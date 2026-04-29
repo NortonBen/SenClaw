@@ -187,7 +187,7 @@ impl Channel for TelegramChannel {
         "telegram"
     }
 
-    async fn connect(&mut self) -> Result<()> {
+    async fn connect(&self) -> Result<()> {
         if self.connected.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -198,7 +198,7 @@ impl Channel for TelegramChannel {
         self.add_bot(&self.default_token.clone()).await
     }
 
-    async fn disconnect(&mut self) -> Result<()> {
+    async fn disconnect(&self) -> Result<()> {
         // Stop all typing indicators
         {
             let mut cancels = self.typing_cancels.lock().await;
@@ -269,13 +269,13 @@ impl Channel for TelegramChannel {
         chat_jid.starts_with("tg:")
     }
 
-    fn on_message(&mut self, handler: MessageCallback) {
+    fn on_message(&self, handler: MessageCallback) {
         if let Ok(mut guard) = self.handlers.write() {
             guard.push(handler);
         }
     }
 
-    fn on_metadata(&mut self, handler: MetadataCallback) {
+    fn on_metadata(&self, handler: MetadataCallback) {
         if let Ok(mut guard) = self.meta_handlers.write() {
             guard.push(handler);
         }

@@ -17,8 +17,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+use crate::channels::feishu_ws;
 use crate::channels::{Channel, MessageCallback, MetadataCallback};
-use crate::types::InlineButton;
+use crate::types::{ChatType, IncomingMessage, InlineButton};
 
 // ===== Constants =====
 
@@ -54,14 +55,6 @@ impl FeishuDomain {
 struct FeishuBotInfo {
     open_id: String,
     name: String,
-}
-
-#[derive(Debug, Clone)]
-struct FeishuAppConfig {
-    app_id: String,
-    app_secret: String,
-    domain: FeishuDomain,
-    base_url: String,
 }
 
 // ===== Token management =====
@@ -475,6 +468,162 @@ struct AppEntry {
     bot_info: FeishuBotInfo,
 }
 
+// ===== WS event types & processing =====
+
+#[derive(Debug, Deserialize)]
+struct WsEventEnvelope {
+    header: WsEventHeader,
+    event: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsEventHeader {
+    #[serde(default)]
+    #[serde(alias = "event_type")]
+    #[serde(alias = "eventType")]
+    event_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsMessageEvent {
+    sender: Option<WsSender>,
+    message: Option<WsMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsSender {
+    sender_id: Option<WsSenderId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsSenderId {
+    open_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WsMessage {
+    message_id: String,
+    chat_id: String,
+    chat_type: String,
+    message_type: String,
+    content: String,
+    #[serde(default)]
+    mentions: Option<Vec<serde_json::Value>>,
+}
+
+/// Process a raw WS event payload (JSON bytes from data frame) into an IncomingMessage
+/// and dispatch to registered handlers. Runs synchronously inside the WS callback.
+fn process_ws_event(
+    payload: &[u8],
+    app_id: &str,
+    bot_open_id: &str,
+    handlers: &Arc<RwLock<Vec<MessageCallback>>>,
+    dedup: &Arc<Mutex<DedupState>>,
+    sender_cache: &Arc<Mutex<HashMap<String, (String, i64)>>>,
+) {
+    let envelope: WsEventEnvelope = match serde_json::from_slice(payload) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("[FeishuWS:{app_id}] Failed to parse event: {e}");
+            return;
+        }
+    };
+
+    let event_type = envelope.header.event_type.as_deref().unwrap_or("");
+    if event_type != "im.message.receive_v1" {
+        return;
+    }
+
+    let event = match envelope.event {
+        Some(ref e) => e,
+        None => return,
+    };
+    let msg_event: WsMessageEvent = match serde_json::from_value(event.clone()) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("[FeishuWS:{app_id}] Failed to parse message event: {e}");
+            return;
+        }
+    };
+
+    let message = match msg_event.message {
+        Some(ref m) => m,
+        None => return,
+    };
+    let sender = match msg_event.sender {
+        Some(ref s) => s,
+        None => return,
+    };
+
+    // Dedup
+    {
+        let mut dedup_guard = match dedup.try_lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if !dedup_guard.try_record(&message.message_id, app_id) {
+            return;
+        }
+    }
+
+    let chat_jid = make_jid(&message.chat_type, &message.chat_id);
+    let sender_open_id = sender
+        .sender_id
+        .as_ref()
+        .and_then(|sid| sid.open_id.as_deref())
+        .unwrap_or("");
+    let sender_jid = if sender_open_id.is_empty() {
+        String::new()
+    } else {
+        format!("feishu:user:{sender_open_id}")
+    };
+
+    // Sender name (best-effort from cache, sync-only)
+    let sender_name = sender_cache
+        .try_lock()
+        .ok()
+        .and_then(|cache| cache.get(sender_open_id).map(|(n, _)| n.clone()))
+        .unwrap_or_else(|| {
+            if sender_open_id.len() >= 8 {
+                format!("{}...", &sender_open_id[..8])
+            } else {
+                sender_open_id.to_string()
+            }
+        });
+
+    let content = parse_text_content(&message.content, &message.message_type);
+    let is_mentioned = check_bot_mention(message.mentions.as_deref(), bot_open_id);
+    let clean_content =
+        remove_bot_mention_placeholders(&content, message.mentions.as_deref(), bot_open_id);
+
+    let chat_type = match message.chat_type.as_str() {
+        "p2p" | "private" => ChatType::Private,
+        _ => ChatType::Group,
+    };
+
+    let incoming = IncomingMessage {
+        id: format!("feishu:{app_id}:{}", message.message_id),
+        chat_jid,
+        sender_name,
+        sender_jid,
+        content: clean_content,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        is_from_me: false,
+        chat_type,
+        mentions_bot_username: Some(is_mentioned),
+        bot_token: Some(app_id.to_string()),
+        native_msg_id: Some(message.message_id.clone()),
+    };
+
+    let handler_guard = match handlers.read() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    for handler in handler_guard.iter() {
+        handler(incoming.clone());
+    }
+}
+
 // ===== FeishuChannel =====
 
 pub struct FeishuChannel {
@@ -487,8 +636,9 @@ pub struct FeishuChannel {
     handlers: Arc<RwLock<Vec<MessageCallback>>>,
     meta_handlers: Arc<RwLock<Vec<MetadataCallback>>>,
     connected: AtomicBool,
-    dedup: Mutex<DedupState>,
-    sender_name_cache: Mutex<HashMap<String, (String, i64)>>,
+    dedup: Arc<Mutex<DedupState>>,
+    sender_name_cache: Arc<Mutex<HashMap<String, (String, i64)>>>,
+    ws_connections: Mutex<HashMap<String, feishu_ws::WsConnection>>,
 }
 
 impl FeishuChannel {
@@ -512,8 +662,9 @@ impl FeishuChannel {
             handlers: Arc::new(RwLock::new(Vec::new())),
             meta_handlers: Arc::new(RwLock::new(Vec::new())),
             connected: AtomicBool::new(false),
-            dedup: Mutex::new(DedupState::new()),
-            sender_name_cache: Mutex::new(HashMap::new()),
+            dedup: Arc::new(Mutex::new(DedupState::new())),
+            sender_name_cache: Arc::new(Mutex::new(HashMap::new())),
+            ws_connections: Mutex::new(HashMap::new()),
         }
     }
 
@@ -563,12 +714,14 @@ impl FeishuChannel {
             bot_info.open_id
         );
 
+        let bot_open_id = bot_info.open_id.clone();
+
         {
             let mut apps = self.apps.lock().await;
             apps.insert(
                 app_id.to_string(),
                 AppEntry {
-                    base_url,
+                    base_url: base_url.clone(),
                     app_id: app_id.to_string(),
                     app_secret: app_secret.to_string(),
                     bot_info,
@@ -577,12 +730,46 @@ impl FeishuChannel {
         }
         self.connected.store(true, Ordering::SeqCst);
 
-        // TODO: Start WS event listener for this app.
-        // See feishu-client.ts — requires Feishu WebSocket framing protocol.
-        // Feishu WS endpoint: wss://open.feishu.cn/open-apis/event/v1/realtime
-        // Uses custom binary framing (not plain JSON WebSocket).
+        // Start WS event listener
+        let app_id_c = app_id.to_string();
+        let handlers = Arc::clone(&self.handlers);
+        let dedup = Arc::clone(&self.dedup);
+        let sender_cache = Arc::clone(&self.sender_name_cache);
 
-        tracing::info!("[FeishuChannel] App {app_id} connected (REST only; WS listener stubbed)");
+        let on_event = Arc::new(move |payload: Vec<u8>| {
+            process_ws_event(
+                &payload,
+                &app_id_c,
+                &bot_open_id,
+                &handlers,
+                &dedup,
+                &sender_cache,
+            );
+        });
+
+        match feishu_ws::start_event_listener(
+            &base_url,
+            app_id,
+            app_secret,
+            self.http.clone(),
+            on_event,
+        )
+        .await
+        {
+            Ok(conn) => {
+                self.ws_connections
+                    .lock()
+                    .await
+                    .insert(app_id.to_string(), conn);
+                tracing::info!("[FeishuChannel] App {app_id} connected (REST + WS)");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[FeishuChannel] App {app_id} connected (REST only; WS failed: {e})"
+                );
+            }
+        }
+
         Ok(true)
     }
 
@@ -643,7 +830,7 @@ impl Channel for FeishuChannel {
         "feishu"
     }
 
-    async fn connect(&mut self) -> Result<()> {
+    async fn connect(&self) -> Result<()> {
         if self.connected.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -660,7 +847,15 @@ impl Channel for FeishuChannel {
         Ok(())
     }
 
-    async fn disconnect(&mut self) -> Result<()> {
+    async fn disconnect(&self) -> Result<()> {
+        // Shut down WS listeners
+        let ws_conns: Vec<feishu_ws::WsConnection> = {
+            let mut guard = self.ws_connections.lock().await;
+            std::mem::take(&mut *guard).into_values().collect()
+        };
+        for conn in ws_conns {
+            conn.shutdown();
+        }
         self.apps.lock().await.clear();
         self.tokens.lock().await.clear();
         self.sender_name_cache.lock().await.clear();
@@ -759,13 +954,13 @@ impl Channel for FeishuChannel {
         chat_jid.starts_with("feishu:")
     }
 
-    fn on_message(&mut self, handler: MessageCallback) {
+    fn on_message(&self, handler: MessageCallback) {
         if let Ok(mut guard) = self.handlers.write() {
             guard.push(handler);
         }
     }
 
-    fn on_metadata(&mut self, handler: MetadataCallback) {
+    fn on_metadata(&self, handler: MetadataCallback) {
         if let Ok(mut guard) = self.meta_handlers.write() {
             guard.push(handler);
         }

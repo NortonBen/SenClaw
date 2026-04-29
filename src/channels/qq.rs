@@ -434,7 +434,7 @@ impl Channel for QQChannel {
         "qq"
     }
 
-    async fn connect(&mut self) -> Result<()> {
+    async fn connect(&self) -> Result<()> {
         let primary_app_id = {
             let guard = self.primary_app_id.lock().await;
             guard.clone()
@@ -463,7 +463,7 @@ impl Channel for QQChannel {
         connect_app_with_timeout(app, state, http, handlers, meta_handlers).await
     }
 
-    async fn disconnect(&mut self) -> Result<()> {
+    async fn disconnect(&self) -> Result<()> {
         let apps = self.apps.lock().await;
         for app in apps.values() {
             app.shutdown.store(true, Ordering::SeqCst);
@@ -541,13 +541,13 @@ impl Channel for QQChannel {
         chat_jid.starts_with("qq:")
     }
 
-    fn on_message(&mut self, handler: MessageCallback) {
+    fn on_message(&self, handler: MessageCallback) {
         if let Ok(mut guard) = self.handlers.write() {
             guard.push(handler);
         }
     }
 
-    fn on_metadata(&mut self, handler: MetadataCallback) {
+    fn on_metadata(&self, handler: MetadataCallback) {
         if let Ok(mut guard) = self.meta_handlers.write() {
             guard.push(handler);
         }

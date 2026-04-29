@@ -4,6 +4,7 @@
 //! The daemon boot sequence (`run_daemon`) follows `src-old/index.ts`.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -165,13 +166,25 @@ fn dispatch_parent_to_json(p: &agent::dispatch_bridge::DispatchParent) -> serde_
         "id": p.id,
         "goal": p.goal,
         "adminFolder": p.admin_folder,
+        "sharedWorkspace": p.shared_workspace,
         "status": p.status,
+        "createdAt": p.created_at,
+        "completedAt": p.completed_at,
         "tasks": p.tasks.iter().map(|t| serde_json::json!({
             "id": t.id,
             "label": t.label,
             "agentId": t.agent_id,
+            "agentJid": t.agent_jid,
+            "dependsOn": t.depends_on,
             "prompt": t.prompt,
             "status": t.status.label(),
+            "result": t.result,
+            "createdAt": t.created_at,
+            "startedAt": t.started_at,
+            "timeoutAt": t.timeout_at,
+            "completedAt": t.completed_at,
+            "isVirtual": t.is_virtual,
+            "personaName": t.persona_name,
         })).collect::<Vec<_>>(),
     })
 }
@@ -345,7 +358,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let mut channels: Vec<Box<dyn channels::Channel>> = Vec::new();
 
     // 3a. Telegram
-    let mut tg = channels::telegram::TelegramChannel::new(cfg.telegram.bot_token.clone());
+    let tg = channels::telegram::TelegramChannel::new(cfg.telegram.bot_token.clone());
     match tg.connect().await {
         Ok(()) => {
             if tg.is_connected() {
@@ -364,7 +377,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // 3b. Feishu
     if !cfg.feishu.app_id.is_empty() && !cfg.feishu.app_secret.is_empty() {
-        let mut feishu = channels::feishu::FeishuChannel::new(
+        let feishu = channels::feishu::FeishuChannel::new(
             cfg.feishu.app_id.clone(),
             cfg.feishu.app_secret.clone(),
             Some(cfg.feishu.domain.clone()),
@@ -386,7 +399,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // 3c. QQ
     if !cfg.qq.app_id.is_empty() && !cfg.qq.app_secret.is_empty() {
-        let mut qq = channels::qq::QQChannel::new(
+        let qq = channels::qq::QQChannel::new(
             cfg.qq.app_id.clone(),
             cfg.qq.app_secret.clone(),
             cfg.qq.sandbox,
@@ -408,14 +421,17 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // 3d. WeChat
     if cfg.wechat.enabled {
-        let mut wx = channels::wechat::WeChatChannel::new(
+        let wx = Arc::new(channels::wechat::WeChatChannel::new(
             "default".to_string(),
             Some(cfg.wechat.api_base_url.clone()),
-        );
+        ));
         match wx.connect().await {
             Ok(()) => {
                 if wx.is_connected() {
                     tracing::info!("[SenClaw] WeChatChannel connected");
+                    // Start long-polling message reception
+                    let wx_poll = Arc::clone(&wx);
+                    tokio::spawn(async move { wx_poll.start_polling().await });
                 }
             }
             Err(e) => {
@@ -434,19 +450,45 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         tracing::info!("[SenClaw] {connected_count} channel(s) connected");
     }
 
+    // Wrap channels for shared access (callbacks + shutdown).
+    let channels: Arc<tokio::sync::Mutex<Vec<Box<dyn Channel>>>> =
+        Arc::new(tokio::sync::Mutex::new(channels));
+
     // ===== 3e. ensure admin group =====
     // Creates admin group (JID depends on configured admin IDs — Telegram > Feishu > web:main).
     // Must happen after channels connect so bot userId is known.
     gateway::group_manager::ensure_admin_group(&db, &gm, &cfg, None);
     tracing::info!("[SenClaw] Admin group ensured");
 
+    // ===== 3f. MCP Manager =====
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let user_config_dir = cfg
+        .paths
+        .global_config_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".senclaw"));
+    let mcp_manager = Arc::new(mcp::manager::McpManager::new(
+        working_dir,
+        user_config_dir,
+    ));
+    if let Err(e) = mcp_manager.init().await {
+        tracing::warn!("[SenClaw] MCP manager init: {e}");
+    }
+    tracing::info!("[SenClaw] MCP manager initialized");
+
     // ===== 4. GroupQueue + AgentPool =====
     let group_queue = agent::group_queue::GroupQueue::new(cfg.agent.max_concurrent);
     let agent_pool =
-        agent::agent_pool::AgentPool::new(Arc::new(agent::agent_pool::ZenCoreApi::new()));
+        agent::agent_pool::AgentPool::new(Arc::new(agent::agent_pool::ZenCoreApi::new(Some(Arc::clone(&mcp_manager)))));
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
-    agent_pool.set_dispatch_bridge(Arc::new(agent::dispatch_bridge::NoopDispatchBridge));
+    let dispatch_bridge = Arc::new(agent::dispatch_bridge::DispatchBridge::new(
+        cfg.paths.dispatch_state_path.clone(),
+    ));
+    agent_pool.set_dispatch_bridge(
+        Arc::clone(&dispatch_bridge) as Arc<dyn agent::dispatch_bridge::DispatchBridgeApi>
+    );
     agent_pool.set_permission_bridge(Arc::new(agent::permission_bridge::PermissionBridge::new(
         Arc::new(RealPermissionApi {
             agent_pool: agent_pool.clone(),
@@ -457,6 +499,94 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         "[SenClaw] AgentPool (zen-core engine) + GroupQueue (max_concurrent={}) ready",
         cfg.agent.max_concurrent
     );
+
+    // Wire reply send through the correct channel.
+    {
+        let chs = Arc::clone(&channels);
+        agent_pool.set_send_reply(Arc::new(move |jid: &str, text: &str, bot_token: Option<&str>| {
+            let chs = Arc::clone(&chs);
+            let jid = jid.to_string();
+            let text = text.to_string();
+            let bt = bot_token.map(|s| s.to_string());
+            tokio::spawn(async move {
+                let guard = chs.lock().await;
+                for c in guard.iter() {
+                    if c.owns_jid(&jid) {
+                        let _ = c.send_message(&jid, &text, bt.as_deref()).await;
+                        break;
+                    }
+                }
+            });
+        }));
+    }
+    tracing::info!("[SenClaw] Reply routing wired to channels");
+
+    // Start SendBridge (HTTP bridge for MCP send-server).
+    let _send_bridge = {
+        let chs_msg = Arc::clone(&channels);
+        let chs_file = Arc::clone(&channels);
+        let send_msg = Arc::new(
+            move |jid: String, text: String, bot_token: Option<String>| {
+                let chs = Arc::clone(&chs_msg);
+                Box::pin(async move {
+                    let guard = chs.lock().await;
+                    for c in guard.iter() {
+                        if c.owns_jid(&jid) {
+                            let _ = c.send_message(&jid, &text, bot_token.as_deref()).await;
+                            break;
+                        }
+                    }
+                }) as futures::future::BoxFuture<'static, ()>
+            },
+        );
+        let send_file = Arc::new(
+            move |jid: String, file_path: String, caption: Option<String>, bot_token: Option<String>| {
+                let chs = Arc::clone(&chs_file);
+                Box::pin(async move {
+                    let guard = chs.lock().await;
+                    for c in guard.iter() {
+                        if c.owns_jid(&jid) {
+                            let _ = c.send_file(&jid, &file_path, caption.as_deref(), bot_token.as_deref()).await;
+                            break;
+                        }
+                    }
+                }) as futures::future::BoxFuture<'static, ()>
+            },
+        );
+        match agent::send_bridge::SendBridge::start(send_msg, send_file).await {
+            Ok(sb) => {
+                tracing::info!("[SenClaw] SendBridge on port {}", sb.port());
+                Some(sb)
+            }
+            Err(e) => {
+                tracing::warn!("[SenClaw] SendBridge failed to start: {e}");
+                None
+            }
+        }
+    };
+
+    // ===== 4b. MessageRouter =====
+    let message_router = Arc::new(gateway::message_router::MessageRouter::new(
+        Arc::clone(&gm),
+        agent_pool.clone() as Arc<dyn gateway::message_router::AgentApi>,
+        Arc::clone(&group_queue),
+        Arc::clone(&db),
+        Arc::new(cfg.clone()),
+    ));
+    // Wire incoming messages from all channels → MessageRouter
+    {
+        let chs = channels.lock().await;
+        for ch in chs.iter() {
+            let router = Arc::clone(&message_router);
+            ch.on_message(Box::new(move |msg| {
+                let r = Arc::clone(&router);
+                tokio::spawn(async move {
+                    r.handle_incoming(msg).await;
+                });
+            }));
+        }
+    }
+    tracing::info!("[SenClaw] MessageRouter wired to {connected_count} channel(s)");
 
     // ===== 5. TaskScheduler =====
     let task_executor =
@@ -518,6 +648,122 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             gateway: Arc::clone(&gw),
         }));
 
+        // Wire DispatchBridge → WebSocket gateway. Every state mutation pushes
+        // a `dispatch:update` to admin clients so the Agent Console reflects
+        // current parents/tasks without polling.
+        {
+            let gw_for_dispatch = Arc::clone(&gw);
+            dispatch_bridge.set_ws_notify(Arc::new(move |parents: &serde_json::Value| {
+                let gw = Arc::clone(&gw_for_dispatch);
+                let parents = parents.clone();
+                tokio::spawn(async move {
+                    gw.notify_dispatch_update(&parents).await;
+                });
+            }));
+        }
+
+        // Wire DispatchBridge → AgentPool. The scheduler hands off augmented
+        // prompts to sub-agents via GroupQueue + process_and_wait, mirroring
+        // the inbound message path. Workspace overrides are applied before
+        // enqueue so the sub-agent picks them up.
+        {
+            let pool = agent_pool.clone();
+            let gm = Arc::clone(&gm);
+            let gq = Arc::clone(&group_queue);
+            let db = Arc::clone(&db);
+            dispatch_bridge.set_send_to_agent(Arc::new(
+                move |jid: &str, task_id: &str, prompt: &str, workspace_dir: &str| {
+                    let Some(binding) = gm.get(&db, jid) else {
+                        tracing::warn!(
+                            "[DispatchBridge] send_to_agent: no binding for {jid}, dropping task {task_id}"
+                        );
+                        return;
+                    };
+                    if !workspace_dir.is_empty() {
+                        pool.set_dispatch_workspace(jid, workspace_dir);
+                    }
+                    pool.set_current_dispatch_task_id(jid, task_id);
+                    pool.mark_dispatch_executing(jid);
+
+                    let pool = pool.clone();
+                    let gq = Arc::clone(&gq);
+                    let jid_owned = jid.to_string();
+                    let prompt_owned = prompt.to_string();
+                    tokio::spawn(async move {
+                        let pool_inner = pool.clone();
+                        let jid_run = jid_owned.clone();
+                        gq.enqueue(
+                            &jid_owned,
+                            Box::pin(async move {
+                                let _ = gateway::message_router::AgentApi::process_and_wait(
+                                    pool_inner.as_ref(),
+                                    &jid_run,
+                                    &binding,
+                                    &prompt_owned,
+                                )
+                                .await;
+                            }),
+                        )
+                        .await;
+                    });
+                },
+            ));
+        }
+        {
+            let pool = agent_pool.clone();
+            dispatch_bridge.set_revert_workspace(Arc::new(move |jid: &str| {
+                pool.revert_dispatch_workspace(jid);
+            }));
+        }
+        // Wire virtual-agent dispatch (Phase 5): persona registry + worker pool.
+        dispatch_bridge.set_virtual_workers(
+            Arc::clone(&persona_registry),
+            Arc::clone(&virtual_worker_pool),
+        );
+        // Wire virtual-agent todos → WebSocket gateway (mirrors TS
+        // virtualWorkerPool.setTodosNotify).
+        {
+            let gw_for_todos = Arc::clone(&gw);
+            virtual_worker_pool.set_todos_notify(Arc::new(
+                move |jid: &str, name: &str, todos: &[agent::virtual_worker_pool::TodoItem]| {
+                    let todos = serde_json::to_value(todos).unwrap_or(serde_json::Value::Null);
+                    let jid = jid.to_string();
+                    let name = name.to_string();
+                    let gw = Arc::clone(&gw_for_todos);
+                    tokio::spawn(async move {
+                        gw.notify_agent_todos(&jid, &name, &todos).await;
+                    });
+                },
+            ));
+        }
+        // Initial agent sync — without this, MCP `dispatch_task` can't resolve
+        // agent name → jid (state.agents stays empty) and tasks never leave
+        // `registered`. Re-sync periodically to pick up groups added/removed
+        // through the Web UI without needing per-handler hooks.
+        {
+            let groups = gm.list(&db).unwrap_or_default();
+            dispatch_bridge.update_agents(&groups);
+            tracing::info!(
+                "[SenClaw] DispatchBridge agents synced ({} group(s))",
+                groups.len()
+            );
+        }
+        {
+            let bridge_for_sync = Arc::clone(&dispatch_bridge);
+            let gm_for_sync = Arc::clone(&gm);
+            let db_for_sync = Arc::clone(&db);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+                tick.tick().await; // skip immediate
+                loop {
+                    tick.tick().await;
+                    let groups = gm_for_sync.list(&db_for_sync).unwrap_or_default();
+                    bridge_for_sync.update_agents(&groups);
+                }
+            });
+        }
+        dispatch_bridge.start();
+
         let ws_router = gw.route(ws_state);
         let ws_port = cfg.ws_port;
         let ws_addr = format!("127.0.0.1:{ws_port}");
@@ -547,14 +793,47 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // 7c. UI HTTP server
     {
-        struct StubUiApi;
-        impl gateway::ui_server::UiApi for StubUiApi {}
+        struct RealUiApi {
+            agent_pool: Arc<agent::agent_pool::AgentPool>,
+        }
+        impl gateway::ui_server::UiApi for RealUiApi {
+            fn reload_all_skills(&self) {
+                self.agent_pool.reload_all_skills();
+            }
+            fn get_thinking_enabled(&self) -> bool {
+                self.agent_pool.get_thinking_enabled()
+            }
+            fn set_thinking_enabled(&self, enabled: bool) {
+                self.agent_pool.set_thinking_enabled(enabled);
+            }
+            fn get_permissions_config(&self) -> gateway::ui_server::AdminPermissionsConfig {
+                let cfg = self.agent_pool.get_permissions_config();
+                gateway::ui_server::AdminPermissionsConfig {
+                    skip_main_agent_permissions: cfg.skip_main_agent_permissions,
+                    skip_all_agents_permissions: cfg.skip_all_agents_permissions,
+                }
+            }
+            fn set_permissions_config(
+                &self,
+                config: gateway::ui_server::AdminPermissionsConfig,
+            ) {
+                self.agent_pool.set_permissions_config(
+                    agent::agent_pool::PermissionsConfig {
+                        skip_main_agent_permissions: config.skip_main_agent_permissions,
+                        skip_all_agents_permissions: config.skip_all_agents_permissions,
+                    },
+                );
+            }
+        }
 
         let ui_state = Arc::new(gateway::ui_server::UiState {
             config: Arc::new(cfg.clone()),
             wiki_manager: Some(Arc::clone(&wiki_mgr)),
             persona_registry: Some(Arc::clone(&persona_registry)),
-            agent_api: Some(Arc::new(StubUiApi)),
+            agent_api: Some(Arc::new(RealUiApi {
+                agent_pool: agent_pool.clone(),
+            })),
+            mcp_manager: Some(Arc::clone(&mcp_manager)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });
@@ -583,10 +862,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     tracing::info!("[SenClaw] Shutting down...");
 
     // Disconnect all channels
-    for ch in channels.iter_mut() {
-        let id = ch.id();
-        if let Err(e) = ch.disconnect().await {
-            tracing::warn!("[SenClaw] Error disconnecting {id}: {e}");
+    {
+        let chs = channels.lock().await;
+        for ch in chs.iter() {
+            let id = ch.id();
+            if let Err(e) = ch.disconnect().await {
+                tracing::warn!("[SenClaw] Error disconnecting {id}: {e}");
+            }
         }
     }
 

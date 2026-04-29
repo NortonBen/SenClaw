@@ -1,6 +1,7 @@
 //! Channel adapter trait + re-exports. Port targets: src-old/types.ts (IChannel) + src-old/channels/*.ts
 
 pub mod feishu;
+pub mod feishu_ws;
 pub mod qq;
 pub mod telegram;
 pub mod wechat;
@@ -23,11 +24,11 @@ pub trait Channel: Send + Sync {
     /// Channel identifier: "telegram", "feishu", "qq", "wechat"
     fn id(&self) -> &'static str;
 
-    /// Establish connection and start receiving messages.
-    async fn connect(&mut self) -> anyhow::Result<()>;
+    /// Establish connection and start background message reception.
+    async fn connect(&self) -> anyhow::Result<()>;
 
     /// Gracefully shut down.
-    async fn disconnect(&mut self) -> anyhow::Result<()>;
+    async fn disconnect(&self) -> anyhow::Result<()>;
 
     fn is_connected(&self) -> bool;
 
@@ -52,10 +53,10 @@ pub trait Channel: Send + Sync {
     fn owns_jid(&self, chat_jid: &str) -> bool;
 
     /// Register a callback for incoming messages.
-    fn on_message(&mut self, handler: MessageCallback);
+    fn on_message(&self, handler: MessageCallback);
 
     /// Register a callback for chat metadata updates.
-    fn on_metadata(&mut self, handler: MetadataCallback);
+    fn on_metadata(&self, handler: MetadataCallback);
 
     /// Get the bot username for a given token (Telegram-specific).
     fn get_bot_username(&self, _bot_token: Option<&str>) -> Option<String> {

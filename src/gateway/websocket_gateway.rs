@@ -35,9 +35,12 @@ use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::Mutex;
 
+use uuid::Uuid;
+
 use crate::config::Config;
 use crate::db::Db;
 use crate::gateway::command_dispatcher::dispatch_command;
+use crate::util::local_time::local_iso_string_now;
 use crate::gateway::group_manager::{
     delete_feishu_app, delete_qq_app, delete_telegram_bot, get_feishu_apps, save_feishu_app,
     save_qq_app, save_telegram_bot, GroupBindingUpdate, GroupManager,
@@ -408,10 +411,23 @@ impl WebSocketGateway {
     async fn broadcast_to_admins(&self, msg: &serde_json::Value) {
         let raw = msg.to_string();
         let clients = self.clients.lock().await;
+        let total = clients.len();
+        let mut sent = 0usize;
         for client in clients.iter() {
             if client.authenticated && client.is_admin {
                 let _ = client.sender.send(Message::Text(raw.clone().into()));
+                sent += 1;
             }
+        }
+        let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+        tracing::debug!(
+            "[WsGateway] broadcast_to_admins type={msg_type} sent={sent}/{total} client(s)"
+        );
+        if sent == 0 && (msg_type == "dispatch:update" || msg_type == "agent:todos") {
+            tracing::warn!(
+                "[WsGateway] {msg_type} fired but NO admin clients connected — \
+                 web client must subscribe to an is_admin group first"
+            );
         }
     }
 
@@ -631,6 +647,14 @@ async fn handle_subscribe(
             if let Some(group) = state.group_manager.get(&state.db, &jid) {
                 if group.is_admin {
                     client.is_admin = true;
+                    tracing::info!(
+                        "[WsGateway] client #{client_idx} subscribed to {jid} (admin) — \
+                         will receive dispatch:update / agent:todos"
+                    );
+                } else {
+                    tracing::info!(
+                        "[WsGateway] client #{client_idx} subscribed to {jid} (non-admin)"
+                    );
                 }
             }
         }
@@ -703,6 +727,32 @@ async fn handle_subscribe(
             send_json(
                 sender,
                 &serde_json::json!({"type": "agent:state", "groupJid": jid, "state": known}),
+            );
+        }
+    }
+
+    // Load and push chat history so the Web UI shows past conversation.
+    if let Ok(messages) = state.db.get_messages(&jid, None) {
+        if !messages.is_empty() {
+            let history: Vec<serde_json::Value> = messages
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.message_id,
+                        "role": if m.is_bot_reply { "agent" } else { "user" },
+                        "senderName": m.sender_name,
+                        "text": m.content,
+                        "timestamp": m.timestamp,
+                    })
+                })
+                .collect();
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "history:load",
+                    "groupJid": jid,
+                    "messages": history,
+                }),
             );
         }
     }
@@ -1105,13 +1155,21 @@ async fn handle_message_send(
             .unwrap_or(false)
     };
     if is_admin {
+        let is_reset = text.trim() == "/reset" || text.trim() == "reset" || text.trim().starts_with("/reset ") || text.trim().starts_with("reset ");
         if let Some(output) =
-            dispatch_command(&state.db, &text)
+            dispatch_command(&state.db, &text, Some(&group_jid))
         {
             send_json(
                 sender,
                 &serde_json::json!({"type": "agent:reply", "groupJid": group_jid, "text": output}),
             );
+            // After reset, push empty history so the frontend clears its local messages.
+            if is_reset {
+                send_json(
+                    sender,
+                    &serde_json::json!({"type": "history:load", "groupJid": group_jid, "messages": []}),
+                );
+            }
             return;
         }
     }
@@ -1137,6 +1195,27 @@ async fn handle_message_send(
         );
         return;
     };
+
+    // Persist user message to conversation history so it appears in history:load.
+    let stored = crate::types::StoredMessage {
+        message_id: format!("web:{}", Uuid::new_v4()),
+        chat_jid: group_jid.clone(),
+        sender_jid: String::new(),
+        sender_name: String::new(),
+        content: text.clone(),
+        timestamp: local_iso_string_now(),
+        is_from_me: false,
+        is_bot_reply: false,
+        reply_to_id: None,
+        media_type: None,
+    };
+    let limit = state
+        .config
+        .agent
+        .max_messages_per_group;
+    if let Err(e) = state.db.insert_message(&stored, limit) {
+        tracing::warn!("[WebSocketGateway] Failed to persist web message for {group_jid}: {e}");
+    }
 
     state.api.enqueue_and_process(&group_jid, &group, &text);
 }
@@ -1530,11 +1609,24 @@ async fn handle_agent_control(
     if !require_auth(clients, client_idx, sender).await {
         return;
     }
-    if !require_admin(clients, client_idx, sender).await {
-        return;
-    }
     let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
     let action = msg["action"].as_str().unwrap_or("").to_string();
+    if !group_jid.is_empty() {
+        let subscribed = {
+            let guard = clients.lock().await;
+            guard
+                .get(client_idx)
+                .map(|c| c.subscriptions.contains(&group_jid))
+                .unwrap_or(false)
+        };
+        if !subscribed {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "Subscribe to the group before controlling its agent"}),
+            );
+            return;
+        }
+    }
     if group_jid.is_empty() || action.is_empty() {
         send_json(
             sender,

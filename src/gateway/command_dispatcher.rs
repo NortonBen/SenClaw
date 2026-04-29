@@ -16,11 +16,14 @@ pub const COMMANDS_HELP: &str = "\
   resume_task <taskId>      — resume task
   cancel_task <taskId>      — cancel task (mark completed, keep record)
   del_task <taskId>         — delete task (remove permanently)
+  history                   — show conversation history stats
+  reset                     — reset session (clear chat history)
   help                      — show this help";
 
 /// Try parsing text as an admin command and execute it.
 /// Returns command output text, or None (not a command — handle via agent).
-pub fn dispatch_command(db: &Db, text: &str) -> Option<String> {
+/// `chat_jid` is required for `reset` and `history` commands.
+pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<String> {
     let t = text.trim();
     if re_help().is_match(t) {
         return Some(COMMANDS_HELP.to_string());
@@ -69,6 +72,24 @@ pub fn dispatch_command(db: &Db, text: &str) -> Option<String> {
         }
     }
 
+    if re_history().is_match(t) {
+        let jid = chat_jid?;
+        let count = db.count_messages(jid).unwrap_or(0);
+        let last_ts = db.get_last_agent_timestamp(jid).ok().flatten();
+        let cursor = last_ts.as_deref().unwrap_or("(none)");
+        return Some(format!(
+            "📊 Conversation history — {jid}\n  Messages: {count}\n  Last agent cursor: {cursor}\n\n\
+             Send `/reset` to clear all chat history."
+        ));
+    }
+
+    if re_reset().is_match(t) {
+        let jid = chat_jid?;
+        let count = db.delete_messages_for_jid(jid).unwrap_or(0);
+        let _ = db.delete_agent_timestamp(jid);
+        return Some(format!("🗑️ Session reset — cleared {count} messages for {jid}"));
+    }
+
     None
 }
 
@@ -92,6 +113,14 @@ fn re_manage_task() -> &'static Regex {
 }
 fn re_del_task() -> &'static Regex {
     static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?del[_\s]task\s+(\S+)$").unwrap());
+    &RE
+}
+fn re_history() -> &'static Regex {
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?history$").unwrap());
+    &RE
+}
+fn re_reset() -> &'static Regex {
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?reset[_\s]?(session)?$").unwrap());
     &RE
 }
 

@@ -532,6 +532,38 @@ impl Db {
         self.set_router_state(&format!("lastAgent:{chat_jid}"), timestamp)
     }
 
+    /// Delete all messages for a chat JID.
+    pub fn delete_messages_for_jid(&self, chat_jid: &str) -> Result<usize> {
+        self.with_conn(|c| {
+            Ok(c.execute(
+                "DELETE FROM channel_messages WHERE chat_jid = ?1",
+                params![chat_jid],
+            )?)
+        })
+    }
+
+    /// Remove the last-agent timestamp cursor for a chat JID.
+    pub fn delete_agent_timestamp(&self, chat_jid: &str) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM router_state WHERE key = ?1",
+                params![format!("lastAgent:{chat_jid}")],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Get the count of stored messages for a chat JID.
+    pub fn count_messages(&self, chat_jid: &str) -> Result<usize> {
+        self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM channel_messages WHERE chat_jid = ?1",
+                params![chat_jid],
+                |r| r.get::<_, usize>(0),
+            )?)
+        })
+    }
+
     // ============================================================
     // Embedding cache
     // ============================================================
@@ -916,6 +948,62 @@ mod tests {
             db.get_last_agent_timestamp("tg:group:1").unwrap().as_deref(),
             Some("2026-04-28T00:00:00Z")
         );
+    }
+
+    #[test]
+    fn delete_messages_and_timestamp() {
+        let db = Db::open_in_memory(&cfg()).unwrap();
+        // Insert messages
+        for i in 0..5 {
+            let msg = StoredMessage {
+                message_id: format!("m{i}"),
+                chat_jid: "tg:group:1".into(),
+                sender_jid: "u".into(),
+                sender_name: "u".into(),
+                content: format!("hi {i}"),
+                timestamp: format!("2026-04-28T00:00:0{i}Z"),
+                is_from_me: false,
+                is_bot_reply: false,
+                reply_to_id: None,
+                media_type: None,
+            };
+            db.insert_message(&msg, 100).unwrap();
+        }
+        assert_eq!(db.count_messages("tg:group:1").unwrap(), 5);
+
+        // Set timestamp
+        db.set_last_agent_timestamp("tg:group:1", "2026-04-28T00:00:04Z").unwrap();
+        assert!(db.get_last_agent_timestamp("tg:group:1").unwrap().is_some());
+
+        // Delete messages
+        let deleted = db.delete_messages_for_jid("tg:group:1").unwrap();
+        assert_eq!(deleted, 5);
+        assert_eq!(db.count_messages("tg:group:1").unwrap(), 0);
+
+        // Delete timestamp
+        db.delete_agent_timestamp("tg:group:1").unwrap();
+        assert!(db.get_last_agent_timestamp("tg:group:1").unwrap().is_none());
+    }
+
+    #[test]
+    fn count_messages_by_jid() {
+        let db = Db::open_in_memory(&cfg()).unwrap();
+        assert_eq!(db.count_messages("tg:group:1").unwrap(), 0);
+        let msg = StoredMessage {
+            message_id: "m1".into(),
+            chat_jid: "tg:group:1".into(),
+            sender_jid: "u".into(),
+            sender_name: "u".into(),
+            content: "hi".into(),
+            timestamp: "2026-04-28T00:00:00Z".into(),
+            is_from_me: false,
+            is_bot_reply: false,
+            reply_to_id: None,
+            media_type: None,
+        };
+        db.insert_message(&msg, 100).unwrap();
+        assert_eq!(db.count_messages("tg:group:1").unwrap(), 1);
+        assert_eq!(db.count_messages("tg:group:2").unwrap(), 0);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -348,6 +348,7 @@ fn extract_text(items: Option<&[WeixinMessageItem]>) -> String {
 struct PendingMenuEntry {
     options: Vec<InlineButton>,
     app_id: String,
+    created_at: Instant,
 }
 
 // ===== WeChatChannel =====
@@ -364,7 +365,7 @@ pub struct WeChatChannel {
     http: reqwest::Client,
     handlers: Arc<RwLock<Vec<MessageCallback>>>,
     meta_handlers: Arc<RwLock<Vec<MetadataCallback>>>,
-    menu_queues: Mutex<HashMap<String, Vec<PendingMenuEntry>>>,
+    menu_queues: Arc<Mutex<HashMap<String, Vec<PendingMenuEntry>>>>,
 }
 
 impl WeChatChannel {
@@ -386,7 +387,7 @@ impl WeChatChannel {
             http,
             handlers: Arc::new(RwLock::new(Vec::new())),
             meta_handlers: Arc::new(RwLock::new(Vec::new())),
-            menu_queues: Mutex::new(HashMap::new()),
+            menu_queues: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -400,7 +401,7 @@ impl WeChatChannel {
         }
     }
 
-    async fn start_polling(self: Arc<Self>) {
+    pub async fn start_polling(self: Arc<Self>) {
         let mut next_timeout_ms = DEFAULT_LONG_POLL_TIMEOUT_MS;
         let mut consecutive_failures: u32 = 0;
 
@@ -682,17 +683,58 @@ impl WeChatChannel {
                 .push(PendingMenuEntry {
                     options: buttons.to_vec(),
                     app_id: self.account_id.clone(),
+                    created_at: Instant::now(),
                 });
         }
-
-        // Auto-expire
-        let _jid = chat_jid.to_string();
-        // TODO: spawn cleanup task for menu expiry
 
         self.send_message_internal(chat_jid, &full_text).await
     }
 
+    /// Remove expired menu entries across all chat jids.
+    fn sweep_expired_menus(&self) {
+        let mut queues = match self.menu_queues.try_lock() {
+            Ok(g) => g,
+            Err(_) => return, // contended; next sweep will catch it
+        };
+        let ttl = Duration::from_secs(MENU_TTL_SECS);
+        let now = Instant::now();
+        queues.retain(|_jid, entries| {
+            entries.retain(|e| now.duration_since(e.created_at) < ttl);
+            !entries.is_empty()
+        });
+    }
+
+    /// Start periodic menu expiry sweep (every 60 s).
+    fn start_menu_cleanup(menu_queues: Arc<Mutex<HashMap<String, Vec<PendingMenuEntry>>>>) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                if let Ok(mut queues) = menu_queues.try_lock() {
+                    let ttl = Duration::from_secs(MENU_TTL_SECS);
+                    let now = Instant::now();
+                    queues.retain(|_jid, entries| {
+                        entries.retain(|e| now.duration_since(e.created_at) < ttl);
+                        !entries.is_empty()
+                    });
+                }
+            }
+        });
+    }
+
     async fn try_handle_menu(&self, chat_jid: &str, content: &str) -> bool {
+        // Opportunistic sweep of expired entries for this jid
+        {
+            let mut queues = self.menu_queues.lock().await;
+            if let Some(entries) = queues.get_mut(chat_jid) {
+                let ttl = Duration::from_secs(MENU_TTL_SECS);
+                let now = Instant::now();
+                entries.retain(|e| now.duration_since(e.created_at) < ttl);
+                if entries.is_empty() {
+                    queues.remove(chat_jid);
+                }
+            }
+        }
+
         let mut queues = self.menu_queues.lock().await;
         let queue = match queues.get_mut(chat_jid) {
             Some(q) if !q.is_empty() => q,
@@ -737,7 +779,7 @@ impl Channel for WeChatChannel {
         "wechat"
     }
 
-    async fn connect(&mut self) -> Result<()> {
+    async fn connect(&self) -> Result<()> {
         if self.connected.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -784,6 +826,9 @@ impl Channel for WeChatChannel {
 
         // Background polling is started by the daemon layer after connect() returns.
 
+        // Start periodic menu expiry sweep
+        Self::start_menu_cleanup(Arc::clone(&self.menu_queues));
+
         tracing::info!(
             "[WeChatChannel] Connected (accountId={} baseUrl={})",
             self.account_id,
@@ -792,7 +837,7 @@ impl Channel for WeChatChannel {
         Ok(())
     }
 
-    async fn disconnect(&mut self) -> Result<()> {
+    async fn disconnect(&self) -> Result<()> {
         self.shutdown.store(true, Ordering::SeqCst);
         self.connected.store(false, Ordering::SeqCst);
         tracing::info!("[WeChatChannel] Disconnected");
@@ -832,13 +877,13 @@ impl Channel for WeChatChannel {
         true // simplified; full impl checks context_tokens
     }
 
-    fn on_message(&mut self, handler: MessageCallback) {
+    fn on_message(&self, handler: MessageCallback) {
         if let Ok(mut guard) = self.handlers.write() {
             guard.push(handler);
         }
     }
 
-    fn on_metadata(&mut self, handler: MetadataCallback) {
+    fn on_metadata(&self, handler: MetadataCallback) {
         if let Ok(mut guard) = self.meta_handlers.write() {
             guard.push(handler);
         }
@@ -852,6 +897,31 @@ impl Channel for WeChatChannel {
         _bot_token: Option<&str>,
     ) -> Result<()> {
         self.send_text_menu(chat_jid, text, buttons).await
+    }
+}
+
+// Delegate Channel trait for Arc<WeChatChannel> so polling can own an Arc clone.
+#[async_trait]
+impl Channel for Arc<WeChatChannel> {
+    fn id(&self) -> &'static str { self.as_ref().id() }
+    async fn connect(&self) -> Result<()> { self.as_ref().connect().await }
+    async fn disconnect(&self) -> Result<()> { self.as_ref().disconnect().await }
+    fn is_connected(&self) -> bool { self.as_ref().is_connected() }
+    async fn send_message(&self, chat_jid: &str, text: &str, bot_token: Option<&str>) -> Result<()> {
+        self.as_ref().send_message(chat_jid, text, bot_token).await
+    }
+    async fn send_file(&self, chat_jid: &str, file_path: &str, caption: Option<&str>, bot_token: Option<&str>) -> Result<()> {
+        self.as_ref().send_file(chat_jid, file_path, caption, bot_token).await
+    }
+    fn owns_jid(&self, chat_jid: &str) -> bool { self.as_ref().owns_jid(chat_jid) }
+    fn on_message(&self, handler: MessageCallback) { self.as_ref().on_message(handler) }
+    fn on_metadata(&self, handler: MetadataCallback) { self.as_ref().on_metadata(handler) }
+    fn get_bot_username(&self, bot_token: Option<&str>) -> Option<String> { self.as_ref().get_bot_username(bot_token) }
+    async fn send_with_buttons(&self, chat_jid: &str, text: &str, buttons: &[InlineButton], bot_token: Option<&str>) -> Result<()> {
+        self.as_ref().send_with_buttons(chat_jid, text, buttons, bot_token).await
+    }
+    async fn set_typing(&self, chat_jid: &str, active: bool, bot_token: Option<&str>) -> Result<()> {
+        self.as_ref().set_typing(chat_jid, active, bot_token).await
     }
 }
 

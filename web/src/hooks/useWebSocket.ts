@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry } from '../types';
 
 interface WsConfig {
   wsPort: number;
@@ -70,6 +70,7 @@ export function useWebSocket(): WsHook {
   }, []);
 
   const subscribe = useCallback((jid: string) => {
+    if (subscribedRef.current.has(jid)) return;
     rawSend({ type: 'subscribe', groupJid: jid });
     subscribedRef.current.add(jid);
     setSubscribed(prev => new Set([...prev, jid]));
@@ -178,15 +179,22 @@ export function useWebSocket(): WsHook {
   }, [rawSend]);
 
   const subscribeAll = useCallback(() => {
+    const toSubscribe: string[] = [];
     setGroups(prev => {
       for (const g of prev) {
         if (!subscribedRef.current.has(g.jid)) {
-          rawSend({ type: 'subscribe', groupJid: g.jid });
+          toSubscribe.push(g.jid);
           subscribedRef.current.add(g.jid);
         }
       }
       return prev;
     });
+    for (const jid of toSubscribe) {
+      rawSend({ type: 'subscribe', groupJid: jid });
+    }
+    if (toSubscribe.length > 0) {
+      setSubscribed(prev => new Set([...prev, ...toSubscribe]));
+    }
   }, [rawSend]);
 
   useEffect(() => {
@@ -212,15 +220,30 @@ export function useWebSocket(): WsHook {
             setGroups(incoming);
             // Auto-subscribe to admin groups so requireAdmin checks pass for settings operations
             for (const g of incoming) {
-              if (g.isAdmin && !subscribedRef.current.has(g.jid)) {
-                rawSend({ type: 'subscribe', groupJid: g.jid });
-              }
+              if (g.isAdmin) subscribe(g.jid);
             }
             break;
           }
           case 'subscribed':
             setSubscribed(prev => new Set([...prev, msg.groupJid as string]));
             break;
+          case 'history:load': {
+            const hjid = msg.groupJid as string;
+            const msgs = msg.messages as Array<{ id: string; role: string; senderName?: string; text: string; timestamp: string }>;
+            if (Array.isArray(msgs)) {
+              setMessages(prev => ({
+                ...prev,
+                [hjid]: msgs.map(m => ({
+                  id:         m.id as string,
+                  role:       (m.role === 'agent' ? 'agent' : 'user'),
+                  senderName: m.senderName,
+                  text:       m.text as string,
+                  timestamp:  m.timestamp as string,
+                } as TextMessage)) as ChatMessage[],
+              }));
+            }
+            break;
+          }
           case 'incoming':
             if (msg.isFromMe) break;
             addMessage(msg.groupJid as string, {
@@ -311,6 +334,12 @@ export function useWebSocket(): WsHook {
             break;
           case 'dispatch:update': {
             const newParents = (msg.parents as DispatchParent[]) ?? [];
+            // eslint-disable-next-line no-console
+            console.debug('[ws] dispatch:update', {
+              parents: newParents.length,
+              tasks: newParents.reduce((n, p) => n + p.tasks.length, 0),
+              statuses: newParents.map(p => `${p.id}:${p.status}(${p.tasks.length})`),
+            });
             const TERMINAL = ['done', 'error', 'timeout'];
             // When a task reaches a terminal state, clear that agent's todos
             setDispatchParents(prev => {
@@ -359,6 +388,11 @@ export function useWebSocket(): WsHook {
 
     const connect = async () => {
       if (destroyed) return;
+      // Close any existing connection to prevent overlapping sockets (e.g. StrictMode remount)
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       if (!configRef.current) {
         try {
           const res = await fetch('/api/config');

@@ -47,6 +47,7 @@ use crate::mcp::helper::{
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
 use crate::util::local_time::local_iso_string_now;
+use uuid::Uuid;
 
 // ===== Constants =====
 
@@ -385,10 +386,11 @@ pub struct ZenCoreApi {
     engines: Mutex<HashMap<String, Arc<ZenEngine>>>,
     handlers: Arc<Mutex<HashMap<String, CoreHandlers>>>,
     http_client: Client,
+    mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
 }
 
 impl ZenCoreApi {
-    pub fn new() -> Self {
+    pub fn new(mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>) -> Self {
         Self {
             engines: Mutex::new(HashMap::new()),
             handlers: Arc::new(Mutex::new(HashMap::new())),
@@ -397,6 +399,7 @@ impl ZenCoreApi {
                 .timeout(Duration::from_secs(120))
                 .build()
                 .expect("ZenCoreApi http client"),
+            mcp_manager,
         }
     }
 
@@ -420,9 +423,15 @@ impl ZenCoreApi {
             instance_id: jid.to_string(),
             ..Default::default()
         };
-        // ZenEngine::new() already registers all tools (static + engine-dependent).
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, self.mcp_manager.clone());
         engine.initialize_plugins();
+        // Refresh MCP bridge tools in the background
+        {
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                engine.refresh_mcp_tools().await;
+            });
+        }
         engines.insert(jid.to_string(), engine.clone());
         engine
     }
@@ -1358,6 +1367,32 @@ impl AgentPool {
                 cb(jid, text);
             }
         }
+
+        // Persist bot reply to conversation history.
+        if let Some(db) = self.db.lock().unwrap().as_ref() {
+            let msg = crate::types::StoredMessage {
+                message_id: format!("bot:{}", Uuid::new_v4()),
+                chat_jid: jid.to_string(),
+                sender_jid: String::new(),
+                sender_name: "assistant".to_string(),
+                content: text.to_string(),
+                timestamp: local_iso_string_now(),
+                is_from_me: false,
+                is_bot_reply: true,
+                reply_to_id: None,
+                media_type: None,
+            };
+            let limit = self
+                .config
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|c| c.agent.max_messages_per_group)
+                .unwrap_or(100);
+            if let Err(e) = db.insert_message(&msg, limit) {
+                tracing::warn!("[AgentPool] Failed to persist bot reply for {jid}: {e}");
+            }
+        }
     }
 
     /// Reset the inactivity timer for a JID. Phase 2 populates the underlying
@@ -1461,11 +1496,11 @@ impl AgentPool {
     /// Semantics:
     ///   1. Sync allowedWorkDirs from config.json
     ///   2. Resolve skipPerms + skill dirs + tool list
-    ///   3. Create SemaCore instance (blocked on sema-core crate; TODO)
-    ///   4. Bind PermissionBridge + events (bindEvents)
-    ///   5. Inject MCP servers with timeouts (blocked on sema-core; TODO)
-    ///   6. Init MemoryManager index (blocked on sema-core; TODO)
-    ///   7. createSession with 60s timeout (blocked on sema-core; TODO)
+    ///   3. Create ZenEngine instance (on-demand in ensure_engine)
+    ///   4. Bind events via bind_events (permissions, replies, state, todos)
+    ///   5. Inject MCP servers via CoreApi
+    ///   6. Init MemoryManager index via manager::init_agent
+    ///   7. createSession via engine.create_session
     ///   8. Apply pending workspace + thinking flag
     ///
     /// On failure: clean up event listeners + dispose core.
@@ -1503,8 +1538,8 @@ impl AgentPool {
         // which scans bundled, global-compat, global-sema, and clawhub-managed dirs.
         // Priority order: bundled < user (~/.claude/skills) < managed (clawhub) < workspace
 
-        // TODO: Clear stale MCP config file to avoid MCPManager.init() racing
-        // with addOrUpdateMCPServer (mirrors TS 503-512).
+        // TS uses a JSON-based MCP config file that needed clearing; Rust uses
+        // SharedMcpRegistry (per-process subprocess spawn) — no file to clear.
 
         // Tool list resolution is handled by ZenEngine::new() which registers
         // all tools (static + TodoWrite + Skill + Task). EXCLUDED_TOOLS filtering
@@ -1514,9 +1549,9 @@ impl AgentPool {
         // with all configuration (instanceId, agentDataDir, workingDir, agentMode,
         // useTools, skillsExtraDirs, skip*Permissions). Mirrors TS 524-538.
 
-        // TODO: PermissionBridge.bindCore(core, binding) — mirrors TS 541.
-        // Permission callbacks are routed through AgentPool::on_permission_request
-        // via bind_events(); per-core binding is deferred until the MCP harness is wired.
+        // PermissionBridge handlers are wired in bind_events:
+        // on_tool_permission_request → PermissionBridge.handle_permission_request
+        // on_ask_question_request → PermissionBridge.handle_ask_question_request
 
         // Init workspace state file (mirrors TS 569-572).
         let home = self.senclaw_home.lock().unwrap().clone();
@@ -2993,14 +3028,14 @@ mod tests {
 
     #[tokio::test]
     async fn zen_core_api_process_message_dispatches() {
-        let api = ZenCoreApi::new();
+        let api = ZenCoreApi::new(None);
         let result = api.process_message("test:1", "hello", &fake_binding("test:1", false));
         assert!(result.is_ok());
     }
 
     #[test]
     fn agent_pool_send_reply_no_callback_does_not_panic() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         // Default permissions config is all-false.
         let cfg = pool.get_permissions_config();
         assert!(!cfg.skip_main_agent_permissions);
@@ -3011,7 +3046,7 @@ mod tests {
 
     #[test]
     fn permissions_config_round_trips() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         pool.set_permissions_config(PermissionsConfig {
             skip_main_agent_permissions: true,
             skip_all_agents_permissions: false,
@@ -3024,7 +3059,7 @@ mod tests {
 
     #[test]
     fn thinking_default_on() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         assert!(pool.get_thinking_enabled());
         pool.set_thinking_enabled(false);
         assert!(!pool.get_thinking_enabled());
@@ -3068,7 +3103,7 @@ mod tests {
 
     #[test]
     fn dispatch_executing_mark_clear() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         pool.mark_dispatch_executing("g:1");
         assert!(pool.state.lock().unwrap().dispatch_executing.contains("g:1"));
         pool.clear_dispatch_executing("g:1");
@@ -3077,7 +3112,7 @@ mod tests {
 
     #[test]
     fn dispatch_task_map_round_trip() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         pool.set_current_dispatch_task_id("g:1", "task-42");
         let s = pool.state.lock().unwrap();
         assert_eq!(s.dispatch_task_map.get("g:1").map(String::as_str), Some("task-42"));
@@ -3085,14 +3120,14 @@ mod tests {
 
     #[test]
     fn notify_dispatch_skips_when_no_pending_reply() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         // No content recorded → silent no-op (no panic).
         pool.notify_dispatch_if_pending("g:1", Some("task-1"));
     }
 
     #[test]
     fn workspace_state_file_path_format() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         let tmp = std::env::temp_dir().join(format!("senclaw-test-{}", std::process::id()));
         pool.set_senclaw_home(tmp.clone());
         let p = pool.workspace_state_file("main");
@@ -3123,7 +3158,7 @@ mod tests {
 
     #[test]
     fn cached_todos_empty_by_default() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new()));
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         assert!(pool.get_all_cached_todos().is_empty());
     }
 }

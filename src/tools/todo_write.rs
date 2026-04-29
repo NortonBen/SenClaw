@@ -8,6 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::zen_core::events::EngineEvent;
 use crate::zen_core::state::StateManager;
 use crate::zen_core::{Tool, ToolContext, ToolOutput, TodosUpdateItem};
 
@@ -129,7 +130,11 @@ impl Tool for TodoWriteTool {
                 }]);
             }
 
-            state.update_todos_intelligently(ctx.agent_id, vec![]);
+            let items = vec![];
+            state.update_todos_intelligently(ctx.agent_id, items.clone());
+            if let Some(bus) = ctx.event_bus {
+                bus.emit(EngineEvent::TodosUpdate(items));
+            }
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!([]),
                 result_for_assistant: "Todo list cleared. All tasks are complete — summarize your work and report the results.".into(),
@@ -138,6 +143,9 @@ impl Tool for TodoWriteTool {
 
         let mut state = self.state.lock().unwrap();
         state.update_todos_intelligently(ctx.agent_id, items.clone());
+        if let Some(bus) = ctx.event_bus {
+            bus.emit(EngineEvent::TodosUpdate(items.clone()));
+        }
 
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!(items),

@@ -208,7 +208,7 @@ async fn query_openai(
     _thinking: bool,
     stream: bool,
 ) -> Result<Message> {
-    let url = format!("{}/v1/chat/completions", profile.base_url.trim_end_matches('/'));
+    let url = format!("{}/chat/completions", profile.base_url.trim_end_matches('/'));
 
     let api_messages = openai_messages_for_api(messages, system_prompt)?;
     let openai_tools = if tools.is_empty() {

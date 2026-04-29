@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use serde::Serialize;
 
 use crate::agent::persona_registry::PersonaConfig;
 
@@ -25,10 +26,11 @@ pub struct VirtualRunResult {
 }
 
 /// A todo item pushed from the virtual agent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TodoItem {
     pub content: String,
     pub status: String,
+    #[serde(default, rename = "activeForm", skip_serializing_if = "Option::is_none")]
     pub active_form: Option<String>,
 }
 
@@ -63,6 +65,7 @@ pub trait VirtualCoreApi: Send + Sync {
         prompt: &str,
         timeout: Duration,
         cancel: Arc<AtomicBool>,
+        todos_notify: Option<TodosNotifyFn>,
     ) -> Result<String> {
         Err(anyhow::anyhow!("VirtualCoreApi not wired"))
     }
@@ -346,6 +349,22 @@ impl VirtualWorkerPool {
         let prompt = prompt.to_string();
         let tools_clone = tools.clone();
         let sys_prompt = persona.system_prompt.clone();
+        let persona_name = persona.name.clone();
+        let task_id_captured = task_id.to_string();
+
+        // Wrap the pool's todos_notify to send with the correct virtual JID
+        // and persona name.
+        let todos_notify: Option<TodosNotifyFn> = self
+            .todos_notify
+            .lock()
+            .unwrap()
+            .clone()
+            .map(move |notify| {
+                let virtual_jid = format!("virtual:{task_id_captured}");
+                Arc::new(move |_instance_id: &str, _label: &str, todos: &[TodoItem]| {
+                    notify(&virtual_jid, &persona_name, todos);
+                }) as TodosNotifyFn
+            });
 
         let result = tokio::task::spawn_blocking(move || {
             let sys_prompt_opt = if sys_prompt.is_empty() {
@@ -364,6 +383,7 @@ impl VirtualWorkerPool {
                 &prompt,
                 timeout,
                 cancel,
+                todos_notify,
             )
         })
         .await;
@@ -462,6 +482,7 @@ fn radix36(mut n: u64) -> String {
 pub struct ZenVirtualCoreApi;
 
 impl VirtualCoreApi for ZenVirtualCoreApi {
+    #[allow(clippy::too_many_arguments)]
     fn execute_virtual_prompt(
         &self,
         instance_id: &str,
@@ -474,6 +495,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         prompt: &str,
         timeout: Duration,
         cancel: Arc<AtomicBool>,
+        todos_notify: Option<TodosNotifyFn>,
     ) -> Result<String> {
         use crate::zen_core::{
             EngineEvent, SessionState, ZenCore, ZenCoreOptions,
@@ -491,7 +513,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             ..Default::default()
         };
 
-        let engine = crate::zen_core::ZenEngine::new(opts);
+        let engine = crate::zen_core::ZenEngine::new(opts, None);
         engine.create_session(None)?;
 
         let mut rx = engine.event_bus.subscribe();
@@ -527,6 +549,19 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                     }
                     EngineEvent::SessionError(data) => {
                         bail!("Virtual agent error: {}", data.error.message);
+                    }
+                    EngineEvent::TodosUpdate(items) => {
+                        if let Some(ref notify) = todos_notify {
+                            let todos: Vec<TodoItem> = items
+                                .into_iter()
+                                .map(|t| TodoItem {
+                                    content: t.content,
+                                    status: t.status,
+                                    active_form: t.active_form,
+                                })
+                                .collect();
+                            notify(instance_id, "virtual", &todos);
+                        }
                     }
                     _ => {}
                 },

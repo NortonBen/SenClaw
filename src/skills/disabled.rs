@@ -115,8 +115,18 @@ pub fn set_disabled_skills_file(p: PathBuf) {
 mod tests {
     use super::*;
 
+    /// Serialise access to global statics so parallel `cargo test` doesn't race.
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_reset() {
+        *DISABLED_FILE.lock().unwrap() = PathBuf::new();
+        *CACHE.lock().unwrap() = None;
+    }
+
     #[test]
     fn test_disabled_skills_lifecycle() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        test_reset();
         let tmp = std::env::temp_dir().join(format!("test-disabled-skills-{}.json", uuid::Uuid::new_v4()));
         set_disabled_skills_file(tmp.clone());
 
@@ -147,6 +157,7 @@ mod tests {
 
     #[test]
     fn test_read_nonexistent_file() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("nonexistent-{}.json", uuid::Uuid::new_v4()));
         set_disabled_skills_file(tmp);
         assert!(read_disabled_skills().is_empty());
@@ -154,6 +165,8 @@ mod tests {
 
     #[test]
     fn test_multiple_disabled() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        test_reset();
         let tmp = std::env::temp_dir().join(format!("test-disabled-multi-{}.json", uuid::Uuid::new_v4()));
         set_disabled_skills_file(tmp.clone());
 

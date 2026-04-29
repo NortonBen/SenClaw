@@ -5,10 +5,8 @@
 //! with file-based locking — identical semantics to the TS DispatchBridge.
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -16,70 +14,11 @@ use crate::mcp::schedule_server::ToolResult;
 
 use rmcp::ServiceExt;
 
-// ===== State types (mirrors DispatchBridge.ts) =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DispatchAgent {
-    pub id: String,
-    pub name: String,
-    pub jid: String,
-    #[serde(default)]
-    pub channel: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DispatchTask {
-    pub id: String,
-    pub label: String,
-    #[serde(rename = "agentId")]
-    pub agent_id: String,
-    #[serde(rename = "agentJid")]
-    pub agent_jid: String,
-    pub depends_on: Vec<String>,
-    pub status: String,
-    pub prompt: String,
-    pub result: Option<String>,
-    #[serde(rename = "timeoutSeconds")]
-    pub timeout_seconds: u64,
-    #[serde(rename = "timeoutAt")]
-    pub timeout_at: Option<String>,
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
-    #[serde(rename = "startedAt")]
-    pub started_at: Option<String>,
-    #[serde(rename = "completedAt")]
-    pub completed_at: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "isVirtual")]
-    pub is_virtual: Option<bool>,
-    #[serde(default)]
-    #[serde(rename = "personaName")]
-    pub persona_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DispatchParent {
-    pub id: String,
-    #[serde(rename = "adminFolder")]
-    pub admin_folder: String,
-    #[serde(rename = "sharedWorkspace")]
-    pub shared_workspace: Option<String>,
-    pub goal: String,
-    pub status: String,
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
-    #[serde(rename = "completedAt")]
-    pub completed_at: Option<String>,
-    pub tasks: Vec<DispatchTask>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DispatchState {
-    #[serde(rename = "_seq")]
-    pub seq: u64,
-    pub agents: Vec<DispatchAgent>,
-    pub parents: Vec<DispatchParent>,
-}
+// State types are owned by the daemon-side `DispatchBridge` so the wire format
+// stays in lock-step with what the Web Agent Console consumes.
+pub use crate::agent::dispatch_bridge::{
+    DispatchAgent, DispatchParent, DispatchState, DispatchTask, DispatchTaskStatus,
+};
 
 // ===== Persona type (lightweight, shadows PersonaRegistry) =====
 
@@ -155,78 +94,14 @@ impl DispatchServer {
         }
     }
 
-    // ===== File helpers (same lock mechanism as DispatchBridge) =====
+    // ===== File helpers — share the daemon-side lock implementation =====
 
     fn read_state(&self) -> DispatchState {
-        fs::read_to_string(&self.state_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
-    }
-
-    fn write_state(&self, state: &DispatchState) {
-        if let Some(parent) = self.state_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(
-            &self.state_path,
-            serde_json::to_string_pretty(state).unwrap_or_default(),
-        );
+        crate::agent::dispatch_bridge::read_state_file(&self.state_path).unwrap_or_default()
     }
 
     fn modify_state(&self, f: impl FnOnce(&mut DispatchState)) {
-        let lock_path = self.state_path.with_extension("json.lock");
-        let start = Instant::now();
-
-        // Acquire lock (spin up to ~500ms, matching TS 50×10ms)
-        let mut locked = false;
-        for _ in 0..50 {
-            match fs::File::create_new(&lock_path) {
-                Ok(mut file) => {
-                    let _ = write!(file, "{}", std::process::id());
-                    locked = true;
-                    break;
-                }
-                Err(_) => {
-                    // busy wait ~10ms
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
-        }
-
-        if !locked {
-            // stale lock detection
-            if let Ok(raw) = fs::read_to_string(&lock_path) {
-                if let Ok(pid) = raw.trim().parse::<i32>() {
-                    // Check if process exists (Unix: kill(pid, 0))
-                    #[cfg(unix)]
-                    {
-                        unsafe {
-                            if libc::kill(pid, 0) != 0 {
-                                let _ = fs::remove_file(&lock_path);
-                                if fs::File::create_new(&lock_path).is_ok() {
-                                    locked = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if !locked {
-            tracing::warn!(
-                elapsed_ms = %start.elapsed().as_millis(),
-                "[dispatch-server] Failed to acquire state lock, skipping modification"
-            );
-            return;
-        }
-
-        let mut state = self.read_state();
-        f(&mut state);
-        self.write_state(&state);
-
-        let _ = fs::remove_file(&lock_path);
+        let _ = crate::agent::dispatch_bridge::modify_state_file(&self.state_path, f);
     }
 
     fn next_id(state: &mut DispatchState, prefix: char) -> String {
@@ -323,11 +198,14 @@ impl DispatchServer {
         if !state.agents.is_empty() {
             lines.push("**Persistent Agents:**".into());
             for a in &state.agents {
+                let channel = if a.channel.is_empty() {
+                    "web-only"
+                } else {
+                    a.channel.as_str()
+                };
                 lines.push(format!(
                     "- {} (id: {}, channel: {})",
-                    a.name,
-                    a.id,
-                    a.channel.as_deref().unwrap_or("web-only")
+                    a.name, a.id, channel
                 ));
             }
         }
@@ -464,7 +342,7 @@ impl DispatchServer {
                         agent_id: agent.id.clone(),
                         agent_jid: agent.jid.clone(),
                         depends_on: deps.clone(),
-                        status: "registered".into(),
+                        status: DispatchTaskStatus::Registered,
                         prompt: prompt.clone(),
                         result: None,
                         timeout_seconds: timeout,
@@ -472,7 +350,7 @@ impl DispatchServer {
                         created_at: now.clone(),
                         started_at: None,
                         completed_at: None,
-                        is_virtual: if agent.is_virtual { Some(true) } else { None },
+                        is_virtual: agent.is_virtual,
                         persona_name: agent.persona_name.clone(),
                     })
                     .collect(),
@@ -584,17 +462,17 @@ impl DispatchServer {
                 }
             }
 
-            match current.status.as_str() {
-                "done" => {
+            match current.status {
+                DispatchTaskStatus::Done => {
                     return ToolResult::ok(current.result.unwrap_or_default());
                 }
-                "error" => {
+                DispatchTaskStatus::Error => {
                     return ToolResult::err(format!(
                         "Task \"{task_label}\" failed (agent: {})",
                         current.agent_id
                     ));
                 }
-                "timeout" => {
+                DispatchTaskStatus::Timeout => {
                     return ToolResult::err(format!(
                         "Task \"{task_label}\" timed out (agent: {})",
                         current.agent_id

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { GroupInfo, RegisterGroupPayload, UpdateGroupPayload } from '../types';
+import { McpTab } from './McpTab';
 
 // ===== Types =====
 
-type Tab = 'permissions' | 'agents' | 'llm';
+type Tab = 'permissions' | 'agents' | 'llm' | 'mcp';
 
 // ===== LLM Config types & constants =====
 
@@ -1391,6 +1392,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'permissions', label: 'Permissions' },
     { id: 'agents',      label: 'Agents' },
     { id: 'llm',         label: 'LLM' },
+    { id: 'mcp',         label: 'MCP' },
   ];
   return (
     <div className="flex border-b border-gray-100">
@@ -1465,6 +1467,7 @@ export function SettingsPanel({ onClose, groups, onRegisterGroup, onRegisterFeis
               refreshKey={llmRefreshKey}
             />
           )}
+          {tab === 'mcp' && <McpTab />}
         </div>
       </aside>
 

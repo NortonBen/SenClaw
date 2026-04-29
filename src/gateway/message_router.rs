@@ -156,7 +156,7 @@ impl MessageRouter {
 
         // 4. Admin command interception
         if group.is_admin {
-            if let Some(result) = dispatch_command(&self.db, &msg.content) {
+            if let Some(result) = dispatch_command(&self.db, &msg.content, Some(&msg.chat_jid)) {
                 tracing::info!("[MessageRouter] Command handled for {}", msg.chat_jid);
                 self.agent_api
                     .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())

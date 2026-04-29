@@ -49,12 +49,18 @@ pub struct ZenEngine {
     // MCP subprocess registry
     mcp_registry: SharedMcpRegistry,
 
+    // External MCP server manager (bridges user-configured MCP tools)
+    pub mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
+
     // Session helpers
     session_id: RwLock<Option<String>>,
 }
 
 impl ZenEngine {
-    pub fn new(options: ZenCoreOptions) -> Arc<Self> {
+    pub fn new(
+        options: ZenCoreOptions,
+        mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
+    ) -> Arc<Self> {
         let instance_id = options.instance_id.clone();
         let event_bus = EventBus::new();
         let response_registry = Arc::new(ResponseRegistry::new());
@@ -84,6 +90,7 @@ impl ZenEngine {
             builtin_tools: RwLock::new(Vec::new()),
             skill_registry: skill_registry.clone(),
             mcp_registry: SharedMcpRegistry::new(),
+            mcp_manager,
             session_id: RwLock::new(None),
         });
 
@@ -122,6 +129,20 @@ impl ZenEngine {
 
     pub fn register_tools(&self, tools: Vec<Arc<dyn Tool>>) {
         self.builtin_tools.write().unwrap().extend(tools);
+    }
+
+    /// Refresh external MCP bridge tools in the tool roster.
+    /// Removes previously-registered `mcp__` tools and re-fetches from the
+    /// McpManager.
+    pub async fn refresh_mcp_tools(self: &Arc<Self>) {
+        if let Some(ref mgr) = self.mcp_manager {
+            let bridge_tools = crate::mcp::bridge::McpBridgeTool::from_manager(mgr).await;
+            let mut tools = self.builtin_tools.write().unwrap();
+            // Remove old MCP bridge tools
+            tools.retain(|t| !t.name().starts_with("mcp__"));
+            // Add refreshed ones
+            tools.extend(bridge_tools);
+        }
     }
 
     pub fn get_tools(&self) -> Vec<Arc<dyn Tool>> {
@@ -686,7 +707,7 @@ mod tests {
             working_dir: "/tmp/test".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         assert_eq!(engine.instance_id, "test-1");
     }
 
@@ -696,7 +717,7 @@ mod tests {
             instance_id: "test-2".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         engine.create_session(None).unwrap();
         let sid = engine.session_id.read().unwrap();
         assert!(sid.is_some());
@@ -708,7 +729,7 @@ mod tests {
             instance_id: "test-3".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         engine.create_session(Some("my-session")).unwrap();
         let sid = engine.session_id.read().unwrap();
         assert_eq!(sid.as_deref(), Some("my-session"));
@@ -720,7 +741,7 @@ mod tests {
             instance_id: "test-4".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         engine.create_session(None).unwrap();
         engine.pause_session();
         let state = engine.state.lock().unwrap();
@@ -733,7 +754,7 @@ mod tests {
             instance_id: "test-5".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         assert!(!engine.has_session_tool_results());
     }
 
@@ -743,7 +764,7 @@ mod tests {
             instance_id: "test-6".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         engine.update_skip_permissions(true);
         let o = engine.options.read().unwrap();
         assert!(o.skip_file_edit_permission);
@@ -757,7 +778,7 @@ mod tests {
             instance_id: "test-7".into(),
             ..Default::default()
         };
-        let engine = ZenEngine::new(opts);
+        let engine = ZenEngine::new(opts, None);
         engine.create_session(None).unwrap();
         engine.process_user_input("hello", None).unwrap();
         let state = engine.state.lock().unwrap();

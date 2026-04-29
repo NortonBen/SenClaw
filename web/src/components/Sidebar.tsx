@@ -105,7 +105,6 @@ export function Sidebar({ groups, selectedJid, agentStates, status, onSelect, on
         {/* Plugins — opens in new tab */}
         <a
           href="/plugins"
-          target="_blank"
           rel="noopener noreferrer"
           title="Plugins"
           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-3 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
@@ -120,7 +119,6 @@ export function Sidebar({ groups, selectedJid, agentStates, status, onSelect, on
         {/* Wiki — opens in new tab */}
         <a
           href="/wiki"
-          target="_blank"
           rel="noopener noreferrer"
           title="Wiki"
           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-3 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"

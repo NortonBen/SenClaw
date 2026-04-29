@@ -21,8 +21,19 @@ const DAILY_SEARCH_DAYS: usize = 7;
 static DATE_FILE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})\.md$").unwrap());
 
-static HEADING_SPLIT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\n(?=## )").unwrap());
+fn split_by_headings(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, part) in raw.split("\n## ").enumerate() {
+        if i == 0 {
+            if part.starts_with("## ") {
+                out.push(part.to_string());
+            }
+        } else {
+            out.push(format!("## {part}"));
+        }
+    }
+    out
+}
 
 // ===== Data structures =====
 
@@ -193,7 +204,7 @@ pub fn search_daily_logs(memory_dir: &Path, query: &str, top_n: usize) -> Vec<Da
             Err(_) => continue,
         };
 
-        for sec in HEADING_SPLIT_RE.split(&raw) {
+        for sec in &split_by_headings(&raw) {
             if !sec.starts_with("## ") {
                 continue;
             }

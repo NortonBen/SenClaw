@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { GroupInfo, ChatMessage, AgentState } from '../types';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 
@@ -16,20 +16,90 @@ interface Props {
   onResolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
 }
 
+const PAGE_SIZE = 5;
+
 export function ChatView({ group, messages, agentState, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
   const [input, setInput]           = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const bottomRef                   = useRef<HTMLDivElement>(null);
   const textareaRef                 = useRef<HTMLTextAreaElement>(null);
+  const scrollRef                   = useRef<HTMLDivElement>(null);
+  const prevMessagesLenRef          = useRef(messages.length);
+  const prevGroupJidRef             = useRef(group.jid);
+  const preserveScrollRef           = useRef<{ prevHeight: number; prevTop: number } | null>(null);
 
   const isProcessing = agentState === 'processing';
   const isPaused     = agentState === 'paused';
   const isActive     = isProcessing || isPaused; // agent has work in progress
 
-  // Auto-scroll to bottom on new messages or typing indicator
+  // Reset pagination when switching groups
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, isProcessing]);
+    if (prevGroupJidRef.current !== group.jid) {
+      prevGroupJidRef.current = group.jid;
+      setVisibleCount(PAGE_SIZE);
+      prevMessagesLenRef.current = messages.length;
+    }
+  }, [group.jid, messages.length]);
+
+  const visibleMessages = messages.slice(Math.max(0, messages.length - visibleCount));
+  const hasMore = messages.length > visibleCount;
+
+  // On group switch / initial mount: jump scroll to bottom synchronously after layout
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [group.jid]);
+
+  // First time messages arrive for a group (0 → N), pin to bottom
+  useLayoutEffect(() => {
+    if (prevMessagesLenRef.current === 0 && messages.length > 0) {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [messages.length]);
+
+  // Restore scroll position after loading older messages (prepended at top)
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && preserveScrollRef.current) {
+      const { prevHeight, prevTop } = preserveScrollRef.current;
+      el.scrollTop = el.scrollHeight - prevHeight + prevTop;
+      preserveScrollRef.current = null;
+    }
+  }, [visibleCount]);
+
+  // Auto-scroll to bottom only when a NEW message is appended (not when loading older)
+  useEffect(() => {
+    const prevLen = prevMessagesLenRef.current;
+    if (messages.length > prevLen) {
+      // grow visible count so the new message is shown
+      const delta = messages.length - prevLen;
+      setVisibleCount(c => c + delta);
+      requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    }
+    prevMessagesLenRef.current = messages.length;
+  }, [messages.length]);
+
+  // Auto-scroll on typing indicator toggle
+  useEffect(() => {
+    if (isProcessing) {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [isProcessing]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollTop <= 0 && hasMore) {
+      preserveScrollRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+      setVisibleCount(c => Math.min(messages.length, c + PAGE_SIZE));
+    }
+  };
 
   // ── Send / pause / resume single handler ──
   const handleActionButton = () => {
@@ -125,14 +195,28 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4 bg-[#F5F8FB]">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-5 space-y-4 bg-[#F5F8FB]">
         {messages.length === 0 && !isProcessing && (
           <div className="flex flex-col items-center justify-center h-full gap-3 select-none">
             <img src="/logo.svg" alt="" className="w-12 h-12 opacity-20" />
             <p className="text-sm text-gray-400">Start a conversation</p>
           </div>
         )}
-        {messages.map(msg => (
+        {hasMore && (
+          <div className="flex justify-center">
+            <button
+              onClick={() => {
+                const el = scrollRef.current;
+                if (el) preserveScrollRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+                setVisibleCount(c => Math.min(messages.length, c + PAGE_SIZE));
+              }}
+              className="text-xs text-gray-400 hover:text-gray-600 px-3 py-1 rounded-full bg-white/70 hover:bg-white border border-gray-200 transition-colors"
+            >
+              Load older messages
+            </button>
+          </div>
+        )}
+        {visibleMessages.map(msg => (
           <MessageBubble
             key={msg.id}
             message={msg}
