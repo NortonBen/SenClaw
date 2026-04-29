@@ -1,0 +1,513 @@
+//! Virtual worker pool — temporary virtual-agent instance manager.
+//! Port target: src-old/agent/VirtualWorkerPool.ts
+//!
+//! Creates temporary sema-core instances per [`PersonaConfig`] and destroys them after
+//! prompt execution. Uses per-persona concurrency limits and supports `cancel_all` /
+//! `cancel_task` for force-stop.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::{bail, Result};
+
+use crate::agent::persona_registry::PersonaConfig;
+
+// ===== Types =====
+
+/// Result of a virtual agent run.
+#[derive(Debug, Clone)]
+pub struct VirtualRunResult {
+    pub result: String,
+    pub duration_ms: u64,
+}
+
+/// A todo item pushed from the virtual agent.
+#[derive(Debug, Clone)]
+pub struct TodoItem {
+    pub content: String,
+    pub status: String,
+    pub active_form: Option<String>,
+}
+
+/// Callback for forwarding virtual-agent todos to WsGateway.
+pub type TodosNotifyFn = Arc<dyn Fn(&str, &str, &[TodoItem]) + Send + Sync>;
+
+// ===== Trait — abstracts sema-core lifecycle for virtual agents =====
+
+/// Abstracts the full sema-core lifecycle for a virtual agent run:
+/// create → createSession → processUserInput → wait for idle → dispose.
+#[allow(unused_variables)]
+pub trait VirtualCoreApi: Send + Sync {
+    /// Execute a prompt in a new temporary sema-core instance.
+    ///
+    /// Implementations should:
+    /// 1. Create SemaCore with the given config
+    /// 2. Create a session
+    /// 3. Bind permission events if `on_permission_bind` is set
+    /// 4. Process user input
+    /// 5. Wait for `state:update` (idle), `session:error`, or cancellation
+    /// 6. Dispose the core
+    /// 7. Return the final reply text from `message:complete` (agentId === 'main')
+    fn execute_virtual_prompt(
+        &self,
+        instance_id: &str,
+        agent_data_dir: &str,
+        working_dir: &str,
+        tools: &[String],
+        system_prompt: Option<&str>,
+        skills_extra_dirs: &[String],
+        skip_perms: bool,
+        prompt: &str,
+        timeout: Duration,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<String> {
+        Err(anyhow::anyhow!("VirtualCoreApi not wired"))
+    }
+}
+
+// ===== Default config =====
+
+const DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1000; // 10 minutes
+
+/// Tools excluded for virtual agents (Task, AskUserQuestion require main-agent context).
+const VIRTUAL_EXCLUDED_TOOLS: &[&str] = &["Task", "AskUserQuestion"];
+
+/// All non-admin pooled tools (used when persona doesn't specify a custom tool list).
+const ALL_POOLED_TOOLS: &[&str] = &[
+    "Bash", "Glob", "Grep", "Read", "Write", "Edit",
+    "TodoWrite", "Skill", "NotebookEdit", "ExitPlanMode",
+];
+
+// ===== Internal: running instance tracking =====
+
+struct RunningInstance {
+    task_id: String,
+    persona_name: String,
+    cancel: Arc<AtomicBool>,
+    /// cancel_task already decremented active_counts; skip duplicate decrement in finally.
+    count_decremented_early: bool,
+}
+
+// ===== VirtualWorkerPool =====
+
+pub struct VirtualWorkerPool {
+    active_counts: Mutex<HashMap<String, u32>>,
+    running_instances: Mutex<HashMap<String, RunningInstance>>,
+    api: Arc<dyn VirtualCoreApi>,
+
+    todos_notify: Mutex<Option<TodosNotifyFn>>,
+    /// Permission bridge callback: called to bind a virtual agent core for permission forwarding.
+    /// Returns a cleanup function.
+    on_bind_permission:
+        Mutex<Option<Box<dyn Fn(&str, &str, bool) -> Option<Box<dyn FnOnce() + Send>> + Send + Sync>>>,
+    /// Returns the current skip-permission state (follows main-agent config).
+    get_skip_perms: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+}
+
+impl VirtualWorkerPool {
+    pub fn new(api: Arc<dyn VirtualCoreApi>) -> Self {
+        Self {
+            active_counts: Mutex::new(HashMap::new()),
+            running_instances: Mutex::new(HashMap::new()),
+            api,
+            todos_notify: Mutex::new(None),
+            on_bind_permission: Mutex::new(None),
+            get_skip_perms: Mutex::new(None),
+        }
+    }
+
+    // ===== Callback setters =====
+
+    /// Inject todos-notify callback (forward virtual-agent todos to WsGateway).
+    pub fn set_todos_notify(&self, f: TodosNotifyFn) {
+        *self.todos_notify.lock().unwrap() = Some(f);
+    }
+
+    /// Inject permission bridge binding.
+    /// `on_bind`: receives (virtual_jid, persona_name, skip_perms), returns optional cleanup fn.
+    pub fn set_permission_bind<
+        F: Fn(&str, &str, bool) -> Option<Box<dyn FnOnce() + Send>> + Send + Sync + 'static,
+    >(
+        &self,
+        on_bind: F,
+        get_skip_perms: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) {
+        *self.on_bind_permission.lock().unwrap() = Some(Box::new(on_bind));
+        *self.get_skip_perms.lock().unwrap() = Some(get_skip_perms);
+    }
+
+    // ===== Public API =====
+
+    /// Run a virtual agent with the given persona config and prompt.
+    /// Returns the agent's final reply text and duration.
+    pub async fn run(
+        &self,
+        persona: &PersonaConfig,
+        prompt: &str,
+        workspace_dir: &str,
+        task_id: Option<&str>,
+        timeout_override: Option<Duration>,
+    ) -> Result<VirtualRunResult> {
+        // Concurrency gate
+        let persona_name = &persona.name;
+        {
+            let mut counts = self.active_counts.lock().unwrap();
+            let current = *counts.get(persona_name).unwrap_or(&0);
+            if current >= persona.max_concurrent {
+                bail!(
+                    "Persona \"{persona_name}\" has reached max concurrency ({}). \
+                     {current} instance(s) currently running.",
+                    persona.max_concurrent
+                );
+            }
+            counts.insert(persona_name.clone(), current + 1);
+        }
+
+        let start = std::time::Instant::now();
+        let instance_id = generate_instance_id(persona_name);
+        let temp_dir = std::env::temp_dir().join(format!("senclaw-virtual-{instance_id}"));
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let task_id = task_id.unwrap_or(&instance_id).to_string();
+
+        // Register running instance for cancel tracking
+        {
+            let mut instances = self.running_instances.lock().unwrap();
+            instances.insert(
+                task_id.clone(),
+                RunningInstance {
+                    task_id: task_id.clone(),
+                    persona_name: persona_name.clone(),
+                    cancel: cancel.clone(),
+                    count_decremented_early: false,
+                },
+            );
+        }
+
+        // Prepare cleanup guard
+        let cleanup_guard = CleanupGuard {
+            pool: self,
+            persona_name: persona_name.clone(),
+            task_id: task_id.clone(),
+            temp_dir: temp_dir.clone(),
+            cleanup_permission: std::sync::Mutex::new(None::<Box<dyn FnOnce() + Send>>),
+        };
+
+        let result = self
+            .execute_inner(
+                persona,
+                prompt,
+                workspace_dir,
+                &task_id,
+                &instance_id,
+                &temp_dir,
+                cancel,
+                timeout_override,
+                &cleanup_guard,
+            )
+            .await;
+
+        // Cleanup runs via Drop, but we handle result explicitly
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Run cleanup
+        cleanup_guard.run();
+
+        match result {
+            Ok(output) => Ok(VirtualRunResult {
+                result: output,
+                duration_ms,
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Get the current active count for a persona.
+    pub fn get_active_count(&self, persona_name: &str) -> u32 {
+        *self.active_counts.lock().unwrap().get(persona_name).unwrap_or(&0)
+    }
+
+    /// Force-stop a virtual task by task ID.
+    pub fn cancel_task(&self, task_id: &str) {
+        let (cancel, persona_name, needs_decrement) = {
+            let mut instances = self.running_instances.lock().unwrap();
+            let Some(instance) = instances.get_mut(task_id) else {
+                return;
+            };
+            tracing::warn!(
+                "[VirtualWorkerPool] Cancelling task {task_id} (persona: {})",
+                instance.persona_name
+            );
+            let needs_decrement = !instance.count_decremented_early;
+            if needs_decrement {
+                instance.count_decremented_early = true;
+            }
+            (
+                Arc::clone(&instance.cancel),
+                instance.persona_name.clone(),
+                needs_decrement,
+            )
+        };
+
+        if needs_decrement {
+            self.decrement_count(&persona_name);
+        }
+
+        cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// Force-stop all running virtual tasks.
+    pub fn cancel_all(&self) {
+        let task_ids: Vec<String> = {
+            let instances = self.running_instances.lock().unwrap();
+            if instances.is_empty() {
+                return;
+            }
+            tracing::warn!(
+                "[VirtualWorkerPool] Cancelling all {} running instance(s)",
+                instances.len()
+            );
+            instances.keys().cloned().collect()
+        };
+        for task_id in &task_ids {
+            self.cancel_task(task_id);
+        }
+    }
+
+    // ===== Internal =====
+
+    async fn execute_inner(
+        &self,
+        persona: &PersonaConfig,
+        prompt: &str,
+        workspace_dir: &str,
+        task_id: &str,
+        instance_id: &str,
+        temp_dir: &std::path::Path,
+        cancel: Arc<AtomicBool>,
+        timeout_override: Option<Duration>,
+        cleanup_guard: &CleanupGuard<'_>,
+    ) -> Result<String> {
+        // Prepare temp agent data dir
+        tokio::fs::create_dir_all(temp_dir).await?;
+        if !persona.system_prompt.is_empty() {
+            tokio::fs::write(
+                temp_dir.join("CLAUDE.md"),
+                persona.system_prompt.as_bytes(),
+            )
+            .await?;
+        }
+
+        // Resolve tool set (exclude VIRTUAL_EXCLUDED_TOOLS)
+        let tools: Vec<String> = if let Some(ref custom_tools) = persona.tools {
+            custom_tools
+                .iter()
+                .filter(|t| !VIRTUAL_EXCLUDED_TOOLS.contains(&t.as_str()))
+                .cloned()
+                .collect()
+        } else {
+            ALL_POOLED_TOOLS
+                .iter()
+                .filter(|t| !VIRTUAL_EXCLUDED_TOOLS.contains(t))
+                .map(|s| s.to_string())
+                .collect()
+        };
+
+        // Permission config: follows main-agent configuration
+        let skip_perms = self
+            .get_skip_perms
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or(true);
+
+        // Bind permission bridge for virtual agents
+        {
+            let virtual_jid = format!("virtual:{task_id}");
+            if let Some(ref bind_fn) = *self.on_bind_permission.lock().unwrap() {
+                let cleanup = bind_fn(&virtual_jid, &persona.name, skip_perms);
+                if let Some(cleanup) = cleanup {
+                    *cleanup_guard.cleanup_permission.lock().unwrap() = Some(cleanup);
+                }
+            }
+        }
+
+        let timeout = timeout_override.unwrap_or(Duration::from_millis(DEFAULT_TIMEOUT_MS));
+
+        // Execute via the core API trait
+        let api = Arc::clone(&self.api);
+        let temp_dir_str = temp_dir.to_string_lossy().to_string();
+        let working_dir = workspace_dir.to_string();
+        let instance_id = instance_id.to_string();
+        let prompt = prompt.to_string();
+        let tools_clone = tools.clone();
+        let sys_prompt = persona.system_prompt.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let sys_prompt_opt = if sys_prompt.is_empty() {
+                None
+            } else {
+                Some(sys_prompt.as_str())
+            };
+            api.execute_virtual_prompt(
+                &instance_id,
+                &temp_dir_str,
+                &working_dir,
+                &tools_clone,
+                sys_prompt_opt,
+                &[], // skills_extra_dirs — not yet ported from TS
+                skip_perms,
+                &prompt,
+                timeout,
+                cancel,
+            )
+        })
+        .await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(join_err) => {
+                if join_err.is_cancelled() {
+                    bail!("Cancelled");
+                }
+                bail!("Virtual agent failed: {join_err}");
+            }
+        }
+    }
+
+    fn decrement_count(&self, persona_name: &str) {
+        let mut counts = self.active_counts.lock().unwrap();
+        let entry = counts.get(persona_name).copied();
+        if let Some(count) = entry {
+            if count <= 1 {
+                counts.remove(persona_name);
+            } else {
+                counts.insert(persona_name.to_string(), count - 1);
+            }
+        }
+    }
+}
+
+// ===== CleanupGuard =====
+
+/// Ensures cleanup runs even on early return / error paths.
+struct CleanupGuard<'p> {
+    pool: &'p VirtualWorkerPool,
+    persona_name: String,
+    task_id: String,
+    temp_dir: PathBuf,
+    cleanup_permission: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+impl CleanupGuard<'_> {
+    fn run(&self) {
+        // Remove running instance
+        {
+            let mut instances = self.pool.running_instances.lock().unwrap();
+            if let Some(inst) = instances.get(&self.task_id) {
+                if !inst.count_decremented_early {
+                    self.pool.decrement_count(&self.persona_name);
+                }
+            }
+            instances.remove(&self.task_id);
+        }
+
+        // Run permission cleanup
+        if let Some(cleanup) = self.cleanup_permission.lock().unwrap().take() {
+            cleanup();
+        }
+
+        // Remove temp dir
+        if self.temp_dir.exists() {
+            let _ = std::fs::remove_dir_all(&self.temp_dir);
+        }
+    }
+}
+
+// ===== Helpers =====
+
+fn generate_instance_id(persona_name: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let ts36 = radix36(ts);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{persona_name}-{ts36}-{n}")
+}
+
+fn radix36(mut n: u64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut buf = Vec::new();
+    while n > 0 {
+        buf.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+    }
+    buf.reverse();
+    String::from_utf8(buf).unwrap()
+}
+
+// ===== Tests =====
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_radix36() {
+        assert_eq!(radix36(0), "0");
+        assert_eq!(radix36(10), "a");
+        assert_eq!(radix36(35), "z");
+        assert_eq!(radix36(36), "10");
+    }
+
+    #[test]
+    fn test_generate_instance_id() {
+        let id1 = generate_instance_id("coder");
+        let id2 = generate_instance_id("coder");
+        assert!(id1.starts_with("coder-"));
+        assert!(id2.starts_with("coder-"));
+        assert_ne!(id1, id2, "instance IDs should be unique");
+    }
+
+    #[test]
+    fn test_virtual_excluded_tools() {
+        assert!(VIRTUAL_EXCLUDED_TOOLS.contains(&"Task"));
+        assert!(VIRTUAL_EXCLUDED_TOOLS.contains(&"AskUserQuestion"));
+    }
+
+    #[test]
+    fn test_get_active_count_default_zero() {
+        let api = Arc::new(StubVirtualCoreApi);
+        let pool = VirtualWorkerPool::new(api);
+        assert_eq!(pool.get_active_count("nonexistent"), 0);
+    }
+
+    #[test]
+    fn test_cancel_task_nonexistent_does_not_panic() {
+        let api = Arc::new(StubVirtualCoreApi);
+        let pool = VirtualWorkerPool::new(api);
+        pool.cancel_task("nonexistent");
+    }
+
+    #[test]
+    fn test_cancel_all_empty_does_not_panic() {
+        let api = Arc::new(StubVirtualCoreApi);
+        let pool = VirtualWorkerPool::new(api);
+        pool.cancel_all();
+    }
+
+    // ===== Stub =====
+
+    struct StubVirtualCoreApi;
+    impl VirtualCoreApi for StubVirtualCoreApi {}
+}

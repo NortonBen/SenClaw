@@ -1,0 +1,765 @@
+//! Dispatch MCP server. Port target: src-old/mcp/dispatch-server.ts
+//!
+//! Tools: list_agents, create_parent, dispatch_task.
+//! Manages DAG task orchestration via a shared state file (`dispatch-state.json`)
+//! with file-based locking — identical semantics to the TS DispatchBridge.
+
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use crate::mcp::schedule_server::ToolResult;
+
+use rmcp::ServiceExt;
+
+// ===== State types (mirrors DispatchBridge.ts) =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchAgent {
+    pub id: String,
+    pub name: String,
+    pub jid: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchTask {
+    pub id: String,
+    pub label: String,
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    #[serde(rename = "agentJid")]
+    pub agent_jid: String,
+    pub depends_on: Vec<String>,
+    pub status: String,
+    pub prompt: String,
+    pub result: Option<String>,
+    #[serde(rename = "timeoutSeconds")]
+    pub timeout_seconds: u64,
+    #[serde(rename = "timeoutAt")]
+    pub timeout_at: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "startedAt")]
+    pub started_at: Option<String>,
+    #[serde(rename = "completedAt")]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "isVirtual")]
+    pub is_virtual: Option<bool>,
+    #[serde(default)]
+    #[serde(rename = "personaName")]
+    pub persona_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchParent {
+    pub id: String,
+    #[serde(rename = "adminFolder")]
+    pub admin_folder: String,
+    #[serde(rename = "sharedWorkspace")]
+    pub shared_workspace: Option<String>,
+    pub goal: String,
+    pub status: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "completedAt")]
+    pub completed_at: Option<String>,
+    pub tasks: Vec<DispatchTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DispatchState {
+    #[serde(rename = "_seq")]
+    pub seq: u64,
+    pub agents: Vec<DispatchAgent>,
+    pub parents: Vec<DispatchParent>,
+}
+
+// ===== Persona type (lightweight, shadows PersonaRegistry) =====
+
+#[derive(Debug, Clone)]
+pub struct PersonaInfo {
+    pub name: String,
+    pub description: String,
+}
+
+pub trait PersonaResolver: Send + Sync {
+    fn list(&self) -> Vec<PersonaInfo>;
+    fn get(&self, name: &str) -> Option<PersonaInfo>;
+}
+
+/// Default persona resolver that scans .md files from a directory.
+pub struct FsPersonaResolver {
+    personas: Vec<PersonaInfo>,
+}
+
+impl FsPersonaResolver {
+    pub fn from_dir(dir: &Path) -> Self {
+        let mut personas = Vec::new();
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |e| e == "md") {
+                    let name = path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown")
+                        .to_owned();
+                    let description = fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|content| {
+                            content.lines().find(|l| !l.starts_with('#') && !l.is_empty())
+                                .map(|l| l.trim().trim_matches(&['"', '\''][..]).to_owned())
+                        })
+                        .unwrap_or_else(|| "(no description)".into());
+                    personas.push(PersonaInfo { name, description });
+                }
+            }
+        }
+        Self { personas }
+    }
+}
+
+impl PersonaResolver for FsPersonaResolver {
+    fn list(&self) -> Vec<PersonaInfo> {
+        self.personas.clone()
+    }
+    fn get(&self, name: &str) -> Option<PersonaInfo> {
+        self.personas.iter().find(|p| p.name == name).cloned()
+    }
+}
+
+// ===== DispatchServer =====
+
+pub struct DispatchServer {
+    state_path: PathBuf,
+    admin_folder: String,
+    persona_resolver: Option<Box<dyn PersonaResolver>>,
+}
+
+impl DispatchServer {
+    pub fn new(
+        state_path: &Path,
+        admin_folder: &str,
+        persona_resolver: Option<Box<dyn PersonaResolver>>,
+    ) -> Self {
+        Self {
+            state_path: state_path.to_path_buf(),
+            admin_folder: admin_folder.to_owned(),
+            persona_resolver,
+        }
+    }
+
+    // ===== File helpers (same lock mechanism as DispatchBridge) =====
+
+    fn read_state(&self) -> DispatchState {
+        fs::read_to_string(&self.state_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_state(&self, state: &DispatchState) {
+        if let Some(parent) = self.state_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(
+            &self.state_path,
+            serde_json::to_string_pretty(state).unwrap_or_default(),
+        );
+    }
+
+    fn modify_state(&self, f: impl FnOnce(&mut DispatchState)) {
+        let lock_path = self.state_path.with_extension("json.lock");
+        let start = Instant::now();
+
+        // Acquire lock (spin up to ~500ms, matching TS 50×10ms)
+        let mut locked = false;
+        for _ in 0..50 {
+            match fs::File::create_new(&lock_path) {
+                Ok(mut file) => {
+                    let _ = write!(file, "{}", std::process::id());
+                    locked = true;
+                    break;
+                }
+                Err(_) => {
+                    // busy wait ~10ms
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+
+        if !locked {
+            // stale lock detection
+            if let Ok(raw) = fs::read_to_string(&lock_path) {
+                if let Ok(pid) = raw.trim().parse::<i32>() {
+                    // Check if process exists (Unix: kill(pid, 0))
+                    #[cfg(unix)]
+                    {
+                        unsafe {
+                            if libc::kill(pid, 0) != 0 {
+                                let _ = fs::remove_file(&lock_path);
+                                if fs::File::create_new(&lock_path).is_ok() {
+                                    locked = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !locked {
+            tracing::warn!(
+                elapsed_ms = %start.elapsed().as_millis(),
+                "[dispatch-server] Failed to acquire state lock, skipping modification"
+            );
+            return;
+        }
+
+        let mut state = self.read_state();
+        f(&mut state);
+        self.write_state(&state);
+
+        let _ = fs::remove_file(&lock_path);
+    }
+
+    fn next_id(state: &mut DispatchState, prefix: char) -> String {
+        state.seq += 1;
+        let date = chrono::Utc::now().format("%Y%m%d");
+        format!("{}-{}-{:04}", prefix, date, state.seq)
+    }
+
+    fn read_admin_workspace(&self) -> Option<String> {
+        let state_file = dirs::home_dir()?
+            .join(".senclaw")
+            .join(format!("workspace-state-{}.json", self.admin_folder));
+        let raw = fs::read_to_string(&state_file).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        v.get("currentDir")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_owned())
+    }
+
+    fn resolve_agent(
+        &self,
+        state: &DispatchState,
+        agent_name: &str,
+    ) -> Option<ResolvedAgent> {
+        // persona:{name} format
+        if let Some(persona_name) = agent_name.strip_prefix("persona:") {
+            if self.persona_resolver.as_ref()?.get(persona_name).is_some() {
+                return Some(ResolvedAgent {
+                    id: agent_name.to_owned(),
+                    jid: String::new(),
+                    is_virtual: true,
+                    persona_name: Some(persona_name.to_owned()),
+                });
+            }
+            return None;
+        }
+
+        let lower = agent_name.to_lowercase();
+        state.agents.iter().find(|a| {
+            a.name.to_lowercase() == lower || a.id.to_lowercase() == lower
+        }).map(|a| ResolvedAgent {
+            id: a.id.clone(),
+            jid: a.jid.clone(),
+            is_virtual: false,
+            persona_name: None,
+        })
+    }
+
+    // ===== DAG cycle detection (DFS) =====
+
+    fn detect_cycle(tasks: &[(String, Vec<String>)]) -> Option<String> {
+        let mut visited = HashSet::new();
+        let mut in_stack = HashSet::new();
+
+        fn dfs(
+            label: &str,
+            tasks: &[(String, Vec<String>)],
+            visited: &mut HashSet<String>,
+            in_stack: &mut HashSet<String>,
+        ) -> bool {
+            if in_stack.contains(label) {
+                return true;
+            }
+            if visited.contains(label) {
+                return false;
+            }
+            visited.insert(label.to_string());
+            in_stack.insert(label.to_string());
+            if let Some((_, deps)) = tasks.iter().find(|(l, _)| l == label) {
+                for dep in deps {
+                    if dfs(dep, tasks, visited, in_stack) {
+                        return true;
+                    }
+                }
+            }
+            in_stack.remove(label);
+            false
+        }
+
+        for (label, _) in tasks {
+            if !visited.contains(label.as_str()) && dfs(label, tasks, &mut visited, &mut in_stack) {
+                return Some(label.clone());
+            }
+        }
+        None
+    }
+
+    // ===== list_agents =====
+
+    pub fn list_agents(&self) -> ToolResult {
+        let state = self.read_state();
+        let mut lines: Vec<String> = Vec::new();
+
+        if !state.agents.is_empty() {
+            lines.push("**Persistent Agents:**".into());
+            for a in &state.agents {
+                lines.push(format!(
+                    "- {} (id: {}, channel: {})",
+                    a.name,
+                    a.id,
+                    a.channel.as_deref().unwrap_or("web-only")
+                ));
+            }
+        }
+
+        if let Some(resolver) = &self.persona_resolver {
+            let personas = resolver.list();
+            if !personas.is_empty() {
+                if !lines.is_empty() {
+                    lines.push(String::new());
+                }
+                lines.push("**Virtual Personas:**".into());
+                for p in &personas {
+                    let desc = p.description.trim_matches(&['"', '\''][..]);
+                    lines.push(format!("- persona:{} — {}", p.name, desc));
+                }
+            }
+        }
+
+        if lines.is_empty() {
+            return ToolResult::ok("No agents or personas registered.".into());
+        }
+        ToolResult::ok(lines.join("\n"))
+    }
+
+    // ===== create_parent =====
+
+    pub fn create_parent(
+        &self,
+        goal: &str,
+        tasks: Vec<DispatchTaskInput>,
+        timeout_seconds: Option<u64>,
+    ) -> ToolResult {
+        let timeout = timeout_seconds.unwrap_or(900);
+
+        // Fill and validate labels
+        let mut normalized: Vec<(String, String, String, Vec<String>)> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        let mut label_set = HashSet::new();
+
+        for (i, t) in tasks.iter().enumerate() {
+            let label = if t.label.trim().is_empty() {
+                format!("task-{i}")
+            } else {
+                t.label.clone()
+            };
+            if label_set.contains(&label) {
+                errors.push(format!("Duplicate label: \"{label}\""));
+            } else {
+                label_set.insert(label.clone());
+            }
+            normalized.push((label, t.agent_name.clone(), t.prompt.clone(), t.depends_on.clone()));
+        }
+
+        // Validate dependsOn references
+        for (label, _, _, deps) in &normalized {
+            for dep in deps {
+                if !label_set.contains(dep) {
+                    errors.push(format!(
+                        "Task \"{label}\" depends on unknown label: \"{dep}\""
+                    ));
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return ToolResult::err(format!(
+                "Error:\n{}",
+                errors.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n")
+            ));
+        }
+
+        // DAG cycle detection
+        let dag_input: Vec<(String, Vec<String>)> = normalized
+            .iter()
+            .map(|(l, _, _, d)| (l.clone(), d.clone()))
+            .collect();
+        if let Some(cycle) = Self::detect_cycle(&dag_input) {
+            return ToolResult::err(format!(
+                "Error: Circular dependency detected involving task \"{cycle}\""
+            ));
+        }
+
+        let mut parent_id = String::new();
+        let mut is_queued = false;
+
+        self.modify_state(|s| {
+            // Resolve agents
+            let mut resolved: Vec<(ResolvedAgent, String, String, Vec<String>)> = Vec::new();
+            for (label, agent_name, prompt, deps) in &normalized {
+                match self.resolve_agent(s, agent_name) {
+                    Some(agent) => {
+                        resolved.push((agent, label.clone(), prompt.clone(), deps.clone()));
+                    }
+                    None => {
+                        errors.push(format!(
+                            "Unknown agent: \"{agent_name}\" (for task \"{label}\")"
+                        ));
+                    }
+                }
+            }
+            if !errors.is_empty() {
+                return;
+            }
+
+            parent_id = Self::next_id(s, 'p');
+            let now = chrono::Utc::now().to_rfc3339();
+
+            let has_active = s.parents.iter().any(
+                |p| p.admin_folder == self.admin_folder && p.status == "active",
+            );
+            is_queued = has_active;
+
+            let parent = DispatchParent {
+                id: parent_id.clone(),
+                admin_folder: self.admin_folder.clone(),
+                shared_workspace: if has_active {
+                    None
+                } else {
+                    self.read_admin_workspace()
+                },
+                goal: goal.to_owned(),
+                status: if has_active {
+                    "queued".into()
+                } else {
+                    "active".into()
+                },
+                created_at: now.clone(),
+                completed_at: None,
+                tasks: resolved
+                    .iter()
+                    .map(|(agent, label, prompt, deps)| DispatchTask {
+                        id: Self::next_id(s, 'd'),
+                        label: label.clone(),
+                        agent_id: agent.id.clone(),
+                        agent_jid: agent.jid.clone(),
+                        depends_on: deps.clone(),
+                        status: "registered".into(),
+                        prompt: prompt.clone(),
+                        result: None,
+                        timeout_seconds: timeout,
+                        timeout_at: None,
+                        created_at: now.clone(),
+                        started_at: None,
+                        completed_at: None,
+                        is_virtual: if agent.is_virtual { Some(true) } else { None },
+                        persona_name: agent.persona_name.clone(),
+                    })
+                    .collect(),
+            };
+            s.parents.push(parent);
+        });
+
+        if !errors.is_empty() {
+            return ToolResult::err(format!(
+                "Error:\n{}",
+                errors.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n")
+            ));
+        }
+
+        let task_lines = normalized
+            .iter()
+            .map(|(label, agent_name, _, deps)| {
+                let deps_str = if deps.is_empty() {
+                    ", no deps".into()
+                } else {
+                    format!(", depends on: [{}]", deps.join(", "))
+                };
+                format!("  - \"{label}\" (agent: {agent_name}{deps_str})")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let status_note = if is_queued {
+            "Status: QUEUED (another dispatch is active; this will start automatically when it completes)"
+        } else {
+            "Status: ACTIVE (starting immediately)"
+        };
+
+        ToolResult::ok(format!(
+            "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
+             Call dispatch_task(\"{parent_id}\", \"<label>\") for each task concurrently.\n\
+             DispatchBridge handles dependency ordering and workspace switching automatically."
+        ))
+    }
+
+    // ===== dispatch_task =====
+
+    pub async fn dispatch_task(
+        &self,
+        parent_id: &str,
+        task_label: &str,
+        timeout_seconds: Option<u64>,
+    ) -> ToolResult {
+        let start_task = {
+            let state = self.read_state();
+            state.parents
+                .iter()
+                .find(|p| p.id == parent_id)
+                .and_then(|p| p.tasks.iter().find(|t| t.label == task_label))
+                .cloned()
+        };
+
+        let start_task = match start_task {
+            Some(t) => t,
+            None => {
+                return ToolResult::err(format!(
+                    "Task not found: parent={parent_id} label=\"{task_label}\""
+                ));
+            }
+        };
+
+        let mut deadline = if let Some(ts) = timeout_seconds {
+            Instant::now() + Duration::from_secs(ts)
+        } else {
+            Instant::now() + Duration::from_secs(start_task.timeout_seconds)
+        };
+
+        loop {
+            if Instant::now() > deadline {
+                return ToolResult::err(format!(
+                    "Task \"{task_label}\" timed out waiting for result"
+                ));
+            }
+
+            let state = self.read_state();
+            let current = state
+                .parents
+                .iter()
+                .find(|p| p.id == parent_id)
+                .and_then(|p| p.tasks.iter().find(|t| t.label == task_label))
+                .cloned();
+
+            let current = match current {
+                Some(t) => t,
+                None => {
+                    return ToolResult::err(format!(
+                        "Task \"{task_label}\" disappeared from state file"
+                    ));
+                }
+            };
+
+            // After task starts, switch to task timeoutAt as deadline
+            if timeout_seconds.is_none() {
+                if let Some(ref timeout_at) = current.timeout_at {
+                    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(timeout_at) {
+                        let task_deadline = t.timestamp_millis() as u64;
+                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                        if task_deadline > now_ms + 5000 {
+                            // Only extend, never shorten
+                            deadline = Instant::now()
+                                + Duration::from_millis(task_deadline.saturating_sub(now_ms));
+                        }
+                    }
+                }
+            }
+
+            match current.status.as_str() {
+                "done" => {
+                    return ToolResult::ok(current.result.unwrap_or_default());
+                }
+                "error" => {
+                    return ToolResult::err(format!(
+                        "Task \"{task_label}\" failed (agent: {})",
+                        current.agent_id
+                    ));
+                }
+                "timeout" => {
+                    return ToolResult::err(format!(
+                        "Task \"{task_label}\" timed out (agent: {})",
+                        current.agent_id
+                    ));
+                }
+                _ => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+}
+
+// ===== Helper types =====
+
+struct ResolvedAgent {
+    id: String,
+    jid: String,
+    is_virtual: bool,
+    persona_name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct DispatchTaskInput {
+    #[serde(default)]
+    pub label: String,
+    #[serde(rename = "agentName")]
+    pub agent_name: String,
+    pub prompt: String,
+    #[serde(default)]
+    #[serde(rename = "dependsOn")]
+    pub depends_on: Vec<String>,
+}
+
+// ===== MCP stdio server =====
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct CreateParentParams {
+    goal: String,
+    tasks: Vec<DispatchTaskInput>,
+    #[serde(default)]
+    #[serde(rename = "timeoutSeconds")]
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct DispatchTaskParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
+    #[serde(rename = "taskLabel")]
+    task_label: String,
+    #[serde(default)]
+    #[serde(rename = "timeoutSeconds")]
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Clone)]
+struct McpDispatchServer {
+    state_path: std::path::PathBuf,
+    admin_folder: String,
+    agents_config_dir: Option<String>,
+}
+
+impl McpDispatchServer {
+    fn inner(&self) -> DispatchServer {
+        let persona_resolver: Option<Box<dyn PersonaResolver>> =
+            self.agents_config_dir.as_ref().map(|dir| {
+                Box::new(FsPersonaResolver::from_dir(std::path::Path::new(dir)))
+                    as Box<dyn PersonaResolver>
+            });
+        DispatchServer::new(&self.state_path, &self.admin_folder, persona_resolver)
+    }
+}
+
+#[rmcp::tool_router(server_handler)]
+impl McpDispatchServer {
+    #[rmcp::tool(description = "List all registered agents and personas")]
+    fn list_agents(&self) -> String {
+        self.inner().list_agents().content
+    }
+
+    #[rmcp::tool(description = "Create a parent dispatch with multiple tasks. Returns parent ID and task labels for dispatch_task calls.")]
+    fn create_parent(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CreateParentParams>,
+    ) -> String {
+        self.inner().create_parent(&p.goal, p.tasks, p.timeout_seconds).content
+    }
+
+    #[rmcp::tool(description = "Dispatch a task within a parent and wait for its result")]
+    async fn dispatch_task(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<DispatchTaskParams>,
+    ) -> String {
+        self.inner()
+            .dispatch_task(&p.parent_id, &p.task_label, p.timeout_seconds)
+            .await
+            .content
+    }
+}
+
+/// Start the dispatch MCP server over stdio.
+pub async fn run_stdio_server() -> anyhow::Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let state_path = std::env::var("SENCLAW_DISPATCH_STATE_PATH")
+        .context("SENCLAW_DISPATCH_STATE_PATH not set")?;
+    let admin_folder =
+        std::env::var("SENCLAW_ADMIN_FOLDER").context("SENCLAW_ADMIN_FOLDER not set")?;
+    let agents_config_dir = std::env::var("SENCLAW_AGENTS_CONFIG_DIR").ok();
+
+    let server = McpDispatchServer {
+        state_path: std::path::PathBuf::from(state_path),
+        admin_folder,
+        agents_config_dir,
+    };
+
+    let service = server.serve(rmcp::transport::io::stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_cycle_acyclic() {
+        let tasks = vec![
+            ("t1".into(), vec![]),
+            ("t2".into(), vec!["t1".into()]),
+            ("t3".into(), vec!["t1".into()]),
+        ];
+        assert!(DispatchServer::detect_cycle(&tasks).is_none());
+    }
+
+    #[test]
+    fn detect_cycle_finds_cycle() {
+        let tasks = vec![
+            ("t1".into(), vec!["t3".into()]),
+            ("t2".into(), vec!["t1".into()]),
+            ("t3".into(), vec!["t2".into()]),
+        ];
+        assert!(DispatchServer::detect_cycle(&tasks).is_some());
+    }
+
+    #[test]
+    fn detect_cycle_self_loop() {
+        let tasks = vec![("t1".into(), vec!["t1".into()])];
+        assert!(DispatchServer::detect_cycle(&tasks).is_some());
+    }
+
+    #[test]
+    fn persona_resolver_from_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(tmp.path().join("coder.md"), "# Coder\nWrites code").unwrap();
+        fs::write(tmp.path().join("reviewer.md"), "# Reviewer\nReviews PRs").unwrap();
+        let resolver = FsPersonaResolver::from_dir(tmp.path());
+        let list = resolver.list();
+        assert_eq!(list.len(), 2);
+    }
+}

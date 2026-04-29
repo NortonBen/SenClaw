@@ -1,0 +1,380 @@
+//! Core query loop — the heart of the agent engine.
+//!
+//! Flow:
+//! ```text
+//! messages + system_prompt
+//!   → query_llm() → assistant message
+//!   → emit message:complete + conversation:usage
+//!   → if no tool calls → finalize, return
+//!   → run_tools() (concurrent or serial)
+//!   → handle abort checkpoints
+//!   → handle control signal rebuild (mode switch)
+//!   → recurse
+//! ```
+//!
+//! Port of TS `Conversation.ts`.
+
+use std::sync::Arc;
+
+use anyhow::Result;
+use reqwest::Client;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
+
+use super::*;
+use crate::zen_core::query_llm;
+use crate::zen_core::run_tools::{self, PermissionChecker, RunContext};
+
+/// Interruption message inserted when the session is aborted.
+pub const INTERRUPT_MESSAGE: &str = "Session was interrupted. The current operation has been cancelled.";
+
+/// Configuration passed to the query loop. All fields are owned so the config
+/// can be moved into spawned tasks.
+pub struct QueryConfig {
+    pub agent_id: String,
+    pub working_dir: String,
+    pub agent_data_dir: String,
+    pub system_prompt: String,
+    pub tools: Vec<Arc<dyn Tool>>,
+    pub http_client: Client,
+    pub event_bus: EventBus,
+    pub permission_checker: Arc<dyn PermissionChecker>,
+    pub profile: ModelProfile,
+    pub thinking: bool,
+    pub stream: bool,
+    pub is_subagent: bool,
+}
+
+/// Run the conversation query loop. Returns the final message history.
+///
+/// This is an async generator conceptually — each "turn" is a call to the LLM
+/// followed by optional tool execution. Since Rust doesn't have native async
+/// generators yet, we process all turns in a single future and emit events
+/// along the way.
+pub async fn query(
+    mut messages: Vec<Message>,
+    config: &QueryConfig,
+    cancel: &CancellationToken,
+) -> Result<Vec<Message>> {
+    loop {
+        // Check cancellation before each LLM call
+        if cancel.is_cancelled() {
+            info!("[{}] query loop cancelled before LLM call", config.agent_id);
+            return Ok(messages);
+        }
+
+        // 1. Call the LLM
+        let assistant_msg = match query_llm::query_llm(
+            &config.http_client,
+            &messages,
+            &config.system_prompt,
+            &config.tools,
+            cancel,
+            &config.profile,
+            config.thinking,
+            config.stream,
+        )
+        .await
+        {
+            Ok(msg) => msg,
+            Err(e) => {
+                let classified = query_llm::LlmError::classify(&e);
+                if classified.should_emit() {
+                    config.event_bus.emit(EngineEvent::SessionError(
+                        classified.to_session_error(),
+                    ));
+                }
+                if classified.is_context_length {
+                    warn!("Context length exceeded — attempting auto-compact");
+                    // TODO: trigger auto-compact + retry
+                }
+                return Err(e);
+            }
+        };
+
+        // Checkpoint 1: after LLM response, before tool execution
+        if cancel.is_cancelled() {
+            info!("[{}] cancelled after LLM response", config.agent_id);
+            let pending_tools = assistant_msg.message.content.iter().filter_map(|b| {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    Some(create_tool_result_stop(id))
+                } else {
+                    None
+                }
+            }).collect::<Vec<_>>();
+
+            let mut interrupt_content: Vec<ContentBlock> = pending_tools;
+            interrupt_content.push(ContentBlock::Text {
+                text: INTERRUPT_MESSAGE.to_string(),
+            });
+            messages.push(assistant_msg);
+            messages.push(create_user_message(interrupt_content));
+
+            config.event_bus.emit(EngineEvent::SessionInterrupted(
+                SessionInterruptedData {
+                    agent_id: config.agent_id.to_string(),
+                    content: INTERRUPT_MESSAGE.to_string(),
+                },
+            ));
+            return Ok(messages);
+        }
+
+        // 2. Emit message:complete
+        let (text_content, reasoning, tool_uses) = extract_content(&assistant_msg);
+
+        let has_tool_calls = !tool_uses.is_empty();
+        let tool_call_infos: Option<Vec<ToolCallInfo>> = if has_tool_calls {
+            Some(
+                tool_uses
+                    .iter()
+                    .filter_map(|b| {
+                        if let ContentBlock::ToolUse { name, input, .. } = b {
+                            Some(ToolCallInfo {
+                                name: name.clone(),
+                                args: input.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        config.event_bus.emit(EngineEvent::MessageComplete(
+            MessageCompleteData {
+                agent_id: config.agent_id.to_string(),
+                reasoning,
+                content: text_content.clone(),
+                has_tool_calls: has_tool_calls,
+                tool_calls: tool_call_infos,
+            },
+        ));
+
+        // 3. Emit conversation:usage (subagents skip this)
+        if !config.is_subagent {
+            let updated = {
+                let mut msgs = messages.clone();
+                msgs.push(assistant_msg.clone());
+                msgs
+            };
+            let _usage = estimate_usage(&updated);
+            config.event_bus.emit(EngineEvent::ConversationUsage(
+                ConversationUsageData {
+                    usage: _usage,
+                },
+            ));
+        }
+
+        // 4. No tools → done
+        if tool_uses.is_empty() {
+            messages.push(assistant_msg);
+            info!(
+                "[{}] query complete — no tool calls, {} messages",
+                config.agent_id,
+                messages.len()
+            );
+            return Ok(messages);
+        }
+
+        // 5. Run tools
+        let ctx = RunContext {
+            agent_id: &config.agent_id,
+            working_dir: &config.working_dir,
+            agent_data_dir: &config.agent_data_dir,
+            tools: &config.tools,
+            fire: &|event| config.event_bus.emit(event),
+            permission_checker: config.permission_checker.as_ref(),
+        };
+
+        let tool_results = run_tools::run_tools(&tool_uses, cancel, &ctx).await;
+
+        // Checkpoint 2: after tool execution, before recursion
+        if cancel.is_cancelled() {
+            info!("[{}] cancelled after tool execution", config.agent_id);
+
+            // Generate stop messages for any incomplete tools
+            let completed_ids: std::collections::HashSet<String> = tool_results
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        Some(tool_use_id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let mut all_results = tool_results;
+            for tu in &tool_uses {
+                if let ContentBlock::ToolUse { id, .. } = tu {
+                    if !completed_ids.contains(id) {
+                        all_results.push(create_tool_result_stop(id));
+                    }
+                }
+            }
+            // Append interrupt text to last result
+            if let Some(last) = all_results.last_mut() {
+                if let ContentBlock::ToolResult { content, .. } = last {
+                    content.push_str(&format!("\n\n{INTERRUPT_MESSAGE}"));
+                }
+            }
+
+            messages.push(assistant_msg);
+            if !all_results.is_empty() {
+                messages.push(create_user_message(all_results));
+            }
+
+            config.event_bus.emit(EngineEvent::SessionInterrupted(
+                SessionInterruptedData {
+                    agent_id: config.agent_id.to_string(),
+                    content: INTERRUPT_MESSAGE.to_string(),
+                },
+            ));
+            return Ok(messages);
+        }
+
+        // 6. Check for control signal rebuild (mode switch)
+        // For now: no rebuild — just recurse
+        messages.push(assistant_msg);
+        if !tool_results.is_empty() {
+            messages.push(create_user_message(tool_results));
+        }
+
+        debug!(
+            "[{}] recurse — {} messages, {} tool results",
+            config.agent_id,
+            messages.len(),
+            tool_uses.len()
+        );
+    }
+}
+
+// ============================================================================
+// Content extraction helpers
+// ============================================================================
+
+fn extract_content(msg: &Message) -> (String, String, Vec<ContentBlock>) {
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    let mut tool_uses = Vec::new();
+
+    for block in &msg.message.content {
+        match block {
+            ContentBlock::Text { text: t } => text.push_str(t),
+            ContentBlock::Thinking { thinking: t } => reasoning.push_str(t),
+            ContentBlock::ToolUse { .. } => {
+                tool_uses.push(block.clone());
+            }
+            _ => {}
+        }
+    }
+
+    (text, reasoning, tool_uses)
+}
+
+// ============================================================================
+// Token estimation (rough)
+// ============================================================================
+
+fn estimate_usage(messages: &[Message]) -> UsageData {
+    let total_chars: usize = messages
+        .iter()
+        .map(|m| {
+            m.message
+                .content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => text.len(),
+                    _ => 0,
+                })
+                .sum::<usize>()
+        })
+        .sum();
+
+    // Rough: 4 chars ≈ 1 token
+    let use_tokens = (total_chars as f64 / 4.0).ceil() as u64;
+    UsageData {
+        use_tokens,
+        max_tokens: 200_000,
+        prompt_tokens: use_tokens,
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_content_separates_text_and_tools() {
+        let msg = Message {
+            msg_type: "assistant".into(),
+            message: MessagePayload {
+                role: "assistant".into(),
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "Let me think...".into(),
+                    },
+                    ContentBlock::Text {
+                        text: "I will help.".into(),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tu-1".into(),
+                        name: "read".into(),
+                        input: serde_json::json!({"path": "/tmp/test"}),
+                    },
+                ],
+            },
+            uuid: "uuid-1".into(),
+        };
+
+        let (text, reasoning, tools) = extract_content(&msg);
+        assert_eq!(text, "I will help.");
+        assert_eq!(reasoning, "Let me think...");
+        assert_eq!(tools.len(), 1);
+        if let ContentBlock::ToolUse { name, .. } = &tools[0] {
+            assert_eq!(name, "read");
+        } else {
+            panic!("Expected ToolUse");
+        }
+    }
+
+    #[test]
+    fn extract_content_empty() {
+        let msg = Message {
+            msg_type: "assistant".into(),
+            message: MessagePayload {
+                role: "assistant".into(),
+                content: vec![],
+            },
+            uuid: "uuid-1".into(),
+        };
+        let (text, reasoning, tools) = extract_content(&msg);
+        assert!(text.is_empty());
+        assert!(reasoning.is_empty());
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn estimate_usage_counts_chars() {
+        let msgs = vec![Message {
+            msg_type: "user".into(),
+            message: MessagePayload {
+                role: "user".into(),
+                content: vec![ContentBlock::Text {
+                    text: "Hello, world!".into(),
+                }],
+            },
+            uuid: "uuid-1".into(),
+        }];
+        let usage = estimate_usage(&msgs);
+        // 13 chars / 4 ≈ 4 tokens
+        assert!(usage.use_tokens >= 3);
+    }
+}

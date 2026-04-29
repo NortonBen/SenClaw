@@ -1,0 +1,97 @@
+[package]
+name = "senclaw"
+version = "0.1.1"
+edition = "2021"
+description = "Multi-group AI gateway built on sema-code-core"
+license = "MIT"
+authors = ["AIRC Sema Team"]
+repository = "https://github.com/midea-ai/SemaClaw"
+homepage = "https://github.com/midea-ai/SemaClaw"
+
+[[bin]]
+name = "senclaw"
+path = "src/main.rs"
+
+[lib]
+name = "senclaw"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Config / env
+dotenvy = "0.15"
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors / logging
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# HTTP client / server (gateway + UIServer + WebSocket)
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tokio-tungstenite = "0.24"
+
+# SQLite + vector + FTS
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Cron
+cron = "0.13"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Compression (replaces fflate)
+flate2 = "1"
+zip = "2"
+
+# QR code (terminal)
+qrcode = "0.14"
+
+# UUID / random
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.8"
+
+# Channel adapters (Telegram has a Rust SDK; others go via REST through reqwest)
+teloxide = { version = "0.13", default-features = false, features = ["ctrlc_handler", "rustls"] }
+
+# Chinese tokenization (replaces nodejieba)
+jieba-rs = "0.7"
+
+# Home dir resolution (replaces os.homedir)
+dirs = "5"
+
+# Hex / hashing helpers (for buildModelKey, content hashing)
+sha2 = "0.10"
+hex = "0.4"
+
+# Regex (query rewrite, pattern matching)
+regex = "1"
+libc = "0.2.186"
+
+# MCP server SDK (self-spawning subprocess architecture)
+rmcp = { version = "1", features = ["transport-io"] }
+schemars = "1"
+
+# Tokio utilities (CancellationToken for zen-core abort)
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
