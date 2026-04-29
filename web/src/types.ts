@@ -12,7 +12,7 @@ export interface GroupInfo {
 }
 
 export interface RegisterGroupPayload {
-  jid?: string;  // Feishu pending binding can be empty; backend auto-generates feishu:pending:{appId}
+  jid?: string;  // Feishu pending: omit; backend may assign feishu:pending:{appId}
   folder: string;
   name: string;
   channel?: 'telegram' | 'feishu' | 'whatsapp' | 'qq';
@@ -85,8 +85,8 @@ export type TaskStatus = 'registered' | 'processing' | 'done' | 'error' | 'timeo
 export interface DispatchTask {
   id: string;
   label: string;
-  agentId: string;   // persistent: folder, virtual: "persona:code-reviewer"
-  agentJid: string;  // persistent: jid, virtual: ""
+  agentId: string;   // persisted: folder; virtual: "persona:code-reviewer"
+  agentJid: string;  // persisted: jid; virtual: ""
   dependsOn: string[];
   status: TaskStatus;
   prompt: string;
@@ -95,7 +95,7 @@ export interface DispatchTask {
   startedAt: string | null;
   timeoutAt: string;
   completedAt: string | null;
-  /** Whether this is a virtual-agent task */
+  /** Virtual agent task */
   isVirtual?: boolean;
   /** Persona name for virtual agent */
   personaName?: string;
@@ -121,15 +121,4 @@ export interface AgentTodoItem {
 export interface AgentTodosEntry {
   agentName: string;
   todos: AgentTodoItem[];
-}
-
-export interface AgentToolInfo {
-  name: string;
-  description: string;
-  status: string;
-}
-
-export interface AgentToolsEntry {
-  agentName: string;
-  tools: AgentToolInfo[];
 }

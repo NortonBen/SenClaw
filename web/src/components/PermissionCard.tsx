@@ -220,7 +220,7 @@ export function QuestionCard({ message, onResolve }: QuestionCardProps) {
       {/* Header */}
       <div className="flex items-center gap-2 mb-3">
         <span className="text-base">&#10067;</span>
-        <p className="font-semibold text-gray-800">Your decision is required</p>
+        <p className="font-semibold text-gray-800">Your response is needed</p>
         {isResolved && (
           <span className="ml-auto text-[11px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
             Answered
@@ -316,7 +316,7 @@ export function QuestionCard({ message, onResolve }: QuestionCardProps) {
                     ref={otherInputRef}
                     type="text"
                     className="w-full bg-transparent border-none outline-none text-sm text-gray-800 placeholder-gray-400"
-                    placeholder="Enter custom content..."
+                    placeholder="Enter custom text..."
                     value={otherTexts[activeTab] ?? ''}
                     onChange={e => setOtherTexts(prev => ({ ...prev, [activeTab]: e.target.value }))}
                     onKeyDown={e => { e.stopPropagation(); handleOtherKeyDown(activeTab, e); }}
@@ -343,7 +343,7 @@ export function QuestionCard({ message, onResolve }: QuestionCardProps) {
             disabled={!allAnswered}
             className="flex-1 py-2 rounded-xl bg-[#5BBFE8] hover:bg-[#3AAAD4] disabled:bg-gray-200 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
           >
-            {allAnswered ? 'Submit' : `Still need to answer ${message.questions.filter((_, qi) => !isAnswered(qi)).length} questions`}
+            {allAnswered ? 'Submit' : `${message.questions.filter((_, qi) => !isAnswered(qi)).length} question(s) left`}
           </button>
           <button
             onClick={handleSkip}

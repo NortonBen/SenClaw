@@ -122,7 +122,7 @@ export function Sidebar({ groups, selectedJid, agentStates, status, onSelect, on
           href="/wiki"
           target="_blank"
           rel="noopener noreferrer"
-          title="Wiki knowledge base"
+          title="Wiki"
           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-3 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
         >
           <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">

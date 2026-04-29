@@ -1,12 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
-import type { AgentState, DispatchParent, DispatchTask, AgentTodosEntry, AgentToolsEntry, PermissionMessage, GroupInfo, ChatMessage } from '../types';
+import type { AgentState, DispatchParent, DispatchTask, AgentTodosEntry, PermissionMessage, GroupInfo, ChatMessage } from '../types';
 import { DispatchTree } from './DispatchTree';
 import { AgentTodoPanel } from './AgentTodoPanel';
 
 interface AgentConsoleProps {
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>;
-  agentTools: Record<string, AgentToolsEntry>;
   messages: Record<string, ChatMessage[]>;
   groups: GroupInfo[];
   agentStates: Record<string, AgentState>;
@@ -23,21 +22,12 @@ const PERM_OPTION_STYLE: Record<string, string> = {
 };
 const DEFAULT_OPT_STYLE = 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100';
 
-export function AgentConsole({ dispatchParents, agentTodos, agentTools, messages, groups, agentStates, resolvePermission }: AgentConsoleProps) {
-  // Active agents = any agent with a known tool roster (created on the backend).
-  // Online state derived from agentStates: 'processing' / 'paused' / 'idle'.
-  const activeAgents = Object.entries(agentTools).map(([jid, entry]) => ({
-    jid,
-    name: entry.agentName,
-    tools: entry.tools,
-    state: (agentStates[jid] ?? 'idle') as AgentState,
-  }));
-  const hasAgents = activeAgents.length > 0;
+export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission }: AgentConsoleProps) {
   const activeParents = dispatchParents.filter(p => p.status === 'active');
   const queuedParents = dispatchParents.filter(p => p.status === 'queued');
   const hasActivity = activeParents.length > 0 || queuedParents.length > 0;
 
-  // Find main admin agent state from active/queued parents
+  // Derive main admin agent state from active/queued parents
   const adminFolder = activeParents[0]?.adminFolder ?? queuedParents[0]?.adminFolder ?? null;
   const adminJid = adminFolder ? (groups.find(g => g.folder === adminFolder)?.jid ?? null) : null;
   const adminState: AgentState = adminJid ? (agentStates[adminJid] ?? 'idle') : 'idle';
@@ -71,7 +61,7 @@ export function AgentConsole({ dispatchParents, agentTodos, agentTools, messages
   // Selected task's agent todos for the detail panel
   const selectedAgentTodos = selectedTask
     ? Object.entries(agentTodos).find(([jid]) => {
-        // Virtual agent: todos are pushed with virtual:{taskId} as jid
+        // Virtual agent: todos keyed by virtual:{taskId}
         if (selectedTask.isVirtual) return jid === `virtual:${selectedTask.id}`;
         const group = groups.find(g => g.jid === jid);
         return group?.folder === selectedTask.agentId;
@@ -101,9 +91,6 @@ export function AgentConsole({ dispatchParents, agentTodos, agentTools, messages
           )}
           {!hasActivity && hasTodos && (
             <span className="w-1.5 h-1.5 rounded-full bg-[#5BBFE8]" />
-          )}
-          {!hasActivity && !hasTodos && hasAgents && (
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />
           )}
         </button>
       </div>
@@ -144,47 +131,8 @@ export function AgentConsole({ dispatchParents, agentTodos, agentTools, messages
 
       <div className="flex flex-1 min-h-0 gap-0">
         {/* Left: DAG + Todos — only render when there's content to show */}
-        {(hasActivity || !!selectedTask || hasTodos || hasAgents) && (
+        {(hasActivity || !!selectedTask || hasTodos) && (
         <div className="flex flex-col flex-1 min-w-0 overflow-y-auto">
-          {/* Active agents + their tools (always show when any agent is online) */}
-          {hasAgents && (
-            <div className="flex flex-col border-b border-gray-100">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-100 flex-shrink-0">
-                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Active Agents</span>
-                <span className="text-[10px] text-gray-300">{activeAgents.length} online</span>
-              </div>
-              <div className="flex flex-col gap-1.5 p-2">
-                {activeAgents.map(a => (
-                  <div key={a.jid} className="bg-white border border-gray-100 rounded-md px-2 py-1.5">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        a.state === 'processing' ? 'bg-green-500 animate-pulse'
-                        : a.state === 'paused' ? 'bg-orange-400'
-                        : 'bg-gray-300'
-                      }`} />
-                      <span className="text-[11px] font-semibold text-gray-700 truncate">{a.name}</span>
-                      <span className="text-[9px] text-gray-400 ml-auto">{a.state}</span>
-                    </div>
-                    {a.tools.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {a.tools.map(t => (
-                          <span
-                            key={t.name}
-                            title={t.description}
-                            className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                              t.status === 'enable' ? 'bg-blue-50 text-[#5BBFE8]' : 'bg-gray-50 text-gray-400'
-                            }`}
-                          >
-                            {t.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
           {/* Dispatch DAG section */}
           {hasActivity && (
             <div className="flex flex-col">

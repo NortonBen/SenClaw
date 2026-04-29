@@ -53,7 +53,7 @@ interface DispatchTreeProps {
   parents: DispatchParent[];
   onSelectTask?: (task: DispatchTask) => void;
   selectedTaskId?: string;
-  /** Main admin agent is paused - processing subtasks show pause icon instead of spinner */
+  /** Main admin agent paused — processing tasks show pause icon instead of spinner */
   adminPaused?: boolean;
 }
 
@@ -181,7 +181,7 @@ export function DispatchTree({ parents, onSelectTask, selectedTaskId, adminPause
                   {lvl.map(t => {
                     const color = agentColor(t.agentId);
                     const isSelected = t.id === selectedTaskId;
-                    // For processing tasks: show ⏸ when admin is paused instead of spinner
+                    // processing + admin paused: show pause icon instead of spinner
                     const isProcessingPaused = isParentPaused && t.status === 'processing';
                     return (
                       <button

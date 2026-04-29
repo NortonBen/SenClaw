@@ -283,6 +283,8 @@ mod tests {
             working_dir: "/tmp",
             agent_data_dir: "/tmp",
             abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(tool.validate_input(
@@ -300,6 +302,8 @@ mod tests {
             working_dir: "/tmp",
             agent_data_dir: "/tmp",
             abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(tool.validate_input(
@@ -317,6 +321,8 @@ mod tests {
             working_dir: "/tmp",
             agent_data_dir: "/tmp",
             abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(tool.validate_input(

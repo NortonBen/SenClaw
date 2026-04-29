@@ -15,6 +15,9 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::gateway::group_manager::load_llm_configs;
+use crate::mcp::SharedMcpRegistry;
+use crate::skills::SkillRegistry;
+use crate::tools::{SkillTool, TaskTool, TodoWriteTool};
 use super::*;
 use events::ResponseRegistry;
 use permissions::PermissionManager;
@@ -26,7 +29,7 @@ use permissions::PermissionManager;
 pub struct ZenEngine {
     pub instance_id: String,
     pub event_bus: EventBus,
-    state: Mutex<StateManager>,
+    state: Arc<Mutex<StateManager>>,
     response_registry: Arc<ResponseRegistry>,
     permission_manager: Arc<PermissionManager>,
     handlers: RwLock<ZenCoreHandlers>,
@@ -39,6 +42,12 @@ pub struct ZenEngine {
 
     // Tool registry
     builtin_tools: RwLock<Vec<Arc<dyn Tool>>>,
+
+    // Skill registry (shared with Skill tool)
+    skill_registry: Arc<SkillRegistry>,
+
+    // MCP subprocess registry
+    mcp_registry: SharedMcpRegistry,
 
     // Session helpers
     session_id: RwLock<Option<String>>,
@@ -60,18 +69,47 @@ impl ZenEngine {
             .build()
             .expect("Failed to create HTTP client");
 
-        Arc::new(Self {
+        let state = Arc::new(Mutex::new(StateManager::new()));
+        let skill_registry = Arc::new(SkillRegistry::default());
+
+        let engine = Arc::new(Self {
             instance_id,
             event_bus,
-            state: Mutex::new(StateManager::new()),
+            state: state.clone(),
             response_registry,
             permission_manager,
             handlers: RwLock::new(ZenCoreHandlers::default()),
             http_client,
             options: RwLock::new(options),
             builtin_tools: RwLock::new(Vec::new()),
+            skill_registry: skill_registry.clone(),
+            mcp_registry: SharedMcpRegistry::new(),
             session_id: RwLock::new(None),
-        })
+        });
+
+        // Register engine-dependent tools
+        engine.register_tool(Arc::new(TodoWriteTool::new(state)));
+        engine.register_tool(Arc::new(SkillTool::new(skill_registry)));
+
+        // Register static tools (no engine deps)
+        engine.register_tools(crate::tools::all_tools());
+
+        // Register TaskTool last so it knows about all other tools
+        let all_tools = engine.builtin_tools.read().unwrap().clone();
+        let profile = Self::resolve_model_profile();
+        engine.register_tool(Arc::new(TaskTool::new(
+            engine.http_client.clone(),
+            engine.event_bus.clone(),
+            engine.state.clone(),
+            engine.permission_manager.clone(),
+            crate::tools::task::default_agent_configs(),
+            engine.options.read().unwrap().working_dir.clone(),
+            engine.options.read().unwrap().agent_data_dir.clone(),
+            all_tools,
+            profile,
+        )));
+
+        engine
     }
 
     // ============================================================
@@ -228,7 +266,7 @@ impl ZenEngine {
         Uuid::new_v4().to_string()
     }
 
-    fn abort_current(&self) {
+    pub fn abort_current(&self) {
         let mut state = self.state.lock().unwrap();
         if let Some(ref token) = state.current_abort {
             if !token.is_cancelled() {
@@ -393,6 +431,7 @@ impl ZenCore for ZenEngine {
         };
         let http_client = self.http_client.clone();
         let permission_manager = self.permission_manager.clone();
+        let response_registry = self.response_registry.clone();
 
         // Build the user message
         let user_msg = create_user_message(vec![ContentBlock::Text {
@@ -423,6 +462,7 @@ impl ZenCore for ZenEngine {
                 tools: tools.clone(),
                 http_client: http_client.clone(),
                 event_bus: event_bus_spawn,
+                response_registry: Some(response_registry.clone()),
                 permission_checker: permission_manager.clone(),
                 profile,
                 thinking: opts.thinking,
@@ -505,9 +545,23 @@ impl ZenCore for ZenEngine {
         self.options.write().unwrap().thinking = enabled;
     }
 
-    fn reload_skills(&self, _disabled: &[String]) {
-        info!("[{}] reload_skills", self.instance_id);
-        // TODO: clear + reinitialize skill registry when skills module is ported
+    fn reload_skills(&self, disabled: &[String]) {
+        info!(
+            "[{}] reload_skills ({} disabled)",
+            self.instance_id,
+            disabled.len()
+        );
+        let config = crate::config::Config::from_env();
+        let mut entries = crate::skills::scan::load_all_local_skills(&config);
+        if !disabled.is_empty() {
+            entries.retain(|e| !disabled.iter().any(|d| d == &e.name));
+        }
+        self.skill_registry.load_entries(&entries);
+        info!(
+            "[{}] reload_skills: {} skills loaded",
+            self.instance_id,
+            self.skill_registry.len()
+        );
     }
 
     fn has_session_tool_results(&self) -> bool {
@@ -526,7 +580,26 @@ impl ZenCore for ZenEngine {
 
     fn add_or_update_mcp_server(&self, cfg: &McpServerConfig, _scope: &str) -> Result<()> {
         info!("[{}] add_or_update_mcp_server: {}", self.instance_id, cfg.name);
-        // TODO: spawn MCP subprocess + register its tools (needs MCP client crate)
+        let instance_id = self.instance_id.clone();
+        let registry = self.mcp_registry.clone();
+        let name = cfg.name.clone();
+        let command = cfg.command.clone();
+        let args = cfg.args.clone();
+        let env = cfg.env.clone();
+
+        tokio::spawn(async move {
+            match registry.spawn(&name, &command, &args, &env).await {
+                Ok(tools) => {
+                    info!(
+                        "[{instance_id}] MCP {name}: {} tool(s) registered",
+                        tools.len()
+                    );
+                }
+                Err(e) => {
+                    warn!("[{instance_id}] MCP {name} spawn failed: {e}");
+                }
+            }
+        });
         Ok(())
     }
 
@@ -574,14 +647,30 @@ impl ZenCore for ZenEngine {
 // ============================================================================
 
 impl ZenEngine {
-    fn initialize_plugins(&self) {
+    pub fn initialize_plugins(&self) {
         let opts = self.options.read().unwrap();
         debug!(
             "[{}] initialize_plugins: working_dir={}",
             self.instance_id, opts.working_dir
         );
-        // TODO: port skill registry + custom command loader
-        // For now this is a no-op — the engine runs without skills
+
+        // Build a minimal config for skill scanning
+        let config = crate::config::Config::from_env();
+        let entries = crate::skills::scan::load_all_local_skills(&config);
+        debug!(
+            "[{}] scanned {} skill entries",
+            self.instance_id,
+            entries.len()
+        );
+
+        if !entries.is_empty() {
+            self.skill_registry.load_entries(&entries);
+            debug!(
+                "[{}] registered {} skills",
+                self.instance_id,
+                self.skill_registry.len()
+            );
+        }
     }
 }
 

@@ -9,6 +9,7 @@
 //!   → run_tools() (concurrent or serial)
 //!   → handle abort checkpoints
 //!   → handle control signal rebuild (mode switch)
+//!   → on context_length_exceeded → compact → retry (once)
 //!   → recurse
 //! ```
 //!
@@ -22,11 +23,41 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::*;
+use crate::zen_core::events::ResponseRegistry;
 use crate::zen_core::query_llm;
 use crate::zen_core::run_tools::{self, PermissionChecker, RunContext};
 
 /// Interruption message inserted when the session is aborted.
 pub const INTERRUPT_MESSAGE: &str = "Session was interrupted. The current operation has been cancelled.";
+
+/// Number of most-recent messages to keep during auto-compaction.
+const COMPACT_KEEP_RECENT: usize = 12;
+
+/// Compact message history when context length is exceeded.
+/// Keeps the first user message (original task framing) and the most recent messages,
+/// dropping middle messages to reduce token count.
+fn compact_messages(messages: &mut Vec<Message>) -> bool {
+    if messages.len() <= COMPACT_KEEP_RECENT + 2 {
+        return false;
+    }
+    let first_user_idx = messages.iter().position(|m| m.msg_type == "user");
+    let keep_from = messages.len().saturating_sub(COMPACT_KEEP_RECENT);
+
+    let mut kept: Vec<Message> = Vec::new();
+    if let Some(idx) = first_user_idx {
+        if idx < keep_from {
+            kept.push(messages[idx].clone());
+            kept.push(create_user_message(vec![ContentBlock::Text {
+                text: "[Context compacted — earlier messages were dropped to stay within the \
+                       token limit. The conversation continues with the most recent context preserved.]"
+                    .into(),
+            }]));
+        }
+    }
+    kept.extend(messages.drain(keep_from..));
+    *messages = kept;
+    true
+}
 
 /// Configuration passed to the query loop. All fields are owned so the config
 /// can be moved into spawned tasks.
@@ -38,6 +69,7 @@ pub struct QueryConfig {
     pub tools: Vec<Arc<dyn Tool>>,
     pub http_client: Client,
     pub event_bus: EventBus,
+    pub response_registry: Option<Arc<ResponseRegistry>>,
     pub permission_checker: Arc<dyn PermissionChecker>,
     pub profile: ModelProfile,
     pub thinking: bool,
@@ -56,6 +88,7 @@ pub async fn query(
     config: &QueryConfig,
     cancel: &CancellationToken,
 ) -> Result<Vec<Message>> {
+    let mut compacted = false;
     loop {
         // Check cancellation before each LLM call
         if cancel.is_cancelled() {
@@ -84,9 +117,38 @@ pub async fn query(
                         classified.to_session_error(),
                     ));
                 }
-                if classified.is_context_length {
-                    warn!("Context length exceeded — attempting auto-compact");
-                    // TODO: trigger auto-compact + retry
+                if classified.is_context_length && !compacted {
+                    warn!(
+                        agent_id = %config.agent_id,
+                        msg_count = messages.len(),
+                        "Context length exceeded — auto-compacting"
+                    );
+                    config.event_bus.emit(EngineEvent::CompactStart(
+                        CompactStartData { message_count: messages.len() },
+                    ));
+                    let did_compact = compact_messages(&mut messages);
+                    config.event_bus.emit(EngineEvent::CompactExec(
+                        CompactExecData {
+                            err_msg: if did_compact { None } else { Some("compaction had no effect".into()) },
+                            token_before: 0,
+                            token_compact: 0,
+                            compact_rate: 0.0,
+                            summary: None,
+                        },
+                    ));
+                    if did_compact {
+                        info!(
+                            agent_id = %config.agent_id,
+                            new_msg_count = messages.len(),
+                            "Auto-compact complete, retrying"
+                        );
+                        compacted = true;
+                        continue;
+                    }
+                    warn!(
+                        agent_id = %config.agent_id,
+                        "Auto-compact had no effect, giving up"
+                    );
                 }
                 return Err(e);
             }
@@ -187,6 +249,8 @@ pub async fn query(
             tools: &config.tools,
             fire: &|event| config.event_bus.emit(event),
             permission_checker: config.permission_checker.as_ref(),
+            event_bus: Some(&config.event_bus),
+            response_registry: config.response_registry.as_deref(),
         };
 
         let tool_results = run_tools::run_tools(&tool_uses, cancel, &ctx).await;

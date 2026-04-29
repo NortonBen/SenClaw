@@ -32,7 +32,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 // Re-export key types
-pub use events::{EventBus, EngineEvent};
+pub use engine::ZenEngine;
+pub use events::{EventBus, EngineEvent, ResponseRegistry};
 pub use state::StateManager;
 
 /// Agent id used for root-agent events.
@@ -404,6 +405,10 @@ pub struct ToolContext<'a> {
     pub working_dir: &'a str,
     pub agent_data_dir: &'a str,
     pub abort: tokio_util::sync::CancellationToken,
+    /// Event bus for tools that emit/receive events (AskUser, etc.)
+    pub event_bus: Option<&'a EventBus>,
+    /// Response registry for tools that need request-response (AskUser, etc.)
+    pub response_registry: Option<&'a ResponseRegistry>,
 }
 
 /// Trait implemented by every tool available to agents.

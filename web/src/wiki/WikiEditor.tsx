@@ -1,7 +1,7 @@
 /**
  * WikiEditor — Markdown editor component
  *
- * Current implementation: controlled <textarea>, wrapped as a component for easy future replacement.
+ * Controlled <textarea>; swap implementations here only later if needed.
  */
 
 interface Props {
@@ -16,7 +16,7 @@ export function WikiEditor({ content, onChange }: Props) {
       onChange={e => onChange(e.target.value)}
       className="w-full h-full resize-none outline-none font-mono text-sm text-gray-800 leading-relaxed p-4 bg-white"
       spellCheck={false}
-      placeholder="# Title&#10;&#10;Write Markdown content here..."
+      placeholder="# Title&#10;&#10;Enter Markdown here..."
     />
   );
 }

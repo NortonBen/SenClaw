@@ -98,21 +98,43 @@ impl MemoryManager {
         query: &str,
         options: Option<SearchOptions>,
     ) -> Result<Vec<SearchResult>> {
-        // Process dirty files before search
-        {
+        // Process dirty files before search.
+        // Collect work outside the critical section so MutexGuard doesn't
+        // live across .await (required for Send).
+        enum DirtyWork {
+            None,
+            FullRescan,
+            SyncFiles(Vec<(String, String)>),
+        }
+        let dirty_work = {
             let mut dirty = self.dirty.lock().unwrap();
-            if let Some(entry) = dirty.remove(folder) {
-                if let Some(changed_files) = entry {
-                    for abs_path in &changed_files {
-                        let source = if abs_path.contains("/memory/") { "memory" } else { "session" };
-                        let existing = self.get_file_record(abs_path, folder);
-                        self.sync_file(abs_path, folder, source, existing.as_ref()).await;
-                    }
-                } else {
-                    drop(dirty);
-                    self.sync_folder(folder).await;
+            match dirty.remove(folder) {
+                Some(Some(changed_files)) => {
+                    let files: Vec<_> = changed_files
+                        .iter()
+                        .map(|abs_path| {
+                            let source = if abs_path.contains("/memory/") { "memory" } else { "session" };
+                            (abs_path.clone(), source.to_string())
+                        })
+                        .collect();
+                    DirtyWork::SyncFiles(files)
+                }
+                Some(None) => DirtyWork::FullRescan,
+                None => DirtyWork::None,
+            }
+        };
+
+        match dirty_work {
+            DirtyWork::SyncFiles(files) => {
+                for (abs_path, source) in &files {
+                    let existing = self.get_file_record(abs_path, folder);
+                    self.sync_file(abs_path, folder, source, existing.as_ref()).await;
                 }
             }
+            DirtyWork::FullRescan => {
+                self.sync_folder(folder).await;
+            }
+            DirtyWork::None => {}
         }
 
         let opts = options.unwrap_or_default();

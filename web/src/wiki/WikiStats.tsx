@@ -1,5 +1,5 @@
 /**
- * WikiStats — knowledge weight/distribution page
+ * WikiStats — knowledge distribution / weights page
  */
 
 import { useEffect } from 'react';
@@ -31,19 +31,19 @@ export function WikiStats({ stats, tags, fetchStats, fetchTags }: Props) {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-8 py-8">
-        <h1 className="text-base font-semibold text-gray-700 mb-6">Knowledge Distribution</h1>
+        <h1 className="text-base font-semibold text-gray-700 mb-6">Knowledge stats</h1>
 
         {/* Summary */}
         <div className="flex gap-4 mb-8 text-sm text-gray-500">
-          <span>Total <strong className="text-gray-800">{stats.totalFiles}</strong> docs</span>
-          <span><strong className="text-gray-800">{stats.totalDirs}</strong> directories</span>
+          <span><strong className="text-gray-800">{stats.totalFiles}</strong> pages</span>
+          <span><strong className="text-gray-800">{stats.totalDirs}</strong> folders</span>
           <span><strong className="text-gray-800">{tags.length}</strong> tags</span>
         </div>
 
         {/* Category bars */}
         {stats.byCategory.length > 0 && (
           <div className="mb-8">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">By Category</h2>
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">By folder</h2>
             <div className="space-y-3">
               {stats.byCategory.map(cat => {
                 const pct = Math.round((cat.count / maxCat) * 100);
@@ -51,7 +51,7 @@ export function WikiStats({ stats, tags, fetchStats, fetchTags }: Props) {
                   <div key={cat.dir}>
                     <div className="flex items-center justify-between text-sm mb-1">
                       <span className="font-medium text-gray-700">{cat.dir}</span>
-                      <span className="text-gray-400 text-xs">{cat.count} docs</span>
+                      <span className="text-gray-400 text-xs">{cat.count} pages</span>
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div
@@ -69,7 +69,7 @@ export function WikiStats({ stats, tags, fetchStats, fetchTags }: Props) {
         {/* Tag cloud */}
         {tags.length > 0 && (
           <div>
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">Top Tags</h2>
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">Popular tags</h2>
             <div className="flex flex-wrap gap-2">
               {tags.map(t => {
                 const size = Math.max(11, Math.min(16, 11 + Math.log(t.count + 1) * 2));
@@ -78,7 +78,7 @@ export function WikiStats({ stats, tags, fetchStats, fetchTags }: Props) {
                     key={t.name}
                     className="px-2.5 py-1 bg-gray-100 text-gray-600 rounded-full cursor-default"
                     style={{ fontSize: `${size}px` }}
-                    title={`${t.count} docs`}
+                    title={`${t.count} pages`}
                   >
                     {t.name}
                     <span className="ml-1 text-gray-400 text-[10px]">×{t.count}</span>

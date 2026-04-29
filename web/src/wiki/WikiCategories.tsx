@@ -1,6 +1,6 @@
 /**
  * WikiCategories — category management page
- * Tree view of directories with create support (cannot delete non-empty directories)
+ * Tree of folders; create new (cannot delete folders that contain files)
  */
 
 import { useEffect, useState } from 'react';
@@ -100,7 +100,7 @@ function DirRow({
           </svg>
           <span className="text-sm font-medium text-gray-700 truncate">{node.name}</span>
           {fileCount > 0 && (
-            <span className="text-xs text-gray-400 ml-1">{fileCount} docs</span>
+            <span className="text-xs text-gray-400 ml-1">{fileCount} pages</span>
           )}
         </button>
 
@@ -108,7 +108,7 @@ function DirRow({
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
           <button
             onClick={() => { setAddingSubdir(a => !a); setNewName(''); }}
-            title="New subdirectory"
+            title="New subfolder"
             className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -119,7 +119,7 @@ function DirRow({
             <button
               onClick={handleDelete}
               disabled={deleting}
-              title="Delete empty directory"
+              title="Delete empty folder"
               className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-30"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -138,7 +138,7 @@ function DirRow({
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setAddingSubdir(false); }}
-            placeholder="Directory name (kebab-case)"
+            placeholder="Folder name (kebab-case)"
             autoFocus
             className="flex-1 px-2 py-1 text-xs bg-amber-50 rounded border border-amber-200 outline-none focus:ring-1 focus:ring-amber-300"
           />
@@ -211,9 +211,9 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-base font-semibold text-gray-700">Category Management</h1>
+            <h1 className="text-base font-semibold text-gray-700">Categories</h1>
             {!treeLoading && (
-              <p className="text-xs text-gray-400 mt-0.5">{totalDirs} directories · {totalFiles} docs</p>
+              <p className="text-xs text-gray-400 mt-0.5">{totalDirs} folders · {totalFiles} pages</p>
             )}
           </div>
           <button
@@ -223,7 +223,7 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
-            New root directory
+            New root folder
           </button>
         </div>
 
@@ -235,7 +235,7 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
               value={rootName}
               onChange={e => setRootName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleCreateRoot(); if (e.key === 'Escape') setAddingRoot(false); }}
-              placeholder="Directory name (kebab-case, e.g. programming)"
+              placeholder="Folder name (kebab-case, e.g. programming)"
               autoFocus
               className="flex-1 px-3 py-1.5 text-sm bg-white rounded border border-amber-200 outline-none focus:ring-1 focus:ring-amber-300"
             />
@@ -254,8 +254,8 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
         {treeLoading && <p className="text-sm text-gray-400 py-4">Loading...</p>}
         {!treeLoading && tree.length === 0 && (
           <div className="text-center py-12 text-gray-400 text-sm">
-            <p>No directories yet</p>
-            <p className="text-xs mt-1">Click "New root directory" to begin</p>
+            <p>No folders yet</p>
+            <p className="text-xs mt-1">Click &quot;New root folder&quot; to get started</p>
           </div>
         )}
         {!treeLoading && tree.length > 0 && (
@@ -275,7 +275,7 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
         )}
 
         <p className="text-xs text-gray-300 mt-4">
-          Note: directories containing files cannot be deleted. You can also modify folders directly in the file system; the frontend auto-refreshes every 30 seconds.
+          Note: folders that contain files cannot be deleted here. You can manage folders on disk; this view refreshes every 30 seconds.
         </p>
       </div>
     </div>

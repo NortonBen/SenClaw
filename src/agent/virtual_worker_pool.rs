@@ -456,11 +456,102 @@ fn radix36(mut n: u64) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+// ===== ZenVirtualCoreApi =====
+
+/// Real [`VirtualCoreApi`] backed by ZenEngine.
+pub struct ZenVirtualCoreApi;
+
+impl VirtualCoreApi for ZenVirtualCoreApi {
+    fn execute_virtual_prompt(
+        &self,
+        instance_id: &str,
+        agent_data_dir: &str,
+        working_dir: &str,
+        tools: &[String],
+        system_prompt: Option<&str>,
+        _skills_extra_dirs: &[String],
+        _skip_perms: bool,
+        prompt: &str,
+        timeout: Duration,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<String> {
+        use crate::zen_core::{
+            EngineEvent, SessionState, ZenCore, ZenCoreOptions,
+        };
+
+        let handle = tokio::runtime::Handle::current();
+
+        let opts = ZenCoreOptions {
+            instance_id: instance_id.to_string(),
+            working_dir: working_dir.to_string(),
+            agent_data_dir: agent_data_dir.to_string(),
+            system_prompt: system_prompt
+                .unwrap_or("You are a helpful AI assistant.")
+                .to_string(),
+            ..Default::default()
+        };
+
+        let engine = crate::zen_core::ZenEngine::new(opts);
+        engine.create_session(None)?;
+
+        let mut rx = engine.event_bus.subscribe();
+        engine.process_user_input(prompt, None)?;
+
+        let mut last_message: Option<String> = None;
+        let deadline = std::time::Instant::now() + timeout;
+
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                engine.abort_current();
+                bail!("Virtual agent cancelled");
+            }
+            if std::time::Instant::now() > deadline {
+                engine.abort_current();
+                bail!("Virtual agent timed out after {}s", timeout.as_secs());
+            }
+
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let result = handle.block_on(async { tokio::time::timeout(remaining, rx.recv()).await });
+
+            match result {
+                Ok(Ok(event)) => match event {
+                    EngineEvent::MessageComplete(data) => {
+                        if data.agent_id == crate::agent::agent_pool::MAIN_AGENT_ID {
+                            last_message = Some(data.content.clone());
+                        }
+                    }
+                    EngineEvent::StateUpdate(data) => {
+                        if data.state == SessionState::Idle {
+                            return Ok(last_message.unwrap_or_default());
+                        }
+                    }
+                    EngineEvent::SessionError(data) => {
+                        bail!("Virtual agent error: {}", data.error.message);
+                    }
+                    _ => {}
+                },
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    bail!("Virtual agent event bus closed");
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                Err(_elapsed) => {
+                    engine.abort_current();
+                    bail!("Virtual agent timed out after {}s", timeout.as_secs());
+                }
+            }
+        }
+    }
+}
+
 // ===== Tests =====
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StubVirtualCoreApi;
+
+    impl VirtualCoreApi for StubVirtualCoreApi {}
 
     #[test]
     fn test_radix36() {
@@ -505,9 +596,4 @@ mod tests {
         let pool = VirtualWorkerPool::new(api);
         pool.cancel_all();
     }
-
-    // ===== Stub =====
-
-    struct StubVirtualCoreApi;
-    impl VirtualCoreApi for StubVirtualCoreApi {}
 }

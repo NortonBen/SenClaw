@@ -55,6 +55,10 @@ pub struct RunContext<'a> {
     pub fire: &'a (dyn Fn(EngineEvent) + Send + Sync),
     /// Permission checker instance.
     pub permission_checker: &'a dyn PermissionChecker,
+    /// Event bus for tools that need it (AskUser, etc.).
+    pub event_bus: Option<&'a EventBus>,
+    /// Response registry for tools that need request-response (AskUser, etc.).
+    pub response_registry: Option<&'a ResponseRegistry>,
 }
 
 // ============================================================================
@@ -184,6 +188,8 @@ async fn run_single_tool(
         working_dir: ctx.working_dir,
         agent_data_dir: ctx.agent_data_dir,
         abort: cancel.clone(),
+        event_bus: ctx.event_bus,
+        response_registry: ctx.response_registry,
     };
     if let Err(validation_msg) = tool.validate_input(&input, &tool_ctx).await {
         (ctx.fire)(EngineEvent::ToolExecutionError(ToolExecutionErrorData {
@@ -376,6 +382,8 @@ mod tests {
             tools,
             fire: &|_| {},
             permission_checker: checker,
+            event_bus: None,
+            response_registry: None,
         }
     }
 

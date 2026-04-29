@@ -308,6 +308,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);
     tracing::info!("[SenClaw] DB initialized: {}", cfg.paths.db_path.display());
 
+    // ===== 1b. MemoryManager =====
+    let _memory_mgr = memory::manager::init(Arc::clone(&db), &cfg);
+    tracing::info!("[SenClaw] MemoryManager initialized");
+
     // ===== 2. GroupManager =====
     // Load group bindings from DB; reconcile with config.json
     let gm = Arc::new(gateway::group_manager::GroupManager::new());
@@ -454,7 +458,37 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         cfg.agent.max_concurrent
     );
 
-    // ===== 5. WebSocketGateway + UIServer =====
+    // ===== 5. TaskScheduler =====
+    let task_executor =
+        Arc::new(scheduler::DefaultTaskExecutor::new(Arc::clone(&db)));
+    let _task_scheduler = scheduler::task_scheduler::TaskScheduler::new(
+        Arc::clone(&db),
+        task_executor,
+        30, // poll interval in seconds
+    )
+    .start();
+    tracing::info!("[SenClaw] TaskScheduler started (30s poll interval)");
+
+    // ===== 5b. VirtualWorkerPool =====
+    let virtual_worker_pool = Arc::new(agent::virtual_worker_pool::VirtualWorkerPool::new(
+        Arc::new(agent::virtual_worker_pool::ZenVirtualCoreApi),
+    ));
+    // Wire permission config follow (mirrors main-agent skip-perms).
+    {
+        let pool = agent_pool.clone();
+        virtual_worker_pool.set_permission_bind(
+            move |_virtual_jid: &str, _persona_name: &str, _skip_perms: bool| {
+                // Permission bridge for virtual agents: follow main-agent config.
+                // Real implementation will register PermissionBridge handlers
+                // on the virtual core's engine.
+                None
+            },
+            Arc::new(move || pool.get_skip_perms_for_virtual()),
+        );
+    }
+    tracing::info!("[SenClaw] VirtualWorkerPool ready");
+
+    // ===== 6. WebSocketGateway + UIServer =====
     // WS and UI listen on separate ports (matching TS config).
 
     // 5a. WebSocket gateway

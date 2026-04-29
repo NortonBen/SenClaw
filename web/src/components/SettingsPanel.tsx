@@ -32,15 +32,15 @@ interface ProviderDef {
 }
 
 const PROVIDERS: Record<string, ProviderDef> = {
-  anthropic:  { name: 'Anthropic',          baseURL: 'https://api.anthropic.com',                         defaultAdapt: 'anthropic', apiKeyPlaceholder: 'Enter your Anthropic API Key' },
-  openai:     { name: 'OpenAI',             baseURL: 'https://api.openai.com/v1',                         defaultAdapt: 'openai',    apiKeyPlaceholder: 'Enter your OpenAI API Key' },
-  kimi:       { name: 'Kimi (Moonshot)',     baseURL: 'https://api.moonshot.cn/v1',                        defaultAdapt: 'openai',    apiKeyPlaceholder: 'Enter your Moonshot API Key' },
-  minimax:    { name: 'MiniMax',            baseURL: 'https://api.minimaxi.com/anthropic',                 defaultAdapt: 'anthropic', apiKeyPlaceholder: 'Enter your MiniMax API Key' },
-  deepseek:   { name: 'DeepSeek',           baseURL: 'https://api.deepseek.com/anthropic', modelsUrl: 'https://api.deepseek.com/v1',        defaultAdapt: 'anthropic', apiKeyPlaceholder: 'Enter your DeepSeek API Key' },
-  glm:        { name: 'GLM (Zhipu)',          baseURL: 'https://open.bigmodel.cn/api/paas/v4',              defaultAdapt: 'openai',    apiKeyPlaceholder: 'Enter your Zhipu API Key' },
-  openrouter: { name: 'OpenRouter',         baseURL: 'https://openrouter.ai/api',          modelsUrl: 'https://openrouter.ai/api/v1',       defaultAdapt: 'openai', apiKeyPlaceholder: 'Enter your OpenRouter API Key' },
-  qwen:       { name: 'Qwen (Alibaba)',      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultAdapt: 'openai',   apiKeyPlaceholder: 'Enter your Alibaba Cloud API Key' },
-  custom:     { name: 'Custom LLM Endpoint',    baseURL: '',                                                   defaultAdapt: 'openai',    baseURLPlaceholder: 'https://your-api.com/v1', apiKeyPlaceholder: 'Enter your API Key' },
+  anthropic:  { name: 'Anthropic',          baseURL: 'https://api.anthropic.com',                         defaultAdapt: 'anthropic', apiKeyPlaceholder: 'Your Anthropic API key' },
+  openai:     { name: 'OpenAI',             baseURL: 'https://api.openai.com/v1',                         defaultAdapt: 'openai',    apiKeyPlaceholder: 'Your OpenAI API key' },
+  kimi:       { name: 'Kimi (Moonshot)',     baseURL: 'https://api.moonshot.cn/v1',                        defaultAdapt: 'openai',    apiKeyPlaceholder: 'Your Moonshot API key' },
+  minimax:    { name: 'MiniMax',            baseURL: 'https://api.minimaxi.com/anthropic',                 defaultAdapt: 'anthropic', apiKeyPlaceholder: 'Your MiniMax API key' },
+  deepseek:   { name: 'DeepSeek',           baseURL: 'https://api.deepseek.com/anthropic', modelsUrl: 'https://api.deepseek.com/v1',        defaultAdapt: 'anthropic', apiKeyPlaceholder: 'Your DeepSeek API key' },
+  glm:        { name: 'GLM (Zhipu)',          baseURL: 'https://open.bigmodel.cn/api/paas/v4',              defaultAdapt: 'openai',    apiKeyPlaceholder: 'Your Zhipu API key' },
+  openrouter: { name: 'OpenRouter',         baseURL: 'https://openrouter.ai/api',          modelsUrl: 'https://openrouter.ai/api/v1',       defaultAdapt: 'openai', apiKeyPlaceholder: 'Your OpenRouter API key' },
+  qwen:       { name: 'Qwen (Alibaba)',      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultAdapt: 'openai',   apiKeyPlaceholder: 'Your Alibaba Cloud API key' },
+  custom:     { name: 'Custom LLM endpoint',    baseURL: '',                                                   defaultAdapt: 'openai',    baseURLPlaceholder: 'https://your-api.com/v1', apiKeyPlaceholder: 'Your API key' },
 };
 const PROVIDER_ORDER = ['anthropic','openai','kimi','minimax','deepseek','glm','openrouter','qwen','custom'];
 const DEFAULT_MAX_TOKENS_OPTIONS = [4096, 8192, 16000, 32000, 64000, 100000];
@@ -87,7 +87,7 @@ const MODEL_LIMITS_TABLE: Array<[string, { maxTokens: number; contextLength: num
   ['glm-4-flash',         { maxTokens: 8192,    contextLength: 128000  }],
   ['glm-4',               { maxTokens: 8192,    contextLength: 128000  }],
   ['glm-z1',              { maxTokens: 32768,   contextLength: 32768   }],
-  // Qwen / Tongyi
+  // Qwen
   ['qwen3',               { maxTokens: 32768,   contextLength: 32768   }],
   ['qwen-long',           { maxTokens: 8192,    contextLength: 1000000 }],
   ['qwen-max',            { maxTokens: 8192,    contextLength: 32000   }],
@@ -114,7 +114,7 @@ function lookupModelLimits(modelName: string): { maxTokens: number; contextLengt
   return null;
 }
 
-/** Ensure options include value; append if missing */
+/** Ensure `options` includes `value`; append if missing */
 function ensureOption(options: number[], value: number): number[] {
   return options.includes(value) ? options : [...options, value].sort((a, b) => a - b);
 }
@@ -193,7 +193,7 @@ function PermissionsTab() {
       setPerms(next);
       setFeedback({ ok: true, msg: 'Saved' });
     } catch {
-      setFeedback({ ok: false, msg: 'Operation failed, please retry' });
+      setFeedback({ ok: false, msg: 'Something went wrong. Try again.' });
     } finally {
       setSaving(false);
     }
@@ -202,18 +202,18 @@ function PermissionsTab() {
   const toggleMain = () => save({ ...perms, skipMainAgentPermissions: !perms.skipMainAgentPermissions });
   const toggleAll  = () => {
     const next = !perms.skipAllAgentsPermissions;
-    // When enabling "Allow all", also set Main Agent switch to true (semantic superset)
+    // When enabling "all agents", main agent toggle is also on (superset)
     save({ skipMainAgentPermissions: next ? true : perms.skipMainAgentPermissions, skipAllAgentsPermissions: next });
   };
 
   return (
     <section className="space-y-3">
-      <p className="text-[11px] font-semibold text-[#5BBFE8] uppercase tracking-wide">Permission Approval</p>
+      <p className="text-[11px] font-semibold text-[#5BBFE8] uppercase tracking-wide">Permissions</p>
 
-      {/* Main Agent */}
+      {/* Main agent */}
       <div className="bg-gray-50 rounded-xl p-3.5">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-800">Main Agent without approval</span>
+          <span className="text-sm font-medium text-gray-800">Skip approval for main agent</span>
           <Toggle
             value={perms.skipMainAgentPermissions || perms.skipAllAgentsPermissions}
             onChange={toggleMain}
@@ -221,28 +221,28 @@ function PermissionsTab() {
           />
         </div>
         <p className="text-[11px] text-gray-400 leading-relaxed">
-          When enabled, Main Agent can run file operations and Bash commands without step-by-step approval.
-          {perms.skipAllAgentsPermissions && <span className="text-[#5BBFE8]"> (overridden by "Allow all")</span>}
+          When on, the main agent does not require step-by-step approval for file edits or Bash.
+          {perms.skipAllAgentsPermissions && <span className="text-[#5BBFE8]"> (overridden by &quot;all agents&quot;)</span>}
         </p>
         {!loading && (
           <p className={`mt-1.5 text-[11px] font-medium ${(perms.skipMainAgentPermissions || perms.skipAllAgentsPermissions) ? 'text-[#5BBFE8]' : 'text-gray-400'}`}>
-            {(perms.skipMainAgentPermissions || perms.skipAllAgentsPermissions) ? '● Enabled' : '○ Disabled'}
+            {(perms.skipMainAgentPermissions || perms.skipAllAgentsPermissions) ? '● On' : '○ Off'}
           </p>
         )}
       </div>
 
-      {/* All Agents */}
+      {/* All agents */}
       <div className="bg-gray-50 rounded-xl p-3.5">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-800">All Agents without approval</span>
+          <span className="text-sm font-medium text-gray-800">Skip approval for all agents</span>
           <Toggle value={perms.skipAllAgentsPermissions} onChange={toggleAll} disabled={loading || saving} />
         </div>
         <p className="text-[11px] text-gray-400 leading-relaxed">
-          When enabled, all agents (including dispatch subagents) can run tools without approval. Suitable for fully trusted local environments.
+          When on, every agent (including dispatch workers) runs tools without approval. Use only in fully trusted local setups.
         </p>
         {!loading && (
           <p className={`mt-1.5 text-[11px] font-medium ${perms.skipAllAgentsPermissions ? 'text-amber-500' : 'text-gray-400'}`}>
-            {perms.skipAllAgentsPermissions ? '● Enabled' : '○ Disabled'}
+            {perms.skipAllAgentsPermissions ? '● On' : '○ Off'}
           </p>
         )}
       </div>
@@ -340,10 +340,10 @@ function AgentRow({ group, onDelete, onEditName }: AgentRowProps) {
             <span className="text-[10px] bg-purple-50 text-purple-500 px-1.5 py-0.5 rounded">Web only</span>
           )}
           {group.requiresTrigger && group.channel && (
-            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Trigger</span>
+            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">@mention</span>
           )}
           {group.allowedWorkDirs !== null && (
-            <span className="text-[10px] bg-blue-50 text-blue-500 px-1.5 py-0.5 rounded">Workdir limit</span>
+            <span className="text-[10px] bg-blue-50 text-blue-500 px-1.5 py-0.5 rounded">Workdir limits</span>
           )}
         </div>
       </div>
@@ -366,7 +366,7 @@ function AgentRow({ group, onDelete, onEditName }: AgentRowProps) {
             <button
               onClick={() => setConfirmDelete(true)}
               className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors"
-              title="Delete Agent"
+              title="Remove agent"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
@@ -437,10 +437,10 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
       setJid('');
     } else if (v === 'feishu') {
       if (!jid || jid.startsWith('web:') || jid.startsWith('tg:') || jid.startsWith('qq:')) {
-        setJid('');  // Feishu JID can be empty (auto-binds after first message)
+        setJid('');  // Feishu JID optional (bound on first message)
       }
     } else if (v === 'qq') {
-      setJid(''); // QQ is always pending; JID auto-binds after first message
+      setJid(''); // QQ: pending until first message binds JID
     }
   };
 
@@ -460,33 +460,33 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
     else if (groups.some(g => g.name.toLowerCase() === trimName.toLowerCase())) errs.name = 'Name already exists';
 
     if (!trimFolder) errs.folder = 'Agent ID is required';
-    else if (!isValidFolder(trimFolder)) errs.folder = 'Only lowercase letters, numbers, and hyphens are allowed';
+    else if (!isValidFolder(trimFolder)) errs.folder = 'Only lowercase letters, digits, and hyphens';
     else if (groups.some(g => g.folder === trimFolder)) errs.folder = 'Agent ID already exists';
 
     if (channel === 'telegram') {
       const trimId = tgChatId.trim();
       if (!trimId) errs.tgChatId = 'Chat ID is required';
       else if (!/^-?\d+$/.test(trimId)) errs.tgChatId = 'Chat ID must be numeric';
-      else if (groups.some(g => g.jid === trimJid)) errs.tgChatId = 'This group is already registered';
-      if (tgChatType === 'user' && !botToken.trim()) errs.botToken = 'User binding requires Bot Token';
+      else if (groups.some(g => g.jid === trimJid)) errs.tgChatId = 'This chat is already registered';
+      if (tgChatType === 'user' && !botToken.trim()) errs.botToken = 'Bot token is required for user binding';
     } else if (channel === 'feishu') {
       const hasAppId = !!botToken.trim();
       const hasAppSecret = !!appSecret.trim();
-      if (hasAppId && !hasAppSecret) errs.appSecret = 'App Secret is required when App ID is provided';
-      if (!hasAppId && hasAppSecret) errs.appId = 'App ID is required when App Secret is provided';
-      // Feishu JID can be left empty (stored as feishu:pending:{appId})
-      if (trimJid && !trimJid.startsWith('feishu:')) errs.jid = 'Invalid Feishu JID format (must start with feishu:)';
+      if (hasAppId && !hasAppSecret) errs.appSecret = 'App Secret is required when App ID is set';
+      if (!hasAppId && hasAppSecret) errs.appId = 'App ID is required when App Secret is set';
+      // Feishu JID optional (stored as feishu:pending:{appId})
+      if (trimJid && !trimJid.startsWith('feishu:')) errs.jid = 'Invalid Feishu JID (must start with feishu:)';
       else if (trimJid && groups.some(g => g.jid === trimJid)) errs.jid = 'This JID is already registered';
       if (!trimJid && !botToken.trim()) errs.appId = 'App ID is required when Chat JID is empty';
     } else if (channel === 'qq') {
       if (!botToken.trim()) errs.appId = 'App ID is required';
       if (!appSecret.trim()) errs.appSecret = 'App Secret is required';
-      // Check pending JID uniqueness
+      // Pending JID uniqueness
       const pendingJid = botToken.trim() ? `qq:pending:${botToken.trim()}` : '';
-      if (pendingJid && groups.some(g => g.jid === pendingJid)) errs.appId = 'This QQ App is already bound';
+      if (pendingJid && groups.some(g => g.jid === pendingJid)) errs.appId = 'This QQ app is already bound';
     } else {
-      // Web-only: JID is auto-generated, only check uniqueness
-      if (groups.some(g => g.jid === trimJid)) errs.jid = 'Agent JID already exists (please change Agent ID)';
+      // Web-only: auto JID; check uniqueness
+      if (groups.some(g => g.jid === trimJid)) errs.jid = 'Agent JID already exists (change Agent ID)';
     }
 
     setErrors(errs);
@@ -501,7 +501,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
       folder: folder.trim(),
       name:   name.trim(),
     };
-    // Pending binding (Feishu/QQ): leave JID empty, backend generates {channel}:pending:{appId}
+    // Pending bind (Feishu/QQ): omit JID; backend assigns {channel}:pending:{appId}
     if (trimmedJid) payload.jid = trimmedJid;
     if (channel) payload.channel = channel;
     if (channel) payload.requiresTrigger = requiresTrigger;
@@ -520,14 +520,14 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
 
   return (
     <div className="border border-[#5BBFE8]/30 rounded-xl p-4 bg-[#EEF7FD]/40 space-y-3">
-      <p className="text-xs font-semibold text-gray-700">New Agent</p>
+      <p className="text-xs font-semibold text-gray-700">New agent</p>
 
       {/* Name */}
       <div>
         <label className="text-[11px] text-gray-500 mb-1 block">Display name <span className="text-red-400">*</span></label>
         <input
           className={`w-full text-sm border rounded-lg px-3 py-2 outline-none transition-colors ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-200 focus:border-[#5BBFE8]'}`}
-          placeholder="Workgroup Assistant"
+          placeholder="Team assistant"
           value={name}
           onChange={e => handleNameChange(e.target.value)}
         />
@@ -545,7 +545,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
         />
         {errors.folder
           ? <p className="text-[11px] text-red-500 mt-0.5">{errors.folder}</p>
-          : <p className="text-[11px] text-gray-400 mt-0.5">Lowercase letters, numbers, and hyphens; cannot be changed after creation</p>
+          : <p className="text-[11px] text-gray-400 mt-0.5">Lowercase letters, digits, hyphens only; cannot change after create</p>
         }
       </div>
 
@@ -563,7 +563,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
           <option value="qq">QQ</option>
         </select>
         {isWebOnly && (
-          <p className="text-[11px] text-gray-400 mt-0.5">Only receives tasks dispatched by Main Agent through the Web UI</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">Receives tasks from the main agent via the web UI only</p>
         )}
       </div>
 
@@ -582,7 +582,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
               />
               {errors.tgChatId
                 ? <p className="text-[11px] text-red-500 mt-0.5">{errors.tgChatId}</p>
-                : <p className="text-[11px] text-gray-400 mt-0.5">Get it via @userinfobot</p>
+                : <p className="text-[11px] text-gray-400 mt-0.5">Use @userinfobot to look it up</p>
               }
             </div>
             <div className="w-28 flex-shrink-0">
@@ -600,11 +600,11 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
           {/* Bot Token */}
           <div>
             <label className="text-[11px] text-gray-500 mb-1 block">
-              Bot Token{tgChatType === 'user' ? <span className="text-red-400"> *</span> : '(optional)'}
+              Bot Token{tgChatType === 'user' ? <span className="text-red-400"> *</span> : ' (optional)'}
             </label>
             <input
               className={`w-full text-sm font-mono border rounded-lg px-3 py-2 outline-none transition-colors ${errors.botToken ? 'border-red-300 bg-red-50' : 'border-gray-200 focus:border-[#5BBFE8]'}`}
-              placeholder={tgChatType === 'user' ? 'Required, dedicated bot bound to this user' : 'Empty = use default bot from .env'}
+              placeholder={tgChatType === 'user' ? 'Required: dedicated bot for this user' : 'Leave empty to use default bot from .env'}
               value={botToken}
               onChange={e => setBotToken(e.target.value)}
             />
@@ -612,7 +612,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
           </div>
           {/* Trigger */}
           <div>
-            <label className="text-[11px] text-gray-500 mb-1 block">Require @mention trigger</label>
+            <label className="text-[11px] text-gray-500 mb-1 block">Require @mention</label>
             <div className="flex items-center gap-2 py-1">
               <Toggle value={requiresTrigger} onChange={setRequiresTrigger} />
               <span className="text-[11px] text-gray-500">{requiresTrigger ? 'On' : 'Off'}</span>
@@ -623,7 +623,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
 
       {channel === 'feishu' && (
         <>
-          {/* Feishu Chat JID(optional) */}
+          {/* Feishu Chat JID (optional) */}
           <div>
             <label className="text-[11px] text-gray-500 mb-1 block">Chat JID <span className="text-gray-400">(optional)</span></label>
             <input
@@ -634,12 +634,12 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
             />
             {errors.jid
               ? <p className="text-[11px] text-red-500 mt-0.5">{errors.jid}</p>
-              : <p className="text-[11px] text-gray-400 mt-0.5">If empty, auto-binding completes after bot receives the first message</p>
+              : <p className="text-[11px] text-gray-400 mt-0.5">Leave empty to bind automatically when the bot receives the first message</p>
             }
           </div>
           {/* Trigger */}
           <div>
-            <label className="text-[11px] text-gray-500 mb-1 block">Require @mention trigger</label>
+            <label className="text-[11px] text-gray-500 mb-1 block">Require @mention</label>
             <div className="flex items-center gap-2 py-1">
               <Toggle value={requiresTrigger} onChange={setRequiresTrigger} />
               <span className="text-[11px] text-gray-500">{requiresTrigger ? 'On' : 'Off'}</span>
@@ -647,7 +647,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
           </div>
           {/* App ID + App Secret */}
           <div className="bg-gray-50 rounded-lg p-3 space-y-2.5">
-            <p className="text-[11px] font-medium text-gray-600">Feishu app credentials (optional; empty uses global default)</p>
+            <p className="text-[11px] font-medium text-gray-600">Feishu app credentials (optional; falls back to global defaults)</p>
             <div className="flex gap-2.5">
               <div className="flex-1">
                 <label className="text-[11px] text-gray-500 mb-1 block">App ID</label>
@@ -663,7 +663,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
                 <label className="text-[11px] text-gray-500 mb-1 block">App Secret</label>
                 <input
                   className={`w-full text-sm font-mono border rounded-lg px-3 py-2 outline-none transition-colors ${errors.appSecret ? 'border-red-300 bg-red-50' : 'border-gray-200 focus:border-[#5BBFE8]'}`}
-                  placeholder="Required when App ID is set"
+                  placeholder="Required if App ID is set"
                   type="password"
                   value={appSecret}
                   onChange={e => setAppSecret(e.target.value)}
@@ -685,7 +685,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
                 <label className="text-[11px] text-gray-500 mb-1 block">App ID <span className="text-red-400">*</span></label>
                 <input
                   className={`w-full text-sm font-mono border rounded-lg px-3 py-2 outline-none transition-colors ${errors.appId ? 'border-red-300 bg-red-50' : 'border-gray-200 focus:border-[#5BBFE8]'}`}
-                  placeholder="QQ Open Platform AppID"
+                  placeholder="QQ Open Platform App ID"
                   value={botToken}
                   onChange={e => setBotToken(e.target.value)}
                 />
@@ -695,7 +695,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
                 <label className="text-[11px] text-gray-500 mb-1 block">App Secret <span className="text-red-400">*</span></label>
                 <input
                   className={`w-full text-sm font-mono border rounded-lg px-3 py-2 outline-none transition-colors ${errors.appSecret ? 'border-red-300 bg-red-50' : 'border-gray-200 focus:border-[#5BBFE8]'}`}
-                  placeholder="QQ Open Platform AppSecret"
+                  placeholder="QQ Open Platform App Secret"
                   type="password"
                   value={appSecret}
                   onChange={e => setAppSecret(e.target.value)}
@@ -711,14 +711,14 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
           </div>
           {/* Trigger */}
           <div>
-            <label className="text-[11px] text-gray-500 mb-1 block">Require @mention trigger</label>
+            <label className="text-[11px] text-gray-500 mb-1 block">Require @mention</label>
             <div className="flex items-center gap-2 py-1">
               <Toggle value={requiresTrigger} onChange={setRequiresTrigger} />
               <span className="text-[11px] text-gray-500">{requiresTrigger ? 'On' : 'Off'}</span>
             </div>
           </div>
           <p className="text-[11px] text-gray-400">
-            Chat JID is auto-bound after bot receives the first QQ message; no manual input needed.
+            Chat JID binds automatically when the bot receives the first QQ message; no manual entry needed.
           </p>
         </>
       )}
@@ -734,7 +734,7 @@ function CreateAgentForm({ groups, onSubmit, onRegisterFeishuApp, onRegisterQQAp
           disabled={submitting}
           className="text-sm px-4 py-1.5 rounded-lg bg-[#5BBFE8] text-white hover:bg-[#3AAAD4] transition-colors disabled:opacity-50"
         >
-          {submitting ? 'Creating...' : 'Create Agent'}
+          {submitting ? 'Creating…' : 'Create agent'}
         </button>
       </div>
     </div>
@@ -836,8 +836,8 @@ function AgentsTab({ groups, onRegisterGroup, onRegisterFeishuApp, onRegisterQQA
       {otherGroups.length > 0 && (
         <div className="bg-blue-50/60 rounded-xl p-3 mt-1">
           <p className="text-[11px] text-[#3AAAD4] leading-relaxed">
-            💡 Main Agent can use <span className="font-mono bg-white px-1 rounded">send_message</span> tool to send messages to groups of other agents,
-            or dispatch by referring to agent names in natural language.
+            💡 The main agent can message other agents&apos; chats via the <span className="font-mono bg-white px-1 rounded">send_message</span> tool,
+            or dispatch by naming agents in natural language.
           </p>
         </div>
       )}
@@ -898,10 +898,10 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
   };
 
   const handleFetchModels = async () => {
-    if (!baseURL) { setTestStatus({ msg: 'Please enter model endpoint', type: 'err' }); return; }
-    if (!apiKey)  { setTestStatus({ msg: 'Please enter API Key', type: 'err' }); return; }
+    if (!baseURL) { setTestStatus({ msg: 'Enter model base URL', type: 'err' }); return; }
+    if (!apiKey)  { setTestStatus({ msg: 'Enter API key', type: 'err' }); return; }
     setFetching(true);
-    setTestStatus({ msg: 'Fetching model list...', type: 'loading' });
+    setTestStatus({ msg: 'Fetching model list…', type: 'loading' });
     // Use provider-specific models URL if available (some providers use a different endpoint for listing models)
     const fetchBaseURL = PROVIDERS[provider]?.modelsUrl ?? baseURL;
     try {
@@ -914,10 +914,10 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
       if (data.success && data.models?.length) {
         setAvailableModels(data.models);
         setSelectedModel(data.models[0]);
-        setTestStatus({ msg: `✓ Retrieved ${data.models.length} models`, type: 'ok' });
+        setTestStatus({ msg: `✓ Loaded ${data.models.length} model(s)`, type: 'ok' });
         setTimeout(() => setTestStatus({ msg: '', type: '' }), 3000);
       } else {
-        setTestStatus({ msg: `✗ ${data.message ?? 'Fetch failed'}`, type: 'err' });
+        setTestStatus({ msg: `✗ ${data.message ?? 'Failed to fetch'}`, type: 'err' });
       }
     } catch {
       setTestStatus({ msg: '✗ Network error', type: 'err' });
@@ -927,8 +927,8 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
   };
 
   const handleTest = async () => {
-    if (!baseURL || !apiKey) { setTestStatus({ msg: 'Please fill model endpoint and API Key', type: 'err' }); return; }
-    setTestStatus({ msg: 'Testing connection...', type: 'loading' });
+    if (!baseURL || !apiKey) { setTestStatus({ msg: 'Enter base URL and API key', type: 'err' }); return; }
+    setTestStatus({ msg: 'Testing connection…', type: 'loading' });
     // Use provider-specific models URL for connection test (avoids auth mismatch on models endpoint)
     const testBaseURL = PROVIDERS[provider]?.modelsUrl ?? baseURL;
     try {
@@ -939,7 +939,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
       });
       const data = await r.json() as { success: boolean; message?: string };
       setConnTested(true); setConnOk(data.success);
-      setTestStatus({ msg: data.success ? '✓ Connection successful' : `✗ ${data.message ?? 'Connection failed'}`, type: data.success ? 'ok' : 'err' });
+      setTestStatus({ msg: data.success ? '✓ Connection OK' : `✗ ${data.message ?? 'Connection failed'}`, type: data.success ? 'ok' : 'err' });
     } catch {
       setConnTested(true); setConnOk(false);
       setTestStatus({ msg: '✗ Network error', type: 'err' });
@@ -947,11 +947,11 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
   };
 
   const handleSave = async () => {
-    if (!apiKey)         { setTestStatus({ msg: 'Please enter API Key', type: 'err' }); return; }
-    if (!currentModel)   { setTestStatus({ msg: 'Please select or enter a model name', type: 'err' }); return; }
-    if (!baseURL)        { setTestStatus({ msg: 'Please enter model endpoint', type: 'err' }); return; }
-    if (!connTested)     { setTestStatus({ msg: '⚠ Please click "Test connection" first', type: 'err' }); return; }
-    if (!connOk)         { setTestStatus({ msg: '⚠ Connection test failed, please fix and retry', type: 'err' }); return; }
+    if (!apiKey)         { setTestStatus({ msg: 'Enter API key', type: 'err' }); return; }
+    if (!currentModel)   { setTestStatus({ msg: 'Select or enter a model name', type: 'err' }); return; }
+    if (!baseURL)        { setTestStatus({ msg: 'Enter model base URL', type: 'err' }); return; }
+    if (!connTested)     { setTestStatus({ msg: '⚠ Run "Test connection" first', type: 'err' }); return; }
+    if (!connOk)         { setTestStatus({ msg: '⚠ Connection test failed; fix settings and test again', type: 'err' }); return; }
     setSaving(true);
     const label = `${currentModel} (${PROVIDERS[provider]?.name ?? provider})`;
     try {
@@ -964,7 +964,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
       onSaved();
       onClose();
     } catch {
-      setTestStatus({ msg: 'Save failed, please retry', type: 'err' });
+      setTestStatus({ msg: 'Save failed, try again', type: 'err' });
     } finally {
       setSaving(false);
     }
@@ -1005,7 +1005,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
 
         {/* Base URL */}
         <div>
-          <label className="text-[11px] text-gray-500 mb-1 block">Model endpoint</label>
+          <label className="text-[11px] text-gray-500 mb-1 block">Base URL</label>
           <input
             className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#5BBFE8] transition-colors"
             placeholder={def.baseURLPlaceholder ?? def.baseURL}
@@ -1021,7 +1021,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
             <input
               type={showKey ? 'text' : 'password'}
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 pr-10 outline-none focus:border-[#5BBFE8] transition-colors"
-              placeholder={def.apiKeyPlaceholder ?? 'Enter your API Key'}
+              placeholder={def.apiKeyPlaceholder ?? 'Your API key'}
               value={apiKey}
               onChange={e => { setApiKey(e.target.value.trim()); setConnTested(false); setConnOk(false); }}
             />
@@ -1053,13 +1053,13 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
               className="text-[11px] text-[#5BBFE8] hover:text-[#3AAAD4]"
               onClick={() => setIsManual(v => !v)}
             >
-              {isManual ? 'Select from list' : 'Manual input'}
+              {isManual ? 'Pick from list' : 'Enter manually'}
             </button>
           </div>
           {isManual ? (
             <input
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#5BBFE8] transition-colors"
-              placeholder="Manual inputModel name"
+              placeholder="Enter model name"
               value={modelName}
               onChange={e => { setModelName(e.target.value); setConnTested(false); setConnOk(false); }}
             />
@@ -1081,7 +1081,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
                 disabled={fetching}
                 className="px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors whitespace-nowrap"
               >
-                {fetching ? 'Fetching...' : 'Fetch models'}
+                {fetching ? 'Fetching…' : 'Fetch models'}
               </button>
             </div>
           )}
@@ -1089,21 +1089,21 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
 
         {/* API type */}
         <div>
-          <label className="text-[11px] text-gray-500 mb-1 block">API Type</label>
+          <label className="text-[11px] text-gray-500 mb-1 block">API style</label>
           <select
             className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#5BBFE8] bg-white"
             value={adapt}
             onChange={e => setAdapt(e.target.value as 'openai' | 'anthropic')}
           >
-            <option value="openai">OpenAI format</option>
-            <option value="anthropic">Anthropic format</option>
+            <option value="openai">OpenAI-compatible</option>
+            <option value="anthropic">Anthropic-compatible</option>
           </select>
         </div>
 
         {/* Max tokens + context length */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-[11px] text-gray-500 mb-1 block">Max generation tokens</label>
+            <label className="text-[11px] text-gray-500 mb-1 block">Max output tokens</label>
             <select
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#5BBFE8] bg-white"
               value={maxTokens}
@@ -1115,7 +1115,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
             </select>
           </div>
           <div>
-            <label className="text-[11px] text-gray-500 mb-1 block">Context window size</label>
+            <label className="text-[11px] text-gray-500 mb-1 block">Context window</label>
             <select
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-[#5BBFE8] bg-white"
               value={contextLength}
@@ -1143,7 +1143,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
             disabled={testStatus.type === 'loading' || saving}
             className="flex-1 text-sm py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
           >
-            {testStatus.type === 'loading' ? 'Testing...' : 'Test connection'}
+            {testStatus.type === 'loading' ? 'Testing…' : 'Test connection'}
           </button>
           <button
             type="button"
@@ -1151,7 +1151,7 @@ function AddModelPanel({ onClose, onSaved }: AddModelPanelProps) {
             disabled={saving || testStatus.type === 'loading'}
             className="flex-1 text-sm py-2 rounded-lg bg-[#5BBFE8] text-white hover:bg-[#3AAAD4] disabled:opacity-50 transition-colors"
           >
-            {saving ? 'Adding...' : 'Add model'}
+            {saving ? 'Adding…' : 'Add model'}
           </button>
         </div>
       </div>
@@ -1252,7 +1252,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
     <div className="space-y-3">
       {/* Current active models */}
       <div>
-        <p className="text-[11px] font-semibold text-[#5BBFE8] uppercase tracking-wide mb-2">Current Models in Use</p>
+        <p className="text-[11px] font-semibold text-[#5BBFE8] uppercase tracking-wide mb-2">Active models</p>
         {displayMain || displayQuick ? (
           <div className="bg-[#EEF7FD]/60 border border-[#5BBFE8]/20 rounded-xl p-3.5 space-y-2.5">
             {/* Main model row */}
@@ -1262,7 +1262,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
                 <p className="text-sm font-medium text-gray-800 truncate">{displayMain?.modelName ?? '—'}</p>
                 <p className="text-[11px] text-gray-400">{displayMain?.providerLabel ?? ''}</p>
               </div>
-              <span className="text-[10px] text-[#5BBFE8] font-medium bg-[#5BBFE8]/10 px-1.5 py-0.5 rounded-md flex-shrink-0">Main Model</span>
+              <span className="text-[10px] text-[#5BBFE8] font-medium bg-[#5BBFE8]/10 px-1.5 py-0.5 rounded-md flex-shrink-0">Main</span>
             </div>
             {/* Quick model row */}
             <div className="flex items-center gap-2">
@@ -1271,11 +1271,11 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
                 <p className="text-sm font-medium text-gray-800 truncate">{displayQuick?.modelName ?? '—'}</p>
                 <p className="text-[11px] text-gray-400">{displayQuick?.providerLabel ?? ''}</p>
               </div>
-              <span className="text-[10px] text-[#A78BFA] font-medium bg-[#A78BFA]/10 px-1.5 py-0.5 rounded-md flex-shrink-0">Quick Model</span>
+              <span className="text-[10px] text-[#A78BFA] font-medium bg-[#A78BFA]/10 px-1.5 py-0.5 rounded-md flex-shrink-0">Quick</span>
             </div>
             {/* Thinking toggle row */}
             <div className="flex items-center justify-between pt-1.5 border-t border-[#5BBFE8]/10">
-              <span className="text-[11px] text-gray-500">Thinking</span>
+              <span className="text-[11px] text-gray-500">Chain-of-thought (Thinking)</span>
               <button
                 onClick={handleThinkingToggle}
                 className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors flex-shrink-0 ${
@@ -1292,7 +1292,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
           </div>
         ) : (
           <div className="bg-gray-50 rounded-xl p-3.5">
-            <p className="text-[11px] text-gray-400">No model configured yet</p>
+            <p className="text-[11px] text-gray-400">No model configured</p>
           </div>
         )}
       </div>
@@ -1301,7 +1301,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
       <div>
         <div className="flex items-center justify-between mb-2">
           <p className="text-[11px] font-semibold text-[#5BBFE8] uppercase tracking-wide">
-            Configured models <span className="text-gray-400 font-normal normal-case">({configs.length})</span>
+            Saved models <span className="text-gray-400 font-normal normal-case">({configs.length})</span>
           </p>
           <button
             onClick={onOpenAdd}
@@ -1315,7 +1315,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
         </div>
 
         {configs.length === 0 ? (
-          <p className="text-[11px] text-gray-400 text-center py-6">No configuration yet, click "Add" to add a model</p>
+          <p className="text-[11px] text-gray-400 text-center py-6">No saved configs yet — click Add to add a model</p>
         ) : (
           <div className="space-y-2">
             {configs.map(c => {
@@ -1337,7 +1337,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
                         {isMain  && <span className="text-[10px] text-[#5BBFE8] font-medium bg-[#5BBFE8]/10 px-1.5 py-0.5 rounded-md">Main</span>}
                         {isQuick && <span className="text-[10px] text-[#A78BFA] font-medium bg-[#A78BFA]/10 px-1.5 py-0.5 rounded-md">Quick</span>}
                       </div>
-                      <p className="text-[11px] text-gray-400 mt-0.5">{PROVIDERS[c.provider]?.name ?? c.provider} · {c.adapt === 'anthropic' ? 'Anthropic format' : 'OpenAI format'}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{PROVIDERS[c.provider]?.name ?? c.provider} · {c.adapt === 'anthropic' ? 'Anthropic API' : 'OpenAI API'}</p>
                       <p className="text-[11px] text-gray-300 font-mono truncate mt-0.5">{c.baseURL}</p>
                     </div>
                     <button
@@ -1360,7 +1360,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
                       }`}
                       disabled={isMain}
                     >
-                      {isMain ? '● Main Model' : 'Set as Main Model'}
+                      {isMain ? '● Main model' : 'Set as main'}
                     </button>
                     <button
                       onClick={() => handleSetQuick(c.id)}
@@ -1371,7 +1371,7 @@ function LLMTab({ onOpenAdd, refreshKey }: LLMTabProps) {
                       }`}
                       disabled={isQuick}
                     >
-                      {isQuick ? '● Quick Model' : 'Set as Quick Model'}
+                      {isQuick ? '● Quick model' : 'Set as quick'}
                     </button>
                   </div>
                 </div>

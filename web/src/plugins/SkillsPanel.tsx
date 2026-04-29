@@ -1,8 +1,8 @@
 /**
- * SkillsPanel — Skills management page
+ * SkillsPanel — manage Skills
  *
- * Browse tab: grouped card grid by source, click into detail (view/edit SKILL.md), top search across local + remote
- * Manage tab: show installed skills by source, each with enable/disable toggle
+ * Browse: card grid by source, detail with SKILL.md view/edit; search hits local + remote ClaWHub
+ * Manage: installed skills by source with per-skill enable/disable
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -11,7 +11,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github.css';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface LocalSkill {
   name: string;
@@ -33,7 +33,7 @@ interface RemoteResult {
 
 type Tab = 'browse' | 'manage';
 
-// ─── Constants ─────────────────────────────────────────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const SOURCE_LABEL: Record<string, string> = {
   bundled: 'Bundled',
@@ -53,7 +53,7 @@ const SOURCE_COLOR: Record<string, string> = {
   workspace: 'bg-amber-100 text-amber-700',
 };
 
-// ─── Utilities ─────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
@@ -74,7 +74,7 @@ function groupBySource(skills: LocalSkill[]) {
   return groups;
 }
 
-// ─── Small components ───────────────────────────────────────────────────────────────────
+// ─── Small components ────────────────────────────────────────────────────────
 
 function SourceBadge({ source, className = '' }: { source: string; className?: string }) {
   return (
@@ -100,7 +100,7 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
-// Skill icon (lightning)
+// Skill icon (bolt)
 function SkillIcon({ className = 'w-5 h-5' }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -109,7 +109,7 @@ function SkillIcon({ className = 'w-5 h-5' }: { className?: string }) {
   );
 }
 
-// ─── Card tiles ─────────────────────────────────────────────────────────────────
+// ─── Card grid ────────────────────────────────────────────────────────────────
 
 function SkillCard({ skill, onClick }: { skill: LocalSkill; onClick: () => void }) {
   return (
@@ -140,7 +140,7 @@ function SkillCard({ skill, onClick }: { skill: LocalSkill; onClick: () => void 
   );
 }
 
-// ─── Detail page ───────────────────────────────────────────────────────────────────
+// ─── Detail view ──────────────────────────────────────────────────────────────
 
 function SkillDetail({ skill, onBack, onToggleDisabled }: {
   skill: LocalSkill;
@@ -253,7 +253,7 @@ function SkillDetail({ skill, onBack, onToggleDisabled }: {
   );
 }
 
-// ─── Browse tab ──────────────────────────────────────────────────────────────
+// ─── Browse tab ───────────────────────────────────────────────────────────────
 
 function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: LocalSkill[]; onRefreshSkills: () => void; onReloadSuccess: () => void }) {
   const [query, setQuery] = useState('');
@@ -265,7 +265,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
   const [installError, setInstallError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync disabled status when leaving detail view
+  // Sync disabled state when leaving detail
   const handleBack = () => setSelectedSkill(null);
 
   const handleToggleDisabled = async (name: string, currentlyDisabled: boolean) => {
@@ -281,7 +281,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
     } catch { /* ignore */ }
   };
 
-  // Local filtering
+  // Local filter
   const localMatched = query.trim()
     ? skills.filter(s =>
         s.name.toLowerCase().includes(query.toLowerCase()) ||
@@ -289,7 +289,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
       )
     : skills;
 
-  // Remote search with 500ms debounce
+  // Remote search, debounced 500ms
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!query.trim()) { setRemoteResults([]); setRemoteError(''); return; }
@@ -329,7 +329,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
     }
   };
 
-  // Detail page view
+  // Detail view
   if (selectedSkill) {
     return (
       <SkillDetail
@@ -355,7 +355,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search skill name/description and ClaWHub remote results..."
+            placeholder="Search skill name or description (local + ClaWHub)…"
             className="w-full pl-8 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-violet-200 transition-colors"
           />
         </div>
@@ -366,7 +366,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
           <div className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{installError}</div>
         )}
 
-        {/* Local skills grouped by source in card grid */}
+        {/* Local skills: cards by source */}
         {groups.length === 0 && !query.trim() && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="w-10 h-10 rounded-2xl bg-violet-50 flex items-center justify-center mb-3">
@@ -410,7 +410,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
             {!remoteLoading && remoteResults.length === 0 && !remoteError && (
               <p className="text-xs text-gray-400 py-2 text-center">No remote results.</p>
             )}
-            {/* Remote results also use card grid */}
+            {/* Remote results: same card grid */}
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
               {remoteResults.map(r => (
                 <div
@@ -453,7 +453,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
   );
 }
 
-// ─── Manage tab ──────────────────────────────────────────────────────────────
+// ─── Manage tab ───────────────────────────────────────────────────────────────
 
 function ManageTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: LocalSkill[]; onRefreshSkills: () => void; onReloadSuccess: () => void }) {
   const [toggling, setToggling] = useState<string | null>(null);
@@ -523,7 +523,7 @@ function ManageTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
   );
 }
 
-// ─── Main entry ───────────────────────────────────────────────────────────────────
+// ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function SkillsPanel() {
   const [tab, setTab] = useState<Tab>('browse');
@@ -570,7 +570,7 @@ export function SkillsPanel() {
           </button>
         ))}
         <div className="flex-1" />
-        {/* Toast: briefly shown after toggle operation */}
+        {/* Toast after toggle */}
         {toast && (
           <span className="mr-2 text-[10px] text-violet-500 bg-violet-50 px-2 py-1 rounded-full animate-pulse">
             {toast}
@@ -578,7 +578,7 @@ export function SkillsPanel() {
         )}
         <button
           onClick={fetchSkills}
-          title="Refresh list display (does not affect running agents)"
+          title="Refresh list (does not affect running agents)"
           className="mb-1.5 p-1.5 text-gray-300 hover:text-violet-500 hover:bg-violet-50 rounded-lg transition-colors"
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -595,9 +595,9 @@ export function SkillsPanel() {
           </svg>
         </div>
       ) : tab === 'browse' ? (
-        <BrowseTab skills={skills} onRefreshSkills={fetchSkills} onReloadSuccess={() => showToast('✓ Applied immediately')} />
+        <BrowseTab skills={skills} onRefreshSkills={fetchSkills} onReloadSuccess={() => showToast('✓ Applied')} />
       ) : (
-        <ManageTab skills={skills} onRefreshSkills={fetchSkills} onReloadSuccess={() => showToast('✓ Applied immediately')} />
+        <ManageTab skills={skills} onRefreshSkills={fetchSkills} onReloadSuccess={() => showToast('✓ Applied')} />
       )}
     </div>
   );

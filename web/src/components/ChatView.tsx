@@ -6,7 +6,7 @@ interface Props {
   group: GroupInfo;
   messages: ChatMessage[];
   agentState: AgentState;
-  /** When compacting is in progress, pause button is disabled and shows "Compacting..." */
+  /** While compacting, pause is disabled; shows "Compacting…" */
   isCompacting: boolean;
   onSend: (text: string) => void;
   onPause: () => void;
@@ -24,17 +24,17 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
 
   const isProcessing = agentState === 'processing';
   const isPaused     = agentState === 'paused';
-  const isActive     = isProcessing || isPaused; // agent has active work
+  const isActive     = isProcessing || isPaused; // agent has work in progress
 
   // Auto-scroll to bottom on new messages or typing indicator
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, isProcessing]);
 
-  // ── Unified handler for send / pause / resume button ──
+  // ── Send / pause / resume single handler ──
   const handleActionButton = () => {
     if (isProcessing) {
-      // Prevent actions while pausing (button already disabled during compacting; this is extra safety)
+      // No-op while compacting (button disabled; belt-and-suspenders)
       if (isCompacting) return;
       onPause();
       return;
@@ -70,10 +70,10 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
     }
   };
 
-  // ── Button state computation ──
+  // ── Action button disabled rules ──
   const actionButtonDisabled =
-    (agentState === 'idle' && !input.trim()) ||   // cannot send in idle without input
-    (isProcessing && isCompacting);               // pause disabled during compacting
+    (agentState === 'idle' && !input.trim()) ||   // idle: need text to send
+    (isProcessing && isCompacting);               // compacting: pause disabled
 
   const actionButtonTitle =
     isProcessing
@@ -82,7 +82,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
       ? 'Resume'
       : 'Send';
 
-  // ── Status text ──
+  // ── Status line ──
   const statusText =
     isCompacting  ? 'Compacting…'
     : isProcessing ? 'Thinking…'
@@ -108,7 +108,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
             <span className={`w-2 h-2 rounded-full transition-colors ${statusDotClass}`} />
             <span className="text-xs text-gray-500">{statusText}</span>
           </div>
-          {/* Stop / reset button — always shown; in idle it clears conversation context */}
+          {/* Stop / reset — always shown; in idle clears session context */}
           <button
             onClick={() => setShowStopConfirm(true)}
             className="w-7 h-7 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 flex items-center justify-center transition-colors"
@@ -158,7 +158,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
             onInput={handleInput}
             disabled={isProcessing}
           />
-          {/* Action button: send / pause / resume */}
+          {/* Action: send / pause / resume */}
           <button
             onClick={handleActionButton}
             disabled={actionButtonDisabled}
@@ -167,17 +167,17 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
             title={actionButtonTitle}
           >
             {isProcessing ? (
-              /* Pause icon ⏸ (two vertical bars) */
+              /* Pause icon */
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
                 <path fillRule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25z" clipRule="evenodd" />
               </svg>
             ) : isPaused ? (
-              /* Resume icon ▶ (triangle) */
+              /* Resume / play icon */
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
                 <path fillRule="evenodd" d="M4.5 5.653c0-1.427 1.529-2.33 2.779-1.643l11.54 6.347c1.295.712 1.295 2.573 0 3.286L7.28 19.99c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
               </svg>
             ) : (
-              /* Send icon ▷ (paper plane) */
+              /* Send icon */
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
                 <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
               </svg>
@@ -191,7 +191,7 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
         </p>
       </div>
 
-      {/* Stop confirmation dialog */}
+      {/* Stop confirmation modal */}
       {showStopConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-80 flex flex-col gap-4">

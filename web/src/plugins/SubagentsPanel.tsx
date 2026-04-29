@@ -1,8 +1,8 @@
 /**
- * SubagentsPanel — Virtual Agent (Persona) management page
+ * SubagentsPanel — Virtual Agent (Personas)
  *
- * Browse tab: search + card grid, click into detail (Markdown render/edit + toggle)
- * Manage tab: list view + enable/disable toggle per item
+ * Browse: search + card grid, detail with Markdown render/edit + toggle
+ * Manage: list with per-item enable/disable
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Subagent {
   name: string;
@@ -24,7 +24,7 @@ interface Subagent {
 
 type Tab = 'browse' | 'manage';
 
-// ─── Utilities ─────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
@@ -35,7 +35,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ─── Small components ───────────────────────────────────────────────────────────────────
+// ─── Small components ─────────────────────────────────────────────────────────
 
 function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: () => void; disabled?: boolean }) {
   return (
@@ -61,7 +61,7 @@ function PersonaIcon({ className = 'w-5 h-5' }: { className?: string }) {
   );
 }
 
-// ─── Card tiles ─────────────────────────────────────────────────────────────────
+// ─── Card grid ────────────────────────────────────────────────────────────────
 
 function SubagentCard({ agent, onClick }: { agent: Subagent; onClick: () => void }) {
   return (
@@ -93,7 +93,7 @@ function SubagentCard({ agent, onClick }: { agent: Subagent; onClick: () => void
   );
 }
 
-// ─── Detail page ───────────────────────────────────────────────────────────────────
+// ─── Detail view ──────────────────────────────────────────────────────────────
 
 function SubagentDetail({ agent, onBack, onToggleDisabled }: {
   agent: Subagent;
@@ -210,7 +210,7 @@ function SubagentDetail({ agent, onBack, onToggleDisabled }: {
   );
 }
 
-// ─── Create editor ──────────────────────────────────────────────────────────────
+// ─── Create editor ────────────────────────────────────────────────────────────
 
 const NEW_TEMPLATE = `---
 name:
@@ -341,7 +341,7 @@ function CreateSubagentEditor({ onClose, onCreated }: { onClose: () => void; onC
   );
 }
 
-// ─── Browse tab ──────────────────────────────────────────────────────────────
+// ─── Browse tab ───────────────────────────────────────────────────────────────
 
 function BrowseTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subagent[]; onRefreshAgents: () => void; onReloadSuccess: () => void }) {
   const [query, setQuery] = useState('');
@@ -445,7 +445,7 @@ function BrowseTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
   );
 }
 
-// ─── Manage tab ──────────────────────────────────────────────────────────────
+// ─── Manage tab ───────────────────────────────────────────────────────────────
 
 function ManageTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subagent[]; onRefreshAgents: () => void; onReloadSuccess: () => void }) {
   const [toggling, setToggling] = useState<string | null>(null);
@@ -508,7 +508,7 @@ function ManageTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
   );
 }
 
-// ─── Main entry ───────────────────────────────────────────────────────────────────
+// ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function SubagentsPanel() {
   const [tab, setTab] = useState<Tab>('browse');

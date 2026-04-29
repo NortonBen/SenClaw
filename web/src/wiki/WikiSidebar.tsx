@@ -1,6 +1,6 @@
 /**
- * WikiSidebar — left sidebar inside wiki area
- * Includes search box + tree + bottom tab nav
+ * WikiSidebar — inner wiki left sidebar
+ * Search box + directory tree + bottom tab navigation
  */
 
 import { useState, useEffect } from 'react';
@@ -162,7 +162,7 @@ export function WikiSidebar({
           <div>
             {searching && <p className="px-3 py-2 text-xs text-gray-400">Searching...</p>}
             {!searching && searchResults.length === 0 && (
-              <p className="px-3 py-2 text-xs text-gray-400">No matches found</p>
+              <p className="px-3 py-2 text-xs text-gray-400">No matches</p>
             )}
             {searchResults.map(r => (
               <button
@@ -186,7 +186,7 @@ export function WikiSidebar({
           <div>
             {treeLoading && <p className="px-3 py-3 text-xs text-gray-400">Loading...</p>}
             {!treeLoading && tree.length === 0 && (
-              <p className="px-3 py-3 text-xs text-gray-400">Knowledge base is empty</p>
+              <p className="px-3 py-3 text-xs text-gray-400">Wiki is empty</p>
             )}
             {tree.map(node => (
               <TreeNode
@@ -205,7 +205,7 @@ export function WikiSidebar({
       <div className="border-t border-gray-100 flex-shrink-0 px-2 py-2 flex gap-1">
         <button
           onClick={onShowStats}
-          title="Knowledge Distribution"
+          title="Knowledge stats"
           className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[11px] transition-colors ${
             activeView === 'stats' ? 'bg-amber-50 text-amber-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
           }`}
@@ -217,7 +217,7 @@ export function WikiSidebar({
         </button>
         <button
           onClick={onShowCategories}
-          title="Category Management"
+          title="Manage categories"
           className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[11px] transition-colors ${
             activeView === 'categories' ? 'bg-amber-50 text-amber-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
           }`}
@@ -225,7 +225,7 @@ export function WikiSidebar({
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
           </svg>
-          <span>Categories</span>
+          <span>Tree</span>
         </button>
       </div>
     </aside>

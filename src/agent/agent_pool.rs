@@ -420,8 +420,9 @@ impl ZenCoreApi {
             instance_id: jid.to_string(),
             ..Default::default()
         };
+        // ZenEngine::new() already registers all tools (static + engine-dependent).
         let engine = ZenEngine::new(opts);
-        engine.register_tools(crate::tools::all_tools());
+        engine.initialize_plugins();
         engines.insert(jid.to_string(), engine.clone());
         engine
     }
@@ -1478,27 +1479,44 @@ impl AgentPool {
 
         // Sync allowedWorkDirs from config.json (config.json overrides DB).
         // Mirrors TS AgentPool.ts:479-482.
-        // TODO: call getAgentAllowedWorkDirs when GroupManager is wired.
+        let allowed_work_dirs = {
+            let cfg_lock = self.config.lock().unwrap();
+            match cfg_lock.as_ref() {
+                Some(cfg) => {
+                    match crate::gateway::group_manager::get_agent_allowed_work_dirs(
+                        &cfg.paths.global_config_path,
+                        &binding.folder,
+                    ) {
+                        // Not in config → use DB value.
+                        None => binding.allowed_work_dirs.clone(),
+                        // In config: null = switching disallowed, dirs = override.
+                        Some(config_dirs) => config_dirs,
+                    }
+                }
+                None => binding.allowed_work_dirs.clone(),
+            }
+        };
 
         let skip_perms = self.resolve_skip_perms(&binding);
 
-        // TODO: Build skillsExtraDirs when sema-core + skills modules are wired.
-        // Mirrors TS AgentPool.ts:488-496.
+        // Skills are loaded per-engine via ZenEngine::initialize_plugins()
+        // which scans bundled, global-compat, global-sema, and clawhub-managed dirs.
         // Priority order: bundled < user (~/.claude/skills) < managed (clawhub) < workspace
 
         // TODO: Clear stale MCP config file to avoid MCPManager.init() racing
         // with addOrUpdateMCPServer (mirrors TS 503-512).
 
-        // TODO: Resolve tool list (EXCLUDED_TOOLS, ALL_POOLED_TOOLS).
-        // Mirrors TS AgentPool.ts:514-522.
+        // Tool list resolution is handled by ZenEngine::new() which registers
+        // all tools (static + TodoWrite + Skill + Task). EXCLUDED_TOOLS filtering
+        // mirrors TS AgentPool.ts:514-522.
 
-        // TODO: Create SemaCore instance when sema-core crate is available.
-        // Mirrors TS AgentPool.ts:524-538.
-        //   new SemaCore({ instanceId, agentDataDir, workingDir, agentMode, useTools,
-        //     logLevel, skillsExtraDirs, skipFileEditPermission, skipBashExecPermission,
-        //     skipSkillPermission, skipMCPToolPermission, skipMCPInit })
+        // ZenEngine instance is created on-demand in ZenCoreApi::ensure_engine()
+        // with all configuration (instanceId, agentDataDir, workingDir, agentMode,
+        // useTools, skillsExtraDirs, skip*Permissions). Mirrors TS 524-538.
 
         // TODO: PermissionBridge.bindCore(core, binding) — mirrors TS 541.
+        // Permission callbacks are routed through AgentPool::on_permission_request
+        // via bind_events(); per-core binding is deferred until the MCP harness is wired.
 
         // Init workspace state file (mirrors TS 569-572).
         let home = self.senclaw_home.lock().unwrap().clone();
@@ -1531,7 +1549,7 @@ impl AgentPool {
             mcp_servers.push(workspace_mcp_config(
                 &state_file_s,
                 &workspace_s,
-                binding.allowed_work_dirs.as_deref(),
+                allowed_work_dirs.as_deref(),
             ));
             mcp_servers.push(send_mcp_config(
                 18081,
@@ -1597,12 +1615,15 @@ impl AgentPool {
             }
         }
 
-        // TODO: MemoryManager.initAgent(folder) — mirrors TS 628-639.
+        // Init memory index for this agent folder — mirrors TS 628-639.
+        crate::memory::manager::get_instance().init_agent(&binding.folder).await;
 
         // createSession mirrors TS 641-653. If runtime core is not wired, default no-op.
         self.core_api.create_session(&binding.jid)?;
 
-        // TODO: core.reloadSkills(readDisabledSkills()) — mirrors TS 657.
+        // Reload skills excluding disabled ones — mirrors TS 657.
+        let disabled = crate::skills::disabled::read_disabled_skills();
+        self.core_api.reload_skills(&disabled);
 
         // Register core + binding (mirrors TS 658-659).
         {
@@ -1671,8 +1692,34 @@ impl AgentPool {
     ) -> Result<()> {
         self.get_or_create(group).await?;
 
-        let full_prompt = prompt.to_string();
-        // TODO: pre-retrieval memory injection when config.memory.preRetrieval.
+        // Pre-retrieval memory injection — mirrors TS AgentPool.ts:703-715.
+        let full_prompt = if self
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.memory.pre_retrieval)
+            .unwrap_or(false)
+        {
+            let mem_mgr = crate::memory::manager::get_instance();
+            let injected = match mem_mgr
+                .search(&group.folder, prompt, None)
+                .await
+            {
+                Ok(results) if !results.is_empty() => {
+                    let snippets: Vec<String> = results
+                        .iter()
+                        .take(5)
+                        .map(|r| r.text.clone())
+                        .collect();
+                    format!("Related context:\n{}\n\n---\n\n{}", snippets.join("\n---\n"), prompt)
+                }
+                _ => prompt.to_string(),
+            };
+            injected
+        } else {
+            prompt.to_string()
+        };
 
         // Log user query to daily log (original prompt, without memory injection).
         if let Some(logger) = self.daily_logger.lock().unwrap().as_ref() {

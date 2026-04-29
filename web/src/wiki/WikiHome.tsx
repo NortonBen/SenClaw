@@ -1,6 +1,6 @@
 /**
- * WikiHome — Wiki Home
- * Shows recent updates + tag cloud; switches to search-first when file count > 100
+ * WikiHome — wiki home
+ * Recent edits + tag cloud; search-first when file count > 100
  */
 
 import { useEffect } from 'react';
@@ -20,7 +20,7 @@ function relativeTime(iso: string): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
-  if (m < 1) return 'Just now';
+  if (m < 1) return 'just now';
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
@@ -45,7 +45,7 @@ export function WikiHome({ stats, tags, onSelectDoc, onSearch, fetchStats, fetch
           <div className="mb-8">
             <input
               type="text"
-              placeholder="Search knowledge base..."
+              placeholder="Search wiki..."
               onFocus={() => {/* handled by sidebar */}}
               className="w-full px-4 py-3 text-sm bg-gray-50 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-amber-200 focus:bg-white transition-all"
               onClick={() => onSearch('')}
@@ -59,11 +59,11 @@ export function WikiHome({ stats, tags, onSelectDoc, onSearch, fetchStats, fetch
           <div className="grid grid-cols-3 gap-4 mb-8">
             <div className="bg-amber-50 rounded-xl p-4 text-center">
               <div className="text-2xl font-bold text-amber-700">{stats.totalFiles}</div>
-              <div className="text-xs text-amber-600 mt-0.5">docs</div>
+              <div className="text-xs text-amber-600 mt-0.5">pages</div>
             </div>
             <div className="bg-blue-50 rounded-xl p-4 text-center">
               <div className="text-2xl font-bold text-blue-700">{stats.totalDirs}</div>
-              <div className="text-xs text-blue-600 mt-0.5">directories</div>
+              <div className="text-xs text-blue-600 mt-0.5">folders</div>
             </div>
             <div className="bg-green-50 rounded-xl p-4 text-center">
               <div className="text-2xl font-bold text-green-700">{tags.length}</div>
@@ -76,7 +76,7 @@ export function WikiHome({ stats, tags, onSelectDoc, onSearch, fetchStats, fetch
           {/* Recent files */}
           {stats && stats.recentFiles.length > 0 && (
             <div>
-              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Recently Updated</h2>
+              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Recently updated</h2>
               <div className="space-y-1">
                 {stats.recentFiles.slice(0, 8).map(f => (
                   <button
@@ -105,7 +105,7 @@ export function WikiHome({ stats, tags, onSelectDoc, onSearch, fetchStats, fetch
                     key={t.name}
                     onClick={() => onSearch(t.name)}
                     className="px-2.5 py-1 bg-gray-100 hover:bg-amber-50 text-gray-600 hover:text-amber-700 rounded-full text-xs transition-colors"
-                    title={`${t.count} docs`}
+                    title={`${t.count} pages`}
                   >
                     {t.name}
                     <span className="ml-1 text-gray-400 text-[10px]">{t.count}</span>
@@ -149,8 +149,8 @@ export function WikiHome({ stats, tags, onSelectDoc, onSearch, fetchStats, fetch
             <svg className="w-12 h-12 mx-auto mb-4 opacity-30" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
             </svg>
-            <p className="text-sm">Knowledge base is empty</p>
-            <p className="text-xs mt-1">Tell the Agent "put into wiki" to start building content</p>
+            <p className="text-sm">Your wiki is empty</p>
+            <p className="text-xs mt-1">Ask the Agent to add content to the wiki to get started</p>
           </div>
         )}
       </div>

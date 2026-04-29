@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, AgentToolsEntry } from '../types';
+import type { GroupInfo, ChatMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry } from '../types';
 
 interface WsConfig {
   wsPort: number;
@@ -11,16 +11,16 @@ export interface WsHook {
   groups: GroupInfo[];
   messages: Record<string, ChatMessage[]>;
   agentStates: Record<string, AgentState>;
-  /** jid -> whether context is compacting (disable pause while compacting) */
+  /** jid → context compacting in progress (disables pause while compacting) */
   agentCompacting: Record<string, boolean>;
   subscribed: Set<string>;
   subscribe: (jid: string) => void;
   sendMessage: (jid: string, text: string) => void;
-  /** Pause agent (send agent:control pause) */
+  /** Pause agent (sends agent:control pause) */
   pauseAgent: (jid: string) => void;
-  /** Resume agent, optionally with extra instructions (send agent:control resume) */
+  /** Resume agent, optional follow-up text (sends agent:control resume) */
   resumeAgent: (jid: string, query?: string) => void;
-  /** Stop and reset agent session (send agent:control stop) */
+  /** Stop and reset agent session (sends agent:control stop) */
   stopAgent: (jid: string) => void;
   resolvePermission: (requestId: string, optionKey: string) => void;
   resolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
@@ -31,8 +31,6 @@ export interface WsHook {
   updateGroup: (jid: string, updates: UpdateGroupPayload) => void;
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>; // keyed by agentJid
-  /** Per-agent tool roster, keyed by agentJid. Populated from `agent:tools`. */
-  agentTools: Record<string, AgentToolsEntry>;
   subscribeAll: () => void;
 }
 
@@ -45,14 +43,13 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
-  const [agentTools, setAgentTools]           = useState<Record<string, AgentToolsEntry>>({});
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
-  const connectGenRef = useRef(0);
+  const retryCountRef = useRef(0);
   const subscribedRef = useRef<Set<string>>(new Set());
-  // jid -> delayed clear timer after all completed
+  // jid → delayed clear timer after all todos complete
   const todosClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const addMessage = useCallback((jid: string, msg: ChatMessage) => {
@@ -73,7 +70,6 @@ export function useWebSocket(): WsHook {
   }, []);
 
   const subscribe = useCallback((jid: string) => {
-    if (subscribedRef.current.has(jid)) return;
     rawSend({ type: 'subscribe', groupJid: jid });
     subscribedRef.current.add(jid);
     setSubscribed(prev => new Set([...prev, jid]));
@@ -204,6 +200,7 @@ export function useWebSocket(): WsHook {
         switch (msg.type) {
           case 'auth:ok':
             setStatus('connected');
+            retryCountRef.current = 0;
             rawSend({ type: 'list:groups' });
             // Re-subscribe to all previously-subscribed groups after reconnect
             for (const jid of subscribedRef.current) {
@@ -217,8 +214,6 @@ export function useWebSocket(): WsHook {
             for (const g of incoming) {
               if (g.isAdmin && !subscribedRef.current.has(g.jid)) {
                 rawSend({ type: 'subscribe', groupJid: g.jid });
-                subscribedRef.current.add(g.jid);
-                setSubscribed(prev => new Set([...prev, g.jid]));
               }
             }
             break;
@@ -249,7 +244,7 @@ export function useWebSocket(): WsHook {
             break;
           case 'agent:state':
             setAgentStates(prev => ({ ...prev, [msg.groupJid as string]: msg.state as string }));
-            // Clear compacting marker on idle (prevents stale "Compacting..." after stopping mid-compact)
+            // Clear compacting flag on idle (avoids stuck "Compacting…" if stopped mid-compact)
             if (msg.state === 'idle') {
               setAgentCompacting(prev => ({ ...prev, [msg.groupJid as string]: false }));
             }
@@ -317,7 +312,7 @@ export function useWebSocket(): WsHook {
           case 'dispatch:update': {
             const newParents = (msg.parents as DispatchParent[]) ?? [];
             const TERMINAL = ['done', 'error', 'timeout'];
-            // When task enters terminal state (done/error/timeout), clear corresponding agent todos
+            // When a task reaches a terminal state, clear that agent's todos
             setDispatchParents(prev => {
               for (const np of newParents) {
                 for (const nt of np.tasks) {
@@ -325,7 +320,7 @@ export function useWebSocket(): WsHook {
                   const op = prev.find(p => p.id === np.id);
                   const ot = op?.tasks.find(t => t.id === nt.id);
                   if (ot && !TERMINAL.includes(ot.status)) {
-                    // This task just entered terminal state
+                    // Task just became terminal
                     setAgentTodos(prevTodos => {
                       const next = { ...prevTodos };
                       delete next[nt.agentJid];
@@ -338,26 +333,17 @@ export function useWebSocket(): WsHook {
             });
             break;
           }
-          case 'agent:tools': {
-            const toolsJid = msg.agentJid as string;
-            const toolsArr = (msg.tools as AgentToolsEntry['tools']) ?? [];
-            setAgentTools(prev => ({
-              ...prev,
-              [toolsJid]: { agentName: msg.agentName as string, tools: toolsArr },
-            }));
-            break;
-          }
           case 'agent:todos': {
             const todoJid = msg.agentJid as string;
             const todosArr = msg.todos as AgentTodosEntry['todos'];
-            // Cancel previous delayed clear for this agent (new todos invalidate old clear plan)
+            // Cancel previous delayed clear for this agent (new todos invalidate the old timer)
             const prev = todosClearTimers.current.get(todoJid);
             if (prev) { clearTimeout(prev); todosClearTimers.current.delete(todoJid); }
             setAgentTodos(prev => ({
               ...prev,
               [todoJid]: { agentName: msg.agentName as string, todos: todosArr },
             }));
-            // Delay clear by 3s when all completed (lets user see completed state before auto-hide)
+            // When all complete, clear after 3s so the user can see the done state
             if (todosArr.length > 0 && todosArr.every(t => t.status === 'completed')) {
               const t = setTimeout(() => {
                 todosClearTimers.current.delete(todoJid);
@@ -373,7 +359,6 @@ export function useWebSocket(): WsHook {
 
     const connect = async () => {
       if (destroyed) return;
-      const connectGen = ++connectGenRef.current;
       if (!configRef.current) {
         try {
           const res = await fetch('/api/config');
@@ -382,34 +367,41 @@ export function useWebSocket(): WsHook {
           configRef.current = { wsPort: 18789, token: '' };
         }
       }
-      if (destroyed || connectGen !== connectGenRef.current) return;
       setStatus('connecting');
       const { wsPort, token } = configRef.current;
       const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
       wsRef.current = ws;
-      ws.onopen = () => {
-        if (destroyed || connectGen !== connectGenRef.current || ws !== wsRef.current) {
-          ws.close();
-          return;
-        }
-        if (token) ws.send(JSON.stringify({ type: 'connect', token }));
-      };
+      ws.onopen = () => { if (token) rawSend({ type: 'connect', token }); };
       ws.onmessage = handleMsg;
       ws.onclose = () => {
-        if (destroyed || connectGen !== connectGenRef.current || ws !== wsRef.current) return;
+        if (destroyed) return;
         setStatus('disconnected');
-        reconnectRef.current = setTimeout(connect, 3000);
+        const delay = Math.min(3000 * 2 ** retryCountRef.current, 15000);
+        retryCountRef.current++;
+        reconnectRef.current = setTimeout(connect, delay);
       };
     };
+
+    const onFocus = () => {
+      if (destroyed) return;
+      if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
+      clearTimeout(reconnectRef.current);
+      retryCountRef.current = 0;
+      connect();
+    };
+    const onVisibility = () => { if (document.visibilityState === 'visible') onFocus(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
 
     connect();
 
     return () => {
       destroyed = true;
-      connectGenRef.current += 1;
       clearTimeout(reconnectRef.current);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
       wsRef.current?.close();
-      // Clear all pending delayed-clear timers for todos
+      // Clear all pending todo clear timers
       for (const t of todosClearTimers.current.values()) clearTimeout(t);
       todosClearTimers.current.clear();
     };
@@ -419,5 +411,5 @@ export function useWebSocket(): WsHook {
   // suppress unused warning — findRequestJid is available for future use
   void findRequestJid;
 
-  return { status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, agentTools, subscribeAll };
+  return { status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll };
 }

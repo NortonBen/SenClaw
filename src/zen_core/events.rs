@@ -92,7 +92,7 @@ impl EventBus {
 /// Per-instance registry for pairing permission/ask-question requests
 /// with their response channels. Used when the engine suspends a tool
 /// waiting for a user response.
-pub(crate) struct ResponseRegistry {
+pub struct ResponseRegistry {
     /// Pending tool permission responses, keyed by tool_name.
     tool_permission_txs:
         std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<ToolPermissionResponseData>>>,

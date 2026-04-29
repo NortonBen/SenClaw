@@ -1,6 +1,6 @@
 /**
- * WikiView — Wiki fullscreen subpage
- * Fully replaces chat layout, top navbar includes home icon for return
+ * WikiView — full-screen wiki subpage
+ * Replaces chat layout; top navbar with home icon to return
  */
 
 import { useEffect, useCallback, useState } from 'react';
@@ -52,8 +52,8 @@ export default function WikiView({ onGoHome }: Props) {
   const viewLabel: Record<InnerView, string> = {
     home: '',
     doc: selectedPath ?? '',
-    stats: 'Knowledge Distribution',
-    categories: 'Category Management',
+    stats: 'Knowledge stats',
+    categories: 'Categories',
   };
 
   return (
