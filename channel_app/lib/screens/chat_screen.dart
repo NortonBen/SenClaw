@@ -16,7 +16,11 @@ class ChatMessage {
   final String text;
   final bool isFromMe;
   final bool isHistory;
-  ChatMessage(this.text, this.isFromMe, {this.isHistory = false});
+  final DateTime? timestamp;
+  final Duration? latency;
+
+  ChatMessage(this.text, this.isFromMe,
+      {this.isHistory = false, this.timestamp, this.latency});
 }
 
 class ChatScreen extends StatefulWidget {
@@ -44,6 +48,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _statusText = 'Đang kết nối tới relay…';
   bool _loadTimedOut = false;
+  DateTime? _lastSendTime;
 
   @override
   void initState() {
@@ -75,7 +80,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _relay!.incomingMessages.listen((text) {
       if (!mounted) return;
       Log.d('[Chat] Tin nhắn mới từ agent: "${text.length > 60 ? text.substring(0, 60) : text}…"');
-      setState(() => _messages.add(ChatMessage(text, false)));
+      
+      Duration? latency;
+      if (_lastSendTime != null) {
+        latency = DateTime.now().difference(_lastSendTime!);
+        _lastSendTime = null; // reset sau khi nhận được chunk đầu tiên
+      }
+
+      setState(() => _messages.add(ChatMessage(text, false, latency: latency)));
       _scrollToBottom();
     });
 
@@ -141,9 +153,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted || _historyLoaded) return;
     Log.i('[Chat] Nhận lịch sử: ${history.length} tin cho agent "${_selectedAgent?.name}"');
 
-    final histMsgs = history
-        .map((m) => ChatMessage(m.content, m.isFromMe, isHistory: true))
-        .toList();
+    final histMsgs = history.map((m) {
+      final ts = DateTime.tryParse(m.timestamp)?.toLocal();
+      return ChatMessage(m.content, m.isFromMe,
+          isHistory: true, timestamp: ts);
+    }).toList();
 
     setState(() {
       _messages.insertAll(0, histMsgs);
@@ -268,6 +282,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await _relay!.sendMessage(text);
       setState(() {
+        _lastSendTime = DateTime.now();
         _messages.add(ChatMessage(text, true));
         _messageController.clear();
       });
@@ -617,38 +632,85 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  String _formatTime(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final msgDay = DateTime(dt.year, dt.month, dt.day);
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    if (msgDay == today) return '$hh:$mm';
+    final dd = dt.day.toString().padLeft(2, '0');
+    final mo = dt.month.toString().padLeft(2, '0');
+    return '$dd/$mo $hh:$mm';
+  }
+
   Widget _buildBubble(ChatMessage msg) {
-    // user (isFromMe=true) → LEFT (trái)
-    // AI  (isFromMe=false) → RIGHT (phải)
+    // user (isFromMe=true) → RIGHT (phải)
+    // AI  (isFromMe=false) → LEFT (trái)
     final isUser = msg.isFromMe;
+    final timeStr = _formatTime(msg.timestamp ?? DateTime.now());
+
     return Align(
-      alignment: isUser ? Alignment.centerLeft : Alignment.centerRight,
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        margin: const EdgeInsets.symmetric(vertical: 3),
         constraints:
             BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-        decoration: BoxDecoration(
-          color: isUser
-              ? Colors.purpleAccent.withOpacity(msg.isHistory ? 0.1 : 0.18)
-              : Colors.white.withOpacity(msg.isHistory ? 0.05 : 0.1),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isUser ? 0 : 16),
-            bottomRight: Radius.circular(isUser ? 16 : 0),
-          ),
-          border: Border.all(
-            color: isUser
-                ? Colors.purpleAccent.withOpacity(msg.isHistory ? 0.15 : 0.3)
-                : Colors.white.withOpacity(0.06),
-          ),
-        ),
-        child: Text(
-          msg.text,
-          style: TextStyle(
-              color: msg.isHistory ? Colors.white60 : Colors.white,
-              fontSize: 14),
+        child: Column(
+          crossAxisAlignment:
+              isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isUser
+                    ? Colors.purpleAccent
+                        .withOpacity(msg.isHistory ? 0.1 : 0.18)
+                    : Colors.white.withOpacity(msg.isHistory ? 0.05 : 0.1),
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isUser ? 16 : 0),
+                  bottomRight: Radius.circular(isUser ? 0 : 16),
+                ),
+                border: Border.all(
+                  color: isUser
+                      ? Colors.purpleAccent
+                          .withOpacity(msg.isHistory ? 0.15 : 0.3)
+                      : Colors.white.withOpacity(0.06),
+                ),
+              ),
+              child: Text(
+                msg.text,
+                style: TextStyle(
+                    color: msg.isHistory ? Colors.white60 : Colors.white,
+                    fontSize: 14),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    timeStr,
+                    style: const TextStyle(color: Colors.white38, fontSize: 10),
+                  ),
+                  if (!isUser && msg.latency != null) ...[
+                    const SizedBox(width: 6),
+                    Text(
+                      '•  Phản hồi: ${(msg.latency!.inMilliseconds / 1000).toStringAsFixed(1)}s',
+                      style: TextStyle(
+                          color: Colors.cyanAccent.withOpacity(0.4),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -656,7 +718,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildTypingIndicator() {
     return Align(
-      alignment: Alignment.centerRight,
+      alignment: Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
