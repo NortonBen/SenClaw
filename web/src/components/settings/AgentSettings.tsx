@@ -377,13 +377,6 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
                     <Checkbox>Set as Main Agent for this channel</Checkbox>
                   </Form.Item>
 
-                  <Form.Item
-                    name="bindBotToken"
-                    label="Bot Token Override"
-                    style={{ marginBottom: 0 }}
-                  >
-                    <Input.Password placeholder="Default channel token will be used if empty" />
-                  </Form.Item>
                 </div>
               )}
             </>

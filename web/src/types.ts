@@ -131,6 +131,7 @@ export interface ChannelInfo {
   name: string;
   credentialsJson: string;
   connectionState: string;
+  enabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -189,6 +190,7 @@ export interface RegisterBindingPayload {
 export interface UpdateChannelPayload {
   name?: string;
   credentials?: Record<string, unknown>;
+  enabled?: boolean;
 }
 
 export interface UpdateAgentPayload {
