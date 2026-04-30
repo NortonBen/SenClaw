@@ -2,7 +2,7 @@
 //!
 //! Port of TS `node_modules/sema-core/dist/tools/Glob/`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use async_trait::async_trait;

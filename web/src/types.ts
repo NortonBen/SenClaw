@@ -123,6 +123,12 @@ export interface AgentTodosEntry {
   todos: AgentTodoItem[];
 }
 
+export interface UsageData {
+  useTokens: number;
+  maxTokens: number;
+  promptTokens: number;
+}
+
 // ===== Entity model types =====
 
 export interface ChannelInfo {

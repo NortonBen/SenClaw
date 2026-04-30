@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package semaclaw.relay;
+
+option go_package = "semaclaw/hub-backend/pkg/proto/relay";
+
+service ChannelRelay {
+    // Bi-directional stream for real-time interaction
+    rpc Stream(stream RelayMessage) returns (stream RelayMessage);
+}
+
+message RelayMessage {
+    string channel_id = 1;
+    string sender_id = 2;
+    int64 timestamp = 3;
+    
+    oneof payload {
+        EncryptedData encrypted_data = 4;
+        ControlMessage control = 5;
+    }
+}
+
+message EncryptedData {
+    bytes nonce = 1;
+    bytes ciphertext = 2;
+    bytes tag = 3;
+}
+
+message ControlMessage {
+    enum Type {
+        PING = 0;
+        PONG = 1;
+        ACK = 2;
+        TYPING_START = 3;
+        TYPING_STOP = 4;
+    }
+    Type type = 1;
+}

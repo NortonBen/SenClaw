@@ -158,10 +158,10 @@ function SenclawFields() {
       <Form.Item
         name="hubUrl"
         label="ClawHub Relay URL"
-        extra="Leave default unless you self-host ClawHub"
-        initialValue="https://hub.senclaw.ai"
+        extra="Local hub URL for testing"
+        initialValue="http://localhost:18080"
       >
-        <Input placeholder="https://hub.senclaw.ai" style={{ fontFamily: 'monospace' }} />
+        <Input placeholder="http://localhost:18080" style={{ fontFamily: 'monospace' }} />
       </Form.Item>
     </>
   );
@@ -178,14 +178,8 @@ interface QRPairingData {
 
 function QRPairingModal({ data, onClose }: { data: QRPairingData; onClose: () => void }) {
   const { token } = theme.useToken();
-  // QR payload: JSON encoded pairing bundle that the app will parse
-  const qrPayload = JSON.stringify({
-    v: 1,
-    channelId: data.channelId,
-    key: data.encryptionKey,
-    hub: data.hubUrl,
-    token: data.token,
-  });
+  // QR payload: semaclaw://connect protocol that the mobile app will parse
+  const qrPayload = `semaclaw://connect?hub=${encodeURIComponent(data.hubUrl)}&cid=${encodeURIComponent(data.channelId)}&key=${encodeURIComponent(data.encryptionKey)}&token=${encodeURIComponent(data.token)}`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(qrPayload);
@@ -332,7 +326,7 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
       appSecret: creds.appSecret ?? '',
       token: creds.token ?? '',
       sandbox: creds.sandbox ?? false,
-      hubUrl: creds.hubUrl ?? 'https://hub.senclaw.ai',
+      hubUrl: creds.hubUrl ?? 'http://localhost:18080',
     });
     setModalOpen(true);
   };
@@ -351,22 +345,33 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
     if (p === 'senclaw') {
       setRegistering(true);
       try {
-        onRegister({ platformType: p, name: values.name, credentials });
+        const hubUrl = credentials.hubUrl as string || 'http://localhost:18080';
+        
         // Fetch QR pairing data from backend after registration
-        const res = await fetch('/api/channels/senclaw/pair', {
+        const res = await fetch(`${hubUrl}/v1/channels/register`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: values.name, hubUrl: credentials.hubUrl }),
         });
+        
         if (res.ok) {
           const data = await res.json();
-          setQrData({ channelId: data.channelId, encryptionKey: data.encryptionKey, hubUrl: data.hubUrl ?? credentials.hubUrl as string, token: data.token });
+          // generate random key
+          const encryptionKey = crypto.randomUUID().replace(/-/g, '');
+          
+          setQrData({ 
+            channelId: data.channel_id, 
+            encryptionKey, 
+            hubUrl: hubUrl, 
+            token: data.access_token 
+          });
+          
+          // Save the channel in local db after getting the info
+          onRegister({ platformType: p, name: values.name, credentials: { ...credentials, channelId: data.channel_id } });
         } else {
-          // Show a placeholder QR with mock data for now
-          setQrData({ channelId: `ch_${Date.now()}`, encryptionKey: 'pending', hubUrl: credentials.hubUrl as string, token: '' });
+          message.error('Failed to register with ClawHub backend');
         }
         setModalOpen(false);
-      } catch {
+      } catch (err) {
+        console.error(err);
         message.error('Failed to generate pairing QR');
       } finally {
         setRegistering(false);

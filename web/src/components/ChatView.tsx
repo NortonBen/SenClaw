@@ -1,12 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { theme } from 'antd';
-import type { GroupInfo, ChatMessage, AgentState } from '../types';
+import type { GroupInfo, ChatMessage, AgentState, UsageData } from '../types';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
+import { Progress, Space, Typography } from 'antd';
+
+const { Text } = Typography;
 
 interface Props {
   group: GroupInfo;
   messages: ChatMessage[];
   agentState: AgentState;
+  usage?: UsageData;
   /** While compacting, pause is disabled; shows "Compacting…" */
   isCompacting: boolean;
   onSend: (text: string) => void;
@@ -19,7 +23,7 @@ interface Props {
 
 const PAGE_SIZE = 5;
 
-export function ChatView({ group, messages, agentState, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
+export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
   const { token } = theme.useToken();
   const [input, setInput]           = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
@@ -180,7 +184,45 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
           <h2 className="font-semibold" style={{ color: token.colorText }}>{group.name}</h2>
           <p className="text-xs mt-0.5" style={{ color: token.colorTextSecondary }}>{group.folder}</p>
         </div>
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-6">
+          {/* Token usage indicator */}
+          {usage && (
+            <div className="flex items-center gap-3" style={{ minWidth: 120 }}>
+              <div className="flex-1">
+                <div className="flex justify-between items-center mb-1">
+                  <Text style={{ fontSize: '10px', color: token.colorTextTertiary, fontWeight: 500 }}>
+                    Tokens
+                  </Text>
+                  <Text style={{ fontSize: '10px', color: token.colorTextTertiary, fontWeight: 600 }}>
+                    {Math.round((usage.useTokens / usage.maxTokens) * 100)}%
+                  </Text>
+                </div>
+                <Progress
+                  percent={(usage.useTokens / usage.maxTokens) * 100}
+                  showInfo={false}
+                  size={[100, 3]}
+                  strokeColor={
+                    usage.useTokens > usage.maxTokens * 0.9 
+                      ? token.colorError 
+                      : usage.useTokens > usage.maxTokens * 0.7 
+                        ? token.colorWarning 
+                        : token.colorPrimary
+                  }
+                  trailColor={token.colorFillSecondary}
+                  style={{ margin: 0, display: 'block' }}
+                />
+              </div>
+              <div className="flex flex-col items-end">
+                <Text style={{ fontSize: '10px', color: token.colorTextSecondary, fontWeight: 600, lineHeight: 1 }}>
+                  {usage.useTokens.toLocaleString()}
+                </Text>
+                <Text style={{ fontSize: '9px', color: token.colorTextTertiary, lineHeight: 1.5 }}>
+                  / {usage.maxTokens.toLocaleString()}
+                </Text>
+              </div>
+            </div>
+          )}
+
           {/* Status indicator */}
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full transition-colors ${statusDotClass}`} />

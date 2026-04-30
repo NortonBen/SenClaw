@@ -54,6 +54,7 @@ export function ChatPage() {
                 group={selectedGroup}
                 messages={ws.messages[selectedJid!] ?? []}
                 agentState={ws.agentStates[selectedJid!] ?? 'idle'}
+                usage={ws.agentUsage[selectedJid!]}
                 isCompacting={ws.agentCompacting[selectedJid!] ?? false}
                 onSend={text => ws.sendMessage(selectedJid!, text)}
                 onPause={() => ws.pauseAgent(selectedJid!)}

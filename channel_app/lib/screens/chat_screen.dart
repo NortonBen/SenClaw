@@ -4,6 +4,7 @@ import '../services/relay_service.dart';
 import '../services/crypto_service.dart';
 import 'welcome_screen.dart';
 import '../services/language_service.dart';
+import 'connection_qr_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -26,13 +27,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _initRelay() async {
     final hub = await storage.read(key: 'hub_url');
     final cid = await storage.read(key: 'channel_id');
+    final token = await storage.read(key: 'access_token');
     final key = await storage.read(key: 'encryption_key');
 
-    if (hub != null && cid != null && key != null) {
+    if (hub != null && cid != null && token != null && key != null) {
       _relayService = RelayService(
         hubUrl: hub,
         channelId: cid,
         senderId: 'mobile-app',
+        accessToken: token,
         encryptionKey: CryptoService.parseBase64Key(key),
       );
       
@@ -88,7 +91,16 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: 'Disconnect',
             onPressed: () => _confirmDisconnect(context),
           ),
-          IconButton(icon: const Icon(Icons.security, color: Colors.cyanAccent), onPressed: () {}),
+          IconButton(
+            icon: const Icon(Icons.qr_code, color: Colors.cyanAccent),
+            tooltip: 'Show Connection QR',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ConnectionQRScreen()),
+              );
+            },
+          ),
         ],
       ),
       body: Container(

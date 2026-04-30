@@ -133,6 +133,7 @@ pub struct AppConfig {
     pub hub_url: String,
     pub channel_id: String,
     pub encryption_key: String,
+    pub access_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +213,7 @@ impl Config {
                 hub_url: env_or("APP_HUB_URL", "http://localhost:50051"),
                 channel_id: env_or("APP_CHANNEL_ID", ""),
                 encryption_key: env_or("APP_ENCRYPTION_KEY", ""),
+                access_token: env_or("APP_ACCESS_TOKEN", ""),
             },
             admin: AdminConfig {
                 telegram_user_id: env_or("ADMIN_TELEGRAM_USER_ID", ""),

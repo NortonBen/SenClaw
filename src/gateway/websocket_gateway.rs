@@ -351,6 +351,19 @@ impl WebSocketGateway {
         self.broadcast(chat_jid, &payload).await;
     }
 
+    pub async fn notify_agent_usage(&self, agent_jid: &str, usage: &crate::zen_core::ConversationUsageData) {
+        let payload = serde_json::json!({
+            "type": "agent:usage",
+            "agentJid": agent_jid,
+            "usage": {
+                "useTokens": usage.usage.use_tokens,
+                "maxTokens": usage.usage.max_tokens,
+                "promptTokens": usage.usage.prompt_tokens,
+            },
+        });
+        self.broadcast_to_all(&payload).await;
+    }
+
     pub async fn notify_permission_request(
         &self,
         chat_jid: &str,

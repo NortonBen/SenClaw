@@ -1,4 +1,4 @@
-//! SenClaw — multi-group AI gateway (Rust port).
+.,//! SenClaw — multi-group AI gateway (Rust port).
 //!
 //! Module layout mirrors the original TypeScript tree under `src-old/`.
 //! The daemon boot sequence (`run_daemon`) follows `src-old/index.ts`.
@@ -315,6 +315,14 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
             gw.notify_agent_tools(&jid, &name, &tools).await;
         });
     }
+
+    fn notify_agent_usage(&self, agent_jid: &str, usage: crate::zen_core::ConversationUsageData) {
+        let gw = Arc::clone(&self.gateway);
+        let jid = agent_jid.to_string();
+        tokio::spawn(async move {
+            gw.notify_agent_usage(&jid, &usage).await;
+        });
+    }
 }
 
 pub async fn run_daemon(cfg: config::Config) -> Result<()> {
@@ -461,6 +469,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let app_ch = channels::app::AppChannel::new(
                     cfg.app.hub_url.clone(),
                     cfg.app.channel_id.clone(),
+                    cfg.app.access_token.clone(),
                     key,
                 );
                 match app_ch.connect().await {
@@ -629,7 +638,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         let hub_url = creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
                         let channel_id = creds["channelId"].as_str().unwrap_or("");
                         let enc_key_b64 = creds["encryptionKey"].as_str().unwrap_or("");
-                        if !channel_id.is_empty() && !enc_key_b64.is_empty() {
+                        let access_token = creds["accessToken"].as_str().unwrap_or("");
+                        if !channel_id.is_empty() && !enc_key_b64.is_empty() && !access_token.is_empty() {
                             let mut key = [0u8; 32];
                             if let Ok(k) = base64::engine::general_purpose::STANDARD.decode(enc_key_b64) {
                                 if k.len() == 32 {
@@ -637,6 +647,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                     let app_ch = channels::app::AppChannel::new(
                                         hub_url.to_string(),
                                         channel_id.to_string(),
+                                        access_token.to_string(),
                                         key,
                                     );
                                     match app_ch.connect().await {

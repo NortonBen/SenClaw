@@ -52,3 +52,5 @@ target/
 **/*.rs.bk
 
 code-old/
+hub-backend/bin/server
+hub-backend/server

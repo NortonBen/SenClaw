@@ -146,9 +146,11 @@ export function AgentSidebar({ ws, selectedJid, onSelect }: Props) {
                     </Text>
                   }
                   description={
-                    <Text style={{ fontSize: '11px', color: token.colorTextDescription, opacity: 0.8 }}>
-                      {group.isAdmin ? 'Main System' : getAgentStatusText(state)}
-                    </Text>
+                    <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                      <Text style={{ fontSize: '11px', color: token.colorTextDescription, opacity: 0.8 }}>
+                        {group.isAdmin ? 'Main System' : getAgentStatusText(state)}
+                      </Text>
+                    </Space>
                   }
                 />
               </List.Item>

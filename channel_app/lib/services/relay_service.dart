@@ -12,6 +12,7 @@ class RelayService {
   late CryptoService _crypto;
   final String channelId;
   final String senderId;
+  final String accessToken;
 
   final _incomingController = StreamController<String>.broadcast();
   Stream<String> get incomingMessages => _incomingController.stream;
@@ -20,6 +21,7 @@ class RelayService {
     required String hubUrl,
     required this.channelId,
     required this.senderId,
+    required this.accessToken,
     required List<int> encryptionKey,
   }) {
     final uri = Uri.parse(hubUrl);
@@ -42,7 +44,13 @@ class RelayService {
     
     // Initial control message or authentication could go here
     
-    final responseStream = _client.stream(outboundStream.stream);
+    final responseStream = _client.stream(
+      outboundStream.stream,
+      options: CallOptions(metadata: {
+        'channel_id': channelId,
+        'access_token': accessToken,
+      }),
+    );
     
     responseStream.listen((msg) async {
       Log.t("Received message from relay: ${msg.channelId}");

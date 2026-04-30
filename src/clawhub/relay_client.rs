@@ -23,6 +23,7 @@ impl RelayClient {
         hub_url: String,
         channel_id: String,
         sender_id: String,
+        access_token: String,
         encryption_key: [u8; 32],
         handler: Option<RelayMessageHandler>,
     ) -> Result<Self> {
@@ -39,8 +40,12 @@ impl RelayClient {
         let mut client_clone = client.clone();
         let outbound_stream = ReceiverStream::new(outbound_rx);
 
+        let mut request = tonic::Request::new(outbound_stream);
+        request.metadata_mut().insert("channel_id", channel_id.parse()?);
+        request.metadata_mut().insert("access_token", access_token.parse()?);
+
         // Establish the stream immediately
-        let response: tonic::Response<tonic::Streaming<RelayMessage>> = client_clone.stream(outbound_stream).await?;
+        let response: tonic::Response<tonic::Streaming<RelayMessage>> = client_clone.stream(request).await?;
         let mut inbound_stream = response.into_inner();
 
         let cid_clone = channel_id.clone();

@@ -19,6 +19,7 @@ use chrono;
 pub struct AppChannel {
     hub_url: String,
     channel_id: String,
+    access_token: String,
     encryption_key: [u8; 32],
     handlers: Arc<RwLock<Vec<MessageCallback>>>,
     meta_handlers: Arc<RwLock<Vec<MetadataCallback>>>,
@@ -27,10 +28,11 @@ pub struct AppChannel {
 }
 
 impl AppChannel {
-    pub fn new(hub_url: String, channel_id: String, encryption_key: [u8; 32]) -> Self {
+    pub fn new(hub_url: String, channel_id: String, access_token: String, encryption_key: [u8; 32]) -> Self {
         Self {
             hub_url,
             channel_id,
+            access_token,
             encryption_key,
             handlers: Arc::new(RwLock::new(Vec::new())),
             meta_handlers: Arc::new(RwLock::new(Vec::new())),
@@ -58,6 +60,7 @@ impl Channel for AppChannel {
     async fn connect(&self) -> Result<()> {
         let hub_url = self.hub_url.clone();
         let channel_id = self.channel_id.clone();
+        let access_token = self.access_token.clone();
         let encryption_key = self.encryption_key;
 
         let handlers = Arc::clone(&self.handlers);
@@ -73,6 +76,7 @@ impl Channel for AppChannel {
             hub_url,
             channel_id.clone(),
             "semaclaw-daemon".to_string(),
+            access_token,
             encryption_key,
             Some(handler),
         )

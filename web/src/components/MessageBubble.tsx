@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { theme, Typography } from 'antd';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css'; 
+import 'highlight.js/styles/github.css'; 
 import type { ChatMessage } from '../types';
 import { PermissionCard, QuestionCard } from './PermissionCard';
+import { useAppContext } from '../contexts/AppContext';
 
 const { Text } = Typography;
 
@@ -38,7 +44,27 @@ function SaveIcon() {
   );
 }
 
-function AgentBubble({ text, timestamp }: { text: string; timestamp: string }) {
+function MarkdownContent({ content, isDarkMode }: { content: string, isDarkMode: boolean }) {
+  if (typeof content !== 'string') return null;
+  
+  return (
+    <div className={`prose ${isDarkMode ? 'prose-invert' : ''} max-w-none`}>
+      <ReactMarkdown 
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{
+          a: ({ ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />,
+          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+          pre: ({ children }) => <pre className="p-0 m-0 bg-transparent">{children}</pre>
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function AgentBubble({ text, timestamp, isDarkMode }: { text: string; timestamp: string, isDarkMode: boolean }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const { token } = theme.useToken();
@@ -68,16 +94,16 @@ function AgentBubble({ text, timestamp }: { text: string; timestamp: string }) {
   };
 
   return (
-    <div className="max-w-[72%] group">
+    <div className="max-w-[85%] group">
       <div 
-        className="px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm border"
+        className="px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm border"
         style={{ 
           background: token.colorFillQuaternary,
           color: token.colorText,
           borderColor: token.colorBorderSecondary
         }}
       >
-        {text}
+        <MarkdownContent content={text} isDarkMode={isDarkMode} />
       </div>
       <div className="flex items-center mt-1 gap-1">
         <Text type="secondary" className="text-[11px] ml-1 flex-1">{formatTime(timestamp)}</Text>
@@ -120,6 +146,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, onResolvePermission, onResolveQuestion }: MessageBubbleProps) {
   const { token } = theme.useToken();
+  const { isDarkMode } = useAppContext();
 
   if (message.role === 'permission') {
     return (
@@ -142,16 +169,16 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
   if (role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[72%]">
+        <div className="max-w-[85%]">
           <div 
-            className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-lg"
+            className="px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-lg"
             style={{
               background: token.colorPrimary,
-              color: '#fff', // User messages often look good with white text on primary color
+              color: '#fff',
               boxShadow: `0 4px 14px 0 ${token.colorPrimary}33`
             }}
           >
-            {text}
+            <MarkdownContent content={text} isDarkMode={true} />
           </div>
           <Text type="secondary" className="text-[10px] font-medium mt-1 text-right pr-1 block">
             {formatTime(timestamp)}
@@ -177,23 +204,23 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
         {isAgent ? 'AI' : (senderName?.charAt(0).toUpperCase() ?? '?')}
       </div>
       {isAgent ? (
-        <AgentBubble text={text} timestamp={timestamp} />
+        <AgentBubble text={text} timestamp={timestamp} isDarkMode={isDarkMode} />
       ) : (
-        <div className="max-w-[72%]">
+        <div className="max-w-[85%]">
           {senderName && (
             <Text type="secondary" className="text-[10px] font-bold tracking-wider mb-1 ml-1 uppercase block">
               {senderName}
             </Text>
           )}
           <div 
-            className="px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm border"
+            className="px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm border"
             style={{ 
               background: token.colorFillQuaternary,
               color: token.colorText,
               borderColor: token.colorBorderSecondary
             }}
           >
-            {text}
+            <MarkdownContent content={text} isDarkMode={isDarkMode} />
           </div>
           <Text type="secondary" className="text-[10px] font-medium mt-1 ml-1 block">
             {formatTime(timestamp)}

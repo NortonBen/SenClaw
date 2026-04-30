@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'chat_screen.dart';
 import '../services/language_service.dart';
 
@@ -184,18 +186,60 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
       final hub = uri.queryParameters['hub'];
       final cid = uri.queryParameters['cid'];
       final key = uri.queryParameters['key'];
+      final token = uri.queryParameters['token'];
 
-      if (hub != null && cid != null && key != null) {
-        await storage.write(key: 'hub_url', value: hub);
-        await storage.write(key: 'channel_id', value: cid);
-        await storage.write(key: 'encryption_key', value: key);
+      if (hub != null && cid != null && key != null && token != null) {
+        try {
+          final response = await http.post(
+            Uri.parse('$hub/v1/channels/verify'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'channel_id': cid,
+              'access_token': token,
+            }),
+          );
 
-        if (!mounted) return;
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (context) => const ChatScreen()),
-          (route) => false,
-        );
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body);
+            if (data['valid'] == true) {
+              final grpcUrl = data['grpc_url'] ?? '127.0.0.1:50051';
+              
+              await storage.write(key: 'hub_url', value: hub);
+              await storage.write(key: 'grpc_url', value: grpcUrl);
+              await storage.write(key: 'channel_id', value: cid);
+              await storage.write(key: 'encryption_key', value: key);
+              await storage.write(key: 'access_token', value: token);
+
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const ChatScreen()),
+                (route) => false,
+              );
+              return;
+            } else {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Verification failed: Invalid token')),
+                );
+              }
+            }
+          } else {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Failed to verify channel with Hub')),
+              );
+            }
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Connection error: $e')),
+            );
+          }
+        }
+        
+        setState(() => _isProcessing = false);
       } else {
         setState(() => _isProcessing = false);
       }

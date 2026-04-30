@@ -207,6 +207,7 @@ pub trait AgentEventSink: Send + Sync {
     /// Broadcast the current tool roster for an agent (sent on agent creation
     /// and on snapshot replay for new admin clients).
     fn notify_agent_tools(&self, agent_jid: &str, agent_name: &str, tools: &[AgentToolInfo]) {}
+    fn notify_agent_usage(&self, agent_jid: &str, usage: crate::zen_core::ConversationUsageData) {}
 }
 
 /// Lightweight tool descriptor exposed to the Web UI through `agent:tools`.
@@ -338,6 +339,12 @@ pub trait CoreApi: Send + Sync {
         _handler: Box<dyn Fn(AskQuestionRequestData) + Send + Sync>,
     ) {
     }
+    fn on_conversation_usage(
+        &self,
+        _jid: &str,
+        _handler: Box<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>,
+    ) {
+    }
     fn respond_to_tool_permission(
         &self,
         _jid: &str,
@@ -374,6 +381,7 @@ struct CoreHandlers {
     session_error: Option<Arc<dyn Fn(SessionErrorData) + Send + Sync>>,
     tool_permission_request: Option<Arc<dyn Fn(ToolPermissionRequestData) + Send + Sync>>,
     ask_question_request: Option<Arc<dyn Fn(AskQuestionRequestData) + Send + Sync>>,
+    conversation_usage: Option<Arc<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>>,
 }
 
 // ===== ZenCoreApi: real zen-core engine bridge =====
@@ -531,6 +539,11 @@ impl ZenCoreApi {
                                             }
                                         ).collect(),
                                     });
+                                }
+                            }
+                            EngineEvent::ConversationUsage(data) => {
+                                if let Some(ref cb) = h.conversation_usage {
+                                    cb(data);
                                 }
                             }
                             _ => {}
@@ -744,6 +757,16 @@ impl CoreApi for ZenCoreApi {
     ) {
         self.with_handlers(jid, |entry| {
             entry.ask_question_request = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_conversation_usage(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.conversation_usage = Some(Arc::from(handler));
         });
     }
 
@@ -2792,6 +2815,21 @@ impl AgentPool {
                             &chat_jid,
                             bot_token.as_deref(),
                         );
+                    }
+                }),
+            );
+        }
+
+        // ---- conversation:usage ----
+        {
+            let pool = Arc::clone(self);
+            let jid = _jid.clone();
+            let jid_arg = jid.clone();
+            self.core_api.on_conversation_usage(
+                &jid_arg,
+                Box::new(move |usage: crate::zen_core::ConversationUsageData| {
+                    if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
+                        sink.notify_agent_usage(&jid, usage);
                     }
                 }),
             );

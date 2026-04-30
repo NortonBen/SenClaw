@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload } from '../types';
 
 interface WsConfig {
   wsPort: number;
@@ -31,6 +31,7 @@ export interface WsHook {
   updateGroup: (jid: string, updates: UpdateGroupPayload) => void;
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>; // keyed by agentJid
+  agentUsage: Record<string, UsageData>; // keyed by agentJid
   subscribeAll: () => void;
   // Entity model
   channels: ChannelInfo[];
@@ -56,6 +57,7 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
+  const [agentUsage, setAgentUsage]           = useState<Record<string, UsageData>>({});
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [agents, setAgents]     = useState<AgentInfo[]>([]);
   const [bindings, setBindings] = useState<BindingWithRelationsInfo[]>([]);
@@ -437,6 +439,14 @@ export function useWebSocket(): WsHook {
             }
             break;
           }
+          case 'agent:usage': {
+            const usageJid = msg.agentJid as string;
+            setAgentUsage(prev => ({
+              ...prev,
+              [usageJid]: msg.usage as UsageData,
+            }));
+            break;
+          }
           // Entity model events
           case 'channels':
             setChannels((msg.channels as ChannelInfo[]) ?? []);
@@ -547,13 +557,13 @@ export function useWebSocket(): WsHook {
   void findRequestJid;
 
   return useMemo(() => ({ 
-    status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
   }), [
-    status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
