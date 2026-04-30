@@ -129,6 +129,22 @@ impl RelayClient {
         Ok(())
     }
 
+    pub async fn send_control(&self, control_type: i32, metadata: String) -> Result<()> {
+        let msg = RelayMessage {
+            channel_id: self.channel_id.clone(),
+            sender_id: self.sender_id.clone(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            message_id: uuid::Uuid::new_v4().to_string(),
+            payload: Some(relay_message::Payload::Control(ControlMessage {
+                r#type: control_type,
+                metadata,
+            })),
+        };
+
+        self.outbound_tx.send(msg).await?;
+        Ok(())
+    }
+
     pub fn decrypt_payload(&self, data: &EncryptedData) -> Result<String> {
         let plaintext = self.crypto.decrypt(&data.nonce, &data.ciphertext, &data.tag)?;
         String::from_utf8(plaintext).map_err(|e| anyhow!("Invalid UTF-8: {}", e))

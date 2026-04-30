@@ -20,6 +20,9 @@ class RelayService {
 
   final _outboundController = StreamController<RelayMessage>.broadcast();
   
+  final _typingController = StreamController<bool>.broadcast();
+  Stream<bool> get typingUpdates => _typingController.stream;
+  
   StreamSubscription? _responseSubscription;
   StreamSubscription? _sessionOutboundSubscription;
   Timer? _reconnectTimer;
@@ -142,6 +145,14 @@ class RelayService {
             } catch (e) {
               Log.e("Decryption failed", error: e);
             }
+          } else if (msg.hasControl()) {
+            if (msg.control.type == ControlMessage_Type.TYPING_START) {
+              Log.d("Received TYPING_START");
+              _typingController.add(true);
+            } else if (msg.control.type == ControlMessage_Type.TYPING_STOP) {
+              Log.d("Received TYPING_STOP");
+              _typingController.add(false);
+            }
           }
         },
         onDone: () {
@@ -208,6 +219,7 @@ class RelayService {
     _responseSubscription?.cancel();
     await _incomingController.close();
     await _outboundController.close();
+    await _typingController.close();
     await _channel.shutdown();
     Log.i("RelayService disposed");
   }

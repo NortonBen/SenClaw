@@ -184,6 +184,27 @@ impl Channel for AppChannel {
         }
     }
 
+    async fn set_typing(
+        &self,
+        _chat_jid: &str,
+        typing: bool,
+        _bot_token: Option<&str>,
+    ) -> Result<()> {
+        let lock = self.client.lock().await;
+        if let Some(ref client) = *lock {
+            let control_type = if typing { 3 } else { 4 }; // TYPING_START=3, TYPING_STOP=4
+            info!(
+                "[AppChannel] Sending typing control ({}) to channel {}",
+                if typing { "START" } else { "STOP" },
+                self.channel_id
+            );
+            client.send_control(control_type, String::new()).await?;
+            Ok(())
+        } else {
+            Err(anyhow!("AppChannel not connected"))
+        }
+    }
+
     async fn send_file(
         &self,
         _chat_jid: &str,

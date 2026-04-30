@@ -13,10 +13,17 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
+class ChatMessage {
+  final String text;
+  final bool isFromMe;
+  ChatMessage(this.text, this.isFromMe);
+}
+
 class _ChatScreenState extends State<ChatScreen> {
   final _config = ConfigService();
   RelayService? _relayService;
-  final List<String> _messages = [];
+  final List<ChatMessage> _chatMessages = <ChatMessage>[];
+  bool _isTyping = false;
 
   @override
   void initState() {
@@ -45,11 +52,21 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       
       _relayService!.incomingMessages.listen((msg) {
-        setState(() {
-          _messages.add(msg);
-        });
+        if (mounted) {
+          setState(() {
+            _chatMessages.add(ChatMessage(msg, false));
+          });
+        }
       });
 
+      _relayService!.typingUpdates.listen((isTyping) {
+        if (mounted) {
+          setState(() {
+            _isTyping = isTyping;
+          });
+        }
+      });
+      
       _relayService!.start();
     }
   }
@@ -125,9 +142,12 @@ class _ChatScreenState extends State<ChatScreen> {
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.all(16),
-                itemCount: _messages.length,
+                itemCount: _chatMessages.length + (_isTyping ? 1 : 0),
                 itemBuilder: (context, index) {
-                  return _buildMessageBubble(_messages[index]);
+                  if (index == _chatMessages.length) {
+                    return _buildTypingIndicator();
+                  }
+                  return _buildMessageBubble(_chatMessages[index]);
                 },
               ),
             ),
@@ -138,18 +158,66 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildMessageBubble(String text) {
+  Widget _buildMessageBubble(ChatMessage message) {
     return Align(
-      alignment: Alignment.centerLeft,
+      alignment: message.isFromMe ? Alignment.centerLeft : Alignment.centerRight,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        decoration: BoxDecoration(
+          color: message.isFromMe 
+            ? Colors.purpleAccent.withOpacity(0.2)
+            : Colors.white.withOpacity(0.1),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(message.isFromMe ? 0 : 16),
+            bottomRight: Radius.circular(message.isFromMe ? 16 : 0),
+          ),
+          border: Border.all(
+            color: message.isFromMe 
+              ? Colors.purpleAccent.withOpacity(0.3)
+              : Colors.white.withOpacity(0.05)
+          ),
+        ),
+        child: Text(message.text, style: const TextStyle(color: Colors.white)),
+      ),
+    );
+  }
+
+  Widget _buildTypingIndicator() {
+    return Align(
+      alignment: Alignment.centerRight,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.1),
+          color: Colors.white.withOpacity(0.05),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
         ),
-        child: Text(text, style: const TextStyle(color: Colors.white)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white54),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Agent is typing...',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.5),
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -163,7 +231,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await _relayService!.sendMessage(text);
       setState(() {
-        _messages.add(text); // Local echo
+        _chatMessages.add(ChatMessage(text, true)); // Local echo
         _messageController.clear();
       });
     } catch (e) {
