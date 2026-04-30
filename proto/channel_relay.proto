@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package relay;
+
+option go_package = "github.com/midea-ai/semaclaw/proto/relay";
+option java_package = "ai.semaclaw.proto.relay";
+option java_multiple_files = true;
+
+service ChannelRelay {
+    // Bi-directional stream for real-time interaction between SemaClaw and Channel App
+    // Both SemaClaw (Edge) and Channel App (Client) connect to this stream
+    rpc Stream(stream RelayMessage) returns (stream RelayMessage);
+}
+
+message RelayMessage {
+    // Unique ID for the connection session
+    string channel_id = 1;
+    
+    // ID of the sender (Agent UUID or App Instance ID)
+    string sender_id = 2;
+    
+    // Unix timestamp in milliseconds
+    int64 timestamp = 3;
+    
+    // Unique message ID for ack/tracking
+    string message_id = 4;
+
+    oneof payload {
+        EncryptedData encrypted_data = 5;
+        ControlMessage control = 6;
+    }
+}
+
+message EncryptedData {
+    // Initialization vector / nonce
+    bytes nonce = 1;
+    
+    // AES-GCM-256 encrypted payload (JSON string)
+    bytes ciphertext = 2;
+    
+    // Authentication tag
+    bytes tag = 3;
+}
+
+message ControlMessage {
+    enum Type {
+        PING = 0;
+        PONG = 1;
+        ACK = 2;
+        TYPING_START = 3;
+        TYPING_STOP = 4;
+        DISCONNECT = 5;
+    }
+    Type type = 1;
+    string metadata = 2; // Optional JSON metadata for control messages
+}
