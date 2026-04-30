@@ -2,12 +2,12 @@ import { Layout, Typography, Breadcrumb, theme, Space } from 'antd';
 import { SkillsPanel } from './SkillsPanel';
 import { SubagentsPanel } from './SubagentsPanel';
 import { HooksPanel } from './HooksPanel';
-import { MCPSettings } from '../components/settings/MCPSettings';
+import { MCPSettings } from './MCPSettings';
 import { PluginsNavItem } from './PluginsSidebar';
 import { Content } from 'antd/es/layout/layout';
 import { ApiOutlined } from '@ant-design/icons';
-import CoworkPanel from './cowork/CoworkPanel';
-import CodePanel from './code/CodePanel';
+import CoworkPanel from './CoworkPanel';
+import CodePanel from './CodePanel';
 
 const { Text } = Typography;
 

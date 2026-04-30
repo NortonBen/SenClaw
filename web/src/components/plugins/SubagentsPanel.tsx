@@ -627,7 +627,7 @@ function ManageTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
 
 export function SubagentsPanel() {
   const { token } = theme.useToken();
-  const [tab, setTab] = useState('browse');
+  const [tab, setTab] = useState<'browse' | 'manage'>('browse');
   const [agents, setAgents] = useState<Subagent[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -642,69 +642,65 @@ export function SubagentsPanel() {
 
   useEffect(() => { fetchAgents(); }, [fetchAgents]);
 
-  const items = [
-    {
-      key: 'browse',
-      label: 'Browse',
-      children: <BrowseTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => { }} />,
-    },
-    {
-      key: 'manage',
-      label: (
-        <Space size={6}>
-          Manage
-          {agents.length > 0 && (
-            <span style={{
-              fontSize: '10px',
-              backgroundColor: token.colorFillSecondary,
-              color: token.colorTextTertiary,
-              padding: '1px 6px',
-              borderRadius: '10px'
-            }}>
-              {agents.length}
-            </span>
-          )}
-        </Space>
-      ),
-      children: <ManageTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => { }} />,
-    },
-  ];
-
   return (
-    <Flex vertical style={{ height: '100%', backgroundColor: token.colorBgLayout }}>
-      <div style={{
-        backgroundColor: token.colorBgContainer,
-        padding: '0 20px',
-        borderBottom: `1px solid ${token.colorBorderSecondary}`,
-        flexShrink: 0
-      }}>
-        <Flex align="center">
-          <Tabs
-            activeKey={tab}
-            onChange={setTab}
-            items={items}
-            style={{ flex: 1 }}
-            tabBarStyle={{ marginBottom: 0, borderBottom: 'none' }}
+    <Flex vertical style={{ height: '100%', overflow: 'hidden' }}>
+      {/* Tab bar */}
+      <Flex
+        align="center"
+        justify="space-between"
+        style={{
+          padding: '0 20px',
+          backgroundColor: token.colorBgContainer,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          flexShrink: 0,
+        }}
+      >
+        <Tabs
+          activeKey={tab}
+          onChange={k => setTab(k as 'browse' | 'manage')}
+          style={{ marginBottom: -1 }}
+          items={[
+            { key: 'browse', label: 'Browse' },
+            {
+              key: 'manage',
+              label: (
+                <Space size={6}>
+                  Manage
+                  {agents.length > 0 && (
+                    <span style={{
+                      backgroundColor: token.colorFillAlter,
+                      color: token.colorTextSecondary,
+                      fontSize: '10px',
+                      padding: '1px 6px',
+                      borderRadius: 10,
+                    }}>
+                      {agents.length}
+                    </span>
+                  )}
+                </Space>
+              ),
+            },
+          ]}
+        />
+        <Tooltip title="Refresh list">
+          <Button
+            type="text"
+            icon={<ReloadOutlined />}
+            size="small"
+            onClick={() => { setLoading(true); fetchAgents(); }}
           />
-          <Tooltip title="Refresh list">
-            <Button
-              type="text"
-              icon={<ReloadOutlined />}
-              onClick={fetchAgents}
-              style={{ color: token.colorTextDescription }}
-            />
-          </Tooltip>
-        </Flex>
-      </div>
+        </Tooltip>
+      </Flex>
 
+      {/* Content */}
       {loading ? (
         <Flex align="center" justify="center" style={{ flex: 1 }}>
-          <Spin size="large" tip="Loading agents..." />
+          <Spin size="large" />
         </Flex>
+      ) : tab === 'browse' ? (
+        <BrowseTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => {}} />
       ) : (
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          {tab === 'browse' ? items[0].children : items[1].children}
-        </div>
+        <ManageTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => {}} />
       )}
     </Flex>
   );

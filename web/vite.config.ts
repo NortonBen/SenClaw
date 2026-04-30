@@ -20,8 +20,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
-        wiki: resolve(__dirname, 'wiki.html'),
-        plugins: resolve(__dirname, 'plugins.html'),
       },
       output: {
         manualChunks: {

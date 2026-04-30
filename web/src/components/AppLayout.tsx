@@ -1,29 +1,28 @@
-import { Outlet } from 'react-router-dom';
-import { Layout } from 'antd';
+import { Layout, theme } from 'antd';
 import { Sidebar } from './Sidebar';
-import type { WsHook } from '../hooks/useWebSocket';
-import { theme } from 'antd';
+import { useAppContext } from '../contexts/AppContext';
+import type { WsStatus } from '../types';
 
 interface Props {
-  ws: WsHook;
-  isDarkMode: boolean;
-  toggleTheme: () => void;
-  sidebarContent: React.ReactNode;
+  sidebar: React.ReactNode;
+  children: React.ReactNode;
+  status?: WsStatus;
 }
 
-export function AppLayout({ ws, isDarkMode, toggleTheme, sidebarContent }: Props) {
+export function AppLayout({ sidebar, children, status }: Props) {
+  const { ws, isDarkMode, toggleTheme } = useAppContext();
   const { token } = theme.useToken();
 
   return (
     <Layout className="h-screen overflow-hidden" style={{ background: token.colorBgBase }}>
       <Sidebar
-        status={ws.status}
-        sidebarContent={sidebarContent}
+        status={status ?? ws.status}
+        sidebarContent={sidebar}
         isDarkMode={isDarkMode}
         toggleTheme={toggleTheme}
       />
       <Layout className="bg-transparent relative">
-        <Outlet />
+        {children}
       </Layout>
     </Layout>
   );

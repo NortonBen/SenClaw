@@ -2,15 +2,20 @@ import React from 'react';
 import { Result, Button, Typography, Space, theme, Breadcrumb, Layout, Flex } from 'antd';
 import { CalendarOutlined, RocketOutlined, HomeOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { useAppContext } from '../contexts/AppContext';
+import { AppLayout } from '../components/AppLayout';
+import { AgentSidebar } from '../components/AgentSidebar';
 
 const { Title, Text } = Typography;
 const { Content } = Layout;
 
 export function CoworkPage() {
+  const { ws } = useAppContext();
   const { token } = theme.useToken();
   const navigate = useNavigate();
 
   return (
+    <AppLayout sidebar={<AgentSidebar ws={ws} selectedJid={null} onSelect={() => navigate('/chats')} />}>
     <Layout style={{ background: 'transparent', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Main Header */}
       <header style={{ 
@@ -88,5 +93,6 @@ export function CoworkPage() {
         </Flex>
       </Content>
     </Layout>
+    </AppLayout>
   );
 }
