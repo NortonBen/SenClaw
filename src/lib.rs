@@ -467,7 +467,11 @@ fn wire_app_channel_controls(
                 tokio::spawn(async move {
                     let val: serde_json::Value =
                         serde_json::from_str(&metadata).unwrap_or_default();
-                    let since = val["since"].as_str().map(|s| s.to_string());
+                    
+                    // Support pagination
+                    let page = val["page"].as_u64().unwrap_or(1) as u32;
+                    let page_size = val["pageSize"].as_u64().unwrap_or(20) as u32;
+                    let offset = (page.saturating_sub(1)) * page_size;
 
                     // Find the chat_jid for this sender.
                     let chat_jid = {
@@ -488,12 +492,20 @@ fn wire_app_channel_controls(
                     };
 
                     let messages = db
-                        .get_messages(&chat_jid, since.as_deref())
+                        .get_messages_paginated(&chat_jid, page_size, offset)
                         .unwrap_or_default();
 
                     let payload: Vec<serde_json::Value> = messages
                         .iter()
                         .map(|m| {
+                            let role = if m.is_bot_reply {
+                                "agent"
+                            } else if m.is_from_me {
+                                "user"
+                            } else {
+                                "other"
+                            };
+
                             serde_json::json!({
                                 "id":        m.message_id,
                                 "sender":    m.sender_name,
@@ -501,14 +513,15 @@ fn wire_app_channel_controls(
                                 "timestamp": m.timestamp,
                                 "isFromMe":  m.is_from_me,
                                 "isBotReply": m.is_bot_reply,
+                                "role":      role,
                             })
                         })
                         .collect();
 
                     let json = serde_json::to_string(&payload).unwrap_or_default();
                     tracing::info!(
-                        "[AppChannel] HISTORY_RESP → {} ({} message(s))",
-                        sender_id, payload.len()
+                        "[AppChannel] HISTORY_RESP → {} ({} message(s), page={}, pageSize={})",
+                        sender_id, payload.len(), page, page_size
                     );
                     let _ = app.send_control(CTRL_HISTORY_RESP, json).await;
                 });

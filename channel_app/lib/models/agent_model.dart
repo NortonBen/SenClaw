@@ -32,6 +32,7 @@ class HistoryMessage {
   final String timestamp;
   final bool isFromMe;
   final bool isBotReply;
+  final String role;
 
   const HistoryMessage({
     required this.id,
@@ -40,14 +41,17 @@ class HistoryMessage {
     required this.timestamp,
     required this.isFromMe,
     required this.isBotReply,
+    this.role = 'user',
   });
 
   factory HistoryMessage.fromJson(Map<String, dynamic> json) => HistoryMessage(
-        id: json['id'] as String? ?? '',
-        sender: json['sender'] as String? ?? '',
-        content: json['content'] as String? ?? '',
-        timestamp: json['timestamp'] as String? ?? '',
+        id: (json['id'] ?? '').toString(),
+        sender: (json['sender'] ?? '').toString(),
+        content: (json['content'] ?? '').toString(),
+        timestamp: (json['timestamp'] ?? '').toString(),
         isFromMe: json['isFromMe'] as bool? ?? false,
         isBotReply: json['isBotReply'] as bool? ?? false,
+        role: (json['role'] ?? (json['isBotReply'] == true ? 'agent' : 'user'))
+            .toString(),
       );
 }

@@ -325,6 +325,33 @@ impl Db {
         })
     }
 
+    pub fn get_messages_paginated(
+        &self,
+        chat_jid: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<StoredMessage>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT * FROM channel_messages
+                 WHERE chat_jid = ?1
+                 ORDER BY timestamp DESC
+                 LIMIT ?2 OFFSET ?3",
+            )?;
+            let rows = stmt
+                .query_map(params![chat_jid, limit as i64, offset as i64], |r| {
+                    Ok(row_to_message(r))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut results = Vec::new();
+            for r in rows {
+                results.push(r?);
+            }
+            Ok(results)
+        })
+    }
+
     // ============================================================
     // Channels
     // ============================================================
@@ -1126,6 +1153,40 @@ mod tests {
             .get_messages("tg:group:1", Some("2026-04-28T00:00:00Z"))
             .unwrap();
         assert_eq!(after.len(), 2);
+    }
+
+    #[test]
+    fn message_pagination() {
+        let db = Db::open_in_memory(&cfg()).unwrap();
+        for i in 0..10 {
+            let msg = StoredMessage {
+                message_id: format!("m{i}"),
+                chat_jid: "tg:group:1".into(),
+                sender_jid: "u".into(),
+                sender_name: "u".into(),
+                content: format!("msg {i}"),
+                timestamp: format!("2026-04-28T00:00:{:02}Z", i),
+                is_from_me: false,
+                is_bot_reply: false,
+                reply_to_id: None,
+                media_type: None,
+            };
+            db.insert_message(&msg, 100).unwrap();
+        }
+
+        // Page 1: 3 items, newest first (9, 8, 7)
+        let p1 = db.get_messages_paginated("tg:group:1", 3, 0).unwrap();
+        assert_eq!(p1.len(), 3);
+        assert_eq!(p1[0].message_id, "m9");
+        assert_eq!(p1[1].message_id, "m8");
+        assert_eq!(p1[2].message_id, "m7");
+
+        // Page 2: 3 items, (6, 5, 4)
+        let p2 = db.get_messages_paginated("tg:group:1", 3, 3).unwrap();
+        assert_eq!(p2.len(), 3);
+        assert_eq!(p2[0].message_id, "m6");
+        assert_eq!(p2[1].message_id, "m5");
+        assert_eq!(p2[2].message_id, "m4");
     }
 
     #[test]

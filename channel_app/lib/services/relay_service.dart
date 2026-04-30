@@ -188,6 +188,7 @@ class RelayService {
         }
       case ControlMessage_Type.HISTORY_RESP:
         try {
+          Log.d('HISTORY_RESP raw meta: $meta');
           final raw = jsonDecode(meta) as List<dynamic>;
           final messages = raw
               .map((e) => HistoryMessage.fromJson(e as Map<String, dynamic>))

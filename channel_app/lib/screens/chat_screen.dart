@@ -18,9 +18,14 @@ class ChatMessage {
   final bool isHistory;
   final DateTime? timestamp;
   final Duration? latency;
+  final String role; // 'user', 'agent', 'other'
 
   ChatMessage(this.text, this.isFromMe,
-      {this.isHistory = false, this.timestamp, this.latency});
+      {this.isHistory = false,
+      this.timestamp,
+      this.latency,
+      String? role})
+      : role = role ?? (isFromMe ? 'user' : 'agent');
 }
 
 class ChatScreen extends StatefulWidget {
@@ -45,6 +50,9 @@ class _ChatScreenState extends State<ChatScreen> {
   AgentInfo? _selectedAgent;
   bool _agentLoaded = false;
   bool _historyLoaded = false;
+  int _currentPage = 1;
+  bool _hasMoreHistory = true;
+  bool _isLoadingMore = false;
 
   String _statusText = 'Đang kết nối tới relay…';
   bool _loadTimedOut = false;
@@ -87,7 +95,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _lastSendTime = null; // reset sau khi nhận được chunk đầu tiên
       }
 
-      setState(() => _messages.add(ChatMessage(text, false, latency: latency)));
+      setState(() => _messages.add(ChatMessage(text, false,
+          latency: latency, timestamp: DateTime.now(), role: 'agent')));
       _scrollToBottom();
     });
 
@@ -100,6 +109,16 @@ class _ChatScreenState extends State<ChatScreen> {
     _relay!.historyUpdates.listen(_onHistory);
 
     _relay!.start();
+
+    _scrollController.addListener(() {
+      if (_scrollController.position.pixels >=
+              _scrollController.position.maxScrollExtent - 200 &&
+          !_isLoadingMore &&
+          _hasMoreHistory &&
+          _selectedAgent != null) {
+        _loadMoreHistory();
+      }
+    });
 
     _loadTimeout = Timer(const Duration(seconds: 20), () {
       if (!mounted || _agentLoaded) return;
@@ -150,20 +169,50 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onHistory(List<HistoryMessage> history) {
-    if (!mounted || _historyLoaded) return;
-    Log.i('[Chat] Nhận lịch sử: ${history.length} tin cho agent "${_selectedAgent?.name}"');
+    if (!mounted) return;
+    Log.i(
+        '[Chat] Nhận lịch sử: ${history.length} tin cho agent "${_selectedAgent?.name}"');
 
     final histMsgs = history.map((m) {
       final ts = DateTime.tryParse(m.timestamp)?.toLocal();
-      return ChatMessage(m.content, m.isFromMe,
-          isHistory: true, timestamp: ts);
+      return ChatMessage(
+        m.content,
+        m.isFromMe,
+        isHistory: true,
+        timestamp: ts,
+        role: m.role.isEmpty
+            ? (m.isBotReply ? 'agent' : 'user')
+            : m.role,
+      );
     }).toList();
 
     setState(() {
-      _messages.insertAll(0, histMsgs);
+      // Vì backend trả về ORDER BY timestamp DESC (mới nhất đầu tiên)
+      // Chúng ta muốn hiển thị cũ nhất đầu danh sách để khi ListView reverse=true, mới nhất ở dưới cùng.
+      // Do đó: danh sách _messages sẽ chứa: [cũ nhất, ..., mới nhất]
+      // Khi nhận thêm trang mới (cũ hơn), ta insert vào đầu danh sách.
+      _messages.insertAll(0, histMsgs.reversed);
       _historyLoaded = true;
+      _isLoadingMore = false;
+      if (history.isEmpty || history.length < 20) {
+        _hasMoreHistory = false;
+      }
     });
-    _scrollToBottom();
+
+    if (_currentPage == 1) {
+      _scrollToBottom();
+    }
+  }
+
+  void _loadMoreHistory() {
+    if (_selectedAgent == null || !_hasMoreHistory || _isLoadingMore) return;
+    Log.i('[Chat] Tải thêm trang lịch sử: ${_currentPage + 1}');
+    setState(() {
+      _isLoadingMore = true;
+      _currentPage++;
+    });
+    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ,
+        jsonEncode({'page': _currentPage, 'pageSize': 20}));
   }
 
   void _selectAgent(AgentInfo agent, {bool sendSelect = true}) {
@@ -172,7 +221,9 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _selectedAgent = agent;
       _historyLoaded = false;
-      _messages.removeWhere((m) => m.isHistory);
+      _currentPage = 1;
+      _hasMoreHistory = true;
+      _messages.clear();
       _statusText = 'Đang tải lịch sử cho "${agent.name}"…';
     });
 
@@ -185,7 +236,8 @@ class _ChatScreenState extends State<ChatScreen> {
         jsonEncode({'folder': agent.folder}),
       );
     }
-    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ, '{}');
+    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ,
+        jsonEncode({'page': 1, 'pageSize': 20}));
   }
 
   void _reloadAgentList() {
@@ -202,9 +254,12 @@ class _ChatScreenState extends State<ChatScreen> {
     Log.i('[Chat] Người dùng yêu cầu tải lại lịch sử cho "${_selectedAgent!.name}"');
     setState(() {
       _historyLoaded = false;
-      _messages.removeWhere((m) => m.isHistory);
+      _currentPage = 1;
+      _hasMoreHistory = true;
+      _messages.clear();
     });
-    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ, '{}');
+    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ,
+        jsonEncode({'page': 1, 'pageSize': 20}));
   }
 
   void _retryLoad() {
@@ -283,7 +338,8 @@ class _ChatScreenState extends State<ChatScreen> {
       await _relay!.sendMessage(text);
       setState(() {
         _lastSendTime = DateTime.now();
-        _messages.add(ChatMessage(text, true));
+        _messages.add(ChatMessage(text, true,
+            timestamp: DateTime.now(), role: 'user'));
         _messageController.clear();
       });
       _scrollToBottom();
@@ -595,6 +651,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final totalCount = _messages.length + (_isTyping ? 1 : 0);
+    // Sử dụng reverse: false để tin nhắn mới ở dưới cùng
+    // Chúng ta đã sắp xếp danh sách _messages theo thứ tự thời gian tăng dần [cũ -> mới]
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -603,13 +661,23 @@ class _ChatScreenState extends State<ChatScreen> {
         if (i == _messages.length) return _buildTypingIndicator();
 
         final msg = _messages[i];
+        
+        // Hiện phân cách lịch sử nếu đây là tin nhắn cuối cùng từ lịch sử
         final isLastHistory = msg.isHistory &&
             (i + 1 >= _messages.length || !_messages[i + 1].isHistory);
 
         return Column(
           children: [
-            if (isLastHistory) _buildHistorySeparator(),
+            if (i == 0 && _isLoadingMore)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+              ),
             _buildBubble(msg),
+            if (isLastHistory) _buildHistorySeparator(),
           ],
         );
       },
@@ -645,9 +713,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildBubble(ChatMessage msg) {
-    // user (isFromMe=true) → RIGHT (phải)
-    // AI  (isFromMe=false) → LEFT (trái)
-    final isUser = msg.isFromMe;
+    // role: 'user' -> RIGHT (phải)
+    // role: 'agent' -> LEFT (trái)
+    final isUser = msg.role == 'user';
+    final isAgent = msg.role == 'agent';
     final timeStr = _formatTime(msg.timestamp ?? DateTime.now());
 
     return Align(
