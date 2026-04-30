@@ -6,6 +6,8 @@ use rand::{rngs::OsRng, RngCore};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use anyhow::{Result, anyhow};
 
+use sha2::{Sha256, Digest};
+
 pub struct Crypto {
     key: [u8; 32],
 }
@@ -13,6 +15,27 @@ pub struct Crypto {
 impl Crypto {
     pub fn new(key: [u8; 32]) -> Self {
         Self { key }
+    }
+
+    pub fn get_key(&self) -> [u8; 32] {
+        self.key
+    }
+
+    /// Creates a new Crypto instance from a base64 encoded key.
+    /// If the decoded key is not 32 bytes, it is hashed using SHA-256 to derive a 32-byte key.
+    pub fn new_from_b64(b64_key: &str) -> Result<Self> {
+        let decoded = STANDARD.decode(b64_key)
+            .map_err(|e| anyhow!("Invalid base64 key: {}", e))?;
+        
+        // Always hash to ensure consistency and proper length
+        let mut hasher = Sha256::new();
+        hasher.update(&decoded);
+        let result = hasher.finalize();
+        
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&result);
+        
+        Ok(Self { key })
     }
 
     /// Encrypts data using AES-256-GCM.

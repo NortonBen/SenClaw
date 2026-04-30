@@ -172,7 +172,11 @@ impl Channel for AppChannel {
     }
 
     fn owns_jid(&self, chat_jid: &str) -> bool {
-        chat_jid.starts_with("app:")
+        if let Some((cid, _)) = Self::parse_jid(chat_jid) {
+            cid == self.channel_id
+        } else {
+            false
+        }
     }
 
     fn on_message(&self, handler: MessageCallback) {

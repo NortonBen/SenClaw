@@ -34,6 +34,17 @@ class CryptoService {
     );
   }
 
+  static Future<List<int>> deriveKey(String base64Key) async {
+    final decoded = base64.decode(base64Key);
+    
+    // Always hash to ensure consistency and correct 32-byte length for AES-256
+    final sha256 = Sha256();
+    final hash = await sha256.hash(decoded);
+    
+    Log.i("Derived 32-byte key from input of length ${decoded.length}");
+    return hash.bytes;
+  }
+
   static List<int> parseBase64Key(String base64Key) {
     return base64.decode(base64Key);
   }

@@ -460,12 +460,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         tracing::info!("[SenClaw] WeChatChannel: not enabled, skipped");
     }
 
-    // 3e. App Connector
+    // 3e. App Connector (Environment-based)
     if !cfg.app.channel_id.is_empty() && !cfg.app.encryption_key.is_empty() {
-        let mut key = [0u8; 32];
-        if let Ok(k) = base64::engine::general_purpose::STANDARD.decode(&cfg.app.encryption_key) {
-            if k.len() == 32 {
-                key.copy_from_slice(&k);
+        match util::crypto::Crypto::new_from_b64(&cfg.app.encryption_key) {
+            Ok(crypto) => {
+                let key = crypto.get_key();
                 let app_ch = channels::app::AppChannel::new(
                     cfg.app.hub_url.clone(),
                     cfg.app.channel_id.clone(),
@@ -475,27 +474,24 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 match app_ch.connect().await {
                     Ok(()) => {
                         if app_ch.is_connected() {
-                            tracing::info!("[SenClaw] AppChannel connected");
+                            tracing::info!("[SenClaw] AppChannel (env) connected: {}", cfg.app.channel_id);
                         }
                     }
                     Err(e) => {
-                        tracing::error!("[SenClaw] AppChannel connect failed: {e}");
+                        tracing::error!("[SenClaw] AppChannel (env) connect failed: {e}");
                     }
                 }
                 channels.push(Box::new(app_ch));
-            } else {
-                tracing::error!("[SenClaw] AppChannel: encryption key must be 32 bytes (base64)");
             }
-        } else {
-            tracing::error!("[SenClaw] AppChannel: invalid base64 encryption key");
+            Err(e) => {
+                tracing::error!("[SenClaw] AppChannel (env): invalid encryption key: {e}");
+            }
         }
     } else {
         if cfg.app.channel_id.is_empty() {
-            tracing::info!("[SenClaw] AppChannel: missing APP_CHANNEL_ID, skipped");
-        } else if cfg.app.encryption_key.is_empty() {
-            tracing::info!("[SenClaw] AppChannel: missing APP_ENCRYPTION_KEY, skipped");
+            tracing::info!("[SenClaw] AppChannel (env): missing APP_CHANNEL_ID, skipped");
         } else {
-            tracing::info!("[SenClaw] AppChannel: no credentials configured, skipped");
+            tracing::info!("[SenClaw] AppChannel (env): missing APP_ENCRYPTION_KEY, skipped");
         }
     }
 
@@ -640,29 +636,26 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                             }
                         }
                     }
-                    "app" => {
+                    "app" | "senclaw" => {
                         let hub_url = creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
                         let channel_id = creds["channelId"].as_str().unwrap_or("");
                         let enc_key_b64 = creds["encryptionKey"].as_str().unwrap_or("");
                         let access_token = creds["accessToken"].as_str().unwrap_or("");
                         if !channel_id.is_empty() && !enc_key_b64.is_empty() && !access_token.is_empty() {
-                            let mut key = [0u8; 32];
-                            if let Ok(k) = base64::engine::general_purpose::STANDARD.decode(enc_key_b64) {
-                                if k.len() == 32 {
-                                    key.copy_from_slice(&k);
-                                    let app_ch = channels::app::AppChannel::new(
-                                        hub_url.to_string(),
-                                        channel_id.to_string(),
-                                        access_token.to_string(),
-                                        key,
-                                    );
-                                    match app_ch.connect().await {
-                                        Ok(()) if app_ch.is_connected() => {
-                                            tracing::info!("[SenClaw] AppChannel from DB (id={}) connected", ch_record.id);
-                                            channels.push(Box::new(app_ch));
-                                        }
-                                        _ => {}
+                            if let Ok(crypto) = util::crypto::Crypto::new_from_b64(enc_key_b64) {
+                                let key = crypto.get_key();
+                                let app_ch = channels::app::AppChannel::new(
+                                    hub_url.to_string(),
+                                    channel_id.to_string(),
+                                    access_token.to_string(),
+                                    key,
+                                );
+                                match app_ch.connect().await {
+                                    Ok(()) if app_ch.is_connected() => {
+                                        tracing::info!("[SenClaw] AppChannel from DB (id={}) connected", ch_record.id);
+                                        channels.push(Box::new(app_ch));
                                     }
+                                    _ => {}
                                 }
                             }
                         }
@@ -676,7 +669,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 }
             }
             let db_init_count = db_channels.iter().filter(|c| {
-                c.platform_type == "feishu" || c.platform_type == "qq" || c.platform_type == "app"
+                c.platform_type == "feishu" || c.platform_type == "qq" || c.platform_type == "app" || c.platform_type == "senclaw"
             }).count();
             if db_init_count > 0 {
                 tracing::info!(

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc/metadata"
 
@@ -81,10 +82,55 @@ func (s *Server) Stream(stream pb.ChannelRelay_StreamServer) error {
 				return err
 			}
 			log.Printf("Client connected. Channel: %s, Sender: %s", channelID, senderID)
-		}
 
+		}
 		// Broadcast to all other participants in the same channel
 		s.broadcast(channelID, senderID, msg)
+	}
+}
+
+// StartHeartbeat runs a background loop to send PING messages to all connected clients
+func (s *Server) StartHeartbeat(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+
+		type clientInfo struct {
+			channelID string
+			senderID  string
+			stream    pb.ChannelRelay_StreamServer
+		}
+		var activeClients []clientInfo
+
+		s.mu.RLock()
+		for channelID, clients := range s.channels {
+			for senderID, stream := range clients {
+				activeClients = append(activeClients, clientInfo{
+					channelID: channelID,
+					senderID:  senderID,
+					stream:    stream,
+				})
+			}
+		}
+		s.mu.RUnlock()
+
+		for _, info := range activeClients {
+			pingMsg := &pb.RelayMessage{
+				ChannelId: info.channelID,
+				SenderId:  "server",
+				Payload: &pb.RelayMessage_Control{
+					Control: &pb.ControlMessage{
+						Type: pb.ControlMessage_PING,
+					},
+				},
+			}
+			if err := info.stream.Send(pingMsg); err != nil {
+				log.Printf("Heartbeat failed for Channel=%s, Sender=%s: %v", info.channelID, info.senderID, err)
+				s.removeClient(info.channelID, info.senderID)
+			}
+		}
 	}
 }
 
@@ -92,16 +138,27 @@ func (s *Server) addClient(channelID, senderID string, stream pb.ChannelRelay_St
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.channels[channelID]; !ok {
-		s.channels[channelID] = make(map[string]pb.ChannelRelay_StreamServer)
+	ch, ok := s.channels[channelID]
+	if !ok {
+		ch = make(map[string]pb.ChannelRelay_StreamServer)
+		s.channels[channelID] = ch
+	}
+
+	// Clean up dead connections in this channel
+	for id, oldStream := range ch {
+		if oldStream.Context().Err() != nil {
+			delete(ch, id)
+			log.Printf("Cleaned up stale connection: Channel=%s, Sender=%s", channelID, id)
+		}
 	}
 
 	// Limit to max 2 connections (Senclaw and App Connector)
-	if len(s.channels[channelID]) >= 2 && s.channels[channelID][senderID] == nil {
+	// If the sender is reconnecting, allow replacing the old one
+	if len(ch) >= 2 && ch[senderID] == nil {
 		return fmt.Errorf("channel is full, maximum 2 connections allowed")
 	}
 
-	s.channels[channelID][senderID] = stream
+	ch[senderID] = stream
 	return nil
 }
 

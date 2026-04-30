@@ -35,12 +35,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final connectionUrl = (grpc != null && grpc.isNotEmpty) ? grpc : hub;
 
     if (connectionUrl != null && cid != null && token != null && key != null) {
+      final encryptionKey = await CryptoService.deriveKey(key);
       _relayService = RelayService(
         hubUrl: connectionUrl,
         channelId: cid,
         senderId: 'mobile-app',
         accessToken: token,
-        encryptionKey: CryptoService.parseBase64Key(key),
+        encryptionKey: encryptionKey,
       );
       
       _relayService!.incomingMessages.listen((msg) {

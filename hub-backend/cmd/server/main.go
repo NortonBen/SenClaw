@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
@@ -51,6 +52,9 @@ func main() {
 	relayServer := relay.NewServer(db)
 
 	pb.RegisterChannelRelayServer(grpcServer, relayServer)
+
+	// Start heartbeat monitor
+	go relayServer.StartHeartbeat(30 * time.Second)
 
 	log.Println("Starting gRPC Server on :50051")
 	if err := grpcServer.Serve(lis); err != nil {

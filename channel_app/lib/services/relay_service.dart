@@ -136,7 +136,7 @@ class RelayService {
                 Uint8List.fromList(enc.nonce),
                 Uint8List.fromList(enc.ciphertext),
                 Uint8List.fromList(enc.tag),
-              );go
+              );
               Log.d("Decrypted message: $decrypted");
               _incomingController.add(decrypted);
             } catch (e) {
