@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::gateway::binding_manager::BindingManager;
 use crate::gateway::command_dispatcher::dispatch_command;
-use crate::gateway::group_manager::{ensure_wechat_admin_group, GroupManager};
+use crate::gateway::group_manager::{ensure_app_group, ensure_wechat_admin_group, GroupManager};
 use crate::gateway::trigger_checker::{should_trigger, should_trigger_entity};
 use crate::gateway::websocket_gateway::WebSocketGateway;
 use crate::types::{BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
@@ -164,6 +164,10 @@ impl MessageRouter {
             }
             if group.is_none() && msg.chat_jid.starts_with("qq:") {
                 group = self.complete_pending_qq_binding(&msg).await;
+            }
+            if group.is_none() && msg.chat_jid.starts_with("app:") {
+                ensure_app_group(&self.db, &self.group_manager, &self.config, &msg.chat_jid);
+                group = self.group_manager.get(&self.db, &msg.chat_jid);
             }
             if group.is_none() {
                 tracing::info!(

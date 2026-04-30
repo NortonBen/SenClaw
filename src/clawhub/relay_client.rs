@@ -81,14 +81,20 @@ impl RelayClient {
         tokio::spawn(async move {
             info!("Inbound relay stream processor started for channel: {}", cid_clone);
             while let Ok(Some(msg)) = inbound_stream.message().await {
-                info!("Relay stream received message: {} from {}", msg.message_id, msg.sender_id);
-                if msg.channel_id != cid_clone { 
+                // Suppress noisy logs for server heartbeat / control frames
+                let is_control = matches!(msg.payload, Some(relay_message::Payload::Control(_)));
+                if !is_control {
+                    info!("Relay stream received message: {} from {}", msg.message_id, msg.sender_id);
+                }
+                if msg.channel_id != cid_clone {
                     tracing::warn!("Received message for wrong channel_id: expected {}, got {}", cid_clone, msg.channel_id);
                     continue; 
                 }
                 
-                if let Some(ref h) = handler {
-                    h(msg);
+                if !is_control {
+                    if let Some(ref h) = handler {
+                        h(msg);
+                    }
                 }
             }
             tracing::warn!("Inbound relay stream closed for channel: {}", cid_clone);

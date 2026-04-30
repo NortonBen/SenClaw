@@ -951,4 +951,54 @@ pub fn ensure_wechat_admin_group(
     );
 }
 
+// ===== ensure_app_group =====
+
+/// Auto-register an app-channel JID as a group on first contact, mirroring the
+/// WeChat pattern. The folder name is derived from the sender_id portion of the
+/// JID (`app:{channel_id}:user:{sender_id}` → folder `app-{sender_id}`).
+pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &str) {
+    let now = chrono_now();
+
+    // Derive a stable folder name from the sender portion of the JID.
+    let folder = {
+        let parts: Vec<&str> = chat_jid.split(':').collect();
+        // JID: app:{channel_id}:user:{sender_id}
+        if parts.len() >= 4 && parts[2] == "user" {
+            format!("app-{}", parts[3])
+        } else {
+            format!("app-{}", chat_jid.replace(':', "-"))
+        }
+    };
+
+    let existing = gm.get(db, chat_jid);
+
+    let binding = GroupBinding {
+        jid: chat_jid.to_string(),
+        folder: folder.clone(),
+        name: existing
+            .as_ref()
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| folder.clone()),
+        channel: "app".to_string(),
+        is_admin: false,
+        requires_trigger: false,
+        allowed_tools: existing.as_ref().and_then(|e| e.allowed_tools.clone()),
+        allowed_paths: existing.as_ref().and_then(|e| e.allowed_paths.clone()),
+        allowed_work_dirs: existing.as_ref().and_then(|e| e.allowed_work_dirs.clone()),
+        bot_token: None,
+        max_messages: existing.as_ref().and_then(|e| e.max_messages),
+        last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
+        added_at: existing
+            .as_ref()
+            .map(|e| e.added_at.clone())
+            .unwrap_or_else(|| now.clone()),
+    };
+
+    gm.register(db, config, &binding);
+
+    let action = if existing.is_some() { "updated" } else { "registered" };
+    tracing::info!(
+        "[GroupManager] App group {action}: {chat_jid} → agents/{folder}/"
+    );
+}
 
