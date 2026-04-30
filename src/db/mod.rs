@@ -455,6 +455,15 @@ impl Db {
             rows.into_iter().collect::<Result<Vec<_>>>()
         })
     }
+    /// List all bindings (with agent+channel) for a specific channel_id.
+    pub fn list_bindings_for_channel(&self, channel_id: i64) -> Result<Vec<BindingWithRelations>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id WHERE b.channel_id=?1 ORDER BY b.id")?;
+            let rows: Vec<_> = stmt.query_map(params![channel_id], |r| Ok(row_to_binding_with_relations(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+
     pub fn delete_binding(&self, id: i64) -> Result<()> {
         self.with_conn(|c| { c.execute("DELETE FROM bindings WHERE id=?1", params![id])?; Ok(()) })
     }

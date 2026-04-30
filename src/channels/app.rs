@@ -1,6 +1,19 @@
 //! App Connector channel adapter using gRPC relay.
 //!
 //! JID format: `app:{channel_id}:user:{sender_id}`
+//!
+//! Control message types (ControlMessage.type):
+//!   0  PING            — server keepalive
+//!   1  PONG
+//!   2  ACK
+//!   3  TYPING_START    — server → app
+//!   4  TYPING_STOP     — server → app
+//!   5  DISCONNECT
+//!   6  AGENT_LIST_REQ  — app → server: request list of available agents
+//!   7  AGENT_LIST_RESP — server → app: JSON array of agents
+//!   8  AGENT_SELECT    — app → server: bind sender to a specific agent folder
+//!   9  HISTORY_REQ     — app → server: request message history
+//!  10  HISTORY_RESP    — server → app: JSON array of stored messages
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -16,6 +29,17 @@ use crate::proto::relay::relay_message;
 use crate::types::{ChatType, IncomingMessage};
 use chrono;
 
+pub const CTRL_AGENT_LIST_REQ: i32 = 6;
+pub const CTRL_AGENT_LIST_RESP: i32 = 7;
+pub const CTRL_AGENT_SELECT: i32 = 8;
+pub const CTRL_HISTORY_REQ: i32 = 9;
+pub const CTRL_HISTORY_RESP: i32 = 10;
+
+/// Called when the app sends a control frame that requires server handling.
+/// Arguments: (sender_id, control_type, metadata_json)
+pub type ControlCallback =
+    Arc<dyn Fn(String, i32, String) + Send + Sync + 'static>;
+
 pub struct AppChannel {
     hub_url: String,
     channel_id: String,
@@ -23,6 +47,7 @@ pub struct AppChannel {
     encryption_key: [u8; 32],
     handlers: Arc<RwLock<Vec<MessageCallback>>>,
     meta_handlers: Arc<RwLock<Vec<MetadataCallback>>>,
+    control_handler: Arc<RwLock<Option<ControlCallback>>>,
     client: Mutex<Option<Arc<RelayClient>>>,
     connected: AtomicBool,
 }
@@ -41,6 +66,7 @@ impl AppChannel {
             encryption_key,
             handlers: Arc::new(RwLock::new(Vec::new())),
             meta_handlers: Arc::new(RwLock::new(Vec::new())),
+            control_handler: Arc::new(RwLock::new(None)),
             client: Mutex::new(None),
             connected: AtomicBool::new(false),
         }
@@ -52,6 +78,21 @@ impl AppChannel {
             Some((parts[1].to_string(), parts[3].to_string()))
         } else {
             None
+        }
+    }
+
+    /// Register a handler for app-initiated control frames (types 6–10).
+    pub fn set_control_handler(&self, handler: ControlCallback) {
+        *self.control_handler.write().unwrap() = Some(handler);
+    }
+
+    /// Send a control frame to the app (e.g. AGENT_LIST_RESP, HISTORY_RESP).
+    pub async fn send_control(&self, control_type: i32, metadata: String) -> Result<()> {
+        let lock = self.client.lock().await;
+        if let Some(ref client) = *lock {
+            client.send_control(control_type, metadata).await
+        } else {
+            Err(anyhow!("AppChannel not connected"))
         }
     }
 }
@@ -69,6 +110,7 @@ impl Channel for AppChannel {
         let encryption_key = self.encryption_key;
 
         let handlers = Arc::clone(&self.handlers);
+        let control_handler = Arc::clone(&self.control_handler);
         let cid = channel_id.clone();
 
         let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel(100);
@@ -78,8 +120,8 @@ impl Channel for AppChannel {
         });
 
         info!(
-            "[AppChannel] Connecting to relay at {} for channel {} (access_token {})",
-            hub_url, channel_id, access_token
+            "[AppChannel] Connecting to relay at {} for channel {}",
+            hub_url, channel_id
         );
         let mut backoff_secs = 2u64;
         let client: RelayClient = loop {
@@ -109,52 +151,60 @@ impl Channel for AppChannel {
 
         tokio::spawn(async move {
             while let Some(msg) = msg_rx.recv().await {
-                info!("[AppChannel] Received relay message: {}", msg.message_id);
-                if let Some(relay_message::Payload::EncryptedData(data)) = msg.payload {
-                    match client_for_inbound.decrypt_payload(&data) {
-                        Ok(text) => {
+                match msg.payload {
+                    Some(relay_message::Payload::EncryptedData(ref data)) => {
+                        info!("[AppChannel] Received message: {} from {}", msg.message_id, msg.sender_id);
+                        match client_for_inbound.decrypt_payload(data) {
+                            Ok(text) => {
+                                info!("[AppChannel] Decrypted from {}: {}", msg.sender_id, text);
+                                let incoming = IncomingMessage {
+                                    id: msg.message_id,
+                                    chat_jid: format!("app:{}:user:{}", cid, msg.sender_id),
+                                    sender_name: msg.sender_id.clone(),
+                                    sender_jid: format!("app:{}:user:{}", cid, msg.sender_id),
+                                    content: text,
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                    is_from_me: false,
+                                    chat_type: ChatType::Private,
+                                    mentions_bot_username: Some(true),
+                                    bot_token: None,
+                                    native_msg_id: None,
+                                };
+                                let h_list = handlers.read().unwrap();
+                                for h in h_list.iter() {
+                                    h(incoming.clone());
+                                }
+                            }
+                            Err(e) => error!("[AppChannel] Decrypt failed: {e}"),
+                        }
+                    }
+                    Some(relay_message::Payload::Control(ref ctrl)) => {
+                        let ctrl_type = ctrl.r#type;
+                        // Server-sent keepalives (PING/PONG/ACK) — ignore silently.
+                        // App-initiated types (≥ AGENT_LIST_REQ) are forwarded to the handler.
+                        if ctrl_type >= CTRL_AGENT_LIST_REQ {
                             info!(
-                                "[AppChannel] Decrypted message from {}: {}",
-                                msg.sender_id, text
+                                "[AppChannel] Control type={} from {}",
+                                ctrl_type, msg.sender_id
                             );
-                            let incoming = IncomingMessage {
-                                id: msg.message_id,
-                                chat_jid: format!("app:{}:user:{}", cid, msg.sender_id),
-                                sender_name: msg.sender_id.clone(),
-                                sender_jid: format!("app:{}:user:{}", cid, msg.sender_id),
-                                content: text,
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                is_from_me: false,
-                                chat_type: ChatType::Private,
-                                mentions_bot_username: Some(true),
-                                bot_token: None,
-                                native_msg_id: None,
-                            };
-
-                            let h_list = handlers.read().unwrap();
-                            for h in h_list.iter() {
-                                h(incoming.clone());
+                            if let Some(ref h) = *control_handler.read().unwrap() {
+                                h(msg.sender_id.clone(), ctrl_type, ctrl.metadata.clone());
                             }
                         }
-                        Err(e) => error!("[AppChannel] Failed to decrypt relay message: {e}"),
                     }
-                } else if matches!(msg.payload, Some(relay_message::Payload::Control(_))) {
-                    // server heartbeat / control frame — ignore silently
-                } else {
-                    warn!(
-                        "[AppChannel] Received relay message with no encrypted payload: {}",
-                        msg.message_id
-                    );
+                    _ => {
+                        warn!(
+                            "[AppChannel] Unknown payload in message: {}",
+                            msg.message_id
+                        );
+                    }
                 }
             }
         });
 
         *self.client.lock().await = Some(client_arc);
         self.connected.store(true, Ordering::SeqCst);
-        info!(
-            "[AppChannel] Connected to relay for channel {}",
-            self.channel_id
-        );
+        info!("[AppChannel] Connected to relay for channel {}", self.channel_id);
         Ok(())
     }
 
@@ -168,38 +218,21 @@ impl Channel for AppChannel {
         self.connected.load(Ordering::SeqCst)
     }
 
-    async fn send_message(
-        &self,
-        chat_jid: &str,
-        text: &str,
-        _bot_token: Option<&str>,
-    ) -> Result<()> {
+    async fn send_message(&self, chat_jid: &str, text: &str, _bot_token: Option<&str>) -> Result<()> {
         let lock = self.client.lock().await;
         if let Some(ref client) = *lock {
-            info!("[AppChannel] Sending message to {}: {}", chat_jid, text);
-            client.send_message(text).await?;
-            Ok(())
+            info!("[AppChannel] Sending to {}: {}", chat_jid, text);
+            client.send_message(text).await
         } else {
             Err(anyhow!("AppChannel not connected"))
         }
     }
 
-    async fn set_typing(
-        &self,
-        _chat_jid: &str,
-        typing: bool,
-        _bot_token: Option<&str>,
-    ) -> Result<()> {
+    async fn set_typing(&self, _chat_jid: &str, typing: bool, _bot_token: Option<&str>) -> Result<()> {
         let lock = self.client.lock().await;
         if let Some(ref client) = *lock {
-            let control_type = if typing { 3 } else { 4 }; // TYPING_START=3, TYPING_STOP=4
-            info!(
-                "[AppChannel] Sending typing control ({}) to channel {}",
-                if typing { "START" } else { "STOP" },
-                self.channel_id
-            );
-            client.send_control(control_type, String::new()).await?;
-            Ok(())
+            let ctrl = if typing { 3 } else { 4 };
+            client.send_control(ctrl, String::new()).await
         } else {
             Err(anyhow!("AppChannel not connected"))
         }
@@ -212,7 +245,6 @@ impl Channel for AppChannel {
         _caption: Option<&str>,
         _bot_token: Option<&str>,
     ) -> Result<()> {
-        // TODO: implement file transfer via relay
         warn!("AppChannel::send_file not implemented yet");
         Ok(())
     }
@@ -232,4 +264,25 @@ impl Channel for AppChannel {
     fn on_metadata(&self, handler: MetadataCallback) {
         self.meta_handlers.write().unwrap().push(handler);
     }
+}
+
+// Allow Arc<AppChannel> to be used in the channels Vec<Box<dyn Channel>>.
+#[async_trait]
+impl Channel for Arc<AppChannel> {
+    fn id(&self) -> &'static str { self.as_ref().id() }
+    async fn connect(&self) -> Result<()> { self.as_ref().connect().await }
+    async fn disconnect(&self) -> Result<()> { self.as_ref().disconnect().await }
+    fn is_connected(&self) -> bool { self.as_ref().is_connected() }
+    async fn send_message(&self, jid: &str, text: &str, bt: Option<&str>) -> Result<()> {
+        self.as_ref().send_message(jid, text, bt).await
+    }
+    async fn set_typing(&self, jid: &str, typing: bool, bt: Option<&str>) -> Result<()> {
+        self.as_ref().set_typing(jid, typing, bt).await
+    }
+    async fn send_file(&self, jid: &str, path: &str, cap: Option<&str>, bt: Option<&str>) -> Result<()> {
+        self.as_ref().send_file(jid, path, cap, bt).await
+    }
+    fn owns_jid(&self, jid: &str) -> bool { self.as_ref().owns_jid(jid) }
+    fn on_message(&self, h: MessageCallback) { self.as_ref().on_message(h) }
+    fn on_metadata(&self, h: MetadataCallback) { self.as_ref().on_metadata(h) }
 }

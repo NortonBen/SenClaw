@@ -345,6 +345,182 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
     }
 }
 
+// ===== App channel control flow wiring =====
+
+/// Wire AGENT_LIST_REQ / AGENT_SELECT / HISTORY_REQ handlers onto an AppChannel.
+/// Called before `connect()` so the handler is in place when the first control
+/// frame arrives.
+fn wire_app_channel_controls(
+    app: &Arc<channels::app::AppChannel>,
+    db: Arc<db::Db>,
+    gm: Arc<gateway::group_manager::GroupManager>,
+    cfg: Arc<config::Config>,
+    db_channel_id: i64,
+) {
+    use channels::app::{
+        CTRL_AGENT_LIST_RESP, CTRL_AGENT_LIST_REQ, CTRL_AGENT_SELECT,
+        CTRL_HISTORY_REQ, CTRL_HISTORY_RESP,
+    };
+
+    let app_for_cb = Arc::clone(app);
+
+    app.set_control_handler(Arc::new(move |sender_id, ctrl_type, metadata| {
+        let app = Arc::clone(&app_for_cb);
+        let db = Arc::clone(&db);
+        let gm = Arc::clone(&gm);
+        let cfg = Arc::clone(&cfg);
+
+        match ctrl_type {
+            // ── Agent list ──────────────────────────────────────────────────
+            t if t == CTRL_AGENT_LIST_REQ => {
+                tokio::spawn(async move {
+                    // Debug: dump all bindings in DB to verify data exists
+                    let all_bindings = db.list_bindings_with_relations().unwrap_or_default();
+                    tracing::info!(
+                        "[AppChannel] DEBUG AGENT_LIST_REQ from={} db_channel_id={} | total_bindings_in_db={}",
+                        sender_id, db_channel_id, all_bindings.len()
+                    );
+                    for bwr in &all_bindings {
+                        tracing::info!(
+                            "[AppChannel] DEBUG binding: id={} channel_id={} channel_type={} channel_name={} agent_folder={} agent_name={}",
+                            bwr.binding.id,
+                            bwr.binding.channel_id,
+                            bwr.channel.platform_type,
+                            bwr.channel.name,
+                            bwr.agent.folder,
+                            bwr.agent.name,
+                        );
+                    }
+
+                    // Only agents explicitly bound to this channel in the DB.
+                    let bindings = db.list_bindings_for_channel(db_channel_id).unwrap_or_default();
+                    tracing::info!(
+                        "[AppChannel] list_bindings_for_channel({}): {} result(s)",
+                        db_channel_id, bindings.len()
+                    );
+
+                    let payload: Vec<serde_json::Value> = bindings
+                        .iter()
+                        .map(|bwr| {
+                            serde_json::json!({
+                                "folder":  bwr.agent.folder,
+                                "name":    bwr.agent.name,
+                                "isAdmin": bwr.binding.is_admin,
+                            })
+                        })
+                        .collect();
+                    let json = serde_json::to_string(&payload).unwrap_or_default();
+                    tracing::info!(
+                        "[AppChannel] AGENT_LIST_RESP → {} ({} agent(s))",
+                        sender_id, payload.len()
+                    );
+                    let _ = app.send_control(CTRL_AGENT_LIST_RESP, json).await;
+                });
+            }
+
+            // ── Agent select — validate against channel<->agent bindings ────
+            t if t == CTRL_AGENT_SELECT => {
+                tokio::spawn(async move {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&metadata).unwrap_or_default();
+                    let folder = val["folder"].as_str().unwrap_or("").to_string();
+
+                    // Validate: folder must be bound to this channel.
+                    let bindings = db.list_bindings_for_channel(db_channel_id).unwrap_or_default();
+                    let target = bindings.iter().find(|bwr| bwr.agent.folder == folder);
+
+                    let Some(bwr) = target else {
+                        tracing::warn!(
+                            "[AppChannel] AGENT_SELECT: folder '{}' not bound to channel {} (sender={})",
+                            folder, db_channel_id, sender_id
+                        );
+                        return;
+                    };
+                    let target_folder = bwr.agent.folder.clone();
+                    let target_name   = bwr.agent.name.clone();
+
+                    // Find the sender's own app group JID and update its folder binding.
+                    let chat_jid = gm.list(&db).unwrap_or_default()
+                        .into_iter()
+                        .find(|g| g.jid.contains(&format!(":user:{}", sender_id)))
+                        .map(|g| g.jid)
+                        .unwrap_or_else(|| format!("app:unknown:user:{}", sender_id));
+
+                    if let Some(mut binding) = gm.get(&db, &chat_jid) {
+                        binding.folder = target_folder.clone();
+                        binding.name   = target_name.clone();
+                        gm.register(&db, &cfg, &binding);
+                        tracing::info!(
+                            "[AppChannel] AGENT_SELECT: {} → folder={} ({})",
+                            chat_jid, target_folder, target_name
+                        );
+                    } else {
+                        tracing::warn!(
+                            "[AppChannel] AGENT_SELECT: no group binding for {}", chat_jid
+                        );
+                    }
+                });
+            }
+
+            // ── History request ─────────────────────────────────────────────
+            t if t == CTRL_HISTORY_REQ => {
+                tokio::spawn(async move {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&metadata).unwrap_or_default();
+                    let since = val["since"].as_str().map(|s| s.to_string());
+
+                    // Find the chat_jid for this sender.
+                    let chat_jid = {
+                        let all = gm.list(&db).unwrap_or_default();
+                        all.into_iter()
+                            .find(|g| {
+                                g.channel == "app"
+                                    && g.jid.contains(&format!(":user:{}", sender_id))
+                            })
+                            .map(|g| g.jid)
+                    };
+
+                    let Some(chat_jid) = chat_jid else {
+                        tracing::warn!(
+                            "[AppChannel] HISTORY_REQ: no group for sender {}", sender_id
+                        );
+                        return;
+                    };
+
+                    let messages = db
+                        .get_messages(&chat_jid, since.as_deref())
+                        .unwrap_or_default();
+
+                    let payload: Vec<serde_json::Value> = messages
+                        .iter()
+                        .map(|m| {
+                            serde_json::json!({
+                                "id":        m.message_id,
+                                "sender":    m.sender_name,
+                                "content":   m.content,
+                                "timestamp": m.timestamp,
+                                "isFromMe":  m.is_from_me,
+                                "isBotReply": m.is_bot_reply,
+                            })
+                        })
+                        .collect();
+
+                    let json = serde_json::to_string(&payload).unwrap_or_default();
+                    tracing::info!(
+                        "[AppChannel] HISTORY_RESP → {} ({} message(s))",
+                        sender_id, payload.len()
+                    );
+                    let _ = app.send_control(CTRL_HISTORY_RESP, json).await;
+                });
+            }
+
+            _ => {
+                tracing::debug!("[AppChannel] Unhandled control type={} from {}", ctrl_type, sender_id);
+            }
+        }
+    }));
+}
+
 pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // ===== 0. Setup wizard =====
     setup::run_setup_if_needed(&cfg.paths.global_config_path);
@@ -583,15 +759,26 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         {
                             if let Ok(crypto) = util::crypto::Crypto::new_from_b64(enc_key_b64) {
                                 let key = crypto.get_key();
-                                let app_ch = channels::app::AppChannel::new(
+                                let app_arc = Arc::new(channels::app::AppChannel::new(
                                     hub_url.to_string(),
                                     channel_id.to_string(),
                                     access_token.to_string(),
                                     key,
+                                ));
+                                wire_app_channel_controls(
+                                    &app_arc,
+                                    Arc::clone(&db),
+                                    Arc::clone(&gm),
+                                    Arc::new(cfg.clone()),
+                                    ch_record.id,
                                 );
-                                match app_ch.connect().await {
-                                    Ok(()) if app_ch.is_connected() => {
-                                        channels.push(Box::new(app_ch));
+                                match app_arc.connect().await {
+                                    Ok(()) if app_arc.is_connected() => {
+                                        tracing::info!(
+                                            "[SenClaw] AppChannel from DB (id={}) connected",
+                                            ch_record.id
+                                        );
+                                        channels.push(Box::new(Arc::clone(&app_arc)));
                                     }
                                     _ => {}
                                 }

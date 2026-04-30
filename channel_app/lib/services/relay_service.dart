@@ -1,11 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
-import '../generated/channel_relay.pbgrpc.dart';
 import 'package:fixnum/fixnum.dart';
+import '../generated/channel_relay.pbgrpc.dart';
+import '../generated/channel_relay.pbenum.dart';
+import '../models/agent_model.dart';
 import 'crypto_service.dart';
 import 'logger_service.dart';
-
 
 class RelayService {
   late ClientChannel _channel;
@@ -18,16 +20,26 @@ class RelayService {
   final _incomingController = StreamController<String>.broadcast();
   Stream<String> get incomingMessages => _incomingController.stream;
 
-  final _outboundController = StreamController<RelayMessage>.broadcast();
-  
   final _typingController = StreamController<bool>.broadcast();
   Stream<bool> get typingUpdates => _typingController.stream;
-  
+
+  final _agentListController = StreamController<List<AgentInfo>>.broadcast();
+  Stream<List<AgentInfo>> get agentListUpdates => _agentListController.stream;
+
+  final _historyController = StreamController<List<HistoryMessage>>.broadcast();
+  Stream<List<HistoryMessage>> get historyUpdates => _historyController.stream;
+
+  final _outboundController = StreamController<RelayMessage>.broadcast();
+
   StreamSubscription? _responseSubscription;
   StreamSubscription? _sessionOutboundSubscription;
   Timer? _reconnectTimer;
+  Timer? _keepAliveTimer;
+  StreamController<RelayMessage>? _sessionCtrl;
   bool _isDisposed = false;
   bool _isConnected = false;
+  bool _isConnecting = false;
+  int _reconnectDelaySecs = 2;
 
   RelayService({
     required String hubUrl,
@@ -36,19 +48,15 @@ class RelayService {
     required this.accessToken,
     required List<int> encryptionKey,
   }) {
-    // Handle hubUrl that might not have a scheme
-    String host = "";
+    String host = '';
     int port = 443;
     bool isSecure = false;
 
     try {
-      if (!hubUrl.contains("://")) {
-        // Assume raw host:port
+      if (!hubUrl.contains('://')) {
         final parts = hubUrl.split(':');
         host = parts[0];
-        if (parts.length > 1) {
-          port = int.parse(parts[1]);
-        }
+        if (parts.length > 1) port = int.parse(parts[1]);
       } else {
         final uri = Uri.parse(hubUrl);
         host = uri.host;
@@ -56,9 +64,8 @@ class RelayService {
         isSecure = uri.scheme == 'https';
       }
     } catch (e) {
-      Log.e("Error parsing hub URL: $hubUrl. Error: $e");
-      // Fallback to defaults or throw
-      host = "127.0.0.1";
+      Log.e('Error parsing hub URL: $hubUrl — $e');
+      host = '127.0.0.1';
       port = 50051;
     }
 
@@ -66,161 +73,208 @@ class RelayService {
       host,
       port: port,
       options: ChannelOptions(
-        credentials: isSecure 
-            ? const ChannelCredentials.secure() 
+        credentials: isSecure
+            ? const ChannelCredentials.secure()
             : const ChannelCredentials.insecure(),
       ),
     );
     _client = ChannelRelayClient(_channel);
     _crypto = CryptoService(encryptionKey);
-    Log.i("RelayService initialized for $host:$port (secure: $isSecure)");
-    Log.i("RelayService: Using encryption key of length ${encryptionKey.length} bytes");
+    Log.i('RelayService: $host:$port (secure=$isSecure)');
   }
 
-  void start() {
-    _connect();
-  }
+  void start() => _connect();
 
   void _connect() async {
-    if (_isDisposed || _isConnected) return;
+    if (_isDisposed || _isConnected || _isConnecting) return;
+    _isConnecting = true;
 
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
-
-    Log.i("RelayService: Attempting to connect...");
+    Log.i('RelayService: connecting...');
 
     try {
-      // Create a session-specific request controller
-      final sessionRequestController = StreamController<RelayMessage>();
-      
-      // Pipe messages from our main outbound controller to the session controller
+      final sessionCtrl = StreamController<RelayMessage>();
+      _sessionCtrl = sessionCtrl;
+
       _sessionOutboundSubscription = _outboundController.stream.listen(
-        (msg) => sessionRequestController.add(msg),
-        onError: (e) => Log.e("Outbound stream error: $e"),
+        sessionCtrl.add,
+        onError: (e) => Log.e('Outbound error: $e'),
       );
 
       final responseStream = _client.stream(
-        sessionRequestController.stream,
+        sessionCtrl.stream,
         options: CallOptions(metadata: {
           'channel_id': channelId,
           'access_token': accessToken,
         }),
       );
-      
-      // Send initial handshake message to unblock the stream
-      sessionRequestController.add(RelayMessage(
-        channelId: channelId,
-        senderId: senderId,
-        timestamp: Int64(DateTime.now().millisecondsSinceEpoch),
-        messageId: "handshake-${DateTime.now().millisecondsSinceEpoch}",
-        control: ControlMessage(
-          type: ControlMessage_Type.PING,
-        ),
-      ));
-      
+
+      // Handshake + agent list request sent directly to session (not via broadcast)
+      sessionCtrl.add(_makeControl(ControlMessage_Type.PING, ''));
+      sessionCtrl.add(_makeControl(ControlMessage_Type.AGENT_LIST_REQ, '{}'));
+
       _responseSubscription = responseStream.listen(
         (msg) async {
           if (!_isConnected) {
             _isConnected = true;
-            Log.i("RelayService: Connected and receiving messages");
+            _isConnecting = false;
+            _reconnectDelaySecs = 2; // reset backoff on success
+            Log.i('RelayService: connected');
+            _startKeepAlive(sessionCtrl);
           }
 
-          if (msg.channelId != channelId) {
-            Log.w("Received message for different channel: ${msg.channelId}");
-            return;
-          }
-
-          Log.d("Received message: ${msg.messageId}");
+          if (msg.channelId != channelId) return;
 
           if (msg.hasEncryptedData()) {
             final enc = msg.encryptedData;
             try {
-              final decrypted = await _crypto.decrypt(
+              final text = await _crypto.decrypt(
                 Uint8List.fromList(enc.nonce),
                 Uint8List.fromList(enc.ciphertext),
                 Uint8List.fromList(enc.tag),
               );
-              Log.d("Decrypted message: $decrypted");
-              _incomingController.add(decrypted);
+              _incomingController.add(text);
             } catch (e) {
-              Log.e("Decryption failed", error: e);
+              Log.e('Decrypt failed: $e');
             }
           } else if (msg.hasControl()) {
-            if (msg.control.type == ControlMessage_Type.TYPING_START) {
-              Log.d("Received TYPING_START");
-              _typingController.add(true);
-            } else if (msg.control.type == ControlMessage_Type.TYPING_STOP) {
-              Log.d("Received TYPING_STOP");
-              _typingController.add(false);
-            }
+            _handleControl(msg.control);
           }
         },
         onDone: () {
-          Log.i("Relay stream closed by server");
-          _handleDisconnect(sessionRequestController);
+          Log.i('Relay stream closed');
+          _handleDisconnect(sessionCtrl);
         },
         onError: (e) {
-          Log.e("Relay stream error", error: e);
-          _handleDisconnect(sessionRequestController);
+          Log.e('Relay stream error: $e');
+          _handleDisconnect(sessionCtrl);
         },
         cancelOnError: true,
       );
     } catch (e) {
-      Log.e("Failed to establish relay connection", error: e);
+      Log.e('Failed to connect: $e');
+      _isConnecting = false;
       _scheduleReconnect();
     }
   }
 
-  void _handleDisconnect(StreamController<RelayMessage> sessionController) {
-    _isConnected = false;
-    _sessionOutboundSubscription?.cancel();
-    _responseSubscription?.cancel();
-    sessionController.close();
-    
-    if (!_isDisposed) {
-      _scheduleReconnect();
+  void _startKeepAlive(StreamController<RelayMessage> sessionCtrl) {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      if (_isDisposed || !_isConnected) return;
+      sessionCtrl.add(_makeControl(ControlMessage_Type.PING, ''));
+    });
+  }
+
+  void _handleControl(ControlMessage ctrl) {
+    final type = ctrl.type;
+    final meta = ctrl.metadata;
+
+    switch (type) {
+      case ControlMessage_Type.TYPING_START:
+        _typingController.add(true);
+      case ControlMessage_Type.TYPING_STOP:
+        _typingController.add(false);
+      case ControlMessage_Type.AGENT_LIST_RESP:
+        try {
+          final raw = jsonDecode(meta) as List<dynamic>;
+          final agents = raw
+              .map((e) => AgentInfo.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _agentListController.add(agents);
+        } catch (e) {
+          Log.e('AGENT_LIST_RESP parse error: $e');
+        }
+      case ControlMessage_Type.HISTORY_RESP:
+        try {
+          final raw = jsonDecode(meta) as List<dynamic>;
+          final messages = raw
+              .map((e) => HistoryMessage.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _historyController.add(messages);
+        } catch (e) {
+          Log.e('HISTORY_RESP parse error: $e');
+        }
+      default:
+        Log.d('Control type=${type.value} meta=$meta');
     }
   }
 
-  void _scheduleReconnect() {
-    if (_isDisposed || _reconnectTimer != null) return;
-    
-    Log.i("RelayService: Scheduling reconnect in 5 seconds...");
-    _reconnectTimer = Timer(const Duration(seconds: 5), _connect);
+  /// Send a control frame to the server.
+  void sendControl(ControlMessage_Type type, String metadata) {
+    if (_isDisposed) return;
+    _outboundController.add(_makeControl(type, metadata));
+  }
+
+  RelayMessage _makeControl(ControlMessage_Type type, String metadata) {
+    return RelayMessage(
+      messageId: DateTime.now().millisecondsSinceEpoch.toString(),
+      channelId: channelId,
+      senderId: senderId,
+      timestamp: Int64(DateTime.now().millisecondsSinceEpoch),
+      control: ControlMessage(type: type, metadata: metadata),
+    );
   }
 
   Future<void> sendMessage(String text) async {
     try {
-      Log.t("Sending message: $text");
       final encrypted = await _crypto.encrypt(text);
-      Log.t("Sending encrypted message: ${encrypted.cipherText}");
-      final msg = RelayMessage(
+      _outboundController.add(RelayMessage(
         messageId: DateTime.now().millisecondsSinceEpoch.toString(),
         channelId: channelId,
         senderId: senderId,
+        timestamp: Int64(DateTime.now().millisecondsSinceEpoch),
         encryptedData: EncryptedData(
           nonce: Uint8List.fromList(encrypted.nonce),
           ciphertext: Uint8List.fromList(encrypted.cipherText),
           tag: Uint8List.fromList(encrypted.mac.bytes),
         ),
-      );
-      _outboundController.add(msg);
-      Log.d("Encrypted message added to outbound queue");
+      ));
     } catch (e) {
-      Log.e("Failed to encrypt/send message", error: e);
+      Log.e('Send failed: $e');
       rethrow;
     }
+  }
+
+  void _handleDisconnect(StreamController<RelayMessage> sessionCtrl) {
+    if (!_isConnected && !_isConnecting) return; // already handled
+    _isConnected = false;
+    _isConnecting = false;
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+    _sessionOutboundSubscription?.cancel();
+    _responseSubscription?.cancel();
+    if (!sessionCtrl.isClosed) sessionCtrl.close();
+    _sessionCtrl = null;
+    if (!_isDisposed) _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_isDisposed || _reconnectTimer != null) return;
+    Log.i('RelayService: reconnecting in ${_reconnectDelaySecs}s...');
+    _reconnectTimer = Timer(Duration(seconds: _reconnectDelaySecs), () {
+      _reconnectTimer = null;
+      _connect();
+    });
+    // Exponential backoff capped at 60 s
+    _reconnectDelaySecs = (_reconnectDelaySecs * 2).clamp(2, 60);
   }
 
   Future<void> dispose() async {
     _isDisposed = true;
     _reconnectTimer?.cancel();
+    _keepAliveTimer?.cancel();
     _sessionOutboundSubscription?.cancel();
     _responseSubscription?.cancel();
-    await _incomingController.close();
-    await _outboundController.close();
-    await _typingController.close();
+    if (_sessionCtrl != null && !_sessionCtrl!.isClosed) _sessionCtrl!.close();
+    await Future.wait([
+      _incomingController.close(),
+      _outboundController.close(),
+      _typingController.close(),
+      _agentListController.close(),
+      _historyController.close(),
+    ]);
     await _channel.shutdown();
-    Log.i("RelayService disposed");
   }
 }

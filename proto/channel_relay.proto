@@ -50,6 +50,11 @@ message ControlMessage {
         TYPING_START = 3;
         TYPING_STOP = 4;
         DISCONNECT = 5;
+        AGENT_LIST_REQ = 6;
+        AGENT_LIST_RESP = 7;
+        AGENT_SELECT = 8;
+        HISTORY_REQ = 9;
+        HISTORY_RESP = 10;
     }
     Type type = 1;
     string metadata = 2; // Optional JSON metadata for control messages

@@ -27,18 +27,24 @@ class ControlMessage_Type extends $pb.ProtobufEnum {
       ControlMessage_Type._(4, _omitEnumNames ? '' : 'TYPING_STOP');
   static const ControlMessage_Type DISCONNECT =
       ControlMessage_Type._(5, _omitEnumNames ? '' : 'DISCONNECT');
+  static const ControlMessage_Type AGENT_LIST_REQ =
+      ControlMessage_Type._(6, _omitEnumNames ? '' : 'AGENT_LIST_REQ');
+  static const ControlMessage_Type AGENT_LIST_RESP =
+      ControlMessage_Type._(7, _omitEnumNames ? '' : 'AGENT_LIST_RESP');
+  static const ControlMessage_Type AGENT_SELECT =
+      ControlMessage_Type._(8, _omitEnumNames ? '' : 'AGENT_SELECT');
+  static const ControlMessage_Type HISTORY_REQ =
+      ControlMessage_Type._(9, _omitEnumNames ? '' : 'HISTORY_REQ');
+  static const ControlMessage_Type HISTORY_RESP =
+      ControlMessage_Type._(10, _omitEnumNames ? '' : 'HISTORY_RESP');
 
   static const $core.List<ControlMessage_Type> values = <ControlMessage_Type>[
-    PING,
-    PONG,
-    ACK,
-    TYPING_START,
-    TYPING_STOP,
-    DISCONNECT,
+    PING, PONG, ACK, TYPING_START, TYPING_STOP, DISCONNECT,
+    AGENT_LIST_REQ, AGENT_LIST_RESP, AGENT_SELECT, HISTORY_REQ, HISTORY_RESP,
   ];
 
   static final $core.List<ControlMessage_Type?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 5);
+      $pb.ProtobufEnum.$_initByValueList(values, 10);
   static ControlMessage_Type? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 

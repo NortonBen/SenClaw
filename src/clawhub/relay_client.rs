@@ -91,10 +91,8 @@ impl RelayClient {
                     continue; 
                 }
                 
-                if !is_control {
-                    if let Some(ref h) = handler {
-                        h(msg);
-                    }
+                if let Some(ref h) = handler {
+                    h(msg);
                 }
             }
             tracing::warn!("Inbound relay stream closed for channel: {}", cid_clone);
