@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/relay_service.dart';
 import '../services/crypto_service.dart';
 import 'welcome_screen.dart';
 import '../services/language_service.dart';
 import 'connection_qr_screen.dart';
+import '../services/config_service.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -14,7 +14,7 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final storage = const FlutterSecureStorage();
+  final _config = ConfigService();
   RelayService? _relayService;
   final List<String> _messages = [];
 
@@ -25,14 +25,18 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _initRelay() async {
-    final hub = await storage.read(key: 'hub_url');
-    final cid = await storage.read(key: 'channel_id');
-    final token = await storage.read(key: 'access_token');
-    final key = await storage.read(key: 'encryption_key');
+    final hub = await _config.hubUrl;
+    final grpc = await _config.grpcUrl;
+    final cid = await _config.channelId;
+    final token = await _config.accessToken;
+    final key = await _config.encryptionKey;
 
-    if (hub != null && cid != null && token != null && key != null) {
+    // Use grpc_url if available, otherwise fallback to hub_url
+    final connectionUrl = (grpc != null && grpc.isNotEmpty) ? grpc : hub;
+
+    if (connectionUrl != null && cid != null && token != null && key != null) {
       _relayService = RelayService(
-        hubUrl: hub,
+        hubUrl: connectionUrl,
         channelId: cid,
         senderId: 'mobile-app',
         accessToken: token,
@@ -66,7 +70,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (confirmed == true) {
-      await storage.deleteAll();
+      await _config.clearAll();
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(
         context,
@@ -149,6 +153,27 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  final TextEditingController _messageController = TextEditingController();
+
+  Future<void> _sendMessage() async {
+    final text = _messageController.text.trim();
+    if (text.isEmpty || _relayService == null) return;
+
+    try {
+      await _relayService!.sendMessage(text);
+      setState(() {
+        _messages.add(text); // Local echo
+        _messageController.clear();
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send message: $e')),
+        );
+      }
+    }
+  }
+
   Widget _buildInputArea() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -160,9 +185,11 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: TextField(
+              controller: _messageController,
+              onSubmitted: (_) => _sendMessage(),
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
-                hintText: 'Message (E2EE)...',
+                hintText: 'Message ...',
                 hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
                 border: InputBorder.none,
               ),
@@ -170,7 +197,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.send, color: Colors.purpleAccent),
-            onPressed: () {},
+            onPressed: _sendMessage,
           ),
         ],
       ),
@@ -179,6 +206,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _messageController.dispose();
     _relayService?.dispose();
     super.dispose();
   }

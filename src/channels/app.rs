@@ -72,6 +72,7 @@ impl Channel for AppChannel {
             let _ = msg_tx.try_send(msg);
         });
 
+        info!("[AppChannel] Connecting to relay at {} for channel {}...", hub_url, channel_id);
         let client: RelayClient = RelayClient::connect(
             hub_url,
             channel_id.clone(),
@@ -80,16 +81,22 @@ impl Channel for AppChannel {
             encryption_key,
             Some(handler),
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("[AppChannel] Failed to connect to relay: {e}");
+            e
+        })?;
 
         let client_arc = Arc::new(client);
         let client_for_inbound = Arc::clone(&client_arc);
 
         tokio::spawn(async move {
             while let Some(msg) = msg_rx.recv().await {
+                info!("[AppChannel] Received relay message: {}", msg.message_id);
                 if let Some(relay_message::Payload::EncryptedData(data)) = msg.payload {
                     match client_for_inbound.decrypt_payload(&data) {
                         Ok(text) => {
+                            info!("[AppChannel] Decrypted message from {}: {}", msg.sender_id, text);
                             let incoming = IncomingMessage {
                                 id: msg.message_id,
                                 chat_jid: format!("app:{}:user:{}", cid, msg.sender_id),
@@ -109,8 +116,10 @@ impl Channel for AppChannel {
                                 h(incoming.clone());
                             }
                         }
-                        Err(e) => error!("Failed to decrypt relay message: {e}"),
+                        Err(e) => error!("[AppChannel] Failed to decrypt relay message: {e}"),
                     }
+                } else {
+                    warn!("[AppChannel] Received relay message with no encrypted payload: {}", msg.message_id);
                 }
             }
         });
@@ -142,6 +151,7 @@ impl Channel for AppChannel {
     ) -> Result<()> {
         let lock = self.client.lock().await;
         if let Some(ref client) = *lock {
+            info!("[AppChannel] Sending message to {}: {}", chat_jid, text);
             client.send_message(text).await?;
             Ok(())
         } else {

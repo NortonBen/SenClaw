@@ -28,17 +28,17 @@ class RelayMessage extends $pb.GeneratedMessage {
     $core.String? channelId,
     $core.String? senderId,
     $fixnum.Int64? timestamp,
-    $core.String? messageId,
     EncryptedData? encryptedData,
     ControlMessage? control,
+    $core.String? messageId,
   }) {
     final result = create();
     if (channelId != null) result.channelId = channelId;
     if (senderId != null) result.senderId = senderId;
     if (timestamp != null) result.timestamp = timestamp;
-    if (messageId != null) result.messageId = messageId;
     if (encryptedData != null) result.encryptedData = encryptedData;
     if (control != null) result.control = control;
+    if (messageId != null) result.messageId = messageId;
     return result;
   }
 
@@ -53,23 +53,23 @@ class RelayMessage extends $pb.GeneratedMessage {
 
   static const $core.Map<$core.int, RelayMessage_Payload>
       _RelayMessage_PayloadByTag = {
-    5: RelayMessage_Payload.encryptedData,
-    6: RelayMessage_Payload.control,
+    4: RelayMessage_Payload.encryptedData,
+    5: RelayMessage_Payload.control,
     0: RelayMessage_Payload.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RelayMessage',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'relay'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'semaclaw.relay'),
       createEmptyInstance: create)
-    ..oo(0, [5, 6])
+    ..oo(0, [4, 5])
     ..aOS(1, _omitFieldNames ? '' : 'channelId')
     ..aOS(2, _omitFieldNames ? '' : 'senderId')
     ..aInt64(3, _omitFieldNames ? '' : 'timestamp')
-    ..aOS(4, _omitFieldNames ? '' : 'messageId')
-    ..aOM<EncryptedData>(5, _omitFieldNames ? '' : 'encryptedData',
+    ..aOM<EncryptedData>(4, _omitFieldNames ? '' : 'encryptedData',
         subBuilder: EncryptedData.create)
-    ..aOM<ControlMessage>(6, _omitFieldNames ? '' : 'control',
+    ..aOM<ControlMessage>(5, _omitFieldNames ? '' : 'control',
         subBuilder: ControlMessage.create)
+    ..aOS(6, _omitFieldNames ? '' : 'messageId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -91,12 +91,12 @@ class RelayMessage extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<RelayMessage>(create);
   static RelayMessage? _defaultInstance;
 
+  @$pb.TagNumber(4)
   @$pb.TagNumber(5)
-  @$pb.TagNumber(6)
   RelayMessage_Payload whichPayload() =>
       _RelayMessage_PayloadByTag[$_whichOneof(0)]!;
+  @$pb.TagNumber(4)
   @$pb.TagNumber(5)
-  @$pb.TagNumber(6)
   void clearPayload() => $_clearField($_whichOneof(0));
 
   /// Unique ID for the connection session
@@ -129,37 +129,37 @@ class RelayMessage extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearTimestamp() => $_clearField(3);
 
+  @$pb.TagNumber(4)
+  EncryptedData get encryptedData => $_getN(3);
+  @$pb.TagNumber(4)
+  set encryptedData(EncryptedData value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasEncryptedData() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEncryptedData() => $_clearField(4);
+  @$pb.TagNumber(4)
+  EncryptedData ensureEncryptedData() => $_ensure(3);
+
+  @$pb.TagNumber(5)
+  ControlMessage get control => $_getN(4);
+  @$pb.TagNumber(5)
+  set control(ControlMessage value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasControl() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearControl() => $_clearField(5);
+  @$pb.TagNumber(5)
+  ControlMessage ensureControl() => $_ensure(4);
+
   /// Unique message ID for ack/tracking
-  @$pb.TagNumber(4)
-  $core.String get messageId => $_getSZ(3);
-  @$pb.TagNumber(4)
-  set messageId($core.String value) => $_setString(3, value);
-  @$pb.TagNumber(4)
-  $core.bool hasMessageId() => $_has(3);
-  @$pb.TagNumber(4)
-  void clearMessageId() => $_clearField(4);
-
-  @$pb.TagNumber(5)
-  EncryptedData get encryptedData => $_getN(4);
-  @$pb.TagNumber(5)
-  set encryptedData(EncryptedData value) => $_setField(5, value);
-  @$pb.TagNumber(5)
-  $core.bool hasEncryptedData() => $_has(4);
-  @$pb.TagNumber(5)
-  void clearEncryptedData() => $_clearField(5);
-  @$pb.TagNumber(5)
-  EncryptedData ensureEncryptedData() => $_ensure(4);
-
   @$pb.TagNumber(6)
-  ControlMessage get control => $_getN(5);
+  $core.String get messageId => $_getSZ(5);
   @$pb.TagNumber(6)
-  set control(ControlMessage value) => $_setField(6, value);
+  set messageId($core.String value) => $_setString(5, value);
   @$pb.TagNumber(6)
-  $core.bool hasControl() => $_has(5);
+  $core.bool hasMessageId() => $_has(5);
   @$pb.TagNumber(6)
-  void clearControl() => $_clearField(6);
-  @$pb.TagNumber(6)
-  ControlMessage ensureControl() => $_ensure(5);
+  void clearMessageId() => $_clearField(6);
 }
 
 class EncryptedData extends $pb.GeneratedMessage {
@@ -186,7 +186,7 @@ class EncryptedData extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'EncryptedData',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'relay'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'semaclaw.relay'),
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'nonce', $pb.PbFieldType.OY)
@@ -268,7 +268,7 @@ class ControlMessage extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ControlMessage',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'relay'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'semaclaw.relay'),
       createEmptyInstance: create)
     ..aE<ControlMessage_Type>(1, _omitFieldNames ? '' : 'type',
         enumValues: ControlMessage_Type.values)

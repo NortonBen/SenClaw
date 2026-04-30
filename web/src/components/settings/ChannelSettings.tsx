@@ -42,6 +42,10 @@ function buildCredentials(platform: Platform, fields: any): Record<string, unkno
     case 'senclaw':
       return {
         hubUrl: fields.hubUrl?.trim() ?? 'https://hub.senclaw.ai',
+        // Preserve hidden fields if they are passed in (e.g. from editing form merge)
+        ...(fields.channelId ? { channelId: fields.channelId } : {}),
+        ...(fields.encryptionKey ? { encryptionKey: fields.encryptionKey } : {}),
+        ...(fields.accessToken ? { accessToken: fields.accessToken } : {}),
       };
     case 'telegram':
       return {
@@ -336,7 +340,11 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
     const credentials = buildCredentials(p, values);
 
     if (editing) {
-      onUpdate(editing.id, { name: values.name, credentials });
+      const oldCreds = parseCredentials(editing.credentialsJson);
+      onUpdate(editing.id, { 
+        name: values.name, 
+        credentials: { ...oldCreds, ...credentials } 
+      });
       message.success('Channel updated');
       setModalOpen(false);
       return;
@@ -346,26 +354,39 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
       setRegistering(true);
       try {
         const hubUrl = credentials.hubUrl as string || 'http://localhost:18080';
-        
+
         // Fetch QR pairing data from backend after registration
         const res = await fetch(`${hubUrl}/v1/channels/register`, {
           method: 'POST',
         });
-        
+
         if (res.ok) {
           const data = await res.json();
-          // generate random key
-          const encryptionKey = crypto.randomUUID().replace(/-/g, '');
-          
-          setQrData({ 
-            channelId: data.channel_id, 
-            encryptionKey, 
-            hubUrl: hubUrl, 
-            token: data.access_token 
+          // generate random key 32 length (true binary random)
+          const keyArray = new Uint8Array(32);
+          crypto.getRandomValues(keyArray);
+          const encryptionKey = btoa(Array.from(keyArray, b => String.fromCharCode(b)).join(''));
+
+          const fullCredentials = {
+            ...credentials,
+            channelId: data.channel_id,
+            encryptionKey,
+            accessToken: data.access_token
+          };
+
+          setQrData({
+            channelId: data.channel_id,
+            encryptionKey,
+            hubUrl: hubUrl,
+            token: data.access_token
           });
-          
+
           // Save the channel in local db after getting the info
-          onRegister({ platformType: p, name: values.name, credentials: { ...credentials, channelId: data.channel_id } });
+          onRegister({ 
+            platformType: p, 
+            name: values.name, 
+            credentials: fullCredentials 
+          });
         } else {
           message.error('Failed to register with ClawHub backend');
         }
@@ -451,6 +472,23 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
               <Button type="text" icon={<EditOutlined />} onClick={() => openEdit(record)} />
             </Tooltip>
           )}
+          {record.platformType === 'senclaw' && (
+            <Tooltip title="Pair Mobile App">
+              <Button
+                type="text"
+                icon={<QrcodeOutlined />}
+                onClick={() => {
+                  const creds = parseCredentials(record.credentialsJson);
+                  setQrData({
+                    channelId: creds.channelId,
+                    encryptionKey: creds.encryptionKey,
+                    hubUrl: creds.hubUrl,
+                    token: creds.accessToken
+                  });
+                }}
+              />
+            </Tooltip>
+          )}
           <Popconfirm
             title="Unregister this channel?"
             description="This will affect all agents bound to it."
@@ -527,10 +565,10 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
 
           {/* Platform-specific fields */}
           {platform === 'telegram' && <TelegramFields />}
-          {platform === 'feishu'   && <FeishuFields />}
-          {platform === 'qq'       && <QQFields />}
-          {platform === 'wechat'   && <WeChatFields />}
-          {platform === 'senclaw'  && <SenclawFields />}
+          {platform === 'feishu' && <FeishuFields />}
+          {platform === 'qq' && <QQFields />}
+          {platform === 'wechat' && <WeChatFields />}
+          {platform === 'senclaw' && <SenclawFields />}
 
           <Flex justify="flex-end" gap={8} style={{ marginTop: 8 }}>
             <Button onClick={() => setModalOpen(false)}>Cancel</Button>
@@ -545,3 +583,6 @@ export const ChannelSettings: React.FC<Props> = ({ channels, onRegister, onUnreg
     </div>
   );
 };
+
+
+

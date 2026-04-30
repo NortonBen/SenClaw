@@ -22,22 +22,22 @@ const RelayMessage$json = {
     {'1': 'channel_id', '3': 1, '4': 1, '5': 9, '10': 'channelId'},
     {'1': 'sender_id', '3': 2, '4': 1, '5': 9, '10': 'senderId'},
     {'1': 'timestamp', '3': 3, '4': 1, '5': 3, '10': 'timestamp'},
-    {'1': 'message_id', '3': 4, '4': 1, '5': 9, '10': 'messageId'},
+    {'1': 'message_id', '3': 6, '4': 1, '5': 9, '10': 'messageId'},
     {
       '1': 'encrypted_data',
-      '3': 5,
+      '3': 4,
       '4': 1,
       '5': 11,
-      '6': '.relay.EncryptedData',
+      '6': '.semaclaw.relay.EncryptedData',
       '9': 0,
       '10': 'encryptedData'
     },
     {
       '1': 'control',
-      '3': 6,
+      '3': 5,
       '4': 1,
       '5': 11,
-      '6': '.relay.ControlMessage',
+      '6': '.semaclaw.relay.ControlMessage',
       '9': 0,
       '10': 'control'
     },
@@ -51,9 +51,10 @@ const RelayMessage$json = {
 final $typed_data.Uint8List relayMessageDescriptor = $convert.base64Decode(
     'CgxSZWxheU1lc3NhZ2USHQoKY2hhbm5lbF9pZBgBIAEoCVIJY2hhbm5lbElkEhsKCXNlbmRlcl'
     '9pZBgCIAEoCVIIc2VuZGVySWQSHAoJdGltZXN0YW1wGAMgASgDUgl0aW1lc3RhbXASHQoKbWVz'
-    'c2FnZV9pZBgEIAEoCVIJbWVzc2FnZUlkEj0KDmVuY3J5cHRlZF9kYXRhGAUgASgLMhQucmVsYX'
-    'kuRW5jcnlwdGVkRGF0YUgAUg1lbmNyeXB0ZWREYXRhEjEKB2NvbnRyb2wYBiABKAsyFS5yZWxh'
-    'eS5Db250cm9sTWVzc2FnZUgAUgdjb250cm9sQgkKB3BheWxvYWQ=');
+    'c2FnZV9pZBgGIAEoCVIJbWVzc2FnZUlkEkYKDmVuY3J5cHRlZF9kYXRhGAQgASgLMh0uc2VtYW'
+    'NsYXcucmVsYXkuRW5jcnlwdGVkRGF0YUgAUg1lbmNyeXB0ZWREYXRhEjoKB2NvbnRyb2wYBSAB'
+    'KAsyHi5zZW1hY2xhdy5yZWxheS5Db250cm9sTWVzc2FnZUgAUgdjb250cm9sQgkKB3BheWxvYW'
+    'Q=');
 
 @$core.Deprecated('Use encryptedDataDescriptor instead')
 const EncryptedData$json = {
@@ -79,7 +80,7 @@ const ControlMessage$json = {
       '3': 1,
       '4': 1,
       '5': 14,
-      '6': '.relay.ControlMessage.Type',
+      '6': '.semaclaw.relay.ControlMessage.Type',
       '10': 'type'
     },
     {'1': 'metadata', '3': 2, '4': 1, '5': 9, '10': 'metadata'},
@@ -102,7 +103,7 @@ const ControlMessage_Type$json = {
 
 /// Descriptor for `ControlMessage`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List controlMessageDescriptor = $convert.base64Decode(
-    'Cg5Db250cm9sTWVzc2FnZRIuCgR0eXBlGAEgASgOMhoucmVsYXkuQ29udHJvbE1lc3NhZ2UuVH'
-    'lwZVIEdHlwZRIaCghtZXRhZGF0YRgCIAEoCVIIbWV0YWRhdGEiVgoEVHlwZRIICgRQSU5HEAAS'
-    'CAoEUE9ORxABEgcKA0FDSxACEhAKDFRZUElOR19TVEFSVBADEg8KC1RZUElOR19TVE9QEAQSDg'
-    'oKRElTQ09OTkVDVBAF');
+    'Cg5Db250cm9sTWVzc2FnZRI3CgR0eXBlGAEgASgOMiMuc2VtYWNsYXcucmVsYXkuQ29udHJvbE'
+    '1lc3NhZ2UuVHlwZVIEdHlwZRIaCghtZXRhZGF0YRgCIAEoCVIIbWV0YWRhdGEiVgoEVHlwZRII'
+    'CgRQSU5HEAASCAoEUE9ORxABEgcKA0FDSxACEhAKDFRZUElOR19TVEFSVBADEg8KC1RZUElOR1'
+    '9TVE9QEAQSDgoKRElTQ09OTkVDVBAF');

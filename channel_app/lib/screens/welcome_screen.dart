@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'pairing_screen.dart';
 import '../services/language_service.dart';
+import '../services/config_service.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
@@ -31,11 +32,19 @@ class WelcomeScreen extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.all(20),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        _buildLanguageButton(context, 'vi', 'VN'),
-                        const SizedBox(width: 10),
-                        _buildLanguageButton(context, 'en', 'EN'),
+                        IconButton(
+                          icon: const Icon(Icons.settings, color: Colors.white70),
+                          onPressed: () => _showSettingsDialog(context),
+                        ),
+                        Row(
+                          children: [
+                            _buildLanguageButton(context, 'vi', 'VN'),
+                            const SizedBox(width: 10),
+                            _buildLanguageButton(context, 'en', 'EN'),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -160,6 +169,48 @@ class WelcomeScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _showSettingsDialog(BuildContext context) async {
+    final config = ConfigService();
+    String? currentHub = await config.hubUrl;
+    final controller = TextEditingController(text: currentHub ?? 'http://10.0.2.2:18080');
+
+    if (!context.mounted) return;
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF16162E),
+          title: Text(t('settings_hub_title'), style: const TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: controller,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Hub URL',
+              labelStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+              enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+              focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF5BBFE8))),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(t('cancel'), style: const TextStyle(color: Colors.white54)),
+            ),
+            TextButton(
+              onPressed: () async {
+                await config.setHubUrl(controller.text.trim());
+                await config.setGrpcUrl(''); // Force recalculation/re-verification
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: Text(t('save'), style: const TextStyle(color: Color(0xFF5BBFE8))),
+            ),
+          ],
+        );
+      },
     );
   }
 }

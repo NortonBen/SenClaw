@@ -81,6 +81,7 @@ type RelayMessage struct {
 	ChannelId string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
 	SenderId  string                 `protobuf:"bytes,2,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
 	Timestamp int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	MessageId string                 `protobuf:"bytes,6,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*RelayMessage_EncryptedData
@@ -139,6 +140,13 @@ func (x *RelayMessage) GetTimestamp() int64 {
 		return x.Timestamp
 	}
 	return 0
+}
+
+func (x *RelayMessage) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
 }
 
 func (x *RelayMessage) GetPayload() isRelayMessage_Payload {
@@ -290,12 +298,14 @@ var File_pkg_proto_relay_proto protoreflect.FileDescriptor
 
 const file_pkg_proto_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x15pkg/proto/relay.proto\x12\x0esemaclaw.relay\"\xf7\x01\n" +
+	"\x15pkg/proto/relay.proto\x12\x0esemaclaw.relay\"\x96\x02\n" +
 	"\fRelayMessage\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x1b\n" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12F\n" +
+	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x06 \x01(\tR\tmessageId\x12F\n" +
 	"\x0eencrypted_data\x18\x04 \x01(\v2\x1d.semaclaw.relay.EncryptedDataH\x00R\rencryptedData\x12:\n" +
 	"\acontrol\x18\x05 \x01(\v2\x1e.semaclaw.relay.ControlMessageH\x00R\acontrolB\t\n" +
 	"\apayload\"W\n" +

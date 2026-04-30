@@ -20,7 +20,7 @@ import 'channel_relay.pb.dart' as $0;
 
 export 'channel_relay.pb.dart';
 
-@$pb.GrpcServiceName('relay.ChannelRelay')
+@$pb.GrpcServiceName('semaclaw.relay.ChannelRelay')
 class ChannelRelayClient extends $grpc.Client {
   /// The hostname for this service.
   static const $core.String defaultHost = '';
@@ -44,14 +44,14 @@ class ChannelRelayClient extends $grpc.Client {
   // method descriptors
 
   static final _$stream = $grpc.ClientMethod<$0.RelayMessage, $0.RelayMessage>(
-      '/relay.ChannelRelay/Stream',
+      '/semaclaw.relay.ChannelRelay/Stream',
       ($0.RelayMessage value) => value.writeToBuffer(),
       $0.RelayMessage.fromBuffer);
 }
 
-@$pb.GrpcServiceName('relay.ChannelRelay')
+@$pb.GrpcServiceName('semaclaw.relay.ChannelRelay')
 abstract class ChannelRelayServiceBase extends $grpc.Service {
-  $core.String get $name => 'relay.ChannelRelay';
+  $core.String get $name => 'semaclaw.relay.ChannelRelay';
 
   ChannelRelayServiceBase() {
     $addMethod($grpc.ServiceMethod<$0.RelayMessage, $0.RelayMessage>(

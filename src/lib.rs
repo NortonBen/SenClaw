@@ -1,4 +1,4 @@
-.,//! SenClaw — multi-group AI gateway (Rust port).
+//! SenClaw — multi-group AI gateway (Rust port).
 //!
 //! Module layout mirrors the original TypeScript tree under `src-old/`.
 //! The daemon boot sequence (`run_daemon`) follows `src-old/index.ts`.
@@ -490,7 +490,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             tracing::error!("[SenClaw] AppChannel: invalid base64 encryption key");
         }
     } else {
-        tracing::info!("[SenClaw] AppChannel: no credentials configured, skipped");
+        if cfg.app.channel_id.is_empty() {
+            tracing::info!("[SenClaw] AppChannel: missing APP_CHANNEL_ID, skipped");
+        } else if cfg.app.encryption_key.is_empty() {
+            tracing::info!("[SenClaw] AppChannel: missing APP_ENCRYPTION_KEY, skipped");
+        } else {
+            tracing::info!("[SenClaw] AppChannel: no credentials configured, skipped");
+        }
     }
 
     // 3e. Reconcile channel adapters from DB channels table.
@@ -911,6 +917,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         agent_pool.set_agent_event_sink(Arc::new(WsAgentEventSink {
             gateway: Arc::clone(&gw),
         }));
+
+        // Wire MessageRouter → WebSocket gateway for real-time incoming messages.
+        message_router.set_ws_gateway(Arc::clone(&gw)).await;
 
         // Wire DispatchBridge → WebSocket gateway. Every state mutation pushes
         // a `dispatch:update` to admin clients so the Agent Console reflects

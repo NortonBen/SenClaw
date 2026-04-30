@@ -301,16 +301,33 @@ export function useWebSocket(): WsHook {
             }
             break;
           }
-          case 'incoming':
-            if (msg.isFromMe) break;
-            addMessage(msg.groupJid as string, {
-              id:         `in-${Date.now()}-${Math.random()}`,
-              role:       'other',
-              senderName: msg.senderName as string,
-              text:       msg.text as string,
-              timestamp:  msg.timestamp as string,
+          case 'incoming': {
+            const inJid = msg.groupJid as string;
+            if (!msg.isFromMe) {
+              addMessage(inJid, {
+                id:         `in-${Date.now()}-${Math.random()}`,
+                role:       'other',
+                senderName: msg.senderName as string,
+                text:       msg.text as string,
+                timestamp:  msg.timestamp as string,
+              });
+            }
+            // Ensure the group appears in the sidebar even if it wasn't in the
+            // initial list:groups response (e.g. chat started from the channel
+            // side before the UI loaded).
+            setGroups(prev => {
+              if (prev.some(g => g.jid === inJid)) return prev;
+              return [...prev, {
+                jid:             inJid,
+                folder:          '',
+                name:            msg.senderName as string || inJid,
+                isAdmin:         false,
+                channel:         inJid.split(':')[0] ?? 'unknown',
+                requiresTrigger: false,
+              } as GroupInfo];
             });
             break;
+          }
           case 'agent:reply':
             addMessage(msg.groupJid as string, {
               id:        `agent-${Date.now()}-${Math.random()}`,

@@ -16,6 +16,7 @@ use crate::gateway::binding_manager::BindingManager;
 use crate::gateway::command_dispatcher::dispatch_command;
 use crate::gateway::group_manager::{ensure_wechat_admin_group, GroupManager};
 use crate::gateway::trigger_checker::{should_trigger, should_trigger_entity};
+use crate::gateway::websocket_gateway::WebSocketGateway;
 use crate::types::{BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
 
 // ===== Agent API trait =====
@@ -72,6 +73,7 @@ pub struct MessageRouter {
     wechat_agent_folder: String,
     notified_jids: Mutex<HashSet<String>>,
     on_jid_migrated: Mutex<Option<OnJidMigrated>>,
+    ws_gateway: Mutex<Option<Arc<WebSocketGateway>>>,
 }
 
 impl MessageRouter {
@@ -93,7 +95,12 @@ impl MessageRouter {
             wechat_agent_folder: "main".to_string(),
             notified_jids: Mutex::new(HashSet::new()),
             on_jid_migrated: Mutex::new(None),
+            ws_gateway: Mutex::new(None),
         }
+    }
+
+    pub async fn set_ws_gateway(&self, gw: Arc<WebSocketGateway>) {
+        *self.ws_gateway.lock().await = Some(gw);
     }
 
     pub async fn set_on_jid_migrated(&self, cb: OnJidMigrated) {
@@ -172,6 +179,11 @@ impl MessageRouter {
 
         // 2. Persist message
         self.store_message(&msg);
+
+        // 2b. Notify WebSocket clients of the incoming message (real-time update).
+        if let Some(gw) = self.ws_gateway.lock().await.clone() {
+            gw.notify_incoming(&msg).await;
+        }
 
         // 3. Trigger check
         if !should_trigger(&msg, &group) {

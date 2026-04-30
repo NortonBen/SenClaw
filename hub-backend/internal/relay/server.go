@@ -15,8 +15,8 @@ import (
 // Server implements the ChannelRelay server
 type Server struct {
 	pb.UnimplementedChannelRelayServer
-	
-	mu       sync.RWMutex
+
+	mu sync.RWMutex
 	// channel_id -> sender_id -> stream
 	channels map[string]map[string]pb.ChannelRelay_StreamServer
 	db       *store.Store
@@ -46,9 +46,16 @@ func (s *Server) Stream(stream pb.ChannelRelay_StreamServer) error {
 	channelID := channelIDs[0]
 	token := tokens[0]
 
+	log.Printf("Received connection. Channel: %s, Token: %s", channelID, token)
+
 	// Verify against db
 	if !s.db.VerifyChannel(channelID, token) {
 		return fmt.Errorf("unauthorized")
+	}
+
+	log.Printf("Client authenticated. Channel: %s", channelID)
+	if err := stream.SendHeader(metadata.MD{}); err != nil {
+		return err
 	}
 
 	var senderID string
@@ -126,8 +133,10 @@ func (s *Server) broadcast(channelID, senderID string, msg *pb.RelayMessage) {
 
 	for id, stream := range ch {
 		if id == senderID {
+			log.Printf("Skipping message to self: %s", senderID)
 			continue // Do not echo back to sender
 		}
+		log.Printf("Broadcasting message %s to %s in channel %s", msg.MessageId, id, channelID)
 		if err := stream.Send(msg); err != nil {
 			log.Printf("Failed to send message to %s in channel %s: %v", id, channelID, err)
 		}

@@ -925,13 +925,42 @@ async fn handle_list_groups(
     if !require_auth(clients, client_idx, sender).await {
         return;
     }
-    let groups: Vec<GroupInfo> = state
+    // Legacy groups table
+    let mut groups: Vec<GroupInfo> = state
         .group_manager
         .list(&state.db)
         .unwrap_or_default()
         .iter()
         .map(to_group_info)
         .collect();
+
+    // Entity-model bindings (Telegram, Feishu, etc. created via Settings UI)
+    // Only include bindings that have a real JID (not pending).
+    let bindings = state
+        .binding_manager
+        .list_with_relations(&state.db)
+        .unwrap_or_default();
+    for br in &bindings {
+        if let Some(jid) = &br.binding.jid {
+            // Skip if already present from legacy groups table.
+            if groups.iter().any(|g| &g.jid == jid) {
+                continue;
+            }
+            groups.push(GroupInfo {
+                jid: jid.clone(),
+                folder: br.agent.folder.clone(),
+                name: format!("{} ({})", br.channel.name, br.agent.name),
+                is_admin: br.binding.is_admin,
+                channel: br.channel.platform_type.clone(),
+                requires_trigger: false,
+                allowed_tools: None,
+                allowed_work_dirs: None,
+                bot_token: br.binding.bot_token_override.clone(),
+                max_messages: br.binding.max_messages,
+            });
+        }
+    }
+
     send_json(sender, &serde_json::json!({"type": "groups", "groups": groups}));
 }
 

@@ -31,7 +31,11 @@ impl RelayClient {
         let channel = Channel::from_shared(hub_url)?
             .connect()
             .await
-            .context("Failed to connect to gRPC relay")?;
+            .map_err(|e| {
+                tracing::error!("Failed to connect to gRPC relay: {e}");
+                anyhow!(e)
+            })?;
+        info!("gRPC channel established.");
         
         let client = ChannelRelayClient::new(channel);
         let crypto = Arc::new(Crypto::new(encryption_key));
@@ -41,8 +45,21 @@ impl RelayClient {
         let outbound_stream = ReceiverStream::new(outbound_rx);
 
         let mut request = tonic::Request::new(outbound_stream);
+        info!("Establishing gRPC stream for channel_id: {}", channel_id);
         request.metadata_mut().insert("channel_id", channel_id.parse()?);
         request.metadata_mut().insert("access_token", access_token.parse()?);
+        // Send initial handshake message to unblock the stream
+        let handshake_msg = RelayMessage {
+            channel_id: channel_id.clone(),
+            sender_id: sender_id.clone(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            message_id: format!("handshake-{}", uuid::Uuid::new_v4()),
+            payload: Some(relay_message::Payload::Control(ControlMessage {
+                r#type: 0, // PING
+                metadata: String::new(),
+            })),
+        };
+        let _ = outbound_tx.send(handshake_msg).await;
 
         // Establish the stream immediately
         let response: tonic::Response<tonic::Streaming<RelayMessage>> = client_clone.stream(request).await?;
@@ -53,13 +70,19 @@ impl RelayClient {
 
         // Spawn inbound processor
         tokio::spawn(async move {
+            info!("Inbound relay stream processor started for channel: {}", cid_clone);
             while let Ok(Some(msg)) = inbound_stream.message().await {
-                if msg.channel_id != cid_clone { continue; }
+                info!("Relay stream received message: {} from {}", msg.message_id, msg.sender_id);
+                if msg.channel_id != cid_clone { 
+                    tracing::warn!("Received message for wrong channel_id: expected {}, got {}", cid_clone, msg.channel_id);
+                    continue; 
+                }
                 
                 if let Some(ref h) = handler {
                     h(msg);
                 }
             }
+            tracing::warn!("Inbound relay stream closed for channel: {}", cid_clone);
         });
 
         Ok(Self {
@@ -74,6 +97,7 @@ impl RelayClient {
     pub async fn send_message(&self, text: &str) -> Result<()> {
         let (nonce, ciphertext, tag) = self.crypto.encrypt(text.as_bytes())?;
         
+        info!("Sending relay message ({} bytes encrypted)", ciphertext.len());
         let msg = RelayMessage {
             channel_id: self.channel_id.clone(),
             sender_id: self.sender_id.clone(),

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
+import 'logger_service.dart';
 
 class CryptoService {
   final AesGcm algorithm = AesGcm.with256bits();
@@ -26,6 +27,7 @@ class CryptoService {
 
   Future<SecretBox> encrypt(String text) async {
     final clearText = utf8.encode(text);
+    Log.i("Encrypting message: $text with key: $secretKey");
     return await algorithm.encrypt(
       clearText,
       secretKey: secretKey,

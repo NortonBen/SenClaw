@@ -1,3 +1,3 @@
 pub mod relay {
-    tonic::include_proto!("relay");
+    tonic::include_proto!("semaclaw.relay");
 }

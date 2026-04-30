@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'chat_screen.dart';
 import '../services/language_service.dart';
+import '../services/config_service.dart';
 
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key});
@@ -14,7 +14,7 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> with SingleTickerProviderStateMixin {
-  final storage = const FlutterSecureStorage();
+  final _config = ConfigService();
   final MobileScannerController controller = MobileScannerController();
   late AnimationController _animationController;
   bool _isProcessing = false;
@@ -183,15 +183,30 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
   Future<void> _handleScan(String code) async {
     try {
       final uri = Uri.parse(code);
-      final hub = uri.queryParameters['hub'];
+      final qrHub = uri.queryParameters['hub'];
       final cid = uri.queryParameters['cid'];
       final key = uri.queryParameters['key'];
       final token = uri.queryParameters['token'];
 
+      debugPrint('--- QR Scan Data ---');
+      debugPrint('Hub: $qrHub');
+      debugPrint('CID: $cid');
+      debugPrint('Key String: $key');
+      if (key != null) {
+        final decoded = base64.decode(key);
+        debugPrint('Decoded Key Length: ${decoded.length} bytes');
+      }
+      debugPrint('Token: $token');
+      debugPrint('-------------------');
+
+      // Read configured hub from storage
+      final savedHub = await _config.hubUrl;
+      final hub = savedHub ?? qrHub;
+
       if (hub != null && cid != null && key != null && token != null) {
         try {
           final response = await http.post(
-            Uri.parse('$hub/v1/channels/verify'),
+            Uri.parse('${hub.endsWith('/') ? hub.substring(0, hub.length - 1) : hub}/v1/channels/verify'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'channel_id': cid,
@@ -204,11 +219,13 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
             if (data['valid'] == true) {
               final grpcUrl = data['grpc_url'] ?? '127.0.0.1:50051';
               
-              await storage.write(key: 'hub_url', value: hub);
-              await storage.write(key: 'grpc_url', value: grpcUrl);
-              await storage.write(key: 'channel_id', value: cid);
-              await storage.write(key: 'encryption_key', value: key);
-              await storage.write(key: 'access_token', value: token);
+              await _config.savePairingData(
+                hubUrl: hub,
+                grpcUrl: grpcUrl,
+                channelId: cid,
+                encryptionKey: key,
+                accessToken: token,
+              );
 
               if (!mounted) return;
               Navigator.pushAndRemoveUntil(

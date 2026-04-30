@@ -1,27 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'config_service.dart';
 
 class LanguageService extends ChangeNotifier {
   static final LanguageService _instance = LanguageService._internal();
   factory LanguageService() => _instance;
   LanguageService._internal();
 
+  final _config = ConfigService();
   Locale _currentLocale = const Locale('vi');
   Locale get currentLocale => _currentLocale;
 
   bool get isVietnamese => _currentLocale.languageCode == 'vi';
 
   Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    final langCode = prefs.getString('language_code') ?? 'vi';
+    final langCode = await _config.languageCode;
     _currentLocale = Locale(langCode);
     notifyListeners();
   }
 
   Future<void> setLanguage(String langCode) async {
     _currentLocale = Locale(langCode);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('language_code', langCode);
+    await _config.setLanguageCode(langCode);
     notifyListeners();
   }
 
@@ -46,6 +45,8 @@ class LanguageService extends ChangeNotifier {
       'logout_confirm_msg': 'Bạn có chắc chắn muốn ngắt kết nối?',
       'cancel': 'Hủy',
       'confirm': 'Xác nhận',
+      'settings_hub_title': 'Cài đặt kết nối Hub',
+      'save': 'Lưu',
     },
     'en': {
       'welcome_title': 'Senclaw Connect',
@@ -63,6 +64,8 @@ class LanguageService extends ChangeNotifier {
       'logout_confirm_msg': 'Are you sure you want to disconnect?',
       'cancel': 'Cancel',
       'confirm': 'Confirm',
+      'settings_hub_title': 'Hub Connection Settings',
+      'save': 'Save',
     }
   };
 }
