@@ -491,19 +491,74 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     match cm.list(&db) {
         Ok(db_channels) => {
             for ch_record in &db_channels {
-                // Skip if a running adapter already covers this platform+creds.
-                let already_running = channels.iter().any(|adapter| {
-                    adapter.id() == ch_record.platform_type.as_str()
-                        && adapter.is_connected()
-                });
+                let creds: serde_json::Value =
+                    serde_json::from_str(&ch_record.credentials_json).unwrap_or_default();
+
+                // Skip if a running adapter already covers this exact channel.
+                // For Telegram we check by bot token so multiple bots can coexist.
+                let already_running = {
+                    let platform = ch_record.platform_type.as_str();
+                    if platform == "telegram" {
+                        let db_token = creds["botToken"].as_str().unwrap_or("").trim();
+                        let effective = if db_token.is_empty() { cfg.telegram.bot_token.as_str() } else { db_token };
+                        // Already running if a connected Telegram adapter was started with the same token.
+                        channels.iter().any(|adapter| {
+                            adapter.id() == "telegram"
+                                && adapter.is_connected()
+                                && !effective.is_empty()
+                                && effective == cfg.telegram.bot_token.as_str()
+                        })
+                    } else {
+                        channels.iter().any(|adapter| {
+                            adapter.id() == platform && adapter.is_connected()
+                        })
+                    }
+                };
                 if already_running {
                     continue;
                 }
 
-                let creds: serde_json::Value =
-                    serde_json::from_str(&ch_record.credentials_json).unwrap_or_default();
-
                 match ch_record.platform_type.as_str() {
+                    "telegram" => {
+                        let token = creds["botToken"].as_str().unwrap_or("").trim().to_string();
+                        // Use global default token if credentials didn't specify one.
+                        let effective_token = if token.is_empty() {
+                            cfg.telegram.bot_token.clone()
+                        } else {
+                            token
+                        };
+                        if effective_token.is_empty() {
+                            tracing::warn!(
+                                "[SenClaw] Telegram channel id={} has no bot token (set SENCLAW_TELEGRAM_BOT_TOKEN or enter token in channel settings)",
+                                ch_record.id
+                            );
+                        } else {
+                            // Re-use the existing TelegramChannel adapter if available,
+                            // otherwise create a new one for this token.
+                            let tg_new = channels::telegram::TelegramChannel::new(effective_token.clone());
+                            match tg_new.add_bot(&effective_token).await {
+                                Ok(()) if tg_new.is_connected() => {
+                                    tracing::info!(
+                                        "[SenClaw] TelegramChannel from DB (id={}) connected",
+                                        ch_record.id
+                                    );
+                                    channels.push(Box::new(tg_new));
+                                }
+                                Ok(()) => {
+                                    tracing::warn!(
+                                        "[SenClaw] TelegramChannel from DB (id={}) did not connect",
+                                        ch_record.id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "[SenClaw] TelegramChannel from DB (id={}) failed: {e}",
+                                        ch_record.id
+                                    );
+                                }
+                            }
+                        }
+                    }
                     "feishu" => {
                         let app_id = creds["appId"].as_str().unwrap_or("");
                         let app_secret = creds["appSecret"].as_str().unwrap_or("");

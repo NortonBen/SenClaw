@@ -338,6 +338,20 @@ impl Db {
     pub fn get_channel(&self, id: i64) -> Result<Option<Channel>> {
         self.with_conn(|c| c.query_row("SELECT * FROM channels WHERE id = ?1", params![id], |r| Ok(row_to_channel(r))).optional()?.transpose())
     }
+    /// Find channels of a given platform type whose credentials_json contains the given token value.
+    /// Used to resolve channel_id from a bot token at message-receipt time.
+    pub fn find_channels_by_platform(&self, platform_type: &str) -> Result<Vec<Channel>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT * FROM channels WHERE platform_type=?1 ORDER BY id",
+            )?;
+            let rows: Vec<_> = stmt
+                .query_map(params![platform_type], |r| Ok(row_to_channel(r)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+
     pub fn list_channels(&self) -> Result<Vec<Channel>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare("SELECT * FROM channels ORDER BY id")?;
@@ -443,6 +457,17 @@ impl Db {
     }
     pub fn delete_binding(&self, id: i64) -> Result<()> {
         self.with_conn(|c| { c.execute("DELETE FROM bindings WHERE id=?1", params![id])?; Ok(()) })
+    }
+
+    /// Count how many bindings exist for the given channel (used for exclusivity enforcement).
+    pub fn count_bindings_for_channel(&self, channel_id: i64) -> Result<i64> {
+        self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM bindings WHERE channel_id=?1",
+                params![channel_id],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
     }
     pub fn update_binding(&self, id: i64, jid: Option<&str>, bot_token_override: Option<&str>, max_messages: Option<u32>) -> Result<()> {
         self.with_conn(|c| {

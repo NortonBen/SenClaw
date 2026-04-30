@@ -33,6 +33,8 @@ impl BindingManager {
         }
     }
 
+    /// `senclaw` channels allow multiple bindings; all other platforms are
+    /// exclusive — one channel, one agent.
     pub fn create(
         &self,
         db: &Db,
@@ -44,6 +46,19 @@ impl BindingManager {
         max_messages: Option<u32>,
         now: &str,
     ) -> Result<Binding> {
+        // Enforce exclusivity for non-senclaw channels.
+        if let Some(ch) = db.get_channel(channel_id)? {
+            if ch.platform_type != "senclaw" {
+                let count = db.count_bindings_for_channel(channel_id)?;
+                if count > 0 {
+                    anyhow::bail!(
+                        "Channel '{}' (platform: {}) already has an agent bound. \
+                         Only Senclaw Connector channels support multiple bindings.",
+                        ch.name, ch.platform_type
+                    );
+                }
+            }
+        }
         let id = db.insert_binding(jid, agent_id, channel_id, is_admin, bot_token_override, max_messages, now)?;
         self.fire_changed();
         db.get_binding(id)?.ok_or_else(|| anyhow::anyhow!("Binding {id} not found after insert"))
@@ -104,6 +119,26 @@ impl BindingManager {
             return db.get_binding(b.id);
         }
         Ok(None)
+    }
+
+    /// Complete all pending (jid=NULL) bindings for a channel by assigning the real JID.
+    /// Returns the number of rows updated.
+    pub fn complete_pending_new_model(
+        &self,
+        db: &Db,
+        channel_id: i64,
+        jid: &str,
+    ) -> Result<usize> {
+        let pending = db.get_pending_bindings_for_channel(channel_id)?;
+        let mut count = 0;
+        for b in pending {
+            db.complete_pending_binding(b.id, jid)?;
+            count += 1;
+        }
+        if count > 0 {
+            self.fire_changed();
+        }
+        Ok(count)
     }
 
     pub fn touch_active(&self, db: &Db, jid: &str, timestamp: &str) -> Result<()> {

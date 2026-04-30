@@ -634,6 +634,13 @@ impl GroupManager {
         let _ = db.touch_group_active(jid, timestamp);
     }
 
+    pub fn find_pending_telegram_binding(&self, db: &Db, bot_token: &str) -> Option<GroupBinding> {
+        if bot_token.is_empty() {
+            return None;
+        }
+        db.get_group(&format!("tg:pending:{bot_token}")).ok().flatten()
+    }
+
     pub fn find_pending_feishu_binding(&self, db: &Db, app_id: &str) -> Option<GroupBinding> {
         if app_id.is_empty() {
             return None;

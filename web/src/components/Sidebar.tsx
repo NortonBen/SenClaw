@@ -3,7 +3,7 @@ import {
   SettingOutlined,
   ApiOutlined,
   MessageOutlined,
-  CalendarOutlined,
+  CoffeeOutlined,
   BulbOutlined,
   BookOutlined,
   BulbFilled,
@@ -77,7 +77,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent }: Pro
           </Button>
           <Button
             type={currentKey === 'cowork' ? 'primary' : 'text'}
-            icon={<CalendarOutlined />}
+            icon={<CoffeeOutlined />}
             onClick={() => navigate('/cowork')}
             className="flex-1 flex justify-center"
           >

@@ -149,6 +149,9 @@ impl MessageRouter {
                     group = self.group_manager.get(&self.db, &msg.chat_jid);
                 }
             }
+            if group.is_none() && msg.chat_jid.starts_with("tg:") {
+                group = self.complete_pending_telegram_binding(&msg).await;
+            }
             if group.is_none() && msg.chat_jid.starts_with("feishu:") {
                 group = self.complete_pending_feishu_binding(&msg).await;
             }
@@ -268,6 +271,54 @@ impl MessageRouter {
             cb(&old_jid, &new_binding);
         }
         Some(new_binding)
+    }
+
+    /// For Telegram: find any channel whose credentials contain the incoming bot token
+    /// and that has a pending (jid=NULL) binding, then complete it with the real JID.
+    async fn complete_pending_telegram_binding(
+        &self,
+        msg: &IncomingMessage,
+    ) -> Option<GroupBinding> {
+        let bot_token = msg.bot_token.as_deref().unwrap_or("");
+        if bot_token.is_empty() {
+            return None;
+        }
+
+        // Find all telegram channels, check which one owns this token
+        let tg_channels = self.db.find_channels_by_platform("telegram").ok()?;
+        for ch in &tg_channels {
+            let creds: serde_json::Value =
+                serde_json::from_str(&ch.credentials_json).unwrap_or_default();
+            let channel_token = creds["botToken"].as_str().unwrap_or("");
+            // Match: explicit token in creds, or empty (uses default env token)
+            if channel_token == bot_token || channel_token.is_empty() {
+                if let Ok(count) = self.binding_manager.complete_pending_new_model(
+                    &self.db,
+                    ch.id,
+                    &msg.chat_jid,
+                ) {
+                    if count > 0 {
+                        tracing::info!(
+                            "[MessageRouter] Telegram pending binding completed for {} on channel '{}'",
+                            msg.chat_jid, ch.name
+                        );
+                        // Now resolve via entity model
+                        if let Ok(Some(br)) = self
+                            .binding_manager
+                            .get_with_relations(&self.db, &msg.chat_jid)
+                        {
+                            return Some(to_group_binding(&br));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also try legacy groups table (tg:pending:{token})
+        let pending = self
+            .group_manager
+            .find_pending_telegram_binding(&self.db, bot_token);
+        self.complete_pending_binding(msg, pending).await
     }
 
     async fn complete_pending_feishu_binding(

@@ -20,6 +20,10 @@ use crate::types::InlineButton;
 const TG_MAX_LEN: usize = 4096;
 const BOT_INIT_TIMEOUT_SECS: u64 = 15;
 const TYPING_INTERVAL_SECS: u64 = 4;
+/// Long-polling window sent to Telegram (seconds).
+const POLL_TIMEOUT_SECS: u64 = 25;
+/// HTTP client timeout — must be > POLL_TIMEOUT_SECS to avoid races.
+const HTTP_TIMEOUT_SECS: u64 = 60;
 
 // ===== Helpers =====
 
@@ -127,7 +131,13 @@ impl TelegramChannel {
             }
         }
 
-        let bot = Bot::new(token);
+        // Build a reqwest client whose timeout exceeds the long-poll window so
+        // Telegram always returns before the HTTP layer closes the connection.
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_default();
+        let bot = Bot::with_client(token, http_client);
 
         // Fetch bot info with timeout
         let me = tokio::time::timeout(
@@ -281,10 +291,10 @@ impl Channel for TelegramChannel {
         }
     }
 
-    fn get_bot_username(&self, _bot_token: Option<&str>) -> Option<String> {
-        // Cannot block on async — return cached value only
-        // In practice, this is called after connect() completes
-        None
+    fn get_bot_username(&self, bot_token: Option<&str>) -> Option<String> {
+        // Use try_lock to avoid blocking; returns None if lock is contended.
+        let token = bot_token.unwrap_or(&self.default_token);
+        self.bots.try_lock().ok()?.get(token).map(|e| e.username.clone())
     }
 
     async fn send_with_buttons(
@@ -374,18 +384,124 @@ async fn listen_loop(
     handlers: Arc<RwLock<Vec<MessageCallback>>>,
     meta_handlers: Arc<RwLock<Vec<MetadataCallback>>>,
 ) {
-    // Use teloxide's dispatching with a handler closure
-    // We use a simple long-polling approach since Dispatcher needs ownership
+    use teloxide::types::{MediaKind, MessageKind, UpdateKind};
 
-    // Just report that we started — actual message handling would use
-    // teloxide's dispatcher pattern. For now, this is a placeholder.
     tracing::info!(
         "[TelegramChannel] Listener started for @{bot_username} (botUserId={bot_user_id})"
     );
 
-    // Keep the future alive so the bot polling continues
-    // In a full implementation, this would use Dispatcher::builder().dispatch()
-    let _ = (bot, token, bot_username, bot_user_id, handlers, meta_handlers);
+    let mut offset: i32 = 0;
+    loop {
+        let updates = match bot.get_updates().offset(offset).timeout(POLL_TIMEOUT_SECS as i32).send().await {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!("[TelegramChannel] getUpdates error for @{bot_username}: {e}");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+
+        for update in updates {
+            offset = offset.max(update.id.0 as i32 + 1);
+
+            let tg_msg = match &update.kind {
+                UpdateKind::Message(m) => m,
+                // Ignore non-message updates (edits, callbacks, etc.)
+                _ => continue,
+            };
+
+            // Only handle text messages for now
+            let text = match &tg_msg.kind {
+                MessageKind::Common(common) => match &common.media_kind {
+                    MediaKind::Text(t) => t.text.clone(),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+
+            let chat_id = tg_msg.chat.id.0;
+            let chat_type_str = match tg_msg.chat.kind {
+                teloxide::types::ChatKind::Private(_) => "private",
+                _ => "group",
+            };
+            let chat_jid = chat_id_to_jid(chat_id, chat_type_str, bot_user_id);
+
+            let sender = tg_msg.from.as_ref();
+            let sender_name = sender
+                .map(|u| {
+                    let mut n = u.first_name.clone();
+                    if let Some(last) = &u.last_name {
+                        n.push(' ');
+                        n.push_str(last);
+                    }
+                    n
+                })
+                .unwrap_or_default();
+            let sender_id = sender.map(|u| u.id.0).unwrap_or(0);
+            let sender_jid = format!("tg:{bot_user_id}:user:{sender_id}");
+
+            // Emit chat metadata on first sight
+            {
+                let title = tg_msg.chat.title().map(str::to_owned);
+                let chat_type_enum = if chat_type_str == "private" {
+                    crate::types::ChatType::Private
+                } else {
+                    crate::types::ChatType::Group
+                };
+                let meta = crate::types::ChatMeta {
+                    jid: chat_jid.clone(),
+                    title,
+                    chat_type: chat_type_enum.clone(),
+                };
+                if let Ok(guard) = meta_handlers.read() {
+                    for cb in guard.iter() {
+                        cb(meta.clone());
+                    }
+                }
+            }
+
+            // Mention detection
+            let entities = match &tg_msg.kind {
+                MessageKind::Common(common) => match &common.media_kind {
+                    MediaKind::Text(t) => t.entities.clone(),
+                    _ => vec![],
+                },
+                _ => vec![],
+            };
+            let mentions_bot = check_mention(&text, &entities, &bot_username);
+
+            let chat_type_enum = if chat_type_str == "private" {
+                crate::types::ChatType::Private
+            } else {
+                crate::types::ChatType::Group
+            };
+
+            let incoming = crate::types::IncomingMessage {
+                id: tg_msg.id.to_string(),
+                chat_jid: chat_jid.clone(),
+                sender_name,
+                sender_jid,
+                content: text,
+                timestamp: tg_msg.date.to_string(),
+                is_from_me: false,
+                chat_type: chat_type_enum,
+                mentions_bot_username: Some(mentions_bot),
+                bot_token: Some(token.clone()),
+                native_msg_id: Some(tg_msg.id.to_string()),
+            };
+
+            tracing::debug!(
+                "[TelegramChannel] Message from {chat_jid}: \"{}\"",
+                &incoming.content.chars().take(60).collect::<String>()
+            );
+
+            if let Ok(guard) = handlers.read() {
+                for cb in guard.iter() {
+                    cb(incoming.clone());
+                }
+            }
+        }
+    }
 }
 
 // ===== Tests =====

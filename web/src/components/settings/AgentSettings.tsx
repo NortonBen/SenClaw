@@ -9,14 +9,13 @@ import {
   Modal, 
   Form, 
   Input, 
-  Switch, 
-  Popconfirm, 
+  Switch,
+  Popconfirm,
   message,
   Tooltip,
   Avatar,
   Divider,
-  Select,
-  Checkbox
+  Select
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -37,7 +36,6 @@ import type {
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
-const { Option } = Select;
 
 interface AgentSettingsProps {
   agents: AgentInfo[];
@@ -68,56 +66,64 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
   const [editingAgent, setEditingAgent] = useState<AgentInfo | null>(null);
   const [form] = Form.useForm();
   
-  // For binding creation in the same form
-  const [bindToChannel, setBindToChannel] = useState<number | null>(null);
-  
-  const pendingBinding = useRef<{ folder: string; channelId: number; jid: string; isAdmin: boolean; botToken: string } | null>(null);
+  const pendingBindings = useRef<{ folder: string; channelIds: number[] } | null>(null);
 
-  // When a new agent appears that matches a pending binding, create the binding
+  // When a new agent appears that matches pending bindings, create them
   useEffect(() => {
-    if (!pendingBinding.current) return;
-    const pb = pendingBinding.current;
+    if (!pendingBindings.current) return;
+    const pb = pendingBindings.current;
     const newAgent = agents.find(a => a.folder === pb.folder);
     if (newAgent) {
-      onRegisterBinding({ 
-        agentId: newAgent.id, 
-        channelId: pb.channelId, 
-        ...(pb.jid ? { jid: pb.jid } : {}), 
-        ...(pb.isAdmin ? { isAdmin: true } : {}), 
-        ...(pb.botToken ? { botTokenOverride: pb.botToken } : {}) 
+      pb.channelIds.forEach(channelId => {
+        onRegisterBinding({ agentId: newAgent.id, channelId });
       });
-      pendingBinding.current = null;
+      pendingBindings.current = null;
     }
   }, [agents, onRegisterBinding]);
 
   const handleAdd = () => {
     setEditingAgent(null);
-    setBindToChannel(null);
     form.resetFields();
     setIsModalOpen(true);
   };
 
   const handleEdit = (agent: AgentInfo) => {
     setEditingAgent(agent);
-    setBindToChannel(null);
+    const currentChannelIds = bindings
+      .filter(b => (b.agent?.id ?? b.agentId) === agent.id)
+      .map(b => b.channel?.id ?? b.channelId);
     form.setFieldsValue({
       name: agent.name,
       folder: agent.folder,
       requiresTrigger: agent.requiresTrigger,
-      workDirs: agent.allowedWorkDirs?.join('\n') ?? ''
+      workDirs: agent.allowedWorkDirs?.join('\n') ?? '',
+      bindChannelIds: currentChannelIds,
     });
     setIsModalOpen(true);
   };
 
   const onFinish = (values: any) => {
     const workDirs = values.workDirs?.trim() ? values.workDirs.split('\n').map((s: string) => s.trim()).filter(Boolean) : null;
-    
+
     if (editingAgent) {
       onUpdate(editingAgent.id, {
         name: values.name,
         requiresTrigger: values.requiresTrigger,
         allowedWorkDirs: workDirs
       });
+
+      // Sync channel bindings: add new, remove removed
+      const currentBindings = bindings.filter(b => (b.agent?.id ?? b.agentId) === editingAgent.id);
+      const currentChannelIds = new Set(currentBindings.map(b => b.channel?.id ?? b.channelId));
+      const newChannelIds = new Set<number>((values.bindChannelIds ?? []).map(Number));
+
+      currentBindings.forEach(b => {
+        if (!newChannelIds.has(b.channel?.id ?? b.channelId)) onUnregisterBinding(b.id);
+      });
+      newChannelIds.forEach(channelId => {
+        if (!currentChannelIds.has(channelId)) onRegisterBinding({ agentId: editingAgent.id, channelId });
+      });
+
       message.success('Agent updated');
     } else {
       onRegister({
@@ -127,14 +133,10 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
         allowedWorkDirs: workDirs
       });
       
-      // If channel selected, queue binding creation
-      if (values.bindChannelId) {
-        pendingBinding.current = { 
-          folder: values.folder.trim(), 
-          channelId: Number(values.bindChannelId), 
-          jid: (values.bindJid || '').trim(), 
-          isAdmin: !!values.bindIsAdmin, 
-          botToken: (values.bindBotToken || '').trim() 
+      if (values.bindChannelIds?.length) {
+        pendingBindings.current = {
+          folder: values.folder.trim(),
+          channelIds: values.bindChannelIds.map(Number),
         };
       }
       message.success('Agent created');
@@ -142,7 +144,17 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
     setIsModalOpen(false);
   };
 
-  const agentBindings = (agentId: number) => bindings.filter(b => b.agent.id === agentId);
+  const agentBindings = (agentId: number) =>
+    bindings.filter(b => (b.agent?.id ?? b.agentId) === agentId);
+
+  // For a given channel, return the agent id it's already exclusively bound to
+  // (undefined if channel supports multi-bind or has no binding).
+  const exclusivelyBoundTo = (channelId: number): number | undefined => {
+    const ch = channels.find(c => c.id === channelId);
+    if (!ch || ch.platformType === 'senclaw') return undefined;
+    const existing = bindings.find(b => (b.channel?.id ?? b.channelId) === channelId);
+    return existing ? (existing.agent?.id ?? existing.agentId) : undefined;
+  };
 
   const columns = [
     {
@@ -176,8 +188,8 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
         return (
           <Space wrap size={[0, 4]}>
             {ab.map(b => (
-              <Tag 
-                key={b.id} 
+              <Tag
+                key={b.id}
                 color={b.isAdmin ? 'orange' : 'blue'}
                 style={{ borderRadius: 6 }}
                 closable={!b.isAdmin}
@@ -185,7 +197,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
               >
                 <Space size={4}>
                   <LinkOutlined />
-                  {b.channel.name}
+                  {b.channel?.name ?? `ch#${b.channelId}`}
                   {b.jid && <Text style={{ fontSize: 10, opacity: 0.7 }}>({b.jid})</Text>}
                 </Space>
               </Tag>
@@ -340,47 +352,43 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
             />
           </Form.Item>
 
-          {!editingAgent && (
-            <>
-              <Divider plain><Text type="secondary" style={{ fontSize: 12 }}>Optional Channel Binding</Text></Divider>
-              
-              <Form.Item
-                name="bindChannelId"
-                label="Bind to Channel"
-              >
-                <Select 
-                  placeholder="Select a channel to bind immediately" 
-                  allowClear
-                  onChange={val => setBindToChannel(val)}
-                >
-                  {channels.map(c => (
-                    <Option key={c.id} value={c.id}>{c.name} ({c.platformType})</Option>
-                  ))}
-                </Select>
-              </Form.Item>
+          <Divider plain><Text type="secondary" style={{ fontSize: 12 }}>Channel Binding</Text></Divider>
 
-              {bindToChannel && (
-                <div style={{ backgroundColor: '#f9f9f9', padding: '16px', borderRadius: '8px', marginBottom: '24px' }}>
-                  <Form.Item
-                    name="bindJid"
-                    label="Chat ID (JID)"
-                    extra="Leave empty for auto-binding on first message"
-                  >
-                    <Input placeholder="e.g. tg:group:-100123" style={{ fontFamily: 'monospace' }} />
-                  </Form.Item>
-
-                  <Form.Item
-                    name="bindIsAdmin"
-                    valuePropName="checked"
-                    style={{ marginBottom: 12 }}
-                  >
-                    <Checkbox>Set as Main Agent for this channel</Checkbox>
-                  </Form.Item>
-
-                </div>
-              )}
-            </>
-          )}
+          <Form.Item
+            name="bindChannelIds"
+            label="Bound Channels"
+            rules={[{
+              validator: (_, selectedIds: number[] = []) => {
+                const conflicts = selectedIds.filter(id => {
+                  const boundTo = exclusivelyBoundTo(id);
+                  return boundTo !== undefined && boundTo !== editingAgent?.id;
+                });
+                if (conflicts.length > 0) {
+                  const names = conflicts.map(id => channels.find(c => c.id === id)?.name ?? `#${id}`).join(', ');
+                  return Promise.reject(`${names} already bound to another agent. Only Senclaw Connector supports multiple bindings.`);
+                }
+                return Promise.resolve();
+              },
+            }]}
+          >
+            <Select
+              mode="multiple"
+              placeholder="Select one or more channels"
+              allowClear
+              optionFilterProp="label"
+              options={channels.map(c => {
+                const boundTo = exclusivelyBoundTo(c.id);
+                const takenByOther = boundTo !== undefined && boundTo !== editingAgent?.id;
+                const takenAgent = takenByOther ? agents.find(a => a.id === boundTo) : undefined;
+                return {
+                  value: c.id,
+                  label: `${c.name} (${c.platformType})`,
+                  disabled: takenByOther,
+                  title: takenByOther ? `Already bound to agent "${takenAgent?.name ?? boundTo}"` : undefined,
+                };
+              })}
+            />
+          </Form.Item>
 
           <Form.Item style={{ marginBottom: 0, marginTop: 24, textAlign: 'right' }}>
             <Space>

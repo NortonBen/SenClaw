@@ -1,6 +1,6 @@
 import React from 'react';
 import { Result, Button, Typography, Space, theme, Breadcrumb, Layout, Flex } from 'antd';
-import { CalendarOutlined, RocketOutlined, HomeOutlined } from '@ant-design/icons';
+import { CoffeeOutlined, RocketOutlined, HomeOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -54,7 +54,7 @@ export function CoworkPage() {
             boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
           }}>
             <Result
-              icon={<CalendarOutlined style={{ fontSize: '72px', color: token.colorPrimary }} />}
+              icon={<CoffeeOutlined style={{ fontSize: '72px', color: token.colorPrimary }} />}
               title={
                 <Title level={2} style={{ margin: 0 }}>Cowork Space</Title>
               }
