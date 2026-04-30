@@ -15,7 +15,7 @@ export interface RegisterGroupPayload {
   jid?: string;  // Feishu pending: omit; backend may assign feishu:pending:{appId}
   folder: string;
   name: string;
-  channel?: 'telegram' | 'feishu' | 'whatsapp' | 'qq';
+  channel?: 'telegram' | 'feishu' | 'whatsapp' | 'qq' | 'app';
   requiresTrigger?: boolean;
   allowedWorkDirs?: string[] | null;
   botToken?: string | null;
@@ -121,4 +121,85 @@ export interface AgentTodoItem {
 export interface AgentTodosEntry {
   agentName: string;
   todos: AgentTodoItem[];
+}
+
+// ===== Entity model types =====
+
+export interface ChannelInfo {
+  id: number;
+  platformType: string;
+  name: string;
+  credentialsJson: string;
+  connectionState: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentInfo {
+  id: number;
+  folder: string;
+  name: string;
+  requiresTrigger: boolean;
+  allowedTools: string[] | null;
+  allowedWorkDirs: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BindingInfo {
+  id: number;
+  jid: string | null;
+  agentId: number;
+  channelId: number;
+  isAdmin: boolean;
+  botTokenOverride: string | null;
+  maxMessages: number | null;
+  lastActive: string | null;
+  createdAt: string;
+}
+
+export interface BindingWithRelationsInfo extends BindingInfo {
+  agent: AgentInfo;
+  channel: ChannelInfo;
+}
+
+export interface RegisterChannelPayload {
+  platformType: string;
+  name: string;
+  credentials: Record<string, unknown>;
+}
+
+export interface RegisterAgentPayload {
+  folder: string;
+  name: string;
+  requiresTrigger?: boolean;
+  allowedTools?: string[] | null;
+  allowedWorkDirs?: string[] | null;
+}
+
+export interface RegisterBindingPayload {
+  agentId: number;
+  channelId: number;
+  jid?: string;
+  isAdmin?: boolean;
+  botTokenOverride?: string;
+  maxMessages?: number | null;
+}
+
+export interface UpdateChannelPayload {
+  name?: string;
+  credentials?: Record<string, unknown>;
+}
+
+export interface UpdateAgentPayload {
+  name?: string;
+  requiresTrigger?: boolean;
+  allowedTools?: string[] | null;
+  allowedWorkDirs?: string[] | null;
+}
+
+export interface UpdateBindingPayload {
+  jid?: string;
+  botTokenOverride?: string;
+  maxMessages?: number | null;
 }

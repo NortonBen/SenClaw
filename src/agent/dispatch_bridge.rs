@@ -276,6 +276,11 @@ pub struct DispatchBridge {
     /// Self-reference populated in `start()` so spawned futures can call back
     /// into the bridge for `notify_task_done` / `notify_task_error`.
     self_weak: Mutex<Option<Weak<Self>>>,
+    /// JSON snapshot of the parents array last sent to admin clients via
+    /// `ws_notify`. Used in `process_pending` to detect external state-file
+    /// mutations (e.g. from the MCP dispatch stdio process) and push a
+    /// `dispatch:update` without waiting for a task transition.
+    last_notified_parents_json: Mutex<String>,
 }
 
 #[derive(Default)]
@@ -309,6 +314,7 @@ impl DispatchBridge {
             persona_registry: Mutex::new(None),
             virtual_worker_pool: Mutex::new(None),
             self_weak: Mutex::new(None),
+            last_notified_parents_json: Mutex::new(String::new()),
         }
     }
 
@@ -704,6 +710,28 @@ impl DispatchBridge {
     /// Phase 5; for now `start_task` only fires for persistent agents.
     fn process_pending(&self) {
         let Ok(state) = self.read_state() else { return };
+
+        // Detect external state-file mutations (e.g. MCP dispatch stdio
+        // process wrote parents via `modify_state_file`). Fire ws_notify
+        // immediately so admin clients see the change without waiting for a
+        // task transition inside this bridge.
+        {
+            let parents_json = serde_json::to_string(&state.parents).unwrap_or_default();
+            let last = self.last_notified_parents_json.lock().unwrap();
+            if parents_json != *last {
+                drop(last);
+                tracing::info!(
+                    "[DispatchBridge] External state change detected ({} parent(s))",
+                    state.parents.len()
+                );
+                if let Some(cb) = self.ws_notify.lock().unwrap().as_ref() {
+                    let v = serde_json::to_value(&state.parents).unwrap_or(serde_json::Value::Null);
+                    cb(&v);
+                }
+                *self.last_notified_parents_json.lock().unwrap() = parents_json;
+            }
+        }
+
         let now = chrono::Utc::now();
 
         // 1. Timeout sweep — only persistent-agent tasks; virtual tasks have
@@ -750,9 +778,24 @@ impl DispatchBridge {
 
     /// After a task completes, scan all active parents for newly-unblocked
     /// `registered` tasks and start them. Cheaper than waiting for the next
-    /// poll tick.
+    /// poll tick. Also detects external state changes like `process_pending`.
     fn process_next_pending(&self) {
         let Ok(state) = self.read_state() else { return };
+
+        // Detect external state-file mutations (same logic as process_pending).
+        {
+            let parents_json = serde_json::to_string(&state.parents).unwrap_or_default();
+            let last = self.last_notified_parents_json.lock().unwrap();
+            if parents_json != *last {
+                drop(last);
+                if let Some(cb) = self.ws_notify.lock().unwrap().as_ref() {
+                    let v = serde_json::to_value(&state.parents).unwrap_or(serde_json::Value::Null);
+                    cb(&v);
+                }
+                *self.last_notified_parents_json.lock().unwrap() = parents_json;
+            }
+        }
+
         let paused = self.inner.lock().unwrap().paused_admins.clone();
         for parent in &state.parents {
             if parent.status != "active" || paused.contains(&parent.admin_folder) {
@@ -1009,9 +1052,18 @@ impl DispatchBridge {
         let _ = std::fs::remove_file(&lock_path);
 
         let state = result?;
-        if let Some(cb) = self.ws_notify.lock().unwrap().as_ref() {
-            let parents = serde_json::to_value(&state.parents).unwrap_or(serde_json::Value::Null);
-            cb(&parents);
+        // Only fire ws_notify when parents actually changed. This avoids
+        // noise from update_agents() periodic syncs that only touch agents[].
+        let parents_json = serde_json::to_string(&state.parents).unwrap_or_default();
+        let mut last = self.last_notified_parents_json.lock().unwrap();
+        if parents_json != *last {
+            *last = parents_json.clone();
+            drop(last);
+            if let Some(cb) = self.ws_notify.lock().unwrap().as_ref() {
+                let parents =
+                    serde_json::to_value(&state.parents).unwrap_or(serde_json::Value::Null);
+                cb(&parents);
+            }
         }
         Ok(())
     }

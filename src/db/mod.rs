@@ -14,6 +14,7 @@
 //! That matches the TS one-process model and keeps this layer simple. If we
 //! ever need real concurrency, swap to `tokio_rusqlite` or a connection pool.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -23,8 +24,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use crate::config::{Config, EmbeddingProvider};
 use crate::memory::schema::{apply_memory_schema, build_model_key};
 use crate::types::{
-    ContextMode, GroupBinding, RunStatus, ScheduleType, ScheduledTask, StoredMessage, TaskRunLog,
-    TaskRunLogInsert, TaskStatus,
+    Agent, Binding, BindingWithRelations, Channel, ContextMode, GroupBinding, RunStatus,
+    ScheduleType, ScheduledTask, StoredMessage, TaskRunLog, TaskRunLogInsert, TaskStatus,
 };
 
 pub struct Db {
@@ -322,6 +323,137 @@ impl Db {
                 .map(|r| r.map_err(anyhow::Error::from).and_then(|inner| inner))
                 .collect()
         })
+    }
+
+    // ============================================================
+    // Channels
+    // ============================================================
+
+    pub fn insert_channel(&self, platform_type: &str, name: &str, credentials_json: &str, now: &str) -> Result<i64> {
+        self.with_conn(|c| {
+            c.execute("INSERT INTO channels (platform_type, name, credentials_json, created_at, updated_at) VALUES (?1,?2,?3,?4,?4)", params![platform_type, name, credentials_json, now])?;
+            Ok(c.last_insert_rowid())
+        })
+    }
+    pub fn get_channel(&self, id: i64) -> Result<Option<Channel>> {
+        self.with_conn(|c| c.query_row("SELECT * FROM channels WHERE id = ?1", params![id], |r| Ok(row_to_channel(r))).optional()?.transpose())
+    }
+    pub fn list_channels(&self) -> Result<Vec<Channel>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT * FROM channels ORDER BY id")?;
+            let rows: Vec<_> = stmt.query_map([], |r| Ok(row_to_channel(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+    pub fn delete_channel(&self, id: i64) -> Result<()> {
+        self.with_conn(|c| { c.execute("DELETE FROM channels WHERE id = ?1", params![id])?; Ok(()) })
+    }
+    pub fn update_channel(&self, id: i64, name: Option<&str>, credentials_json: Option<&str>, now: &str) -> Result<()> {
+        self.with_conn(|c| {
+            if let Some(n) = name { c.execute("UPDATE channels SET name=?1,updated_at=?2 WHERE id=?3", params![n,now,id])?; }
+            if let Some(creds) = credentials_json { c.execute("UPDATE channels SET credentials_json=?1,updated_at=?2 WHERE id=?3", params![creds,now,id])?; }
+            Ok(())
+        })
+    }
+
+    // ============================================================
+    // Agents
+    // ============================================================
+
+    pub fn insert_agent(&self, folder: &str, name: &str, requires_trigger: bool, allowed_tools: Option<&Vec<String>>, allowed_work_dirs: Option<&Vec<String>>, now: &str) -> Result<i64> {
+        self.with_conn(|c| {
+            c.execute("INSERT INTO agents (folder,name,requires_trigger,allowed_tools,allowed_work_dirs,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![folder,name,requires_trigger as i64,json_or_null_owned(allowed_tools)?,json_or_null_owned(allowed_work_dirs)?,now])?;
+            Ok(c.last_insert_rowid())
+        })
+    }
+    pub fn get_agent(&self, id: i64) -> Result<Option<Agent>> {
+        self.with_conn(|c| c.query_row("SELECT * FROM agents WHERE id = ?1", params![id], |r| Ok(row_to_agent(r))).optional()?.transpose())
+    }
+    pub fn get_agent_by_folder(&self, folder: &str) -> Result<Option<Agent>> {
+        self.with_conn(|c| c.query_row("SELECT * FROM agents WHERE folder = ?1", params![folder], |r| Ok(row_to_agent(r))).optional()?.transpose())
+    }
+    pub fn list_agents(&self) -> Result<Vec<Agent>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT * FROM agents ORDER BY id")?;
+            let rows: Vec<_> = stmt.query_map([], |r| Ok(row_to_agent(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+    pub fn delete_agent(&self, id: i64) -> Result<()> {
+        self.with_conn(|c| { c.execute("DELETE FROM agents WHERE id = ?1", params![id])?; Ok(()) })
+    }
+    pub fn update_agent(&self, id: i64, name: Option<&str>, requires_trigger: Option<bool>, allowed_tools: Option<&Vec<String>>, allowed_work_dirs: Option<&Vec<String>>, now: &str) -> Result<()> {
+        self.with_conn(|c| {
+            if let Some(n) = name { c.execute("UPDATE agents SET name=?1,updated_at=?2 WHERE id=?3", params![n,now,id])?; }
+            if let Some(rt) = requires_trigger { c.execute("UPDATE agents SET requires_trigger=?1,updated_at=?2 WHERE id=?3", params![rt as i64,now,id])?; }
+            if let Some(tools) = allowed_tools { c.execute("UPDATE agents SET allowed_tools=?1,updated_at=?2 WHERE id=?3", params![json_or_null_owned(Some(tools))?,now,id])?; }
+            if let Some(dirs) = allowed_work_dirs { c.execute("UPDATE agents SET allowed_work_dirs=?1,updated_at=?2 WHERE id=?3", params![json_or_null_owned(Some(dirs))?,now,id])?; }
+            Ok(())
+        })
+    }
+
+    // ============================================================
+    // Bindings
+    // ============================================================
+
+    pub fn insert_binding(&self, jid: Option<&str>, agent_id: i64, channel_id: i64, is_admin: bool, bot_token_override: Option<&str>, max_messages: Option<u32>, now: &str) -> Result<i64> {
+        self.with_conn(|c| {
+            c.execute("INSERT INTO bindings (jid,agent_id,channel_id,is_admin,bot_token_override,max_messages,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![jid,agent_id,channel_id,is_admin as i64,bot_token_override,max_messages,now])?;
+            Ok(c.last_insert_rowid())
+        })
+    }
+    pub fn get_binding(&self, id: i64) -> Result<Option<Binding>> {
+        self.with_conn(|c| c.query_row("SELECT * FROM bindings WHERE id = ?1", params![id], |r| Ok(row_to_binding(r))).optional()?.transpose())
+    }
+    pub fn get_binding_by_jid(&self, jid: &str) -> Result<Option<Binding>> {
+        self.with_conn(|c| c.query_row("SELECT * FROM bindings WHERE jid = ?1", params![jid], |r| Ok(row_to_binding(r))).optional()?.transpose())
+    }
+    pub fn get_binding_with_relations(&self, jid: &str) -> Result<Option<BindingWithRelations>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id WHERE b.jid=?1",
+                params![jid],
+                |r| Ok(row_to_binding_with_relations(r)),
+            ).optional()?.transpose()
+        })
+    }
+    pub fn get_pending_bindings_for_channel(&self, channel_id: i64) -> Result<Vec<Binding>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT * FROM bindings WHERE channel_id=?1 AND jid IS NULL")?;
+            let rows: Vec<_> = stmt.query_map(params![channel_id], |r| Ok(row_to_binding(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+    pub fn complete_pending_binding(&self, binding_id: i64, jid: &str) -> Result<()> {
+        self.with_conn(|c| { c.execute("UPDATE bindings SET jid=?1 WHERE id=?2 AND jid IS NULL", params![jid,binding_id])?; Ok(()) })
+    }
+    pub fn list_bindings(&self) -> Result<Vec<Binding>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT * FROM bindings ORDER BY id")?;
+            let rows: Vec<_> = stmt.query_map([], |r| Ok(row_to_binding(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+    pub fn list_bindings_with_relations(&self) -> Result<Vec<BindingWithRelations>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id ORDER BY b.id")?;
+            let rows: Vec<_> = stmt.query_map([], |r| Ok(row_to_binding_with_relations(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+    pub fn delete_binding(&self, id: i64) -> Result<()> {
+        self.with_conn(|c| { c.execute("DELETE FROM bindings WHERE id=?1", params![id])?; Ok(()) })
+    }
+    pub fn update_binding(&self, id: i64, jid: Option<&str>, bot_token_override: Option<&str>, max_messages: Option<u32>) -> Result<()> {
+        self.with_conn(|c| {
+            if let Some(j) = jid { c.execute("UPDATE bindings SET jid=?1 WHERE id=?2", params![j,id])?; }
+            if let Some(tok) = bot_token_override { c.execute("UPDATE bindings SET bot_token_override=?1 WHERE id=?2", params![tok,id])?; }
+            if let Some(mm) = max_messages { c.execute("UPDATE bindings SET max_messages=?1 WHERE id=?2", params![mm,id])?; }
+            Ok(())
+        })
+    }
+    pub fn touch_binding_active(&self, jid: &str, timestamp: &str) -> Result<()> {
+        self.with_conn(|c| { c.execute("UPDATE bindings SET last_active=?1 WHERE jid=?2", params![timestamp,jid])?; Ok(()) })
     }
 
     // ============================================================
@@ -706,6 +838,89 @@ fn json_or_null(v: &Option<Vec<String>>) -> Result<Option<String>> {
 
 fn parse_json_array(raw: Option<String>) -> Option<Vec<String>> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+}
+
+fn json_or_null_owned(v: Option<&Vec<String>>) -> Result<Option<String>> {
+    Ok(match v {
+        None => None,
+        Some(list) => Some(serde_json::to_string(list)?),
+    })
+}
+
+fn row_to_channel(row: &Row<'_>) -> Result<Channel> {
+    Ok(Channel {
+        id: row.get("id")?,
+        platform_type: row.get("platform_type")?,
+        name: row.get("name")?,
+        credentials_json: row.get("credentials_json")?,
+        connection_state: row.get("connection_state")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn row_to_agent(row: &Row<'_>) -> Result<Agent> {
+    Ok(Agent {
+        id: row.get("id")?,
+        folder: row.get("folder")?,
+        name: row.get("name")?,
+        requires_trigger: row.get::<_, i64>("requires_trigger")? != 0,
+        allowed_tools: parse_json_array(row.get("allowed_tools")?),
+        allowed_paths: parse_json_array(row.get("allowed_paths")?),
+        allowed_work_dirs: parse_json_array(row.get("allowed_work_dirs")?),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn row_to_binding(row: &Row<'_>) -> Result<Binding> {
+    Ok(Binding {
+        id: row.get("id")?,
+        jid: row.get("jid")?,
+        agent_id: row.get("agent_id")?,
+        channel_id: row.get("channel_id")?,
+        is_admin: row.get::<_, i64>("is_admin")? != 0,
+        bot_token_override: row.get("bot_token_override")?,
+        max_messages: row.get::<_, Option<i64>>("max_messages")?.map(|n| n as u32),
+        last_active: row.get("last_active")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+fn row_to_binding_with_relations(row: &Row<'_>) -> Result<BindingWithRelations> {
+    Ok(BindingWithRelations {
+        binding: Binding {
+            id: row.get(0)?,
+            jid: row.get(1)?,
+            agent_id: row.get(2)?,
+            channel_id: row.get(3)?,
+            is_admin: row.get::<_, i64>(4)? != 0,
+            bot_token_override: row.get(5)?,
+            max_messages: row.get::<_, Option<i64>>(6)?.map(|n| n as u32),
+            last_active: row.get(7)?,
+            created_at: row.get(8)?,
+        },
+        agent: Agent {
+            id: row.get(9)?,
+            folder: row.get(10)?,
+            name: row.get(11)?,
+            requires_trigger: row.get::<_, i64>(12)? != 0,
+            allowed_tools: parse_json_array(row.get(13)?),
+            allowed_paths: parse_json_array(row.get(14)?),
+            allowed_work_dirs: parse_json_array(row.get(15)?),
+            created_at: row.get(16)?,
+            updated_at: row.get(17)?,
+        },
+        channel: Channel {
+            id: row.get(18)?,
+            platform_type: row.get(19)?,
+            name: row.get(20)?,
+            credentials_json: row.get(21)?,
+            connection_state: row.get(22)?,
+            created_at: row.get(23)?,
+            updated_at: row.get(24)?,
+        },
+    })
 }
 
 fn row_to_group(row: &Row<'_>) -> Result<GroupBinding> {

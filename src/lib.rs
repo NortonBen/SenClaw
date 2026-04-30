@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine;
 
 pub mod agent;
 pub mod channels;
@@ -19,13 +20,14 @@ pub mod db;
 pub mod gateway;
 pub mod mcp;
 pub mod memory;
+pub mod proto;
 pub mod scheduler;
 pub mod setup;
 pub mod skills;
 pub mod subagents;
 pub mod types;
-pub mod tools;
 pub mod util;
+pub mod tools;
 pub mod wiki;
 pub mod zen_core;
 
@@ -278,6 +280,10 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         agent_name: &str,
         todos: &[agent::agent_pool::TodoSnapshot],
     ) {
+        tracing::info!(
+            "[WsAgentEventSink] notify_agent_todos jid={agent_jid} name={agent_name} count={}",
+            todos.len()
+        );
         let gw = Arc::clone(&self.gateway);
         let jid = agent_jid.to_string();
         let name = agent_name.to_string();
@@ -325,9 +331,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let _memory_mgr = memory::manager::init(Arc::clone(&db), &cfg);
     tracing::info!("[SenClaw] MemoryManager initialized");
 
-    // ===== 2. GroupManager =====
+    // ===== 2. GroupManager & Other Managers =====
     // Load group bindings from DB; reconcile with config.json
     let gm = Arc::new(gateway::group_manager::GroupManager::new());
+    let am = Arc::new(gateway::agent_manager::AgentManager::new());
+    let bm = Arc::new(gateway::binding_manager::BindingManager::new());
+    let cm = Arc::new(gateway::channel_manager::ChannelManager::new());
     // Sync groups from config.json into DB on startup
     let (sync_added, sync_updated, sync_removed) =
         gateway::group_manager::sync_groups_from_config(&db, &gm, &cfg);
@@ -441,6 +450,172 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         channels.push(Box::new(wx));
     } else {
         tracing::info!("[SenClaw] WeChatChannel: not enabled, skipped");
+    }
+
+    // 3e. App Connector
+    if !cfg.app.channel_id.is_empty() && !cfg.app.encryption_key.is_empty() {
+        let mut key = [0u8; 32];
+        if let Ok(k) = base64::engine::general_purpose::STANDARD.decode(&cfg.app.encryption_key) {
+            if k.len() == 32 {
+                key.copy_from_slice(&k);
+                let app_ch = channels::app::AppChannel::new(
+                    cfg.app.hub_url.clone(),
+                    cfg.app.channel_id.clone(),
+                    key,
+                );
+                match app_ch.connect().await {
+                    Ok(()) => {
+                        if app_ch.is_connected() {
+                            tracing::info!("[SenClaw] AppChannel connected");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("[SenClaw] AppChannel connect failed: {e}");
+                    }
+                }
+                channels.push(Box::new(app_ch));
+            } else {
+                tracing::error!("[SenClaw] AppChannel: encryption key must be 32 bytes (base64)");
+            }
+        } else {
+            tracing::error!("[SenClaw] AppChannel: invalid base64 encryption key");
+        }
+    } else {
+        tracing::info!("[SenClaw] AppChannel: no credentials configured, skipped");
+    }
+
+    // 3e. Reconcile channel adapters from DB channels table.
+    // Entity migration creates channels from legacy groups; config.json may also
+    // have entries. This step ensures any channel stored in the DB that isn't
+    // already covered by a config-based adapter gets initialized.
+    match cm.list(&db) {
+        Ok(db_channels) => {
+            for ch_record in &db_channels {
+                // Skip if a running adapter already covers this platform+creds.
+                let already_running = channels.iter().any(|adapter| {
+                    adapter.id() == ch_record.platform_type.as_str()
+                        && adapter.is_connected()
+                });
+                if already_running {
+                    continue;
+                }
+
+                let creds: serde_json::Value =
+                    serde_json::from_str(&ch_record.credentials_json).unwrap_or_default();
+
+                match ch_record.platform_type.as_str() {
+                    "feishu" => {
+                        let app_id = creds["appId"].as_str().unwrap_or("");
+                        let app_secret = creds["appSecret"].as_str().unwrap_or("");
+                        let domain = creds["domain"].as_str();
+                        if !app_id.is_empty() && !app_secret.is_empty() {
+                            let feishu = channels::feishu::FeishuChannel::new(
+                                app_id.to_string(),
+                                app_secret.to_string(),
+                                domain.map(|s| s.to_string()),
+                            );
+                            match feishu.connect().await {
+                                Ok(()) if feishu.is_connected() => {
+                                    tracing::info!(
+                                        "[SenClaw] FeishuChannel from DB (id={}) connected",
+                                        ch_record.id
+                                    );
+                                    channels.push(Box::new(feishu));
+                                }
+                                Ok(()) => {
+                                    tracing::warn!(
+                                        "[SenClaw] FeishuChannel from DB (id={}) not connected",
+                                        ch_record.id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "[SenClaw] FeishuChannel from DB (id={}) failed: {e}",
+                                        ch_record.id
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    "qq" => {
+                        let app_id = creds["appId"].as_str().unwrap_or("");
+                        let app_secret = creds["appSecret"].as_str().unwrap_or("");
+                        let sandbox = creds["sandbox"].as_bool().unwrap_or(false);
+                        if !app_id.is_empty() && !app_secret.is_empty() {
+                            let qq = channels::qq::QQChannel::new(
+                                app_id.to_string(),
+                                app_secret.to_string(),
+                                sandbox,
+                            );
+                            match qq.connect().await {
+                                Ok(()) if qq.is_connected() => {
+                                    tracing::info!(
+                                        "[SenClaw] QQChannel from DB (id={}) connected",
+                                        ch_record.id
+                                    );
+                                    channels.push(Box::new(qq));
+                                }
+                                Ok(()) => {
+                                    tracing::warn!(
+                                        "[SenClaw] QQChannel from DB (id={}) not connected",
+                                        ch_record.id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "[SenClaw] QQChannel from DB (id={}) failed: {e}",
+                                        ch_record.id
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    "app" => {
+                        let hub_url = creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
+                        let channel_id = creds["channelId"].as_str().unwrap_or("");
+                        let enc_key_b64 = creds["encryptionKey"].as_str().unwrap_or("");
+                        if !channel_id.is_empty() && !enc_key_b64.is_empty() {
+                            let mut key = [0u8; 32];
+                            if let Ok(k) = base64::engine::general_purpose::STANDARD.decode(enc_key_b64) {
+                                if k.len() == 32 {
+                                    key.copy_from_slice(&k);
+                                    let app_ch = channels::app::AppChannel::new(
+                                        hub_url.to_string(),
+                                        channel_id.to_string(),
+                                        key,
+                                    );
+                                    match app_ch.connect().await {
+                                        Ok(()) if app_ch.is_connected() => {
+                                            tracing::info!("[SenClaw] AppChannel from DB (id={}) connected", ch_record.id);
+                                            channels.push(Box::new(app_ch));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        tracing::debug!(
+                            "[SenClaw] Channel id={} type={}: no DB-based init needed",
+                            ch_record.id, ch_record.platform_type
+                        );
+                    }
+                }
+            }
+            let db_init_count = db_channels.iter().filter(|c| {
+                c.platform_type == "feishu" || c.platform_type == "qq" || c.platform_type == "app"
+            }).count();
+            if db_init_count > 0 {
+                tracing::info!(
+                    "[SenClaw] DB channel reconciliation: checked {} channel(s)",
+                    db_init_count
+                );
+            }
+        }
+        Err(e) => {
+            tracing::error!("[SenClaw] Failed to list DB channels for reconciliation: {e}");
+        }
     }
 
     let connected_count = channels.iter().filter(|ch| ch.is_connected()).count();
@@ -568,6 +743,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // ===== 4b. MessageRouter =====
     let message_router = Arc::new(gateway::message_router::MessageRouter::new(
         Arc::clone(&gm),
+        Arc::clone(&bm),
         agent_pool.clone() as Arc<dyn gateway::message_router::AgentApi>,
         Arc::clone(&group_queue),
         Arc::clone(&db),
@@ -632,6 +808,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             config: Arc::new(cfg.clone()),
             db: Arc::clone(&db),
             group_manager: Arc::clone(&gm),
+            agent_manager: Arc::clone(&am),
+            binding_manager: Arc::clone(&bm),
+            channel_manager: Arc::clone(&cm),
             api: ws_api,
         });
 

@@ -178,6 +178,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/mcp-servers/:name/disconnect", post(mcp_servers_disconnect))
         .route("/api/mcp-servers/:name/tools", post(mcp_servers_tools))
         .route("/api/mcp-servers/:name/enabled", post(mcp_servers_enabled))
+        // Hooks config
+        .route("/api/hooks", get(hooks_get).put(hooks_put))
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback
@@ -1291,6 +1293,49 @@ async fn mcp_servers_enabled(
     }
     let info = mgr.get_server_info(&name).await;
     Ok(Json(mcp_server_json(&info)))
+}
+
+// ===== /api/hooks =====
+
+async fn hooks_get(State(s): State<Arc<UiState>>) -> Result<Json<serde_json::Value>, AppError> {
+    let path = &s.config.paths.hooks_path;
+    if path.exists() {
+        let raw = fs::read_to_string(path)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
+            serde_json::json!({ "hooks": {} })
+        });
+        Ok(Json(json))
+    } else {
+        Ok(Json(serde_json::json!({ "hooks": {} })))
+    }
+}
+
+async fn hooks_put(
+    State(s): State<Arc<UiState>>,
+    body: String,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate JSON and check for "hooks" key
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid JSON: {e}")))?;
+    match &json {
+        serde_json::Value::Object(map) if map.contains_key("hooks") => {}
+        _ => return Err(AppError(StatusCode::BAD_REQUEST, "Root object must have a \"hooks\" key".into())),
+    }
+    // Validate hooks is an object
+    if let Some(hooks) = json.get("hooks") {
+        if !hooks.is_object() {
+            return Err(AppError(StatusCode::BAD_REQUEST, "\"hooks\" must be a plain object".into()));
+        }
+    }
+    let path = &s.config.paths.hooks_path;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    fs::write(path, &body)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ===== SPA fallback =====

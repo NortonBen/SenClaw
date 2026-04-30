@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { theme } from 'antd';
 import type { DirNode } from '../hooks/useWiki';
 
 interface Props {
@@ -40,6 +41,7 @@ function DirRow({
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const { token } = theme.useToken();
 
   const fileCount = countFiles(node);
   const isEmpty = fileCount === 0 && (node.children ?? []).filter(c => c.type === 'dir' || c.type === 'file').length === 0;
@@ -50,13 +52,19 @@ function DirRow({
     return (
       <button
         onClick={() => onSelectDoc(node.path)}
-        className="w-full flex items-center gap-2 py-1.5 px-3 text-xs text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors text-left"
-        style={{ paddingLeft: `${indent + 12}px` }}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+          fontSize: 12, color: token.colorTextSecondary, background: 'transparent',
+          border: 'none', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
+          paddingLeft: indent + 12
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = token.colorFillAlter; e.currentTarget.style.color = token.colorText; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = token.colorTextSecondary; }}
       >
-        <svg className="w-3 h-3 flex-shrink-0 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <svg style={{ width: 12, height: 12, flexShrink: 0, color: token.colorTextQuaternary }} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
         </svg>
-        <span className="truncate">{name}</span>
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
       </button>
     );
   }
@@ -90,28 +98,32 @@ function DirRow({
     <div>
       {/* Dir row */}
       <div
-        className="flex items-center gap-2 py-1.5 px-3 hover:bg-gray-50 group"
-        style={{ paddingLeft: `${indent + 8}px` }}
+        className="group"
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', paddingLeft: indent + 8, cursor: 'pointer', transition: 'background 0.2s' }}
+        onMouseEnter={e => e.currentTarget.style.background = token.colorFillAlter}
+        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
       >
-        <button onClick={() => setOpen(o => !o)} className="flex items-center gap-1.5 flex-1 min-w-0 text-left">
-          <span className="text-gray-300 text-[10px] w-3">{open ? '▾' : '▸'}</span>
-          <svg className="w-4 h-4 flex-shrink-0 text-amber-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+          <span style={{ color: token.colorTextTertiary, fontSize: 10, width: 12 }}>{open ? '▾' : '▸'}</span>
+          <svg style={{ width: 16, height: 16, flexShrink: 0, color: token.colorWarning }} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
           </svg>
-          <span className="text-sm font-medium text-gray-700 truncate">{node.name}</span>
+          <span style={{ fontSize: 14, fontWeight: 500, color: token.colorText, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
           {fileCount > 0 && (
-            <span className="text-xs text-gray-400 ml-1">{fileCount} pages</span>
+            <span style={{ fontSize: 12, color: token.colorTextQuaternary, marginLeft: 4 }}>{fileCount} pages</span>
           )}
         </button>
 
-        {/* Actions (visible on hover) */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+        {/* Actions */}
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 flex items-center gap-1">
           <button
             onClick={() => { setAddingSubdir(a => !a); setNewName(''); }}
             title="New subfolder"
-            className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+            style={{ padding: 4, color: token.colorTextQuaternary, background: 'transparent', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.background = token.colorWarningBg; e.currentTarget.style.color = token.colorWarning; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = token.colorTextQuaternary; }}
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <svg style={{ width: 14, height: 14 }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
           </button>
@@ -120,9 +132,11 @@ function DirRow({
               onClick={handleDelete}
               disabled={deleting}
               title="Delete empty folder"
-              className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-30"
+              style={{ padding: 4, color: deleting ? token.colorTextQuaternary : token.colorError, background: 'transparent', border: 'none', borderRadius: 4, cursor: deleting ? 'not-allowed' : 'pointer', opacity: deleting ? 0.3 : 1 }}
+              onMouseEnter={e => { if(!deleting) { e.currentTarget.style.background = token.colorErrorBg; } }}
+              onMouseLeave={e => { if(!deleting) { e.currentTarget.style.background = 'transparent'; } }}
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <svg style={{ width: 14, height: 14 }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
               </svg>
             </button>
@@ -132,7 +146,7 @@ function DirRow({
 
       {/* Inline new subdir input */}
       {addingSubdir && (
-        <div className="flex items-center gap-2 py-1 px-3" style={{ paddingLeft: `${indent + 36}px` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', paddingLeft: indent + 36 }}>
           <input
             type="text"
             value={newName}
@@ -140,16 +154,19 @@ function DirRow({
             onKeyDown={e => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setAddingSubdir(false); }}
             placeholder="Folder name (kebab-case)"
             autoFocus
-            className="flex-1 px-2 py-1 text-xs bg-amber-50 rounded border border-amber-200 outline-none focus:ring-1 focus:ring-amber-300"
+            style={{
+              flex: 1, padding: '4px 8px', fontSize: 12, background: token.colorWarningBg,
+              borderRadius: 4, border: `1px solid ${token.colorWarningBorder}`, outline: 'none', color: token.colorText
+            }}
           />
           <button
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
-            className="px-2 py-1 text-xs bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-40 transition-colors"
+            style={{ padding: '4px 8px', fontSize: 12, background: token.colorWarning, color: '#fff', border: 'none', borderRadius: 4, cursor: (creating || !newName.trim()) ? 'not-allowed' : 'pointer', opacity: (creating || !newName.trim()) ? 0.4 : 1 }}
           >
             {creating ? '...' : 'Create'}
           </button>
-          <button onClick={() => setAddingSubdir(false)} className="text-gray-400 hover:text-gray-600 text-xs px-1">Cancel</button>
+          <button onClick={() => setAddingSubdir(false)} style={{ color: token.colorTextTertiary, background: 'transparent', border: 'none', fontSize: 12, padding: '0 4px', cursor: 'pointer' }}>Cancel</button>
         </div>
       )}
 
@@ -177,6 +194,7 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
   const [addingRoot, setAddingRoot] = useState(false);
   const [rootName, setRootName] = useState('');
   const [creating, setCreating] = useState(false);
+  const { token } = theme.useToken();
 
   useEffect(() => {
     onRefreshTree();
@@ -206,21 +224,25 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
   const totalDirs = tree.reduce((s, n) => s + countDirs(n), 0);
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-8 py-8">
+    <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ maxWidth: 672, margin: '0 auto', padding: '32px' }}>
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
-            <h1 className="text-base font-semibold text-gray-700">Categories</h1>
+            <h1 style={{ fontSize: 16, fontWeight: 600, color: token.colorText, margin: 0 }}>Categories</h1>
             {!treeLoading && (
-              <p className="text-xs text-gray-400 mt-0.5">{totalDirs} folders · {totalFiles} pages</p>
+              <p style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 4 }}>{totalDirs} folders · {totalFiles} pages</p>
             )}
           </div>
           <button
             onClick={() => { setAddingRoot(a => !a); setRootName(''); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg transition-colors"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12,
+              background: token.colorWarningBgHover, color: token.colorWarning, border: 'none',
+              borderRadius: 8, cursor: 'pointer', transition: 'background 0.2s'
+            }}
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <svg style={{ width: 14, height: 14 }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
             New root folder
@@ -229,7 +251,7 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
 
         {/* New root dir input */}
         {addingRoot && (
-          <div className="flex items-center gap-2 mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, padding: 12, background: token.colorWarningBg, borderRadius: 8, border: `1px solid ${token.colorWarningBorder}` }}>
             <input
               type="text"
               value={rootName}
@@ -237,29 +259,32 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
               onKeyDown={e => { if (e.key === 'Enter') handleCreateRoot(); if (e.key === 'Escape') setAddingRoot(false); }}
               placeholder="Folder name (kebab-case, e.g. programming)"
               autoFocus
-              className="flex-1 px-3 py-1.5 text-sm bg-white rounded border border-amber-200 outline-none focus:ring-1 focus:ring-amber-300"
+              style={{
+                flex: 1, padding: '6px 12px', fontSize: 14, background: token.colorBgContainer,
+                borderRadius: 4, border: `1px solid ${token.colorWarningBorder}`, outline: 'none', color: token.colorText
+              }}
             />
             <button
               onClick={handleCreateRoot}
               disabled={creating || !rootName.trim()}
-              className="px-3 py-1.5 text-sm bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-40 transition-colors"
+              style={{ padding: '6px 12px', fontSize: 14, background: token.colorWarning, color: '#fff', border: 'none', borderRadius: 4, cursor: (creating || !rootName.trim()) ? 'not-allowed' : 'pointer', opacity: (creating || !rootName.trim()) ? 0.4 : 1 }}
             >
               {creating ? '...' : 'Create'}
             </button>
-            <button onClick={() => setAddingRoot(false)} className="text-gray-400 hover:text-gray-600 text-sm px-1">Cancel</button>
+            <button onClick={() => setAddingRoot(false)} style={{ color: token.colorTextTertiary, background: 'transparent', border: 'none', fontSize: 14, padding: '0 4px', cursor: 'pointer' }}>Cancel</button>
           </div>
         )}
 
         {/* Tree */}
-        {treeLoading && <p className="text-sm text-gray-400 py-4">Loading...</p>}
+        {treeLoading && <p style={{ fontSize: 14, color: token.colorTextQuaternary, padding: '16px 0' }}>Loading...</p>}
         {!treeLoading && tree.length === 0 && (
-          <div className="text-center py-12 text-gray-400 text-sm">
+          <div style={{ textAlign: 'center', padding: '48px 0', color: token.colorTextQuaternary, fontSize: 14 }}>
             <p>No folders yet</p>
-            <p className="text-xs mt-1">Click &quot;New root folder&quot; to get started</p>
+            <p style={{ fontSize: 12, marginTop: 4 }}>Click "New root folder" to get started</p>
           </div>
         )}
         {!treeLoading && tree.length > 0 && (
-          <div className="border border-gray-100 rounded-xl overflow-hidden">
+          <div style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 12, overflow: 'hidden' }}>
             {tree.map(node => (
               <DirRow
                 key={node.path}
@@ -274,7 +299,7 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
           </div>
         )}
 
-        <p className="text-xs text-gray-300 mt-4">
+        <p style={{ fontSize: 12, color: token.colorTextQuaternary, marginTop: 16 }}>
           Note: folders that contain files cannot be deleted here. You can manage folders on disk; this view refreshes every 30 seconds.
         </p>
       </div>

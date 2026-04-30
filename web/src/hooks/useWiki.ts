@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -172,8 +172,8 @@ export function useWiki() {
     fetchTags,
     mkdir,
     deleteDir,
-    clearDoc: () => setDoc(null),
-    clearSearch: () => setSearchResults([]),
-    clearError: () => setError(null),
+    clearDoc: useCallback(() => setDoc(null), []),
+    clearSearch: useCallback(() => setSearchResults([]), []),
+    clearError: useCallback(() => setError(null), []),
   };
 }

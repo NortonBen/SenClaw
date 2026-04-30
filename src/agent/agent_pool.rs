@@ -469,12 +469,20 @@ impl ZenCoreApi {
                                 }
                             }
                             EngineEvent::TodosUpdate(items) => {
+                                tracing::info!(
+                                    "[AgentPool] bridge_events TodosUpdate jid={jid} items={}",
+                                    items.len()
+                                );
                                 if let Some(ref cb) = h.todos_update {
                                     cb(items.iter().map(|item| TodosUpdateItem {
                                         content: item.content.clone(),
                                         status: item.status.clone(),
                                         active_form: item.active_form.clone(),
                                     }).collect());
+                                } else {
+                                    tracing::warn!(
+                                        "[AgentPool] bridge_events TodosUpdate for {jid} but NO handler registered"
+                                    );
                                 }
                             }
                             EngineEvent::CompactStart(_) => {
@@ -2608,6 +2616,10 @@ impl AgentPool {
             self.core_api.on_todos_update(
                 &jid_arg,
                 Box::new(move |data: Vec<TodosUpdateItem>| {
+                    tracing::info!(
+                        "[AgentPool] todos_update handler jid={jid} items={}",
+                        data.len()
+                    );
                     let todos: Vec<TodoSnapshot> = data
                         .into_iter()
                         .map(|item| TodoSnapshot {
@@ -2628,6 +2640,10 @@ impl AgentPool {
                     }
                     if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
                         sink.notify_agent_todos(&jid, &name, &todos);
+                    } else {
+                        tracing::warn!(
+                            "[AgentPool] todos_update handler for {jid}: NO agent_event_sink set"
+                        );
                     }
                 }),
             );

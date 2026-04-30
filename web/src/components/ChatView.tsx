@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { theme } from 'antd';
 import type { GroupInfo, ChatMessage, AgentState } from '../types';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 
@@ -19,6 +20,7 @@ interface Props {
 const PAGE_SIZE = 5;
 
 export function ChatView({ group, messages, agentState, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
+  const { token } = theme.useToken();
   const [input, setInput]           = useState('');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -167,21 +169,30 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center px-6 py-4 bg-white border-b border-gray-100 flex-shrink-0">
+      <div 
+        className="flex items-center px-6 py-4 backdrop-blur-xl border-b flex-shrink-0"
+        style={{ 
+          background: `${token.colorBgContainer}cc`, // transparent background
+          borderColor: token.colorBorderSecondary 
+        }}
+      >
         <div>
-          <h2 className="font-semibold text-gray-800">{group.name}</h2>
-          <p className="text-xs text-gray-400 mt-0.5">{group.folder}</p>
+          <h2 className="font-semibold" style={{ color: token.colorText }}>{group.name}</h2>
+          <p className="text-xs mt-0.5" style={{ color: token.colorTextSecondary }}>{group.folder}</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
           {/* Status indicator */}
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full transition-colors ${statusDotClass}`} />
-            <span className="text-xs text-gray-500">{statusText}</span>
+            <span className="text-xs" style={{ color: token.colorTextSecondary }}>{statusText}</span>
           </div>
           {/* Stop / reset — always shown; in idle clears session context */}
           <button
             onClick={() => setShowStopConfirm(true)}
-            className="w-7 h-7 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 flex items-center justify-center transition-colors"
+            className="w-7 h-7 rounded-full flex items-center justify-center transition-colors"
+            style={{ color: token.colorTextDescription }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = token.colorError; e.currentTarget.style.background = `${token.colorError}1a`; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = token.colorTextDescription; e.currentTarget.style.background = 'transparent'; }}
             title="Reset session"
             aria-label="Reset session"
           >
@@ -195,11 +206,22 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-5 space-y-4 bg-[#F5F8FB]">
-        {messages.length === 0 && !isProcessing && (
-          <div className="flex flex-col items-center justify-center h-full gap-3 select-none">
-            <img src="/logo.svg" alt="" className="w-12 h-12 opacity-20" />
-            <p className="text-sm text-gray-400">Start a conversation</p>
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-5 space-y-4 bg-transparent">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full gap-4 select-none">
+            <div className="relative">
+              <div 
+                className="absolute inset-0 blur-[40px] opacity-10 rounded-full" 
+                style={{ background: token.colorPrimary }} 
+              />
+              <img src="/logo.png" alt="" className="w-12 h-12 opacity-20 relative z-10" />
+            </div>
+            <p 
+              className="text-xs font-bold tracking-widest uppercase"
+              style={{ color: token.colorTextDescription }}
+            >
+              Start a conversation
+            </p>
           </div>
         )}
         {hasMore && (
@@ -210,7 +232,14 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
                 if (el) preserveScrollRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
                 setVisibleCount(c => Math.min(messages.length, c + PAGE_SIZE));
               }}
-              className="text-xs text-gray-400 hover:text-gray-600 px-3 py-1 rounded-full bg-white/70 hover:bg-white border border-gray-200 transition-colors"
+              className="text-[10px] font-bold tracking-wider uppercase px-4 py-2 rounded-full border transition-colors"
+              style={{
+                color: token.colorTextSecondary,
+                background: token.colorFillAlter,
+                borderColor: token.colorBorderSecondary,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = token.colorText; e.currentTarget.style.background = token.colorFillSecondary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = token.colorTextSecondary; e.currentTarget.style.background = token.colorFillAlter; }}
             >
               Load older messages
             </button>
@@ -229,11 +258,22 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
       </div>
 
       {/* Input area */}
-      <div className="px-6 py-4 bg-white border-t border-gray-100 flex-shrink-0">
+      <div 
+        className="px-6 py-4 backdrop-blur-xl border-t flex-shrink-0"
+        style={{ 
+          background: `${token.colorBgContainer}cc`, // transparent background
+          borderColor: token.colorBorderSecondary 
+        }}
+      >
         <div className="flex gap-3 items-end">
           <textarea
             ref={textareaRef}
-            className="flex-1 resize-none border border-gray-200 rounded-2xl px-4 py-3 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-[#5BBFE8] focus:ring-2 focus:ring-[#5BBFE8]/20 transition-all min-h-[44px] max-h-32 disabled:bg-gray-50 disabled:cursor-not-allowed"
+            className="flex-1 resize-none rounded-2xl px-4 py-3 text-sm focus:outline-none transition-all min-h-[44px] max-h-32 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              background: token.colorFillAlter,
+              border: `1px solid ${token.colorBorder}`,
+              color: token.colorText,
+            }}
             placeholder={isPaused ? 'Add instructions or leave empty to continue…' : 'Message…'}
             rows={1}
             value={input}
@@ -246,7 +286,12 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
           <button
             onClick={handleActionButton}
             disabled={actionButtonDisabled}
-            className="w-10 h-10 rounded-full bg-[#5BBFE8] hover:bg-[#3AAAD4] disabled:bg-gray-200 disabled:cursor-not-allowed flex items-center justify-center text-white transition-colors flex-shrink-0"
+            className="w-10 h-10 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
+            style={{
+              background: actionButtonDisabled ? token.colorFillSecondary : token.colorPrimary,
+              color: actionButtonDisabled ? token.colorTextDisabled : '#fff',
+              cursor: actionButtonDisabled ? 'not-allowed' : 'pointer'
+            }}
             aria-label={actionButtonTitle}
             title={actionButtonTitle}
           >
@@ -268,7 +313,10 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
             )}
           </button>
         </div>
-        <p className="text-[11px] text-gray-400 mt-2 ml-1">
+        <p 
+          className="text-[10px] font-medium mt-2 ml-1"
+          style={{ color: token.colorTextDescription }}
+        >
           {isPaused
             ? 'Press ▶ to resume · Add instructions above if needed'
             : 'Enter to send · Shift+Enter for new line'}
@@ -277,18 +325,24 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
 
       {/* Stop confirmation modal */}
       {showStopConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-80 flex flex-col gap-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div 
+            className="border rounded-2xl shadow-2xl p-6 w-80 flex flex-col gap-4"
+            style={{ 
+              background: token.colorBgElevated,
+              borderColor: token.colorBorderSecondary 
+            }}
+          >
             <div className="flex items-center gap-3">
-              <span className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+              <span className="w-9 h-9 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-red-500">
                   <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                   <path d="M3 3v5h5" />
                 </svg>
               </span>
-              <h3 className="font-semibold text-gray-800">Reset session?</h3>
+              <h3 className="font-semibold" style={{ color: token.colorText }}>Reset session?</h3>
             </div>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm leading-relaxed" style={{ color: token.colorTextSecondary }}>
               {isActive
                 ? 'Current task will be terminated and all conversation context will be discarded. This cannot be undone.'
                 : 'All conversation context will be cleared and a new session will start. This cannot be undone.'}
@@ -296,13 +350,17 @@ export function ChatView({ group, messages, agentState, isCompacting, onSend, on
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setShowStopConfirm(false)}
-                className="px-4 py-2 text-sm rounded-xl text-gray-600 hover:bg-gray-100 transition-colors"
+                className="px-4 py-2 text-sm font-medium rounded-xl transition-colors"
+                style={{ color: token.colorTextSecondary }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = token.colorFillAlter; e.currentTarget.style.color = token.colorText; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = token.colorTextSecondary; }}
               >
                 Cancel
               </button>
               <button
                 onClick={() => { setShowStopConfirm(false); onStop(); }}
-                className="px-4 py-2 text-sm rounded-xl bg-red-500 hover:bg-red-600 text-white transition-colors"
+                className="px-4 py-2 text-sm rounded-xl text-white transition-colors"
+                style={{ background: token.colorError }}
               >
                 Terminate
               </button>

@@ -63,6 +63,16 @@ qrcode = "0.14"
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
 
+# gRPC / Proto
+tonic = { version = "0.12", features = ["tls", "gzip"] }
+prost = "0.13"
+tokio-stream = "0.1"
+
+# Encryption / Encoding
+aes-gcm = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+
 # Channel adapters (Telegram has a Rust SDK; others go via REST through reqwest)
 teloxide = { version = "0.13", default-features = false, features = ["ctrlc_handler", "rustls"] }
 
@@ -91,6 +101,9 @@ tokio-util = { version = "0.7", features = ["rt"] }
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4.5"
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [profile.release]
 lto = "thin"

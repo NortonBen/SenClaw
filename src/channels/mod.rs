@@ -1,5 +1,6 @@
 //! Channel adapter trait + re-exports. Port targets: src-old/types.ts (IChannel) + src-old/channels/*.ts
 
+pub mod app;
 pub mod feishu;
 pub mod feishu_ws;
 pub mod qq;

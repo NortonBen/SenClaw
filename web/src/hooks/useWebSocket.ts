@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry } from '../types';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload } from '../types';
 
 interface WsConfig {
   wsPort: number;
@@ -32,6 +32,19 @@ export interface WsHook {
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>; // keyed by agentJid
   subscribeAll: () => void;
+  // Entity model
+  channels: ChannelInfo[];
+  agents: AgentInfo[];
+  bindings: BindingWithRelationsInfo[];
+  registerChannel: (data: RegisterChannelPayload) => void;
+  registerAgent: (data: RegisterAgentPayload) => void;
+  registerBinding: (data: RegisterBindingPayload) => void;
+  unregisterChannel: (id: number) => void;
+  unregisterAgent: (id: number) => void;
+  unregisterBinding: (id: number) => void;
+  updateChannel: (id: number, updates: UpdateChannelPayload) => void;
+  updateAgent: (id: number, updates: UpdateAgentPayload) => void;
+  updateBinding: (id: number, updates: UpdateBindingPayload) => void;
 }
 
 export function useWebSocket(): WsHook {
@@ -43,6 +56,9 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
+  const [agents, setAgents]     = useState<AgentInfo[]>([]);
+  const [bindings, setBindings] = useState<BindingWithRelationsInfo[]>([]);
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -197,6 +213,42 @@ export function useWebSocket(): WsHook {
     }
   }, [rawSend]);
 
+  const registerChannel = useCallback((data: RegisterChannelPayload) => {
+    rawSend({ type: 'register:channel', ...data });
+  }, [rawSend]);
+
+  const registerAgent = useCallback((data: RegisterAgentPayload) => {
+    rawSend({ type: 'register:agent', ...data });
+  }, [rawSend]);
+
+  const registerBinding = useCallback((data: RegisterBindingPayload) => {
+    rawSend({ type: 'register:binding', ...data });
+  }, [rawSend]);
+
+  const unregisterChannel = useCallback((id: number) => {
+    rawSend({ type: 'unregister:channel', id });
+  }, [rawSend]);
+
+  const unregisterAgent = useCallback((id: number) => {
+    rawSend({ type: 'unregister:agent', id });
+  }, [rawSend]);
+
+  const unregisterBinding = useCallback((id: number) => {
+    rawSend({ type: 'unregister:binding', id });
+  }, [rawSend]);
+
+  const updateChannel = useCallback((id: number, updates: UpdateChannelPayload) => {
+    rawSend({ type: 'update:channel', id, ...updates });
+  }, [rawSend]);
+
+  const updateAgent = useCallback((id: number, updates: UpdateAgentPayload) => {
+    rawSend({ type: 'update:agent', id, ...updates });
+  }, [rawSend]);
+
+  const updateBinding = useCallback((id: number, updates: UpdateBindingPayload) => {
+    rawSend({ type: 'update:binding', id, ...updates });
+  }, [rawSend]);
+
   useEffect(() => {
     let destroyed = false;
 
@@ -210,6 +262,9 @@ export function useWebSocket(): WsHook {
             setStatus('connected');
             retryCountRef.current = 0;
             rawSend({ type: 'list:groups' });
+            rawSend({ type: 'list:channels' });
+            rawSend({ type: 'list:agents' });
+            rawSend({ type: 'list:bindings' });
             // Re-subscribe to all previously-subscribed groups after reconnect
             for (const jid of subscribedRef.current) {
               rawSend({ type: 'subscribe', groupJid: jid });
@@ -382,6 +437,52 @@ export function useWebSocket(): WsHook {
             }
             break;
           }
+          // Entity model events
+          case 'channels':
+            setChannels((msg.channels as ChannelInfo[]) ?? []);
+            break;
+          case 'agents':
+            setAgents((msg.agents as AgentInfo[]) ?? []);
+            break;
+          case 'bindings':
+            setBindings((msg.bindings as BindingWithRelationsInfo[]) ?? []);
+            break;
+          case 'channel:registered':
+            setChannels(prev => {
+              const ch = msg.channel as ChannelInfo;
+              return prev.some(c => c.id === ch.id) ? prev.map(c => c.id === ch.id ? ch : c) : [...prev, ch];
+            });
+            break;
+          case 'agent:registered':
+            setAgents(prev => {
+              const a = msg.agent as AgentInfo;
+              return prev.some(x => x.id === a.id) ? prev.map(x => x.id === a.id ? a : x) : [...prev, a];
+            });
+            break;
+          case 'binding:registered':
+            setBindings(prev => {
+              const b = msg.binding as BindingWithRelationsInfo;
+              return prev.some(x => x.id === b.id) ? prev.map(x => x.id === b.id ? b : x) : [...prev, b];
+            });
+            break;
+          case 'channel:unregistered':
+            setChannels(prev => prev.filter(c => c.id !== (msg.id as number)));
+            break;
+          case 'agent:unregistered':
+            setAgents(prev => prev.filter(a => a.id !== (msg.id as number)));
+            break;
+          case 'binding:unregistered':
+            setBindings(prev => prev.filter(b => b.id !== (msg.id as number)));
+            break;
+          case 'channel:updated':
+            setChannels(prev => prev.map(c => c.id === (msg.channel as ChannelInfo).id ? msg.channel as ChannelInfo : c));
+            break;
+          case 'agent:updated':
+            setAgents(prev => prev.map(a => a.id === (msg.agent as AgentInfo).id ? msg.agent as AgentInfo : a));
+            break;
+          case 'binding:updated':
+            setBindings(prev => prev.map(b => b.id === (msg.binding as BindingWithRelationsInfo).id ? msg.binding as BindingWithRelationsInfo : b));
+            break;
         }
       } catch { /* ignore */ }
     };
@@ -445,5 +546,17 @@ export function useWebSocket(): WsHook {
   // suppress unused warning — findRequestJid is available for future use
   void findRequestJid;
 
-  return { status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll };
+  return useMemo(() => ({ 
+    status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll,
+    channels, agents, bindings,
+    registerChannel, registerAgent, registerBinding,
+    unregisterChannel, unregisterAgent, unregisterBinding,
+    updateChannel, updateAgent, updateBinding,
+  }), [
+    status, groups, messages, agentStates, agentCompacting, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll,
+    channels, agents, bindings,
+    registerChannel, registerAgent, registerBinding,
+    unregisterChannel, unregisterAgent, unregisterBinding,
+    updateChannel, updateAgent, updateBinding,
+  ]);
 }

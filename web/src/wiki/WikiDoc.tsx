@@ -8,8 +8,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github.css';
+import { theme, Button, Tag, Typography, Space, Divider } from 'antd';
+import { ArrowLeftOutlined, EditOutlined, SaveOutlined, CloseOutlined, CaretRightOutlined, CaretDownOutlined } from '@ant-design/icons';
 import type { WikiDoc as WikiDocType } from '../hooks/useWiki';
 import { WikiEditor } from './WikiEditor';
+
+const { Text } = Typography;
 
 interface Props {
   path: string;
@@ -19,12 +23,6 @@ interface Props {
   onLoad: (path: string) => void;
   onSave: (path: string, content: string) => Promise<void>;
   onRefresh: (path: string) => void;
-}
-
-function TagBadge({ tag }: { tag: string }) {
-  return (
-    <span className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full">{tag}</span>
-  );
 }
 
 function relativeTime(iso: string): string {
@@ -39,6 +37,7 @@ function relativeTime(iso: string): string {
 }
 
 export function WikiDoc({ path, doc, loading, onBack, onLoad, onSave, onRefresh }: Props) {
+  const { token } = theme.useToken();
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -72,51 +71,46 @@ export function WikiDoc({ path, doc, loading, onBack, onLoad, onSave, onRefresh 
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: token.colorBgContainer }}>
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-100 flex-shrink-0 bg-white">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 transition-colors"
+      <div 
+        className="flex items-center gap-3 px-6 py-3 flex-shrink-0"
+        style={{ borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer }}
+      >
+        <Button 
+          type="text" 
+          icon={<ArrowLeftOutlined />} 
+          onClick={onBack} 
+          size="small"
+          style={{ color: token.colorTextSecondary }}
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-          </svg>
           Back
-        </button>
+        </Button>
 
-        <span className="text-gray-200">|</span>
-        <span className="text-xs text-gray-400 truncate flex-1 font-mono">{path}</span>
+        <Divider type="vertical" style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
+        <Text type="secondary" ellipsis className="flex-1 font-mono text-xs">{path}</Text>
 
         {!editing && (
-          <button
-            onClick={handleEdit}
-            className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
-          >
+          <Button type="default" size="small" icon={<EditOutlined />} onClick={handleEdit}>
             Edit
-          </button>
+          </Button>
         )}
         {editing && (
-          <div className="flex gap-2">
-            <button
-              onClick={handleCancel}
-              className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
-            >
+          <Space>
+            <Button size="small" icon={<CloseOutlined />} onClick={handleCancel}>
               Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-3 py-1.5 text-xs bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          </div>
+            </Button>
+            <Button size="small" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
+              Save
+            </Button>
+          </Space>
         )}
       </div>
 
       {loading && (
-        <div className="flex-1 flex items-center justify-center text-sm text-gray-400">Loading...</div>
+        <div className="flex-1 flex items-center justify-center">
+          <Text type="secondary">Loading...</Text>
+        </div>
       )}
 
       {!loading && doc && !editing && (
@@ -126,16 +120,38 @@ export function WikiDoc({ path, doc, loading, onBack, onLoad, onSave, onRefresh 
             {(doc.frontmatter.tags.length > 0 || doc.frontmatter.updated) && (
               <div className="flex items-center gap-3 mb-6 flex-wrap">
                 <div className="flex gap-1.5 flex-wrap">
-                  {doc.frontmatter.tags.map(t => <TagBadge key={t} tag={t} />)}
+                  {doc.frontmatter.tags.map(t => <Tag color="orange" key={t}>{t}</Tag>)}
                 </div>
                 {doc.frontmatter.updated && (
-                  <span className="text-xs text-gray-400 ml-auto">{relativeTime(doc.frontmatter.updated)}</span>
+                  <Text type="secondary" className="text-xs ml-auto">
+                    {relativeTime(doc.frontmatter.updated)}
+                  </Text>
                 )}
               </div>
             )}
 
             {/* Markdown content */}
-            <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-code:text-amber-700 prose-code:bg-amber-50 prose-code:px-1 prose-code:rounded prose-pre:bg-gray-50 prose-pre:border prose-pre:border-gray-200">
+            <div 
+              className="prose prose-sm max-w-none prose-headings:font-semibold"
+              style={{
+                color: token.colorText,
+                '--tw-prose-body': token.colorText,
+                '--tw-prose-headings': token.colorText,
+                '--tw-prose-links': token.colorPrimary,
+                '--tw-prose-bold': token.colorText,
+                '--tw-prose-counters': token.colorTextSecondary,
+                '--tw-prose-bullets': token.colorTextSecondary,
+                '--tw-prose-hr': token.colorBorderSecondary,
+                '--tw-prose-quotes': token.colorTextSecondary,
+                '--tw-prose-quote-borders': token.colorBorderSecondary,
+                '--tw-prose-captions': token.colorTextSecondary,
+                '--tw-prose-code': token.colorWarning,
+                '--tw-prose-pre-code': token.colorText,
+                '--tw-prose-pre-bg': token.colorFillAlter,
+                '--tw-prose-th-borders': token.colorBorderSecondary,
+                '--tw-prose-td-borders': token.colorBorderSecondary,
+              } as React.CSSProperties}
+            >
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                 {/* Strip frontmatter from display */}
                 {doc.content.startsWith('---')
@@ -146,20 +162,23 @@ export function WikiDoc({ path, doc, loading, onBack, onLoad, onSave, onRefresh 
 
             {/* History */}
             {doc.gitLog.length > 0 && (
-              <div className="mt-8 border-t border-gray-100 pt-4">
-                <button
+              <div className="mt-8 pt-4" style={{ borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+                <Button 
+                  type="text" 
+                  size="small" 
+                  icon={showHistory ? <CaretDownOutlined /> : <CaretRightOutlined />}
                   onClick={() => setShowHistory(h => !h)}
-                  className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                  style={{ color: token.colorTextSecondary, padding: 0 }}
                 >
-                  {showHistory ? '▾' : '▸'} History ({doc.gitLog.length})
-                </button>
+                  History ({doc.gitLog.length})
+                </Button>
                 {showHistory && (
                   <div className="mt-2 space-y-1">
                     {doc.gitLog.map(c => (
-                      <div key={c.hash} className="flex items-center gap-3 text-xs text-gray-400">
-                        <span className="font-mono text-[10px] text-gray-300">{c.hash.slice(0, 7)}</span>
-                        <span className="flex-1 truncate">{c.message}</span>
-                        <span className="flex-shrink-0">{new Date(c.date).toLocaleDateString('zh-CN')}</span>
+                      <div key={c.hash} className="flex items-center gap-3 text-xs" style={{ color: token.colorTextSecondary }}>
+                        <Text type="secondary" className="font-mono text-[10px]">{c.hash.slice(0, 7)}</Text>
+                        <Text className="flex-1 truncate" style={{ color: token.colorTextSecondary }}>{c.message}</Text>
+                        <Text type="secondary" className="flex-shrink-0">{new Date(c.date).toLocaleDateString('zh-CN')}</Text>
                       </div>
                     ))}
                   </div>

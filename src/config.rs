@@ -7,6 +7,7 @@
 
 use std::env;
 use std::path::PathBuf;
+use base64::Engine;
 
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
@@ -62,6 +63,7 @@ pub struct PathsConfig {
     pub dispatch_state_path: PathBuf,
     pub managed_skills_dir: PathBuf,
     pub wiki_dir: PathBuf,
+    pub hooks_path: PathBuf,
     pub virtual_agents_dir: PathBuf,
     /// Optional bundled-skills dir; empty when unset (TS treats blank as disabled).
     pub bundled_skills_dir: Option<PathBuf>,
@@ -127,11 +129,19 @@ pub struct MemoryConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct AppConfig {
+    pub hub_url: String,
+    pub channel_id: String,
+    pub encryption_key: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct Config {
     pub telegram: TelegramConfig,
     pub feishu: FeishuConfig,
     pub qq: QqConfig,
     pub wechat: WechatConfig,
+    pub app: AppConfig,
     pub admin: AdminConfig,
     pub agent: AgentConfig,
     pub scheduler: SchedulerConfig,
@@ -198,6 +208,11 @@ impl Config {
                 api_base_url: env_or("WECHAT_API_BASE_URL", "https://ilinkai.weixin.qq.com"),
                 agent_folder: env_or("WECHAT_AGENT_FOLDER", "main"),
             },
+            app: AppConfig {
+                hub_url: env_or("APP_HUB_URL", "http://localhost:50051"),
+                channel_id: env_or("APP_CHANNEL_ID", ""),
+                encryption_key: env_or("APP_ENCRYPTION_KEY", ""),
+            },
             admin: AdminConfig {
                 telegram_user_id: env_or("ADMIN_TELEGRAM_USER_ID", ""),
                 feishu_open_id: env_or("ADMIN_FEISHU_OPEN_ID", ""),
@@ -227,6 +242,10 @@ impl Config {
                     senclaw_home.join("managed").join("skills"),
                 ),
                 wiki_dir: env_path("WIKI_DIR", senclaw_data.join("wiki")),
+                hooks_path: env_path(
+                    "SENCLAW_HOOKS_PATH",
+                    senclaw_home.join("hooks.json"),
+                ),
                 virtual_agents_dir: env_path(
                     "SENCLAW_VIRTUAL_AGENTS_DIR",
                     senclaw_data.join("virtual-agents"),

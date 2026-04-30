@@ -151,12 +151,113 @@ fn to_group_info(g: &GroupBinding) -> GroupInfo {
     }
 }
 
+// ===== Entity wire format (camelCase) =====
+
+#[derive(Debug, Clone, Serialize)]
+struct ChannelInfoWire {
+    id: i64,
+    #[serde(rename = "platformType")]
+    platform_type: String,
+    name: String,
+    #[serde(rename = "credentialsJson")]
+    credentials_json: String,
+    #[serde(rename = "connectionState")]
+    connection_state: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+fn to_channel_info(ch: &crate::types::Channel) -> ChannelInfoWire {
+    ChannelInfoWire {
+        id: ch.id,
+        platform_type: ch.platform_type.clone(),
+        name: ch.name.clone(),
+        credentials_json: ch.credentials_json.clone(),
+        connection_state: ch.connection_state.clone(),
+        created_at: ch.created_at.clone(),
+        updated_at: ch.updated_at.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentInfoWire {
+    id: i64,
+    folder: String,
+    name: String,
+    #[serde(rename = "requiresTrigger")]
+    requires_trigger: bool,
+    #[serde(rename = "allowedTools")]
+    allowed_tools: Option<Vec<String>>,
+    #[serde(rename = "allowedWorkDirs")]
+    allowed_work_dirs: Option<Vec<String>>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+fn to_agent_info(a: &crate::types::Agent) -> AgentInfoWire {
+    AgentInfoWire {
+        id: a.id,
+        folder: a.folder.clone(),
+        name: a.name.clone(),
+        requires_trigger: a.requires_trigger,
+        allowed_tools: a.allowed_tools.clone(),
+        allowed_work_dirs: a.allowed_work_dirs.clone(),
+        created_at: a.created_at.clone(),
+        updated_at: a.updated_at.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BindingWithRelationsWire {
+    id: i64,
+    jid: Option<String>,
+    #[serde(rename = "agentId")]
+    agent_id: i64,
+    #[serde(rename = "channelId")]
+    channel_id: i64,
+    #[serde(rename = "isAdmin")]
+    is_admin: bool,
+    #[serde(rename = "botTokenOverride")]
+    bot_token_override: Option<String>,
+    #[serde(rename = "maxMessages")]
+    max_messages: Option<u32>,
+    #[serde(rename = "lastActive")]
+    last_active: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    agent: AgentInfoWire,
+    channel: ChannelInfoWire,
+}
+
+fn to_binding_with_relations(br: &crate::types::BindingWithRelations) -> BindingWithRelationsWire {
+    BindingWithRelationsWire {
+        id: br.binding.id,
+        jid: br.binding.jid.clone(),
+        agent_id: br.binding.agent_id,
+        channel_id: br.binding.channel_id,
+        is_admin: br.binding.is_admin,
+        bot_token_override: br.binding.bot_token_override.clone(),
+        max_messages: br.binding.max_messages,
+        last_active: br.binding.last_active.clone(),
+        created_at: br.binding.created_at.clone(),
+        agent: to_agent_info(&br.agent),
+        channel: to_channel_info(&br.channel),
+    }
+}
+
 // ===== Shared state passed through to handlers =====
 
 pub struct WsState {
     pub config: Arc<Config>,
     pub db: Arc<Db>,
     pub group_manager: Arc<GroupManager>,
+    pub agent_manager: Arc<crate::gateway::agent_manager::AgentManager>,
+    pub binding_manager: Arc<crate::gateway::binding_manager::BindingManager>,
+    pub channel_manager: Arc<crate::gateway::channel_manager::ChannelManager>,
     pub api: Arc<dyn WsGatewayApi>,
 }
 
@@ -420,7 +521,7 @@ impl WebSocketGateway {
             }
         }
         let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-        tracing::debug!(
+        tracing::info!(
             "[WsGateway] broadcast_to_admins type={msg_type} sent={sent}/{total} client(s)"
         );
         if sent == 0 && (msg_type == "dispatch:update" || msg_type == "agent:todos") {
@@ -588,6 +689,18 @@ async fn handle_message(
         "list:feishu-apps" => handle_list_feishu_apps(clients, client_idx, &sender, state).await,
         "list:dispatch" => handle_list_dispatch(clients, client_idx, &sender, state).await,
         "agent:control" => handle_agent_control(clients, client_idx, &sender, state, msg).await,
+        "list:channels" => handle_list_channels(clients, client_idx, &sender, state).await,
+        "list:agents" => handle_list_agents(clients, client_idx, &sender, state).await,
+        "list:bindings" => handle_list_bindings(clients, client_idx, &sender, state).await,
+        "register:channel" => handle_register_channel(clients, client_idx, &sender, state, msg).await,
+        "register:agent" => handle_register_agent(clients, client_idx, &sender, state, msg).await,
+        "register:binding" => handle_register_binding(clients, client_idx, &sender, state, msg).await,
+        "unregister:channel" => handle_unregister_channel(clients, client_idx, &sender, state, msg).await,
+        "unregister:agent" => handle_unregister_agent(clients, client_idx, &sender, state, msg).await,
+        "unregister:binding" => handle_unregister_binding(clients, client_idx, &sender, state, msg).await,
+        "update:channel" => handle_update_channel(clients, client_idx, &sender, state, msg).await,
+        "update:agent" => handle_update_agent(clients, client_idx, &sender, state, msg).await,
+        "update:binding" => handle_update_binding(clients, client_idx, &sender, state, msg).await,
         _ => {
             send_json(
                 &sender,
@@ -670,6 +783,10 @@ async fn handle_subscribe(
     };
     if is_admin {
         let parents = state.api.get_dispatch_parents();
+        let parent_count = parents.as_array().map(|a| a.len()).unwrap_or(0);
+        tracing::info!(
+            "[WsGateway] subscribe snapshot client #{client_idx}: dispatch:update with {parent_count} parent(s)"
+        );
         if !parents.is_null() {
             send_json(
                 sender,
@@ -678,6 +795,10 @@ async fn handle_subscribe(
         }
         let todos = state.api.get_agent_todos();
         if let serde_json::Value::Object(map) = &todos {
+            tracing::info!(
+                "[WsGateway] subscribe snapshot client #{client_idx}: agent:todos for {} agent(s)",
+                map.len()
+            );
             for (agent_jid, entry) in map {
                 let agent_name =
                     entry.get("agentName").and_then(|v| v.as_str()).unwrap_or(agent_jid);
@@ -693,6 +814,9 @@ async fn handle_subscribe(
                 );
             }
         } else if !todos.is_null() {
+            tracing::info!(
+                "[WsGateway] subscribe snapshot client #{client_idx}: agent:todos (legacy format)"
+            );
             send_json(
                 sender,
                 &serde_json::json!({"type": "agent:todos", "todos": todos}),
@@ -1593,6 +1717,10 @@ async fn handle_list_dispatch(
         return;
     }
     let parents = state.api.get_dispatch_parents();
+    let parent_count = parents.as_array().map(|a| a.len()).unwrap_or(0);
+    tracing::info!(
+        "[WsGateway] list:dispatch client #{client_idx}: {parent_count} parent(s)"
+    );
     send_json(
         sender,
         &serde_json::json!({"type": "dispatch:update", "parents": parents}),
@@ -1659,6 +1787,354 @@ async fn handle_agent_control(
                 sender,
                 &serde_json::json!({"type": "error", "message": format!("Unknown agent:control action: {action}")}),
             );
+        }
+    }
+}
+
+// ===== Entity CRUD handlers =====
+
+async fn handle_list_channels(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let channels: Vec<ChannelInfoWire> = state
+        .channel_manager
+        .list(&state.db)
+        .unwrap_or_default()
+        .iter()
+        .map(|c| to_channel_info(c))
+        .collect();
+    send_json(sender, &serde_json::json!({"type": "channels", "channels": channels}));
+}
+
+async fn handle_list_agents(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let agents: Vec<AgentInfoWire> = state
+        .agent_manager
+        .list(&state.db)
+        .unwrap_or_default()
+        .iter()
+        .map(|a| to_agent_info(a))
+        .collect();
+    send_json(sender, &serde_json::json!({"type": "agents", "agents": agents}));
+}
+
+async fn handle_list_bindings(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let bindings: Vec<BindingWithRelationsWire> = state
+        .binding_manager
+        .list_with_relations(&state.db)
+        .unwrap_or_default()
+        .iter()
+        .map(|b| to_binding_with_relations(b))
+        .collect();
+    send_json(sender, &serde_json::json!({"type": "bindings", "bindings": bindings}));
+}
+
+async fn handle_register_channel(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let platform_type = msg["platformType"].as_str().unwrap_or("");
+    let name = msg["name"].as_str().unwrap_or("");
+    if platform_type.is_empty() || name.is_empty() {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "platformType and name are required"}));
+        return;
+    }
+    let credentials = msg["credentials"].clone();
+    let now = local_iso_string_now();
+    match state.channel_manager.create(&state.db, platform_type, name, &credentials.to_string(), &now) {
+        Ok(ch) => {
+            let wire = to_channel_info(&ch);
+            send_json(sender, &serde_json::json!({"type": "channel:registered", "channel": wire}));
+            broadcast_to_all_inner(clients, &serde_json::json!({"type": "channel:registered", "channel": wire})).await;
+        }
+        Err(e) => {
+            send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        }
+    }
+}
+
+async fn handle_register_agent(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let folder = msg["folder"].as_str().unwrap_or("");
+    let name = msg["name"].as_str().unwrap_or("");
+    if folder.is_empty() || name.is_empty() {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "folder and name are required"}));
+        return;
+    }
+    let requires_trigger = msg["requiresTrigger"].as_bool().unwrap_or(true);
+    let allowed_tools: Option<Vec<String>> = msg["allowedTools"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let allowed_work_dirs: Option<Vec<String>> = msg["allowedWorkDirs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let now = local_iso_string_now();
+    match state.agent_manager.create(&state.db, &state.config, folder, name, requires_trigger, allowed_tools.as_ref(), allowed_work_dirs.as_ref(), &now) {
+        Ok(a) => {
+            let wire = to_agent_info(&a);
+            send_json(sender, &serde_json::json!({"type": "agent:registered", "agent": wire}));
+            broadcast_to_all_inner(clients, &serde_json::json!({"type": "agent:registered", "agent": wire})).await;
+        }
+        Err(e) => {
+            send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        }
+    }
+}
+
+async fn handle_register_binding(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let agent_id = msg["agentId"].as_i64().unwrap_or(0);
+    let channel_id = msg["channelId"].as_i64().unwrap_or(0);
+    if agent_id == 0 || channel_id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "agentId and channelId are required"}));
+        return;
+    }
+    let jid = msg["jid"].as_str();
+    let is_admin = msg["isAdmin"].as_bool().unwrap_or(false);
+    let bot_token_override = msg["botTokenOverride"].as_str();
+    let max_messages = msg["maxMessages"].as_u64().map(|n| n as u32);
+    let now = local_iso_string_now();
+    match state.binding_manager.create(&state.db, jid, agent_id, channel_id, is_admin, bot_token_override, max_messages, &now) {
+        Ok(b) => {
+            // Fetch with relations for the full response
+            if let Ok(Some(br)) = state.binding_manager.get_with_relations(&state.db, &b.jid.clone().unwrap_or_default()) {
+                let wire = to_binding_with_relations(&br);
+                send_json(sender, &serde_json::json!({"type": "binding:registered", "binding": wire}));
+                broadcast_to_all_inner(clients, &serde_json::json!({"type": "binding:registered", "binding": wire})).await;
+            } else {
+                // Fallback: send just the binding without relations
+                send_json(sender, &serde_json::json!({"type": "binding:registered", "binding": {"id": b.id}}));
+            }
+        }
+        Err(e) => {
+            send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        }
+    }
+}
+
+async fn handle_unregister_channel(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let id = msg["id"].as_i64().unwrap_or(0);
+    if id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id is required"}));
+        return;
+    }
+    if let Err(e) = state.channel_manager.delete(&state.db, id) {
+        send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        return;
+    }
+    send_json(sender, &serde_json::json!({"type": "channel:unregistered", "id": id}));
+    broadcast_to_all_inner(clients, &serde_json::json!({"type": "channel:unregistered", "id": id})).await;
+}
+
+async fn handle_unregister_agent(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let id = msg["id"].as_i64().unwrap_or(0);
+    if id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id is required"}));
+        return;
+    }
+    if let Err(e) = state.agent_manager.delete(&state.db, id) {
+        send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        return;
+    }
+    send_json(sender, &serde_json::json!({"type": "agent:unregistered", "id": id}));
+    broadcast_to_all_inner(clients, &serde_json::json!({"type": "agent:unregistered", "id": id})).await;
+}
+
+async fn handle_unregister_binding(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let id = msg["id"].as_i64().unwrap_or(0);
+    if id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id is required"}));
+        return;
+    }
+    if let Err(e) = state.binding_manager.delete(&state.db, id) {
+        send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        return;
+    }
+    send_json(sender, &serde_json::json!({"type": "binding:unregistered", "id": id}));
+    broadcast_to_all_inner(clients, &serde_json::json!({"type": "binding:unregistered", "id": id})).await;
+}
+
+async fn handle_update_channel(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let id = msg["id"].as_i64().unwrap_or(0);
+    if id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id is required"}));
+        return;
+    }
+    let name = msg["name"].as_str();
+    let credentials = msg["credentials"].as_object().map(|c| serde_json::to_string(&c).unwrap_or_default());
+    let now = local_iso_string_now();
+    if let Err(e) = state.channel_manager.update(&state.db, id, name, credentials.as_deref(), &now) {
+        send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        return;
+    }
+    if let Ok(Some(ch)) = state.channel_manager.get(&state.db, id) {
+        let wire = to_channel_info(&ch);
+        send_json(sender, &serde_json::json!({"type": "channel:updated", "channel": wire}));
+        broadcast_to_all_inner(clients, &serde_json::json!({"type": "channel:updated", "channel": wire})).await;
+    }
+}
+
+async fn handle_update_agent(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let id = msg["id"].as_i64().unwrap_or(0);
+    if id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id is required"}));
+        return;
+    }
+    let name = msg["name"].as_str();
+    let requires_trigger = msg["requiresTrigger"].as_bool();
+    let allowed_tools: Option<Vec<String>> = msg["allowedTools"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let allowed_work_dirs: Option<Vec<String>> = msg["allowedWorkDirs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let now = local_iso_string_now();
+    if let Err(e) = state.agent_manager.update(&state.db, id, name, requires_trigger, allowed_tools.as_ref(), allowed_work_dirs.as_ref(), &now) {
+        send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        return;
+    }
+    if let Ok(Some(a)) = state.agent_manager.get(&state.db, id) {
+        let wire = to_agent_info(&a);
+        send_json(sender, &serde_json::json!({"type": "agent:updated", "agent": wire}));
+        broadcast_to_all_inner(clients, &serde_json::json!({"type": "agent:updated", "agent": wire})).await;
+    }
+}
+
+async fn handle_update_binding(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if !require_admin(clients, client_idx, sender).await {
+        return;
+    }
+    let id = msg["id"].as_i64().unwrap_or(0);
+    if id == 0 {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id is required"}));
+        return;
+    }
+    let jid = msg["jid"].as_str();
+    let bot_token_override = msg["botTokenOverride"].as_str();
+    let max_messages = msg["maxMessages"].as_u64().map(|n| n as u32);
+    if let Err(e) = state.binding_manager.update(&state.db, id, jid, bot_token_override, max_messages) {
+        send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
+        return;
+    }
+    if let Ok(Some(b)) = state.binding_manager.get(&state.db, id) {
+        // Fetch with relations for full info
+        if let Ok(Some(br)) = state.binding_manager.get_with_relations(&state.db, &b.jid.clone().unwrap_or_default()) {
+            let wire = to_binding_with_relations(&br);
+            send_json(sender, &serde_json::json!({"type": "binding:updated", "binding": wire}));
+            broadcast_to_all_inner(clients, &serde_json::json!({"type": "binding:updated", "binding": wire})).await;
         }
     }
 }

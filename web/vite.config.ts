@@ -10,6 +10,12 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:18788',
     },
   },
+  // Also for preview mode
+  preview: {
+    proxy: {
+      '/api': 'http://127.0.0.1:18788',
+    },
+  },
   build: {
     rollupOptions: {
       input: {

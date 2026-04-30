@@ -1,14 +1,37 @@
-/**
- * SubagentsPanel — Virtual Agent (Personas)
- *
- * Browse: search + card grid, detail with Markdown render/edit + toggle
- * Manage: list with per-item enable/disable
- */
-
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import {
+  theme,
+  Typography,
+  Button,
+  Input,
+  Switch,
+  Tag,
+  Card,
+  Space,
+  Avatar,
+  Empty,
+  Spin,
+  Modal,
+  message,
+  Tooltip,
+  Tabs,
+  Flex
+} from 'antd';
+import {
+  UserOutlined,
+  SearchOutlined,
+  PlusOutlined,
+  ArrowLeftOutlined,
+  EditOutlined,
+  ReloadOutlined,
+  ExclamationCircleOutlined
+} from '@ant-design/icons';
+
+const { Text, Title, Paragraph } = Typography;
+const { TextArea } = Input;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -22,8 +45,6 @@ interface Subagent {
   disabled: boolean;
 }
 
-type Tab = 'browse' | 'manage';
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -35,61 +56,61 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ─── Small components ─────────────────────────────────────────────────────────
-
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: () => void; disabled?: boolean }) {
-  return (
-    <button
-      onClick={e => { e.stopPropagation(); onChange(); }}
-      disabled={disabled}
-      className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150 focus:outline-none ${
-        checked ? 'bg-purple-500' : 'bg-gray-200'
-      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-      role="switch"
-      aria-checked={checked}
-    >
-      <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-150 ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
-    </button>
-  );
-}
-
-function PersonaIcon({ className = 'w-5 h-5' }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
-    </svg>
-  );
-}
-
 // ─── Card grid ────────────────────────────────────────────────────────────────
 
 function SubagentCard({ agent, onClick }: { agent: Subagent; onClick: () => void }) {
+  const { token } = theme.useToken();
+
   return (
-    <button
+    <Card
+      hoverable
+      size="small"
       onClick={onClick}
-      className="group flex flex-col gap-2.5 p-4 bg-white border border-gray-100 rounded-2xl text-left hover:border-purple-200 hover:shadow-md transition-all duration-150 cursor-pointer"
+      style={{
+        height: '100%',
+        backgroundColor: token.colorBgContainer,
+        borderColor: token.colorBorderSecondary,
+      }}
+      styles={{ body: { padding: '12px', height: '100%', display: 'flex', flexDirection: 'column' } }}
     >
-      {/* Header: icon + name */}
-      <div className="flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-100 transition-colors">
-          <PersonaIcon className="w-4 h-4 text-purple-500" />
+      <Flex vertical gap={8} style={{ height: '100%' }}>
+        {/* Header: icon + name */}
+        <Flex align="center" gap={10}>
+          <div style={{
+            backgroundColor: token.colorPrimaryBg,
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0
+          }}>
+            <UserOutlined style={{ color: token.colorPrimary, fontSize: 16 }} />
+          </div>
+          <Text strong style={{ fontSize: token.fontSizeSM, flex: 1 }} ellipsis={{ tooltip: agent.name }}>
+            {agent.name}
+          </Text>
+        </Flex>
+
+        {/* Description */}
+        <div style={{ flex: 1 }}>
+          <Paragraph type="secondary" style={{ fontSize: 12, margin: 0 }} ellipsis={{ rows: 2 }}>
+            {agent.description || <span style={{ fontStyle: 'italic', opacity: 0.5 }}>No description</span>}
+          </Paragraph>
         </div>
-        <span className="text-sm font-semibold text-gray-800 truncate leading-tight">{agent.name}</span>
-      </div>
-      {/* Description */}
-      <p className="text-xs text-gray-400 leading-relaxed line-clamp-2 flex-1">
-        {agent.description || <span className="italic text-gray-300">No description</span>}
-      </p>
-      {/* Footer */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-600">
-          max {agent.maxConcurrent}
-        </span>
-        {agent.disabled && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-50 text-red-400">off</span>
-        )}
-      </div>
-    </button>
+
+        {/* Footer */}
+        <Flex align="center" gap={6} wrap="wrap">
+          <Tag color="purple" style={{ margin: 0, fontSize: '10px' }}>
+            max {agent.maxConcurrent}
+          </Tag>
+          {agent.disabled && (
+            <Tag color="error" style={{ margin: 0, fontSize: '10px' }}>off</Tag>
+          )}
+        </Flex>
+      </Flex>
+    </Card>
   );
 }
 
@@ -100,6 +121,7 @@ function SubagentDetail({ agent, onBack, onToggleDisabled }: {
   onBack: () => void;
   onToggleDisabled: (name: string, disabled: boolean) => void;
 }) {
+  const { token } = theme.useToken();
   const [editing, setEditing] = useState(false);
   const [readme, setReadme] = useState<string | null>(null);
   const [draftContent, setDraftContent] = useState('');
@@ -120,93 +142,125 @@ function SubagentDetail({ agent, onBack, onToggleDisabled }: {
       });
       setReadme(draftContent);
       setEditing(false);
+      message.success('Persona saved');
+    } catch (e) {
+      message.error('Failed to save persona');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <Flex vertical style={{ height: '100%', background: token.colorBgLayout }}>
       {/* Top bar */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 bg-white flex-shrink-0">
-        <button
+      <Flex
+        align="center"
+        gap="middle"
+        style={{
+          padding: '12px 20px',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          backgroundColor: token.colorBgContainer,
+          flexShrink: 0
+        }}
+      >
+        <Button
+          type="text"
+          icon={<ArrowLeftOutlined />}
           onClick={onBack}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-purple-600 hover:bg-purple-50 px-2 py-1.5 rounded-lg transition-colors flex-shrink-0"
+          size="small"
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-          </svg>
           Back
-        </button>
-        <span className="text-gray-200 select-none">|</span>
+        </Button>
+        <div style={{ width: '1px', height: '16px', backgroundColor: token.colorBorderSecondary }} />
+
         {/* Name + meta */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="text-sm font-semibold text-gray-800 truncate">{agent.name}</span>
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-600">
-            max {agent.maxConcurrent}
-          </span>
+        <Flex align="center" gap="small" style={{ flex: 1, minWidth: 0 }}>
+          <Text strong ellipsis={{ tooltip: agent.name }}>{agent.name}</Text>
+          <Tag color="purple" style={{ margin: 0, fontSize: '10px' }}>max {agent.maxConcurrent}</Tag>
           {agent.model && (
-            <span className="text-[10px] text-gray-400">{agent.model}</span>
+            <Text type="secondary" style={{ fontSize: 12 }}>{agent.model}</Text>
           )}
           {agent.disabled && (
-            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-50 text-red-400">disabled</span>
+            <Tag color="error" style={{ margin: 0, fontSize: '10px' }}>disabled</Tag>
           )}
-        </div>
+        </Flex>
+
         {/* Actions */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <Space size="small">
           {editing ? (
             <>
-              <button onClick={() => setEditing(false)} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100">Cancel</button>
-              <button onClick={handleSave} disabled={saving} className="text-xs bg-purple-500 text-white px-3 py-1 rounded-lg hover:bg-purple-600 disabled:opacity-50">
-                {saving ? 'Saving...' : 'Save'}
-              </button>
+              <Button size="small" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button size="small" type="primary" onClick={handleSave} loading={saving}>
+                Save
+              </Button>
             </>
           ) : (
-            <button
+            <Button
+              size="small"
+              icon={<EditOutlined />}
               onClick={() => { setDraftContent(readme ?? ''); setEditing(true); }}
-              className="text-xs text-gray-400 hover:text-purple-600 hover:bg-purple-50 px-2 py-1 rounded-lg flex items-center gap-1 transition-colors"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" />
-              </svg>
               Edit
-            </button>
+            </Button>
           )}
-          <Toggle checked={!agent.disabled} onChange={() => onToggleDisabled(agent.name, agent.disabled)} />
-        </div>
-      </div>
+          <Switch
+            checked={!agent.disabled}
+            onChange={() => onToggleDisabled(agent.name, agent.disabled)}
+            size="small"
+          />
+        </Space>
+      </Flex>
 
       {/* Path */}
-      <div className="px-5 py-2 bg-gray-50/60 border-b border-gray-100 flex-shrink-0">
-        <span className="text-[10px] font-mono text-gray-400">{agent.filePath}</span>
+      <div
+        style={{
+          backgroundColor: token.colorFillAlter,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          padding: '6px 20px',
+          flexShrink: 0
+        }}
+      >
+        <Text type="secondary" style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+          {agent.filePath}
+        </Text>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto bg-white">
+      <div style={{ flex: 1, overflowY: 'auto', backgroundColor: token.colorBgContainer }}>
         {readme === null ? (
-          <div className="flex items-center justify-center h-32">
-            <svg className="animate-spin w-4 h-4 text-purple-300" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-            </svg>
-          </div>
+          <Flex align="center" justify="center" style={{ height: '300px' }}>
+            <Spin tip="Loading persona..." />
+          </Flex>
         ) : editing ? (
-          <textarea
-            className="w-full h-full font-mono text-xs text-gray-700 p-5 resize-none focus:outline-none leading-relaxed"
+          <TextArea
+            style={{
+              height: '100%',
+              padding: '20px',
+              fontFamily: 'monospace',
+              fontSize: token.fontSizeSM,
+              resize: 'none',
+              border: 'none',
+              backgroundColor: 'transparent'
+            }}
             value={draftContent}
             onChange={e => setDraftContent(e.target.value)}
             spellCheck={false}
-            style={{ minHeight: '100%' }}
           />
         ) : readme ? (
-          <div className="prose prose-sm max-w-none px-6 py-5 prose-headings:font-semibold prose-code:text-amber-700 prose-code:bg-amber-50 prose-code:px-1 prose-code:rounded prose-pre:bg-gray-50 prose-pre:border prose-pre:border-gray-200 [&_img]:rounded-lg">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{readme}</ReactMarkdown>
+          <div style={{ padding: '20px 24px' }}>
+            <div style={{
+              color: token.colorText,
+              fontSize: token.fontSizeSM,
+              lineHeight: 1.6
+            }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{readme}</ReactMarkdown>
+            </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-32 text-xs text-gray-400">No persona file found</div>
+          <Empty description="No persona content" style={{ marginTop: '64px' }} />
         )}
       </div>
-    </div>
+    </Flex>
   );
 }
 
@@ -223,16 +277,23 @@ max_concurrent: 3
 `;
 
 function CreateSubagentEditor({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const { token } = theme.useToken();
   const [content, setContent] = useState(NEW_TEMPLATE);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [showConfirmClose, setShowConfirmClose] = useState(false);
 
   const isDirty = content !== NEW_TEMPLATE;
 
   const handleClose = () => {
     if (isDirty) {
-      setShowConfirmClose(true);
+      Modal.confirm({
+        title: 'Discard changes?',
+        content: 'You have unsaved changes. Are you sure you want to close?',
+        okText: 'Discard',
+        okType: 'danger',
+        cancelText: 'Keep editing',
+        onOk: onClose
+      });
     } else {
       onClose();
     }
@@ -262,6 +323,7 @@ function CreateSubagentEditor({ onClose, onCreated }: { onClose: () => void; onC
         setError(data.error || `HTTP ${res.status}`);
         return;
       }
+      message.success('Virtual agent created');
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -271,79 +333,89 @@ function CreateSubagentEditor({ onClose, onCreated }: { onClose: () => void; onC
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <Flex vertical style={{ height: '100%' }}>
       {/* Top bar */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 bg-white flex-shrink-0">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <PersonaIcon className="w-4 h-4 text-purple-500 flex-shrink-0" />
-          <span className="text-sm font-semibold text-gray-800">New Virtual Agent</span>
-        </div>
-        <button
-          onClick={handleClose}
-          className="text-gray-400 hover:text-gray-600 text-xs px-2 py-1 rounded hover:bg-gray-100 transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
+      <Flex
+        align="center"
+        gap="middle"
+        style={{
+          padding: '12px 20px',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          backgroundColor: token.colorBgContainer,
+          flexShrink: 0
+        }}
+      >
+        <Flex align="center" gap="small" style={{ flex: 1 }}>
+          <Avatar
+            size={24}
+            icon={<UserOutlined style={{ fontSize: '12px' }} />}
+            style={{ backgroundColor: token.colorPrimaryBg, color: token.colorPrimary }}
+          />
+          <Text strong style={{ fontSize: '14px' }}>New Virtual Agent</Text>
+        </Flex>
+        <Button type="text" size="small" onClick={handleClose}>Cancel</Button>
+      </Flex>
 
       {/* Editor */}
-      <div className="flex-1 overflow-hidden relative">
-        <textarea
-          className="w-full h-full font-mono text-xs text-gray-700 p-5 resize-none focus:outline-none leading-relaxed"
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <TextArea
+          style={{
+            height: '100%',
+            padding: '20px',
+            fontFamily: token.fontFamilyCode,
+            fontSize: '12px',
+            resize: 'none',
+            border: 'none',
+            backgroundColor: token.colorBgContainer
+          }}
           value={content}
           onChange={e => { setContent(e.target.value); setError(''); }}
           spellCheck={false}
           placeholder="Edit your persona file here..."
-          style={{ minHeight: '100%' }}
         />
 
         {/* Save button — bottom right */}
-        <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2">
+        <Flex vertical align="end" gap="middle" style={{ position: 'absolute', bottom: '24px', right: '24px' }}>
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 text-xs px-3 py-2 rounded-lg max-w-xs">
-              {error}
+            <div
+              style={{
+                backgroundColor: token.colorErrorBg,
+                border: `1px solid ${token.colorErrorBorder}`,
+                borderRadius: '8px',
+                padding: '8px 12px',
+                maxWidth: '300px'
+              }}
+            >
+              <Space size={6}>
+                <ExclamationCircleOutlined style={{ color: token.colorError }} />
+                <Text type="danger" style={{ fontSize: '12px' }}>{error}</Text>
+              </Space>
             </div>
           )}
-          <button
+          <Button
+            type="primary"
+            size="large"
             onClick={handleSave}
-            disabled={saving}
-            className="bg-purple-500 text-white text-sm font-medium px-5 py-2 rounded-xl hover:bg-purple-600 disabled:opacity-50 shadow-lg hover:shadow-xl transition-all"
+            loading={saving}
+            style={{
+              borderRadius: '12px',
+              height: '44px',
+              padding: '0 24px',
+              boxShadow: token.boxShadow
+            }}
           >
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+            {saving ? 'Saving...' : 'Save Agent'}
+          </Button>
+        </Flex>
       </div>
-
-      {/* Confirm close dialog */}
-      {showConfirmClose && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="bg-white rounded-2xl shadow-xl p-5 max-w-sm mx-4">
-            <p className="text-sm font-semibold text-gray-800 mb-2">Discard changes?</p>
-            <p className="text-xs text-gray-500 mb-4">You have unsaved changes. Are you sure you want to close?</p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowConfirmClose(false)}
-                className="text-xs text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-100"
-              >
-                Keep editing
-              </button>
-              <button
-                onClick={onClose}
-                className="text-xs text-white bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-lg"
-              >
-                Discard
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </Flex>
   );
 }
 
 // ─── Browse tab ───────────────────────────────────────────────────────────────
 
 function BrowseTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subagent[]; onRefreshAgents: () => void; onReloadSuccess: () => void }) {
+  const { token } = theme.useToken();
   const [query, setQuery] = useState('');
   const [selectedAgent, setSelectedAgent] = useState<Subagent | null>(null);
   const [creating, setCreating] = useState(false);
@@ -362,9 +434,9 @@ function BrowseTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
 
   const localMatched = query.trim()
     ? agents.filter(a =>
-        a.name.toLowerCase().includes(query.toLowerCase()) ||
-        a.description.toLowerCase().includes(query.toLowerCase())
-      )
+      a.name.toLowerCase().includes(query.toLowerCase()) ||
+      a.description.toLowerCase().includes(query.toLowerCase())
+    )
     : agents;
 
   if (creating) {
@@ -387,67 +459,79 @@ function BrowseTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <Flex vertical style={{ height: '100%' }}>
       {/* Search bar + Add button */}
-      <div className="px-5 py-3 border-b border-gray-100 bg-white flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-            </svg>
-            <input
-              type="text"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Search persona name or description..."
-              className="w-full pl-8 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:border-purple-300 focus:outline-none focus:ring-1 focus:ring-purple-200 transition-colors"
+      <Flex
+        align="center"
+        gap="middle"
+        style={{
+          padding: '12px 20px',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          backgroundColor: token.colorBgContainer,
+          flexShrink: 0
+        }}
+      >
+        <Input
+          placeholder="Search persona name or description..."
+          prefix={<SearchOutlined style={{ color: token.colorTextPlaceholder }} />}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          style={{
+            borderRadius: '8px',
+            backgroundColor: token.colorBgLayout,
+            flex: 1
+          }}
+          allowClear
+        />
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setCreating(true)}
+          style={{ borderRadius: '8px' }}
+        >
+          New
+        </Button>
+      </Flex>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+        {localMatched.length === 0 ? (
+          <Flex vertical align="center" justify="center" style={{ height: '300px' }}>
+            <Empty
+              image={<UserOutlined style={{ fontSize: '48px', color: token.colorTextDisabled }} />}
+              description={
+                <Space direction="vertical" size={2}>
+                  <Text type="secondary">{query.trim() ? `No agents match "${query}"` : 'No virtual agents found'}</Text>
+                  {!query.trim() && (
+                    <Text type="secondary" style={{ fontSize: '11px' }}>
+                      Add .md persona files to ~/semaclaw/virtual-agents/
+                    </Text>
+                  )}
+                </Space>
+              }
             />
-          </div>
-          <button
-            onClick={() => setCreating(true)}
-            title="Create new virtual agent"
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors flex-shrink-0"
+          </Flex>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gap: '16px',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))'
+            }}
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            New
-          </button>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-5 py-4">
-        {localMatched.length === 0 && !query.trim() && (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="w-10 h-10 rounded-2xl bg-purple-50 flex items-center justify-center mb-3">
-              <PersonaIcon className="w-5 h-5 text-purple-300" />
-            </div>
-            <p className="text-sm text-gray-400">No virtual agents found.</p>
-            <p className="text-xs text-gray-300 mt-1">
-              Add .md persona files to ~/semaclaw/virtual-agents/
-            </p>
-          </div>
-        )}
-
-        {localMatched.length === 0 && query.trim() && (
-          <p className="text-xs text-gray-400 py-4 text-center">No agents match "{query}".</p>
-        )}
-
-        {localMatched.length > 0 && (
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
             {localMatched.map(a => (
               <SubagentCard key={a.name} agent={a} onClick={() => setSelectedAgent(a)} />
             ))}
           </div>
         )}
       </div>
-    </div>
+    </Flex>
   );
 }
 
 // ─── Manage tab ───────────────────────────────────────────────────────────────
 
 function ManageTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subagent[]; onRefreshAgents: () => void; onReloadSuccess: () => void }) {
+  const { token } = theme.useToken();
   const [toggling, setToggling] = useState<string | null>(null);
 
   const handleToggle = async (name: string, currentlyDisabled: boolean) => {
@@ -464,46 +548,77 @@ function ManageTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
 
   if (agents.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
-        <div className="w-10 h-10 rounded-2xl bg-purple-50 flex items-center justify-center mb-3">
-          <PersonaIcon className="w-5 h-5 text-purple-300" />
-        </div>
-        <p className="text-sm text-gray-400">No virtual agents found.</p>
-      </div>
+      <Flex vertical align="center" justify="center" style={{ height: '300px' }}>
+        <Empty description="No virtual agents found" />
+      </Flex>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-5 py-4">
-      <div className="border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50">
-        {agents.map(agent => (
-          <div key={agent.name} className="flex items-center gap-3 px-4 py-3 bg-white hover:bg-gray-50/50 transition-colors">
-            <div className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center flex-shrink-0">
-              <PersonaIcon className="w-3.5 h-3.5 text-purple-400" />
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+      <Card
+        size="small"
+        styles={{ body: { padding: 0 } }}
+        style={{
+          backgroundColor: token.colorBgContainer,
+          borderColor: token.colorBorderSecondary,
+          overflow: 'hidden',
+          borderRadius: '12px'
+        }}
+      >
+        {agents.map((agent, i) => (
+          <Flex
+            key={agent.name}
+            align="center"
+            gap="middle"
+            style={{
+              padding: '12px 16px',
+              borderBottom: i === agents.length - 1 ? 'none' : `1px solid ${token.colorBorderSecondary}`,
+              transition: 'background-color 0.2s',
+              cursor: 'default'
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = token.colorFillAlter; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+          >
+            <div style={{
+              backgroundColor: token.colorPrimaryBg,
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0
+            }}>
+              <UserOutlined style={{ color: token.colorPrimary, fontSize: 16 }} />
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className={`text-sm font-medium ${agent.disabled ? 'text-gray-400' : 'text-gray-800'}`}>
+            <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+              <Space size={8}>
+                <Text strong style={{
+                  color: agent.disabled ? token.colorTextDisabled : token.colorText,
+                  fontSize: token.fontSizeSM
+                }}>
                   {agent.name}
-                </span>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-500">
+                </Text>
+                <Tag color="purple" style={{ margin: 0, fontSize: '10px' }}>
                   max {agent.maxConcurrent}
-                </span>
-              </div>
+                </Tag>
+              </Space>
               {agent.description && (
-                <p className={`text-xs mt-0.5 truncate ${agent.disabled ? 'text-gray-300' : 'text-gray-400'}`}>
+                <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
                   {agent.description}
-                </p>
+                </Text>
               )}
-            </div>
-            <Toggle
+            </Flex>
+            <Switch
               checked={!agent.disabled}
               onChange={() => handleToggle(agent.name, agent.disabled)}
-              disabled={toggling === agent.name}
+              loading={toggling === agent.name}
+              size="small"
             />
-          </div>
+          </Flex>
         ))}
-      </div>
+      </Card>
     </div>
   );
 }
@@ -511,11 +626,10 @@ function ManageTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function SubagentsPanel() {
-  const [tab, setTab] = useState<Tab>('browse');
+  const { token } = theme.useToken();
+  const [tab, setTab] = useState('browse');
   const [agents, setAgents] = useState<Subagent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState('');
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -528,61 +642,70 @@ export function SubagentsPanel() {
 
   useEffect(() => { fetchAgents(); }, [fetchAgents]);
 
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(''), 2500);
-  }, []);
+  const items = [
+    {
+      key: 'browse',
+      label: 'Browse',
+      children: <BrowseTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => { }} />,
+    },
+    {
+      key: 'manage',
+      label: (
+        <Space size={6}>
+          Manage
+          {agents.length > 0 && (
+            <span style={{
+              fontSize: '10px',
+              backgroundColor: token.colorFillSecondary,
+              color: token.colorTextTertiary,
+              padding: '1px 6px',
+              borderRadius: '10px'
+            }}>
+              {agents.length}
+            </span>
+          )}
+        </Space>
+      ),
+      children: <ManageTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => { }} />,
+    },
+  ];
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div className="flex items-center px-5 pt-3 border-b border-gray-100 bg-white flex-shrink-0">
-        {(['browse', 'manage'] as Tab[]).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === t
-                ? 'border-purple-500 text-purple-600'
-                : 'border-transparent text-gray-400 hover:text-gray-600'
-            }`}
-          >
-            {t === 'browse' ? 'Browse' : 'Manage'}
-            {t === 'manage' && agents.length > 0 && (
-              <span className="ml-1.5 text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full">{agents.length}</span>
-            )}
-          </button>
-        ))}
-        <div className="flex-1" />
-        {toast && (
-          <span className="mr-2 text-[10px] text-purple-500 bg-purple-50 px-2 py-1 rounded-full animate-pulse">
-            {toast}
-          </span>
-        )}
-        <button
-          onClick={fetchAgents}
-          title="Refresh list"
-          className="mb-1.5 p-1.5 text-gray-300 hover:text-purple-500 hover:bg-purple-50 rounded-lg transition-colors"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-          </svg>
-        </button>
+    <Flex vertical style={{ height: '100%', backgroundColor: token.colorBgLayout }}>
+      <div style={{
+        backgroundColor: token.colorBgContainer,
+        padding: '0 20px',
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        flexShrink: 0
+      }}>
+        <Flex align="center">
+          <Tabs
+            activeKey={tab}
+            onChange={setTab}
+            items={items}
+            style={{ flex: 1 }}
+            tabBarStyle={{ marginBottom: 0, borderBottom: 'none' }}
+          />
+          <Tooltip title="Refresh list">
+            <Button
+              type="text"
+              icon={<ReloadOutlined />}
+              onClick={fetchAgents}
+              style={{ color: token.colorTextDescription }}
+            />
+          </Tooltip>
+        </Flex>
       </div>
 
       {loading ? (
-        <div className="flex-1 flex items-center justify-center">
-          <svg className="animate-spin w-5 h-5 text-purple-300" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-          </svg>
-        </div>
-      ) : tab === 'browse' ? (
-        <BrowseTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => showToast('Saved')} />
+        <Flex align="center" justify="center" style={{ flex: 1 }}>
+          <Spin size="large" tip="Loading agents..." />
+        </Flex>
       ) : (
-        <ManageTab agents={agents} onRefreshAgents={fetchAgents} onReloadSuccess={() => showToast('Saved')} />
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {tab === 'browse' ? items[0].children : items[1].children}
+        </div>
       )}
-    </div>
+    </Flex>
   );
 }

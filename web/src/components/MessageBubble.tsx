@@ -1,6 +1,9 @@
 import { useState } from 'react';
+import { theme, Typography } from 'antd';
 import type { ChatMessage } from '../types';
 import { PermissionCard, QuestionCard } from './PermissionCard';
+
+const { Text } = Typography;
 
 function formatTime(iso: string): string {
   try {
@@ -38,6 +41,7 @@ function SaveIcon() {
 function AgentBubble({ text, timestamp }: { text: string; timestamp: string }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const { token } = theme.useToken();
 
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
@@ -65,32 +69,40 @@ function AgentBubble({ text, timestamp }: { text: string; timestamp: string }) {
 
   return (
     <div className="max-w-[72%] group">
-      <div className="bg-white text-gray-800 px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm border border-gray-100">
+      <div 
+        className="px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm border"
+        style={{ 
+          background: token.colorFillQuaternary,
+          color: token.colorText,
+          borderColor: token.colorBorderSecondary
+        }}
+      >
         {text}
       </div>
       <div className="flex items-center mt-1 gap-1">
-        <p className="text-[11px] text-gray-400 ml-1 flex-1">{formatTime(timestamp)}</p>
+        <Text type="secondary" className="text-[11px] ml-1 flex-1">{formatTime(timestamp)}</Text>
         <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={handleCopy}
             title="Copy"
-            className={`p-1 rounded transition-colors ${
-              copyState === 'copied'
-                ? 'text-green-500'
-                : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
-            }`}
+            className="p-1 rounded transition-colors"
+            style={{
+              color: copyState === 'copied' ? token.colorSuccess : token.colorTextDescription,
+            }}
           >
             {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
           </button>
           <button
             onClick={handleSave}
             title={saveState === 'error' ? 'Save failed' : 'Save as note'}
-            className={`p-1 rounded transition-colors ${
-              saveState === 'saved'   ? 'text-green-500' :
-              saveState === 'error'   ? 'text-red-400' :
-              saveState === 'saving'  ? 'text-gray-300 cursor-not-allowed' :
-              'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
-            }`}
+            className="p-1 rounded transition-colors"
+            style={{
+              color: saveState === 'saved' ? token.colorSuccess :
+                     saveState === 'error' ? token.colorError :
+                     saveState === 'saving' ? token.colorTextDisabled :
+                     token.colorTextDescription,
+              cursor: saveState === 'saving' ? 'not-allowed' : 'pointer'
+            }}
           >
             {saveState === 'saved' ? <CheckIcon /> : <SaveIcon />}
           </button>
@@ -107,6 +119,8 @@ interface MessageBubbleProps {
 }
 
 export function MessageBubble({ message, onResolvePermission, onResolveQuestion }: MessageBubbleProps) {
+  const { token } = theme.useToken();
+
   if (message.role === 'permission') {
     return (
       <div className="flex justify-start">
@@ -129,10 +143,19 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
     return (
       <div className="flex justify-end">
         <div className="max-w-[72%]">
-          <div className="bg-[#5BBFE8] text-white px-4 py-2.5 rounded-2xl rounded-tr-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm">
+          <div 
+            className="px-4 py-2.5 rounded-2xl rounded-tr-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-lg"
+            style={{
+              background: token.colorPrimary,
+              color: '#fff', // User messages often look good with white text on primary color
+              boxShadow: `0 4px 14px 0 ${token.colorPrimary}33`
+            }}
+          >
             {text}
           </div>
-          <p className="text-[11px] text-gray-400 mt-1 text-right pr-1">{formatTime(timestamp)}</p>
+          <Text type="secondary" className="text-[10px] font-medium mt-1 text-right pr-1 block">
+            {formatTime(timestamp)}
+          </Text>
         </div>
       </div>
     );
@@ -143,9 +166,14 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
   return (
     <div className="flex gap-2.5 items-end">
       {/* Avatar */}
-      <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mb-5 text-white text-[10px] font-bold ${
-        isAgent ? 'bg-[#5BBFE8]' : 'bg-gray-300'
-      }`}>
+      <div 
+        className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mb-5 text-[10px] font-bold shadow-lg"
+        style={{
+          background: isAgent ? token.colorPrimary : token.colorFillSecondary,
+          color: isAgent ? '#fff' : token.colorText,
+          boxShadow: isAgent ? `0 4px 14px 0 ${token.colorPrimary}33` : undefined
+        }}
+      >
         {isAgent ? 'AI' : (senderName?.charAt(0).toUpperCase() ?? '?')}
       </div>
       {isAgent ? (
@@ -153,12 +181,23 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
       ) : (
         <div className="max-w-[72%]">
           {senderName && (
-            <p className="text-[11px] text-gray-500 mb-1 ml-1">{senderName}</p>
+            <Text type="secondary" className="text-[10px] font-bold tracking-wider mb-1 ml-1 uppercase block">
+              {senderName}
+            </Text>
           )}
-          <div className="bg-white text-gray-800 px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm border border-gray-100">
+          <div 
+            className="px-4 py-2.5 rounded-2xl rounded-tl-sm text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm border"
+            style={{ 
+              background: token.colorFillQuaternary,
+              color: token.colorText,
+              borderColor: token.colorBorderSecondary
+            }}
+          >
             {text}
           </div>
-          <p className="text-[11px] text-gray-400 mt-1 ml-1">{formatTime(timestamp)}</p>
+          <Text type="secondary" className="text-[10px] font-medium mt-1 ml-1 block">
+            {formatTime(timestamp)}
+          </Text>
         </div>
       )}
     </div>
@@ -166,18 +205,37 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
 }
 
 export function TypingIndicator() {
+  const { token } = theme.useToken();
+
   return (
     <div className="flex gap-2.5 items-end">
-      <div className="w-7 h-7 rounded-full bg-[#5BBFE8] flex items-center justify-center flex-shrink-0 mb-5 text-white text-[10px] font-bold">
+      <div 
+        className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mb-5 text-[10px] font-bold shadow-lg"
+        style={{
+          background: token.colorPrimary,
+          color: '#fff',
+          boxShadow: `0 4px 14px 0 ${token.colorPrimary}33`
+        }}
+      >
         AI
       </div>
-      <div className="bg-white px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100">
+      <div 
+        className="px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm border"
+        style={{ 
+          background: token.colorFillQuaternary,
+          borderColor: token.colorBorderSecondary
+        }}
+      >
         <div className="flex gap-1 items-center h-4">
           {[0, 150, 300].map(delay => (
             <span
               key={delay}
-              className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce"
-              style={{ animationDelay: `${delay}ms` }}
+              className="w-1.5 h-1.5 rounded-full animate-bounce"
+              style={{ 
+                animationDelay: `${delay}ms`,
+                background: token.colorPrimary,
+                opacity: 0.6
+              }}
             />
           ))}
         </div>

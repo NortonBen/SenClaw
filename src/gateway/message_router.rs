@@ -12,10 +12,11 @@ use crate::agent::group_queue::GroupQueue;
 use crate::agent::session_bridge::build_prompt_for_group;
 use crate::config::Config;
 use crate::db::Db;
+use crate::gateway::binding_manager::BindingManager;
 use crate::gateway::command_dispatcher::dispatch_command;
 use crate::gateway::group_manager::{ensure_wechat_admin_group, GroupManager};
-use crate::gateway::trigger_checker::should_trigger;
-use crate::types::{GroupBinding, IncomingMessage, StoredMessage};
+use crate::gateway::trigger_checker::{should_trigger, should_trigger_entity};
+use crate::types::{BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
 
 // ===== Agent API trait =====
 
@@ -63,6 +64,7 @@ pub type OnJidMigrated = Arc<dyn Fn(&str, &GroupBinding) + Send + Sync + 'static
 
 pub struct MessageRouter {
     group_manager: Arc<GroupManager>,
+    binding_manager: Arc<BindingManager>,
     agent_api: Arc<dyn AgentApi>,
     group_queue: Arc<GroupQueue>,
     db: Arc<Db>,
@@ -75,6 +77,7 @@ pub struct MessageRouter {
 impl MessageRouter {
     pub fn new(
         group_manager: Arc<GroupManager>,
+        binding_manager: Arc<BindingManager>,
         agent_api: Arc<dyn AgentApi>,
         group_queue: Arc<GroupQueue>,
         db: Arc<Db>,
@@ -82,6 +85,7 @@ impl MessageRouter {
     ) -> Self {
         Self {
             group_manager,
+            binding_manager,
             agent_api,
             group_queue,
             db,
@@ -97,6 +101,27 @@ impl MessageRouter {
         *guard = Some(cb);
     }
 
+    /// Resolve a [`GroupBinding`] for the incoming message JID.
+    /// Tries the new entity model first (bindings table), then falls back to
+    /// the legacy groups table.
+    async fn resolve_binding(&self, msg: &IncomingMessage) -> Option<GroupBinding> {
+        // 1. Try new entity model via BindingManager.
+        if let Ok(Some(br)) = self
+            .binding_manager
+            .get_with_relations(&self.db, &msg.chat_jid)
+        {
+            tracing::info!(
+                "[MessageRouter] Resolved via entity model: agent={} channel={}",
+                br.agent.folder,
+                br.channel.name
+            );
+            return Some(to_group_binding(&br));
+        }
+
+        // 2. Fall back to legacy GroupManager.
+        self.group_manager.get(&self.db, &msg.chat_jid)
+    }
+
     /// Main entry point — called by channels when a message arrives.
     pub async fn handle_incoming(&self, msg: IncomingMessage) {
         tracing::info!(
@@ -105,8 +130,8 @@ impl MessageRouter {
             &msg.content.chars().take(60).collect::<String>(),
         );
 
-        // 1. Find registered group binding
-        let mut group = self.group_manager.get(&self.db, &msg.chat_jid);
+        // 1. Find registered group binding (entity model first, then legacy)
+        let mut group = self.resolve_binding(&msg).await;
 
         if group.is_none() {
             if msg.chat_jid.starts_with("wx:") {
@@ -356,6 +381,26 @@ async fn run_agent(agent_api: Arc<dyn AgentApi>, db: Arc<Db>, jid: String, group
 
     if let Some(ts) = cursor {
         let _ = db.set_last_agent_timestamp(&jid, &ts);
+    }
+}
+
+/// Synthesize a legacy [`GroupBinding`] from the new entity model so the
+/// existing AgentPool / trigger-checker / dispatch paths work without changes.
+fn to_group_binding(br: &BindingWithRelations) -> GroupBinding {
+    GroupBinding {
+        jid: br.binding.jid.clone().unwrap_or_default(),
+        folder: br.agent.folder.clone(),
+        name: br.agent.name.clone(),
+        channel: br.channel.platform_type.clone(),
+        is_admin: br.binding.is_admin,
+        requires_trigger: br.agent.requires_trigger,
+        allowed_tools: br.agent.allowed_tools.clone(),
+        allowed_paths: br.agent.allowed_paths.clone(),
+        allowed_work_dirs: br.agent.allowed_work_dirs.clone(),
+        bot_token: br.binding.bot_token_override.clone(),
+        max_messages: br.binding.max_messages,
+        last_active: br.binding.last_active.clone(),
+        added_at: br.binding.created_at.clone(),
     }
 }
 

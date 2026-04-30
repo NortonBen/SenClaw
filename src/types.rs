@@ -72,6 +72,53 @@ pub struct GroupBinding {
     pub added_at: String,
 }
 
+// ===== New entity model =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Channel {
+    pub id: i64,
+    pub platform_type: String,
+    pub name: String,
+    pub credentials_json: String,
+    pub connection_state: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Agent {
+    pub id: i64,
+    pub folder: String,
+    pub name: String,
+    pub requires_trigger: bool,
+    pub allowed_tools: Option<Vec<String>>,
+    pub allowed_paths: Option<Vec<String>>,
+    pub allowed_work_dirs: Option<Vec<String>>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Binding {
+    pub id: i64,
+    /// None = pending binding (auto-complete on first message)
+    pub jid: Option<String>,
+    pub agent_id: i64,
+    pub channel_id: i64,
+    pub is_admin: bool,
+    pub bot_token_override: Option<String>,
+    pub max_messages: Option<u32>,
+    pub last_active: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BindingWithRelations {
+    pub binding: Binding,
+    pub agent: Agent,
+    pub channel: Channel,
+}
+
 // ===== DB layer =====
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -144,7 +144,14 @@ impl Tool for TodoWriteTool {
         let mut state = self.state.lock().unwrap();
         state.update_todos_intelligently(ctx.agent_id, items.clone());
         if let Some(bus) = ctx.event_bus {
+            tracing::info!(
+                "[TodoWrite] Emitting TodosUpdate for {} ({} items)",
+                ctx.agent_id,
+                items.len()
+            );
             bus.emit(EngineEvent::TodosUpdate(items.clone()));
+        } else {
+            tracing::warn!("[TodoWrite] No event_bus in ToolContext — todos update NOT broadcast");
         }
 
         Ok(vec![ToolOutput::Result {

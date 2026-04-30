@@ -3,4 +3,5 @@
 pub mod auth;
 pub mod client;
 pub mod lockfile;
+pub mod relay_client;
 pub mod signal;
