@@ -751,6 +751,25 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     }
     tracing::info!("[SenClaw] Reply routing wired to channels");
 
+    // Wire typing indicator through the correct channel.
+    {
+        let chs = Arc::clone(&channels);
+        agent_pool.set_typing_fn(Arc::new(move |jid: &str, active: bool, bot_token: Option<&str>| {
+            let chs = Arc::clone(&chs);
+            let jid = jid.to_string();
+            let bt = bot_token.map(|s| s.to_string());
+            tokio::spawn(async move {
+                let guard = chs.lock().await;
+                for c in guard.iter() {
+                    if c.owns_jid(&jid) {
+                        let _ = c.set_typing(&jid, active, bt.as_deref()).await;
+                        break;
+                    }
+                }
+            });
+        }));
+    }
+
     // Start SendBridge (HTTP bridge for MCP send-server).
     let _send_bridge = {
         let chs_msg = Arc::clone(&channels);

@@ -794,6 +794,9 @@ pub type ReplyFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
 /// channel-bound replies once message_router wires it up (Phase 2).
 pub type SendReplyFn = Arc<dyn Fn(&str, &str, Option<&str>) + Send + Sync>;
 
+/// Typing indicator callback (jid, active, bot_token).
+pub type TypingFn = Arc<dyn Fn(&str, bool, Option<&str>) + Send + Sync>;
+
 /// Inactivity-timer reset closure stored per JID during process_and_wait.
 type ActivityResetFn = Arc<dyn Fn() + Send + Sync>;
 
@@ -887,6 +890,7 @@ pub struct AgentPool {
     // `AgentPool::new(core_api)` call still compiles.
     on_reply: Mutex<Option<ReplyFn>>,
     send_reply: Mutex<Option<SendReplyFn>>,
+    typing_fn: Mutex<Option<TypingFn>>,
     permission_bridge: Mutex<Option<Arc<PermissionBridge>>>,
     daily_logger: Mutex<Option<Arc<DailyLogger>>>,
     agent_event_sink: Mutex<Option<Arc<dyn AgentEventSink>>>,
@@ -917,6 +921,7 @@ impl AgentPool {
             state: Mutex::new(State::new()),
             on_reply: Mutex::new(None),
             send_reply: Mutex::new(None),
+            typing_fn: Mutex::new(None),
             permission_bridge: Mutex::new(None),
             daily_logger: Mutex::new(None),
             agent_event_sink: Mutex::new(None),
@@ -942,6 +947,16 @@ impl AgentPool {
     /// the WS-only reply path.
     pub fn set_send_reply(&self, f: SendReplyFn) {
         *self.send_reply.lock().unwrap() = Some(f);
+    }
+
+    pub fn set_typing_fn(&self, f: TypingFn) {
+        *self.typing_fn.lock().unwrap() = Some(f);
+    }
+
+    fn send_typing(&self, jid: &str, active: bool, bot_token: Option<&str>) {
+        if let Some(f) = self.typing_fn.lock().unwrap().as_ref().cloned() {
+            f(jid, active, bot_token);
+        }
     }
 
     pub fn set_permission_bridge(&self, bridge: Arc<PermissionBridge>) {
@@ -1811,6 +1826,9 @@ impl AgentPool {
             s.process_event_txs.insert(jid.to_string(), event_tx);
         }
 
+        // ---- typing indicator ON ----
+        self.send_typing(jid, true, group.bot_token.as_deref());
+
         // ---- call process_user_input (non-blocking) ----
         // Mirrors TS AgentPool.ts:826: core.processUserInput(fullPrompt).
         // Stub CoreApi no-ops; real sema-core starts processing and emits events.
@@ -1901,6 +1919,9 @@ impl AgentPool {
             s.active_aborts.remove(&jid_owned);
             s.process_event_txs.remove(&jid_owned);
         }
+
+        // ---- typing indicator OFF ----
+        self.send_typing(&jid_owned, false, group.bot_token.as_deref());
 
         // ---- handle loop result ----
         match loop_result {

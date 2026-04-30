@@ -133,7 +133,8 @@ impl TelegramChannel {
 
         // Build a reqwest client whose timeout exceeds the long-poll window so
         // Telegram always returns before the HTTP layer closes the connection.
-        let http_client = reqwest::Client::builder()
+        // Use teloxide's own ClientBuilder to avoid reqwest version conflicts.
+        let http_client = teloxide::net::default_reqwest_settings()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
             .unwrap_or_default();
@@ -276,7 +277,7 @@ impl Channel for TelegramChannel {
     }
 
     fn owns_jid(&self, chat_jid: &str) -> bool {
-        chat_jid.starts_with("tg:")
+        self.connected.load(Ordering::SeqCst) && chat_jid.starts_with("tg:")
     }
 
     fn on_message(&self, handler: MessageCallback) {
@@ -392,7 +393,7 @@ async fn listen_loop(
 
     let mut offset: i32 = 0;
     loop {
-        let updates = match bot.get_updates().offset(offset).timeout(POLL_TIMEOUT_SECS as i32).send().await {
+        let updates = match bot.get_updates().offset(offset).timeout(POLL_TIMEOUT_SECS as u32).send().await {
             Ok(u) => u,
             Err(e) => {
                 tracing::warn!("[TelegramChannel] getUpdates error for @{bot_username}: {e}");
@@ -482,7 +483,7 @@ async fn listen_loop(
                 sender_name,
                 sender_jid,
                 content: text,
-                timestamp: tg_msg.date.to_string(),
+                timestamp: tg_msg.date.format("%Y-%m-%dT%H:%M:%S.000Z").to_string(),
                 is_from_me: false,
                 chat_type: chat_type_enum,
                 mentions_bot_username: Some(mentions_bot),
