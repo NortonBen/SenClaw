@@ -28,19 +28,11 @@ pub async fn run(cmd: ChannelCmd) -> Result<()> {
             println!("=== Channel Status ===");
             println!(
                 "Telegram:  {}",
-                if cfg.telegram.bot_token.is_empty() { "not configured" } else { "configured" }
-            );
-            println!(
-                "Feishu:    {}",
-                if cfg.feishu.app_id.is_empty() { "not configured" } else { "configured" }
-            );
-            println!(
-                "QQ:        {}",
-                if cfg.qq.app_id.is_empty() { "not configured" } else { "configured" }
-            );
-            println!(
-                "WeChat:    {}",
-                if cfg.wechat.enabled { "enabled" } else { "disabled" }
+                if cfg.telegram.bot_token.is_empty() {
+                    "not configured"
+                } else {
+                    "configured"
+                }
             );
         }
         ChannelCmd::Status => {

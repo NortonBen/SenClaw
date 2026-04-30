@@ -26,15 +26,18 @@ impl Crypto {
     pub fn new_from_b64(b64_key: &str) -> Result<Self> {
         let decoded = STANDARD.decode(b64_key)
             .map_err(|e| anyhow!("Invalid base64 key: {}", e))?;
-        
-        // Always hash to ensure consistency and proper length
-        let mut hasher = Sha256::new();
-        hasher.update(&decoded);
-        let result = hasher.finalize();
-        
+
         let mut key = [0u8; 32];
-        key.copy_from_slice(&result);
-        
+        if decoded.len() == 32 {
+            // Already the right length — use directly without hashing
+            key.copy_from_slice(&decoded);
+        } else {
+            // Derive a 32-byte key via SHA-256
+            let mut hasher = Sha256::new();
+            hasher.update(&decoded);
+            key.copy_from_slice(&hasher.finalize());
+        }
+
         Ok(Self { key })
     }
 

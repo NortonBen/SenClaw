@@ -31,14 +31,8 @@ use crate::agent::permission_bridge::{
     AskQuestionData, AskQuestionOption, AskQuestionPayload, PermissionBridge, PermissionPayload,
 };
 use crate::agent::session_bridge;
-use crate::config::Config;
+use crate::config::{Config, FeishuConfig};
 use crate::db::Db;
-use crate::zen_core::engine::ZenEngine;
-use crate::zen_core::{
-    AskQuestionResponseData, EngineEvent, SessionState, ToolPermissionResponseData,
-    ZenCore, ZenCoreOptions,
-};
-use tokio::sync::broadcast::error::RecvError;
 use crate::gateway::message_router::AgentApi;
 use crate::mcp::helper::{
     dispatch_mcp_config, feishu_wiki_mcp_config, memory_mcp_config, schedule_mcp_config,
@@ -47,6 +41,12 @@ use crate::mcp::helper::{
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
 use crate::util::local_time::local_iso_string_now;
+use crate::zen_core::engine::ZenEngine;
+use crate::zen_core::{
+    AskQuestionResponseData, EngineEvent, SessionState, ToolPermissionResponseData, ZenCore,
+    ZenCoreOptions,
+};
+use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 // ===== Constants =====
@@ -85,7 +85,11 @@ impl Default for PermissionsConfig {
 pub struct TodoSnapshot {
     pub content: String,
     pub status: String,
-    #[serde(default, rename = "activeForm", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "activeForm",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub active_form: Option<String>,
 }
 
@@ -117,7 +121,11 @@ pub struct StateUpdateData {
 pub struct TodosUpdateItem {
     pub content: String,
     pub status: String,
-    #[serde(default, rename = "activeForm", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "activeForm",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub active_form: Option<String>,
 }
 
@@ -233,12 +241,7 @@ pub struct CachedTools {
 #[allow(unused_variables)]
 pub trait CoreApi: Send + Sync {
     /// Process a user prompt synchronously (Phase 1 stub path).
-    fn process_message(
-        &self,
-        jid: &str,
-        prompt: &str,
-        group: &GroupBinding,
-    ) -> Result<String> {
+    fn process_message(&self, jid: &str, prompt: &str, group: &GroupBinding) -> Result<String> {
         Err(anyhow::anyhow!("CoreApi not wired — sema-core unavailable"))
     }
 
@@ -297,36 +300,16 @@ pub trait CoreApi: Send + Sync {
         _handler: Box<dyn Fn(MessageCompleteData) + Send + Sync>,
     ) {
     }
-    fn on_state_update(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(StateUpdateData) + Send + Sync>,
-    ) {
-    }
+    fn on_state_update(&self, _jid: &str, _handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {}
     fn on_todos_update(
         &self,
         _jid: &str,
         _handler: Box<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>,
     ) {
     }
-    fn on_compact_start(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(CompactStartData) + Send + Sync>,
-    ) {
-    }
-    fn on_compact_exec(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(CompactExecData) + Send + Sync>,
-    ) {
-    }
-    fn on_session_error(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(SessionErrorData) + Send + Sync>,
-    ) {
-    }
+    fn on_compact_start(&self, _jid: &str, _handler: Box<dyn Fn(CompactStartData) + Send + Sync>) {}
+    fn on_compact_exec(&self, _jid: &str, _handler: Box<dyn Fn(CompactExecData) + Send + Sync>) {}
+    fn on_session_error(&self, _jid: &str, _handler: Box<dyn Fn(SessionErrorData) + Send + Sync>) {}
     fn on_tool_permission_request(
         &self,
         _jid: &str,
@@ -454,8 +437,7 @@ impl ZenCoreApi {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        let handlers = handlers_map.lock().unwrap()
-                            .get(&jid).cloned();
+                        let handlers = handlers_map.lock().unwrap().get(&jid).cloned();
                         let h = match handlers {
                             Some(h) => h,
                             None => continue,
@@ -482,11 +464,14 @@ impl ZenCoreApi {
                                     items.len()
                                 );
                                 if let Some(ref cb) = h.todos_update {
-                                    cb(items.iter().map(|item| TodosUpdateItem {
-                                        content: item.content.clone(),
-                                        status: item.status.clone(),
-                                        active_form: item.active_form.clone(),
-                                    }).collect());
+                                    cb(items
+                                        .iter()
+                                        .map(|item| TodosUpdateItem {
+                                            content: item.content.clone(),
+                                            status: item.status.clone(),
+                                            active_form: item.active_form.clone(),
+                                        })
+                                        .collect());
                                 } else {
                                     tracing::warn!(
                                         "[AgentPool] bridge_events TodosUpdate for {jid} but NO handler registered"
@@ -525,19 +510,23 @@ impl ZenCoreApi {
                                 if let Some(ref cb) = h.ask_question_request {
                                     cb(AskQuestionRequestData {
                                         agent_id: data.agent_id,
-                                        questions: data.questions.into_iter().map(
-                                            |q| AskQuestionData {
+                                        questions: data
+                                            .questions
+                                            .into_iter()
+                                            .map(|q| AskQuestionData {
                                                 question: q.question,
                                                 header: q.header,
-                                                options: q.options.into_iter().map(
-                                                    |o| AskQuestionOption {
+                                                options: q
+                                                    .options
+                                                    .into_iter()
+                                                    .map(|o| AskQuestionOption {
                                                         label: o.label,
                                                         description: o.description,
-                                                    }
-                                                ).collect(),
+                                                    })
+                                                    .collect(),
                                                 multi_select: q.multi_select,
-                                            }
-                                        ).collect(),
+                                            })
+                                            .collect(),
                                     });
                                 }
                             }
@@ -550,10 +539,7 @@ impl ZenCoreApi {
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
-                        tracing::warn!(
-                            "[ZenCoreApi] event bus lagged by {} for {}",
-                            n, jid
-                        );
+                        tracing::warn!("[ZenCoreApi] event bus lagged by {} for {}", n, jid);
                         continue;
                     }
                     Err(RecvError::Closed) => break,
@@ -564,12 +550,7 @@ impl ZenCoreApi {
 }
 
 impl CoreApi for ZenCoreApi {
-    fn process_message(
-        &self,
-        jid: &str,
-        prompt: &str,
-        _group: &GroupBinding,
-    ) -> Result<String> {
+    fn process_message(&self, jid: &str, prompt: &str, _group: &GroupBinding) -> Result<String> {
         let engine = self.ensure_engine(jid);
         engine.process_user_input(prompt, None)?;
         Ok("Dispatched to zen-core".to_string())
@@ -649,13 +630,10 @@ impl CoreApi for ZenCoreApi {
     }
 
     fn get_tool_infos(&self, jid: &str) -> Vec<AgentToolInfo> {
-        let engine = self
-            .engines
-            .lock()
-            .unwrap()
-            .get(jid)
-            .cloned();
-        let Some(engine) = engine else { return Vec::new() };
+        let engine = self.engines.lock().unwrap().get(jid).cloned();
+        let Some(engine) = engine else {
+            return Vec::new();
+        };
         engine
             .get_tool_infos()
             .into_iter()
@@ -674,7 +652,9 @@ impl CoreApi for ZenCoreApi {
     }
 
     fn has_session_tool_results(&self, jid: &str) -> bool {
-        self.engines.lock().unwrap()
+        self.engines
+            .lock()
+            .unwrap()
             .get(jid)
             .map(|e| e.has_session_tool_results())
             .unwrap_or(false)
@@ -690,51 +670,31 @@ impl CoreApi for ZenCoreApi {
         });
     }
 
-    fn on_state_update(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(StateUpdateData) + Send + Sync>,
-    ) {
+    fn on_state_update(&self, jid: &str, handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {
         self.with_handlers(jid, |entry| {
             entry.state_update = Some(Arc::from(handler));
         });
     }
 
-    fn on_todos_update(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>,
-    ) {
+    fn on_todos_update(&self, jid: &str, handler: Box<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>) {
         self.with_handlers(jid, |entry| {
             entry.todos_update = Some(Arc::from(handler));
         });
     }
 
-    fn on_compact_start(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(CompactStartData) + Send + Sync>,
-    ) {
+    fn on_compact_start(&self, jid: &str, handler: Box<dyn Fn(CompactStartData) + Send + Sync>) {
         self.with_handlers(jid, |entry| {
             entry.compact_start = Some(Arc::from(handler));
         });
     }
 
-    fn on_compact_exec(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(CompactExecData) + Send + Sync>,
-    ) {
+    fn on_compact_exec(&self, jid: &str, handler: Box<dyn Fn(CompactExecData) + Send + Sync>) {
         self.with_handlers(jid, |entry| {
             entry.compact_exec = Some(Arc::from(handler));
         });
     }
 
-    fn on_session_error(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(SessionErrorData) + Send + Sync>,
-    ) {
+    fn on_session_error(&self, jid: &str, handler: Box<dyn Fn(SessionErrorData) + Send + Sync>) {
         self.with_handlers(jid, |entry| {
             entry.session_error = Some(Arc::from(handler));
         });
@@ -770,12 +730,7 @@ impl CoreApi for ZenCoreApi {
         });
     }
 
-    fn respond_to_tool_permission(
-        &self,
-        jid: &str,
-        tool_name: &str,
-        selected: &str,
-    ) -> Result<()> {
+    fn respond_to_tool_permission(&self, jid: &str, tool_name: &str, selected: &str) -> Result<()> {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.respond_to_tool_permission(ToolPermissionResponseData {
                 tool_name: tool_name.to_string(),
@@ -858,8 +813,7 @@ struct State {
 
     // process_and_wait event bridge (per-jid) — sender set by PAW before
     // process_user_input, forwarded to by bind_events persistent handlers.
-    process_event_txs:
-        HashMap<String, tokio::sync::mpsc::UnboundedSender<ProcessEvent>>,
+    process_event_txs: HashMap<String, tokio::sync::mpsc::UnboundedSender<ProcessEvent>>,
 
     // process_and_wait runtime state.
     active_timer_resets: HashMap<String, ActivityResetFn>,
@@ -1199,12 +1153,7 @@ impl AgentPool {
 
     /// Forward a tool-permission response to the underlying core instance.
     /// Used by [`PermissionBridgeApi`] wiring in daemon startup.
-    pub fn respond_to_tool_permission(
-        &self,
-        group_jid: &str,
-        tool_name: &str,
-        selected: &str,
-    ) {
+    pub fn respond_to_tool_permission(&self, group_jid: &str, tool_name: &str, selected: &str) {
         if let Err(e) = self
             .core_api
             .respond_to_tool_permission(group_jid, tool_name, selected)
@@ -1603,13 +1552,11 @@ impl AgentPool {
         let home = self.senclaw_home.lock().unwrap().clone();
         let workspace_dir = home
             .parent()
-            .map(|p| {
-                p.join("senclaw")
+            .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
+            .unwrap_or_else(|| {
+                PathBuf::from("senclaw")
                     .join("workspace")
                     .join(&binding.folder)
-            })
-            .unwrap_or_else(|| {
-                PathBuf::from("senclaw").join("workspace").join(&binding.folder)
             });
         let state_file = home.join(format!("workspace-state-{}.json", binding.folder));
         Self::init_workspace_state(&state_file, &workspace_dir);
@@ -1622,11 +1569,14 @@ impl AgentPool {
             let db_path_s = cfg.paths.db_path.to_string_lossy().to_string();
             let agents_dir_s = cfg.paths.agents_dir.to_string_lossy().to_string();
             let dispatch_state_s = cfg.paths.dispatch_state_path.to_string_lossy().to_string();
-            let virtual_agents_dir_s =
-                cfg.paths.virtual_agents_dir.to_string_lossy().to_string();
+            let virtual_agents_dir_s = cfg.paths.virtual_agents_dir.to_string_lossy().to_string();
 
             let mut mcp_servers: Vec<McpServerConfig> = Vec::new();
-            mcp_servers.push(schedule_mcp_config(&db_path_s, &binding.folder, &binding.jid));
+            mcp_servers.push(schedule_mcp_config(
+                &db_path_s,
+                &binding.folder,
+                &binding.jid,
+            ));
             mcp_servers.push(workspace_mcp_config(
                 &state_file_s,
                 &workspace_s,
@@ -1665,7 +1615,11 @@ impl AgentPool {
             if binding.channel == "feishu" {
                 if let Some(creds) = self.resolve_feishu_credentials(
                     &cfg.paths.global_config_path,
-                    &cfg.feishu,
+                    &FeishuConfig {
+                        app_id: "cli".to_string(),
+                        app_secret: "cli".to_string(),
+                        domain: "cli".to_string(),
+                    },
                     binding.bot_token.as_deref(),
                 ) {
                     mcp_servers.push(feishu_wiki_mcp_config(
@@ -1697,7 +1651,9 @@ impl AgentPool {
         }
 
         // Init memory index for this agent folder — mirrors TS 628-639.
-        crate::memory::manager::get_instance().init_agent(&binding.folder).await;
+        crate::memory::manager::get_instance()
+            .init_agent(&binding.folder)
+            .await;
 
         // createSession mirrors TS 641-653. If runtime core is not wired, default no-op.
         self.core_api.create_session(&binding.jid)?;
@@ -1783,17 +1739,15 @@ impl AgentPool {
             .unwrap_or(false)
         {
             let mem_mgr = crate::memory::manager::get_instance();
-            let injected = match mem_mgr
-                .search(&group.folder, prompt, None)
-                .await
-            {
+            let injected = match mem_mgr.search(&group.folder, prompt, None).await {
                 Ok(results) if !results.is_empty() => {
-                    let snippets: Vec<String> = results
-                        .iter()
-                        .take(5)
-                        .map(|r| r.text.clone())
-                        .collect();
-                    format!("Related context:\n{}\n\n---\n\n{}", snippets.join("\n---\n"), prompt)
+                    let snippets: Vec<String> =
+                        results.iter().take(5).map(|r| r.text.clone()).collect();
+                    format!(
+                        "Related context:\n{}\n\n---\n\n{}",
+                        snippets.join("\n---\n"),
+                        prompt
+                    )
                 }
                 _ => prompt.to_string(),
             };
@@ -1813,8 +1767,7 @@ impl AgentPool {
 
         // ---- event bridge channels ----
         // mpsc: bind_events persistent handlers forward state:update / session:error here.
-        let (event_tx, mut event_rx) =
-            tokio::sync::mpsc::unbounded_channel::<ProcessEvent>();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ProcessEvent>();
         // oneshot: destroy_inner signals abort to break the event loop.
         let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel::<String>();
 
@@ -1875,9 +1828,8 @@ impl AgentPool {
 
         // Initial inactivity timer.
         let timeout_dur = Duration::from_millis(AGENT_TIMEOUT_MS);
-        let mut timeout_fut: std::pin::Pin<
-            Box<dyn std::future::Future<Output = ()> + Send>,
-        > = Box::pin(tokio::time::sleep(timeout_dur));
+        let mut timeout_fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+            Box::pin(tokio::time::sleep(timeout_dur));
 
         let loop_result = loop {
             tokio::select! {
@@ -1954,9 +1906,7 @@ impl AgentPool {
                 }
                 Ok(())
             }
-            LoopResult::Aborted(_reason) => {
-                Err(anyhow::anyhow!("Agent aborted"))
-            }
+            LoopResult::Aborted(_reason) => Err(anyhow::anyhow!("Agent aborted")),
             LoopResult::Error(data) => {
                 let msg = format!("[{}] {}", data.code, data.message);
                 let transient: &[&str] = &[
@@ -1968,8 +1918,7 @@ impl AgentPool {
                     "missing finish_reason",
                 ];
                 let is_transient = transient.iter().any(|p| msg.contains(p));
-                let is_network =
-                    data.code == "NETWORK_ERROR" || msg.contains("NETWORK_ERROR");
+                let is_network = data.code == "NETWORK_ERROR" || msg.contains("NETWORK_ERROR");
 
                 if is_transient && retries_left > 0 {
                     tracing::warn!(
@@ -2091,9 +2040,7 @@ impl AgentPool {
             return;
         }
 
-        let has_active_paw = {
-            self.state.lock().unwrap().active_aborts.contains_key(jid)
-        };
+        let has_active_paw = { self.state.lock().unwrap().active_aborts.contains_key(jid) };
         let admin_folder = {
             self.state
                 .lock()
@@ -2176,11 +2123,13 @@ impl AgentPool {
             return;
         }
 
-        let was_synth_paused = {
-            self.state.lock().unwrap().synth_paused_jids.contains(jid)
-        };
+        let was_synth_paused = { self.state.lock().unwrap().synth_paused_jids.contains(jid) };
         let was_dispatch_paused = {
-            self.state.lock().unwrap().dispatch_paused_jids.contains(jid)
+            self.state
+                .lock()
+                .unwrap()
+                .dispatch_paused_jids
+                .contains(jid)
         };
         let was_idle_paused = was_synth_paused || was_dispatch_paused;
         let admin_folder = {
@@ -2208,14 +2157,11 @@ impl AgentPool {
                     let _ = self.core_api.process_user_input(jid, &prompt);
                 } else {
                     // Rebuild prompt from DB history and run process_and_wait.
-                    let binding = {
-                        self.state.lock().unwrap().bindings.get(jid).cloned()
-                    };
+                    let binding = { self.state.lock().unwrap().bindings.get(jid).cloned() };
                     if let Some(binding) = binding {
                         let db = self.db.lock().unwrap().clone();
                         if let Some(db) = db {
-                            let (db_prompt, _) =
-                                session_bridge::build_prompt_for_group(&db, jid);
+                            let (db_prompt, _) = session_bridge::build_prompt_for_group(&db, jid);
                             if !db_prompt.is_empty() {
                                 let pool = Arc::clone(self);
                                 let jid = jid.to_string();
@@ -2229,14 +2175,14 @@ impl AgentPool {
                                     )
                                     .await
                                     {
-                                        tracing::error!("[AgentPool] resume_agent process_and_wait error: {e}");
+                                        tracing::error!(
+                                            "[AgentPool] resume_agent process_and_wait error: {e}"
+                                        );
                                     }
                                 });
                             }
                         } else if !self.state.lock().unwrap().active_aborts.contains_key(jid) {
-                            if let Some(sink) =
-                                self.agent_event_sink.lock().unwrap().as_ref()
-                            {
+                            if let Some(sink) = self.agent_event_sink.lock().unwrap().as_ref() {
                                 sink.notify_agent_state(jid, "idle");
                             }
                         }
@@ -2255,14 +2201,9 @@ impl AgentPool {
             let dispatch_ctx = admin_folder
                 .as_ref()
                 .and_then(|folder| {
-                    self.dispatch_bridge
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .map(|b| {
-                            build_dispatch_resume_hint(Some(b.as_ref()), folder)
-                                .unwrap_or_default()
-                        })
+                    self.dispatch_bridge.lock().unwrap().as_ref().map(|b| {
+                        build_dispatch_resume_hint(Some(b.as_ref()), folder).unwrap_or_default()
+                    })
                 })
                 .unwrap_or_default();
             let hint = if query.is_some()
@@ -2580,9 +2521,8 @@ impl AgentPool {
                     }
                     if data.state == "idle" {
                         // Dispatch task-done coordination (persistent).
-                        let is_dispatch = {
-                            pool.state.lock().unwrap().dispatch_executing.contains(&jid)
-                        };
+                        let is_dispatch =
+                            { pool.state.lock().unwrap().dispatch_executing.contains(&jid) };
                         if is_dispatch {
                             let reply_text = {
                                 let lr = last_reply.lock().unwrap();
@@ -2604,8 +2544,7 @@ impl AgentPool {
                                 let bridge = pool.dispatch_bridge.lock().unwrap().clone();
                                 (tid, bridge)
                             };
-                            if let (Some(tid), Some(bridge)) = (task_id.as_ref(), bridge.as_ref())
-                            {
+                            if let (Some(tid), Some(bridge)) = (task_id.as_ref(), bridge.as_ref()) {
                                 bridge.notify_task_done(tid, &reply_text);
                                 let mut s = pool.state.lock().unwrap();
                                 if s.dispatch_task_map.get(&jid) == Some(tid) {
@@ -2874,14 +2813,11 @@ impl AgentPool {
         // Spawn a timeout + wait task.
         let task_id_owned = task_id.to_string();
         tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                Duration::from_millis(AGENT_TIMEOUT_MS),
-                async {
-                    // Poll until idle (placeholder — real sema-core emits state:update:idle).
-                    // For now just complete immediately with ok.
-                    Ok(())
-                },
-            )
+            let result = tokio::time::timeout(Duration::from_millis(AGENT_TIMEOUT_MS), async {
+                // Poll until idle (placeholder — real sema-core emits state:update:idle).
+                // For now just complete immediately with ok.
+                Ok(())
+            })
             .await
             .unwrap_or_else(|_| {
                 Err(anyhow::anyhow!(
@@ -2891,7 +2827,9 @@ impl AgentPool {
             let _ = done_tx.send(result);
         });
 
-        let _ = self.core_api.process_user_input(&instance_id, &effective_prompt);
+        let _ = self
+            .core_api
+            .process_user_input(&instance_id, &effective_prompt);
 
         done_rx
             .await
@@ -3053,12 +2991,7 @@ impl AgentApi for AgentPool {
         AgentPool::broadcast_reply(self, chat_jid, text, bot_token).await
     }
 
-    async fn process_and_wait(
-        &self,
-        jid: &str,
-        group: &GroupBinding,
-        prompt: &str,
-    ) -> Result<()> {
+    async fn process_and_wait(&self, jid: &str, group: &GroupBinding, prompt: &str) -> Result<()> {
         self.process_and_wait_inner(jid, group, prompt, 5).await
     }
 
@@ -3150,7 +3083,11 @@ mod tests {
         let regular = fake_binding("group:1", false);
         let dispatch_set = HashSet::new();
         assert!(AgentPool::compute_skip_perms(&opts, &admin, &dispatch_set));
-        assert!(!AgentPool::compute_skip_perms(&opts, &regular, &dispatch_set));
+        assert!(!AgentPool::compute_skip_perms(
+            &opts,
+            &regular,
+            &dispatch_set
+        ));
     }
 
     #[test]
@@ -3173,16 +3110,30 @@ mod tests {
         };
         let regular = fake_binding("g:1", false);
         let dispatch_set = HashSet::new();
-        assert!(AgentPool::compute_skip_perms(&opts, &regular, &dispatch_set));
+        assert!(AgentPool::compute_skip_perms(
+            &opts,
+            &regular,
+            &dispatch_set
+        ));
     }
 
     #[test]
     fn dispatch_executing_mark_clear() {
         let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         pool.mark_dispatch_executing("g:1");
-        assert!(pool.state.lock().unwrap().dispatch_executing.contains("g:1"));
+        assert!(pool
+            .state
+            .lock()
+            .unwrap()
+            .dispatch_executing
+            .contains("g:1"));
         pool.clear_dispatch_executing("g:1");
-        assert!(!pool.state.lock().unwrap().dispatch_executing.contains("g:1"));
+        assert!(!pool
+            .state
+            .lock()
+            .unwrap()
+            .dispatch_executing
+            .contains("g:1"));
     }
 
     #[test]
@@ -3190,7 +3141,10 @@ mod tests {
         let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
         pool.set_current_dispatch_task_id("g:1", "task-42");
         let s = pool.state.lock().unwrap();
-        assert_eq!(s.dispatch_task_map.get("g:1").map(String::as_str), Some("task-42"));
+        assert_eq!(
+            s.dispatch_task_map.get("g:1").map(String::as_str),
+            Some("task-42")
+        );
     }
 
     #[test]

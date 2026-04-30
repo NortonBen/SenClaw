@@ -64,7 +64,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
 
 # gRPC / Proto
-tonic = { version = "0.12", features = ["tls", "gzip"] }
+tonic = { version = "0.12", features = ["tls", "tls-native-roots", "gzip"] }
 prost = "0.13"
 tokio-stream = "0.1"
 

@@ -28,7 +28,16 @@ impl RelayClient {
         handler: Option<RelayMessageHandler>,
     ) -> Result<Self> {
         info!("Connecting to gRPC relay at {}...", hub_url);
-        let channel = Channel::from_shared(hub_url)?
+        let is_https = hub_url.starts_with("https://");
+        let mut endpoint = Channel::from_shared(hub_url.clone())
+            .context("invalid relay URL")?;
+        if is_https {
+            let tls = tonic::transport::ClientTlsConfig::new()
+                .with_native_roots();
+            endpoint = endpoint.tls_config(tls).context("TLS config")?;
+        }
+        let channel = endpoint
+            .connect_timeout(std::time::Duration::from_secs(10))
             .connect()
             .await
             .map_err(|e| {

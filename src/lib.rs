@@ -25,9 +25,9 @@ pub mod scheduler;
 pub mod setup;
 pub mod skills;
 pub mod subagents;
+pub mod tools;
 pub mod types;
 pub mod util;
-pub mod tools;
 pub mod wiki;
 pub mod zen_core;
 
@@ -87,14 +87,19 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         let gq = Arc::clone(&self.group_queue);
         let jid_key = jid.clone();
         tokio::spawn(async move {
-            gq.enqueue(&jid_key, Box::pin(async move {
-                let _ = gateway::message_router::AgentApi::process_and_wait(
-                    agent_pool.as_ref(),
-                    &jid,
-                    &g,
-                    &t,
-                ).await;
-            })).await;
+            gq.enqueue(
+                &jid_key,
+                Box::pin(async move {
+                    let _ = gateway::message_router::AgentApi::process_and_wait(
+                        agent_pool.as_ref(),
+                        &jid,
+                        &g,
+                        &t,
+                    )
+                    .await;
+                }),
+            )
+            .await;
         });
     }
 
@@ -146,7 +151,12 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         let cached = self.agent_pool.get_all_cached_todos();
         let map: serde_json::Map<String, serde_json::Value> = cached
             .into_iter()
-            .map(|(jid, entry)| (jid, serde_json::to_value(entry).unwrap_or(serde_json::Value::Null)))
+            .map(|(jid, entry)| {
+                (
+                    jid,
+                    serde_json::to_value(entry).unwrap_or(serde_json::Value::Null),
+                )
+            })
             .collect();
         serde_json::Value::Object(map)
     }
@@ -157,7 +167,12 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         let cached = self.agent_pool.get_all_cached_tools();
         let map: serde_json::Map<String, serde_json::Value> = cached
             .into_iter()
-            .map(|(jid, entry)| (jid, serde_json::to_value(entry).unwrap_or(serde_json::Value::Null)))
+            .map(|(jid, entry)| {
+                (
+                    jid,
+                    serde_json::to_value(entry).unwrap_or(serde_json::Value::Null),
+                )
+            })
             .collect();
         serde_json::Value::Object(map)
     }
@@ -202,14 +217,18 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         let gw = Arc::clone(&self.gateway);
         let jid = chat_jid.to_string();
         let text = text.to_string();
-        tokio::spawn(async move { gw.notify_agent_reply(&jid, &text).await; });
+        tokio::spawn(async move {
+            gw.notify_agent_reply(&jid, &text).await;
+        });
     }
 
     fn notify_agent_state(&self, chat_jid: &str, state: &str) {
         let gw = Arc::clone(&self.gateway);
         let jid = chat_jid.to_string();
         let state = state.to_string();
-        tokio::spawn(async move { gw.notify_agent_state(&jid, &state).await; });
+        tokio::spawn(async move {
+            gw.notify_agent_state(&jid, &state).await;
+        });
     }
 
     fn notify_permission_request(
@@ -255,7 +274,8 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         let key = option_key.to_string();
         let label = option_label.to_string();
         tokio::spawn(async move {
-            gw.notify_permission_resolved(&jid, &req, &key, &label).await;
+            gw.notify_permission_resolved(&jid, &req, &key, &label)
+                .await;
         });
     }
 
@@ -358,9 +378,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 2b. PersonaRegistry =====
     let persona_registry = {
-        let reg = agent::persona_registry::PersonaRegistry::new(
-            cfg.paths.virtual_agents_dir.clone(),
-        );
+        let reg =
+            agent::persona_registry::PersonaRegistry::new(cfg.paths.virtual_agents_dir.clone());
         let reg = Arc::new(std::sync::Mutex::new(reg));
         // Spawn file watcher for hot-reload
         agent::persona_registry::PersonaRegistry::spawn_watcher(Arc::clone(&reg));
@@ -387,113 +406,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             }
         }
         Err(e) => {
-            tracing::error!("[SenClaw] TelegramChannel connect failed, continuing without Telegram: {e}");
+            tracing::error!(
+                "[SenClaw] TelegramChannel connect failed, continuing without Telegram: {e}"
+            );
         }
     }
     channels.push(Box::new(tg));
-
-    // 3b. Feishu
-    if !cfg.feishu.app_id.is_empty() && !cfg.feishu.app_secret.is_empty() {
-        let feishu = channels::feishu::FeishuChannel::new(
-            cfg.feishu.app_id.clone(),
-            cfg.feishu.app_secret.clone(),
-            Some(cfg.feishu.domain.clone()),
-        );
-        match feishu.connect().await {
-            Ok(()) => {
-                if feishu.is_connected() {
-                    tracing::info!("[SenClaw] FeishuChannel connected");
-                }
-            }
-            Err(e) => {
-                tracing::error!("[SenClaw] FeishuChannel connect failed, continuing without Feishu: {e}");
-            }
-        }
-        channels.push(Box::new(feishu));
-    } else {
-        tracing::info!("[SenClaw] FeishuChannel: no credentials configured, skipped");
-    }
-
-    // 3c. QQ
-    if !cfg.qq.app_id.is_empty() && !cfg.qq.app_secret.is_empty() {
-        let qq = channels::qq::QQChannel::new(
-            cfg.qq.app_id.clone(),
-            cfg.qq.app_secret.clone(),
-            cfg.qq.sandbox,
-        );
-        match qq.connect().await {
-            Ok(()) => {
-                if qq.is_connected() {
-                    tracing::info!("[SenClaw] QQChannel connected");
-                }
-            }
-            Err(e) => {
-                tracing::error!("[SenClaw] QQChannel connect failed, continuing without QQ: {e}");
-            }
-        }
-        channels.push(Box::new(qq));
-    } else {
-        tracing::info!("[SenClaw] QQChannel: no credentials configured, skipped");
-    }
-
-    // 3d. WeChat
-    if cfg.wechat.enabled {
-        let wx = Arc::new(channels::wechat::WeChatChannel::new(
-            "default".to_string(),
-            Some(cfg.wechat.api_base_url.clone()),
-        ));
-        match wx.connect().await {
-            Ok(()) => {
-                if wx.is_connected() {
-                    tracing::info!("[SenClaw] WeChatChannel connected");
-                    // Start long-polling message reception
-                    let wx_poll = Arc::clone(&wx);
-                    tokio::spawn(async move { wx_poll.start_polling().await });
-                }
-            }
-            Err(e) => {
-                tracing::error!("[SenClaw] WeChatChannel connect failed, continuing without WeChat: {e}");
-            }
-        }
-        channels.push(Box::new(wx));
-    } else {
-        tracing::info!("[SenClaw] WeChatChannel: not enabled, skipped");
-    }
-
-    // 3e. App Connector (Environment-based)
-    if !cfg.app.channel_id.is_empty() && !cfg.app.encryption_key.is_empty() {
-        match util::crypto::Crypto::new_from_b64(&cfg.app.encryption_key) {
-            Ok(crypto) => {
-                let key = crypto.get_key();
-                let app_ch = channels::app::AppChannel::new(
-                    cfg.app.hub_url.clone(),
-                    cfg.app.channel_id.clone(),
-                    cfg.app.access_token.clone(),
-                    key,
-                );
-                match app_ch.connect().await {
-                    Ok(()) => {
-                        if app_ch.is_connected() {
-                            tracing::info!("[SenClaw] AppChannel (env) connected: {}", cfg.app.channel_id);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("[SenClaw] AppChannel (env) connect failed: {e}");
-                    }
-                }
-                channels.push(Box::new(app_ch));
-            }
-            Err(e) => {
-                tracing::error!("[SenClaw] AppChannel (env): invalid encryption key: {e}");
-            }
-        }
-    } else {
-        if cfg.app.channel_id.is_empty() {
-            tracing::info!("[SenClaw] AppChannel (env): missing APP_CHANNEL_ID, skipped");
-        } else {
-            tracing::info!("[SenClaw] AppChannel (env): missing APP_ENCRYPTION_KEY, skipped");
-        }
-    }
 
     // 3e. Reconcile channel adapters from DB channels table.
     // Entity migration creates channels from legacy groups; config.json may also
@@ -511,7 +429,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     let platform = ch_record.platform_type.as_str();
                     if platform == "telegram" {
                         let db_token = creds["botToken"].as_str().unwrap_or("").trim();
-                        let effective = if db_token.is_empty() { cfg.telegram.bot_token.as_str() } else { db_token };
+                        let effective = if db_token.is_empty() {
+                            cfg.telegram.bot_token.as_str()
+                        } else {
+                            db_token
+                        };
                         // Already running if a connected Telegram adapter was started with the same token.
                         channels.iter().any(|adapter| {
                             adapter.id() == "telegram"
@@ -520,9 +442,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                 && effective == cfg.telegram.bot_token.as_str()
                         })
                     } else {
-                        channels.iter().any(|adapter| {
-                            adapter.id() == platform && adapter.is_connected()
-                        })
+                        channels
+                            .iter()
+                            .any(|adapter| adapter.id() == platform && adapter.is_connected())
                     }
                 };
                 if already_running {
@@ -546,7 +468,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         } else {
                             // Re-use the existing TelegramChannel adapter if available,
                             // otherwise create a new one for this token.
-                            let tg_new = channels::telegram::TelegramChannel::new(effective_token.clone());
+                            let tg_new =
+                                channels::telegram::TelegramChannel::new(effective_token.clone());
                             match tg_new.add_bot(&effective_token).await {
                                 Ok(()) if tg_new.is_connected() => {
                                     tracing::info!(
@@ -637,11 +560,27 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         }
                     }
                     "app" | "senclaw" => {
-                        let hub_url = creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
+                        let raw_hub_url =
+                            creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
+                        let hub_url = if raw_hub_url.contains(":18080") {
+                            let corrected = raw_hub_url.replace(":18080", ":50051");
+                            tracing::warn!(
+                                "[SenClaw] Channel id={} hubUrl {} uses REST port 18080, auto-correcting to {}",
+                                ch_record.id,
+                                raw_hub_url,
+                                corrected
+                            );
+                            corrected
+                        } else {
+                            raw_hub_url.to_string()
+                        };
                         let channel_id = creds["channelId"].as_str().unwrap_or("");
                         let enc_key_b64 = creds["encryptionKey"].as_str().unwrap_or("");
                         let access_token = creds["accessToken"].as_str().unwrap_or("");
-                        if !channel_id.is_empty() && !enc_key_b64.is_empty() && !access_token.is_empty() {
+                        if !channel_id.is_empty()
+                            && !enc_key_b64.is_empty()
+                            && !access_token.is_empty()
+                        {
                             if let Ok(crypto) = util::crypto::Crypto::new_from_b64(enc_key_b64) {
                                 let key = crypto.get_key();
                                 let app_ch = channels::app::AppChannel::new(
@@ -652,7 +591,6 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                 );
                                 match app_ch.connect().await {
                                     Ok(()) if app_ch.is_connected() => {
-                                        tracing::info!("[SenClaw] AppChannel from DB (id={}) connected", ch_record.id);
                                         channels.push(Box::new(app_ch));
                                     }
                                     _ => {}
@@ -663,14 +601,21 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     _ => {
                         tracing::debug!(
                             "[SenClaw] Channel id={} type={}: no DB-based init needed",
-                            ch_record.id, ch_record.platform_type
+                            ch_record.id,
+                            ch_record.platform_type
                         );
                     }
                 }
             }
-            let db_init_count = db_channels.iter().filter(|c| {
-                c.platform_type == "feishu" || c.platform_type == "qq" || c.platform_type == "app" || c.platform_type == "senclaw"
-            }).count();
+            let db_init_count = db_channels
+                .iter()
+                .filter(|c| {
+                    c.platform_type == "feishu"
+                        || c.platform_type == "qq"
+                        || c.platform_type == "app"
+                        || c.platform_type == "senclaw"
+                })
+                .count();
             if db_init_count > 0 {
                 tracing::info!(
                     "[SenClaw] DB channel reconciliation: checked {} channel(s)",
@@ -707,11 +652,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         .global_config_path
         .parent()
         .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".senclaw"));
-    let mcp_manager = Arc::new(mcp::manager::McpManager::new(
-        working_dir,
-        user_config_dir,
-    ));
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".senclaw")
+        });
+    let mcp_manager = Arc::new(mcp::manager::McpManager::new(working_dir, user_config_dir));
     if let Err(e) = mcp_manager.init().await {
         tracing::warn!("[SenClaw] MCP manager init: {e}");
     }
@@ -719,8 +665,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 4. GroupQueue + AgentPool =====
     let group_queue = agent::group_queue::GroupQueue::new(cfg.agent.max_concurrent);
-    let agent_pool =
-        agent::agent_pool::AgentPool::new(Arc::new(agent::agent_pool::ZenCoreApi::new(Some(Arc::clone(&mcp_manager)))));
+    let agent_pool = agent::agent_pool::AgentPool::new(Arc::new(
+        agent::agent_pool::ZenCoreApi::new(Some(Arc::clone(&mcp_manager))),
+    ));
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
     let dispatch_bridge = Arc::new(agent::dispatch_bridge::DispatchBridge::new(
@@ -743,41 +690,45 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // Wire reply send through the correct channel.
     {
         let chs = Arc::clone(&channels);
-        agent_pool.set_send_reply(Arc::new(move |jid: &str, text: &str, bot_token: Option<&str>| {
-            let chs = Arc::clone(&chs);
-            let jid = jid.to_string();
-            let text = text.to_string();
-            let bt = bot_token.map(|s| s.to_string());
-            tokio::spawn(async move {
-                let guard = chs.lock().await;
-                for c in guard.iter() {
-                    if c.owns_jid(&jid) {
-                        let _ = c.send_message(&jid, &text, bt.as_deref()).await;
-                        break;
+        agent_pool.set_send_reply(Arc::new(
+            move |jid: &str, text: &str, bot_token: Option<&str>| {
+                let chs = Arc::clone(&chs);
+                let jid = jid.to_string();
+                let text = text.to_string();
+                let bt = bot_token.map(|s| s.to_string());
+                tokio::spawn(async move {
+                    let guard = chs.lock().await;
+                    for c in guard.iter() {
+                        if c.owns_jid(&jid) {
+                            let _ = c.send_message(&jid, &text, bt.as_deref()).await;
+                            break;
+                        }
                     }
-                }
-            });
-        }));
+                });
+            },
+        ));
     }
     tracing::info!("[SenClaw] Reply routing wired to channels");
 
     // Wire typing indicator through the correct channel.
     {
         let chs = Arc::clone(&channels);
-        agent_pool.set_typing_fn(Arc::new(move |jid: &str, active: bool, bot_token: Option<&str>| {
-            let chs = Arc::clone(&chs);
-            let jid = jid.to_string();
-            let bt = bot_token.map(|s| s.to_string());
-            tokio::spawn(async move {
-                let guard = chs.lock().await;
-                for c in guard.iter() {
-                    if c.owns_jid(&jid) {
-                        let _ = c.set_typing(&jid, active, bt.as_deref()).await;
-                        break;
+        agent_pool.set_typing_fn(Arc::new(
+            move |jid: &str, active: bool, bot_token: Option<&str>| {
+                let chs = Arc::clone(&chs);
+                let jid = jid.to_string();
+                let bt = bot_token.map(|s| s.to_string());
+                tokio::spawn(async move {
+                    let guard = chs.lock().await;
+                    for c in guard.iter() {
+                        if c.owns_jid(&jid) {
+                            let _ = c.set_typing(&jid, active, bt.as_deref()).await;
+                            break;
+                        }
                     }
-                }
-            });
-        }));
+                });
+            },
+        ));
     }
 
     // Start SendBridge (HTTP bridge for MCP send-server).
@@ -799,13 +750,23 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             },
         );
         let send_file = Arc::new(
-            move |jid: String, file_path: String, caption: Option<String>, bot_token: Option<String>| {
+            move |jid: String,
+                  file_path: String,
+                  caption: Option<String>,
+                  bot_token: Option<String>| {
                 let chs = Arc::clone(&chs_file);
                 Box::pin(async move {
                     let guard = chs.lock().await;
                     for c in guard.iter() {
                         if c.owns_jid(&jid) {
-                            let _ = c.send_file(&jid, &file_path, caption.as_deref(), bot_token.as_deref()).await;
+                            let _ = c
+                                .send_file(
+                                    &jid,
+                                    &file_path,
+                                    caption.as_deref(),
+                                    bot_token.as_deref(),
+                                )
+                                .await;
                             break;
                         }
                     }
@@ -849,8 +810,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     tracing::info!("[SenClaw] MessageRouter wired to {connected_count} channel(s)");
 
     // ===== 5. TaskScheduler =====
-    let task_executor =
-        Arc::new(scheduler::DefaultTaskExecutor::new(Arc::clone(&db)));
+    let task_executor = Arc::new(scheduler::DefaultTaskExecutor::new(Arc::clone(&db)));
     let _task_scheduler = scheduler::task_scheduler::TaskScheduler::new(
         Arc::clone(&db),
         task_executor,
@@ -1054,7 +1014,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     if let Err(e) = wiki_mgr.ensure_init().await {
         tracing::warn!("[SenClaw] Wiki init failed (non-fatal): {e}");
     } else {
-        tracing::info!("[SenClaw] WikiManager initialized: {}", cfg.paths.wiki_dir.display());
+        tracing::info!(
+            "[SenClaw] WikiManager initialized: {}",
+            cfg.paths.wiki_dir.display()
+        );
     }
 
     // 7c. UI HTTP server
@@ -1079,16 +1042,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     skip_all_agents_permissions: cfg.skip_all_agents_permissions,
                 }
             }
-            fn set_permissions_config(
-                &self,
-                config: gateway::ui_server::AdminPermissionsConfig,
-            ) {
-                self.agent_pool.set_permissions_config(
-                    agent::agent_pool::PermissionsConfig {
+            fn set_permissions_config(&self, config: gateway::ui_server::AdminPermissionsConfig) {
+                self.agent_pool
+                    .set_permissions_config(agent::agent_pool::PermissionsConfig {
                         skip_main_agent_permissions: config.skip_main_agent_permissions,
                         skip_all_agents_permissions: config.skip_all_agents_permissions,
-                    },
-                );
+                    });
             }
         }
 

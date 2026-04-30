@@ -5,9 +5,9 @@
 //! vars (`TELEGRAM_BOT_TOKEN`, `FEISHU_APP_ID`, …) are unchanged.
 //! Default paths live under `~/.senclaw/` and `~/senclaw/`.
 
+use base64::Engine;
 use std::env;
 use std::path::PathBuf;
-use base64::Engine;
 
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
@@ -139,10 +139,6 @@ pub struct AppConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub telegram: TelegramConfig,
-    pub feishu: FeishuConfig,
-    pub qq: QqConfig,
-    pub wechat: WechatConfig,
-    pub app: AppConfig,
     pub admin: AdminConfig,
     pub agent: AgentConfig,
     pub scheduler: SchedulerConfig,
@@ -194,27 +190,6 @@ impl Config {
                 bot_token: env_or("TELEGRAM_BOT_TOKEN", ""),
                 agent_folder: env_or("TELEGRAM_AGENT_FOLDER", "main"),
             },
-            feishu: FeishuConfig {
-                app_id: env_or("FEISHU_APP_ID", ""),
-                app_secret: env_or("FEISHU_APP_SECRET", ""),
-                domain: env_or("FEISHU_DOMAIN", "feishu"),
-            },
-            qq: QqConfig {
-                app_id: env_or("QQ_APP_ID", ""),
-                app_secret: env_or("QQ_APP_SECRET", ""),
-                sandbox: env_bool("QQ_SANDBOX", false),
-            },
-            wechat: WechatConfig {
-                enabled: env_bool("WECHAT_ENABLED", false),
-                api_base_url: env_or("WECHAT_API_BASE_URL", "https://ilinkai.weixin.qq.com"),
-                agent_folder: env_or("WECHAT_AGENT_FOLDER", "main"),
-            },
-            app: AppConfig {
-                hub_url: env_or("APP_HUB_URL", "http://localhost:50051"),
-                channel_id: env_or("APP_CHANNEL_ID", ""),
-                encryption_key: env_or("APP_ENCRYPTION_KEY", ""),
-                access_token: env_or("APP_ACCESS_TOKEN", ""),
-            },
             admin: AdminConfig {
                 telegram_user_id: env_or("ADMIN_TELEGRAM_USER_ID", ""),
                 feishu_open_id: env_or("ADMIN_FEISHU_OPEN_ID", ""),
@@ -244,10 +219,7 @@ impl Config {
                     senclaw_home.join("managed").join("skills"),
                 ),
                 wiki_dir: env_path("WIKI_DIR", senclaw_data.join("wiki")),
-                hooks_path: env_path(
-                    "SENCLAW_HOOKS_PATH",
-                    senclaw_home.join("hooks.json"),
-                ),
+                hooks_path: env_path("SENCLAW_HOOKS_PATH", senclaw_home.join("hooks.json")),
                 virtual_agents_dir: env_path(
                     "SENCLAW_VIRTUAL_AGENTS_DIR",
                     senclaw_data.join("virtual-agents"),
@@ -265,7 +237,8 @@ impl Config {
                         }
                         _ => {
                             // Fallback: <project>/skills/ (mirrors TS __dirname + ../skills)
-                            let project_skills = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
+                            let project_skills =
+                                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
                             if project_skills.exists() {
                                 Some(project_skills)
                             } else {
@@ -277,9 +250,10 @@ impl Config {
                 },
             },
             memory: MemoryConfig {
-                embedding_provider: EmbeddingProvider::parse(
-                    &env_or("SENCLAW_EMBEDDING_PROVIDER", "none"),
-                ),
+                embedding_provider: EmbeddingProvider::parse(&env_or(
+                    "SENCLAW_EMBEDDING_PROVIDER",
+                    "none",
+                )),
                 openai_api_key: env_or("SENCLAW_OPENAI_API_KEY", ""),
                 openai_base_url: env_or("SENCLAW_OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 openai_model: env_or("SENCLAW_OPENAI_MODEL", "text-embedding-3-small"),
@@ -333,14 +307,20 @@ mod tests {
 
     #[test]
     fn embedding_provider_parses() {
-        assert_eq!(EmbeddingProvider::parse("openai"), EmbeddingProvider::Openai);
+        assert_eq!(
+            EmbeddingProvider::parse("openai"),
+            EmbeddingProvider::Openai
+        );
         assert_eq!(EmbeddingProvider::parse("local"), EmbeddingProvider::Local);
         assert_eq!(EmbeddingProvider::parse("garbage"), EmbeddingProvider::None);
     }
 
     #[test]
     fn resolve_dimensions_uses_override_when_positive() {
-        assert_eq!(Config::resolve_dimensions(EmbeddingProvider::Openai, 3072), 3072);
+        assert_eq!(
+            Config::resolve_dimensions(EmbeddingProvider::Openai, 3072),
+            3072
+        );
     }
 
     #[test]
@@ -350,7 +330,13 @@ mod tests {
 
     #[test]
     fn resolve_dimensions_other_default_1536() {
-        assert_eq!(Config::resolve_dimensions(EmbeddingProvider::Openai, 0), 1536);
-        assert_eq!(Config::resolve_dimensions(EmbeddingProvider::Ollama, 0), 1536);
+        assert_eq!(
+            Config::resolve_dimensions(EmbeddingProvider::Openai, 0),
+            1536
+        );
+        assert_eq!(
+            Config::resolve_dimensions(EmbeddingProvider::Ollama, 0),
+            1536
+        );
     }
 }

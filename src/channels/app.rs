@@ -28,7 +28,12 @@ pub struct AppChannel {
 }
 
 impl AppChannel {
-    pub fn new(hub_url: String, channel_id: String, access_token: String, encryption_key: [u8; 32]) -> Self {
+    pub fn new(
+        hub_url: String,
+        channel_id: String,
+        access_token: String,
+        encryption_key: [u8; 32],
+    ) -> Self {
         Self {
             hub_url,
             channel_id,
@@ -72,20 +77,32 @@ impl Channel for AppChannel {
             let _ = msg_tx.try_send(msg);
         });
 
-        info!("[AppChannel] Connecting to relay at {} for channel {}...", hub_url, channel_id);
-        let client: RelayClient = RelayClient::connect(
-            hub_url,
-            channel_id.clone(),
-            "semaclaw-daemon".to_string(),
-            access_token,
-            encryption_key,
-            Some(handler),
-        )
-        .await
-        .map_err(|e| {
-            error!("[AppChannel] Failed to connect to relay: {e}");
-            e
-        })?;
+        info!(
+            "[AppChannel] Connecting to relay at {} for channel {} (access_token {})",
+            hub_url, channel_id, access_token
+        );
+        let mut backoff_secs = 2u64;
+        let client: RelayClient = loop {
+            match RelayClient::connect(
+                hub_url.clone(),
+                channel_id.clone(),
+                "semaclaw-daemon".to_string(),
+                access_token.clone(),
+                encryption_key,
+                Some(Arc::clone(&handler)),
+            )
+            .await
+            {
+                Ok(c) => break c,
+                Err(e) => {
+                    error!(
+                        "[AppChannel] Failed to connect to relay: {e}; retrying in {backoff_secs}s"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                    backoff_secs = (backoff_secs * 2).min(60);
+                }
+            }
+        };
 
         let client_arc = Arc::new(client);
         let client_for_inbound = Arc::clone(&client_arc);
@@ -96,7 +113,10 @@ impl Channel for AppChannel {
                 if let Some(relay_message::Payload::EncryptedData(data)) = msg.payload {
                     match client_for_inbound.decrypt_payload(&data) {
                         Ok(text) => {
-                            info!("[AppChannel] Decrypted message from {}: {}", msg.sender_id, text);
+                            info!(
+                                "[AppChannel] Decrypted message from {}: {}",
+                                msg.sender_id, text
+                            );
                             let incoming = IncomingMessage {
                                 id: msg.message_id,
                                 chat_jid: format!("app:{}:user:{}", cid, msg.sender_id),
@@ -118,8 +138,13 @@ impl Channel for AppChannel {
                         }
                         Err(e) => error!("[AppChannel] Failed to decrypt relay message: {e}"),
                     }
+                } else if matches!(msg.payload, Some(relay_message::Payload::Control(_))) {
+                    // server heartbeat / control frame — ignore silently
                 } else {
-                    warn!("[AppChannel] Received relay message with no encrypted payload: {}", msg.message_id);
+                    warn!(
+                        "[AppChannel] Received relay message with no encrypted payload: {}",
+                        msg.message_id
+                    );
                 }
             }
         });
