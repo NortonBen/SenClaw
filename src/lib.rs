@@ -749,20 +749,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         }
                     }
                     "app" | "senclaw" => {
-                        let raw_hub_url =
-                            creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
-                        let hub_url = if raw_hub_url.contains(":18080") {
-                            let corrected = raw_hub_url.replace(":18080", ":50051");
-                            tracing::warn!(
-                                "[SenClaw] Channel id={} hubUrl {} uses REST port 18080, auto-correcting to {}",
-                                ch_record.id,
-                                raw_hub_url,
-                                corrected
-                            );
-                            corrected
-                        } else {
-                            raw_hub_url.to_string()
-                        };
+                        let hub_url = creds["hubUrl"].as_str().unwrap_or("http://localhost:50051");
                         let channel_id = creds["channelId"].as_str().unwrap_or("");
                         let enc_key_b64 = creds["encryptionKey"].as_str().unwrap_or("");
                         let access_token = creds["accessToken"].as_str().unwrap_or("");

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"semaclaw/hub-backend/internal/models"
@@ -135,7 +136,7 @@ func (s *Server) handleRegisterChannel() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"channel_id":   channelID,
@@ -157,7 +158,9 @@ func (s *Server) handleVerifyChannel() http.HandlerFunc {
 
 		valid := s.store.VerifyChannel(req.ChannelID, req.AccessToken)
 		w.Header().Set("Content-Type", "application/json")
-		
+
+		log.Println("Verifying channel: ", req.ChannelID, s.grpcURL)
+
 		if valid {
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"valid":    true,
