@@ -74,7 +74,7 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
 
     if re_history().is_match(t) {
         let jid = chat_jid?;
-        let count = db.count_messages(jid).unwrap_or(0);
+        let count = db.count_group_messages(jid).unwrap_or(0);
         let last_ts = db.get_last_agent_timestamp(jid).ok().flatten();
         let cursor = last_ts.as_deref().unwrap_or("(none)");
         return Some(format!(
@@ -85,7 +85,7 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
 
     if re_reset().is_match(t) {
         let jid = chat_jid?;
-        let count = db.delete_messages_for_jid(jid).unwrap_or(0);
+        let count = db.delete_group_messages_for_jid(jid).unwrap_or(0);
         let _ = db.delete_agent_timestamp(jid);
         return Some(format!("🗑️ Session reset — cleared {count} messages for {jid}"));
     }

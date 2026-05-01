@@ -1,8 +1,12 @@
 //! SQLite handle. Mirrors `src-old/db/db.ts`.
 //!
 //! Tables owned here:
-//!   * `groups`            — GroupBinding registry
-//!   * `channel_messages`  — message history (FIFO, retention per group)
+//!   * `groups`            — GroupBinding registry (legacy, being phased out)
+//!   * `channels`          — platform connections (Telegram bot, Feishu, QQ, etc.)
+//!   * `agents`            — AI agent definitions (folder, name, tools, model, etc.)
+//!   * `bindings`          — N:N join: agent ↔ channel + per-chat JID
+//!   * `channel_messages`  — raw platform messages (incoming from Telegram/Feishu/etc.)
+//!   * `group_messages`    — conversation history (user messages + bot responses)
 //!   * `scheduled_tasks`   — scheduler entries
 //!   * `task_run_logs`     — task execution log
 //!   * `router_state`      — KV cursor (e.g. lastAgentTimestamp)
@@ -114,14 +118,15 @@ impl Db {
             c.execute(
                 r#"
                 INSERT INTO groups
-                  (jid, folder, name, channel, is_admin, requires_trigger,
+                  (jid, folder, name, channel, group_type, is_admin, requires_trigger,
                    allowed_tools, allowed_paths, allowed_work_dirs,
                    bot_token, max_messages, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 ON CONFLICT(jid) DO UPDATE SET
                   folder            = excluded.folder,
                   name              = excluded.name,
                   channel           = excluded.channel,
+                  group_type        = excluded.group_type,
                   is_admin          = excluded.is_admin,
                   requires_trigger  = excluded.requires_trigger,
                   allowed_tools     = excluded.allowed_tools,
@@ -136,6 +141,7 @@ impl Db {
                     g.folder,
                     g.name,
                     g.channel,
+                    g.group_type,
                     g.is_admin as i64,
                     g.requires_trigger as i64,
                     json_or_null(&g.allowed_tools)?,
@@ -353,6 +359,135 @@ impl Db {
     }
 
     // ============================================================
+    // Group messages (conversation history: user + bot responses)
+    // ============================================================
+
+    pub fn insert_group_message(&self, msg: &StoredMessage, default_limit: u32) -> Result<()> {
+        self.with_conn(|c| {
+            let limit: i64 = c
+                .query_row(
+                    "SELECT max_messages FROM groups WHERE jid = ?1",
+                    params![msg.chat_jid],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .optional()?
+                .flatten()
+                .unwrap_or(default_limit as i64);
+
+            c.execute(
+                r#"
+                INSERT OR IGNORE INTO group_messages
+                  (message_id, chat_jid, sender_jid, sender_name, content,
+                   timestamp, is_from_me, is_bot_reply, reply_to_id, media_type)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+                "#,
+                params![
+                    msg.message_id,
+                    msg.chat_jid,
+                    msg.sender_jid,
+                    msg.sender_name,
+                    msg.content,
+                    msg.timestamp,
+                    msg.is_from_me as i64,
+                    msg.is_bot_reply as i64,
+                    msg.reply_to_id,
+                    msg.media_type,
+                ],
+            )?;
+
+            c.execute(
+                r#"
+                DELETE FROM group_messages
+                WHERE chat_jid = ?1
+                  AND message_id NOT IN (
+                    SELECT message_id FROM group_messages
+                    WHERE chat_jid = ?1
+                    ORDER BY timestamp DESC
+                    LIMIT ?2
+                  )
+                "#,
+                params![msg.chat_jid, limit],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn get_group_messages(&self, chat_jid: &str, since: Option<&str>) -> Result<Vec<StoredMessage>> {
+        self.with_conn(|c| {
+            let rows: Vec<rusqlite::Result<Result<StoredMessage>>> = if let Some(since) = since {
+                let mut stmt = c.prepare(
+                    "SELECT * FROM group_messages
+                     WHERE chat_jid = ?1 AND timestamp > ?2
+                     ORDER BY timestamp ASC",
+                )?;
+                let v: Vec<_> = stmt
+                    .query_map(params![chat_jid, since], |r| Ok(row_to_message(r)))?
+                    .collect();
+                v
+            } else {
+                let mut stmt = c.prepare(
+                    "SELECT * FROM group_messages
+                     WHERE chat_jid = ?1
+                     ORDER BY timestamp ASC",
+                )?;
+                let v: Vec<_> = stmt
+                    .query_map(params![chat_jid], |r| Ok(row_to_message(r)))?
+                    .collect();
+                v
+            };
+            rows.into_iter()
+                .map(|r| r.map_err(anyhow::Error::from).and_then(|inner| inner))
+                .collect()
+        })
+    }
+
+    pub fn get_group_messages_paginated(
+        &self,
+        chat_jid: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<StoredMessage>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT * FROM group_messages
+                 WHERE chat_jid = ?1
+                 ORDER BY timestamp DESC
+                 LIMIT ?2 OFFSET ?3",
+            )?;
+            let rows = stmt
+                .query_map(params![chat_jid, limit as i64, offset as i64], |r| {
+                    Ok(row_to_message(r))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut results = Vec::new();
+            for r in rows {
+                results.push(r?);
+            }
+            Ok(results)
+        })
+    }
+
+    pub fn delete_group_messages_for_jid(&self, chat_jid: &str) -> Result<usize> {
+        self.with_conn(|c| {
+            Ok(c.execute(
+                "DELETE FROM group_messages WHERE chat_jid = ?1",
+                params![chat_jid],
+            )?)
+        })
+    }
+
+    pub fn count_group_messages(&self, chat_jid: &str) -> Result<usize> {
+        self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM group_messages WHERE chat_jid = ?1",
+                params![chat_jid],
+                |r| r.get::<_, usize>(0),
+            )?)
+        })
+    }
+
+    // ============================================================
     // Channels
     // ============================================================
 
@@ -401,9 +536,9 @@ impl Db {
     // Agents
     // ============================================================
 
-    pub fn insert_agent(&self, folder: &str, name: &str, requires_trigger: bool, allowed_tools: Option<&Vec<String>>, allowed_work_dirs: Option<&Vec<String>>, now: &str) -> Result<i64> {
+    pub fn insert_agent(&self, folder: &str, name: &str, requires_trigger: bool, allowed_tools: Option<&Vec<String>>, allowed_work_dirs: Option<&Vec<String>>, core_prompt: &str, model_id: Option<&str>, now: &str) -> Result<i64> {
         self.with_conn(|c| {
-            c.execute("INSERT INTO agents (folder,name,requires_trigger,allowed_tools,allowed_work_dirs,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![folder,name,requires_trigger as i64,json_or_null_owned(allowed_tools)?,json_or_null_owned(allowed_work_dirs)?,now])?;
+            c.execute("INSERT INTO agents (folder,name,requires_trigger,allowed_tools,allowed_work_dirs,core_prompt,model_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)", params![folder,name,requires_trigger as i64,json_or_null_owned(allowed_tools)?,json_or_null_owned(allowed_work_dirs)?,core_prompt,model_id,now])?;
             Ok(c.last_insert_rowid())
         })
     }
@@ -423,12 +558,41 @@ impl Db {
     pub fn delete_agent(&self, id: i64) -> Result<()> {
         self.with_conn(|c| { c.execute("DELETE FROM agents WHERE id = ?1", params![id])?; Ok(()) })
     }
-    pub fn update_agent(&self, id: i64, name: Option<&str>, requires_trigger: Option<bool>, allowed_tools: Option<&Vec<String>>, allowed_work_dirs: Option<&Vec<String>>, now: &str) -> Result<()> {
+    pub fn update_agent(
+        &self,
+        id: i64,
+        name: Option<&str>,
+        requires_trigger: Option<bool>,
+        allowed_tools: Option<&Vec<String>>,
+        allowed_work_dirs: Option<&Vec<String>>,
+        core_prompt: Option<&str>,
+        clear_model_id: bool,
+        model_id: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
         self.with_conn(|c| {
-            if let Some(n) = name { c.execute("UPDATE agents SET name=?1,updated_at=?2 WHERE id=?3", params![n,now,id])?; }
-            if let Some(rt) = requires_trigger { c.execute("UPDATE agents SET requires_trigger=?1,updated_at=?2 WHERE id=?3", params![rt as i64,now,id])?; }
-            if let Some(tools) = allowed_tools { c.execute("UPDATE agents SET allowed_tools=?1,updated_at=?2 WHERE id=?3", params![json_or_null_owned(Some(tools))?,now,id])?; }
-            if let Some(dirs) = allowed_work_dirs { c.execute("UPDATE agents SET allowed_work_dirs=?1,updated_at=?2 WHERE id=?3", params![json_or_null_owned(Some(dirs))?,now,id])?; }
+            let tx = c.unchecked_transaction()?;
+            if let Some(n) = name {
+                tx.execute("UPDATE agents SET name=?1,updated_at=?2 WHERE id=?3", rusqlite::params![n, now, id])?;
+            }
+            if let Some(rt) = requires_trigger {
+                tx.execute("UPDATE agents SET requires_trigger=?1,updated_at=?2 WHERE id=?3", rusqlite::params![rt as i64, now, id])?;
+            }
+            if let Some(tools) = allowed_tools {
+                tx.execute("UPDATE agents SET allowed_tools=?1,updated_at=?2 WHERE id=?3", rusqlite::params![json_or_null_owned(Some(tools))?, now, id])?;
+            }
+            if let Some(dirs) = allowed_work_dirs {
+                tx.execute("UPDATE agents SET allowed_work_dirs=?1,updated_at=?2 WHERE id=?3", rusqlite::params![json_or_null_owned(Some(dirs))?, now, id])?;
+            }
+            if let Some(cp) = core_prompt {
+                tx.execute("UPDATE agents SET core_prompt=?1,updated_at=?2 WHERE id=?3", rusqlite::params![cp, now, id])?;
+            }
+            if clear_model_id {
+                tx.execute("UPDATE agents SET model_id=NULL,updated_at=?1 WHERE id=?2", rusqlite::params![now, id])?;
+            } else if let Some(m) = model_id {
+                tx.execute("UPDATE agents SET model_id=?1,updated_at=?2 WHERE id=?3", rusqlite::params![m, now, id])?;
+            }
+            tx.commit()?;
             Ok(())
         })
     }
@@ -452,7 +616,7 @@ impl Db {
     pub fn get_binding_with_relations(&self, jid: &str) -> Result<Option<BindingWithRelations>> {
         self.with_conn(|c| {
             c.query_row(
-                "SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id WHERE b.jid=?1",
+                "SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.core_prompt,a.model_id,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id WHERE b.jid=?1",
                 params![jid],
                 |r| Ok(row_to_binding_with_relations(r)),
             ).optional()?.transpose()
@@ -477,7 +641,7 @@ impl Db {
     }
     pub fn list_bindings_with_relations(&self) -> Result<Vec<BindingWithRelations>> {
         self.with_conn(|c| {
-            let mut stmt = c.prepare("SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id ORDER BY b.id")?;
+            let mut stmt = c.prepare("SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.core_prompt,a.model_id,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id ORDER BY b.id")?;
             let rows: Vec<_> = stmt.query_map([], |r| Ok(row_to_binding_with_relations(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter().collect::<Result<Vec<_>>>()
         })
@@ -485,7 +649,7 @@ impl Db {
     /// List all bindings (with agent+channel) for a specific channel_id.
     pub fn list_bindings_for_channel(&self, channel_id: i64) -> Result<Vec<BindingWithRelations>> {
         self.with_conn(|c| {
-            let mut stmt = c.prepare("SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id WHERE b.channel_id=?1 ORDER BY b.id")?;
+            let mut stmt = c.prepare("SELECT b.id,b.jid,b.agent_id,b.channel_id,b.is_admin,b.bot_token_override,b.max_messages,b.last_active,b.created_at, a.id,a.folder,a.name,a.requires_trigger,a.allowed_tools,a.allowed_paths,a.allowed_work_dirs,a.core_prompt,a.model_id,a.created_at,a.updated_at, ch.id,ch.platform_type,ch.name,ch.credentials_json,ch.connection_state,ch.created_at,ch.updated_at FROM bindings b JOIN agents a ON b.agent_id=a.id JOIN channels ch ON b.channel_id=ch.id WHERE b.channel_id=?1 ORDER BY b.id")?;
             let rows: Vec<_> = stmt.query_map(params![channel_id], |r| Ok(row_to_binding_with_relations(r)))?.collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter().collect::<Result<Vec<_>>>()
         })
@@ -833,6 +997,58 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_msg_timestamp
           ON channel_messages(chat_jid, timestamp);
 
+        CREATE TABLE IF NOT EXISTS channels (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          platform_type     TEXT NOT NULL,
+          name              TEXT NOT NULL,
+          credentials_json  TEXT NOT NULL DEFAULT '{}',
+          connection_state  TEXT NOT NULL DEFAULT 'disconnected',
+          created_at        TEXT NOT NULL,
+          updated_at        TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agents (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          folder            TEXT UNIQUE NOT NULL,
+          name              TEXT NOT NULL DEFAULT '',
+          requires_trigger  INTEGER NOT NULL DEFAULT 1,
+          allowed_tools     TEXT,
+          allowed_paths     TEXT,
+          allowed_work_dirs TEXT,
+          core_prompt       TEXT NOT NULL DEFAULT '',
+          model_id          TEXT,
+          created_at        TEXT NOT NULL,
+          updated_at        TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS bindings (
+          id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+          jid                 TEXT UNIQUE,
+          agent_id            INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          channel_id          INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+          is_admin            INTEGER NOT NULL DEFAULT 0,
+          bot_token_override  TEXT,
+          max_messages        INTEGER,
+          last_active         TEXT,
+          created_at          TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS group_messages (
+          message_id   TEXT NOT NULL,
+          chat_jid     TEXT NOT NULL,
+          sender_jid   TEXT NOT NULL DEFAULT '',
+          sender_name  TEXT NOT NULL DEFAULT '',
+          content      TEXT NOT NULL DEFAULT '',
+          timestamp    TEXT NOT NULL,
+          is_from_me   INTEGER NOT NULL DEFAULT 0,
+          is_bot_reply INTEGER NOT NULL DEFAULT 0,
+          reply_to_id  TEXT,
+          media_type   TEXT,
+          PRIMARY KEY (message_id, chat_jid)
+        );
+        CREATE INDEX IF NOT EXISTS idx_group_msg_ts
+          ON group_messages(chat_jid, timestamp);
+
         CREATE TABLE IF NOT EXISTS scheduled_tasks (
           id             TEXT PRIMARY KEY,
           group_folder   TEXT NOT NULL,
@@ -878,6 +1094,17 @@ fn apply_schema(conn: &Connection) -> Result<()> {
     let task_cols = column_names(conn, "scheduled_tasks")?;
     if !task_cols.iter().any(|c| c == "script_path") {
         conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN script_path TEXT", [])?;
+    }
+    // Migration: add core_prompt and model_id to agents table
+    let agent_cols = column_names(conn, "agents")?;
+    if !agent_cols.iter().any(|c| c == "core_prompt") {
+        conn.execute("ALTER TABLE agents ADD COLUMN core_prompt TEXT NOT NULL DEFAULT ''", [])?;
+    }
+    if !agent_cols.iter().any(|c| c == "model_id") {
+        conn.execute("ALTER TABLE agents ADD COLUMN model_id TEXT", [])?;
+    }
+    if !group_cols.iter().any(|c| c == "group_type") {
+        conn.execute("ALTER TABLE groups ADD COLUMN group_type TEXT NOT NULL DEFAULT 'chat'", [])?;
     }
     Ok(())
 }
@@ -929,6 +1156,8 @@ fn row_to_agent(row: &Row<'_>) -> Result<Agent> {
         allowed_tools: parse_json_array(row.get("allowed_tools")?),
         allowed_paths: parse_json_array(row.get("allowed_paths")?),
         allowed_work_dirs: parse_json_array(row.get("allowed_work_dirs")?),
+        core_prompt: row.get::<_, String>("core_prompt").unwrap_or_default(),
+        model_id: row.get("model_id")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -969,17 +1198,19 @@ fn row_to_binding_with_relations(row: &Row<'_>) -> Result<BindingWithRelations> 
             allowed_tools: parse_json_array(row.get(13)?),
             allowed_paths: parse_json_array(row.get(14)?),
             allowed_work_dirs: parse_json_array(row.get(15)?),
-            created_at: row.get(16)?,
-            updated_at: row.get(17)?,
+            core_prompt: row.get::<_, String>(16).unwrap_or_default(),
+            model_id: row.get(17)?,
+            created_at: row.get(18)?,
+            updated_at: row.get(19)?,
         },
         channel: Channel {
-            id: row.get(18)?,
-            platform_type: row.get(19)?,
-            name: row.get(20)?,
-            credentials_json: row.get(21)?,
-            connection_state: row.get(22)?,
-            created_at: row.get(23)?,
-            updated_at: row.get(24)?,
+            id: row.get(20)?,
+            platform_type: row.get(21)?,
+            name: row.get(22)?,
+            credentials_json: row.get(23)?,
+            connection_state: row.get(24)?,
+            created_at: row.get(25)?,
+            updated_at: row.get(26)?,
         },
     })
 }
@@ -990,6 +1221,7 @@ fn row_to_group(row: &Row<'_>) -> Result<GroupBinding> {
         folder: row.get("folder")?,
         name: row.get("name")?,
         channel: row.get::<_, Option<String>>("channel")?.unwrap_or_default(),
+        group_type: row.get::<_, Option<String>>("group_type")?.unwrap_or_else(|| "chat".to_string()),
         is_admin: row.get::<_, i64>("is_admin")? != 0,
         requires_trigger: row.get::<_, i64>("requires_trigger")? != 0,
         allowed_tools: parse_json_array(row.get("allowed_tools")?),
@@ -1052,6 +1284,7 @@ mod tests {
             folder: "team-a".into(),
             name: "Team A".into(),
             channel: "telegram".into(),
+            group_type: "chat".into(),
             is_admin: true,
             requires_trigger: false,
             allowed_tools: Some(vec!["Read".into(), "Grep".into()]),

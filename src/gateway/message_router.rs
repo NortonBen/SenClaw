@@ -410,11 +410,14 @@ impl MessageRouter {
             reply_to_id: None,
             media_type: None,
         };
-        if let Err(e) = self
-            .db
-            .insert_message(&stored, self.config.agent.max_messages_per_group)
-        {
-            tracing::error!("[MessageRouter] Failed to store message {}: {e:#}", msg.id);
+        let limit = self.config.agent.max_messages_per_group;
+        // Raw platform message log
+        if let Err(e) = self.db.insert_message(&stored, limit) {
+            tracing::error!("[MessageRouter] Failed to store channel message {}: {e:#}", msg.id);
+        }
+        // Conversation history
+        if let Err(e) = self.db.insert_group_message(&stored, limit) {
+            tracing::error!("[MessageRouter] Failed to store group message {}: {e:#}", msg.id);
         }
     }
 }
@@ -459,6 +462,7 @@ fn to_group_binding(br: &BindingWithRelations) -> GroupBinding {
         folder: br.agent.folder.clone(),
         name: br.agent.name.clone(),
         channel: br.channel.platform_type.clone(),
+        group_type: "chat".into(),
         is_admin: br.binding.is_admin,
         requires_trigger: br.agent.requires_trigger,
         allowed_tools: br.agent.allowed_tools.clone(),

@@ -7,12 +7,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use std::sync::Arc;
 
 use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
 
 use rmcp::ServiceExt;
-use crate::memory::embedding::EmbeddingProvider;
+use crate::memory::embedding::{create_embedding_provider, EmbeddingProvider};
 use crate::memory::fts_search::{self, SearchOptions};
 
 // ===== MCP stdio server =====
@@ -47,10 +48,13 @@ struct McpMemoryServer {
 }
 
 impl McpMemoryServer {
-    fn open_db(&self) -> Result<Db> {
-        let mut cfg = crate::config::Config::from_env();
-        cfg.paths.db_path = PathBuf::from(&self.db_path);
-        Db::open(&cfg).context("open memory DB")
+    fn open_db_and_provider(&self) -> Result<(Db, Option<Box<dyn EmbeddingProvider>>)> {
+        let cfg = crate::config::Config::from_env();
+        let mut db_cfg = cfg.clone();
+        db_cfg.paths.db_path = PathBuf::from(&self.db_path);
+        let db = Db::open(&db_cfg).context("open memory DB")?;
+        let provider = create_embedding_provider(&cfg, Arc::new(Db::open(&db_cfg)?));
+        Ok((db, provider))
     }
 }
 
@@ -61,11 +65,11 @@ impl McpMemoryServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<MemorySearchParams>,
     ) -> String {
-        let db = match self.open_db() {
-            Ok(db) => db,
+        let (db, provider) = match self.open_db_and_provider() {
+            Ok(v) => v,
             Err(e) => return format!("Error: {e}"),
         };
-        let srv = MemoryServer::new(db, &self.folder, &self.agents_dir, None);
+        let srv = MemoryServer::new(db, &self.folder, &self.agents_dir, provider);
         srv.memory_search(&p.query, p.max_results, p.source.as_deref())
             .await
             .content
@@ -76,8 +80,8 @@ impl McpMemoryServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<MemoryGetParams>,
     ) -> String {
-        let db = match self.open_db() {
-            Ok(db) => db,
+        let db = match self.open_db_and_provider() {
+            Ok((db, _)) => db,
             Err(e) => return format!("Error: {e}"),
         };
         let srv = MemoryServer::new(db, &self.folder, &self.agents_dir, None);

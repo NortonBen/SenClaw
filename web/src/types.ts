@@ -4,11 +4,14 @@ export interface GroupInfo {
   name: string;
   isAdmin: boolean;
   channel: string;
+  groupType: string;
   requiresTrigger: boolean;
   allowedTools: string[] | null;
+  allowedPaths: string[] | null;
   allowedWorkDirs: string[] | null;
-  botToken: string | null;
   maxMessages: number | null;
+  agentId?: number;
+  channelId?: number;
 }
 
 export interface RegisterGroupPayload {
@@ -16,16 +19,23 @@ export interface RegisterGroupPayload {
   folder: string;
   name: string;
   channel?: 'telegram' | 'feishu' | 'whatsapp' | 'qq' | 'app';
+  groupType?: string;
   requiresTrigger?: boolean;
+  allowedTools?: string[] | null;
+  allowedPaths?: string[] | null;
   allowedWorkDirs?: string[] | null;
-  botToken?: string | null;
 }
 
 export interface UpdateGroupPayload {
   name?: string;
+  channel?: string;
+  groupType?: string;
+  isAdmin?: boolean;
   requiresTrigger?: boolean;
+  allowedTools?: string[] | null;
+  allowedPaths?: string[] | null;
   allowedWorkDirs?: string[] | null;
-  botToken?: string | null;
+  maxMessages?: number | null;
 }
 
 // ===== Message types =====
@@ -149,6 +159,8 @@ export interface AgentInfo {
   requiresTrigger: boolean;
   allowedTools: string[] | null;
   allowedWorkDirs: string[] | null;
+  corePrompt: string;
+  modelId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -182,6 +194,8 @@ export interface RegisterAgentPayload {
   requiresTrigger?: boolean;
   allowedTools?: string[] | null;
   allowedWorkDirs?: string[] | null;
+  corePrompt?: string;
+  modelId?: string | null;
 }
 
 export interface RegisterBindingPayload {
@@ -204,6 +218,8 @@ export interface UpdateAgentPayload {
   requiresTrigger?: boolean;
   allowedTools?: string[] | null;
   allowedWorkDirs?: string[] | null;
+  corePrompt?: string;
+  modelId?: string | null;
 }
 
 export interface UpdateBindingPayload {

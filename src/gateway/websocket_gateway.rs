@@ -124,16 +124,22 @@ struct GroupInfo {
     #[serde(rename = "isAdmin")]
     is_admin: bool,
     channel: String,
+    #[serde(rename = "groupType")]
+    group_type: String,
     #[serde(rename = "requiresTrigger")]
     requires_trigger: bool,
     #[serde(rename = "allowedTools")]
     allowed_tools: Option<Vec<String>>,
+    #[serde(rename = "allowedPaths")]
+    allowed_paths: Option<Vec<String>>,
     #[serde(rename = "allowedWorkDirs")]
     allowed_work_dirs: Option<Vec<String>>,
-    #[serde(rename = "botToken")]
-    bot_token: Option<String>,
     #[serde(rename = "maxMessages")]
     max_messages: Option<u32>,
+    #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
+    agent_id: Option<i64>,
+    #[serde(rename = "channelId", skip_serializing_if = "Option::is_none")]
+    channel_id: Option<i64>,
 }
 
 fn to_group_info(g: &GroupBinding) -> GroupInfo {
@@ -143,11 +149,14 @@ fn to_group_info(g: &GroupBinding) -> GroupInfo {
         name: g.name.clone(),
         is_admin: g.is_admin,
         channel: g.channel.clone(),
+        group_type: g.group_type.clone(),
         requires_trigger: g.requires_trigger,
         allowed_tools: g.allowed_tools.clone(),
+        allowed_paths: g.allowed_paths.clone(),
         allowed_work_dirs: g.allowed_work_dirs.clone(),
-        bot_token: g.bot_token.clone(),
         max_messages: g.max_messages,
+        agent_id: None,
+        channel_id: None,
     }
 }
 
@@ -192,6 +201,10 @@ struct AgentInfoWire {
     allowed_tools: Option<Vec<String>>,
     #[serde(rename = "allowedWorkDirs")]
     allowed_work_dirs: Option<Vec<String>>,
+    #[serde(rename = "corePrompt")]
+    core_prompt: String,
+    #[serde(rename = "modelId")]
+    model_id: Option<String>,
     #[serde(rename = "createdAt")]
     created_at: String,
     #[serde(rename = "updatedAt")]
@@ -206,6 +219,8 @@ fn to_agent_info(a: &crate::types::Agent) -> AgentInfoWire {
         requires_trigger: a.requires_trigger,
         allowed_tools: a.allowed_tools.clone(),
         allowed_work_dirs: a.allowed_work_dirs.clone(),
+        core_prompt: a.core_prompt.clone(),
+        model_id: a.model_id.clone(),
         created_at: a.created_at.clone(),
         updated_at: a.updated_at.clone(),
     }
@@ -869,7 +884,7 @@ async fn handle_subscribe(
     }
 
     // Load and push chat history so the Web UI shows past conversation.
-    if let Ok(messages) = state.db.get_messages(&jid, None) {
+    if let Ok(messages) = state.db.get_group_messages(&jid, None) {
         if !messages.is_empty() {
             let history: Vec<serde_json::Value> = messages
                 .iter()
@@ -952,11 +967,14 @@ async fn handle_list_groups(
                 name: format!("{} ({})", br.channel.name, br.agent.name),
                 is_admin: br.binding.is_admin,
                 channel: br.channel.platform_type.clone(),
-                requires_trigger: false,
-                allowed_tools: None,
-                allowed_work_dirs: None,
-                bot_token: br.binding.bot_token_override.clone(),
+                group_type: "chat".to_string(),
+                requires_trigger: br.agent.requires_trigger,
+                allowed_tools: br.agent.allowed_tools.clone(),
+                allowed_paths: br.agent.allowed_paths.clone(),
+                allowed_work_dirs: br.agent.allowed_work_dirs.clone(),
                 max_messages: br.binding.max_messages,
+                agent_id: Some(br.agent.id),
+                channel_id: Some(br.channel.id),
             });
         }
     }
@@ -1081,6 +1099,7 @@ async fn handle_register_group(
         } else {
             resolved_channel.clone()
         },
+        group_type: msg["groupType"].as_str().unwrap_or("chat").to_string(),
         is_admin: false,
         requires_trigger: msg["requiresTrigger"]
             .as_bool()
@@ -1247,12 +1266,25 @@ async fn handle_update_group(
     if let Some(v) = msg["channel"].as_str() {
         updates.channel = Some(v.to_string());
     }
+    if let Some(v) = msg["groupType"].as_str() {
+        updates.group_type = Some(v.to_string());
+    }
     if let Some(v) = msg["requiresTrigger"].as_bool() {
         updates.requires_trigger = Some(v);
+    }
+    if let Some(v) = msg["isAdmin"].as_bool() {
+        updates.is_admin = Some(v);
     }
     if msg.get("allowedTools").is_some() {
         updates.allowed_tools = Some(
             msg["allowedTools"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+        );
+    }
+    if msg.get("allowedPaths").is_some() {
+        updates.allowed_paths = Some(
+            msg["allowedPaths"]
                 .as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
         );
@@ -1379,7 +1411,7 @@ async fn handle_message_send(
         .config
         .agent
         .max_messages_per_group;
-    if let Err(e) = state.db.insert_message(&stored, limit) {
+    if let Err(e) = state.db.insert_group_message(&stored, limit) {
         tracing::warn!("[WebSocketGateway] Failed to persist web message for {group_jid}: {e}");
     }
 
@@ -1947,8 +1979,10 @@ async fn handle_register_agent(
     let requires_trigger = msg["requiresTrigger"].as_bool().unwrap_or(true);
     let allowed_tools: Option<Vec<String>> = msg["allowedTools"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
     let allowed_work_dirs: Option<Vec<String>> = msg["allowedWorkDirs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let core_prompt = msg["corePrompt"].as_str().unwrap_or("");
+    let model_id = msg["modelId"].as_str();
     let now = local_iso_string_now();
-    match state.agent_manager.create(&state.db, &state.config, folder, name, requires_trigger, allowed_tools.as_ref(), allowed_work_dirs.as_ref(), &now) {
+    match state.agent_manager.create(&state.db, &state.config, &state.group_manager, folder, name, requires_trigger, allowed_tools.as_ref(), allowed_work_dirs.as_ref(), core_prompt, model_id, &now) {
         Ok(a) => {
             let wire = to_agent_info(&a);
             send_json(sender, &serde_json::json!({"type": "agent:registered", "agent": wire}));
@@ -2133,9 +2167,18 @@ async fn handle_update_agent(
     let name = msg["name"].as_str();
     let requires_trigger = msg["requiresTrigger"].as_bool();
     let allowed_tools: Option<Vec<String>> = msg["allowedTools"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-    let allowed_work_dirs: Option<Vec<String>> = msg["allowedWorkDirs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    // allowedWorkDirs: absent = don't touch; null or [] = clear to NULL
+    let allowed_work_dirs: Option<Vec<String>> = if msg["allowedWorkDirs"].is_null() {
+        Some(vec![])
+    } else {
+        msg["allowedWorkDirs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    };
+    let core_prompt = msg["corePrompt"].as_str();
+    // modelId: explicit null = clear; absent = don't touch; string = set
+    let clear_model_id = msg["modelId"].is_null();
+    let model_id = msg["modelId"].as_str();
     let now = local_iso_string_now();
-    if let Err(e) = state.agent_manager.update(&state.db, id, name, requires_trigger, allowed_tools.as_ref(), allowed_work_dirs.as_ref(), &now) {
+    if let Err(e) = state.agent_manager.update(&state.db, &state.config, id, name, requires_trigger, allowed_tools.as_ref(), allowed_work_dirs.as_ref(), core_prompt, clear_model_id, model_id, &now) {
         send_json(sender, &serde_json::json!({"type": "error", "message": format!("{e}")}));
         return;
     }
@@ -2294,6 +2337,7 @@ mod tests {
             folder: "team-a".into(),
             name: "Team A".into(),
             channel: "telegram".into(),
+            group_type: "group".into(),
             is_admin: false,
             requires_trigger: true,
             allowed_tools: Some(vec!["Read".into(), "Write".into()]),

@@ -15,6 +15,9 @@ class ConfigService {
   static const String _keyLanguage = 'language_code';
   static const String _keySelectedAgentFolder = 'selected_agent_folder';
   static const String _keySelectedAgentName = 'selected_agent_name';
+  static const String _keyFeatureMemory = 'feature_memory';
+  static const String _keyFeatureScheduler = 'feature_scheduler';
+  static const String _keyFeatureWiki = 'feature_wiki';
 
   Future<String?> get hubUrl => _storage.read(key: _keyHubUrl);
   Future<String?> get grpcUrl => _storage.read(key: _keyGrpcUrl);
@@ -28,6 +31,13 @@ class ConfigService {
   Future<String?> get selectedAgentName =>
       _storage.read(key: _keySelectedAgentName);
 
+  Future<bool> get featureMemory async =>
+      (await _storage.read(key: _keyFeatureMemory)) != 'false';
+  Future<bool> get featureScheduler async =>
+      (await _storage.read(key: _keyFeatureScheduler)) != 'false';
+  Future<bool> get featureWiki async =>
+      (await _storage.read(key: _keyFeatureWiki)) != 'false';
+
   Future<void> setHubUrl(String v) => _storage.write(key: _keyHubUrl, value: v);
   Future<void> setGrpcUrl(String v) => _storage.write(key: _keyGrpcUrl, value: v);
   Future<void> setChannelId(String v) => _storage.write(key: _keyChannelId, value: v);
@@ -38,6 +48,13 @@ class ConfigService {
       _storage.write(key: _keySelectedAgentFolder, value: v);
   Future<void> setSelectedAgentName(String v) =>
       _storage.write(key: _keySelectedAgentName, value: v);
+
+  Future<void> setFeatureMemory(bool v) =>
+      _storage.write(key: _keyFeatureMemory, value: v.toString());
+  Future<void> setFeatureScheduler(bool v) =>
+      _storage.write(key: _keyFeatureScheduler, value: v.toString());
+  Future<void> setFeatureWiki(bool v) =>
+      _storage.write(key: _keyFeatureWiki, value: v.toString());
 
   Future<void> clearSelectedAgent() => Future.wait([
         _storage.delete(key: _keySelectedAgentFolder),

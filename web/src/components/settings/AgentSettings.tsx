@@ -17,13 +17,14 @@ import {
   Divider,
   Select
 } from 'antd';
-import { 
-  PlusOutlined, 
-  DeleteOutlined, 
-  EditOutlined, 
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  EditOutlined,
   RobotOutlined,
   LinkOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 import type { 
   AgentInfo, 
@@ -97,6 +98,8 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       folder: agent.folder,
       requiresTrigger: agent.requiresTrigger,
       workDirs: agent.allowedWorkDirs?.join('\n') ?? '',
+      corePrompt: agent.corePrompt ?? '',
+      modelId: agent.modelId ?? undefined,
       bindChannelIds: currentChannelIds,
     });
     setIsModalOpen(true);
@@ -109,7 +112,9 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       onUpdate(editingAgent.id, {
         name: values.name,
         requiresTrigger: values.requiresTrigger,
-        allowedWorkDirs: workDirs
+        allowedWorkDirs: workDirs,
+        corePrompt: values.corePrompt ?? '',
+        modelId: values.modelId || null,
       });
 
       // Sync channel bindings: add new, remove removed
@@ -130,7 +135,9 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
         name: values.name,
         folder: values.folder,
         requiresTrigger: values.requiresTrigger,
-        allowedWorkDirs: workDirs
+        allowedWorkDirs: workDirs,
+        corePrompt: values.corePrompt ?? '',
+        modelId: values.modelId || null,
       });
       
       if (values.bindChannelIds?.length) {
@@ -345,9 +352,21 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
             label="Allowed Working Directories"
             tooltip="Restrict agent to these paths (one per line). Leave empty for no restriction."
           >
-            <TextArea 
-              rows={3} 
-              placeholder="/Users/name/projects/my-app" 
+            <TextArea
+              rows={3}
+              placeholder="/Users/name/projects/my-app"
+              style={{ fontFamily: 'monospace' }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="corePrompt"
+            label="Core Prompt"
+            tooltip="Instructions describing what this agent does and how it should behave. Appended to every conversation."
+          >
+            <TextArea
+              rows={4}
+              placeholder="You are a helpful assistant that specializes in..."
               style={{ fontFamily: 'monospace' }}
             />
           </Form.Item>

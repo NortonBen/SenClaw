@@ -30,9 +30,13 @@ struct GroupConfigEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     channel: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    group_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     requires_trigger: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     allowed_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allowed_paths: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     allowed_work_dirs: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -227,6 +231,18 @@ pub fn ensure_agent_dirs(config: &Config, folder: &str, name: &str) -> (String, 
     )
 }
 
+/// Write (or overwrite) SOUL.md with the given core_prompt.
+/// If core_prompt is empty, writes the default template.
+pub fn write_soul_md(config: &Config, folder: &str, name: &str, core_prompt: &str) {
+    let soul_md = config.paths.agents_dir.join(folder).join("SOUL.md");
+    let content = if core_prompt.trim().is_empty() {
+        default_soul_md(folder, name)
+    } else {
+        core_prompt.to_string()
+    };
+    fs::write(&soul_md, content).ok();
+}
+
 // ===== Global config load/save =====
 
 fn load_global_config(path: &Path) -> GlobalConfig {
@@ -362,8 +378,10 @@ fn save_group_to_config(config_path: &Path, binding: &GroupBinding) {
         folder: binding.folder.clone(),
         name: binding.name.clone(),
         channel: Some(binding.channel.clone()).filter(|c| !c.is_empty()),
+        group_type: Some(binding.group_type.clone()).filter(|t| t != "chat"),
         requires_trigger: Some(binding.requires_trigger),
         allowed_tools: binding.allowed_tools.clone(),
+        allowed_paths: binding.allowed_paths.clone(),
         allowed_work_dirs: binding.allowed_work_dirs.clone(),
         bot_token: binding.bot_token.clone(),
         max_messages: binding.max_messages,
@@ -415,6 +433,7 @@ pub fn sync_groups_from_config(
             folder: entry.folder.clone(),
             name: entry.name.clone(),
             channel: entry.channel.clone().unwrap_or_default(),
+            group_type: entry.group_type.clone().unwrap_or_else(|| "chat".to_string()),
             is_admin: false,
             requires_trigger: entry.requires_trigger.unwrap_or(true),
             allowed_tools: entry.allowed_tools.clone(),
@@ -606,6 +625,7 @@ impl GroupManager {
             folder: updates.folder.unwrap_or(existing.folder),
             name: updates.name.unwrap_or(existing.name),
             channel: updates.channel.unwrap_or(existing.channel),
+            group_type: updates.group_type.unwrap_or(existing.group_type),
             is_admin: updates.is_admin.unwrap_or(existing.is_admin),
             requires_trigger: updates.requires_trigger.unwrap_or(existing.requires_trigger),
             allowed_tools: merge_opt_opt(updates.allowed_tools, existing.allowed_tools),
@@ -728,6 +748,7 @@ pub struct GroupBindingUpdate {
     pub folder: Option<String>,
     pub name: Option<String>,
     pub channel: Option<String>,
+    pub group_type: Option<String>,
     pub is_admin: Option<bool>,
     pub requires_trigger: Option<bool>,
     pub allowed_tools: Option<Option<Vec<String>>>,
@@ -863,6 +884,7 @@ pub fn ensure_admin_group(
             .map(|e| e.name.clone())
             .unwrap_or_else(|| format!("{folder} ({})", if channel.is_empty() { "web" } else { channel })),
         channel: channel.to_string(),
+        group_type: existing.as_ref().map(|e| e.group_type.clone()).unwrap_or_else(|| "chat".to_string()),
         is_admin: folder == "main",
         requires_trigger: false,
         allowed_tools: None,
@@ -925,6 +947,7 @@ pub fn ensure_wechat_admin_group(
             .map(|e| e.name.clone())
             .unwrap_or_else(|| folder.to_string()),
         channel: "wechat".to_string(),
+        group_type: existing.as_ref().map(|e| e.group_type.clone()).unwrap_or_else(|| "chat".to_string()),
         is_admin,
         requires_trigger: false,
         allowed_tools: if is_admin { None } else { existing.as_ref().and_then(|e| e.allowed_tools.clone()) },
@@ -980,6 +1003,7 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
             .map(|e| e.name.clone())
             .unwrap_or_else(|| folder.clone()),
         channel: "app".to_string(),
+        group_type: existing.as_ref().map(|e| e.group_type.clone()).unwrap_or_else(|| "chat".to_string()),
         is_admin: false,
         requires_trigger: false,
         allowed_tools: existing.as_ref().and_then(|e| e.allowed_tools.clone()),

@@ -58,10 +58,27 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loadTimedOut = false;
   DateTime? _lastSendTime;
 
+  bool _featureMemory = true;
+  bool _featureScheduler = true;
+  bool _featureWiki = true;
+
   @override
   void initState() {
     super.initState();
+    _loadFeatureToggles();
     _initRelay();
+  }
+
+  Future<void> _loadFeatureToggles() async {
+    final mem = await _config.featureMemory;
+    final sch = await _config.featureScheduler;
+    final wiki = await _config.featureWiki;
+    if (!mounted) return;
+    setState(() {
+      _featureMemory = mem;
+      _featureScheduler = sch;
+      _featureWiki = wiki;
+    });
   }
 
   Future<void> _initRelay() async {
@@ -410,8 +427,56 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
+
+            // Feature toggles
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text(
+                'TÍNH NĂNG',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.3),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+            _featureToggle(
+              icon: Icons.memory_outlined,
+              label: 'Bộ nhớ',
+              description: 'Lưu trữ ngữ cảnh hội thoại',
+              color: const Color(0xFF5BBFE8),
+              value: _featureMemory,
+              onChanged: (v) {
+                setState(() => _featureMemory = v);
+                _config.setFeatureMemory(v);
+              },
+            ),
+            _featureToggle(
+              icon: Icons.schedule_outlined,
+              label: 'Lịch trình',
+              description: 'Tác vụ định kỳ & lập lịch',
+              color: const Color(0xFFFFB74D),
+              value: _featureScheduler,
+              onChanged: (v) {
+                setState(() => _featureScheduler = v);
+                _config.setFeatureScheduler(v);
+              },
+            ),
+            _featureToggle(
+              icon: Icons.menu_book_outlined,
+              label: 'Wiki',
+              description: 'Kho kiến thức của agent',
+              color: const Color(0xFF66BB6A),
+              value: _featureWiki,
+              onChanged: (v) {
+                setState(() => _featureWiki = v);
+                _config.setFeatureWiki(v);
+              },
+            ),
+
             Divider(color: Colors.white.withOpacity(0.08)),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
 
             // Reload agent list
             _drawerItem(
@@ -464,6 +529,67 @@ class _ChatScreenState extends State<ChatScreen> {
 
             const SizedBox(height: 12),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _featureToggle({
+    required IconData icon,
+    required String label,
+    required String description,
+    required Color color,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        decoration: BoxDecoration(
+          color: value ? color.withOpacity(0.08) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: value ? color.withOpacity(0.25) : Colors.white.withOpacity(0.06),
+          ),
+        ),
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          leading: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: value ? color.withOpacity(0.18) : Colors.white.withOpacity(0.05),
+            ),
+            child: Icon(icon, color: value ? color : Colors.white38, size: 18),
+          ),
+          title: Text(
+            label,
+            style: TextStyle(
+              color: value ? Colors.white : Colors.white54,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: Text(
+            description,
+            style: TextStyle(
+              color: value ? Colors.white38 : Colors.white24,
+              fontSize: 11,
+            ),
+          ),
+          trailing: Switch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: color,
+            activeTrackColor: color.withOpacity(0.3),
+            inactiveThumbColor: Colors.white38,
+            inactiveTrackColor: Colors.white12,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          dense: true,
+          onTap: () => onChanged(!value),
         ),
       ),
     );

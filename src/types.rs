@@ -57,6 +57,8 @@ pub struct GroupBinding {
     pub name: String,
     /// "" = web-only (no channel binding).
     pub channel: String,
+    /// "chat" | "cowork" | "code"
+    pub group_type: String,
     pub is_admin: bool,
     pub requires_trigger: bool,
     /// `None` = all tools allowed.
@@ -94,6 +96,8 @@ pub struct Agent {
     pub allowed_tools: Option<Vec<String>>,
     pub allowed_paths: Option<Vec<String>>,
     pub allowed_work_dirs: Option<Vec<String>>,
+    pub core_prompt: String,
+    pub model_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

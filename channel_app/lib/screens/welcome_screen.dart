@@ -175,7 +175,7 @@ class WelcomeScreen extends StatelessWidget {
   Future<void> _showSettingsDialog(BuildContext context) async {
     final config = ConfigService();
     String? currentHub = await config.hubUrl;
-    final controller = TextEditingController(text: currentHub ?? 'http://10.0.2.2:18080');
+    final controller = TextEditingController(text: currentHub ?? 'http://127.0.0.1:18080');
 
     if (!context.mounted) return;
     

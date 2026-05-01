@@ -492,7 +492,7 @@ fn wire_app_channel_controls(
                     };
 
                     let messages = db
-                        .get_messages_paginated(&chat_jid, page_size, offset)
+                        .get_group_messages_paginated(&chat_jid, page_size, offset)
                         .unwrap_or_default();
 
                     let payload: Vec<serde_json::Value> = messages
@@ -503,7 +503,7 @@ fn wire_app_channel_controls(
                             } else if m.is_from_me {
                                 "user"
                             } else {
-                                "other"
+                                "assistant"
                             };
 
                             serde_json::json!({

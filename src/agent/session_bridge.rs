@@ -44,7 +44,7 @@ pub fn build_prompt_for_group(db: &Db, chat_jid: &str) -> (String, Option<String
         .ok()
         .flatten();
     let messages = db
-        .get_messages(chat_jid, since.as_deref())
+        .get_group_messages(chat_jid, since.as_deref())
         .unwrap_or_default();
     let last_msg_ts = messages.last().map(|m| m.timestamp.clone());
     (format_messages_for_agent(&messages), last_msg_ts)

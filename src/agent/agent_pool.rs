@@ -1384,7 +1384,7 @@ impl AgentPool {
                 .as_ref()
                 .map(|c| c.agent.max_messages_per_group)
                 .unwrap_or(100);
-            if let Err(e) = db.insert_message(&msg, limit) {
+            if let Err(e) = db.insert_group_message(&msg, limit) {
                 tracing::warn!("[AgentPool] Failed to persist bot reply for {jid}: {e}");
             }
         }
@@ -1730,30 +1730,46 @@ impl AgentPool {
         self.get_or_create(group).await?;
 
         // Pre-retrieval memory injection — mirrors TS AgentPool.ts:703-715.
-        let full_prompt = if self
-            .config
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|c| c.memory.pre_retrieval)
-            .unwrap_or(false)
-        {
-            let mem_mgr = crate::memory::manager::get_instance();
-            let injected = match mem_mgr.search(&group.folder, prompt, None).await {
-                Ok(results) if !results.is_empty() => {
-                    let snippets: Vec<String> =
-                        results.iter().take(5).map(|r| r.text.clone()).collect();
-                    format!(
-                        "Related context:\n{}\n\n---\n\n{}",
-                        snippets.join("\n---\n"),
-                        prompt
-                    )
-                }
-                _ => prompt.to_string(),
+        let full_prompt = {
+            let (do_retrieval, max_results, min_score) = {
+                let cfg = self.config.lock().unwrap();
+                let c = cfg.as_ref();
+                (
+                    c.map(|c| c.memory.pre_retrieval).unwrap_or(false),
+                    c.map(|c| c.memory.search_max_results as usize).unwrap_or(5),
+                    c.map(|c| c.memory.search_min_score).unwrap_or(0.5),
+                )
             };
-            injected
-        } else {
-            prompt.to_string()
+            if do_retrieval {
+                let today_file = chrono::Utc::now().format("%Y-%m-%d.md").to_string();
+                let mem_mgr = crate::memory::manager::get_instance();
+                let opts = crate::memory::fts_search::SearchOptions {
+                    max_results: max_results * 3,
+                    min_score,
+                    source: None,
+                };
+                match mem_mgr.search(&group.folder, prompt, Some(opts)).await {
+                    Ok(results) => {
+                        let filtered: Vec<_> = results
+                            .into_iter()
+                            .filter(|r| r.score >= min_score && !r.path.ends_with(&today_file))
+                            .take(max_results)
+                            .collect();
+                        let mem_context = crate::memory::manager::format_search_results(&filtered);
+                        if mem_context.is_empty() {
+                            prompt.to_string()
+                        } else {
+                            format!("<memory>\n{mem_context}\n</memory>\n\n{prompt}")
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[AgentPool] Memory pre-retrieval failed: {e}");
+                        prompt.to_string()
+                    }
+                }
+            } else {
+                prompt.to_string()
+            }
         };
 
         // Log user query to daily log (original prompt, without memory injection).
@@ -3022,6 +3038,7 @@ mod tests {
             folder: "test".into(),
             name: "Test".into(),
             channel: "web".into(),
+            group_type: "chat".into(),
             is_admin,
             requires_trigger: false,
             allowed_tools: None,

@@ -8,8 +8,8 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::types::Agent;
-use crate::gateway::group_manager::ensure_agent_dirs;
+use crate::types::{Agent, GroupBinding};
+use crate::gateway::group_manager::{ensure_agent_dirs, write_soul_md, GroupManager};
 
 pub struct AgentManager {
     on_changed: Mutex<Option<Box<dyn Fn() + Send + 'static>>>,
@@ -40,17 +40,42 @@ impl AgentManager {
         &self,
         db: &Db,
         config: &Config,
+        group_manager: &GroupManager,
         folder: &str,
         name: &str,
         requires_trigger: bool,
         allowed_tools: Option<&Vec<String>>,
         allowed_work_dirs: Option<&Vec<String>>,
+        core_prompt: &str,
+        model_id: Option<&str>,
         now: &str,
     ) -> Result<Agent> {
         // Ensure agent directory + SOUL.md + MEMORY.md + workspace
         ensure_agent_dirs(config, folder, name);
+        // Write user's core_prompt to SOUL.md (overrides the default template)
+        write_soul_md(config, folder, name, core_prompt);
 
-        let id = db.insert_agent(folder, name, requires_trigger, allowed_tools, allowed_work_dirs, now)?;
+        let id = db.insert_agent(folder, name, requires_trigger, allowed_tools, allowed_work_dirs, core_prompt, model_id, now)?;
+
+        // Auto-create a default web-only group for the new agent
+        let default_group = GroupBinding {
+            jid: format!("web:{folder}"),
+            folder: folder.to_string(),
+            name: name.to_string(),
+            channel: String::new(),
+            group_type: "chat".to_string(),
+            is_admin: false,
+            requires_trigger,
+            allowed_tools: allowed_tools.cloned(),
+            allowed_paths: None,
+            allowed_work_dirs: allowed_work_dirs.cloned(),
+            bot_token: None,
+            max_messages: None,
+            last_active: None,
+            added_at: now.to_string(),
+        };
+        group_manager.register(db, config, &default_group);
+
         self.fire_changed();
         db.get_agent(id)?.ok_or_else(|| anyhow::anyhow!("Agent {id} not found after insert"))
     }
@@ -77,14 +102,26 @@ impl AgentManager {
     pub fn update(
         &self,
         db: &Db,
+        config: &Config,
         id: i64,
         name: Option<&str>,
         requires_trigger: Option<bool>,
         allowed_tools: Option<&Vec<String>>,
         allowed_work_dirs: Option<&Vec<String>>,
+        core_prompt: Option<&str>,
+        clear_model_id: bool,
+        model_id: Option<&str>,
         now: &str,
     ) -> Result<()> {
-        db.update_agent(id, name, requires_trigger, allowed_tools, allowed_work_dirs, now)?;
+        db.update_agent(id, name, requires_trigger, allowed_tools, allowed_work_dirs, core_prompt, clear_model_id, model_id, now)?;
+
+        // Sync SOUL.md when core_prompt changes
+        if let Some(cp) = core_prompt {
+            if let Ok(Some(agent)) = db.get_agent(id) {
+                write_soul_md(config, &agent.folder, &agent.name, cp);
+            }
+        }
+
         self.fire_changed();
         Ok(())
     }

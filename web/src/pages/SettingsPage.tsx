@@ -5,6 +5,7 @@ import {
   ApiOutlined,
   UserOutlined,
   ThunderboltOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -12,6 +13,7 @@ import { AgentSidebar } from '../components/AgentSidebar';
 import { GeneralSettings } from '../components/settings/GeneralSettings';
 import { ChannelSettings } from '../components/settings/ChannelSettings';
 import { AgentSettings } from '../components/settings/AgentSettings';
+import { GroupSettings } from '../components/settings/GroupSettings';
 import { LLMSettings } from '../components/settings/LLMSettings';
 
 const { Content } = Layout;
@@ -42,6 +44,20 @@ export const SettingsPage: React.FC = () => {
           onRegister={ws.registerChannel}
           onUnregister={ws.unregisterChannel}
           onUpdate={ws.updateChannel}
+        />
+      ),
+    },
+    {
+      key: 'groups',
+      label: <span><TeamOutlined />Groups</span>,
+      children: (
+        <GroupSettings
+          groups={ws.groups}
+          agents={ws.agents}
+          channels={ws.channels}
+          onRegisterGroup={ws.registerGroup}
+          onUpdateGroup={ws.updateGroup}
+          onUnregisterGroup={ws.unregisterGroup}
         />
       ),
     },
