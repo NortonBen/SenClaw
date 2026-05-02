@@ -283,3 +283,196 @@ pub struct TaskRunLogInsert {
     pub result: Option<String>,
     pub error: Option<String>,
 }
+
+// ===== Cowork types =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkWorkspace {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub root_dir: String,
+    pub working_dir: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkMember {
+    pub workspace_id: String,
+    pub member_id: String,
+    pub role: String,
+    pub jid: Option<String>,
+    pub subdir: Option<String>,
+    pub persona: Option<String>,
+    pub responsibilities: Option<String>,
+    pub triggers: Option<String>,
+    pub handoff_rules: Option<String>,
+    pub acceptance_criteria: Option<String>,
+    pub output_format: Option<String>,
+    pub sla: Option<String>,
+    pub limits: Option<String>,
+    pub joined_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkBoardEntry {
+    pub id: String,
+    pub workspace_id: String,
+    pub section: String,
+    pub title: Option<String>,
+    pub content: String,
+    pub author: String,
+    pub pinned: bool,
+    pub tags: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkTask {
+    pub id: String,
+    pub workspace_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub assignee: Option<String>,
+    pub reviewer: Option<String>,
+    pub priority: String,
+    pub depends_on: Option<String>,
+    pub attachments: Option<String>,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub due_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkTaskComment {
+    pub id: i64,
+    pub task_id: String,
+    pub author: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkMessage {
+    pub id: String,
+    pub workspace_id: String,
+    pub from_member: String,
+    pub to_member: Option<String>,
+    pub message_type: String,
+    pub content: String,
+    pub attachments: Option<String>,
+    pub task_id: Option<String>,
+    pub is_read: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkRecordingSession {
+    pub id: String,
+    pub workspace_id: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub event_count: i64,
+    pub total_tokens: i64,
+    pub agents: Option<String>,
+}
+
+// ===== Cowork Templates =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoworkTemplate {
+    pub name: String,
+    pub description: String,
+    pub icon: Option<String>,
+    pub members: Vec<TemplateMember>,
+    pub board: Option<TemplateBoard>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateMember {
+    #[serde(rename = "agentFolder")]
+    pub agent_folder: String,
+    pub role: String,
+    pub subdir: Option<String>,
+    pub persona: Option<String>,
+    pub responsibilities: Option<Vec<String>>,
+    pub triggers: Option<Vec<TemplateTrigger>>,
+    pub handoff: Option<Vec<TemplateHandoffRule>>,
+    #[serde(rename = "acceptanceCriteria")]
+    pub acceptance_criteria: Option<Vec<String>>,
+    pub output: Option<TemplateOutput>,
+    pub sla: Option<TemplateSla>,
+    pub limits: Option<TemplateLimits>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateTrigger {
+    #[serde(rename = "type")]
+    pub trigger_type: String,
+    pub condition: Option<String>,
+    pub from: Option<String>,
+    #[serde(rename = "messageType")]
+    pub message_type: Option<String>,
+    pub status: Option<String>,
+    pub assignee: Option<String>,
+    pub cron: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateHandoffRule {
+    pub when: String,
+    pub to: String,
+    #[serde(rename = "type")]
+    pub message_type: String,
+    #[serde(rename = "messageTemplate")]
+    pub message_template: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateOutput {
+    pub format: Option<String>,
+    #[serde(rename = "requiredSections")]
+    pub required_sections: Option<Vec<String>>,
+    #[serde(rename = "attachDiff")]
+    pub attach_diff: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateSla {
+    #[serde(rename = "maxDurationPerTaskMinutes")]
+    pub max_duration_minutes: Option<i64>,
+    #[serde(rename = "maxTokenPerTask")]
+    pub max_token_per_task: Option<i64>,
+    #[serde(rename = "escalateAfterBlockedMinutes")]
+    pub escalate_after_blocked_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateLimits {
+    #[serde(rename = "maxFileSizeWriteKb")]
+    pub max_file_size_write_kb: Option<i64>,
+    #[serde(rename = "allowedBashCommands")]
+    pub allowed_bash_commands: Option<Vec<String>>,
+    #[serde(rename = "deniedTools")]
+    pub denied_tools: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateBoard {
+    pub sections: Vec<TemplateBoardSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateBoardSection {
+    #[serde(rename = "type")]
+    pub section_type: String,
+    pub title: String,
+    pub template: Option<String>,
+}

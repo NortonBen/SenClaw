@@ -18,9 +18,12 @@
 //!         └── ModelManager
 //! ```
 
+pub mod config_manager;
 pub mod conversation;
 pub mod engine;
 pub mod events;
+pub mod hooks;
+pub mod model_manager;
 pub mod permissions;
 pub mod query_llm;
 pub mod run_tools;
@@ -32,8 +35,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 // Re-export key types
+pub use config_manager::{ConfigManager, ProjectConfig, ProjectConfigPatch, with_conf_manager};
 pub use engine::ZenEngine;
 pub use events::{EventBus, EngineEvent, ResponseRegistry};
+pub use model_manager::{ModelManager, ModelUpdateData, TaskConfig, with_model_manager};
 pub use state::StateManager;
 
 /// Agent id used for root-agent events.

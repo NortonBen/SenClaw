@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use anyhow::Result;
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
@@ -43,7 +45,12 @@ pub fn get_instance() -> Arc<MemoryManager> {
         .unwrap()
         .as_ref()
         .cloned()
-        .expect("MemoryManager not initialized. Call memory::manager::init() first.")
+        .expect("MemoryManager not initialized — call memory::manager::init() at daemon startup")
+}
+
+/// Non-panicking variant; returns None if not yet initialised.
+pub fn try_get_instance() -> Option<Arc<MemoryManager>> {
+    INSTANCE.lock().unwrap().as_ref().cloned()
 }
 
 // ===== Types =====
@@ -66,6 +73,8 @@ pub struct MemoryManager {
     chunker_options: ChunkerOptions,
     /// folder → set of changed absolute paths (None = full resync needed)
     dirty: Mutex<HashMap<String, Option<HashSet<String>>>>,
+    /// folder → CancellationToken for the polling watcher task
+    watcher_tokens: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl MemoryManager {
@@ -77,6 +86,7 @@ impl MemoryManager {
             embedding_provider: emb,
             chunker_options: ChunkerOptions::default(),
             dirty: Mutex::new(HashMap::new()),
+            watcher_tokens: Mutex::new(HashMap::new()),
         }
     }
 
@@ -175,12 +185,13 @@ impl MemoryManager {
         }
     }
 
-    /// Stop watcher for a folder.
+    /// Stop watcher and clean up state for a folder.
     pub fn destroy_agent(&self, folder: &str) {
-        // Watcher cleanup is handled by the polling loop detecting
-        // that the folder entry is gone from the dirty map.
-        // For now this is a no-op — the polling loop self-cleans.
-        let _ = folder;
+        if let Some(token) = self.watcher_tokens.lock().unwrap().remove(folder) {
+            token.cancel();
+        }
+        self.dirty.lock().unwrap().remove(folder);
+        tracing::info!("[MemoryManager] destroy_agent({folder}): watcher cancelled");
     }
 
     /// Global cleanup.
@@ -275,6 +286,7 @@ impl MemoryManager {
         // Chunk
         let raw_chunks = chunk_text(&content, self.chunker_options.clone());
         if raw_chunks.is_empty() {
+            tracing::warn!("[MemoryManager] sync_file: no chunks produced for {abs_path} (file may be empty)");
             return;
         }
 
@@ -450,6 +462,9 @@ impl MemoryManager {
     // ===== File watching (poll-based) =====
 
     fn start_watching(self: &Arc<Self>, folder: &str) {
+        let token = CancellationToken::new();
+        self.watcher_tokens.lock().unwrap().insert(folder.to_string(), token.clone());
+
         let this = Arc::clone(self);
         let folder = folder.to_string();
         tokio::spawn(async move {
@@ -463,7 +478,13 @@ impl MemoryManager {
             let mut last_mtimes: HashMap<PathBuf, i64> = HashMap::new();
 
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        tracing::info!("[MemoryManager] watcher stopped for {folder}");
+                        return;
+                    }
+                    _ = interval.tick() => {}
+                }
 
                 // Check MEMORY.md
                 if let Ok(meta) = fs::metadata(&memory_md) {
@@ -510,22 +531,23 @@ impl MemoryManager {
 
     fn resolve_memory_path(&self, folder: &str, relative_path: &str) -> Option<PathBuf> {
         let agent_dir = self.agents_dir.join(folder);
-        let agent_dir_str = agent_dir.to_string_lossy().to_string();
 
-        let is_safe = |p: &Path| {
-            let s = p.to_string_lossy().to_string();
-            s == agent_dir_str || s.starts_with(&format!("{}/", agent_dir_str))
+        // Canonicalise the base dir so symlinks / `..` components can't escape it.
+        let base = agent_dir.canonicalize().ok()?;
+
+        let is_safe = |p: &Path| -> bool {
+            p.canonicalize().ok().map_or(false, |canon| canon.starts_with(&base))
         };
 
         // Try direct join
         let candidate = agent_dir.join(relative_path);
-        if is_safe(&candidate) && candidate.exists() {
+        if is_safe(&candidate) {
             return Some(candidate);
         }
 
         // Try memory/ subdirectory
         let candidate = agent_dir.join("memory").join(relative_path);
-        if is_safe(&candidate) && candidate.exists() {
+        if is_safe(&candidate) {
             return Some(candidate);
         }
 

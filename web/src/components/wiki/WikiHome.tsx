@@ -5,7 +5,7 @@
 
 import { useEffect } from 'react';
 import { theme } from 'antd';
-import type { WikiStats, TagEntry, DirNode } from '../hooks/useWiki';
+import type { WikiStats, TagEntry, DirNode } from '../../hooks/useWiki';
 
 interface Props {
   stats: WikiStats | null;

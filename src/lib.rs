@@ -16,6 +16,7 @@ pub mod channels;
 pub mod clawhub;
 pub mod cli;
 pub mod config;
+pub mod cowork;
 pub mod db;
 pub mod gateway;
 pub mod mcp;
@@ -554,6 +555,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let am = Arc::new(gateway::agent_manager::AgentManager::new());
     let bm = Arc::new(gateway::binding_manager::BindingManager::new());
     let cm = Arc::new(gateway::channel_manager::ChannelManager::new());
+    let cowork_mgr = Arc::new(cowork::CoworkManager::new());
+    cowork_mgr.ensure_builtin_templates(&cfg);
     // Sync groups from config.json into DB on startup
     let (sync_added, sync_updated, sync_removed) =
         gateway::group_manager::sync_groups_from_config(&db, &gm, &cfg);
@@ -1042,6 +1045,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             agent_manager: Arc::clone(&am),
             binding_manager: Arc::clone(&bm),
             channel_manager: Arc::clone(&cm),
+            cowork_manager: Arc::clone(&cowork_mgr),
             api: ws_api,
         });
 
@@ -1240,6 +1244,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
         let ui_state = Arc::new(gateway::ui_server::UiState {
             config: Arc::new(cfg.clone()),
+            db: Some(Arc::clone(&db)),
+            cowork_manager: Some(Arc::clone(&cowork_mgr)),
             wiki_manager: Some(Arc::clone(&wiki_mgr)),
             persona_registry: Some(Arc::clone(&persona_registry)),
             agent_api: Some(Arc::new(RealUiApi {

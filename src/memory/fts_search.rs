@@ -212,9 +212,11 @@ async fn mixed_search(
     }
     for r in fts_results {
         if let Some(e) = combined.get_mut(&r.id) {
+            // chunk found by both vector AND fts — combine weights
             e.score += r.score * 0.3;
         } else {
-            combined.insert(r.id.clone(), SearchResult { score: r.score * 0.7, ..r });
+            // fts-only result gets 0.3 weight (not the vector weight of 0.7)
+            combined.insert(r.id.clone(), SearchResult { score: r.score * 0.3, ..r });
         }
     }
     let mut merged: Vec<SearchResult> = combined.into_values().collect();

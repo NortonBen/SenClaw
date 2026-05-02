@@ -9,7 +9,7 @@ import {
   ClusterOutlined,
   BookOutlined
 } from '@ant-design/icons';
-import type { DirNode, SearchResult } from '../hooks/useWiki';
+import type { DirNode, SearchResult } from '../../hooks/useWiki';
 
 const { Text } = Typography;
 

@@ -1,39 +1,34 @@
-//! Agent pool — core agent lifecycle management.
-//! Port target: src-old/agent/AgentPool.ts (1391 lines).
-//!
-//! Phase 1 ported (this file): state maps, [`AgentEventSink`] trait, extended
-//! [`CoreApi`] trait, simple setters, dispatch coordination, permission /
-//! thinking hot-update, [`AgentPool::broadcast_reply`], `notify_activity`,
-//! workspace state file helpers.
-//!
-//! Phase 2+ pending: `get_or_create` with concurrency lock, `process_and_wait`
-//! with inactivity timer + retry / abort, `destroy` / `destroy_all`,
-//! `stop_agent` / `pause_agent` / `resume_agent`, `run_isolated`, `bind_events`
-//! event wiring, skills hot-reload signal watcher, workspace state file
-//! watcher.
+//! AgentPool — core agent lifecycle management and dispatch coordination.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
-
 use std::time::Duration;
 
 use anyhow::Result;
-use async_trait::async_trait;
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
+use crate::gateway::message_router::AgentApi;
+
+use super::state::State;
+use super::traits::{AgentEventSink, CachedTools, CoreApi};
+use super::types::{
+    AskQuestionRequestData, CachedTodos, CompactExecData, CompactStartData,
+    MessageCompleteData, ProcessEvent, ReplyFn, SendReplyFn, SessionErrorData, StateUpdateData,
+    TodoSnapshot, TodosUpdateItem, ToolPermissionRequestData, TypingFn, AGENT_TIMEOUT_MS,
+    MAIN_AGENT_ID,
+};
+use super::workspace::WorkspaceStateFile;
 use crate::agent::dispatch_bridge::{
     build_dispatch_resume_hint, AdminActivityCallback, DispatchBridgeApi,
 };
 use crate::agent::group_queue::GroupQueue;
 use crate::agent::permission_bridge::{
-    AskQuestionData, AskQuestionOption, AskQuestionPayload, PermissionBridge, PermissionPayload,
+    AskQuestionPayload, PermissionBridge, PermissionPayload,
 };
 use crate::agent::session_bridge;
 use crate::config::{Config, FeishuConfig};
 use crate::db::Db;
-use crate::gateway::message_router::AgentApi;
 use crate::mcp::helper::{
     dispatch_mcp_config, feishu_wiki_mcp_config, memory_mcp_config, schedule_mcp_config,
     send_mcp_config, workspace_mcp_config, McpServerConfig,
@@ -41,827 +36,12 @@ use crate::mcp::helper::{
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
 use crate::util::local_time::local_iso_string_now;
-use crate::zen_core::engine::ZenEngine;
-use crate::zen_core::{
-    AskQuestionResponseData, EngineEvent, SessionState, ToolPermissionResponseData, ZenCore,
-    ZenCoreOptions,
-};
-use tokio::sync::broadcast::error::RecvError;
-use uuid::Uuid;
-
-// ===== Constants =====
-
-/// Agent ID emitted by sema-core for the main (root) agent. Subagent events
-/// carry a different id and are filtered out.
-#[allow(dead_code)] // wired by Phase 2 bind_events
-pub(crate) const MAIN_AGENT_ID: &str = "main";
-
-/// `process_and_wait` inactivity timeout (30 minutes). Must exceed the longest
-/// dispatch_task runtime so chained tool calls don't trip the watchdog.
-pub const AGENT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
-
-// ===== Public payload types =====
-
-/// Permission flags surfaced to the Web UI / virtual workers.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct PermissionsConfig {
-    #[serde(rename = "skipMainAgentPermissions")]
-    pub skip_main_agent_permissions: bool,
-    #[serde(rename = "skipAllAgentsPermissions")]
-    pub skip_all_agents_permissions: bool,
-}
-
-impl Default for PermissionsConfig {
-    fn default() -> Self {
-        Self {
-            skip_main_agent_permissions: false,
-            skip_all_agents_permissions: false,
-        }
-    }
-}
-
-/// One TodoWrite item snapshot — cached for replay on WS subscribe.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoSnapshot {
-    pub content: String,
-    pub status: String,
-    #[serde(
-        default,
-        rename = "activeForm",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub active_form: Option<String>,
-}
-
-/// Per-agent cached todos snapshot.
-#[derive(Debug, Clone, Serialize)]
-pub struct CachedTodos {
-    #[serde(rename = "agentName")]
-    pub agent_name: String,
-    pub todos: Vec<TodoSnapshot>,
-}
-
-// ===== Event data types (mirrors TS sema-core events) =====
-
-/// `message:complete` event payload.
-#[derive(Debug, Clone)]
-pub struct MessageCompleteData {
-    pub agent_id: String,
-    pub content: String,
-}
-
-/// `state:update` event payload.
-#[derive(Debug, Clone)]
-pub struct StateUpdateData {
-    pub state: String,
-}
-
-/// `todos:update` event payload — list of todo items.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodosUpdateItem {
-    pub content: String,
-    pub status: String,
-    #[serde(
-        default,
-        rename = "activeForm",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub active_form: Option<String>,
-}
-
-/// `compact:start` event payload.
-#[derive(Debug, Clone)]
-pub struct CompactStartData;
-
-/// `compact:exec` event payload.
-#[derive(Debug, Clone)]
-pub struct CompactExecData;
-
-/// `session:error` event payload.
-#[derive(Debug, Clone)]
-pub struct SessionErrorData {
-    pub code: String,
-    pub message: String,
-}
-
-/// `tool:permission:request` event payload.
-#[derive(Debug, Clone)]
-pub struct ToolPermissionRequestData {
-    pub tool_name: String,
-    pub title: String,
-    pub content: serde_json::Value,
-    pub options: HashMap<String, String>,
-}
-
-/// `ask:question:request` event payload.
-#[derive(Debug, Clone)]
-pub struct AskQuestionRequestData {
-    pub agent_id: String,
-    pub questions: Vec<AskQuestionData>,
-}
-
-/// Events forwarded from `bind_events` persistent handlers to an active
-/// `process_and_wait` event loop. Sent through the unbounded channel stored
-/// in [`State::process_event_txs`].
-#[derive(Debug, Clone)]
-enum ProcessEvent {
-    /// Core reached idle — resolve the PAW promise.
-    Idle,
-    /// Core emitted a session error — trigger error handling.
-    Error(SessionErrorData),
-    /// Non-idle, non-paused state update — restart the inactivity timer.
-    Reset,
-}
-
-// ===== AgentEventSink trait (mirrors TS interface) =====
-
-/// Sink for agent-side events that the WebSocket gateway forwards to the Web UI.
-/// Default impls are no-ops so partial wiring compiles.
-#[allow(unused_variables)]
-pub trait AgentEventSink: Send + Sync {
-    fn notify_agent_reply(&self, chat_jid: &str, text: &str);
-    fn notify_agent_state(&self, chat_jid: &str, state: &str);
-    fn notify_permission_request(
-        &self,
-        chat_jid: &str,
-        request_id: &str,
-        payload: PermissionPayload,
-    ) {
-    }
-    fn notify_ask_question_request(
-        &self,
-        chat_jid: &str,
-        request_id: &str,
-        payload: AskQuestionPayload,
-    ) {
-    }
-    fn notify_permission_resolved(
-        &self,
-        chat_jid: &str,
-        request_id: &str,
-        option_key: &str,
-        option_label: &str,
-    ) {
-    }
-    fn notify_ask_question_resolved(
-        &self,
-        chat_jid: &str,
-        request_id: &str,
-        answers: HashMap<String, String>,
-    ) {
-    }
-    fn notify_agent_todos(&self, agent_jid: &str, agent_name: &str, todos: &[TodoSnapshot]) {}
-    fn notify_agent_compacting(&self, chat_jid: &str, is_compacting: bool) {}
-    /// Broadcast the current tool roster for an agent (sent on agent creation
-    /// and on snapshot replay for new admin clients).
-    fn notify_agent_tools(&self, agent_jid: &str, agent_name: &str, tools: &[AgentToolInfo]) {}
-    fn notify_agent_usage(&self, agent_jid: &str, usage: crate::zen_core::ConversationUsageData) {}
-}
-
-/// Lightweight tool descriptor exposed to the Web UI through `agent:tools`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentToolInfo {
-    pub name: String,
-    pub description: String,
-    pub status: String,
-}
-
-/// Per-agent cached tool roster — used for snapshot replay on WS subscribe.
-#[derive(Debug, Clone, Serialize)]
-pub struct CachedTools {
-    #[serde(rename = "agentName")]
-    pub agent_name: String,
-    pub tools: Vec<AgentToolInfo>,
-}
-
-// ===== CoreApi trait (extended) =====
-
-/// Operations AgentPool needs from the agent runtime (sema-core or stub).
-/// All methods default to no-op / error so partial wiring compiles.
-#[allow(unused_variables)]
-pub trait CoreApi: Send + Sync {
-    /// Process a user prompt synchronously (Phase 1 stub path).
-    fn process_message(&self, jid: &str, prompt: &str, group: &GroupBinding) -> Result<String> {
-        Err(anyhow::anyhow!("CoreApi not wired — sema-core unavailable"))
-    }
-
-    /// Tear down the core for a JID.
-    fn destroy_agent(&self, jid: &str) {}
-
-    /// Hot-update skip-permission flags for an existing core.
-    fn update_skip_permissions(&self, jid: &str, skip: bool) {}
-
-    /// Hot-update Thinking-mode flag for an existing core.
-    fn update_thinking(&self, jid: &str, enabled: bool) {}
-
-    /// Switch the core's working directory (used by workspace_switch and dispatch).
-    fn set_working_dir(&self, jid: &str, dir: &str) {}
-
-    /// Reset working directory to the core's compile-time default.
-    fn clear_working_dir(&self, jid: &str) {}
-
-    /// Pause the live session (Phase 3).
-    fn pause_session(&self, jid: &str) {}
-
-    /// Soft-interrupt the session, preserving history (Phase 3).
-    fn interrupt_session(&self, jid: &str) {}
-
-    /// Reload skills registry across all cores after disable/enable.
-    fn reload_skills(&self, disabled: &[String]) {}
-
-    /// Runtime config used by core backend implementation.
-    fn set_runtime_config(&self, _cfg: Arc<Config>) {}
-
-    /// Register or update one MCP server for this core.
-    fn add_or_update_mcp_server(&self, _jid: &str, _cfg: &McpServerConfig) -> Result<()> {
-        Ok(())
-    }
-
-    /// Recreate session after stop (discards context, fresh session). Default no-op.
-    fn create_session(&self, _jid: &str) -> Result<()> {
-        Ok(())
-    }
-
-    /// Send user input to a running session (used by resume_agent). Default no-op.
-    fn process_user_input(&self, _jid: &str, _prompt: &str) -> Result<()> {
-        Ok(())
-    }
-
-    /// Whether the session has pending tool-call results. Default false.
-    fn has_session_tool_results(&self, _jid: &str) -> bool {
-        false
-    }
-
-    /// Register event listeners on the underlying core.
-    /// Default no-ops — real sema-core will implement these.
-    fn on_message_complete(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(MessageCompleteData) + Send + Sync>,
-    ) {
-    }
-    fn on_state_update(&self, _jid: &str, _handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {}
-    fn on_todos_update(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>,
-    ) {
-    }
-    fn on_compact_start(&self, _jid: &str, _handler: Box<dyn Fn(CompactStartData) + Send + Sync>) {}
-    fn on_compact_exec(&self, _jid: &str, _handler: Box<dyn Fn(CompactExecData) + Send + Sync>) {}
-    fn on_session_error(&self, _jid: &str, _handler: Box<dyn Fn(SessionErrorData) + Send + Sync>) {}
-    fn on_tool_permission_request(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(ToolPermissionRequestData) + Send + Sync>,
-    ) {
-    }
-    fn on_ask_question_request(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(AskQuestionRequestData) + Send + Sync>,
-    ) {
-    }
-    fn on_conversation_usage(
-        &self,
-        _jid: &str,
-        _handler: Box<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>,
-    ) {
-    }
-    fn respond_to_tool_permission(
-        &self,
-        _jid: &str,
-        _tool_name: &str,
-        _selected: &str,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn respond_to_ask_question(
-        &self,
-        _jid: &str,
-        _agent_id: &str,
-        _answers: HashMap<String, String>,
-    ) -> Result<()> {
-        Ok(())
-    }
-    /// Remove all event listeners registered for `jid`.
-    fn off_all(&self, _jid: &str) {}
-
-    /// Snapshot the tool roster currently registered on the underlying engine
-    /// for `jid`. Default implementation returns an empty list.
-    fn get_tool_infos(&self, _jid: &str) -> Vec<AgentToolInfo> {
-        Vec::new()
-    }
-}
-
-#[derive(Default, Clone)]
-struct CoreHandlers {
-    message_complete: Option<Arc<dyn Fn(MessageCompleteData) + Send + Sync>>,
-    state_update: Option<Arc<dyn Fn(StateUpdateData) + Send + Sync>>,
-    todos_update: Option<Arc<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>>,
-    compact_start: Option<Arc<dyn Fn(CompactStartData) + Send + Sync>>,
-    compact_exec: Option<Arc<dyn Fn(CompactExecData) + Send + Sync>>,
-    session_error: Option<Arc<dyn Fn(SessionErrorData) + Send + Sync>>,
-    tool_permission_request: Option<Arc<dyn Fn(ToolPermissionRequestData) + Send + Sync>>,
-    ask_question_request: Option<Arc<dyn Fn(AskQuestionRequestData) + Send + Sync>>,
-    conversation_usage: Option<Arc<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>>,
-}
-
-// ===== ZenCoreApi: real zen-core engine bridge =====
-
-/// Production [`CoreApi`] backed by [`ZenEngine`] (the zen-core runtime).
-///
-/// Manages one [`ZenEngine`] per JID, bridges engine events to CoreApi
-/// handler callbacks, and delegates lifecycle operations to the engine.
-pub struct ZenCoreApi {
-    engines: Mutex<HashMap<String, Arc<ZenEngine>>>,
-    handlers: Arc<Mutex<HashMap<String, CoreHandlers>>>,
-    http_client: Client,
-    mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
-}
-
-impl ZenCoreApi {
-    pub fn new(mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>) -> Self {
-        Self {
-            engines: Mutex::new(HashMap::new()),
-            handlers: Arc::new(Mutex::new(HashMap::new())),
-            http_client: Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("ZenCoreApi http client"),
-            mcp_manager,
-        }
-    }
-
-    fn get_handlers(&self, jid: &str) -> Option<CoreHandlers> {
-        self.handlers.lock().unwrap().get(jid).cloned()
-    }
-
-    fn with_handlers<F: FnOnce(&mut CoreHandlers)>(&self, jid: &str, f: F) {
-        let mut map = self.handlers.lock().unwrap();
-        let entry = map.entry(jid.to_string()).or_default();
-        f(entry);
-    }
-
-    /// Create or retrieve the engine for a JID.
-    fn ensure_engine(&self, jid: &str) -> Arc<ZenEngine> {
-        let mut engines = self.engines.lock().unwrap();
-        if let Some(engine) = engines.get(jid) {
-            return engine.clone();
-        }
-        let opts = ZenCoreOptions {
-            instance_id: jid.to_string(),
-            ..Default::default()
-        };
-        let engine = ZenEngine::new(opts, self.mcp_manager.clone());
-        engine.initialize_plugins();
-        // Refresh MCP bridge tools in the background
-        {
-            let engine = engine.clone();
-            tokio::spawn(async move {
-                engine.refresh_mcp_tools().await;
-            });
-        }
-        engines.insert(jid.to_string(), engine.clone());
-        engine
-    }
-
-    /// Subscribe to the engine's EventBus and forward events to handlers.
-    fn bridge_events(&self, jid: &str, engine: &Arc<ZenEngine>) {
-        let jid = jid.to_string();
-        let handlers_map = Arc::clone(&self.handlers);
-        let mut rx = engine.event_bus.subscribe();
-
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        let handlers = handlers_map.lock().unwrap().get(&jid).cloned();
-                        let h = match handlers {
-                            Some(h) => h,
-                            None => continue,
-                        };
-                        match event {
-                            EngineEvent::MessageComplete(data) => {
-                                if let Some(ref cb) = h.message_complete {
-                                    cb(MessageCompleteData {
-                                        agent_id: data.agent_id,
-                                        content: data.content,
-                                    });
-                                }
-                            }
-                            EngineEvent::StateUpdate(data) => {
-                                if let Some(ref cb) = h.state_update {
-                                    cb(StateUpdateData {
-                                        state: data.state.as_str().to_string(),
-                                    });
-                                }
-                            }
-                            EngineEvent::TodosUpdate(items) => {
-                                tracing::info!(
-                                    "[AgentPool] bridge_events TodosUpdate jid={jid} items={}",
-                                    items.len()
-                                );
-                                if let Some(ref cb) = h.todos_update {
-                                    cb(items
-                                        .iter()
-                                        .map(|item| TodosUpdateItem {
-                                            content: item.content.clone(),
-                                            status: item.status.clone(),
-                                            active_form: item.active_form.clone(),
-                                        })
-                                        .collect());
-                                } else {
-                                    tracing::warn!(
-                                        "[AgentPool] bridge_events TodosUpdate for {jid} but NO handler registered"
-                                    );
-                                }
-                            }
-                            EngineEvent::CompactStart(_) => {
-                                if let Some(ref cb) = h.compact_start {
-                                    cb(CompactStartData);
-                                }
-                            }
-                            EngineEvent::CompactExec(_) => {
-                                if let Some(ref cb) = h.compact_exec {
-                                    cb(CompactExecData);
-                                }
-                            }
-                            EngineEvent::SessionError(data) => {
-                                if let Some(ref cb) = h.session_error {
-                                    cb(SessionErrorData {
-                                        code: data.error.code,
-                                        message: data.error.message,
-                                    });
-                                }
-                            }
-                            EngineEvent::ToolPermissionRequest(data) => {
-                                if let Some(ref cb) = h.tool_permission_request {
-                                    cb(ToolPermissionRequestData {
-                                        tool_name: data.tool_name,
-                                        title: data.title,
-                                        content: data.content,
-                                        options: data.options,
-                                    });
-                                }
-                            }
-                            EngineEvent::AskQuestionRequest(data) => {
-                                if let Some(ref cb) = h.ask_question_request {
-                                    cb(AskQuestionRequestData {
-                                        agent_id: data.agent_id,
-                                        questions: data
-                                            .questions
-                                            .into_iter()
-                                            .map(|q| AskQuestionData {
-                                                question: q.question,
-                                                header: q.header,
-                                                options: q
-                                                    .options
-                                                    .into_iter()
-                                                    .map(|o| AskQuestionOption {
-                                                        label: o.label,
-                                                        description: o.description,
-                                                    })
-                                                    .collect(),
-                                                multi_select: q.multi_select,
-                                            })
-                                            .collect(),
-                                    });
-                                }
-                            }
-                            EngineEvent::ConversationUsage(data) => {
-                                if let Some(ref cb) = h.conversation_usage {
-                                    cb(data);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::warn!("[ZenCoreApi] event bus lagged by {} for {}", n, jid);
-                        continue;
-                    }
-                    Err(RecvError::Closed) => break,
-                }
-            }
-        });
-    }
-}
-
-impl CoreApi for ZenCoreApi {
-    fn process_message(&self, jid: &str, prompt: &str, _group: &GroupBinding) -> Result<String> {
-        let engine = self.ensure_engine(jid);
-        engine.process_user_input(prompt, None)?;
-        Ok("Dispatched to zen-core".to_string())
-    }
-
-    fn destroy_agent(&self, jid: &str) {
-        let engine = self.engines.lock().unwrap().remove(jid);
-        if let Some(e) = engine {
-            e.dispose();
-        }
-        self.handlers.lock().unwrap().remove(jid);
-    }
-
-    fn update_skip_permissions(&self, jid: &str, skip: bool) {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.update_skip_permissions(skip);
-        }
-    }
-
-    fn update_thinking(&self, jid: &str, enabled: bool) {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.update_thinking(enabled);
-        }
-    }
-
-    fn set_working_dir(&self, jid: &str, dir: &str) {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.set_working_dir(dir);
-        }
-    }
-
-    fn clear_working_dir(&self, jid: &str) {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.clear_working_dir();
-        }
-    }
-
-    fn pause_session(&self, jid: &str) {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.pause_session();
-        }
-    }
-
-    fn interrupt_session(&self, jid: &str) {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.interrupt_session(SessionState::Idle);
-        }
-    }
-
-    fn reload_skills(&self, disabled: &[String]) {
-        for engine in self.engines.lock().unwrap().values() {
-            engine.reload_skills(disabled);
-        }
-    }
-
-    fn set_runtime_config(&self, _cfg: Arc<Config>) {
-        // Config is passed via environment; no-op for zen-core
-    }
-
-    fn add_or_update_mcp_server(&self, jid: &str, cfg: &McpServerConfig) -> Result<()> {
-        let engine = self.ensure_engine(jid);
-        let zc_cfg = crate::zen_core::McpServerConfig {
-            name: cfg.name.clone(),
-            command: cfg.command.clone(),
-            args: cfg.args.clone(),
-            env: cfg.env.clone(),
-        };
-        engine.add_or_update_mcp_server(&zc_cfg, "project")?;
-        Ok(())
-    }
-
-    fn create_session(&self, jid: &str) -> Result<()> {
-        let engine = self.ensure_engine(jid);
-        self.bridge_events(jid, &engine);
-        engine.create_session(None)?;
-        Ok(())
-    }
-
-    fn get_tool_infos(&self, jid: &str) -> Vec<AgentToolInfo> {
-        let engine = self.engines.lock().unwrap().get(jid).cloned();
-        let Some(engine) = engine else {
-            return Vec::new();
-        };
-        engine
-            .get_tool_infos()
-            .into_iter()
-            .map(|t| AgentToolInfo {
-                name: t.name,
-                description: t.description,
-                status: t.status,
-            })
-            .collect()
-    }
-
-    fn process_user_input(&self, jid: &str, prompt: &str) -> Result<()> {
-        let engine = self.ensure_engine(jid);
-        engine.process_user_input(prompt, None)?;
-        Ok(())
-    }
-
-    fn has_session_tool_results(&self, jid: &str) -> bool {
-        self.engines
-            .lock()
-            .unwrap()
-            .get(jid)
-            .map(|e| e.has_session_tool_results())
-            .unwrap_or(false)
-    }
-
-    fn on_message_complete(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(MessageCompleteData) + Send + Sync>,
-    ) {
-        self.with_handlers(jid, |entry| {
-            entry.message_complete = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_state_update(&self, jid: &str, handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {
-        self.with_handlers(jid, |entry| {
-            entry.state_update = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_todos_update(&self, jid: &str, handler: Box<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>) {
-        self.with_handlers(jid, |entry| {
-            entry.todos_update = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_compact_start(&self, jid: &str, handler: Box<dyn Fn(CompactStartData) + Send + Sync>) {
-        self.with_handlers(jid, |entry| {
-            entry.compact_start = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_compact_exec(&self, jid: &str, handler: Box<dyn Fn(CompactExecData) + Send + Sync>) {
-        self.with_handlers(jid, |entry| {
-            entry.compact_exec = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_session_error(&self, jid: &str, handler: Box<dyn Fn(SessionErrorData) + Send + Sync>) {
-        self.with_handlers(jid, |entry| {
-            entry.session_error = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_tool_permission_request(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(ToolPermissionRequestData) + Send + Sync>,
-    ) {
-        self.with_handlers(jid, |entry| {
-            entry.tool_permission_request = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_ask_question_request(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(AskQuestionRequestData) + Send + Sync>,
-    ) {
-        self.with_handlers(jid, |entry| {
-            entry.ask_question_request = Some(Arc::from(handler));
-        });
-    }
-
-    fn on_conversation_usage(
-        &self,
-        jid: &str,
-        handler: Box<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>,
-    ) {
-        self.with_handlers(jid, |entry| {
-            entry.conversation_usage = Some(Arc::from(handler));
-        });
-    }
-
-    fn respond_to_tool_permission(&self, jid: &str, tool_name: &str, selected: &str) -> Result<()> {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.respond_to_tool_permission(ToolPermissionResponseData {
-                tool_name: tool_name.to_string(),
-                selected: selected.to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn respond_to_ask_question(
-        &self,
-        jid: &str,
-        _agent_id: &str,
-        answers: HashMap<String, String>,
-    ) -> Result<()> {
-        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
-            engine.respond_to_ask_question(AskQuestionResponseData {
-                agent_id: _agent_id.to_string(),
-                answers,
-            });
-        }
-        Ok(())
-    }
-
-    fn off_all(&self, jid: &str) {
-        self.with_handlers(jid, |entry| {
-            *entry = CoreHandlers::default();
-        });
-    }
-}
-
-// ===== Callback type aliases =====
-
-/// Reply callback (jid, text). Used by the WebSocket gateway path before
-/// `set_send_reply` lands.
-pub type ReplyFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
-
-/// Channel send callback (jid, text, bot_token). Replaces ReplyFn for
-/// channel-bound replies once message_router wires it up (Phase 2).
-pub type SendReplyFn = Arc<dyn Fn(&str, &str, Option<&str>) + Send + Sync>;
-
-/// Typing indicator callback (jid, active, bot_token).
-pub type TypingFn = Arc<dyn Fn(&str, bool, Option<&str>) + Send + Sync>;
-
-/// Inactivity-timer reset closure stored per JID during process_and_wait.
-type ActivityResetFn = Arc<dyn Fn() + Send + Sync>;
-
-/// Abort callback stored per JID — invoked on `destroy()` to break a pending
-/// process_and_wait promise.
-type AbortFn = Box<dyn FnOnce(&str) + Send>;
-
-/// Cleanup callback stored per JID — removes persistent event listeners.
-type CleanupFn = Box<dyn FnOnce() + Send>;
-
-/// Workspace-state-file unwatch callback.
-type UnwatchFn = Box<dyn FnOnce() + Send>;
-
-// ===== Internal state =====
-
-struct State {
-    /// JIDs with an active core (real type is hidden behind CoreApi).
-    cores: HashSet<String>,
-    /// jid → binding snapshot.
-    bindings: HashMap<String, GroupBinding>,
-
-    // permission / thinking flags (runtime mirror of config.json).
-    skip_main_agent_permissions: bool,
-    skip_all_agents_permissions: bool,
-    thinking_enabled: bool,
-
-    // workspace tracking.
-    runtime_work_dirs: HashMap<String, String>,
-    workspace_watchers: HashMap<String, UnwatchFn>,
-
-    // dispatch coordination.
-    dispatch_workspace_overrides: HashMap<String, String>,
-    dispatch_executing: HashSet<String>,
-    last_dispatch_replies: HashMap<String, String>,
-    dispatch_task_map: HashMap<String, String>,
-
-    // process_and_wait event bridge (per-jid) — sender set by PAW before
-    // process_user_input, forwarded to by bind_events persistent handlers.
-    process_event_txs: HashMap<String, tokio::sync::mpsc::UnboundedSender<ProcessEvent>>,
-
-    // process_and_wait runtime state.
-    active_timer_resets: HashMap<String, ActivityResetFn>,
-    active_aborts: HashMap<String, AbortFn>,
-    event_cleanups: HashMap<String, CleanupFn>,
-
-    // todos cache + create-lock + pause sets.
-    cached_todos: HashMap<String, CachedTodos>,
-    cached_tools: HashMap<String, CachedTools>,
-    pending_creates: HashSet<String>,
-    paused_children_by_admin: HashMap<String, Vec<String>>,
-    synth_paused_jids: HashSet<String>,
-    dispatch_paused_jids: HashSet<String>,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            cores: HashSet::new(),
-            bindings: HashMap::new(),
-            skip_main_agent_permissions: false,
-            skip_all_agents_permissions: false,
-            thinking_enabled: true,
-            runtime_work_dirs: HashMap::new(),
-            workspace_watchers: HashMap::new(),
-            dispatch_workspace_overrides: HashMap::new(),
-            dispatch_executing: HashSet::new(),
-            last_dispatch_replies: HashMap::new(),
-            dispatch_task_map: HashMap::new(),
-            process_event_txs: HashMap::new(),
-            active_timer_resets: HashMap::new(),
-            active_aborts: HashMap::new(),
-            event_cleanups: HashMap::new(),
-            cached_todos: HashMap::new(),
-            cached_tools: HashMap::new(),
-            pending_creates: HashSet::new(),
-            paused_children_by_admin: HashMap::new(),
-            synth_paused_jids: HashSet::new(),
-            dispatch_paused_jids: HashSet::new(),
-        }
-    }
-}
 
 // ===== AgentPool =====
 
 pub struct AgentPool {
     core_api: Arc<dyn CoreApi>,
-    state: Mutex<State>,
+    pub(crate) state: Mutex<State>,
 
     // Optional dependencies wired after construction so lib.rs's existing
     // `AgentPool::new(core_api)` call still compiles.
@@ -1030,9 +210,9 @@ impl AgentPool {
 
     // ===== Permission / Thinking config =====
 
-    pub fn get_permissions_config(&self) -> PermissionsConfig {
+    pub fn get_permissions_config(&self) -> super::types::PermissionsConfig {
         let s = self.state.lock().unwrap();
-        PermissionsConfig {
+        super::types::PermissionsConfig {
             skip_main_agent_permissions: s.skip_main_agent_permissions,
             skip_all_agents_permissions: s.skip_all_agents_permissions,
         }
@@ -1045,7 +225,7 @@ impl AgentPool {
     }
 
     /// Hot-update permission flags across every active core.
-    pub fn set_permissions_config(&self, opts: PermissionsConfig) {
+    pub fn set_permissions_config(&self, opts: super::types::PermissionsConfig) {
         let updates: Vec<(String, bool)> = {
             let mut s = self.state.lock().unwrap();
             s.skip_main_agent_permissions = opts.skip_main_agent_permissions;
@@ -1097,8 +277,8 @@ impl AgentPool {
         self.state.lock().unwrap().thinking_enabled
     }
 
-    fn compute_skip_perms(
-        opts: &PermissionsConfig,
+    pub(crate) fn compute_skip_perms(
+        opts: &super::types::PermissionsConfig,
         binding: &GroupBinding,
         dispatch_set: &HashSet<String>,
     ) -> bool {
@@ -1117,7 +297,7 @@ impl AgentPool {
     #[allow(dead_code)]
     pub(crate) fn resolve_skip_perms(&self, binding: &GroupBinding) -> bool {
         let s = self.state.lock().unwrap();
-        let opts = PermissionsConfig {
+        let opts = super::types::PermissionsConfig {
             skip_main_agent_permissions: s.skip_main_agent_permissions,
             skip_all_agents_permissions: s.skip_all_agents_permissions,
         };
@@ -1720,7 +900,7 @@ impl AgentPool {
     /// | `Reset`         | restart inactivity timer                |
     /// | `Abort`         | cleanup, reject                         |
     /// | `Timeout`       | destroy, notify dispatch, reject        |
-    async fn process_and_wait_inner(
+    pub(crate) async fn process_and_wait_inner(
         &self,
         jid: &str,
         group: &GroupBinding,
@@ -2008,7 +1188,7 @@ impl AgentPool {
     }
 
     /// Internal destroy — aborts pending op, tears down core, cleans state.
-    async fn destroy_inner(&self, jid: &str) {
+    pub(crate) async fn destroy_inner(&self, jid: &str) {
         // Abort any pending process_and_wait.
         let abort = {
             let mut s = self.state.lock().unwrap();
@@ -2968,11 +2148,11 @@ impl AgentPool {
         config_path: &std::path::Path,
         feishu_config: &crate::config::FeishuConfig,
         bot_token: Option<&str>,
-    ) -> Option<FeishuCredentials> {
+    ) -> Option<super::workspace::FeishuCredentials> {
         if let Some(token) = bot_token {
             let apps = crate::gateway::group_manager::get_feishu_apps(config_path);
             if let Some(app) = apps.get(token) {
-                return Some(FeishuCredentials {
+                return Some(super::workspace::FeishuCredentials {
                     app_id: token.to_string(),
                     app_secret: app.app_secret.clone(),
                     domain: app.domain.clone(),
@@ -2980,7 +2160,7 @@ impl AgentPool {
             }
         }
         if !feishu_config.app_id.is_empty() && !feishu_config.app_secret.is_empty() {
-            return Some(FeishuCredentials {
+            return Some(super::workspace::FeishuCredentials {
                 app_id: feishu_config.app_id.clone(),
                 app_secret: feishu_config.app_secret.clone(),
                 domain: Some(feishu_config.domain.clone()),
@@ -2988,223 +2168,5 @@ impl AgentPool {
         }
         tracing::warn!("[AgentPool] Cannot resolve Feishu credentials for botToken={bot_token:?}");
         None
-    }
-}
-
-/// Resolved Feishu credentials returned by [`AgentPool::resolve_feishu_credentials`].
-#[derive(Debug, Clone)]
-pub struct FeishuCredentials {
-    pub app_id: String,
-    pub app_secret: String,
-    pub domain: Option<String>,
-}
-
-// ===== AgentApi impl (Phase 2) =====
-
-#[async_trait]
-impl AgentApi for AgentPool {
-    async fn broadcast_reply(&self, chat_jid: &str, text: &str, bot_token: Option<&str>) {
-        AgentPool::broadcast_reply(self, chat_jid, text, bot_token).await
-    }
-
-    async fn process_and_wait(&self, jid: &str, group: &GroupBinding, prompt: &str) -> Result<()> {
-        self.process_and_wait_inner(jid, group, prompt, 5).await
-    }
-
-    async fn destroy(&self, jid: &str) {
-        self.destroy_inner(jid).await;
-    }
-}
-
-// ===== Workspace state file (de)serialization =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WorkspaceStateFile {
-    #[serde(rename = "currentDir")]
-    current_dir: String,
-    #[serde(rename = "updatedAt", default)]
-    updated_at: String,
-}
-
-// ===== Tests =====
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
-        GroupBinding {
-            jid: jid.into(),
-            folder: "test".into(),
-            name: "Test".into(),
-            channel: "web".into(),
-            group_type: "chat".into(),
-            is_admin,
-            requires_trigger: false,
-            allowed_tools: None,
-            allowed_paths: None,
-            allowed_work_dirs: None,
-            bot_token: None,
-            max_messages: None,
-            last_active: None,
-            added_at: "2026-01-01T00:00:00Z".into(),
-        }
-    }
-
-    #[tokio::test]
-    async fn zen_core_api_process_message_dispatches() {
-        let api = ZenCoreApi::new(None);
-        let result = api.process_message("test:1", "hello", &fake_binding("test:1", false));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn agent_pool_send_reply_no_callback_does_not_panic() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        // Default permissions config is all-false.
-        let cfg = pool.get_permissions_config();
-        assert!(!cfg.skip_main_agent_permissions);
-        assert!(!cfg.skip_all_agents_permissions);
-        // notify_activity on unknown JID is a no-op.
-        pool.notify_activity("nobody:0");
-    }
-
-    #[test]
-    fn permissions_config_round_trips() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        pool.set_permissions_config(PermissionsConfig {
-            skip_main_agent_permissions: true,
-            skip_all_agents_permissions: false,
-        });
-        let cfg = pool.get_permissions_config();
-        assert!(cfg.skip_main_agent_permissions);
-        assert!(!cfg.skip_all_agents_permissions);
-        assert!(pool.get_skip_perms_for_virtual());
-    }
-
-    #[test]
-    fn thinking_default_on() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        assert!(pool.get_thinking_enabled());
-        pool.set_thinking_enabled(false);
-        assert!(!pool.get_thinking_enabled());
-    }
-
-    #[test]
-    fn skip_perms_admin_with_main_flag() {
-        let opts = PermissionsConfig {
-            skip_main_agent_permissions: true,
-            skip_all_agents_permissions: false,
-        };
-        let admin = fake_binding("admin:1", true);
-        let regular = fake_binding("group:1", false);
-        let dispatch_set = HashSet::new();
-        assert!(AgentPool::compute_skip_perms(&opts, &admin, &dispatch_set));
-        assert!(!AgentPool::compute_skip_perms(
-            &opts,
-            &regular,
-            &dispatch_set
-        ));
-    }
-
-    #[test]
-    fn skip_perms_dispatch_subagent_inherits_main() {
-        let opts = PermissionsConfig {
-            skip_main_agent_permissions: true,
-            skip_all_agents_permissions: false,
-        };
-        let sub = fake_binding("sub:1", false);
-        let mut dispatch_set = HashSet::new();
-        dispatch_set.insert("sub:1".to_string());
-        assert!(AgentPool::compute_skip_perms(&opts, &sub, &dispatch_set));
-    }
-
-    #[test]
-    fn skip_perms_skip_all_overrides_everything() {
-        let opts = PermissionsConfig {
-            skip_main_agent_permissions: false,
-            skip_all_agents_permissions: true,
-        };
-        let regular = fake_binding("g:1", false);
-        let dispatch_set = HashSet::new();
-        assert!(AgentPool::compute_skip_perms(
-            &opts,
-            &regular,
-            &dispatch_set
-        ));
-    }
-
-    #[test]
-    fn dispatch_executing_mark_clear() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        pool.mark_dispatch_executing("g:1");
-        assert!(pool
-            .state
-            .lock()
-            .unwrap()
-            .dispatch_executing
-            .contains("g:1"));
-        pool.clear_dispatch_executing("g:1");
-        assert!(!pool
-            .state
-            .lock()
-            .unwrap()
-            .dispatch_executing
-            .contains("g:1"));
-    }
-
-    #[test]
-    fn dispatch_task_map_round_trip() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        pool.set_current_dispatch_task_id("g:1", "task-42");
-        let s = pool.state.lock().unwrap();
-        assert_eq!(
-            s.dispatch_task_map.get("g:1").map(String::as_str),
-            Some("task-42")
-        );
-    }
-
-    #[test]
-    fn notify_dispatch_skips_when_no_pending_reply() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        // No content recorded → silent no-op (no panic).
-        pool.notify_dispatch_if_pending("g:1", Some("task-1"));
-    }
-
-    #[test]
-    fn workspace_state_file_path_format() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        let tmp = std::env::temp_dir().join(format!("senclaw-test-{}", std::process::id()));
-        pool.set_senclaw_home(tmp.clone());
-        let p = pool.workspace_state_file("main");
-        assert_eq!(p, tmp.join("workspace-state-main.json"));
-    }
-
-    #[test]
-    fn init_workspace_state_writes_default() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state_file = tmp.path().join("workspace-state-foo.json");
-        let default_dir = tmp.path().join("foo-workspace");
-        AgentPool::init_workspace_state(&state_file, &default_dir);
-        let raw = std::fs::read_to_string(&state_file).unwrap();
-        let parsed: WorkspaceStateFile = serde_json::from_str(&raw).unwrap();
-        assert_eq!(parsed.current_dir, default_dir.to_string_lossy());
-        assert!(!parsed.updated_at.is_empty());
-    }
-
-    #[test]
-    fn init_workspace_state_skips_when_file_exists() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state_file = tmp.path().join("ws.json");
-        std::fs::write(&state_file, r#"{"currentDir":"/custom","updatedAt":""}"#).unwrap();
-        AgentPool::init_workspace_state(&state_file, &tmp.path().join("default"));
-        let raw = std::fs::read_to_string(&state_file).unwrap();
-        assert!(raw.contains("/custom"));
-    }
-
-    #[test]
-    fn cached_todos_empty_by_default() {
-        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
-        assert!(pool.get_all_cached_todos().is_empty());
     }
 }

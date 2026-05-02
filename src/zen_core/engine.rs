@@ -19,6 +19,11 @@ use crate::mcp::SharedMcpRegistry;
 use crate::skills::SkillRegistry;
 use crate::tools::{SkillTool, TaskTool, TodoWriteTool};
 use super::*;
+use super::config_manager;
+use super::hooks::{
+    self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput,
+    HookInputBase, HookManager, SessionInput, StopInput, UserPromptSubmitInput,
+};
 use events::ResponseRegistry;
 use permissions::PermissionManager;
 
@@ -54,6 +59,9 @@ pub struct ZenEngine {
 
     // Session helpers
     session_id: RwLock<Option<String>>,
+
+    // Hook system
+    pub hook_manager: Arc<HookManager>,
 }
 
 impl ZenEngine {
@@ -92,6 +100,7 @@ impl ZenEngine {
             mcp_registry: SharedMcpRegistry::new(),
             mcp_manager,
             session_id: RwLock::new(None),
+            hook_manager: Arc::new(HookManager::empty()),
         });
 
         // Register engine-dependent tools
@@ -298,6 +307,24 @@ impl ZenEngine {
         state.current_abort = None;
     }
 
+    /// Build `ExecuteHooksOptions` reusing the engine's HTTP client and active profile.
+    fn hook_opts(&self) -> (Client, ModelProfile) {
+        (self.http_client.clone(), Self::resolve_model_profile())
+    }
+
+    /// Build the base fields included in every hook input payload.
+    fn hook_base(&self, event: HookEvent) -> HookInputBase {
+        let sid = self.session_id.read().unwrap().clone().unwrap_or_default();
+        let cwd = self.options.read().unwrap().working_dir.clone();
+        HookInputBase {
+            hook_event_name: event,
+            session_id: sid,
+            agent_id: MAIN_AGENT_ID.to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            cwd,
+        }
+    }
+
     /// Resolve active model profile from global config first, then env fallback.
     fn resolve_model_profile() -> ModelProfile {
         let config_path = std::env::var("SENCLAW_CONFIG_PATH")
@@ -396,8 +423,27 @@ impl ZenCore for ZenEngine {
         *self.session_id.write().unwrap() = Some(sid.clone());
         drop(state);
 
+        // Register working dir in ConfigManager (creates default config if new)
+        let working_dir = self.options.read().unwrap().working_dir.clone();
+        config_manager::with_conf_manager(|mgr| mgr.register_project(&working_dir));
+
         // Initialize plugins (skills + custom commands)
         self.initialize_plugins();
+
+        // Fire SessionStart hook (fire-and-forget — non-blockable)
+        if self.hook_manager.has_hooks_for_event(&HookEvent::SessionStart) {
+            let hm = self.hook_manager.clone();
+            let (client, profile) = self.hook_opts();
+            let base = self.hook_base(HookEvent::SessionStart);
+            tokio::spawn(async move {
+                zen_hooks::execute_hooks(
+                    &hm,
+                    &HookEvent::SessionStart,
+                    &HookInput::Session(SessionInput { base }),
+                    &ExecuteHooksOptions { client: Some(&client), profile: Some(&profile), ..Default::default() },
+                ).await;
+            });
+        }
 
         // Emit session:ready
         let opts = self.options.read().unwrap();
@@ -454,13 +500,6 @@ impl ZenCore for ZenEngine {
         let permission_manager = self.permission_manager.clone();
         let response_registry = self.response_registry.clone();
 
-        // Build the user message
-        let user_msg = create_user_message(vec![ContentBlock::Text {
-            text: prompt.to_string(),
-        }]);
-        let mut messages = messages;
-        messages.push(user_msg);
-
         // Build system prompt
         let system_prompt = if opts.system_prompt.is_empty() {
             "You are a helpful AI assistant.".to_string()
@@ -471,8 +510,55 @@ impl ZenCore for ZenEngine {
         // Resolve profile from active UI config first, env fallback second.
         let profile = Self::resolve_model_profile();
 
+        // UserPromptSubmit hook — may update the prompt before it reaches the LLM.
+        // Runs synchronously before the spawn so `updatedInput` can modify the prompt.
+        let prompt = prompt.to_owned();
+        let prompt = if self.hook_manager.has_hooks_for_event(&HookEvent::UserPromptSubmit) {
+            let hm = self.hook_manager.clone();
+            let (client, hook_profile) = self.hook_opts();
+            let base = self.hook_base(HookEvent::UserPromptSubmit);
+            let p = prompt.clone();
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    zen_hooks::execute_hooks(
+                        &hm,
+                        &HookEvent::UserPromptSubmit,
+                        &HookInput::UserPromptSubmit(UserPromptSubmitInput { base, prompt: p }),
+                        &ExecuteHooksOptions {
+                            client: Some(&client),
+                            profile: Some(&hook_profile),
+                            ..Default::default()
+                        },
+                    ).await
+                })
+            });
+            if let Some(updated) = result.updated_input {
+                updated["prompt"].as_str().unwrap_or(&prompt).to_owned()
+            } else {
+                prompt
+            }
+        } else {
+            prompt
+        };
+
+        // Persist prompt to project history
+        let working_dir_for_hist = self.options.read().unwrap().working_dir.clone();
+        config_manager::with_conf_manager(|mgr| {
+            mgr.save_user_input_to_history(&working_dir_for_hist, &prompt);
+        });
+
+        // Build the user message (after hooks may have modified prompt)
+        let user_msg = create_user_message(vec![ContentBlock::Text {
+            text: prompt.clone(),
+        }]);
+        let mut messages = messages;
+        messages.push(user_msg);
+
         // Spawn the conversation loop — runs in background, emits events
         let event_bus_spawn = event_bus.clone();
+        let hook_manager_spawn = self.hook_manager.clone();
+        let session_id_spawn = self.session_id.read().unwrap().clone().unwrap_or_default();
+        let cwd_spawn = opts.working_dir.clone();
         tokio::spawn(async move {
             let eb = event_bus_spawn.clone();
             let config = conversation::QueryConfig {
@@ -485,27 +571,53 @@ impl ZenCore for ZenEngine {
                 event_bus: event_bus_spawn,
                 response_registry: Some(response_registry.clone()),
                 permission_checker: permission_manager.clone(),
-                profile,
+                profile: profile.clone(),
                 thinking: opts.thinking,
                 stream: opts.stream,
                 is_subagent: false,
+                hook_manager: Some(hook_manager_spawn.clone()),
+                hook_client: Some(http_client.clone()),
+                hook_profile: Some(profile.clone()),
+                session_id: session_id_spawn.clone(),
             };
 
             let result = conversation::query(messages, &config, &cancel).await;
 
-            match result {
-                Ok(_final_messages) => {
+            let stop_reason = match &result {
+                Ok(_) => {
                     info!("[{instance_id}] conversation loop completed");
+                    None
                 }
                 Err(e) => {
-                    warn!("[{instance_id}] conversation loop error: {e}");
-                    let classified = query_llm::LlmError::classify(&e);
+                    let msg = e.to_string();
+                    warn!("[{instance_id}] conversation loop error: {msg}");
+                    let classified = query_llm::LlmError::classify(e);
                     if classified.should_emit() {
-                        eb.emit(EngineEvent::SessionError(
-                            classified.to_session_error(),
-                        ));
+                        eb.emit(EngineEvent::SessionError(classified.to_session_error()));
                     }
+                    Some(msg)
                 }
+            };
+
+            // Fire Stop hook (non-blockable)
+            if hook_manager_spawn.has_hooks_for_event(&HookEvent::Stop) {
+                let base = HookInputBase {
+                    hook_event_name: HookEvent::Stop,
+                    session_id: session_id_spawn.clone(),
+                    agent_id: MAIN_AGENT_ID.to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    cwd: cwd_spawn.clone(),
+                };
+                zen_hooks::execute_hooks(
+                    &hook_manager_spawn,
+                    &HookEvent::Stop,
+                    &HookInput::Stop(StopInput { base, stop_reason }),
+                    &ExecuteHooksOptions {
+                        client: Some(&http_client),
+                        profile: Some(&profile),
+                        ..Default::default()
+                    },
+                ).await;
             }
 
             // Signal idle (unless cancelled)
@@ -544,6 +656,21 @@ impl ZenCore for ZenEngine {
         self.abort_current();
         self.state.lock().unwrap().clear_all();
         self.response_registry.clear();
+
+        // Fire SessionEnd hook (non-blockable, fire-and-forget)
+        if self.hook_manager.has_hooks_for_event(&HookEvent::SessionEnd) {
+            let hm = self.hook_manager.clone();
+            let (client, profile) = self.hook_opts();
+            let base = self.hook_base(HookEvent::SessionEnd);
+            tokio::spawn(async move {
+                zen_hooks::execute_hooks(
+                    &hm,
+                    &HookEvent::SessionEnd,
+                    &HookInput::Session(SessionInput { base }),
+                    &ExecuteHooksOptions { client: Some(&client), profile: Some(&profile), ..Default::default() },
+                ).await;
+            });
+        }
     }
 
     fn set_working_dir(&self, dir: &str) {

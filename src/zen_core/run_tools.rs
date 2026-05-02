@@ -13,6 +13,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::*;
+use super::hooks::{
+    self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput, HookInputBase,
+    HookManager, PostToolUseInput, PreToolUseInput,
+};
 
 /// Abstract permission checker — injected by the engine so RunTools doesn't
 /// need to know about PermissionManager internals.
@@ -59,6 +63,14 @@ pub struct RunContext<'a> {
     pub event_bus: Option<&'a EventBus>,
     /// Response registry for tools that need request-response (AskUser, etc.).
     pub response_registry: Option<&'a ResponseRegistry>,
+    /// Hook manager for PreToolUse / PostToolUse hooks (optional).
+    pub hook_manager: Option<Arc<HookManager>>,
+    /// HTTP client passed to prompt hooks.
+    pub hook_client: Option<reqwest::Client>,
+    /// Model profile passed to prompt hooks.
+    pub hook_profile: Option<ModelProfile>,
+    /// Session id for hook base payload.
+    pub session_id: String,
 }
 
 // ============================================================================
@@ -205,6 +217,56 @@ async fn run_single_tool(
         }];
     }
 
+    // PreToolUse hook — may block the tool or update its input
+    let input = if let Some(ref hm) = ctx.hook_manager {
+        if hm.has_hooks_for_event(&HookEvent::PreToolUse) {
+            let base = HookInputBase {
+                hook_event_name: HookEvent::PreToolUse,
+                session_id: ctx.session_id.clone(),
+                agent_id: ctx.agent_id.to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                cwd: ctx.working_dir.to_string(),
+            };
+            let hook_input = HookInput::PreToolUse(PreToolUseInput {
+                base,
+                tool_name: tool_name.clone(),
+                tool_input: input.clone(),
+            });
+            let result = zen_hooks::execute_hooks(
+                hm,
+                &HookEvent::PreToolUse,
+                &hook_input,
+                &ExecuteHooksOptions {
+                    client: ctx.hook_client.as_ref(),
+                    profile: ctx.hook_profile.as_ref(),
+                    ..Default::default()
+                },
+            ).await;
+
+            if result.blocked {
+                let reason = result.reason.unwrap_or_else(|| "Blocked by hook".into());
+                (ctx.fire)(EngineEvent::ToolExecutionError(ToolExecutionErrorData {
+                    agent_id: ctx.agent_id.to_string(),
+                    tool_name: tool_name.clone(),
+                    title: tool.get_display_title(&input),
+                    content: reason.clone(),
+                }));
+                return vec![ContentBlock::ToolResult {
+                    tool_use_id: tool_id,
+                    content: reason,
+                    is_error: true,
+                }];
+            }
+
+            // Hook may supply updated input
+            result.updated_input.unwrap_or(input)
+        } else {
+            input
+        }
+    } else {
+        input
+    };
+
     // Permission check for write tools
     if !tool.is_read_only() {
         if cancel.is_cancelled() {
@@ -255,6 +317,34 @@ async fn run_single_tool(
                                 content: msg.content,
                             },
                         ));
+
+                        // PostToolUse hook (non-blockable, fire-and-forget semantics ok)
+                        if let Some(ref hm) = ctx.hook_manager {
+                            if hm.has_hooks_for_event(&HookEvent::PostToolUse) {
+                                let base = HookInputBase {
+                                    hook_event_name: HookEvent::PostToolUse,
+                                    session_id: ctx.session_id.clone(),
+                                    agent_id: ctx.agent_id.to_string(),
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                    cwd: ctx.working_dir.to_string(),
+                                };
+                                zen_hooks::execute_hooks(
+                                    hm,
+                                    &HookEvent::PostToolUse,
+                                    &HookInput::PostToolUse(PostToolUseInput {
+                                        base,
+                                        tool_name: tool_name.clone(),
+                                        tool_input: input.clone(),
+                                        tool_response: data.clone(),
+                                    }),
+                                    &ExecuteHooksOptions {
+                                        client: ctx.hook_client.as_ref(),
+                                        profile: ctx.hook_profile.as_ref(),
+                                        ..Default::default()
+                                    },
+                                ).await;
+                            }
+                        }
 
                         results.push(ContentBlock::ToolResult {
                             tool_use_id: tool_id.clone(),
@@ -384,6 +474,10 @@ mod tests {
             permission_checker: checker,
             event_bus: None,
             response_registry: None,
+            hook_manager: None,
+            hook_client: None,
+            hook_profile: None,
+            session_id: String::new(),
         }
     }
 

@@ -227,3 +227,155 @@ export interface UpdateBindingPayload {
   botTokenOverride?: string;
   maxMessages?: number | null;
 }
+
+// ===== Cowork entity types =====
+
+export interface CoworkWorkspace {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  rootDir: string;
+  workingDir?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CoworkMember {
+  workspaceId: string;
+  memberId: string;
+  role: string;
+  jid: string | null;
+  subdir: string | null;
+  persona: string | null;
+  responsibilities: string | null;
+  triggers: string | null;
+  handoffRules: string | null;
+  acceptanceCriteria: string | null;
+  outputFormat: string | null;
+  sla: string | null;
+  limits: string | null;
+  joinedAt: string;
+  updatedAt: string;
+}
+
+export interface CoworkBoardEntry {
+  id: string;
+  workspaceId: string;
+  section: string;
+  title: string | null;
+  content: string;
+  author: string;
+  pinned: boolean;
+  tags: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CoworkTask {
+  id: string;
+  workspaceId: string;
+  title: string;
+  description: string | null;
+  status: 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'blocked';
+  assignee: string | null;
+  reviewer: string | null;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  dependsOn: string | null;
+  attachments: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  dueAt: string | null;
+  completedAt: string | null;
+}
+
+export interface CoworkTaskComment {
+  id: number;
+  taskId: string;
+  author: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface CoworkMessage {
+  id: string;
+  workspaceId: string;
+  fromMember: string;
+  toMember: string | null;
+  messageType: 'handoff' | 'review_request' | 'clarification' | 'result' | 'status' | 'alert';
+  content: string;
+  attachments: string | null;
+  taskId: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+// ===== Cowork Template types =====
+
+export interface CoworkTemplate {
+  name: string;
+  description: string;
+  icon?: string;
+  members: TemplateMember[];
+  board?: TemplateBoard;
+}
+
+export interface TemplateMember {
+  agentFolder: string;
+  role: string;
+  subdir?: string;
+  persona?: string;
+  responsibilities?: string[];
+  triggers?: TemplateTrigger[];
+  handoff?: TemplateHandoffRule[];
+  acceptanceCriteria?: string[];
+  output?: TemplateOutput;
+  sla?: TemplateSla;
+  limits?: TemplateLimits;
+}
+
+export interface TemplateTrigger {
+  type: string;
+  condition?: string;
+  from?: string;
+  messageType?: string;
+  status?: string;
+  assignee?: string;
+  cron?: string;
+}
+
+export interface TemplateHandoffRule {
+  when: string;
+  to: string;
+  type: string;
+  messageTemplate?: string;
+}
+
+export interface TemplateOutput {
+  format?: string;
+  requiredSections?: string[];
+  attachDiff?: boolean;
+}
+
+export interface TemplateSla {
+  maxDurationPerTaskMinutes?: number;
+  maxTokenPerTask?: number;
+  escalateAfterBlockedMinutes?: number;
+}
+
+export interface TemplateLimits {
+  maxFileSizeWriteKb?: number;
+  allowedBashCommands?: string[];
+  deniedTools?: string[];
+}
+
+export interface TemplateBoard {
+  sections: TemplateBoardSection[];
+}
+
+export interface TemplateBoardSection {
+  type: string;
+  title: string;
+  template?: string;
+}

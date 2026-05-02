@@ -1,0 +1,416 @@
+//! ZenCoreApi — production [`CoreApi`] backed by [`ZenEngine`] (the zen-core runtime).
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::Result;
+use reqwest::Client;
+
+use super::traits::{AgentToolInfo, CoreApi, CoreHandlers};
+use super::types::{
+    AskQuestionRequestData, CompactExecData, CompactStartData, MessageCompleteData,
+    SessionErrorData, StateUpdateData, TodosUpdateItem, ToolPermissionRequestData,
+};
+use crate::agent::permission_bridge::{AskQuestionData, AskQuestionOption};
+use crate::config::Config;
+use crate::mcp::helper::McpServerConfig;
+use crate::types::GroupBinding;
+use crate::zen_core::{
+    AskQuestionResponseData, EngineEvent, SessionState, ToolPermissionResponseData, ZenCore,
+    ZenCoreOptions, ZenEngine,
+};
+use tokio::sync::broadcast::error::RecvError;
+
+/// Production [`CoreApi`] backed by [`ZenEngine`] (the zen-core runtime).
+///
+/// Manages one [`ZenEngine`] per JID, bridges engine events to CoreApi
+/// handler callbacks, and delegates lifecycle operations to the engine.
+pub struct ZenCoreApi {
+    engines: Mutex<HashMap<String, Arc<ZenEngine>>>,
+    handlers: Arc<Mutex<HashMap<String, CoreHandlers>>>,
+    http_client: Client,
+    mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
+}
+
+impl ZenCoreApi {
+    pub fn new(mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>) -> Self {
+        Self {
+            engines: Mutex::new(HashMap::new()),
+            handlers: Arc::new(Mutex::new(HashMap::new())),
+            http_client: Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(120))
+                .build()
+                .expect("ZenCoreApi http client"),
+            mcp_manager,
+        }
+    }
+
+    fn get_handlers(&self, jid: &str) -> Option<CoreHandlers> {
+        self.handlers.lock().unwrap().get(jid).cloned()
+    }
+
+    fn with_handlers<F: FnOnce(&mut CoreHandlers)>(&self, jid: &str, f: F) {
+        let mut map = self.handlers.lock().unwrap();
+        let entry = map.entry(jid.to_string()).or_default();
+        f(entry);
+    }
+
+    /// Create or retrieve the engine for a JID.
+    fn ensure_engine(&self, jid: &str) -> Arc<ZenEngine> {
+        let mut engines = self.engines.lock().unwrap();
+        if let Some(engine) = engines.get(jid) {
+            return engine.clone();
+        }
+        let opts = ZenCoreOptions {
+            instance_id: jid.to_string(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, self.mcp_manager.clone());
+        engine.initialize_plugins();
+        // Refresh MCP bridge tools in the background
+        {
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                engine.refresh_mcp_tools().await;
+            });
+        }
+        engines.insert(jid.to_string(), engine.clone());
+        engine
+    }
+
+    /// Subscribe to the engine's EventBus and forward events to handlers.
+    fn bridge_events(&self, jid: &str, engine: &Arc<ZenEngine>) {
+        let jid = jid.to_string();
+        let handlers_map = Arc::clone(&self.handlers);
+        let mut rx = engine.event_bus.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let handlers = handlers_map.lock().unwrap().get(&jid).cloned();
+                        let h = match handlers {
+                            Some(h) => h,
+                            None => continue,
+                        };
+                        match event {
+                            EngineEvent::MessageComplete(data) => {
+                                if let Some(ref cb) = h.message_complete {
+                                    cb(MessageCompleteData {
+                                        agent_id: data.agent_id,
+                                        content: data.content,
+                                    });
+                                }
+                            }
+                            EngineEvent::StateUpdate(data) => {
+                                if let Some(ref cb) = h.state_update {
+                                    cb(StateUpdateData {
+                                        state: data.state.as_str().to_string(),
+                                    });
+                                }
+                            }
+                            EngineEvent::TodosUpdate(items) => {
+                                tracing::info!(
+                                    "[AgentPool] bridge_events TodosUpdate jid={jid} items={}",
+                                    items.len()
+                                );
+                                if let Some(ref cb) = h.todos_update {
+                                    cb(items
+                                        .iter()
+                                        .map(|item| TodosUpdateItem {
+                                            content: item.content.clone(),
+                                            status: item.status.clone(),
+                                            active_form: item.active_form.clone(),
+                                        })
+                                        .collect());
+                                } else {
+                                    tracing::warn!(
+                                        "[AgentPool] bridge_events TodosUpdate for {jid} but NO handler registered"
+                                    );
+                                }
+                            }
+                            EngineEvent::CompactStart(_) => {
+                                if let Some(ref cb) = h.compact_start {
+                                    cb(CompactStartData);
+                                }
+                            }
+                            EngineEvent::CompactExec(_) => {
+                                if let Some(ref cb) = h.compact_exec {
+                                    cb(CompactExecData);
+                                }
+                            }
+                            EngineEvent::SessionError(data) => {
+                                if let Some(ref cb) = h.session_error {
+                                    cb(SessionErrorData {
+                                        code: data.error.code,
+                                        message: data.error.message,
+                                    });
+                                }
+                            }
+                            EngineEvent::ToolPermissionRequest(data) => {
+                                if let Some(ref cb) = h.tool_permission_request {
+                                    cb(ToolPermissionRequestData {
+                                        tool_name: data.tool_name,
+                                        title: data.title,
+                                        content: data.content,
+                                        options: data.options,
+                                    });
+                                }
+                            }
+                            EngineEvent::AskQuestionRequest(data) => {
+                                if let Some(ref cb) = h.ask_question_request {
+                                    cb(AskQuestionRequestData {
+                                        agent_id: data.agent_id,
+                                        questions: data
+                                            .questions
+                                            .into_iter()
+                                            .map(|q| AskQuestionData {
+                                                question: q.question,
+                                                header: q.header,
+                                                options: q
+                                                    .options
+                                                    .into_iter()
+                                                    .map(|o| AskQuestionOption {
+                                                        label: o.label,
+                                                        description: o.description,
+                                                    })
+                                                    .collect(),
+                                                multi_select: q.multi_select,
+                                            })
+                                            .collect(),
+                                    });
+                                }
+                            }
+                            EngineEvent::ConversationUsage(data) => {
+                                if let Some(ref cb) = h.conversation_usage {
+                                    cb(data);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!("[ZenCoreApi] event bus lagged by {} for {}", n, jid);
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+}
+
+impl CoreApi for ZenCoreApi {
+    fn process_message(&self, jid: &str, prompt: &str, _group: &GroupBinding) -> Result<String> {
+        let engine = self.ensure_engine(jid);
+        engine.process_user_input(prompt, None)?;
+        Ok("Dispatched to zen-core".to_string())
+    }
+
+    fn destroy_agent(&self, jid: &str) {
+        let engine = self.engines.lock().unwrap().remove(jid);
+        if let Some(e) = engine {
+            e.dispose();
+        }
+        self.handlers.lock().unwrap().remove(jid);
+    }
+
+    fn update_skip_permissions(&self, jid: &str, skip: bool) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.update_skip_permissions(skip);
+        }
+    }
+
+    fn update_thinking(&self, jid: &str, enabled: bool) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.update_thinking(enabled);
+        }
+    }
+
+    fn set_working_dir(&self, jid: &str, dir: &str) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_working_dir(dir);
+        }
+    }
+
+    fn clear_working_dir(&self, jid: &str) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.clear_working_dir();
+        }
+    }
+
+    fn pause_session(&self, jid: &str) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.pause_session();
+        }
+    }
+
+    fn interrupt_session(&self, jid: &str) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.interrupt_session(SessionState::Idle);
+        }
+    }
+
+    fn reload_skills(&self, disabled: &[String]) {
+        for engine in self.engines.lock().unwrap().values() {
+            engine.reload_skills(disabled);
+        }
+    }
+
+    fn set_runtime_config(&self, _cfg: Arc<Config>) {
+        // Config is passed via environment; no-op for zen-core
+    }
+
+    fn add_or_update_mcp_server(&self, jid: &str, cfg: &McpServerConfig) -> Result<()> {
+        let engine = self.ensure_engine(jid);
+        let zc_cfg = crate::zen_core::McpServerConfig {
+            name: cfg.name.clone(),
+            command: cfg.command.clone(),
+            args: cfg.args.clone(),
+            env: cfg.env.clone(),
+        };
+        engine.add_or_update_mcp_server(&zc_cfg, "project")?;
+        Ok(())
+    }
+
+    fn create_session(&self, jid: &str) -> Result<()> {
+        let engine = self.ensure_engine(jid);
+        self.bridge_events(jid, &engine);
+        engine.create_session(None)?;
+        Ok(())
+    }
+
+    fn get_tool_infos(&self, jid: &str) -> Vec<AgentToolInfo> {
+        let engine = self.engines.lock().unwrap().get(jid).cloned();
+        let Some(engine) = engine else {
+            return Vec::new();
+        };
+        engine
+            .get_tool_infos()
+            .into_iter()
+            .map(|t| AgentToolInfo {
+                name: t.name,
+                description: t.description,
+                status: t.status,
+            })
+            .collect()
+    }
+
+    fn process_user_input(&self, jid: &str, prompt: &str) -> Result<()> {
+        let engine = self.ensure_engine(jid);
+        engine.process_user_input(prompt, None)?;
+        Ok(())
+    }
+
+    fn has_session_tool_results(&self, jid: &str) -> bool {
+        self.engines
+            .lock()
+            .unwrap()
+            .get(jid)
+            .map(|e| e.has_session_tool_results())
+            .unwrap_or(false)
+    }
+
+    fn on_message_complete(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(MessageCompleteData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.message_complete = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_state_update(&self, jid: &str, handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {
+        self.with_handlers(jid, |entry| {
+            entry.state_update = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_todos_update(&self, jid: &str, handler: Box<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>) {
+        self.with_handlers(jid, |entry| {
+            entry.todos_update = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_compact_start(&self, jid: &str, handler: Box<dyn Fn(CompactStartData) + Send + Sync>) {
+        self.with_handlers(jid, |entry| {
+            entry.compact_start = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_compact_exec(&self, jid: &str, handler: Box<dyn Fn(CompactExecData) + Send + Sync>) {
+        self.with_handlers(jid, |entry| {
+            entry.compact_exec = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_session_error(&self, jid: &str, handler: Box<dyn Fn(SessionErrorData) + Send + Sync>) {
+        self.with_handlers(jid, |entry| {
+            entry.session_error = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_tool_permission_request(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(ToolPermissionRequestData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.tool_permission_request = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_ask_question_request(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(AskQuestionRequestData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.ask_question_request = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_conversation_usage(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.conversation_usage = Some(Arc::from(handler));
+        });
+    }
+
+    fn respond_to_tool_permission(&self, jid: &str, tool_name: &str, selected: &str) -> Result<()> {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.respond_to_tool_permission(ToolPermissionResponseData {
+                tool_name: tool_name.to_string(),
+                selected: selected.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn respond_to_ask_question(
+        &self,
+        jid: &str,
+        _agent_id: &str,
+        answers: HashMap<String, String>,
+    ) -> Result<()> {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.respond_to_ask_question(AskQuestionResponseData {
+                agent_id: _agent_id.to_string(),
+                answers,
+            });
+        }
+        Ok(())
+    }
+
+    fn off_all(&self, jid: &str) {
+        self.with_handlers(jid, |entry| {
+            *entry = CoreHandlers::default();
+        });
+    }
+}

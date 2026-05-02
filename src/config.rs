@@ -67,6 +67,7 @@ pub struct PathsConfig {
     pub virtual_agents_dir: PathBuf,
     /// Optional bundled-skills dir; empty when unset (TS treats blank as disabled).
     pub bundled_skills_dir: Option<PathBuf>,
+    pub workspace_templates_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +249,10 @@ impl Config {
                     };
                     resolved
                 },
+                workspace_templates_dir: env_path(
+                    "SENCLAW_WORKSPACE_TEMPLATES_DIR",
+                    senclaw_data.join("workspace-templates"),
+                ),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(

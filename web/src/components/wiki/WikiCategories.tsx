@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { theme } from 'antd';
-import type { DirNode } from '../hooks/useWiki';
+import type { DirNode } from '../../hooks/useWiki';
 
 interface Props {
   tree: DirNode[];

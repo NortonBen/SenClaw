@@ -119,7 +119,7 @@ impl OpenAiProvider {
                 }
             }
         }
-        bail!("unreachable");
+        bail!("embedding failed after {MAX_RETRIES} retries");
     }
 }
 
@@ -209,7 +209,7 @@ impl OpenRouterProvider {
                 }
             }
         }
-        bail!("unreachable");
+        bail!("embedding failed after {MAX_RETRIES} retries");
     }
 }
 

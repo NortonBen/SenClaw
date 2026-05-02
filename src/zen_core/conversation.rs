@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::*;
+use super::hooks::HookManager;
 use crate::zen_core::events::ResponseRegistry;
 use crate::zen_core::query_llm;
 use crate::zen_core::run_tools::{self, PermissionChecker, RunContext};
@@ -75,6 +76,11 @@ pub struct QueryConfig {
     pub thinking: bool,
     pub stream: bool,
     pub is_subagent: bool,
+    /// Optional hook manager for PreToolUse/PostToolUse hooks.
+    pub hook_manager: Option<Arc<HookManager>>,
+    pub hook_client: Option<Client>,
+    pub hook_profile: Option<ModelProfile>,
+    pub session_id: String,
 }
 
 /// Run the conversation query loop. Returns the final message history.
@@ -251,6 +257,10 @@ pub async fn query(
             permission_checker: config.permission_checker.as_ref(),
             event_bus: Some(&config.event_bus),
             response_registry: config.response_registry.as_deref(),
+            hook_manager: config.hook_manager.clone(),
+            hook_client: config.hook_client.clone(),
+            hook_profile: config.hook_profile.clone(),
+            session_id: config.session_id.clone(),
         };
 
         let tool_results = run_tools::run_tools(&tool_uses, cancel, &ctx).await;

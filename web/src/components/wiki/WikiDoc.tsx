@@ -10,7 +10,7 @@ import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github.css';
 import { theme, Button, Tag, Typography, Space, Divider } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, SaveOutlined, CloseOutlined, CaretRightOutlined, CaretDownOutlined } from '@ant-design/icons';
-import type { WikiDoc as WikiDocType } from '../hooks/useWiki';
+import type { WikiDoc as WikiDocType } from '../../hooks/useWiki';
 import { WikiEditor } from './WikiEditor';
 
 const { Text } = Typography;
