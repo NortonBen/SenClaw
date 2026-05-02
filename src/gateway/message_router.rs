@@ -17,45 +17,7 @@ use crate::gateway::command_dispatcher::dispatch_command;
 use crate::gateway::group_manager::{ensure_app_group, ensure_wechat_admin_group, GroupManager};
 use crate::gateway::trigger_checker::{should_trigger, should_trigger_entity};
 use crate::gateway::websocket_gateway::WebSocketGateway;
-use crate::types::{BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
-
-// ===== Agent API trait =====
-
-/// Operations MessageRouter needs from AgentPool.
-#[async_trait]
-pub trait AgentApi: Send + Sync {
-    /// Send a direct reply to a chat (for admin commands and unregistered Feishu notices).
-    async fn broadcast_reply(&self, chat_jid: &str, text: &str, bot_token: Option<&str>);
-
-    /// Process a prompt through the agent. Blocks until the agent finishes.
-    async fn process_and_wait(
-        &self,
-        jid: &str,
-        group: &GroupBinding,
-        prompt: &str,
-    ) -> Result<()>;
-
-    /// Destroy/cleanup agent state for a JID (after JID migration).
-    async fn destroy(&self, jid: &str);
-}
-
-/// No-op stub — used before AgentPool is ported.
-pub struct NoopAgentApi;
-
-#[async_trait]
-impl AgentApi for NoopAgentApi {
-    async fn broadcast_reply(&self, _jid: &str, _text: &str, _token: Option<&str>) {}
-    async fn process_and_wait(
-        &self,
-        _jid: &str,
-        _group: &GroupBinding,
-        _prompt: &str,
-    ) -> Result<()> {
-        tracing::warn!("[MessageRouter] NoopAgentApi::process_and_wait — agent not wired");
-        Ok(())
-    }
-    async fn destroy(&self, _jid: &str) {}
-}
+use crate::types::{AgentApi, BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
 
 // ===== JID migration callback =====
 

@@ -140,4 +140,5 @@ export type ExtensionMessage =
   | { type: 'CrawlResult'; job_id: JobId; page_result: CrawlPageResult }
   | { type: 'CrawlComplete'; job_id: JobId; total_pages: number; duration_ms: number }
   | { type: 'ScreenshotFrame'; tab_id: TabId; data: string; format: string }
-  | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId };
+  | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId }
+  | { type: 'UserInstruction'; text: string };

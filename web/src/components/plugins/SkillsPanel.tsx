@@ -276,14 +276,38 @@ function SkillDetail({ skill, onBack, onToggleDisabled }: {
             spellCheck={false}
           />
         ) : readme ? (
-          <div style={{ padding: '20px 24px' }}>
-            <div style={{
-              color: token.colorText,
-              fontSize: token.fontSizeSM,
-              lineHeight: 1.6
-            }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{readme}</ReactMarkdown>
-            </div>
+          <div style={{ padding: '24px 28px', maxWidth: 900 }}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                h1: ({ children }) => <Title level={2} style={{ marginTop: 32, marginBottom: 12, fontWeight: 700, borderBottom: `1px solid ${token.colorBorderSecondary}`, paddingBottom: 8 }}>{children}</Title>,
+                h2: ({ children }) => <Title level={3} style={{ marginTop: 28, marginBottom: 10, fontWeight: 600 }}>{children}</Title>,
+                h3: ({ children }) => <Title level={4} style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>{children}</Title>,
+                h4: ({ children }) => <Title level={5} style={{ marginTop: 20, marginBottom: 6 }}>{children}</Title>,
+                p: ({ children }) => <Paragraph style={{ fontSize: token.fontSize, lineHeight: 1.75, marginBottom: 12, color: token.colorText }}>{children}</Paragraph>,
+                code: ({ className, children, ...props }: any) => {
+                  const isInline = !className;
+                  if (isInline) {
+                    return <code style={{ background: token.colorFillSecondary, padding: '2px 6px', borderRadius: 4, fontSize: '0.9em', fontFamily: 'Menlo, Monaco, monospace', color: token.colorError }} {...props}>{children}</code>;
+                  }
+                  return <code className={className} {...props}>{children}</code>;
+                },
+                pre: ({ children }) => <pre style={{ background: token.colorFillAlter, padding: 16, borderRadius: 8, overflow: 'auto', fontSize: 13, fontFamily: 'Menlo, Monaco, monospace', lineHeight: 1.6, border: `1px solid ${token.colorBorderSecondary}`, marginBottom: 16 }}>{children}</pre>,
+                ul: ({ children }) => <ul style={{ paddingLeft: 24, marginBottom: 12, lineHeight: 1.7, color: token.colorText }}>{children}</ul>,
+                ol: ({ children }) => <ol style={{ paddingLeft: 24, marginBottom: 12, lineHeight: 1.7, color: token.colorText }}>{children}</ol>,
+                li: ({ children }) => <li style={{ marginBottom: 4, fontSize: token.fontSize }}>{children}</li>,
+                blockquote: ({ children }) => <blockquote style={{ borderLeft: `4px solid ${token.colorPrimary}`, paddingLeft: 16, margin: '16px 0', color: token.colorTextSecondary, background: token.colorFillAlter, padding: '12px 16px', borderRadius: '0 8px 8px 0' }}>{children}</blockquote>,
+                table: ({ children }) => <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: token.fontSizeSM }}>{children}</table>,
+                th: ({ children }) => <th style={{ border: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px', background: token.colorFillAlter, fontWeight: 600, textAlign: 'left' }}>{children}</th>,
+                td: ({ children }) => <td style={{ border: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px', color: token.colorText }}>{children}</td>,
+                hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorderSecondary}`, margin: '24px 0' }} />,
+                a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: token.colorPrimary, textDecoration: 'underline' }}>{children}</a>,
+                img: ({ src, alt }) => <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 8, marginBottom: 12 }} />,
+              }}
+            >
+              {readme}
+            </ReactMarkdown>
           </div>
         ) : (
           <Flex align="center" justify="center" style={{ height: 200 }}>

@@ -55,6 +55,8 @@ enum Command {
     AdminServer,
     /// Start the Feishu wiki MCP server (stdio JSON-RPC)
     FeishuWikiServer,
+    /// Start the browser MCP server (stdio JSON-RPC)
+    BrowserServer,
 }
 
 #[tokio::main]
@@ -76,6 +78,7 @@ async fn main() -> Result<()> {
                 | Command::VirtualServer
                 | Command::AdminServer
                 | Command::FeishuWikiServer
+                | Command::BrowserServer
         )
     );
 
@@ -112,5 +115,6 @@ async fn main() -> Result<()> {
         Command::VirtualServer => senclaw::mcp::virtual_server::run_stdio_server().await,
         Command::AdminServer => senclaw::mcp::admin_server::run_stdio_server().await,
         Command::FeishuWikiServer => senclaw::mcp::feishu_wiki_server::run_stdio_server().await,
+        Command::BrowserServer => senclaw::mcp::browser_server::run_stdio_server().await,
     }
 }

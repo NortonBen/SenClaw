@@ -9,6 +9,8 @@ import {
   PlayCircleOutlined, DisconnectOutlined, ExclamationCircleOutlined,
   ReloadOutlined, ApiOutlined, CheckCircleOutlined,
   CloseCircleOutlined, SyncOutlined, MinusCircleOutlined,
+  ToolOutlined, CodeOutlined, BugOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 
 const { Text, Paragraph } = Typography;
@@ -19,6 +21,7 @@ const { TextArea } = Input;
 interface McpToolDef {
   name: string;
   description?: string | null;
+  inputSchema?: Record<string, any> | null;
 }
 
 interface McpServerItem {
@@ -63,7 +66,7 @@ function StatusTag({ status }: { status: McpServerItem['status'] }) {
 // ===== Server Card (Browse) =====
 
 function ServerCard({
-  server, onConnect, onDisconnect, onFilter, onToggle, onDelete,
+  server, onConnect, onDisconnect, onFilter, onToggle, onDelete, onToolDetail, onToolList,
 }: {
   server: McpServerItem;
   onConnect: () => void;
@@ -71,6 +74,8 @@ function ServerCard({
   onFilter: () => void;
   onToggle: (val: boolean) => void;
   onDelete: () => void;
+  onToolDetail: (tool: McpToolDef) => void;
+  onToolList: () => void;
 }) {
   const { token } = theme.useToken();
 
@@ -126,12 +131,34 @@ function ServerCard({
       )}
 
       {/* Tools */}
-      <Flex wrap="wrap" gap={4}>
-        {server.tools?.slice(0, 4).map(t => (
-          <Tag key={t.name} style={{ fontSize: 10, margin: 0 }}>{t.name}</Tag>
+      <Flex wrap="wrap" gap={4} align="center">
+        {server.tools?.slice(0, 5).map(t => (
+          <Tag
+            key={t.name}
+            style={{ fontSize: 10, margin: 0, cursor: 'pointer' }}
+            color={t.inputSchema ? 'blue' : undefined}
+            onClick={(e) => { e.stopPropagation(); onToolDetail(t); }}
+          >
+            {t.name}
+          </Tag>
         ))}
-        {server.tools && server.tools.length > 4 && (
-          <Text type="secondary" style={{ fontSize: 10 }}>+{server.tools.length - 4} more</Text>
+        {server.tools && server.tools.length > 5 && (
+          <Text
+            type="secondary"
+            style={{ fontSize: 10, cursor: 'pointer', textDecoration: 'underline' }}
+            onClick={(e) => { e.stopPropagation(); onToolList(); }}
+          >
+            +{server.tools.length - 5} more
+          </Text>
+        )}
+        {server.tools && server.tools.length > 0 && server.tools.length <= 5 && (
+          <Text
+            type="secondary"
+            style={{ fontSize: 10, cursor: 'pointer', marginLeft: 'auto' }}
+            onClick={(e) => { e.stopPropagation(); onToolList(); }}
+          >
+            <UnorderedListOutlined /> View all
+          </Text>
         )}
         {!server.tools?.length && (
           <Text type="secondary" style={{ fontSize: 11, fontStyle: 'italic' }}>No tools</Text>
@@ -183,7 +210,7 @@ function ServerCard({
 // ===== Manage Row (Manage tab) =====
 
 function ServerRow({
-  server, idx, total, onConnect, onDisconnect, onFilter, onToggle, onDelete,
+  server, idx, total, onConnect, onDisconnect, onFilter, onToggle, onDelete, onToolList,
 }: {
   server: McpServerItem;
   idx: number;
@@ -193,6 +220,7 @@ function ServerRow({
   onFilter: () => void;
   onToggle: (val: boolean) => void;
   onDelete: () => void;
+  onToolList: () => void;
 }) {
   const { token } = theme.useToken();
   return (
@@ -223,6 +251,15 @@ function ServerRow({
 
       <Flex align="center" gap={8} style={{ flexShrink: 0 }}>
         <StatusTag status={server.status} />
+        {server.tools && server.tools.length > 0 && (
+          <Tag
+            color="blue"
+            style={{ cursor: 'pointer', margin: 0, fontSize: 11 }}
+            onClick={(e) => { e.stopPropagation(); onToolList(); }}
+          >
+            <UnorderedListOutlined /> {server.tools.length} tool{server.tools.length > 1 ? 's' : ''}
+          </Tag>
+        )}
         {!server.builtin && (
           <>
             {server.status === 'connected' ? (
@@ -384,6 +421,87 @@ function AddServerModal({ open, onClose, onSaved }: {
   );
 }
 
+// ===== Tool List Modal =====
+
+function ToolListModal({
+  open, server, onClose, onToolDetail,
+}: {
+  open: boolean;
+  server: McpServerItem | null;
+  onClose: () => void;
+  onToolDetail: (tool: McpToolDef) => void;
+}) {
+  const { token } = theme.useToken();
+
+  if (!server) return null;
+
+  return (
+    <Modal
+      title={
+        <Space>
+          <UnorderedListOutlined />
+          <span>Tools</span>
+          <Tag color="blue" style={{ margin: 0 }}>{server.name}</Tag>
+          <Tag style={{ margin: 0, fontSize: 11 }}>{server.tools?.length ?? 0} total</Tag>
+        </Space>
+      }
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={560}
+      destroyOnClose
+    >
+      <div style={{ marginTop: 12 }}>
+        {server.tools && server.tools.length > 0 ? (
+          <Flex vertical gap={4}>
+            {server.tools.map(t => (
+              <div
+                key={t.name}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  backgroundColor: token.colorBgContainer,
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.backgroundColor = token.colorFillAlter; }}
+                onMouseLeave={e => { e.currentTarget.style.backgroundColor = token.colorBgContainer; }}
+                onClick={() => {
+                  onToolDetail(t);
+                  onClose();
+                }}
+              >
+                <Flex align="center" justify="space-between" gap={8}>
+                  <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+                    <ToolOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
+                    <Text strong style={{ fontSize: 13 }}>{t.name}</Text>
+                    {t.inputSchema && (
+                      <Tag color="green" style={{ fontSize: 10, margin: 0, flexShrink: 0 }}>schema</Tag>
+                    )}
+                  </Flex>
+                  <Text type="secondary" style={{ fontSize: 11, flexShrink: 0 }}>
+                    Click for details
+                  </Text>
+                </Flex>
+                {t.description && (
+                  <Text type="secondary" style={{ fontSize: 12, marginTop: 4 }} ellipsis>
+                    {t.description}
+                  </Text>
+                )}
+              </div>
+            ))}
+          </Flex>
+        ) : (
+          <Flex align="center" justify="center" style={{ padding: '40px 0' }}>
+            <Text type="secondary">No tools available</Text>
+          </Flex>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ===== Root =====
 
 export const MCPSettings: React.FC = () => {
@@ -396,6 +514,16 @@ export const MCPSettings: React.FC = () => {
   const [toolFilter, setToolFilter] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [savingFilter, setSavingFilter] = useState(false);
+  // Tool detail modal
+  const [toolOpen, setToolOpen] = useState(false);
+  const [toolServer, setToolServer] = useState<McpServerItem | null>(null);
+  const [toolDetail, setToolDetail] = useState<McpToolDef | null>(null);
+  const [testArgs, setTestArgs] = useState('{}');
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  // Tool list modal
+  const [toolListOpen, setToolListOpen] = useState(false);
+  const [toolListServer, setToolListServer] = useState<McpServerItem | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -474,6 +602,45 @@ export const MCPSettings: React.FC = () => {
       message.success('Tool filters saved');
     } catch { message.error('Failed to save filters'); }
     finally { setSavingFilter(false); }
+  };
+
+  const handleToolDetail = (server: McpServerItem, tool: McpToolDef) => {
+    setToolServer(server);
+    setToolDetail(tool);
+    setTestArgs('{}');
+    setTestResult(null);
+    setToolOpen(true);
+  };
+
+  const handleToolList = (server: McpServerItem) => {
+    setToolListServer(server);
+    setToolListOpen(true);
+  };
+
+  const handleToolTest = async () => {
+    if (!toolServer || !toolDetail) return;
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      let args: any = {};
+      try { args = JSON.parse(testArgs); } catch { args = {}; }
+      const r = await fetch(`/api/mcp-servers/${encodeURIComponent(toolServer.name)}/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: toolDetail.name, args }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        setTestResult(JSON.stringify(data.result, null, 2));
+        message.success(`Tool ${toolDetail.name} executed`);
+      } else {
+        setTestResult(`Error: ${data.error}`);
+        message.error(data.error);
+      }
+    } catch (e: any) {
+      setTestResult(`Error: ${e.message}`);
+      message.error(e.message);
+    } finally { setTestLoading(false); }
   };
 
   const connected = servers.filter(s => s.status === 'connected').length;
@@ -573,6 +740,8 @@ export const MCPSettings: React.FC = () => {
                   onFilter={() => openFilter(srv)}
                   onToggle={val => handleToggle(srv.name, val, srv.scope)}
                   onDelete={() => handleDelete(srv.name, srv.scope)}
+                  onToolDetail={(tool) => handleToolDetail(srv, tool)}
+                  onToolList={() => handleToolList(srv)}
                 />
               ))}
             </div>
@@ -601,6 +770,7 @@ export const MCPSettings: React.FC = () => {
                   onFilter={() => openFilter(srv)}
                   onToggle={val => handleToggle(srv.name, val, srv.scope)}
                   onDelete={() => handleDelete(srv.name, srv.scope)}
+                  onToolList={() => handleToolList(srv)}
                 />
               ))}
             </Card>
@@ -647,6 +817,108 @@ export const MCPSettings: React.FC = () => {
               ))}
             </Flex>
           </div>
+        )}
+      </Modal>
+
+      {/* Tool List Modal */}
+      <ToolListModal
+        open={toolListOpen}
+        server={toolListServer}
+        onClose={() => setToolListOpen(false)}
+        onToolDetail={(tool) => {
+          if (toolListServer) handleToolDetail(toolListServer, tool);
+        }}
+      />
+
+      {/* Tool Detail Modal */}
+      <Modal
+        title={
+          <Space>
+            <ToolOutlined />
+            <span>{toolDetail?.name}</span>
+            {toolServer && <Tag color="blue" style={{ margin: 0 }}>{toolServer.name}</Tag>}
+          </Space>
+        }
+        open={toolOpen}
+        onCancel={() => setToolOpen(false)}
+        footer={null}
+        width={640}
+        destroyOnClose
+      >
+        {toolDetail && (
+          <Flex vertical gap={16} style={{ marginTop: 12 }}>
+            {/* Description */}
+            <div>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>Description</Text>
+              <Text style={{ fontSize: 13 }}>{toolDetail.description || 'No description'}</Text>
+            </div>
+
+            {/* Input Schema */}
+            {toolDetail.inputSchema && (
+              <div>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                  <CodeOutlined /> Input Schema
+                </Text>
+                <pre style={{
+                  background: '#f6f8fa', padding: 12, borderRadius: 6,
+                  fontSize: 12, fontFamily: 'Menlo, Monaco, monospace',
+                  maxHeight: 200, overflow: 'auto', margin: 0,
+                  border: '1px solid #f0f0f0',
+                }}>
+                  {JSON.stringify(toolDetail.inputSchema, null, 2)}
+                </pre>
+              </div>
+            )}
+
+            {/* Test section */}
+            {toolServer?.status === 'connected' && !toolServer.builtin && (
+              <div>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+                  <BugOutlined /> Test Tool
+                </Text>
+                <TextArea
+                  rows={5}
+                  value={testArgs}
+                  onChange={e => setTestArgs(e.target.value)}
+                  style={{ fontFamily: 'Menlo, Monaco, monospace', fontSize: 12 }}
+                  placeholder='{"key": "value"}'
+                />
+                <Flex justify="space-between" align="center" style={{ marginTop: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Enter arguments as JSON</Text>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<BugOutlined />}
+                    onClick={handleToolTest}
+                    loading={testLoading}
+                  >
+                    Run Test
+                  </Button>
+                </Flex>
+                {testResult !== null && (
+                  <pre style={{
+                    background: testResult.startsWith('Error') ? '#fff2f0' : '#f6ffed',
+                    padding: 12, borderRadius: 6,
+                    fontSize: 12, fontFamily: 'Menlo, Monaco, monospace',
+                    maxHeight: 300, overflow: 'auto', marginTop: 12,
+                    border: `1px solid ${testResult.startsWith('Error') ? '#ffccc7' : '#b7eb8f'}`,
+                  }}>
+                    {testResult}
+                  </pre>
+                )}
+              </div>
+            )}
+            {(!toolServer || toolServer.status !== 'connected') && (
+              <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic' }}>
+                Connect the server to test this tool.
+              </Text>
+            )}
+            {toolServer?.builtin && (
+              <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic' }}>
+                Built-in server tools execute via the agent. Use the Chat to invoke them.
+              </Text>
+            )}
+          </Flex>
         )}
       </Modal>
     </Flex>

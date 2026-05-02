@@ -7,7 +7,26 @@ import { CrawlEngine } from '../agent/CrawlEngine';
 import { getWsPort } from '../lib/storage';
 import type { DaemonMessage } from '../types/protocol';
 
-export default defineBackground(async () => {
+const MAX_LOGS = 50;
+let activityLogs: string[] = [];
+
+function logActivity(message: string) {
+  const timestamp = new Date().toLocaleTimeString();
+  const entry = `[${timestamp}] ${message}`;
+  activityLogs.push(entry);
+  if (activityLogs.length > MAX_LOGS) activityLogs.shift();
+
+  // Broadcast to side panel or other parts of the extension
+  chrome.runtime.sendMessage({ type: 'activity-log', entry }).catch(() => {
+    // Expected to fail if no listener is active (side panel closed)
+  });
+}
+
+export default defineBackground(() => {
+  setupBackground();
+});
+
+async function setupBackground() {
   const wsPort = await getWsPort();
   const ws = new WSClient(wsPort);
   const tabs = new TabsController();
@@ -55,6 +74,7 @@ export default defineBackground(async () => {
   // ===== Handle messages from Daemon =====
   ws.onMessage(async (msg: DaemonMessage) => {
     try {
+      logActivity(`Received: ${msg.type}`);
       await handleDaemonMessage(msg, tabs, searcher, crawler, ws);
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : String(e);
@@ -77,15 +97,20 @@ export default defineBackground(async () => {
   chrome.runtime.onConnect.addListener(() => {});
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
 
-  // Respond to connection-status queries from side panel
+  // Respond to status/log queries from side panel
   let connected = false;
   ws.onStatusChange((status) => { connected = status; });
   chrome.runtime.onMessage.addListener((_msg, _sender, sendResponse) => {
     if (_msg?.type === 'get-connection-status') {
       sendResponse({ connected });
+    } else if (_msg?.type === 'get-activity-logs') {
+      sendResponse({ logs: activityLogs });
+    } else if (_msg?.type === 'send-chat') {
+      ws.send({ type: 'UserInstruction', text: _msg.text });
+      sendResponse({ status: 'ok' });
     }
   });
-});
+}
 
 async function handleDaemonMessage(
   msg: DaemonMessage,
@@ -97,6 +122,7 @@ async function handleDaemonMessage(
   switch (msg.type) {
     // ===== Tab Management =====
     case 'Navigate': {
+      logActivity(`Navigating to: ${msg.url}`);
       const tab = await tabs.navigate(msg.url, msg.tab_id);
       ws.send({ type: 'Response', request_id: msg.request_id, status: 'ok', data: { tab_id: tab.id, url: tab.url } });
       break;
@@ -149,6 +175,7 @@ async function handleDaemonMessage(
     case 'Hover':
     case 'PressKey':
     case 'UploadFile': {
+      logActivity(`Action: ${msg.type}`);
       const result = await MessageBridge.sendToTab(msg.tab_id ?? tabs.getActiveTabId() ?? undefined, msg);
       ws.send({ type: 'Response', request_id: msg.request_id, ...result });
       break;
@@ -217,15 +244,19 @@ async function handleDaemonMessage(
     // ===== Search =====
     case 'Search': {
       // Create a fresh tab for search
+      logActivity(`Searching: "${msg.query}" on ${msg.engine}`);
       const tab = await tabs.create();
       await new Promise(r => setTimeout(r, 500));
       const results = await searcher.search(tab.id, msg.query, msg.engine, msg.num_results, msg.language);
       ws.send({ type: 'Response', request_id: msg.request_id, status: 'ok', data: results });
+      logActivity(`Search complete: ${results.results.length} results found`);
+      await tabs.close(tab.id);
       break;
     }
 
     // ===== Crawl =====
     case 'CrawlStart': {
+      logActivity(`Starting crawl: ${msg.start_url}`);
       crawler.start({
         job_id: msg.job_id,
         start_url: msg.start_url,

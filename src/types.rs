@@ -3,6 +3,8 @@
 //! `IChannel` is a TS interface; in Rust it becomes a trait — left out for now
 //! and lands together with the channel module ports.
 
+use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 // ===== Channel layer =====
@@ -121,6 +123,43 @@ pub struct BindingWithRelations {
     pub binding: Binding,
     pub agent: Agent,
     pub channel: Channel,
+}
+
+// ===== Agent API trait =====
+
+/// Operations that the message router and cowork manager need from the agent pool.
+#[async_trait]
+pub trait AgentApi: Send + Sync {
+    /// Send a direct reply to a chat (for admin commands and unregistered notices).
+    async fn broadcast_reply(&self, chat_jid: &str, text: &str, bot_token: Option<&str>);
+
+    /// Process a prompt through the agent. Blocks until the agent finishes.
+    async fn process_and_wait(
+        &self,
+        jid: &str,
+        group: &GroupBinding,
+        prompt: &str,
+    ) -> Result<()>;
+
+    /// Destroy/cleanup agent state for a JID (after JID migration).
+    async fn destroy(&self, jid: &str);
+}
+
+/// No-op stub — used before AgentPool is ported or when agent execution is unavailable.
+pub struct NoopAgentApi;
+
+#[async_trait]
+impl AgentApi for NoopAgentApi {
+    async fn broadcast_reply(&self, _jid: &str, _text: &str, _token: Option<&str>) {}
+    async fn process_and_wait(
+        &self,
+        _jid: &str,
+        _group: &GroupBinding,
+        _prompt: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn destroy(&self, _jid: &str) {}
 }
 
 // ===== DB layer =====
@@ -287,6 +326,7 @@ pub struct TaskRunLogInsert {
 // ===== Cowork types =====
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkWorkspace {
     pub id: String,
     pub name: String,
@@ -299,6 +339,7 @@ pub struct CoworkWorkspace {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkMember {
     pub workspace_id: String,
     pub member_id: String,
@@ -318,6 +359,7 @@ pub struct CoworkMember {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkBoardEntry {
     pub id: String,
     pub workspace_id: String,
@@ -332,6 +374,7 @@ pub struct CoworkBoardEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkTask {
     pub id: String,
     pub workspace_id: String,
@@ -351,6 +394,7 @@ pub struct CoworkTask {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkTaskComment {
     pub id: i64,
     pub task_id: String,
@@ -360,6 +404,7 @@ pub struct CoworkTaskComment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkMessage {
     pub id: String,
     pub workspace_id: String,
@@ -374,6 +419,7 @@ pub struct CoworkMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoworkRecordingSession {
     pub id: String,
     pub workspace_id: String,

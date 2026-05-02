@@ -54,3 +54,6 @@ target/
 code-old/
 hub-backend/bin/server
 hub-backend/server
+test_parse
+test_parse.rs
+test_prompt.sh

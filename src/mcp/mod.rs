@@ -2,6 +2,7 @@
 
 pub mod admin_server;
 pub mod bridge;
+pub mod browser_server;
 pub mod client;
 pub mod config;
 pub mod dispatch_server;

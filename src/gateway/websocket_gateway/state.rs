@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use axum::extract::ws::Message;
 
+use super::browser::BrowserRelay;
+use crate::types::AgentApi;
+
 pub(crate) struct WsClient {
     pub(crate) sender: tokio::sync::mpsc::UnboundedSender<Message>,
     pub(crate) authenticated: bool,
@@ -23,4 +26,6 @@ pub struct WsState {
     pub channel_manager: Arc<crate::gateway::channel_manager::ChannelManager>,
     pub cowork_manager: Arc<crate::cowork::CoworkManager>,
     pub api: Arc<dyn super::gateway::WsGatewayApi>,
+    pub agent_api: Option<Arc<dyn AgentApi>>,
+    pub browser_relay: Arc<BrowserRelay>,
 }

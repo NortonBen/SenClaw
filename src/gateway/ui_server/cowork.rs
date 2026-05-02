@@ -33,6 +33,107 @@ pub(crate) fn cowork_db(s: &UiState) -> Result<&Db, AppError> {
         .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))
 }
 
+// ===== Cowork Working Dir Browser =====
+
+#[derive(Deserialize)]
+pub(crate) struct BrowseQuery {
+    pub(crate) path: Option<String>,
+}
+
+/// Browse the workspace's workingDir — returns a flat list of children under the given path.
+pub(crate) async fn cowork_ws_browse(
+    State(s): State<Arc<UiState>>,
+    AxumPath(ws_id): AxumPath<String>,
+    Query(q): Query<BrowseQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mgr = cowork_mgr(&s)?;
+    let db = cowork_db(&s)?;
+    let ws = mgr.get_workspace(db, &ws_id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
+
+    let working_dir = ws.working_dir.as_deref().unwrap_or(&ws.root_dir);
+    let base = PathBuf::from(working_dir);
+
+    if !base.exists() {
+        return Ok(Json(serde_json::json!({ "entries": [], "path": "", "error": "Working directory does not exist" })));
+    }
+
+    let target = match q.path.as_deref() {
+        Some(p) if !p.is_empty() => base.join(p),
+        _ => base.clone(),
+    };
+
+    // Security: must stay within working_dir
+    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.clone());
+    let canonical_target = target.canonicalize().unwrap_or_else(|_| target.clone());
+    if !canonical_target.starts_with(&canonical_base) {
+        return Err(AppError(StatusCode::FORBIDDEN, "Path outside working directory".into()));
+    }
+
+    let rel = canonical_target
+        .strip_prefix(&canonical_base)
+        .unwrap_or(&canonical_target)
+        .to_string_lossy()
+        .to_string();
+
+    // If target is a file, return its content
+    if canonical_target.is_file() {
+        let content = fs::read_to_string(&canonical_target)
+            .unwrap_or_else(|_| "[binary or unreadable]".into());
+        let mime = path_to_mime(&canonical_target.to_string_lossy());
+        let is_binary = content.contains('\0') || mime == "application/octet-stream";
+        return Ok(Json(serde_json::json!({
+            "path": rel,
+            "content": if is_binary { "[binary file]" } else { &content },
+            "mime": mime,
+            "isBinary": is_binary,
+            "size": canonical_target.metadata().map(|m| m.len()).unwrap_or(0),
+            "isFile": true,
+            "workingDir": working_dir,
+        })));
+    }
+
+    let mut entries = Vec::new();
+    if let Ok(read_dir) = fs::read_dir(&canonical_target) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let is_dir = path.is_dir();
+            if let Ok(meta) = path.metadata() {
+                let name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                // Skip hidden files/dirs
+                if name.starts_with('.') { continue; }
+                entries.push(serde_json::json!({
+                    "name": name,
+                    "path": if rel.is_empty() { name.clone() } else { format!("{}/{}", rel, name) },
+                    "isDir": is_dir,
+                    "size": meta.len(),
+                    "modified": meta.modified().ok().map(|t| {
+                        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                    }),
+                }));
+            }
+        }
+    }
+
+    // dirs first, then alphabetical
+    entries.sort_by(|a, b| {
+        let a_dir = a["isDir"].as_bool().unwrap_or(false);
+        let b_dir = b["isDir"].as_bool().unwrap_or(false);
+        b_dir.cmp(&a_dir)
+            .then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
+    });
+
+    Ok(Json(serde_json::json!({
+        "entries": entries,
+        "path": rel,
+        "isDir": true,
+        "workingDir": working_dir,
+    })))
+}
+
 pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -410,7 +511,9 @@ pub(crate) async fn cowork_messages_send(
     let mgr = cowork_mgr(&s)?;
     let db = cowork_db(&s)?;
     let now = now_iso();
-    let (msg, tasks) = mgr.process_user_message(db, &ws_id, &body.from_member, &body.content, &now)
+    let mgr_arc = s.cowork_manager.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Cowork not initialized".into()))?.clone();
+    let agent_api = s.cowork_agent_api.as_ref().map(|api| (Arc::clone(api), Arc::clone(s.db.as_ref().unwrap())));
+    let (msg, tasks) = mgr.process_user_message(db, &ws_id, &body.from_member, &body.content, &now, agent_api, mgr_arc)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "message": msg, "tasks": tasks })))
 }

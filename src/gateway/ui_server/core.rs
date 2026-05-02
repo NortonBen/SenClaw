@@ -26,7 +26,8 @@ use super::cowork::{
     cowork_members_update, cowork_messages_list, cowork_messages_send, cowork_task_comments_add,
     cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete, cowork_tasks_get,
     cowork_tasks_list, cowork_tasks_update, cowork_templates_get, cowork_templates_list,
-    cowork_ws_create, cowork_ws_delete, cowork_ws_get, cowork_ws_list, cowork_ws_update,
+    cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get, cowork_ws_list,
+    cowork_ws_update,
 };
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
@@ -34,7 +35,8 @@ use super::llm_config::{
 };
 use super::mcp::{
     hooks_get, hooks_put, mcp_servers_connect, mcp_servers_delete, mcp_servers_disconnect,
-    mcp_servers_enabled, mcp_servers_get, mcp_servers_list, mcp_servers_save, mcp_servers_tools,
+    mcp_servers_enabled, mcp_servers_get, mcp_servers_list, mcp_servers_save, mcp_servers_test,
+    mcp_servers_tools,
 };
 use super::quicknotes::quicknotes_save;
 use super::skills::{
@@ -79,6 +81,7 @@ pub struct UiState {
     pub wiki_manager: Option<Arc<WikiManager>>,
     pub persona_registry: Option<Arc<Mutex<crate::agent::persona_registry::PersonaRegistry>>>,
     pub agent_api: Option<Arc<dyn UiApi>>,
+    pub cowork_agent_api: Option<Arc<dyn crate::types::AgentApi>>,
     pub mcp_manager: Option<Arc<McpManager>>,
     pub ws_port: u16,
     pub ws_token: String,
@@ -144,6 +147,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/mcp-servers/:name/connect", post(mcp_servers_connect))
         .route("/api/mcp-servers/:name/disconnect", post(mcp_servers_disconnect))
         .route("/api/mcp-servers/:name/tools", post(mcp_servers_tools))
+        .route("/api/mcp-servers/:name/test", post(mcp_servers_test))
         .route("/api/mcp-servers/:name/enabled", post(mcp_servers_enabled))
         // Hooks config
         .route("/api/hooks", get(hooks_get).put(hooks_put))
@@ -163,6 +167,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/cowork/workspaces/:id/documents", post(cowork_documents_upload))
         .route("/api/cowork/workspaces/:id/files", get(cowork_files_list))
         .route("/api/cowork/workspaces/:id/files/download", get(cowork_files_download))
+        .route("/api/cowork/workspaces/:id/browse", get(cowork_ws_browse))
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback

@@ -254,7 +254,7 @@ impl Drop for McpRegistry {
 /// Shared, thread-safe MCP client registry.
 #[derive(Clone)]
 pub struct SharedMcpRegistry {
-    inner: Arc<std::sync::Mutex<McpRegistry>>,
+    pub(crate) inner: Arc<std::sync::Mutex<McpRegistry>>,
 }
 
 impl SharedMcpRegistry {
@@ -292,5 +292,37 @@ impl SharedMcpRegistry {
     pub fn kill_all(&self) {
         let mut reg = self.inner.lock().unwrap();
         reg.kill_all();
+    }
+
+    /// Call a tool on a specific MCP server by server name and short tool name.
+    pub async fn call_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        // We cannot hold the MutexGuard across .await, so we serialise the
+        // request manually: grab the client, send the request, release the guard,
+        // then read the response.
+        //
+        // McpClient uses a BufReader over stdout; the IO must happen with the
+        // client held. Since McpClient::call_tool takes &mut self we need the
+        // guard for the whole call. To avoid the Send issue we run the blocking
+        // portion in spawn_blocking.
+        let inner = self.inner.clone();
+        let server = server_name.to_string();
+        let tool = tool_name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut reg = inner.lock().unwrap();
+            let client = reg
+                .clients
+                .get_mut(&server)
+                .ok_or_else(|| anyhow::anyhow!("MCP server '{server}' not in registry"))?;
+            // call_tool is async, but we are inside spawn_blocking.
+            // Use Handle::current().block_on to drive the future.
+            tokio::runtime::Handle::current().block_on(client.call_tool(&tool, arguments))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
     }
 }

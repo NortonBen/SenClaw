@@ -142,6 +142,8 @@ pub struct McpToolDef {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "inputSchema")]
+    pub input_schema: Option<serde_json::Value>,
 }
 
 /// Combined server config + runtime info sent to the frontend.

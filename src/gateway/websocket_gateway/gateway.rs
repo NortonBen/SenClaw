@@ -97,8 +97,11 @@ impl WebSocketGateway {
         let states = self.last_known_states.clone();
         let token = self.token.clone();
 
-        axum::Router::new().route(
-            "/",
+        let main_route = {
+            let clients = clients.clone();
+            let states = states.clone();
+            let token = token.clone();
+            let state = state.clone();
             axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| {
                 let clients = clients.clone();
                 let states = states.clone();
@@ -111,8 +114,33 @@ impl WebSocketGateway {
                         )
                     })
                 }
-            }),
-        )
+            })
+        };
+
+        let browser_relay = state.browser_relay.clone();
+        let browser_route = axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| {
+            let relay = browser_relay.clone();
+            async move {
+                ws.on_upgrade(move |socket| {
+                    super::browser::handle_browser_connection(socket, relay)
+                })
+            }
+        });
+
+        let browser_relay2 = state.browser_relay.clone();
+        let browser_mcp_route = axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| {
+            let relay = browser_relay2.clone();
+            async move {
+                ws.on_upgrade(move |socket| {
+                    super::browser::handle_browser_mcp_connection(socket, relay)
+                })
+            }
+        });
+
+        axum::Router::new()
+            .route("/", main_route)
+            .route("/browser", browser_route)
+            .route("/browser-mcp", browser_mcp_route)
     }
 
     // ===== Broadcast helpers =====

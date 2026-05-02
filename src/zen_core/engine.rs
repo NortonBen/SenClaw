@@ -6,24 +6,26 @@
 //!
 //! Port of TS `ZenEngine` from sema-core.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 use reqwest::Client;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use super::config_manager;
+use super::hooks::{
+    self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput, HookInputBase, HookManager,
+    SessionInput, StopInput, UserPromptSubmitInput,
+};
+use super::*;
 use crate::gateway::group_manager::load_llm_configs;
 use crate::mcp::SharedMcpRegistry;
 use crate::skills::SkillRegistry;
 use crate::tools::{SkillTool, TaskTool, TodoWriteTool};
-use super::*;
-use super::config_manager;
-use super::hooks::{
-    self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput,
-    HookInputBase, HookManager, SessionInput, StopInput, UserPromptSubmitInput,
-};
 use events::ResponseRegistry;
 use permissions::PermissionManager;
 
@@ -332,7 +334,12 @@ impl ZenEngine {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| {
                 dirs::home_dir()
-                    .map(|h| h.join(".senclaw").join("config.json").to_string_lossy().to_string())
+                    .map(|h| {
+                        h.join(".senclaw")
+                            .join("config.json")
+                            .to_string_lossy()
+                            .to_string()
+                    })
                     .unwrap_or_else(|| ".senclaw/config.json".to_string())
             });
 
@@ -375,12 +382,20 @@ impl ZenEngine {
         let base_url = std::env::var("SENCLAW_OPENAI_BASE_URL")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| std::env::var("OPENAI_BASE_URL").ok().filter(|v| !v.trim().is_empty()))
+            .or_else(|| {
+                std::env::var("OPENAI_BASE_URL")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+            })
             .unwrap_or_else(|| "https://api.openai.com/v1".into());
         let api_key = std::env::var("SENCLAW_OPENAI_API_KEY")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|v| !v.trim().is_empty()))
+            .or_else(|| {
+                std::env::var("OPENAI_API_KEY")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+            })
             .unwrap_or_default();
         let model_name = std::env::var("SENCLAW_OPENAI_CHAT_MODEL")
             .ok()
@@ -431,7 +446,10 @@ impl ZenCore for ZenEngine {
         self.initialize_plugins();
 
         // Fire SessionStart hook (fire-and-forget — non-blockable)
-        if self.hook_manager.has_hooks_for_event(&HookEvent::SessionStart) {
+        if self
+            .hook_manager
+            .has_hooks_for_event(&HookEvent::SessionStart)
+        {
             let hm = self.hook_manager.clone();
             let (client, profile) = self.hook_opts();
             let base = self.hook_base(HookEvent::SessionStart);
@@ -440,8 +458,13 @@ impl ZenCore for ZenEngine {
                     &hm,
                     &HookEvent::SessionStart,
                     &HookInput::Session(SessionInput { base }),
-                    &ExecuteHooksOptions { client: Some(&client), profile: Some(&profile), ..Default::default() },
-                ).await;
+                    &ExecuteHooksOptions {
+                        client: Some(&client),
+                        profile: Some(&profile),
+                        ..Default::default()
+                    },
+                )
+                .await;
             });
         }
 
@@ -492,6 +515,22 @@ impl ZenCore for ZenEngine {
         let event_bus = self.event_bus.clone();
         let opts = self.options.read().unwrap().clone();
         let tools = self.get_tools();
+        // Debug: log all tools being sent to LLM so we can verify browser tools appear
+        {
+            let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+            let mcp_tools: Vec<&str> = tool_names
+                .iter()
+                .filter(|n| n.starts_with("mcp__"))
+                .copied()
+                .collect();
+            info!(
+                "[{}] get_tools: {} total ({} mcp__*): {:?}",
+                self.instance_id,
+                tool_names.len(),
+                mcp_tools.len(),
+                mcp_tools
+            );
+        }
         let messages = {
             let state = self.state.lock().unwrap();
             state.message_history(MAIN_AGENT_ID)
@@ -513,7 +552,10 @@ impl ZenCore for ZenEngine {
         // UserPromptSubmit hook — may update the prompt before it reaches the LLM.
         // Runs synchronously before the spawn so `updatedInput` can modify the prompt.
         let prompt = prompt.to_owned();
-        let prompt = if self.hook_manager.has_hooks_for_event(&HookEvent::UserPromptSubmit) {
+        let prompt = if self
+            .hook_manager
+            .has_hooks_for_event(&HookEvent::UserPromptSubmit)
+        {
             let hm = self.hook_manager.clone();
             let (client, hook_profile) = self.hook_opts();
             let base = self.hook_base(HookEvent::UserPromptSubmit);
@@ -529,7 +571,8 @@ impl ZenCore for ZenEngine {
                             profile: Some(&hook_profile),
                             ..Default::default()
                         },
-                    ).await
+                    )
+                    .await
                 })
             });
             if let Some(updated) = result.updated_input {
@@ -617,7 +660,8 @@ impl ZenCore for ZenEngine {
                         profile: Some(&profile),
                         ..Default::default()
                     },
-                ).await;
+                )
+                .await;
             }
 
             // Signal idle (unless cancelled)
@@ -642,7 +686,10 @@ impl ZenCore for ZenEngine {
     }
 
     fn interrupt_session(&self, target_state: SessionState) {
-        info!("[{}] interrupt_session → {:?}", self.instance_id, target_state);
+        info!(
+            "[{}] interrupt_session → {:?}",
+            self.instance_id, target_state
+        );
         self.abort_current();
         let mut state = self.state.lock().unwrap();
         state.update_state(MAIN_AGENT_ID, target_state);
@@ -658,7 +705,10 @@ impl ZenCore for ZenEngine {
         self.response_registry.clear();
 
         // Fire SessionEnd hook (non-blockable, fire-and-forget)
-        if self.hook_manager.has_hooks_for_event(&HookEvent::SessionEnd) {
+        if self
+            .hook_manager
+            .has_hooks_for_event(&HookEvent::SessionEnd)
+        {
             let hm = self.hook_manager.clone();
             let (client, profile) = self.hook_opts();
             let base = self.hook_base(HookEvent::SessionEnd);
@@ -667,8 +717,13 @@ impl ZenCore for ZenEngine {
                     &hm,
                     &HookEvent::SessionEnd,
                     &HookInput::Session(SessionInput { base }),
-                    &ExecuteHooksOptions { client: Some(&client), profile: Some(&profile), ..Default::default() },
-                ).await;
+                    &ExecuteHooksOptions {
+                        client: Some(&client),
+                        profile: Some(&profile),
+                        ..Default::default()
+                    },
+                )
+                .await;
             });
         }
     }
@@ -727,25 +782,82 @@ impl ZenCore for ZenEngine {
     }
 
     fn add_or_update_mcp_server(&self, cfg: &McpServerConfig, _scope: &str) -> Result<()> {
-        info!("[{}] add_or_update_mcp_server: {}", self.instance_id, cfg.name);
+        info!(
+            "[{}] add_or_update_mcp_server: {}",
+            self.instance_id, cfg.name
+        );
         let instance_id = self.instance_id.clone();
         let registry = self.mcp_registry.clone();
+        let builtin_tools_lock = Arc::new(std::sync::RwLock::<Vec<Arc<dyn Tool>>>::new(vec![]));
+        // We can't move self into a 'static future. Instead we use a Mutex-protected
+        // Vec that we'll merge into builtin_tools synchronously after spawn returns.
+        // Simpler approach: use a oneshot channel to send bridge_tools back.
         let name = cfg.name.clone();
         let command = cfg.command.clone();
         let args = cfg.args.clone();
         let env = cfg.env.clone();
+        // Shared buffer for the spawned task to write tool objects into.
+        let tools_buffer: Arc<Mutex<Vec<Arc<dyn Tool>>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_buffer_clone = Arc::clone(&tools_buffer);
+        let _ = builtin_tools_lock;
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             match registry.spawn(&name, &command, &args, &env).await {
-                Ok(tools) => {
-                    info!(
-                        "[{instance_id}] MCP {name}: {} tool(s) registered",
-                        tools.len()
-                    );
+                Ok(tool_infos) => {
+                    let count = tool_infos.len();
+                    let server_name = name.clone();
+                    let reg_clone = registry.clone();
+                    let bridge_tools: Vec<Arc<dyn Tool>> = tool_infos
+                        .into_iter()
+                        .map(|ti| {
+                            let full_name = if server_name.starts_with("senclaw-") {
+                                let clean_server = &server_name["senclaw-".len()..];
+                                let mut clean_tool = ti.name.clone();
+                                let prefix = format!("{}_", clean_server);
+                                if clean_tool.starts_with(&prefix) {
+                                    clean_tool = clean_tool[prefix.len()..].to_string();
+                                }
+                                format!("mcp__{}__{}", clean_server, clean_tool)
+                            } else {
+                                format!("mcp__{}__{}", server_name, ti.name)
+                            };
+
+                            Arc::new(McpRegistryBridgeTool {
+                                full_name,
+                                tool_name: ti.name,
+                                server_name: server_name.clone(),
+                                desc: ti.description,
+                                schema: ti.input_schema,
+                                registry: reg_clone.clone(),
+                            }) as Arc<dyn Tool>
+                        })
+                        .collect();
+                    *tools_buffer_clone.lock().unwrap() = bridge_tools;
+                    info!("[{instance_id}] MCP {name}: {count} tool(s) spawned");
+                    count
                 }
                 Err(e) => {
                     warn!("[{instance_id}] MCP {name} spawn failed: {e}");
+                    0
                 }
+            }
+        });
+
+        // Synchronously wait for spawn to complete then merge tools into builtin_tools.
+        // We're on a tokio thread so we block_in_place to avoid deadlocking.
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            let count = rt.block_on(handle).unwrap_or(0);
+            if count > 0 {
+                let new_tools = std::mem::take(&mut *tools_buffer.lock().unwrap());
+                let prefix = format!("mcp__{}__", cfg.name);
+                let mut tools = self.builtin_tools.write().unwrap();
+                tools.retain(|t| !t.name().starts_with(&prefix));
+                tools.extend(new_tools);
+                info!(
+                    "[{}] MCP {}: {count} tool(s) added to builtin_tools",
+                    self.instance_id, cfg.name
+                );
             }
         });
         Ok(())
@@ -819,6 +931,99 @@ impl ZenEngine {
                 self.skill_registry.len()
             );
         }
+    }
+}
+
+// ===== McpRegistryBridgeTool =====
+// Wraps a single tool from a spawned MCP subprocess so it can participate in
+// the ZenEngine's builtin_tools roster and be visible to the LLM.
+
+struct McpRegistryBridgeTool {
+    /// Full tool name sent to the LLM, e.g. `mcp__senclaw-browser__navigate`
+    full_name: String,
+    /// Short tool name used for subprocess `tools/call`
+    tool_name: String,
+    /// MCP server name (key in registry)
+    server_name: String,
+    desc: String,
+    schema: Value,
+    registry: SharedMcpRegistry,
+}
+
+#[async_trait::async_trait]
+impl Tool for McpRegistryBridgeTool {
+    fn name(&self) -> &str {
+        &self.full_name
+    }
+
+    fn description(&self) -> &str {
+        &self.desc
+    }
+
+    fn input_schema(&self) -> Value {
+        self.schema.clone()
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let result = self
+            .registry
+            .call_tool(&self.server_name, &self.tool_name, input)
+            .await?;
+        let summary = match &result {
+            Value::String(s) => s.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_else(|_| format!("{other:?}")),
+        };
+        Ok(vec![ToolOutput::Result {
+            data: result,
+            result_for_assistant: summary,
+        }])
+    }
+
+    fn gen_tool_result_message(&self, data: &Value, input: &Value) -> ToolResultMessage {
+        let summary = match data {
+            Value::String(s) => s.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_else(|_| format!("{other:?}")),
+        };
+        ToolResultMessage {
+            title: self.get_display_title(input),
+            summary,
+            content: data.clone(),
+        }
+    }
+
+    fn get_display_title(&self, _input: &Value) -> String {
+        let name = self.tool_name.replace('_', " ");
+        // Capitalize words
+        let capitalized = name
+            .split_whitespace()
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let server_display = if self.server_name.starts_with("senclaw-") {
+            &self.server_name["senclaw-".len()..]
+        } else {
+            &self.server_name
+        };
+
+        format!("{}: {}", server_display.to_uppercase(), capitalized)
+    }
+
+    fn gen_tool_permission(&self, input: &Value) -> Option<ToolPermissionInfo> {
+        Some(ToolPermissionInfo {
+            title: self.get_display_title(input),
+            content: input.clone(),
+        })
     }
 }
 

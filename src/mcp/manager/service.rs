@@ -324,6 +324,43 @@ impl McpManager {
                     "doc_write_blocks".into(),
                 ],
             },
+            BuiltInServerInfo {
+                name: "senclaw-browser".into(),
+                transport: "stdio".into(),
+                description: Some("Remote Chrome browser control via extension".into()),
+                tools: vec![
+                    "browser_navigate".into(),
+                    "browser_new_tab".into(),
+                    "browser_close_tab".into(),
+                    "browser_list_tabs".into(),
+                    "browser_switch_tab".into(),
+                    "browser_go_back".into(),
+                    "browser_go_forward".into(),
+                    "browser_reload".into(),
+                    "browser_click".into(),
+                    "browser_type".into(),
+                    "browser_select_option".into(),
+                    "browser_scroll".into(),
+                    "browser_hover".into(),
+                    "browser_press_key".into(),
+                    "browser_upload_file".into(),
+                    "browser_execute_js".into(),
+                    "browser_wait".into(),
+                    "browser_snapshot".into(),
+                    "browser_screenshot".into(),
+                    "browser_extract_text".into(),
+                    "browser_extract_links".into(),
+                    "browser_extract_table".into(),
+                    "browser_extract_structured".into(),
+                    "browser_search".into(),
+                    "browser_crawl".into(),
+                    "browser_crawl_status".into(),
+                    "browser_fill_form".into(),
+                    "browser_click_and_wait".into(),
+                    "browser_get_status".into(),
+                    "browser_stop_task".into(),
+                ],
+            },
         ]
     }
 
@@ -379,6 +416,11 @@ impl McpManager {
                             None
                         } else {
                             Some(t.description.clone())
+                        },
+                        input_schema: if t.input_schema.is_null() || t.input_schema.is_object() && t.input_schema.as_object().map_or(false, |o| o.is_empty()) {
+                            None
+                        } else {
+                            Some(t.input_schema.clone())
                         },
                     })
                     .collect();
@@ -488,6 +530,23 @@ impl McpManager {
             .ok_or_else(|| anyhow::anyhow!("MCP server not connected: {server_name}"))?;
 
         client.call_tool(&tool_name, arguments).await
+    }
+
+    /// Test a tool by calling it on a connected external server.
+    /// Returns the tool's JSON response. Returns 400 error for built-in servers.
+    pub async fn test_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let external = self.external.read().await;
+        if !external.contains_key(server_name) {
+            anyhow::bail!("Built-in server tools cannot be tested from the UI. Use the agent to invoke them.");
+        }
+        drop(external);
+        let full_name = format!("mcp__{}__{}", server_name, tool_name);
+        self.call_external_tool(&full_name, arguments).await
     }
 
     /// Clean up all external connections.

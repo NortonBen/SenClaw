@@ -14,6 +14,8 @@ use crate::mcp::manager::McpManager;
 
 use super::core::{AppError, UiState};
 
+use axum::response::IntoResponse;
+
 // ===== MCP helper =====
 
 /// Helper to get McpManager from state.
@@ -354,4 +356,32 @@ pub(crate) async fn hooks_put(
     fs::write(path, &body)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---- POST /api/mcp-servers/:name/test ----
+
+#[derive(Deserialize)]
+pub(crate) struct TestToolBody {
+    tool: String,
+    #[serde(default)]
+    args: serde_json::Value,
+}
+
+pub(crate) async fn mcp_servers_test(
+    State(s): State<Arc<UiState>>,
+    AxumPath(name): AxumPath<String>,
+    axum::extract::Json(body): axum::extract::Json<TestToolBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mgr = mcp_mgr(&s)?;
+    let args = if body.args.is_null() { serde_json::json!({}) } else { body.args };
+    match mgr.test_tool(&name, &body.tool, args).await {
+        Ok(result) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "result": result,
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": e.to_string(),
+        }))),
+    }
 }

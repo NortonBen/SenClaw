@@ -175,3 +175,12 @@ pub fn feishu_wiki_mcp_config(app_id: &str, app_secret: &str, domain: Option<&st
         .insert("FEISHU_DOMAIN".into(), domain.unwrap_or("feishu").to_owned());
     cfg
 }
+
+// ===== Browser =====
+
+pub fn browser_mcp_config(ws_port: u16) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-browser", "browser-server");
+    cfg.env
+        .insert("SENCLAW_WS_PORT".into(), ws_port.to_string());
+    cfg
+}

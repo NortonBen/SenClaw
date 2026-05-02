@@ -45,17 +45,38 @@ impl FsPersonaResolver {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "md") {
-                    let name = path.file_stem()
+                    let mut name = path.file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("unknown")
                         .to_owned();
-                    let description = fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|content| {
-                            content.lines().find(|l| !l.starts_with('#') && !l.is_empty())
-                                .map(|l| l.trim().trim_matches(&['"', '\''][..]).to_owned())
-                        })
-                        .unwrap_or_else(|| "(no description)".into());
+                    let mut description = String::from("(no description)");
+                    
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        let mut in_frontmatter = false;
+                        let mut found_fm = false;
+                        for line in content.lines() {
+                            let trimmed = line.trim();
+                            if trimmed == "---" {
+                                if in_frontmatter {
+                                    break;
+                                } else if !found_fm {
+                                    in_frontmatter = true;
+                                    found_fm = true;
+                                    continue;
+                                }
+                            }
+                            if in_frontmatter {
+                                if trimmed.starts_with("name:") {
+                                    name = trimmed["name:".len()..].trim().trim_matches(&['"', '\''][..]).to_owned();
+                                } else if trimmed.starts_with("description:") {
+                                    description = trimmed["description:".len()..].trim().trim_matches(&['"', '\''][..]).to_owned();
+                                }
+                            } else if !found_fm && !trimmed.is_empty() && !trimmed.starts_with('#') {
+                                description = trimmed.trim_matches(&['"', '\''][..]).to_owned();
+                                break;
+                            }
+                        }
+                    }
                     personas.push(PersonaInfo { name, description });
                 }
             }

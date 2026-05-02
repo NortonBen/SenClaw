@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Typography, Button, Card, Space, Tag, Modal, Form, Input, Select,
   Breadcrumb, Layout, Flex, Tabs, Badge, Avatar, Tooltip, Popconfirm,
@@ -12,7 +12,8 @@ import {
   PauseCircleOutlined, ThunderboltOutlined, UserOutlined,
   RobotOutlined, SendOutlined, ReloadOutlined, MoreOutlined,
   BugOutlined, ArrowRightOutlined, InboxOutlined,
-  FileOutlined, FileTextOutlined, FolderOutlined, DownloadOutlined, UploadOutlined, PaperClipOutlined
+  FileOutlined, FileTextOutlined, FolderOutlined, FolderOpenOutlined, DownloadOutlined, UploadOutlined, PaperClipOutlined,
+  LaptopOutlined, CloudOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../contexts/AppContext';
@@ -91,6 +92,16 @@ export function CoworkPage() {
   const [fileLoading, setFileLoading] = useState(false);
   const [members, setMembers] = useState<CoworkMember[]>([]);
 
+  // Working directory browser state
+  const [resTab, setResTab] = useState<string>('workspace');
+  const [wdEntries, setWdEntries] = useState<any[]>([]);
+  const [wdPath, setWdPath] = useState<string>('');
+  const [wdLoading, setWdLoading] = useState(false);
+  const [wdContent, setWdContent] = useState<string | null>(null);
+  const [wdFilePath, setWdFilePath] = useState<string | null>(null);
+  // Workspace file tree navigation
+  const [wsNavPath, setWsNavPath] = useState<string>('');
+
   // Modal states
   const [wsModalOpen, setWsModalOpen] = useState(false);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -161,6 +172,24 @@ export function CoworkPage() {
     finally { setFileLoading(false); }
   }, [api]);
 
+  const loadWorkingDir = useCallback(async (wsId: string, dirPath?: string) => {
+    setWdLoading(true);
+    try {
+      const query = dirPath ? `?path=${encodeURIComponent(dirPath)}` : '';
+      const data = await api(`/api/cowork/workspaces/${wsId}/browse${query}`);
+      if (data.isFile) {
+        setWdFilePath(data.path);
+        setWdContent(data.content || '');
+      } else {
+        setWdEntries(data.entries || []);
+        setWdPath(data.path || '');
+        setWdFilePath(null);
+        setWdContent(null);
+      }
+    } catch { /* ignore */ }
+    finally { setWdLoading(false); }
+  }, [api]);
+
   const loadMembers = useCallback(async (wsId: string) => {
     try {
       const data = await api(`/api/cowork/workspaces/${wsId}/members`);
@@ -170,15 +199,44 @@ export function CoworkPage() {
 
   useEffect(() => { loadWorkspaces(); loadTemplates(); }, [loadWorkspaces, loadTemplates]);
 
+  // Compute workspace file entries at current navigation depth
+  const wsEntries = useMemo(() => {
+    const prefix = wsNavPath ? wsNavPath + '/' : '';
+    const children: any[] = [];
+    const seen = new Set<string>();
+    for (const f of wsFiles) {
+      if (!f.path.startsWith(prefix)) continue;
+      const rest = f.path.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      const name = slash === -1 ? rest : rest.slice(0, slash);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (slash === -1) {
+        // Direct child
+        children.push({ ...f, name });
+      } else {
+        // Directory
+        children.push({ name, path: prefix + name, isDir: true, size: 0 });
+      }
+    }
+    children.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return children;
+  }, [wsFiles, wsNavPath]);
+
   const selectWorkspace = useCallback((ws: CoworkWorkspace) => {
     setSelectedWs(ws);
     setLoading(true);
     setSelectedFilePath(null);
     setFileContent(null);
+    setWdEntries([]); setWdPath(''); setWdFilePath(null); setWdContent(null);
+    setWsNavPath('');
     Promise.all([
-      loadTasks(ws.id), loadBoard(ws.id), loadMessages(ws.id), loadFiles(ws.id), loadMembers(ws.id)
+      loadTasks(ws.id), loadBoard(ws.id), loadMessages(ws.id), loadFiles(ws.id), loadMembers(ws.id), loadWorkingDir(ws.id)
     ]).finally(() => setLoading(false));
-  }, [loadTasks, loadBoard, loadMessages, loadFiles, loadMembers]);
+  }, [loadTasks, loadBoard, loadMessages, loadFiles, loadMembers, loadWorkingDir]);
 
   // Create workspace
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -985,109 +1043,234 @@ export function CoworkPage() {
                   ),
                 },
                 {
-                  key: 'files',
-                  label: <Space><FileOutlined />Files ({wsFiles.length})</Space>,
+                  key: 'resources',
+                  label: <Space><FolderOpenOutlined />Resources</Space>,
                   children: (
-                    <div style={{ display: 'flex', height: 'calc(100vh - 180px)' }}>
-                      {/* File tree */}
-                      <div style={{ width: 260, borderRight: '1px solid #f0f0f0', overflowY: 'auto', padding: 8, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
-                        {/* Upload button */}
-                        <Upload
-                          multiple
-                          showUploadList={false}
-                          beforeUpload={file => {
-                            const fd = new FormData();
-                            fd.append('file', file);
-                            fetch(`/api/cowork/workspaces/${selectedWs!.id}/documents`, { method: 'POST', body: fd })
-                              .then(() => { loadFiles(selectedWs!.id); message.success(`Uploaded ${file.name}`); })
-                              .catch(() => message.error(`Failed to upload ${file.name}`));
-                            return false;
+                    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)' }}>
+                      <div style={{ padding: '4px 0 8px', borderBottom: '1px solid #f0f0f0' }}>
+                        <Segmented
+                          size="small"
+                          value={resTab}
+                          onChange={val => {
+                            setResTab(val as string);
+                            setSelectedFilePath(null); setFileContent(null);
+                            setWdFilePath(null); setWdContent(null);
                           }}
-                          accept=".md,.txt,.pdf,.json,.yaml,.yml,.toml,.csv,.ts,.js,.py,.rs,.html,.css"
-                        >
-                          <Button block size="small" icon={<UploadOutlined />} style={{ marginBottom: 8, fontSize: 12 }}>
-                            Upload files
-                          </Button>
-                        </Upload>
-                        {loading ? <Spin size="small" style={{ display: 'block', marginTop: 32, textAlign: 'center' }} /> : (
-                          wsFiles.length === 0 ? <Empty description="No files" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
-                            <List
-                              size="small"
-                              dataSource={wsFiles}
-                              renderItem={(f: any) => (
-                                <div
-                                  key={f.path}
-                                  onClick={() => !f.isDir && loadFileContent(selectedWs!.id, f.path)}
-                                  style={{
-                                    padding: '4px 8px',
-                                    cursor: f.isDir ? 'default' : 'pointer',
-                                    borderRadius: 4,
-                                    background: selectedFilePath === f.path ? '#e6f7ff' : 'transparent',
-                                    fontSize: 12,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 6,
-                                  }}
-                                >
-                                  {f.isDir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileTextOutlined style={{ color: '#1890ff' }} />}
-                                  <Text style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{f.name}</Text>
-                                  {!f.isDir && <Text type="secondary" style={{ fontSize: 10 }}>{formatSize(f.size)}</Text>}
-                                </div>
-                              )}
-                            />
-                          )
-                        )}
+                          options={[
+                            { label: <Space><LaptopOutlined />Working Dir</Space>, value: 'working-dir' },
+                            { label: <Space><CloudOutlined />Workspace ({wsFiles.length})</Space>, value: 'workspace' },
+                          ]}
+                        />
                       </div>
-                      {/* File content viewer */}
-                      <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-                        {fileLoading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                          selectedFilePath && fileContent !== null ? (
-                            <div>
-                              <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
-                                <Text strong>{selectedFilePath.split('/').pop()}</Text>
-                                <Space>
-                                  <Text type="secondary" style={{ fontSize: 11 }}>{selectedFilePath}</Text>
-                                  <a
-                                    href={`/api/cowork/workspaces/${selectedWs!.id}/files/download?path=${encodeURIComponent(selectedFilePath)}`}
-                                    download
-                                  >
-                                    <Button size="small" icon={<DownloadOutlined />} type="link">Download</Button>
-                                  </a>
-                                </Space>
+                      {/* Working Dir browser */}
+                      {resTab === 'working-dir' ? (
+                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                          <div style={{ width: 280, borderRight: '1px solid #f0f0f0', overflowY: 'auto', padding: 8, flexShrink: 0 }}>
+                            {/* Breadcrumb */}
+                            {wdPath ? (
+                              <Flex align="center" gap={4} style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                <Button type="link" size="small" onClick={() => loadWorkingDir(selectedWs!.id)}
+                                  icon={<HomeOutlined />} style={{ padding: 0, fontSize: 11 }} />
+                                {wdPath.split('/').map((seg, i, arr) => {
+                                  const partial = arr.slice(0, i + 1).join('/');
+                                  return (
+                                    <React.Fragment key={partial}>
+                                      <Text type="secondary" style={{ fontSize: 11 }}>/</Text>
+                                      <Button type="link" size="small"
+                                        onClick={() => loadWorkingDir(selectedWs!.id, partial)}
+                                        style={{ padding: 0, fontSize: 11 }}>
+                                        {seg}
+                                      </Button>
+                                    </React.Fragment>
+                                  );
+                                })}
                               </Flex>
-                              <Card style={{ borderRadius: 8 }}>
-                                {selectedFilePath.endsWith('.md') || selectedFilePath.endsWith('.markdown') ? (
-                                  <div
-                                    style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}
-                                    dangerouslySetInnerHTML={{ __html: renderMarkdown(fileContent) }}
-                                  />
-                                ) : (
-                                  <pre style={{
-                                    whiteSpace: 'pre-wrap',
-                                    fontFamily: 'Menlo, Monaco, monospace',
-                                    fontSize: 12,
-                                    lineHeight: 1.5,
-                                    margin: 0,
-                                    padding: 12,
-                                    background: '#f6f8fa',
-                                    borderRadius: 6,
-                                    maxHeight: 'calc(100vh - 320px)',
-                                    overflow: 'auto',
-                                  }}>
-                                    {fileContent}
-                                  </pre>
-                                )}
-                              </Card>
-                            </div>
-                          ) : (
-                            <div style={{ textAlign: 'center', marginTop: 64, color: '#8c8c8c' }}>
-                              <FileTextOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-                              <br />
-                              <Text type="secondary">Select a file to preview</Text>
-                            </div>
-                          )
-                        )}
-                      </div>
+                            ) : (
+                              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
+                                <HomeOutlined /> {selectedWs?.workingDir || '(no working dir)'}
+                              </Text>
+                            )}
+                            {wdLoading ? <Spin size="small" style={{ display: 'block', marginTop: 32, textAlign: 'center' }} /> : (
+                              wdEntries.length === 0 ? (
+                                <Empty description="Empty directory" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                              ) : (
+                                <List
+                                  size="small"
+                                  dataSource={wdEntries}
+                                  renderItem={(e: any) => (
+                                    <div
+                                      key={e.path}
+                                      onClick={() => {
+                                        if (e.isDir) {
+                                          loadWorkingDir(selectedWs!.id, e.path);
+                                        } else {
+                                          loadWorkingDir(selectedWs!.id, e.path);
+                                        }
+                                      }}
+                                      style={{
+                                        padding: '4px 8px', cursor: 'pointer', borderRadius: 4,
+                                        background: wdFilePath === e.path ? '#e6f7ff' : 'transparent',
+                                        fontSize: 12, display: 'flex', alignItems: 'center', gap: 6,
+                                      }}
+                                    >
+                                      {e.isDir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileTextOutlined style={{ color: '#1890ff' }} />}
+                                      <Text style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{e.name}</Text>
+                                      {!e.isDir && <Text type="secondary" style={{ fontSize: 10 }}>{formatSize(e.size)}</Text>}
+                                    </div>
+                                  )}
+                                />
+                              )
+                            )}
+                          </div>
+                          {/* Working dir file content */}
+                          <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+                            {wdLoading && wdFilePath ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
+                              wdFilePath && wdContent !== null ? (
+                                <div>
+                                  <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
+                                    <Text strong>{wdFilePath.split('/').pop()}</Text>
+                                    <Text type="secondary" style={{ fontSize: 11 }}>{wdFilePath}</Text>
+                                  </Flex>
+                                  <Card style={{ borderRadius: 8 }}>
+                                    {wdFilePath.endsWith('.md') || wdFilePath.endsWith('.markdown') ? (
+                                      <div
+                                        style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}
+                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(wdContent) }}
+                                      />
+                                    ) : (
+                                      <pre style={{
+                                        whiteSpace: 'pre-wrap', fontFamily: 'Menlo, Monaco, monospace',
+                                        fontSize: 12, lineHeight: 1.5, margin: 0, padding: 12,
+                                        background: '#f6f8fa', borderRadius: 6,
+                                        maxHeight: 'calc(100vh - 340px)', overflow: 'auto',
+                                      }}>{wdContent}</pre>
+                                    )}
+                                  </Card>
+                                </div>
+                              ) : (
+                                <div style={{ textAlign: 'center', marginTop: 64, color: '#8c8c8c' }}>
+                                  <LaptopOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                                  <br /><Text type="secondary">Select a file to preview</Text>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        /* Workspace file viewer */
+                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                          <div style={{ width: 280, borderRight: '1px solid #f0f0f0', overflowY: 'auto', padding: 8, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+                            {/* Breadcrumb */}
+                            {wsNavPath ? (
+                              <Flex align="center" gap={4} style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                <Button type="link" size="small" onClick={() => setWsNavPath('')}
+                                  icon={<HomeOutlined />} style={{ padding: 0, fontSize: 11 }} />
+                                {wsNavPath.split('/').map((seg, i, arr) => {
+                                  const partial = arr.slice(0, i + 1).join('/');
+                                  return (
+                                    <React.Fragment key={partial}>
+                                      <Text type="secondary" style={{ fontSize: 11 }}>/</Text>
+                                      <Button type="link" size="small"
+                                        onClick={() => setWsNavPath(partial)}
+                                        style={{ padding: 0, fontSize: 11 }}>
+                                        {seg}
+                                      </Button>
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </Flex>
+                            ) : (
+                              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
+                                <HomeOutlined /> shared
+                              </Text>
+                            )}
+                            <Upload
+                              multiple
+                              showUploadList={false}
+                              beforeUpload={file => {
+                                const fd = new FormData();
+                                fd.append('file', file);
+                                fetch(`/api/cowork/workspaces/${selectedWs!.id}/documents`, { method: 'POST', body: fd })
+                                  .then(() => { loadFiles(selectedWs!.id); message.success(`Uploaded ${file.name}`); })
+                                  .catch(() => message.error(`Failed to upload ${file.name}`));
+                                return false;
+                              }}
+                              accept=".md,.txt,.pdf,.json,.yaml,.yml,.toml,.csv,.ts,.js,.py,.rs,.html,.css"
+                            >
+                              <Button block size="small" icon={<UploadOutlined />} style={{ marginBottom: 8, fontSize: 12 }}>
+                                Upload files
+                              </Button>
+                            </Upload>
+                            {loading ? <Spin size="small" style={{ display: 'block', marginTop: 32, textAlign: 'center' }} /> : (
+                              wsFiles.length === 0 ? <Empty description="No files" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
+                                <List
+                                  size="small"
+                                  dataSource={wsEntries}
+                                  renderItem={(f: any) => (
+                                    <div
+                                      key={f.path}
+                                      onClick={() => {
+                                        if (f.isDir) {
+                                          setWsNavPath(f.path);
+                                          setSelectedFilePath(null); setFileContent(null);
+                                        } else {
+                                          loadFileContent(selectedWs!.id, f.path);
+                                        }
+                                      }}
+                                      style={{
+                                        padding: '4px 8px', cursor: 'pointer', borderRadius: 4,
+                                        background: selectedFilePath === f.path ? '#e6f7ff' : 'transparent',
+                                        fontSize: 12, display: 'flex', alignItems: 'center', gap: 6,
+                                      }}
+                                    >
+                                      {f.isDir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileTextOutlined style={{ color: '#1890ff' }} />}
+                                      <Text style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{f.name}</Text>
+                                      {!f.isDir && <Text type="secondary" style={{ fontSize: 10 }}>{formatSize(f.size)}</Text>}
+                                    </div>
+                                  )}
+                                />
+                              )
+                            )}
+                          </div>
+                          <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+                            {fileLoading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
+                              selectedFilePath && fileContent !== null ? (
+                                <div>
+                                  <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
+                                    <Text strong>{selectedFilePath.split('/').pop()}</Text>
+                                    <Space>
+                                      <Text type="secondary" style={{ fontSize: 11 }}>{selectedFilePath}</Text>
+                                      <a href={`/api/cowork/workspaces/${selectedWs!.id}/files/download?path=${encodeURIComponent(selectedFilePath)}`} download>
+                                        <Button size="small" icon={<DownloadOutlined />} type="link">Download</Button>
+                                      </a>
+                                    </Space>
+                                  </Flex>
+                                  <Card style={{ borderRadius: 8 }}>
+                                    {selectedFilePath.endsWith('.md') || selectedFilePath.endsWith('.markdown') ? (
+                                      <div
+                                        style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}
+                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(fileContent) }}
+                                      />
+                                    ) : (
+                                      <pre style={{
+                                        whiteSpace: 'pre-wrap', fontFamily: 'Menlo, Monaco, monospace',
+                                        fontSize: 12, lineHeight: 1.5, margin: 0, padding: 12,
+                                        background: '#f6f8fa', borderRadius: 6,
+                                        maxHeight: 'calc(100vh - 340px)', overflow: 'auto',
+                                      }}>{fileContent}</pre>
+                                    )}
+                                  </Card>
+                                </div>
+                              ) : (
+                                <div style={{ textAlign: 'center', marginTop: 64, color: '#8c8c8c' }}>
+                                  <FileTextOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+                                  <br /><Text type="secondary">Select a file to preview</Text>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ),
                 },

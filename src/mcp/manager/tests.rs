@@ -142,7 +142,7 @@ async fn manager_builtin_servers_listed() {
 
     let mgr = McpManager::new(work, cfg_dir);
     let builtins = mgr.get_builtin_servers();
-    assert_eq!(builtins.len(), 7);
+    assert_eq!(builtins.len(), 8);
     // Each has a name starting with senclaw-
     for s in &builtins {
         assert!(s.name.starts_with("senclaw-"), "unexpected name: {}", s.name);

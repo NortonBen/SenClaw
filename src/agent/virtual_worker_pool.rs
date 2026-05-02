@@ -15,6 +15,7 @@ use anyhow::{bail, Result};
 use serde::Serialize;
 
 use crate::agent::persona_registry::PersonaConfig;
+use crate::zen_core::McpServerConfig;
 
 // ===== Types =====
 
@@ -66,6 +67,7 @@ pub trait VirtualCoreApi: Send + Sync {
         timeout: Duration,
         cancel: Arc<AtomicBool>,
         todos_notify: Option<TodosNotifyFn>,
+        extra_mcp_servers: &[McpServerConfig],
     ) -> Result<String> {
         Err(anyhow::anyhow!("VirtualCoreApi not wired"))
     }
@@ -102,6 +104,8 @@ pub struct VirtualWorkerPool {
     api: Arc<dyn VirtualCoreApi>,
 
     todos_notify: Mutex<Option<TodosNotifyFn>>,
+    /// Extra MCP servers (e.g. browser-mcp) injected into every virtual engine.
+    extra_mcp_servers: Mutex<Vec<McpServerConfig>>,
     /// Permission bridge callback: called to bind a virtual agent core for permission forwarding.
     /// Returns a cleanup function.
     on_bind_permission:
@@ -117,9 +121,15 @@ impl VirtualWorkerPool {
             running_instances: Mutex::new(HashMap::new()),
             api,
             todos_notify: Mutex::new(None),
+            extra_mcp_servers: Mutex::new(Vec::new()),
             on_bind_permission: Mutex::new(None),
             get_skip_perms: Mutex::new(None),
         }
+    }
+
+    /// Set extra MCP servers to inject into every virtual engine (e.g. browser-mcp).
+    pub fn set_extra_mcp_servers(&self, servers: Vec<McpServerConfig>) {
+        *self.extra_mcp_servers.lock().unwrap() = servers;
     }
 
     // ===== Callback setters =====
@@ -351,6 +361,7 @@ impl VirtualWorkerPool {
         let sys_prompt = persona.system_prompt.clone();
         let persona_name = persona.name.clone();
         let task_id_captured = task_id.to_string();
+        let extra_mcp_servers = self.extra_mcp_servers.lock().unwrap().clone();
 
         // Wrap the pool's todos_notify to send with the correct virtual JID
         // and persona name.
@@ -384,6 +395,7 @@ impl VirtualWorkerPool {
                 timeout,
                 cancel,
                 todos_notify,
+                &extra_mcp_servers,
             )
         })
         .await;
@@ -496,6 +508,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         timeout: Duration,
         cancel: Arc<AtomicBool>,
         todos_notify: Option<TodosNotifyFn>,
+        extra_mcp_servers: &[McpServerConfig],
     ) -> Result<String> {
         use crate::zen_core::{
             EngineEvent, SessionState, ZenCore, ZenCoreOptions,
@@ -515,6 +528,22 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
 
         let engine = crate::zen_core::ZenEngine::new(opts, None);
         engine.create_session(None)?;
+
+        // Inject extra MCP servers (e.g. browser-mcp) so virtual agents have browser tools.
+        // Then wait briefly to allow the async spawn tasks to register their tools before
+        // process_user_input queries the tool list.
+        if !extra_mcp_servers.is_empty() {
+            for mcp_cfg in extra_mcp_servers {
+                if let Err(e) = engine.add_or_update_mcp_server(mcp_cfg, "virtual") {
+                    tracing::warn!(
+                        "[VirtualAgent:{instance_id}] Failed to inject MCP server '{}': {e}",
+                        mcp_cfg.name
+                    );
+                }
+            }
+            // Give the tokio::spawn tasks inside add_or_update_mcp_server time to connect.
+            handle.block_on(tokio::time::sleep(std::time::Duration::from_millis(500)));
+        }
 
         let mut rx = engine.event_bus.subscribe();
         engine.process_user_input(prompt, None)?;

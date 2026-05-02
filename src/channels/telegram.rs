@@ -277,7 +277,7 @@ impl Channel for TelegramChannel {
     }
 
     fn owns_jid(&self, chat_jid: &str) -> bool {
-        self.connected.load(Ordering::SeqCst) && chat_jid.starts_with("tg:")
+        chat_jid.starts_with("tg:")
     }
 
     fn on_message(&self, handler: MessageCallback) {

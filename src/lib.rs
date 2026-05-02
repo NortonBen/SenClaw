@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use base64::Engine;
 
 pub mod agent;
+pub mod browser;
 pub mod channels;
 pub mod clawhub;
 pub mod cli;
@@ -91,7 +92,7 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
             gq.enqueue(
                 &jid_key,
                 Box::pin(async move {
-                    let _ = gateway::message_router::AgentApi::process_and_wait(
+                    let _ = types::AgentApi::process_and_wait(
                         agent_pool.as_ref(),
                         &jid,
                         &g,
@@ -979,7 +980,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let message_router = Arc::new(gateway::message_router::MessageRouter::new(
         Arc::clone(&gm),
         Arc::clone(&bm),
-        agent_pool.clone() as Arc<dyn gateway::message_router::AgentApi>,
+        agent_pool.clone() as Arc<dyn types::AgentApi>,
         Arc::clone(&group_queue),
         Arc::clone(&db),
         Arc::new(cfg.clone()),
@@ -1026,7 +1027,18 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             Arc::new(move || pool.get_skip_perms_for_virtual()),
         );
     }
-    tracing::info!("[SenClaw] VirtualWorkerPool ready");
+    // Inject browser MCP server so browser-agent virtual instances have browser tools.
+    // Use zen_core::McpServerConfig (not mcp::helper) since VirtualWorkerPool uses that type.
+    virtual_worker_pool.set_extra_mcp_servers(vec![{
+        let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port);
+        crate::zen_core::McpServerConfig {
+            name: helper_cfg.name,
+            command: helper_cfg.command,
+            args: helper_cfg.args,
+            env: helper_cfg.env,
+        }
+    }]);
+    tracing::info!("[SenClaw] VirtualWorkerPool ready (browser-mcp injected)");
 
     // ===== 6. WebSocketGateway + UIServer =====
     // WS and UI listen on separate ports (matching TS config).
@@ -1038,6 +1050,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             agent_pool: agent_pool.clone(),
         });
 
+        let browser_relay = Arc::new(
+            gateway::websocket_gateway::BrowserRelay::new(),
+        );
+
         let ws_state = Arc::new(gateway::websocket_gateway::WsState {
             config: Arc::new(cfg.clone()),
             db: Arc::clone(&db),
@@ -1047,6 +1063,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             channel_manager: Arc::clone(&cm),
             cowork_manager: Arc::clone(&cowork_mgr),
             api: ws_api,
+            agent_api: Some(agent_pool.clone() as Arc<dyn types::AgentApi>),
+            browser_relay,
         });
 
         let gw = Arc::new(gateway::websocket_gateway::WebSocketGateway::new(
@@ -1112,7 +1130,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         gq.enqueue(
                             &jid_owned,
                             Box::pin(async move {
-                                let _ = gateway::message_router::AgentApi::process_and_wait(
+                                let _ = types::AgentApi::process_and_wait(
                                     pool_inner.as_ref(),
                                     &jid_run,
                                     &binding,
@@ -1251,6 +1269,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             agent_api: Some(Arc::new(RealUiApi {
                 agent_pool: agent_pool.clone(),
             })),
+            cowork_agent_api: Some(agent_pool.clone() as Arc<dyn types::AgentApi>),
             mcp_manager: Some(Arc::clone(&mcp_manager)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),

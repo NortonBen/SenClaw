@@ -9,6 +9,12 @@ export default defineConfig({
     name: 'SenClaw Extension',
     description: 'Remote browser control for SemaClaw agents',
     version: '0.1.0',
+    icons: {
+      '16': 'icon.png',
+      '32': 'icon.png',
+      '48': 'icon.png',
+      '128': 'icon.png',
+    },
     permissions: [
       'tabs',
       'activeTab',

@@ -554,29 +554,64 @@ pub(crate) async fn handle_cowork_message_send(
         );
         return;
     }
+    let content = msg["content"].as_str().unwrap_or("");
     let now = chrono::Utc::now().to_rfc3339();
-    match state.cowork_manager.send_message(
-        &state.db,
-        ws_id,
-        from,
-        msg["toMember"].as_str(),
-        msg["messageType"].as_str().unwrap_or("status"),
-        msg["content"].as_str().unwrap_or(""),
-        msg["taskId"].as_str(),
-        msg["attachments"].as_str(),
-        &now,
-    ) {
-        Ok(cmsg) => {
-            send_json(
-                sender,
-                &serde_json::json!({"type":"cowork:message:sent","workspaceId":ws_id,"message":cmsg}),
-            );
+
+    // If the workspace has members, use process_user_message to decompose and dispatch tasks.
+    // Otherwise fall back to simple send_message.
+    let has_members = state
+        .cowork_manager
+        .list_members(&state.db, ws_id)
+        .map(|m| !m.is_empty())
+        .unwrap_or(false);
+
+    if has_members {
+        let agent_api = state.agent_api.as_ref().map(|api| (Arc::clone(api), Arc::clone(&state.db)));
+        match state.cowork_manager.process_user_message(
+            &state.db, ws_id, from, content, &now, agent_api, Arc::clone(&state.cowork_manager),
+        ) {
+            Ok((cmsg, tasks)) => {
+                send_json(
+                    sender,
+                    &serde_json::json!({
+                        "type": "cowork:message:sent",
+                        "workspaceId": ws_id,
+                        "message": cmsg,
+                        "tasks": tasks,
+                    }),
+                );
+            }
+            Err(e) => {
+                send_json(
+                    sender,
+                    &serde_json::json!({"type":"error","message":e.to_string()}),
+                );
+            }
         }
-        Err(e) => {
-            send_json(
-                sender,
-                &serde_json::json!({"type":"error","message":e.to_string()}),
-            );
+    } else {
+        match state.cowork_manager.send_message(
+            &state.db,
+            ws_id,
+            from,
+            msg["toMember"].as_str(),
+            msg["messageType"].as_str().unwrap_or("status"),
+            content,
+            msg["taskId"].as_str(),
+            msg["attachments"].as_str(),
+            &now,
+        ) {
+            Ok(cmsg) => {
+                send_json(
+                    sender,
+                    &serde_json::json!({"type":"cowork:message:sent","workspaceId":ws_id,"message":cmsg}),
+                );
+            }
+            Err(e) => {
+                send_json(
+                    sender,
+                    &serde_json::json!({"type":"error","message":e.to_string()}),
+                );
+            }
         }
     }
 }

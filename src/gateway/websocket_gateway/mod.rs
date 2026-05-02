@@ -28,6 +28,7 @@
 mod wire;
 mod state;
 mod gateway;
+mod browser;
 mod notify;
 mod connection;
 mod handlers;
@@ -38,5 +39,6 @@ mod helpers;
 mod tests;
 
 // Re-export public API
+pub(crate) use browser::BrowserRelay;
 pub use gateway::{WebSocketGateway, WsGatewayApi};
 pub use state::WsState;

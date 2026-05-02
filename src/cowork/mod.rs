@@ -2,18 +2,20 @@
 //! Workspaces are multi-agent collaborative environments with task boards,
 //! shared knowledge boards, inter-agent messaging, and recording.
 
+pub mod prompt;
+
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use uuid::Uuid;
 
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::{
-    CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkWorkspace,
-    CoworkTemplate, TemplateMember, TemplateBoard, TemplateBoardSection,
+    AgentApi, CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkWorkspace,
+    CoworkTemplate, GroupBinding, TemplateMember, TemplateBoard, TemplateBoardSection,
 };
 
 pub struct CoworkManager {
@@ -45,7 +47,110 @@ impl CoworkManager {
     // Orchestration — message → task decomposition
     // ============================================================
 
-    /// Process a user message in the workspace: save it, create tasks for agents.
+    /// Dispatch a cowork task to a workspace member agent for execution.
+    /// Spawns a background task that calls process_and_wait and updates status.
+    pub fn send_to_cowork_agent(
+        &self,
+        db: Arc<Db>,
+        agent_api: Arc<dyn AgentApi>,
+        workspace_id: &str,
+        task: &CoworkTask,
+        member: &CoworkMember,
+        manager: Arc<CoworkManager>,
+    ) {
+        let task_id = task.id.clone();
+        let member_id = member.member_id.clone();
+        let workspace_id_owned = workspace_id.to_string();
+        let jid = member.jid.clone().unwrap_or_else(|| {
+            format!("cowork:{}:{}", workspace_id, member.member_id)
+        });
+        let folder = member.member_id.clone();
+        let allowed_dirs = member.subdir.clone().map(|d| vec![d]);
+
+        // Resolve context for prompt
+        let workspace = match db.get_cowork_workspace(&workspace_id_owned) {
+            Ok(Some(ws)) => ws,
+            _ => return,
+        };
+        let board = db.get_cowork_board_entries(&workspace_id_owned, None).unwrap_or_default();
+        let all_tasks = db.list_cowork_tasks(&workspace_id_owned, None).unwrap_or_default();
+
+        // Find completed dependency tasks
+        let dependent_results: Vec<CoworkTask> = if let Some(ref deps_json) = task.depends_on {
+            if let Ok(dep_ids) = serde_json::from_str::<Vec<String>>(deps_json) {
+                all_tasks
+                    .into_iter()
+                    .filter(|t| dep_ids.contains(&t.id) && t.status == "done")
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        let prompt = self::prompt::build_cowork_task_prompt(
+            task,
+            member,
+            &workspace,
+            &board,
+            &dependent_results,
+        );
+
+        let group = GroupBinding {
+            jid: jid.clone(),
+            folder: folder.clone(),
+            name: format!("cowork-{member_id}"),
+            channel: "web".to_string(),
+            group_type: "cowork".to_string(),
+            is_admin: false,
+            requires_trigger: false,
+            allowed_tools: None,
+            allowed_paths: None,
+            allowed_work_dirs: allowed_dirs,
+            bot_token: None,
+            max_messages: None,
+            last_active: None,
+            added_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let db_clone = Arc::clone(&db);
+
+        tokio::spawn(async move {
+            // Mark in_progress
+            let now = chrono::Utc::now().to_rfc3339();
+            let _ = db_clone.update_cowork_task(
+                &task_id,
+                None,   // title
+                None,   // description
+                Some("in_progress"),
+                None,   // assignee
+                None,   // reviewer
+                None,   // priority
+                None,   // depends_on
+                None,   // attachments
+                &now,
+            );
+
+            let result = agent_api.process_and_wait(&jid, &group, &prompt).await;
+
+            // Update status based on result
+            let now2 = chrono::Utc::now().to_rfc3339();
+            let new_status = if result.is_ok() { "done" } else { "blocked" };
+            let _ = db_clone.update_cowork_task(
+                &task_id,
+                None, None,
+                Some(new_status),
+                None, None, None, None, None,
+                &now2,
+            );
+
+            manager.fire_changed();
+        });
+    }
+
+    /// Process a user message in the workspace: save it, create tasks for agents,
+    /// and optionally dispatch tasks to agents for execution.
     /// Returns (message, created_tasks).
     pub fn process_user_message(
         &self,
@@ -54,6 +159,8 @@ impl CoworkManager {
         from_user: &str,
         content: &str,
         now: &str,
+        agent_api: Option<(Arc<dyn AgentApi>, Arc<Db>)>,
+        self_arc: Arc<CoworkManager>,
     ) -> Result<(CoworkMessage, Vec<CoworkTask>)> {
         // 1. Save the message
         let msg_id = format!("cwmsg-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
@@ -141,6 +248,23 @@ impl CoworkManager {
                             created_tasks.push(task);
                         }
                     }
+                }
+            }
+        }
+
+        // 5. Dispatch tasks to agents if an agent API is available
+        if let Some((ref api, ref db_arc)) = agent_api {
+            for task in &created_tasks {
+                let assignee_id = task.assignee.as_deref().unwrap_or("");
+                if let Some(member) = members.iter().find(|m| m.member_id == assignee_id) {
+                    self.send_to_cowork_agent(
+                        Arc::clone(db_arc),
+                        Arc::clone(api),
+                        workspace_id,
+                        task,
+                        member,
+                        Arc::clone(&self_arc),
+                    );
                 }
             }
         }

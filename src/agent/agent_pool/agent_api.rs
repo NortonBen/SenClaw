@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::agent::agent_pool::pool::AgentPool;
-use crate::gateway::message_router::AgentApi;
+use crate::types::AgentApi;
 use crate::types::GroupBinding;
 
 #[async_trait]

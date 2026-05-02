@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::gateway::message_router::AgentApi;
+use crate::types::AgentApi;
 
 use super::state::State;
 use super::traits::{AgentEventSink, CachedTools, CoreApi};
@@ -30,8 +30,8 @@ use crate::agent::session_bridge;
 use crate::config::{Config, FeishuConfig};
 use crate::db::Db;
 use crate::mcp::helper::{
-    dispatch_mcp_config, feishu_wiki_mcp_config, memory_mcp_config, schedule_mcp_config,
-    send_mcp_config, workspace_mcp_config, McpServerConfig,
+    browser_mcp_config, dispatch_mcp_config, feishu_wiki_mcp_config, memory_mcp_config,
+    schedule_mcp_config, send_mcp_config, workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -809,6 +809,7 @@ impl AgentPool {
                     ));
                 }
             }
+            mcp_servers.push(browser_mcp_config(cfg.ws_port));
             tracing::info!(
                 "[AgentPool] Preparing {} MCP server(s) for {}: {}",
                 mcp_servers.len(),
