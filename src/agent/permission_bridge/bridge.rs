@@ -1,156 +1,32 @@
-//! Permission bridge — relay sema-core permission requests to inline keyboards / Web UI.
-//! Port target: src-old/agent/PermissionBridge.ts
-//!
-//! Stores pending permission and ask-question requests keyed by request ID (8-char hex).
-//! Routes inline-button callback data back to sema-core via the [`PermissionBridgeApi`] trait.
-//! Web UI can also resolve requests via `resolve_permission` / `resolve_ask_question_batch`.
-//!
-//! Channel-agnostic: callbacks and channel sends go through the API trait so the daemon
-//! wiring connects them to real channel adapters (Telegram, Feishu, etc.).
+//! PermissionBridge — relay sema-core permission requests to inline keyboards / Web UI.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
-use serde::Serialize;
-
 use crate::types::InlineButton;
 
-// ===== Public payload types (mirrors TS PermissionPayload / AskQuestionPayload) =====
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PermissionOption {
-    pub key: String,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PermissionPayload {
-    #[serde(rename = "toolName")]
-    pub tool_name: String,
-    pub title: String,
-    /// Full untruncated content; frontend decides whether to collapse.
-    pub content: String,
-    pub options: Vec<PermissionOption>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AskQuestionOption {
-    pub label: String,
-    #[serde(default)]
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AskQuestionData {
-    pub header: String,
-    pub question: String,
-    pub options: Vec<AskQuestionOption>,
-    #[serde(rename = "multiSelect")]
-    pub multi_select: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AskQuestionPayload {
-    #[serde(rename = "agentId")]
-    pub agent_id: String,
-    pub questions: Vec<AskQuestionData>,
-}
-
-// ===== Internal pending state =====
-
-struct PendingPermission {
-    tool_name: String,
-    chat_jid: String,
-    /// Identifies which group/core to respond to (typically the group JID).
-    group_jid: String,
-}
-
-struct PendingAskQuestion {
-    agent_id: String,
-    chat_jid: String,
-    group_jid: String,
-    questions: Vec<AskQuestionData>,
-    /// Accumulated answers keyed by question text (Telegram step-by-step path).
-    answers: HashMap<String, String>,
-    /// Remaining unanswered count; triggers respond when zero.
-    pending_count: usize,
-}
-
-// ===== Callback data prefix constants =====
-
-const PREFIX_PERM: &str = "P";
-const PREFIX_ASK: &str = "Q";
-
-// ===== API trait (abstracts sema-core + channel dependencies) =====
-
-/// Abstracts the external dependencies of PermissionBridge:
-/// channel message sending, sema-core responding, and web-chat detection.
-///
-/// Default no-op implementations are provided so partial wiring compiles;
-/// the daemon replaces them with real implementations at startup.
-#[allow(unused_variables)]
-pub trait PermissionBridgeApi: Send + Sync {
-    /// Send an inline-keyboard message to a chat.
-    fn send_with_buttons(
-        &self,
-        chat_jid: &str,
-        text: &str,
-        buttons: &[InlineButton],
-        bot_token: Option<&str>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Send a plain text message (fallback when buttons aren't supported).
-    fn send_message(
-        &self,
-        chat_jid: &str,
-        text: &str,
-        bot_token: Option<&str>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Whether the channel for this JID supports inline buttons.
-    fn supports_buttons(&self, _chat_jid: &str) -> bool {
-        false
-    }
-
-    /// Whether this JID is a web-only chat (no backing channel adapter).
-    fn is_web_jid(&self, _chat_jid: &str) -> bool {
-        false
-    }
-
-    /// Route `respondToToolPermission` to the correct sema-core instance.
-    fn respond_to_tool_permission(&self, _group_jid: &str, _tool_name: &str, _selected: &str) {}
-
-    /// Route `respondToAskQuestion` to the correct sema-core instance.
-    fn respond_to_ask_question(
-        &self,
-        _group_jid: &str,
-        _agent_id: &str,
-        _answers: HashMap<String, String>,
-    ) {
-    }
-}
-
-// ===== PermissionBridge =====
+use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
+use super::types::{
+    AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission,
+    PermissionOption, PermissionPayload,
+};
+use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
 pub struct PermissionBridge {
-    pending_permissions: Mutex<HashMap<String, PendingPermission>>,
-    pending_ask_questions: Mutex<HashMap<String, PendingAskQuestion>>,
+    pub(crate) pending_permissions: Mutex<HashMap<String, PendingPermission>>,
+    pub(crate) pending_ask_questions: Mutex<HashMap<String, PendingAskQuestion>>,
     max_content_length: usize,
     api: Arc<dyn PermissionBridgeApi>,
 
     // Callback setters (set once during daemon wiring)
-    on_activity: Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>,
-    on_permission_request: Mutex<Option<Box<dyn Fn(&str, &str, PermissionPayload) + Send + Sync>>>,
-    on_ask_question_request:
+    pub(crate) on_activity: Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>,
+    pub(crate) on_permission_request:
+        Mutex<Option<Box<dyn Fn(&str, &str, PermissionPayload) + Send + Sync>>>,
+    pub(crate) on_ask_question_request:
         Mutex<Option<Box<dyn Fn(&str, &str, AskQuestionPayload) + Send + Sync>>>,
-    on_permission_resolved:
+    pub(crate) on_permission_resolved:
         Mutex<Option<Box<dyn Fn(&str, &str, &str, &str) + Send + Sync>>>,
-    on_ask_question_resolved:
+    pub(crate) on_ask_question_resolved:
         Mutex<Option<Box<dyn Fn(&str, &str, HashMap<String, String>) + Send + Sync>>>,
 }
 
@@ -589,190 +465,5 @@ impl PermissionBridge {
         }
 
         Some(format!("✅ Selected: {question_label}"))
-    }
-}
-
-// ===== Utility functions =====
-
-fn short_id() -> String {
-    use rand::Rng;
-    let bytes: [u8; 4] = rand::thread_rng().gen();
-    hex::encode(bytes) // 8 chars
-}
-
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-    }
-}
-
-/// Format sema-core content into a readable string.
-///
-/// - string → returned as-is
-/// - object with `patch[].lines` (file write/edit diff) → extracted diff lines
-/// - other objects → JSON pretty-printed
-fn format_content(content: &serde_json::Value) -> String {
-    if let Some(s) = content.as_str() {
-        return s.to_string();
-    }
-
-    // Try extracting diff lines from patch structure
-    if let Some(patch) = content.get("patch").and_then(|p| p.as_array()) {
-        let mut lines: Vec<String> = Vec::new();
-        for hunk in patch {
-            if let Some(hunk_lines) = hunk.get("lines").and_then(|l| l.as_array()) {
-                for line in hunk_lines {
-                    if let Some(s) = line.as_str() {
-                        lines.push(s.to_string());
-                    }
-                }
-            }
-        }
-        if !lines.is_empty() {
-            return lines.join("\n");
-        }
-    }
-
-    serde_json::to_string_pretty(content).unwrap_or_default()
-}
-
-/// Truncate content string by max length, showing "...(N chars omitted)" for overflow.
-fn truncate_content(content: &str, max_len: usize) -> String {
-    if content.len() <= max_len {
-        return content.to_string();
-    }
-    let omitted = content.len() - max_len;
-    format!("{}\n...({omitted} chars omitted)", &content[..max_len])
-}
-
-// ===== Tests =====
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    struct StubApi;
-    impl PermissionBridgeApi for StubApi {}
-
-    fn stub_api() -> Arc<dyn PermissionBridgeApi> {
-        Arc::new(StubApi)
-    }
-
-    #[test]
-    fn test_short_id_is_8_hex_chars() {
-        let id = short_id();
-        assert_eq!(id.len(), 8);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn test_capitalize_first() {
-        assert_eq!(capitalize_first("allow"), "Allow");
-        assert_eq!(capitalize_first(""), "");
-        assert_eq!(capitalize_first("a"), "A");
-        assert_eq!(capitalize_first("ABC"), "ABC");
-    }
-
-    #[test]
-    fn test_format_content_string() {
-        let v = serde_json::json!("hello world");
-        assert_eq!(format_content(&v), "hello world");
-    }
-
-    #[test]
-    fn test_format_content_diff_patch() {
-        let v = serde_json::json!({
-            "patch": [
-                {"lines": ["+added line", "-removed line"]},
-                {"lines": [" context line"]}
-            ]
-        });
-        assert_eq!(
-            format_content(&v),
-            "+added line\n-removed line\n context line"
-        );
-    }
-
-    #[test]
-    fn test_format_content_fallback_json() {
-        let v = serde_json::json!({"key": "value", "nested": {"a": 1}});
-        let result = format_content(&v);
-        assert!(result.contains("\"key\""));
-        assert!(result.contains("\"value\""));
-    }
-
-    #[test]
-    fn test_truncate_content_no_truncation() {
-        let s = "short message";
-        assert_eq!(truncate_content(s, 200), s);
-    }
-
-    #[test]
-    fn test_truncate_content_with_overflow() {
-        let s = "x".repeat(250);
-        let result = truncate_content(&s, 200);
-        assert!(result.starts_with(&"x".repeat(200)));
-        assert!(result.contains("50 chars omitted"));
-    }
-
-    #[test]
-    fn test_resolve_permission_not_found() {
-        let bridge = PermissionBridge::new(stub_api(), None);
-        assert!(!bridge.resolve_permission("nonexistent", "allow"));
-    }
-
-    #[test]
-    fn test_resolve_permission_first_responder_wins() {
-        let bridge = PermissionBridge::new(stub_api(), None);
-
-        // Set a permission-request callback to prevent auto-deny path
-        let captured_id = Arc::new(Mutex::new(String::new()));
-        {
-            let captured_id = Arc::clone(&captured_id);
-            bridge.set_permission_request_callback(move |_chat_jid, request_id, _payload| {
-                *captured_id.lock().unwrap() = request_id.to_string();
-            });
-        }
-
-        let options: HashMap<String, String> =
-            [("allow".into(), "Allow".into()), ("refuse".into(), "Refuse".into())]
-                .into();
-        bridge.handle_permission_request(
-            "Bash",
-            "Run command?",
-            &serde_json::json!("rm -rf /"),
-            &options,
-            "group-1",
-            "chat-1",
-            None,
-        );
-
-        let request_id = captured_id.lock().unwrap().clone();
-        assert!(!request_id.is_empty(), "request ID should be captured");
-
-        // First resolution should succeed
-        assert!(bridge.resolve_permission(&request_id, "allow"));
-
-        // Second resolution on same ID should fail (already consumed)
-        assert!(!bridge.resolve_permission(&request_id, "refuse"));
-    }
-
-    #[test]
-    fn test_handle_callback_unknown_prefix() {
-        let bridge = PermissionBridge::new(stub_api(), None);
-        assert_eq!(bridge.handle_callback("X:123:allow", "chat-1"), None);
-    }
-
-    #[test]
-    fn test_resolve_ask_question_batch_not_found() {
-        let bridge = PermissionBridge::new(stub_api(), None);
-        assert!(!bridge.resolve_ask_question_batch(
-            "nonexistent",
-            &serde_json::json!({"0": 0}),
-            None
-        ));
     }
 }

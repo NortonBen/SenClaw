@@ -8,9 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::zen_core::{
-    Tool, ToolContext, ToolOutput, ToolResultMessage,
-};
+use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolResultMessage};
 
 use super::manager::McpManager;
 
@@ -66,12 +64,11 @@ impl Tool for McpBridgeTool {
         false
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let result = self.manager.call_external_tool(&self.full_name, input).await?;
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let result = self
+            .manager
+            .call_external_tool(&self.full_name, input)
+            .await?;
         let summary = match &result {
             Value::String(s) => s.clone(),
             other => serde_json::to_string_pretty(other).unwrap_or_else(|_| format!("{other:?}")),
@@ -82,11 +79,7 @@ impl Tool for McpBridgeTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         let summary = match data {
             Value::String(s) => s.clone(),
             other => serde_json::to_string_pretty(other).unwrap_or_else(|_| format!("{other:?}")),

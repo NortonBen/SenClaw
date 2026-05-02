@@ -18,10 +18,12 @@ use super::core::{AppError, UiState};
 
 /// Helper to get McpManager from state.
 pub(crate) fn mcp_mgr(s: &UiState) -> Result<&McpManager, AppError> {
-    s.mcp_manager
-        .as_ref()
-        .map(|m| m.as_ref())
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "MCP manager not initialized".into()))
+    s.mcp_manager.as_ref().map(|m| m.as_ref()).ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "MCP manager not initialized".into(),
+        )
+    })
 }
 
 // ---- Helpers ----
@@ -29,7 +31,10 @@ pub(crate) fn mcp_mgr(s: &UiState) -> Result<&McpManager, AppError> {
 /// Reject attempts to modify built-in servers.
 fn reject_builtin(name: &str, mgr: &McpManager) -> Result<(), AppError> {
     if mgr.get_builtin_servers().iter().any(|b| b.name == name) {
-        return Err(AppError(StatusCode::FORBIDDEN, format!("{name} is a built-in server")));
+        return Err(AppError(
+            StatusCode::FORBIDDEN,
+            format!("{name} is a built-in server"),
+        ));
     }
     Ok(())
 }
@@ -42,19 +47,23 @@ fn mcp_server_json(info: &McpServerInfo) -> serde_json::Value {
 
 // ---- GET /api/mcp-servers ----
 
-pub(crate) async fn mcp_servers_list(State(s): State<Arc<UiState>>) -> Result<Json<serde_json::Value>, AppError> {
+pub(crate) async fn mcp_servers_list(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = mcp_mgr(&s)?;
     let builtins = mgr.get_builtin_servers();
     let externals = mgr.get_all_servers().await;
     let mut servers: Vec<serde_json::Value> = builtins
         .iter()
-        .map(|b| serde_json::json!({
-            "name": b.name,
-            "transport": b.transport,
-            "description": b.description,
-            "builtin": true,
-            "tools": b.tools,
-        }))
+        .map(|b| {
+            serde_json::json!({
+                "name": b.name,
+                "transport": b.transport,
+                "description": b.description,
+                "builtin": true,
+                "tools": b.tools,
+            })
+        })
         .collect();
     servers.extend(externals.iter().map(mcp_server_json));
     Ok(Json(serde_json::json!({ "servers": servers })))
@@ -79,7 +88,10 @@ pub(crate) async fn mcp_servers_get(
     }
     let info = mgr.get_server_info(&name).await;
     if info.error.as_deref() == Some("server not found") {
-        return Err(AppError(StatusCode::NOT_FOUND, format!("server {name} not found")));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            format!("server {name} not found"),
+        ));
     }
     Ok(Json(mcp_server_json(&info)))
 }
@@ -107,7 +119,9 @@ pub(crate) struct McpServerBody {
     scope: Option<String>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 pub(crate) async fn mcp_servers_save(
     State(s): State<Arc<UiState>>,
@@ -118,7 +132,12 @@ pub(crate) async fn mcp_servers_save(
         "stdio" => McpTransportType::Stdio,
         "sse" => McpTransportType::Sse,
         "http" => McpTransportType::Http,
-        _ => return Err(AppError(StatusCode::BAD_REQUEST, "invalid transport type".into())),
+        _ => {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "invalid transport type".into(),
+            ))
+        }
     };
     let scope = match body.scope.as_deref() {
         Some("project") => McpScopeType::Project,
@@ -144,7 +163,9 @@ pub(crate) async fn mcp_servers_save(
 
     reject_builtin(&cfg.name, mgr)?;
 
-    let info = mgr.add_or_update(cfg, scope).await
+    let info = mgr
+        .add_or_update(cfg, scope)
+        .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(mcp_server_json(&info)))
 }
@@ -167,10 +188,15 @@ pub(crate) async fn mcp_servers_delete(
         Some("project") => McpScopeType::Project,
         _ => McpScopeType::User,
     };
-    let existed = mgr.remove(&name, scope).await
+    let existed = mgr
+        .remove(&name, scope)
+        .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if !existed {
-        return Err(AppError(StatusCode::NOT_FOUND, format!("server {name} not found")));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            format!("server {name} not found"),
+        ));
     }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -205,7 +231,8 @@ pub(crate) async fn mcp_servers_disconnect(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = mcp_mgr(&s)?;
     reject_builtin(&name, mgr)?;
-    mgr.disconnect_server(&name).await
+    mgr.disconnect_server(&name)
+        .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -230,10 +257,15 @@ pub(crate) async fn mcp_servers_tools(
         Some("project") => McpScopeType::Project,
         _ => McpScopeType::User,
     };
-    let found = mgr.update_use_tools(&name, scope, body.tool_names).await
+    let found = mgr
+        .update_use_tools(&name, scope, body.tool_names)
+        .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if !found {
-        return Err(AppError(StatusCode::NOT_FOUND, format!("server {name} not found")));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            format!("server {name} not found"),
+        ));
     }
     let info = mgr.get_server_info(&name).await;
     Ok(Json(mcp_server_json(&info)))
@@ -258,10 +290,15 @@ pub(crate) async fn mcp_servers_enabled(
         Some("project") => McpScopeType::Project,
         _ => McpScopeType::User,
     };
-    let found = mgr.update_enabled(&name, scope, body.enabled).await
+    let found = mgr
+        .update_enabled(&name, scope, body.enabled)
+        .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if !found {
-        return Err(AppError(StatusCode::NOT_FOUND, format!("server {name} not found")));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            format!("server {name} not found"),
+        ));
     }
     let info = mgr.get_server_info(&name).await;
     Ok(Json(mcp_server_json(&info)))
@@ -269,14 +306,15 @@ pub(crate) async fn mcp_servers_enabled(
 
 // ===== /api/hooks =====
 
-pub(crate) async fn hooks_get(State(s): State<Arc<UiState>>) -> Result<Json<serde_json::Value>, AppError> {
+pub(crate) async fn hooks_get(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
     let path = &s.config.paths.hooks_path;
     if path.exists() {
         let raw = fs::read_to_string(path)
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let json: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
-            serde_json::json!({ "hooks": {} })
-        });
+        let json: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({ "hooks": {} }));
         Ok(Json(json))
     } else {
         Ok(Json(serde_json::json!({ "hooks": {} })))
@@ -292,12 +330,20 @@ pub(crate) async fn hooks_put(
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid JSON: {e}")))?;
     match &json {
         serde_json::Value::Object(map) if map.contains_key("hooks") => {}
-        _ => return Err(AppError(StatusCode::BAD_REQUEST, "Root object must have a \"hooks\" key".into())),
+        _ => {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "Root object must have a \"hooks\" key".into(),
+            ))
+        }
     }
     // Validate hooks is an object
     if let Some(hooks) = json.get("hooks") {
         if !hooks.is_object() {
-            return Err(AppError(StatusCode::BAD_REQUEST, "\"hooks\" must be a plain object".into()));
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "\"hooks\" must be a plain object".into(),
+            ));
         }
     }
     let path = &s.config.paths.hooks_path;
