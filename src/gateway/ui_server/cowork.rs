@@ -230,11 +230,11 @@ pub(crate) async fn cowork_ws_update(
 pub(crate) async fn cowork_ws_delete(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = cowork_mgr(&s)?;
     let db = cowork_db(&s)?;
     mgr.delete_workspace(db, &id).map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ===== Cowork Members =====
@@ -308,11 +308,11 @@ pub(crate) async fn cowork_members_update(
 pub(crate) async fn cowork_members_remove(
     State(s): State<Arc<UiState>>,
     AxumPath((ws_id, member_id)): AxumPath<(String, String)>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = cowork_mgr(&s)?;
     let db = cowork_db(&s)?;
     mgr.remove_member(db, &ws_id, &member_id).map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ===== Cowork Board =====
@@ -444,11 +444,11 @@ pub(crate) async fn cowork_tasks_update(
 pub(crate) async fn cowork_tasks_delete(
     State(s): State<Arc<UiState>>,
     AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = cowork_mgr(&s)?;
     let db = cowork_db(&s)?;
     mgr.delete_task(db, &task_id).map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ===== Cowork Task Comments =====

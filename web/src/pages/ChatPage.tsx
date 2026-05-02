@@ -4,13 +4,12 @@ import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
 import { AgentSidebar } from '../components/AgentSidebar';
 import { ChatView } from '../components/ChatView';
-import { AgentConsole } from '../components/AgentConsole';
 
 const { Content } = Layout;
 
 export function ChatPage() {
   const { ws } = useAppContext();
-  const { dispatchParents, subscribeAll, agentTodos } = ws;
+  const { dispatchParents, subscribeAll } = ws;
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
 
   useEffect(() => {
@@ -75,14 +74,6 @@ export function ChatPage() {
               </div>
             )}
           </main>
-          <AgentConsole
-            dispatchParents={dispatchParents}
-            agentTodos={agentTodos}
-            messages={ws.messages}
-            groups={ws.groups}
-            agentStates={ws.agentStates}
-            resolvePermission={ws.resolvePermission}
-          />
         </Content>
       </Layout>
     </AppLayout>

@@ -4,6 +4,7 @@
 
 pub mod prompt;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use uuid::Uuid;
 
+use crate::agent::dispatch_bridge::{
+    DispatchBridge, DispatchTask, DispatchTaskStatus,
+};
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::{
@@ -20,12 +24,18 @@ use crate::types::{
 
 pub struct CoworkManager {
     on_changed: Mutex<Option<Box<dyn Fn() + Send + 'static>>>,
+    /// Optional dispatch bridge for DAG-based task orchestration.
+    dispatch_bridge: Mutex<Option<Arc<DispatchBridge>>>,
+    /// Maps DispatchTask IDs → (CoworkTask ID, workspace ID) for status sync.
+    dispatch_task_map: Mutex<HashMap<String, (String, String)>>,
 }
 
 impl CoworkManager {
     pub fn new() -> Self {
         Self {
             on_changed: Mutex::new(None),
+            dispatch_bridge: Mutex::new(None),
+            dispatch_task_map: Mutex::new(HashMap::new()),
         }
     }
 
@@ -35,12 +45,71 @@ impl CoworkManager {
         }
     }
 
+    /// Inject the dispatch bridge for DAG-based task orchestration.
+    /// When set, `process_user_message` routes tasks through the dispatch
+    /// bridge instead of calling `send_to_cowork_agent` directly.
+    pub fn set_dispatch_bridge(&self, bridge: Arc<DispatchBridge>) {
+        *self.dispatch_bridge.lock().unwrap() = Some(bridge);
+        self.fire_changed();
+    }
+
+    /// Get the dispatch bridge if set.
+    pub fn get_dispatch_bridge(&self) -> Option<Arc<DispatchBridge>> {
+        self.dispatch_bridge.lock().unwrap().clone()
+    }
+
     fn fire_changed(&self) {
         if let Ok(guard) = self.on_changed.lock() {
             if let Some(ref cb) = *guard {
                 cb();
             }
         }
+    }
+
+    // ============================================================
+    // Dispatch lifecycle — keep CoworkTask ↔ DispatchTask in sync
+    // ============================================================
+
+    /// Called when a dispatch task transitions status. Updates the corresponding
+    /// CoworkTask status and fires cowork:changed.
+    pub fn on_dispatch_task_lifecycle(
+        &self,
+        db: &Db,
+        dispatch_task_id: &str,
+        new_status: &str,
+        _task_label: &str,
+        _parent_goal: &str,
+    ) {
+        let map = self.dispatch_task_map.lock().unwrap();
+        let Some((cowork_task_id, _workspace_id)) = map.get(dispatch_task_id) else {
+            return;
+        };
+        let cowork_task_id = cowork_task_id.clone();
+        drop(map);
+
+        let cowork_status = match new_status {
+            "processing" => "in_progress",
+            "done" => "done",
+            "error" | "timeout" => "blocked",
+            _ => return,
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = db.update_cowork_task(
+            &cowork_task_id,
+            None, None, Some(cowork_status),
+            None, None, None, None, None,
+            &now,
+        ) {
+            tracing::warn!(
+                "[Cowork] Failed to update task {cowork_task_id} → {cowork_status}: {e}"
+            );
+        } else {
+            tracing::info!(
+                "[Cowork] Task {cowork_task_id} → {cowork_status} (dispatch: {dispatch_task_id})"
+            );
+        }
+
+        self.fire_changed();
     }
 
     // ============================================================
@@ -66,6 +135,11 @@ impl CoworkManager {
         });
         let folder = member.member_id.clone();
         let allowed_dirs = member.subdir.clone().map(|d| vec![d]);
+
+        tracing::info!(
+            "[Cowork] Dispatching task {} to agent {} (jid={})",
+            task_id, member_id, jid
+        );
 
         // Resolve context for prompt
         let workspace = match db.get_cowork_workspace(&workspace_id_owned) {
@@ -114,6 +188,7 @@ impl CoworkManager {
             added_at: chrono::Utc::now().to_rfc3339(),
         };
 
+        let task_title = task.title.clone();
         let db_clone = Arc::clone(&db);
 
         tokio::spawn(async move {
@@ -132,11 +207,33 @@ impl CoworkManager {
                 &now,
             );
 
+            // Insert a status message
+            let dispatch_msg_id = format!("cwmsg-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+            let _ = db_clone.insert_cowork_message(&CoworkMessage {
+                id: dispatch_msg_id,
+                workspace_id: workspace_id_owned.clone(),
+                from_member: "system".into(),
+                to_member: Some(member_id.clone()),
+                message_type: "status".into(),
+                content: format!("Dispatched task to {member_id}"),
+                attachments: None,
+                task_id: Some(task_id.clone()),
+                is_read: false,
+                created_at: now.clone(),
+            });
+
+            tracing::info!(
+                "[Cowork] Task {task_id} → in_progress, calling process_and_wait for {jid}"
+            );
             let result = agent_api.process_and_wait(&jid, &group, &prompt).await;
 
             // Update status based on result
             let now2 = chrono::Utc::now().to_rfc3339();
             let new_status = if result.is_ok() { "done" } else { "blocked" };
+            tracing::info!(
+                "[Cowork] Task {task_id} → {new_status} (process_and_wait: {:?})",
+                result.is_ok()
+            );
             let _ = db_clone.update_cowork_task(
                 &task_id,
                 None, None,
@@ -144,6 +241,26 @@ impl CoworkManager {
                 None, None, None, None, None,
                 &now2,
             );
+
+            // Insert a completion message
+            let done_msg_id = format!("cwmsg-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+            let content = if new_status == "done" {
+                format!("{member_id} completed task: {task_title}")
+            } else {
+                format!("{member_id} blocked on task: {task_title}")
+            };
+            let _ = db_clone.insert_cowork_message(&CoworkMessage {
+                id: done_msg_id,
+                workspace_id: workspace_id_owned.clone(),
+                from_member: member_id.clone(),
+                to_member: Some("user".into()),
+                message_type: if new_status == "done" { "result".into() } else { "alert".into() },
+                content,
+                attachments: None,
+                task_id: Some(task_id.clone()),
+                is_read: false,
+                created_at: now2.clone(),
+            });
 
             manager.fire_changed();
         });
@@ -222,13 +339,24 @@ impl CoworkManager {
                         let trigger_type = trigger["type"].as_str().unwrap_or("");
                         let should_fire = match trigger_type {
                             "message_received" => {
-                                // Check if from matches
                                 let from_filter = trigger["from"].as_str();
                                 from_filter.map_or(true, |f| f == from_user)
                             }
                             "on_mention" => {
                                 let from_filter = trigger["from"].as_str();
                                 from_filter.map_or(false, |f| f == from_user)
+                            }
+                            "task_assigned" => {
+                                // Fire when a task is being assigned to this member
+                                // (this member is the assignee of a newly created task)
+                                true
+                            }
+                            "task_status_changed" => {
+                                // Fire when task status changes (e.g. lead → worker handoff)
+                                let status_filter = trigger["status"].as_str();
+                                status_filter.map_or(true, |s| {
+                                    s == "in_progress" || s == "review" || s == "done"
+                                })
                             }
                             _ => false,
                         };
@@ -252,8 +380,148 @@ impl CoworkManager {
             }
         }
 
-        // 5. Dispatch tasks to agents if an agent API is available
-        if let Some((ref api, ref db_arc)) = agent_api {
+        // 5. Dispatch tasks — prefer DAG dispatch bridge when available;
+        //    fall back to direct process_and_wait per-task dispatch.
+        let dag_bridge = self.dispatch_bridge.lock().unwrap().clone();
+        if let Some(ref bridge) = dag_bridge {
+            // DAG path: convert CoworkTasks → DispatchTasks, enqueue as parent.
+            let workspace = match db.get_cowork_workspace(workspace_id) {
+                Ok(Some(ws)) => ws,
+                _ => {
+                    self.fire_changed();
+                    return Ok((msg, created_tasks));
+                }
+            };
+            let board = db.get_cowork_board_entries(workspace_id, None).unwrap_or_default();
+
+            let dispatch_tasks: Vec<DispatchTask> = created_tasks
+                .iter()
+                .map(|task| {
+                    let assignee_id = task.assignee.as_deref().unwrap_or("");
+                    let member = members.iter().find(|m| m.member_id == assignee_id);
+                    let agent_id = assignee_id.to_string();
+                    let agent_jid = member
+                        .and_then(|m| m.jid.clone())
+                        .unwrap_or_else(|| format!("cowork:{}:{}", workspace_id, agent_id));
+
+                    // Resolve depends_on: CoworkTask IDs → DispatchTask labels (task titles)
+                    let depends_on: Vec<String> = task
+                        .depends_on
+                        .as_ref()
+                        .and_then(|d| serde_json::from_str::<Vec<String>>(d).ok())
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|dep_id| {
+                            created_tasks
+                                .iter()
+                                .find(|t| t.id == *dep_id)
+                                .map(|t| t.title.clone())
+                        })
+                        .collect();
+
+                    // Build cowork-aware prompt
+                    let deps: Vec<CoworkTask> = created_tasks
+                        .iter()
+                        .filter(|t| {
+                            task.depends_on
+                                .as_ref()
+                                .and_then(|d| serde_json::from_str::<Vec<String>>(d).ok())
+                                .map(|ids| ids.contains(&t.id))
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect();
+
+                    let prompt = self::prompt::build_cowork_task_prompt(
+                        task,
+                        member.unwrap_or(&CoworkMember {
+                            workspace_id: workspace_id.to_string(),
+                            member_id: agent_id.clone(),
+                            role: "worker".into(),
+                            jid: Some(agent_jid.clone()),
+                            subdir: None,
+                            persona: None,
+                            responsibilities: None,
+                            triggers: None,
+                            handoff_rules: None,
+                            acceptance_criteria: None,
+                            output_format: None,
+                            sla: None,
+                            limits: None,
+                            joined_at: String::new(),
+                            updated_at: String::new(),
+                        }),
+                        &workspace,
+                        &board,
+                        &deps,
+                    );
+
+                    // Infer timeout from member SLA
+                    let timeout_seconds: u64 = member
+                        .and_then(|m| m.sla.as_ref())
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .and_then(|v| v.get("maxDurationPerTaskMinutes").and_then(|t| t.as_i64()))
+                        .map(|mins| (mins * 60) as u64)
+                        .unwrap_or(1800); // default 30 min
+
+                    DispatchTask {
+                        id: String::new(), // filled by enqueue_parent
+                        label: task.title.clone(),
+                        agent_id,
+                        agent_jid,
+                        depends_on,
+                        prompt,
+                        status: DispatchTaskStatus::Registered,
+                        result: None,
+                        created_at: String::new(), // filled by enqueue_parent
+                        started_at: None,
+                        timeout_seconds,
+                        timeout_at: None,
+                        completed_at: None,
+                        is_virtual: false,
+                        persona_name: None,
+                    }
+                })
+                .collect();
+
+            let goal = content.to_string();
+            let admin_folder = members
+                .iter()
+                .find(|m| m.role == "lead")
+                .or_else(|| members.first())
+                .map(|m| m.member_id.clone())
+                .unwrap_or_else(|| "cowork".into());
+
+            match bridge.enqueue_parent(
+                goal,
+                admin_folder,
+                Some(workspace.root_dir.clone()),
+                dispatch_tasks,
+            ) {
+                Ok((parent_id, task_ids)) => {
+                    tracing::info!(
+                        "[Cowork] Enqueued DAG parent {parent_id} with {} task(s)",
+                        task_ids.len()
+                    );
+                    // Store dispatch_task_id → cowork_task_id mapping for status sync.
+                    {
+                        let mut map = self.dispatch_task_map.lock().unwrap();
+                        for (i, dispatch_id) in task_ids.iter().enumerate() {
+                            if let Some(cowork_task) = created_tasks.get(i) {
+                                map.insert(
+                                    dispatch_id.clone(),
+                                    (cowork_task.id.clone(), workspace_id.to_string()),
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("[Cowork] Failed to enqueue DAG parent: {e}");
+                }
+            }
+        } else if let Some((ref api, ref db_arc)) = agent_api {
+            // Fallback: direct process_and_wait per-task dispatch (no DAG).
             for task in &created_tasks {
                 let assignee_id = task.assignee.as_deref().unwrap_or("");
                 if let Some(member) = members.iter().find(|m| m.member_id == assignee_id) {
@@ -342,7 +610,27 @@ impl CoworkManager {
     }
 
     pub fn delete_workspace(&self, db: &Db, id: &str) -> Result<()> {
+        // Fetch workspace first to get root_dir before deleting the DB record
+        let root_dir = db
+            .get_cowork_workspace(id)?
+            .map(|ws| ws.root_dir);
+
         db.delete_cowork_workspace(id)?;
+
+        // Remove the workspace folder from disk
+        if let Some(dir) = root_dir {
+            let path = PathBuf::from(&dir);
+            if path.exists() {
+                if let Err(e) = fs::remove_dir_all(&path) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to remove workspace directory during delete",
+                    );
+                }
+            }
+        }
+
         self.fire_changed();
         Ok(())
     }

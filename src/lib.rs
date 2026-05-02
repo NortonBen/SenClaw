@@ -1097,6 +1097,34 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             }));
         }
 
+        // Wire CoworkManager → WebSocket gateway. Every mutation fires
+        // a cowork:changed event so the Cowork UI auto-refreshes.
+        {
+            let gw_for_cowork = Arc::clone(&gw);
+            cowork_mgr.set_on_changed(Box::new(move || {
+                let gw = Arc::clone(&gw_for_cowork);
+                tokio::spawn(async move {
+                    gw.broadcast_to_all(&serde_json::json!({
+                        "type": "cowork:changed",
+                    })).await;
+                });
+            }));
+        }
+
+        // Wire DispatchBridge → CoworkManager. Routes cowork tasks through the
+        // DAG dispatch system instead of direct process_and_wait. A lifecycle
+        // callback keeps CoworkTask status in sync with DispatchTask transitions.
+        cowork_mgr.set_dispatch_bridge(Arc::clone(&dispatch_bridge));
+        {
+            let mgr = Arc::clone(&cowork_mgr);
+            let db = Arc::clone(&db);
+            dispatch_bridge.set_task_lifecycle_callback(Arc::new(
+                move |task_id: &str, status: &str, label: &str, goal: &str| {
+                    mgr.on_dispatch_task_lifecycle(&db, task_id, status, label, goal);
+                },
+            ));
+        }
+
         // Wire DispatchBridge → AgentPool. The scheduler hands off augmented
         // prompts to sub-agents via GroupQueue + process_and_wait, mirroring
         // the inbound message path. Workspace overrides are applied before

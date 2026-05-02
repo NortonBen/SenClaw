@@ -24,7 +24,10 @@ pub mod types;
 mod tests;
 
 // Re-export all public types for external users.
-pub use bridge::{DispatchBridge, RevertWorkspaceCallback, SendToAgentCallback, WsNotifyCallback};
+pub use bridge::{
+    DispatchBridge, RevertWorkspaceCallback, SendToAgentCallback, TaskLifecycleCallback,
+    WsNotifyCallback,
+};
 pub use dag::is_ready;
 pub use resume::build_dispatch_resume_hint;
 pub use traits::{DispatchBridgeApi, NoopDispatchBridge};

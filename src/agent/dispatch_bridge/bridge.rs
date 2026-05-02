@@ -33,6 +33,11 @@ pub type SendToAgentCallback =
 /// so the sub-agent can be restored to its own working directory.
 pub type RevertWorkspaceCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Callback invoked when a dispatch task changes status. Arguments:
+/// `(task_id, new_status, task_label, parent_goal)` — used by CoworkManager
+/// to keep CoworkTask status in sync with DispatchTask lifecycle.
+pub type TaskLifecycleCallback = Arc<dyn Fn(&str, &str, &str, &str) + Send + Sync>;
+
 /// Polling cadence for the scheduler tick (timeouts + ready-task launch).
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 /// Cleanup cadence — drops `done` parents older than [`CLEANUP_RETENTION`].
@@ -64,6 +69,9 @@ pub struct DispatchBridge {
     persona_registry: Mutex<Option<Arc<Mutex<PersonaRegistry>>>>,
     /// Virtual worker pool — required for virtual-agent dispatch (Phase 5).
     pub(super) virtual_worker_pool: Mutex<Option<Arc<VirtualWorkerPool>>>,
+    /// Optional callback fired on every task status transition (start/done/error/timeout).
+    /// Used by CoworkManager to keep CoworkTask ↔ DispatchTask status in sync.
+    on_task_lifecycle: Mutex<Option<TaskLifecycleCallback>>,
     /// Self-reference populated in `start()` so spawned futures can call back
     /// into the bridge for `notify_task_done` / `notify_task_error`.
     self_weak: Mutex<Option<Weak<Self>>>,
@@ -104,6 +112,7 @@ impl DispatchBridge {
             revert_workspace: Mutex::new(None),
             persona_registry: Mutex::new(None),
             virtual_worker_pool: Mutex::new(None),
+            on_task_lifecycle: Mutex::new(None),
             self_weak: Mutex::new(None),
             last_notified_parents_json: Mutex::new(String::new()),
         }
@@ -138,6 +147,68 @@ impl DispatchBridge {
     /// task on a sub-agent finishes.
     pub fn set_revert_workspace(&self, cb: RevertWorkspaceCallback) {
         *self.revert_workspace.lock().unwrap() = Some(cb);
+    }
+
+    /// Inject a callback fired on every task status transition (start/done/error/timeout).
+    /// Used by CoworkManager to keep CoworkTask ↔ DispatchTask status in sync.
+    pub fn set_task_lifecycle_callback(&self, cb: TaskLifecycleCallback) {
+        *self.on_task_lifecycle.lock().unwrap() = Some(cb);
+    }
+
+    fn fire_task_lifecycle(&self, task_id: &str, status: &str, label: &str, parent_goal: &str) {
+        if let Some(cb) = self.on_task_lifecycle.lock().unwrap().as_ref() {
+            cb(task_id, status, label, parent_goal);
+        }
+    }
+
+    /// Enqueue a new parent dispatch into the bridge state. Generates `p-*` and
+    /// `d-*` IDs from the monotonic sequence. Returns `(parent_id, task_ids)`.
+    /// All tasks start as `registered` and the parent starts as `queued`.
+    pub fn enqueue_parent(
+        &self,
+        goal: String,
+        admin_folder: String,
+        shared_workspace: Option<String>,
+        tasks: Vec<DispatchTask>,
+    ) -> std::io::Result<(String, Vec<String>)> {
+        let admin_folder_display = admin_folder.clone(); // clone before move into closure
+        let mut parent_id = String::new();
+        let mut task_ids: Vec<String> = Vec::new();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.modify_state(|state| {
+            state.seq += 1;
+            parent_id = format!("p-{}", state.seq);
+            let mut resolved_tasks = Vec::with_capacity(tasks.len());
+            for mut t in tasks {
+                state.seq += 1;
+                let tid = format!("d-{}", state.seq);
+                t.id = tid.clone();
+                t.created_at = now.clone();
+                task_ids.push(tid);
+                resolved_tasks.push(t);
+            }
+            let parent = DispatchParent {
+                id: parent_id.clone(),
+                goal,
+                admin_folder,
+                shared_workspace,
+                status: "queued".into(),
+                created_at: now,
+                completed_at: None,
+                tasks: resolved_tasks,
+            };
+            state.parents.push(parent);
+        })?;
+        // After adding a queued parent, try to activate it immediately if the
+        // admin has no other active parent.
+        if !parent_id.is_empty() {
+            self.activate_next_queued(&admin_folder_display);
+        }
+        tracing::info!(
+            "[DispatchBridge] Enqueued parent {parent_id} with {} task(s) → admin: {admin_folder_display}",
+            task_ids.len()
+        );
+        Ok((parent_id, task_ids))
     }
 
     /// Boot-time recovery + heartbeat startup. Mirrors TS `start()`:
@@ -313,6 +384,8 @@ impl DispatchBridge {
         let now = chrono::Utc::now().to_rfc3339();
         let mut task_admin: Option<String> = None;
         let mut completed_admin: Option<String> = None;
+        let mut task_label = String::new();
+        let mut parent_goal = String::new();
         let _ = self.modify_state(|state| {
             for parent in &mut state.parents {
                 if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
@@ -320,6 +393,8 @@ impl DispatchBridge {
                         return;
                     }
                     task_admin = Some(parent.admin_folder.clone());
+                    task_label = task.label.clone();
+                    parent_goal = parent.goal.clone();
                     task.status = DispatchTaskStatus::Done;
                     task.result = Some(text.to_string());
                     task.completed_at = Some(now.clone());
@@ -332,6 +407,7 @@ impl DispatchBridge {
                 }
             }
         });
+        self.fire_task_lifecycle(task_id, "done", &task_label, &parent_goal);
         tracing::info!(
             "[DispatchBridge] Task {task_id} done{}",
             if let Some(j) = &jid {
@@ -361,6 +437,8 @@ impl DispatchBridge {
         let now = chrono::Utc::now().to_rfc3339();
         let mut task_admin: Option<String> = None;
         let mut completed_admin: Option<String> = None;
+        let mut task_label = String::new();
+        let mut parent_goal = String::new();
         let _ = self.modify_state(|state| {
             for parent in &mut state.parents {
                 if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
@@ -368,6 +446,8 @@ impl DispatchBridge {
                         return;
                     }
                     task_admin = Some(parent.admin_folder.clone());
+                    task_label = task.label.clone();
+                    parent_goal = parent.goal.clone();
                     task.status = DispatchTaskStatus::Error;
                     task.result = Some(error_message.to_string());
                     task.completed_at = Some(now.clone());
@@ -380,6 +460,7 @@ impl DispatchBridge {
                 }
             }
         });
+        self.fire_task_lifecycle(task_id, "error", &task_label, &parent_goal);
         tracing::warn!(
             "[DispatchBridge] Task {task_id} error{}: {error_message}",
             if let Some(j) = &jid {
@@ -643,6 +724,8 @@ impl DispatchBridge {
         .to_rfc3339();
 
         let task_id = task.id.clone();
+        let task_label = task.label.clone();
+        let parent_goal = parent.goal.clone();
         let started_clone = started_at_iso.clone();
         let timeout_clone = timeout_at_iso.clone();
         let _ = self.modify_state(|state| {
@@ -654,6 +737,7 @@ impl DispatchBridge {
                 }
             }
         });
+        self.fire_task_lifecycle(&task_id, "processing", &task_label, &parent_goal);
 
         let target = if task.is_virtual {
             format!("persona:{}", task.persona_name.as_deref().unwrap_or(""))
@@ -757,9 +841,13 @@ impl DispatchBridge {
     fn mark_task_timeout(&self, task_id: &str, jid: &str) {
         let now = chrono::Utc::now().to_rfc3339();
         let mut completed_admin: Option<String> = None;
+        let mut task_label = String::new();
+        let mut parent_goal = String::new();
         let _ = self.modify_state(|state| {
             for parent in &mut state.parents {
                 if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task_label = task.label.clone();
+                    parent_goal = parent.goal.clone();
                     task.status = DispatchTaskStatus::Timeout;
                     task.completed_at = Some(now.clone());
                     if parent.tasks.iter().all(|t| t.status.is_terminal()) {
@@ -771,6 +859,7 @@ impl DispatchBridge {
                 }
             }
         });
+        self.fire_task_lifecycle(task_id, "timeout", &task_label, &parent_goal);
         self.remove_active_task(task_id);
         tracing::warn!("[DispatchBridge] Task {task_id} timed out");
         if let Some(folder) = completed_admin {
