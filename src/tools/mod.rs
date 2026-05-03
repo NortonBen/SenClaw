@@ -12,6 +12,7 @@ pub mod notebook_edit;
 pub mod read;
 pub mod skill;
 pub mod task;
+pub mod time;
 pub mod todo_write;
 pub mod write;
 
@@ -29,6 +30,7 @@ pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;
 pub use skill::SkillTool;
 pub use task::{AgentConfig, TaskTool};
+pub use time::TimeTool;
 pub use todo_write::TodoWriteTool;
 pub use write::WriteTool;
 
@@ -46,5 +48,6 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(WriteTool),
         Arc::new(EditTool),
         Arc::new(NotebookEditTool),
+        Arc::new(TimeTool),
     ]
 }
