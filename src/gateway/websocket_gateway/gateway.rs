@@ -75,6 +75,9 @@ pub struct WebSocketGateway {
     pub(crate) token: Option<String>,
     pub(crate) clients: Arc<Mutex<Vec<super::state::WsClient>>>,
     pub(crate) last_known_states: Arc<Mutex<HashMap<String, String>>>,
+    /// Pending permission:request messages keyed by requestId.
+    /// Stored so they can be replayed as a snapshot when an admin client (re)connects.
+    pub(crate) pending_permissions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
 impl WebSocketGateway {
@@ -84,6 +87,7 @@ impl WebSocketGateway {
             token,
             clients: Arc::new(Mutex::new(Vec::new())),
             last_known_states: Arc::new(Mutex::new(HashMap::new())),
+            pending_permissions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -92,21 +96,31 @@ impl WebSocketGateway {
     pub fn route(&self, state: Arc<super::state::WsState>) -> axum::Router {
         let clients = self.clients.clone();
         let states = self.last_known_states.clone();
+        let pending_perms = self.pending_permissions.clone();
         let token = self.token.clone();
 
         let main_route = {
             let clients = clients.clone();
             let states = states.clone();
+            let pending_perms = pending_perms.clone();
             let token = token.clone();
             let state = state.clone();
             axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| {
                 let clients = clients.clone();
                 let states = states.clone();
+                let pending_perms = pending_perms.clone();
                 let token = token.clone();
                 let state = state.clone();
                 async move {
                     ws.on_upgrade(move |socket| {
-                        super::connection::handle_connection(socket, clients, states, token, state)
+                        super::connection::handle_connection(
+                            socket,
+                            clients,
+                            states,
+                            pending_perms,
+                            token,
+                            state,
+                        )
                     })
                 }
             })
@@ -164,6 +178,25 @@ impl WebSocketGateway {
                 "[WsGateway] {msg_type} fired but NO admin clients connected — \
                  web client must subscribe to an is_admin group first"
             );
+        }
+    }
+
+    /// Broadcast to admin clients that are NOT already subscribed to `skip_jid`.
+    /// Used for permission events on non-admin groups: group subscribers get it via
+    /// `broadcast(jid, ...)`, and admins watching the Agent Console get it here
+    /// without receiving a duplicate if they happen to also subscribe to that group.
+    pub(crate) async fn broadcast_to_admins_excluding(
+        &self,
+        skip_jid: &str,
+        msg: &serde_json::Value,
+    ) {
+        let raw = msg.to_string();
+        let clients = self.clients.lock().await;
+        for client in clients.iter() {
+            if client.authenticated && client.is_admin && !client.subscriptions.contains(skip_jid)
+            {
+                let _ = client.sender.send(Message::Text(raw.clone().into()));
+            }
         }
     }
 

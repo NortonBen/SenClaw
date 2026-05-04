@@ -79,10 +79,20 @@ impl WebSocketGateway {
             obj.insert("groupJid".into(), chat_jid.into());
             obj.insert("requestId".into(), request_id.into());
         }
+        // Store for admin subscribe snapshot replay (so reconnecting admins see pending requests).
+        self.pending_permissions
+            .lock()
+            .await
+            .insert(request_id.to_string(), msg.clone());
         if chat_jid.starts_with("virtual:") {
             self.broadcast_to_admins(&msg).await;
         } else {
+            // Broadcast to group subscribers (covers users viewing that chat).
             self.broadcast(chat_jid, &msg).await;
+            // Also notify admins NOT subscribed to this group so the Agent Console
+            // always shows dispatch subagent permissions. Admins that ARE subscribed
+            // already received it from broadcast() above — skip them to avoid duplicates.
+            self.broadcast_to_admins_excluding(chat_jid, &msg).await;
         }
     }
 
@@ -135,6 +145,8 @@ impl WebSocketGateway {
         option_key: &str,
         option_label: &str,
     ) {
+        // Remove from pending store so reconnecting admins don't see resolved requests.
+        self.pending_permissions.lock().await.remove(request_id);
         let msg = serde_json::json!({
             "type": "permission:resolved",
             "groupJid": chat_jid,
@@ -146,6 +158,7 @@ impl WebSocketGateway {
             self.broadcast_to_admins(&msg).await;
         } else {
             self.broadcast(chat_jid, &msg).await;
+            self.broadcast_to_admins_excluding(chat_jid, &msg).await;
         }
     }
 
