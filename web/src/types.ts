@@ -311,6 +311,49 @@ export interface CoworkMessage {
   createdAt: string;
 }
 
+// ===== Tool Auto-Accept Rules =====
+
+export type RuleAction = 'auto_accept' | 'auto_deny' | 'force_request' | 'auto_accept_and_allow';
+
+export type RuleMatcherType =
+  | 'bash_glob'
+  | 'bash_regex'
+  | 'tool_exact'
+  | 'mcp_server'
+  | 'mcp_glob'
+  | 'tool_category'
+  | 'always';
+
+export type ToolCategory = 'file_edit' | 'bash' | 'skill' | 'mcp' | 'all';
+
+export interface RuleMatcher {
+  type: RuleMatcherType;
+  /** bash_glob / bash_regex / mcp_glob pattern */
+  pattern?: string;
+  /** tool_exact: exact tool name */
+  tool_name?: string;
+  /** mcp_server: server name */
+  server?: string;
+  /** mcp_server: specific tool (null = all tools of server) */
+  tool?: string | null;
+  /** tool_category */
+  category?: ToolCategory;
+}
+
+export interface RuleScope {
+  group_jid?: string;
+  agent_id?: string;
+}
+
+export interface ToolAutoAcceptRule {
+  id: string;
+  matcher: RuleMatcher;
+  action: RuleAction;
+  scope?: RuleScope | null;
+  enabled: boolean;
+  description?: string | null;
+}
+
 // ===== Cowork Template types =====
 
 export interface CoworkTemplate {

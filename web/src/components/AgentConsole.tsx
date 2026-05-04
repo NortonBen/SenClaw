@@ -2,11 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { theme, Typography, Button, Badge, Space, Card, Tag } from 'antd';
 import {
   SettingOutlined,
-  CheckCircleOutlined,
-  LoadingOutlined,
-  PauseCircleOutlined,
   CloseOutlined,
-  ExclamationCircleOutlined,
   LeftOutlined,
 } from '@ant-design/icons';
 import type { AgentState, DispatchParent, DispatchTask, AgentTodosEntry, PermissionMessage, GroupInfo, ChatMessage } from '../types';

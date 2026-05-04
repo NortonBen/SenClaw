@@ -1,5 +1,27 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule } from '../types';
+
+const TOOL_RULES_KEY = 'senclaw:tool-rules';
+const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
+
+function loadRules(): ToolAutoAcceptRule[] {
+  try {
+    const raw = localStorage.getItem(TOOL_RULES_KEY);
+    return raw ? (JSON.parse(raw) as ToolAutoAcceptRule[]) : [];
+  } catch { return []; }
+}
+
+function saveRules(rules: ToolAutoAcceptRule[]) {
+  try { localStorage.setItem(TOOL_RULES_KEY, JSON.stringify(rules)); } catch {}
+}
+
+function loadAcceptAll(): boolean {
+  try { return localStorage.getItem(ACCEPT_ALL_KEY) === 'true'; } catch { return false; }
+}
+
+function saveAcceptAll(v: boolean) {
+  try { localStorage.setItem(ACCEPT_ALL_KEY, String(v)); } catch {}
+}
 
 interface WsConfig {
   wsPort: number;
@@ -48,6 +70,13 @@ export interface WsHook {
   updateChannel: (id: number, updates: UpdateChannelPayload) => void;
   updateAgent: (id: number, updates: UpdateAgentPayload) => void;
   updateBinding: (id: number, updates: UpdateBindingPayload) => void;
+  // Tool auto-accept rules
+  toolRules: ToolAutoAcceptRule[];
+  dangerouslyAcceptAll: boolean;
+  addToolRule: (rule: ToolAutoAcceptRule) => void;
+  removeToolRule: (id: string) => void;
+  toggleToolRule: (id: string) => void;
+  setDangerouslyAcceptAll: (enabled: boolean) => void;
 }
 
 export function useWebSocket(): WsHook {
@@ -64,6 +93,8 @@ export function useWebSocket(): WsHook {
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [agents, setAgents]     = useState<AgentInfo[]>([]);
   const [bindings, setBindings] = useState<BindingWithRelationsInfo[]>([]);
+  const [toolRules, setToolRules]             = useState<ToolAutoAcceptRule[]>(loadRules);
+  const [dangerouslyAcceptAll, setAcceptAllState] = useState<boolean>(loadAcceptAll);
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -252,6 +283,40 @@ export function useWebSocket(): WsHook {
 
   const updateBinding = useCallback((id: number, updates: UpdateBindingPayload) => {
     rawSend({ type: 'update:binding', id, ...updates });
+  }, [rawSend]);
+
+  const addToolRule = useCallback((rule: ToolAutoAcceptRule) => {
+    setToolRules(prev => {
+      const next = [...prev, rule];
+      saveRules(next);
+      rawSend({ type: 'permission:rule:add', rule });
+      return next;
+    });
+  }, [rawSend]);
+
+  const removeToolRule = useCallback((id: string) => {
+    setToolRules(prev => {
+      const next = prev.filter(r => r.id !== id);
+      saveRules(next);
+      rawSend({ type: 'permission:rule:remove', ruleId: id });
+      return next;
+    });
+  }, [rawSend]);
+
+  const toggleToolRule = useCallback((id: string) => {
+    setToolRules(prev => {
+      const next = prev.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r);
+      saveRules(next);
+      const updated = next.find(r => r.id === id);
+      if (updated) rawSend({ type: 'permission:rule:update', rule: updated });
+      return next;
+    });
+  }, [rawSend]);
+
+  const setDangerouslyAcceptAll = useCallback((enabled: boolean) => {
+    saveAcceptAll(enabled);
+    setAcceptAllState(enabled);
+    rawSend({ type: 'permission:accept-all', enabled });
   }, [rawSend]);
 
   useEffect(() => {
@@ -510,6 +575,37 @@ export function useWebSocket(): WsHook {
           case 'cowork:changed':
             setCoworkChanged(prev => prev + 1);
             break;
+          case 'permission:rules':
+            setToolRules(() => {
+              const rules = (msg.rules as ToolAutoAcceptRule[]) ?? [];
+              saveRules(rules);
+              return rules;
+            });
+            break;
+          case 'permission:rule:added':
+            setToolRules(prev => {
+              const rule = msg.rule as ToolAutoAcceptRule;
+              if (prev.some(r => r.id === rule.id)) return prev;
+              const next = [...prev, rule];
+              saveRules(next);
+              return next;
+            });
+            break;
+          case 'permission:rule:removed':
+            setToolRules(prev => {
+              const next = prev.filter(r => r.id !== (msg.ruleId as string));
+              saveRules(next);
+              return next;
+            });
+            break;
+          case 'permission:rule:updated':
+            setToolRules(prev => {
+              const rule = msg.rule as ToolAutoAcceptRule;
+              const next = prev.map(r => r.id === rule.id ? rule : r);
+              saveRules(next);
+              return next;
+            });
+            break;
         }
       } catch { /* ignore */ }
     };
@@ -579,11 +675,13 @@ export function useWebSocket(): WsHook {
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
+    toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
+    toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
   ]);
 }
