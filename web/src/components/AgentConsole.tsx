@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { theme, Typography, Button, Badge, Space, Card, Tag, Empty } from 'antd';
+import { theme, Typography, Button, Badge, Space, Card, Tag } from 'antd';
 import {
   SettingOutlined,
   CheckCircleOutlined,
@@ -9,7 +9,7 @@ import {
   ExclamationCircleOutlined,
   LeftOutlined,
 } from '@ant-design/icons';
-import type { AgentState, DispatchParent, DispatchTask, AgentTodosEntry, PermissionMessage, GroupInfo, ChatMessage, TaskBacklogEntry, AgentConsoleEvent } from '../types';
+import type { AgentState, DispatchParent, DispatchTask, AgentTodosEntry, PermissionMessage, GroupInfo, ChatMessage } from '../types';
 import { DispatchTree } from './DispatchTree';
 import { AgentTodoPanel } from './AgentTodoPanel';
 
@@ -47,15 +47,13 @@ function saveWidth(w: number) {
 interface AgentConsoleProps {
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>;
-  taskBacklogs: TaskBacklogEntry[];
-  agentConsoleEvents: AgentConsoleEvent[];
   messages: Record<string, ChatMessage[]>;
   groups: GroupInfo[];
   agentStates: Record<string, AgentState>;
   resolvePermission: (requestId: string, optionKey: string) => void;
 }
 
-export function AgentConsole({ dispatchParents, agentTodos, taskBacklogs, agentConsoleEvents, messages, groups, agentStates, resolvePermission }: AgentConsoleProps) {
+export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission }: AgentConsoleProps) {
   const { token } = theme.useToken();
   const activeParents = dispatchParents.filter(p => p.status === 'active');
   const queuedParents = dispatchParents.filter(p => p.status === 'queued');
@@ -133,8 +131,6 @@ export function AgentConsole({ dispatchParents, agentTodos, taskBacklogs, agentC
   }, []);
 
   const hasTodos = Object.keys(agentTodos).length > 0;
-  const hasBacklogs = taskBacklogs.length > 0;
-  const hasDebugEvents = agentConsoleEvents.length > 0;
 
   if (collapsed) {
     const totalPending = pendingPermissions.length;
@@ -159,7 +155,7 @@ export function AgentConsole({ dispatchParents, agentTodos, taskBacklogs, agentC
           icon={<SettingOutlined style={{ fontSize: '18px' }} />}
           badge={totalPending}
           active={hasActivity}
-          hasContent={hasTodos || hasBacklogs || hasDebugEvents}
+          hasContent={hasTodos}
           token={token}
         />
       </div>
@@ -330,79 +326,6 @@ export function AgentConsole({ dispatchParents, agentTodos, taskBacklogs, agentC
               <AgentTodoPanel agentTodos={agentTodos} groups={groups} />
             </div>
           )}
-
-          {/* Backlog Section */}
-          {hasBacklogs && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <Text style={{ fontSize: '11px', textTransform: 'uppercase', color: token.colorTextDescription, letterSpacing: '0.5px' }}>
-                Task Backlog Signals
-              </Text>
-              {taskBacklogs.slice(0, 5).map(backlog => (
-                <Card
-                  key={backlog.taskId}
-                  size="small"
-                  style={{ borderRadius: '8px', borderLeft: `3px solid ${token.colorWarning}` }}
-                  bodyStyle={{ padding: '8px' }}
-                >
-                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                    <Space size={4} wrap>
-                      <Tag color="warning" style={{ margin: 0, fontSize: '10px' }}>task:backlog</Tag>
-                      <Text code style={{ fontSize: '10px' }}>{backlog.taskId}</Text>
-                    </Space>
-                    <Text type="secondary" style={{ fontSize: '10px' }}>{backlog.chatJid}</Text>
-                    <Text style={{ fontSize: '11px' }}>
-                      {backlog.prompt.length > 120 ? `${backlog.prompt.slice(0, 120)}...` : backlog.prompt}
-                    </Text>
-                    <Text type="secondary" style={{ fontSize: '10px' }}>
-                      suggestedIntervalMs={backlog.suggestedIntervalMs}
-                    </Text>
-                  </Space>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          {/* Debug Event Section */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <Text style={{ fontSize: '11px', textTransform: 'uppercase', color: token.colorTextDescription, letterSpacing: '0.5px' }}>
-              WebSocket Debug Events
-            </Text>
-            {hasDebugEvents ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {agentConsoleEvents.slice(0, 8).map(event => (
-                  <div
-                    key={event.id}
-                    style={{
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      background: token.colorFillAlter,
-                    }}
-                  >
-                    <Space size={4} wrap>
-                      <Tag color={event.type === 'dispatch:update' ? 'processing' : event.type === 'agent:todos' ? 'success' : 'warning'} style={{ margin: 0, fontSize: '10px' }}>
-                        {event.type}
-                      </Tag>
-                      <Text type="secondary" style={{ fontSize: '10px' }}>
-                        {new Date(event.timestamp).toLocaleTimeString()}
-                      </Text>
-                    </Space>
-                    <Text strong style={{ display: 'block', marginTop: 4, fontSize: '11px' }}>
-                      {event.title}
-                    </Text>
-                    <Text type="secondary" style={{ display: 'block', fontSize: '10px' }}>
-                      {event.detail}
-                    </Text>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={<Text type="secondary" style={{ fontSize: '11px' }}>No dispatch/todos/backlog events yet</Text>}
-              />
-            )}
-          </div>
 
         </Space>
       </div>

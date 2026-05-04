@@ -447,8 +447,9 @@ impl DispatchServer {
 
         ToolResult::ok(format!(
             "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
-             Call dispatch_task(\"{parent_id}\", \"<label>\") for each task concurrently.\n\
-             DispatchBridge handles dependency ordering and workspace switching automatically."
+             Call wait_for_parent(\"{parent_id}\") to block until all tasks finish and get \
+             aggregated results. DispatchBridge handles DAG ordering and workspace switching \
+             automatically — do NOT call dispatch_task individually per task."
         ))
     }
 
@@ -546,6 +547,104 @@ impl DispatchServer {
             }
         }
     }
+
+    // ===== wait_for_parent =====
+
+    /// Block until every task in `parent_id` reaches a terminal state, then
+    /// return a structured summary of all results. This is the preferred
+    /// completion primitive — callers don't need to call dispatch_task per
+    /// task; a single wait_for_parent call covers the entire DAG.
+    pub async fn wait_for_parent(
+        &self,
+        parent_id: &str,
+        timeout_seconds: Option<u64>,
+    ) -> ToolResult {
+        // Validate parent exists and compute poll deadline.
+        let max_task_timeout = {
+            let state = self.read_state();
+            let Some(parent) = state.parents.iter().find(|p| p.id == parent_id) else {
+                return ToolResult::err(format!("Parent not found: {parent_id}"));
+            };
+            parent
+                .tasks
+                .iter()
+                .map(|t| t.timeout_seconds)
+                .max()
+                .unwrap_or(900)
+        };
+
+        // Allow enough time for all tasks to run sequentially in the worst case.
+        // Use caller override when provided; otherwise use the largest single-task
+        // timeout × number-of-tasks (sequential worst case) capped at 2h.
+        let deadline_secs = timeout_seconds.unwrap_or_else(|| {
+            let state = self.read_state();
+            let task_count = state
+                .parents
+                .iter()
+                .find(|p| p.id == parent_id)
+                .map(|p| p.tasks.len() as u64)
+                .unwrap_or(1);
+            (max_task_timeout * task_count).min(2 * 3600)
+        });
+        let deadline = Instant::now() + Duration::from_secs(deadline_secs);
+
+        // Poll until all tasks are terminal or we time out.
+        loop {
+            if Instant::now() > deadline {
+                return ToolResult::err(format!(
+                    "wait_for_parent timed out after {deadline_secs}s waiting for parent {parent_id}"
+                ));
+            }
+
+            let state = self.read_state();
+            let Some(parent) = state.parents.iter().find(|p| p.id == parent_id) else {
+                return ToolResult::err(format!(
+                    "Parent {parent_id} disappeared from state file"
+                ));
+            };
+
+            let all_terminal = parent.tasks.iter().all(|t| t.status.is_terminal());
+            if all_terminal {
+                // Build summary
+                let mut lines = Vec::new();
+                lines.push(format!("Parent {} complete. Results:", parent_id));
+                for task in &parent.tasks {
+                    let status_str = task.status.label();
+                    let result_preview = task
+                        .result
+                        .as_deref()
+                        .map(|r| {
+                            if r.len() > 500 {
+                                format!("{}… (truncated)", &r[..500])
+                            } else {
+                                r.to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "(no output)".into());
+                    lines.push(format!(
+                        "\n## Task \"{}\" (agent: {}, status: {})\n{}",
+                        task.label, task.agent_id, status_str, result_preview
+                    ));
+                }
+
+                let any_error = parent
+                    .tasks
+                    .iter()
+                    .any(|t| matches!(t.status, DispatchTaskStatus::Error | DispatchTaskStatus::Timeout));
+
+                let summary = lines.join("\n");
+                if any_error {
+                    // Return as non-error so the caller can still read partial results
+                    return ToolResult::ok(format!(
+                        "{summary}\n\n⚠️  Some tasks failed or timed out — partial results above."
+                    ));
+                }
+                return ToolResult::ok(summary);
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
 }
 
 // ===== Helper types =====
@@ -586,6 +685,15 @@ struct DispatchTaskParams {
     parent_id: String,
     #[serde(rename = "taskLabel")]
     task_label: String,
+    #[serde(default)]
+    #[serde(rename = "timeoutSeconds")]
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct WaitForParentParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
     #[serde(default)]
     #[serde(rename = "timeoutSeconds")]
     timeout_seconds: Option<u64>,
@@ -639,6 +747,23 @@ impl McpDispatchServer {
     ) -> String {
         self.inner()
             .dispatch_task(&p.parent_id, &p.task_label, p.timeout_seconds)
+            .await
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Wait for ALL tasks in a parent dispatch to complete, then return aggregated results. \
+                       Preferred over calling dispatch_task per-task. DispatchBridge handles DAG ordering \
+                       automatically — just call this once after create_parent."
+    )]
+    async fn wait_for_parent(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            WaitForParentParams,
+        >,
+    ) -> String {
+        self.inner()
+            .wait_for_parent(&p.parent_id, p.timeout_seconds)
             .await
             .content
     }

@@ -110,7 +110,6 @@ impl WebSocketGateway {
             prompt.len(),
             interval_ms + overdue_ms
         );
-        tracing::debug!(target: "senclaw::ws", payload = %msg, "emit task:backlog payload");
         self.broadcast_to_admins(&msg).await;
     }
 
@@ -187,7 +186,6 @@ impl WebSocketGateway {
         tracing::info!(
             "[WsGateway] emit dispatch:update parents={parent_count} tasks={task_count}"
         );
-        tracing::debug!(target: "senclaw::ws", payload = %msg, "emit dispatch:update payload");
         self.broadcast_to_admins(&msg).await;
     }
 
@@ -221,7 +219,6 @@ impl WebSocketGateway {
             "[WsGateway] emit agent:todos agent_jid={agent_jid} agent_name={agent_name} \
              todos={todo_count} completed={completed_count}"
         );
-        tracing::debug!(target: "senclaw::ws", payload = %msg, "emit agent:todos payload");
         self.broadcast_to_admins(&msg).await;
     }
 

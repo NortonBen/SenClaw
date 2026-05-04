@@ -133,24 +133,6 @@ export interface AgentTodosEntry {
   todos: AgentTodoItem[];
 }
 
-export interface TaskBacklogEntry {
-  taskId: string;
-  chatJid: string;
-  prompt: string;
-  intervalMs: number;
-  overdueMs: number;
-  suggestedIntervalMs: number;
-  receivedAt: string;
-}
-
-export interface AgentConsoleEvent {
-  id: string;
-  type: 'dispatch:update' | 'agent:todos' | 'task:backlog';
-  title: string;
-  detail: string;
-  timestamp: string;
-}
-
 export interface UsageData {
   useTokens: number;
   maxTokens: number;

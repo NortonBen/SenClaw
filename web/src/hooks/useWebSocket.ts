@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, TaskBacklogEntry, AgentConsoleEvent } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload } from '../types';
 
 interface WsConfig {
   wsPort: number;
@@ -31,11 +31,9 @@ export interface WsHook {
   updateGroup: (jid: string, updates: UpdateGroupPayload) => void;
   dispatchParents: DispatchParent[];
   agentTodos: Record<string, AgentTodosEntry>; // keyed by agentJid
-  taskBacklogs: TaskBacklogEntry[];
-  agentConsoleEvents: AgentConsoleEvent[];
   agentUsage: Record<string, UsageData>; // keyed by agentJid
   subscribeAll: () => void;
-  /// Incremented on every cowork:changed event so the CoworkPage can auto-refresh.
+  /** Incremented on every cowork:changed event so the CoworkPage can auto-refresh. */
   coworkChanged: number;
   // Entity model
   channels: ChannelInfo[];
@@ -61,8 +59,6 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
-  const [taskBacklogs, setTaskBacklogs]       = useState<TaskBacklogEntry[]>([]);
-  const [agentConsoleEvents, setAgentConsoleEvents] = useState<AgentConsoleEvent[]>([]);
   const [agentUsage, setAgentUsage]           = useState<Record<string, UsageData>>({});
   const [coworkChanged, setCoworkChanged]     = useState(0);
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
@@ -86,14 +82,6 @@ export function useWebSocket(): WsHook {
       ...prev,
       [jid]: (prev[jid] ?? []).map(m => m.id === id ? updater(m) : m),
     }));
-  }, []);
-
-  const pushAgentConsoleEvent = useCallback((event: Omit<AgentConsoleEvent, 'id' | 'timestamp'>) => {
-    setAgentConsoleEvents(prev => [{
-      ...event,
-      id: `${event.type}-${Date.now()}-${Math.random()}`,
-      timestamp: new Date().toISOString(),
-    }, ...prev].slice(0, 20));
   }, []);
 
   const rawSend = useCallback((data: object) => {
@@ -423,18 +411,6 @@ export function useWebSocket(): WsHook {
             break;
           case 'dispatch:update': {
             const newParents = (msg.parents as DispatchParent[]) ?? [];
-            const taskCount = newParents.reduce((n, p) => n + p.tasks.length, 0);
-            // eslint-disable-next-line no-console
-            console.debug('[ws] dispatch:update', {
-              parents: newParents.length,
-              tasks: taskCount,
-              statuses: newParents.map(p => `${p.id}:${p.status}(${p.tasks.length})`),
-            });
-            pushAgentConsoleEvent({
-              type: 'dispatch:update',
-              title: `Dispatch update: ${newParents.length} parent(s)`,
-              detail: `${taskCount} task(s): ${newParents.map(p => `${p.id}:${p.status}`).join(', ') || 'empty'}`,
-            });
             const TERMINAL = ['done', 'error', 'timeout'];
             // When a task reaches a terminal state, clear that agent's todos
             setDispatchParents(prev => {
@@ -460,21 +436,6 @@ export function useWebSocket(): WsHook {
           case 'agent:todos': {
             const todoJid = msg.agentJid as string;
             const todosArr = ((msg.todos as AgentTodosEntry['todos']) ?? []);
-            const completed = todosArr.filter(t => t.status === 'completed').length;
-            const inProgress = todosArr.filter(t => t.status === 'in_progress').length;
-            // eslint-disable-next-line no-console
-            console.debug('[ws] agent:todos', {
-              agentJid: todoJid,
-              agentName: msg.agentName as string,
-              todos: todosArr.length,
-              completed,
-              inProgress,
-            });
-            pushAgentConsoleEvent({
-              type: 'agent:todos',
-              title: `Todos: ${msg.agentName as string || todoJid}`,
-              detail: `${todosArr.length} item(s), ${inProgress} in progress, ${completed} completed`,
-            });
             // Cancel previous delayed clear for this agent (new todos invalidate the old timer)
             const prev = todosClearTimers.current.get(todoJid);
             if (prev) { clearTimeout(prev); todosClearTimers.current.delete(todoJid); }
@@ -490,26 +451,6 @@ export function useWebSocket(): WsHook {
               }, 3000);
               todosClearTimers.current.set(todoJid, t);
             }
-            break;
-          }
-          case 'task:backlog': {
-            const entry: TaskBacklogEntry = {
-              taskId: msg.taskId as string,
-              chatJid: msg.chatJid as string,
-              prompt: msg.prompt as string,
-              intervalMs: msg.intervalMs as number,
-              overdueMs: msg.overdueMs as number,
-              suggestedIntervalMs: msg.suggestedIntervalMs as number,
-              receivedAt: new Date().toISOString(),
-            };
-            // eslint-disable-next-line no-console
-            console.debug('[ws] task:backlog', entry);
-            setTaskBacklogs(prev => [entry, ...prev.filter(item => item.taskId !== entry.taskId)].slice(0, 20));
-            pushAgentConsoleEvent({
-              type: 'task:backlog',
-              title: `Backlog task: ${entry.taskId}`,
-              detail: `${entry.chatJid} · suggested ${entry.suggestedIntervalMs}ms`,
-            });
             break;
           }
           case 'agent:usage': {
@@ -633,13 +574,13 @@ export function useWebSocket(): WsHook {
   void findRequestJid;
 
   return useMemo(() => ({
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, taskBacklogs, agentConsoleEvents, subscribeAll, coworkChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
   }), [
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, taskBacklogs, agentConsoleEvents, subscribeAll, coworkChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
