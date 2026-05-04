@@ -383,6 +383,12 @@ impl CoreApi for ZenCoreApi {
         });
     }
 
+    fn add_allowed_tool(&self, jid: &str, tool: &str) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.add_allowed_tool(tool);
+        }
+    }
+
     fn respond_to_tool_permission(&self, jid: &str, tool_name: &str, selected: &str) -> Result<()> {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.respond_to_tool_permission(ToolPermissionResponseData {

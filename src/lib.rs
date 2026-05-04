@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -56,14 +56,32 @@ struct RealWsApi {
 
 struct RealPermissionApi {
     agent_pool: Arc<agent::agent_pool::AgentPool>,
+    /// Pending virtual-agent permission responses: key = "virtual_jid::tool_name"
+    virtual_perm_senders:
+        Arc<Mutex<HashMap<String, std::sync::mpsc::SyncSender<String>>>>,
 }
 
 impl agent::permission_bridge::PermissionBridgeApi for RealPermissionApi {
     fn is_web_jid(&self, chat_jid: &str) -> bool {
-        chat_jid.starts_with("web:")
+        // virtual: jids are also "web-style" — they broadcast to admins and have no
+        // channel buttons, so they follow the same code path as web: jids.
+        chat_jid.starts_with("web:") || chat_jid.starts_with("virtual:")
     }
 
     fn respond_to_tool_permission(&self, group_jid: &str, tool_name: &str, selected: &str) {
+        if group_jid.starts_with("virtual:") {
+            // Deliver response to the waiting virtual agent thread via mpsc.
+            let key = format!("{group_jid}::{tool_name}");
+            if let Some(tx) = self.virtual_perm_senders.lock().unwrap().remove(&key) {
+                let _: Result<(), std::sync::mpsc::SendError<String>> =
+                    tx.send(selected.to_string());
+            } else {
+                tracing::warn!(
+                    "[RealPermissionApi] no waiting sender for virtual permission: jid={group_jid} tool={tool_name}"
+                );
+            }
+            return;
+        }
         self.agent_pool
             .respond_to_tool_permission(group_jid, tool_name, selected);
     }
@@ -862,9 +880,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     agent_pool.set_dispatch_bridge(
         Arc::clone(&dispatch_bridge) as Arc<dyn agent::dispatch_bridge::DispatchBridgeApi>
     );
+    // Shared map for routing virtual-agent permission responses back to their waiting thread.
+    let virtual_perm_senders: Arc<Mutex<HashMap<String, std::sync::mpsc::SyncSender<String>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     agent_pool.set_permission_bridge(Arc::new(agent::permission_bridge::PermissionBridge::new(
         Arc::new(RealPermissionApi {
             agent_pool: agent_pool.clone(),
+            virtual_perm_senders: Arc::clone(&virtual_perm_senders),
         }),
         None,
     )));
@@ -1021,6 +1043,31 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             },
             Arc::new(move || pool.get_skip_perms_for_virtual()),
         );
+    }
+    // Wire virtual agent permission forwarding: when a virtual subagent needs user
+    // approval, forward the request to the admin Web UI via PermissionBridge, then
+    // block until the user responds (up to 10 minutes).
+    {
+        let pool_for_vw = agent_pool.clone();
+        let senders_for_vw = Arc::clone(&virtual_perm_senders);
+        virtual_worker_pool.set_virtual_permission_fn(Arc::new(
+            move |virtual_jid: String,
+                  tool_name: String,
+                  title: String,
+                  content: serde_json::Value,
+                  options: HashMap<String, String>,
+                  tx: std::sync::mpsc::SyncSender<String>| {
+                let key = format!("{virtual_jid}::{tool_name}");
+                senders_for_vw.lock().unwrap().insert(key, tx);
+                pool_for_vw.handle_virtual_permission_request(
+                    &virtual_jid,
+                    &tool_name,
+                    &title,
+                    &content,
+                    &options,
+                );
+            },
+        ));
     }
     // Inject browser MCP server so browser-agent virtual instances have browser tools.
     // Use zen_core::McpServerConfig (not mcp::helper) since VirtualWorkerPool uses that type.
@@ -1180,20 +1227,33 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     let pool = pool.clone();
                     let gq = Arc::clone(&gq);
                     let jid_owned = jid.to_string();
+                    let task_id_owned = task_id.to_string();
                     let prompt_owned = prompt.to_string();
                     tokio::spawn(async move {
                         let pool_inner = pool.clone();
                         let jid_run = jid_owned.clone();
+                        let task_id_run = task_id_owned.clone();
                         gq.enqueue(
                             &jid_owned,
                             Box::pin(async move {
-                                let _ = types::AgentApi::process_and_wait(
+                                tracing::info!(
+                                    "[DispatchBridge] queue task start: jid={jid_run} task={task_id_run}"
+                                );
+                                let result = types::AgentApi::process_and_wait(
                                     pool_inner.as_ref(),
                                     &jid_run,
                                     &binding,
                                     &prompt_owned,
                                 )
                                 .await;
+                                match result {
+                                    Ok(()) => tracing::info!(
+                                        "[DispatchBridge] queue task done: jid={jid_run} task={task_id_run}"
+                                    ),
+                                    Err(e) => tracing::warn!(
+                                        "[DispatchBridge] queue task error: jid={jid_run} task={task_id_run}: {e}"
+                                    ),
+                                }
                             }),
                         )
                         .await;
@@ -1205,6 +1265,18 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             let pool = agent_pool.clone();
             dispatch_bridge.set_revert_workspace(Arc::new(move |jid: &str| {
                 pool.revert_dispatch_workspace(jid);
+            }));
+        }
+        {
+            let pool = agent_pool.clone();
+            dispatch_bridge.set_abort_agent(Arc::new(move |jid: &str, reason: &str| {
+                let pool = pool.clone();
+                let jid = jid.to_string();
+                let reason = reason.to_string();
+                tokio::spawn(async move {
+                    tracing::warn!("[DispatchBridge] aborting {jid}: {reason}");
+                    pool.destroy_inner(&jid).await;
+                });
             }));
         }
         // Wire virtual-agent dispatch (Phase 5): persona registry + worker pool.

@@ -32,20 +32,22 @@ impl GroupQueue {
     }
 
     pub async fn enqueue(self: &Arc<Self>, jid: &str, task: BoxedTask) {
-        self.inner
-            .queues
-            .lock()
-            .await
-            .entry(jid.to_string())
-            .or_default()
-            .push(task);
+        let queued_len = {
+            let mut queues = self.inner.queues.lock().await;
+            let queue = queues.entry(jid.to_string()).or_default();
+            queue.push(task);
+            queue.len()
+        };
+        tracing::info!("[GroupQueue] enqueue jid={jid} queued={queued_len}");
 
         let was_idle = {
             let mut running = self.inner.running.lock().await;
             if running.get(jid).copied().unwrap_or(false) {
+                tracing::info!("[GroupQueue] jid={jid} already running; task remains queued");
                 false
             } else {
                 running.insert(jid.to_string(), true);
+                tracing::info!("[GroupQueue] jid={jid} was idle; starting drain");
                 true
             }
         };
@@ -78,6 +80,8 @@ fn run_drain(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
         let permit = gq.semaphore.acquire().await.expect("semaphore closed");
+        tracing::info!("[GroupQueue] drain start jid={jid}");
+        let mut ran = 0usize;
 
         loop {
             let next = {
@@ -93,7 +97,10 @@ fn run_drain(
 
             match next {
                 Some(task) => {
+                    ran += 1;
+                    tracing::info!("[GroupQueue] task start jid={jid} seq={ran}");
                     task.await;
+                    tracing::info!("[GroupQueue] task done jid={jid} seq={ran}");
                 }
                 None => break,
             }
@@ -102,6 +109,7 @@ fn run_drain(
         // Explicitly drop permit before mutating gq for re-scheduling
         drop(permit);
         gq.inner.running.lock().await.remove(&jid);
+        tracing::info!("[GroupQueue] drain idle jid={jid} ran={ran}");
 
         let has_more = gq
             .inner

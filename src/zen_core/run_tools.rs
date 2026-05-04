@@ -178,6 +178,12 @@ async fn run_single_tool(
 
     // Checkpoint: cancelled before starting
     if cancel.is_cancelled() {
+        tracing::info!(
+            "[RunTools] skipped cancelled tool agent={} tool={} id={}",
+            ctx.agent_id,
+            tool_name,
+            tool_id
+        );
         return vec![create_tool_result_stop(&tool_id)];
     }
 
@@ -273,9 +279,21 @@ async fn run_single_tool(
     // Permission check for write tools
     if !tool.is_read_only() {
         if cancel.is_cancelled() {
+            tracing::info!(
+                "[RunTools] skipped cancelled write tool agent={} tool={} id={}",
+                ctx.agent_id,
+                tool_name,
+                tool_id
+            );
             return vec![create_tool_result_stop(&tool_id)];
         }
 
+        tracing::info!(
+            "[RunTools] permission check agent={} tool={} id={}",
+            ctx.agent_id,
+            tool_name,
+            tool_id
+        );
         match ctx
             .permission_checker
             .check(tool.as_ref(), &input, cancel, ctx.agent_id)
@@ -283,9 +301,21 @@ async fn run_single_tool(
         {
             Ok(true) => {
                 // Permission granted — proceed
+                tracing::info!(
+                    "[RunTools] permission granted agent={} tool={} id={}",
+                    ctx.agent_id,
+                    tool_name,
+                    tool_id
+                );
             }
             Ok(false) => {
                 // Permission denied
+                tracing::warn!(
+                    "[RunTools] permission denied agent={} tool={} id={}",
+                    ctx.agent_id,
+                    tool_name,
+                    tool_id
+                );
                 let msg = "Tool execution was cancelled by user.".to_string();
                 return vec![ContentBlock::ToolResult {
                     tool_use_id: tool_id,
@@ -301,8 +331,22 @@ async fn run_single_tool(
     }
 
     // Execute the tool
+    tracing::info!(
+        "[RunTools] start agent={} tool={} id={} read_only={}",
+        ctx.agent_id,
+        tool_name,
+        tool_id,
+        tool.is_read_only()
+    );
     match tool.call(input.clone(), &tool_ctx).await {
         Ok(outputs) => {
+            tracing::info!(
+                "[RunTools] complete agent={} tool={} id={} outputs={}",
+                ctx.agent_id,
+                tool_name,
+                tool_id,
+                outputs.len()
+            );
             let mut results = Vec::new();
             for output in outputs {
                 match output {
@@ -365,6 +409,12 @@ async fn run_single_tool(
             results
         }
         Err(e) => {
+            tracing::warn!(
+                "[RunTools] error agent={} tool={} id={}: {e}",
+                ctx.agent_id,
+                tool_name,
+                tool_id
+            );
             let error_msg = format!("Tool execution failed: {e}");
             (ctx.fire)(EngineEvent::ToolExecutionError(ToolExecutionErrorData {
                 agent_id: ctx.agent_id.to_string(),

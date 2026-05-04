@@ -742,6 +742,7 @@ impl ZenCore for ZenEngine {
         opts.skip_file_edit_permission = skip;
         opts.skip_bash_exec_permission = skip;
         opts.skip_skill_permission = skip;
+        opts.skip_mcp_tool_permission = skip;
     }
 
     fn update_thinking(&self, enabled: bool) {
@@ -861,6 +862,10 @@ impl ZenCore for ZenEngine {
             }
         });
         Ok(())
+    }
+
+    fn add_allowed_tool(&self, key: &str) {
+        self.permission_manager.add_allowed_tool(key);
     }
 
     fn respond_to_tool_permission(&self, response: ToolPermissionResponseData) {

@@ -28,6 +28,10 @@ pub struct PermissionBridge {
         Mutex<Option<Box<dyn Fn(&str, &str, &str, &str) + Send + Sync>>>,
     pub(crate) on_ask_question_resolved:
         Mutex<Option<Box<dyn Fn(&str, &str, HashMap<String, String>) + Send + Sync>>>,
+    /// Fired when user selects "allow" (never ask again) for a tool.
+    /// Signature: `(group_jid, tool_name)` — used to persist the approval to DB.
+    pub(crate) on_tool_allowed:
+        Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
 }
 
 impl PermissionBridge {
@@ -42,6 +46,7 @@ impl PermissionBridge {
             on_ask_question_request: Mutex::new(None),
             on_permission_resolved: Mutex::new(None),
             on_ask_question_resolved: Mutex::new(None),
+            on_tool_allowed: Mutex::new(None),
         }
     }
 
@@ -82,6 +87,12 @@ impl PermissionBridge {
         *self.on_permission_resolved.lock().unwrap() = Some(Box::new(cb));
     }
 
+    /// Inject callback fired when "allow" (never ask again) is selected.
+    /// Receives `(group_jid, tool_name)` so callers can persist the approval.
+    pub fn set_tool_allowed_callback<F: Fn(&str, &str) + Send + Sync + 'static>(&self, cb: F) {
+        *self.on_tool_allowed.lock().unwrap() = Some(Box::new(cb));
+    }
+
     /// Inject ask-question-resolution notifier (broadcast to other endpoints).
     pub fn set_ask_question_resolved_callback<
         F: Fn(&str, &str, HashMap<String, String>) + Send + Sync + 'static,
@@ -102,12 +113,30 @@ impl PermissionBridge {
             map.remove(request_id)
         };
         let Some(pending) = pending else {
+            tracing::warn!(
+                "[PermissionBridge] resolve permission ignored: unknown request id={}",
+                request_id
+            );
             return false;
         };
 
+        tracing::info!(
+            "[PermissionBridge] resolve permission id={} group_jid={} chat_jid={} tool={} option={}",
+            request_id,
+            pending.group_jid,
+            pending.chat_jid,
+            pending.tool_name,
+            option_key
+        );
         self.fire_activity(&pending.chat_jid);
         self.api
             .respond_to_tool_permission(&pending.group_jid, &pending.tool_name, option_key);
+
+        if option_key == "allow" {
+            if let Some(cb) = self.on_tool_allowed.lock().unwrap().as_ref() {
+                cb(&pending.group_jid, &pending.tool_name);
+            }
+        }
 
         let label = capitalize_first(option_key);
         if let Some(cb) = self.on_permission_resolved.lock().unwrap().as_ref() {
@@ -236,6 +265,15 @@ impl PermissionBridge {
             .collect();
 
         let is_web = self.api.is_web_jid(chat_jid);
+        tracing::info!(
+            "[PermissionBridge] request id={} group_jid={} chat_jid={} tool={} is_web={} options={}",
+            request_id,
+            group_jid,
+            chat_jid,
+            tool_name,
+            is_web,
+            options.len()
+        );
 
         // Try channel send with buttons
         if !is_web {
@@ -273,6 +311,12 @@ impl PermissionBridge {
 
         // Notify Web UI
         if let Some(cb) = self.on_permission_request.lock().unwrap().as_ref() {
+            tracing::info!(
+                "[PermissionBridge] notify UI request id={} chat_jid={} tool={}",
+                request_id,
+                chat_jid,
+                tool_name
+            );
             cb(
                 chat_jid,
                 &request_id,
@@ -400,6 +444,12 @@ impl PermissionBridge {
 
         self.api
             .respond_to_tool_permission(&pending.group_jid, &pending.tool_name, option_key);
+
+        if option_key == "allow" {
+            if let Some(cb) = self.on_tool_allowed.lock().unwrap().as_ref() {
+                cb(&pending.group_jid, &pending.tool_name);
+            }
+        }
 
         let label = capitalize_first(option_key);
         if let Some(cb) = self.on_permission_resolved.lock().unwrap().as_ref() {

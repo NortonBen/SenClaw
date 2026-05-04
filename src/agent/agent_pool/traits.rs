@@ -120,6 +120,10 @@ pub trait CoreApi: Send + Sync {
         Ok(())
     }
 
+    /// Pre-seed the permission allowlist (never-ask-again) for a JID.
+    /// Called on engine creation to load persisted group allowed_tools.
+    fn add_allowed_tool(&self, _jid: &str, _tool: &str) {}
+
     /// Recreate session after stop (discards context, fresh session). Default no-op.
     fn create_session(&self, _jid: &str) -> Result<()> {
         Ok(())

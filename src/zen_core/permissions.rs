@@ -268,21 +268,40 @@ impl PermissionManager {
             options,
         };
 
+        // Register before emitting the request so fast responders cannot race
+        // ahead of the waiter.
+        let mut rx = self.response_registry.register_tool_permission(&name);
+        info!(
+            "[PermissionManager] request emitted agent={} tool={} options={:?}",
+            agent_id,
+            name,
+            request.options.keys().collect::<Vec<_>>()
+        );
+
         // Emit to event bus (for UI)
         self.event_bus
             .emit(EngineEvent::ToolPermissionRequest(request));
-
-        // Register response waiter
-        let mut rx = self.response_registry.register_tool_permission(&name);
+        info!(
+            "[PermissionManager] waiting response agent={} tool={}",
+            agent_id, name
+        );
 
         // Wait for response or cancellation
         tokio::select! {
             _ = cancel.cancelled() => {
+                info!(
+                    "[PermissionManager] cancelled while waiting agent={} tool={}",
+                    agent_id, name
+                );
                 Ok(false)
             }
             result = &mut rx => {
                 match result {
                     Ok(response) => {
+                        info!(
+                            "[PermissionManager] response received agent={} tool={} selected={}",
+                            agent_id, name, response.selected
+                        );
                         match response.selected.as_str() {
                             "agree" => Ok(true),
                             "allow" => {
@@ -302,6 +321,10 @@ impl PermissionManager {
                     }
                     Err(_) => {
                         // Sender dropped (engine disposed)
+                        info!(
+                            "[PermissionManager] response waiter dropped agent={} tool={}",
+                            agent_id, name
+                        );
                         Ok(false)
                     }
                 }

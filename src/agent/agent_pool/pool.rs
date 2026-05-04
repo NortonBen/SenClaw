@@ -121,6 +121,42 @@ impl AgentPool {
                 pool.notify_activity(jid);
             }
         });
+
+        // When user selects "allow" (never ask again), persist tool to DB and
+        // also update the in-memory binding so future engines for this group start
+        // with the tool pre-approved.
+        let weak2 = self.self_weak.lock().unwrap().clone();
+        bridge.set_tool_allowed_callback(move |group_jid: &str, tool_name: &str| {
+            let Some(pool) = weak2.upgrade() else { return };
+            let group_jid = group_jid.to_string();
+            let tool_name = tool_name.to_string();
+
+            // Persist to DB (best-effort).
+            if let Some(db) = pool.db.lock().unwrap().as_ref() {
+                if let Err(e) = db.append_group_allowed_tool(&group_jid, &tool_name) {
+                    tracing::warn!(
+                        "[AgentPool] Failed to persist allowed tool {tool_name} for {group_jid}: {e}"
+                    );
+                } else {
+                    tracing::info!(
+                        "[AgentPool] Persisted allowed tool {tool_name} for group {group_jid}"
+                    );
+                }
+            }
+
+            // Update in-memory binding so the next engine creation for this group
+            // also inherits the approval.
+            {
+                let mut s = pool.state.lock().unwrap();
+                if let Some(binding) = s.bindings.get_mut(&group_jid) {
+                    let tools = binding.allowed_tools.get_or_insert_with(Vec::new);
+                    if !tools.contains(&tool_name) {
+                        tools.push(tool_name);
+                    }
+                }
+            }
+        });
+
         *self.permission_bridge.lock().unwrap() = Some(bridge);
     }
 
@@ -325,6 +361,34 @@ impl AgentPool {
         match self.permission_bridge.lock().unwrap().as_ref() {
             Some(b) => b.resolve_ask_question_batch(request_id, answers, other_texts),
             None => false,
+        }
+    }
+
+    /// Surface a permission request from a virtual agent (no persistent core).
+    /// Calls `PermissionBridge::handle_permission_request` with the virtual_jid so the
+    /// request shows up in the admin Web UI.
+    pub fn handle_virtual_permission_request(
+        &self,
+        virtual_jid: &str,
+        tool_name: &str,
+        title: &str,
+        content: &serde_json::Value,
+        options: &HashMap<String, String>,
+    ) {
+        if let Some(bridge) = self.permission_bridge.lock().unwrap().as_ref() {
+            bridge.handle_permission_request(
+                tool_name,
+                title,
+                content,
+                options,
+                virtual_jid, // group_jid
+                virtual_jid, // chat_jid (virtual: prefix → broadcast_to_admins in notify.rs)
+                None,        // bot_token
+            );
+        } else {
+            tracing::warn!(
+                "[AgentPool] handle_virtual_permission_request: no PermissionBridge for {virtual_jid}/{tool_name}"
+            );
         }
     }
 
@@ -836,6 +900,15 @@ impl AgentPool {
         // createSession mirrors TS 641-653. If runtime core is not wired, default no-op.
         self.core_api.create_session(&binding.jid)?;
 
+        // Seed PermissionManager with tools that have already been approved for this group
+        // (stored as GroupBinding.allowed_tools in DB). This ensures the "never ask again"
+        // list survives daemon restarts for as long as the group's DB record is intact.
+        if let Some(tools) = &binding.allowed_tools {
+            for tool in tools {
+                self.core_api.add_allowed_tool(&binding.jid, tool);
+            }
+        }
+
         // Reload skills excluding disabled ones — mirrors TS 657.
         let disabled = crate::skills::disabled::read_disabled_skills();
         self.core_api.reload_skills(&disabled);
@@ -1011,6 +1084,14 @@ impl AgentPool {
 
         let bot_token = group.bot_token.clone();
         let jid_owned = jid.to_string();
+        let dispatch_task_id = {
+            let s = self.state.lock().unwrap();
+            s.dispatch_task_map.get(jid).cloned()
+        };
+        tracing::info!(
+            "[AgentPool] PAW wait start jid={jid_owned} dispatch_task={} retries_left={retries_left}",
+            dispatch_task_id.as_deref().unwrap_or("-")
+        );
 
         // ---- event loop with resetTimer ----
         #[derive(Debug)]
@@ -1039,14 +1120,46 @@ impl AgentPool {
                 event = event_rx.recv() => {
                     match event {
                         Some(ProcessEvent::Idle) => {
-                            tracing::debug!("[AgentPool] PAW idle for {jid_owned}");
+                            let tid = self
+                                .state
+                                .lock()
+                                .unwrap()
+                                .dispatch_task_map
+                                .get(&jid_owned)
+                                .cloned()
+                                .unwrap_or_else(|| "-".into());
+                            tracing::info!("[AgentPool] PAW idle jid={jid_owned} dispatch_task={tid}");
                             break LoopResult::Success;
                         }
                         Some(ProcessEvent::Error(data)) => {
+                            let tid = self
+                                .state
+                                .lock()
+                                .unwrap()
+                                .dispatch_task_map
+                                .get(&jid_owned)
+                                .cloned()
+                                .unwrap_or_else(|| "-".into());
+                            tracing::warn!(
+                                "[AgentPool] PAW session error jid={jid_owned} dispatch_task={tid} code={} message={}",
+                                data.code,
+                                data.message
+                            );
                             break LoopResult::Error(data);
                         }
                         Some(ProcessEvent::Reset) => {
                             // Restart inactivity timer (mirrors TS resetTimer).
+                            let tid = self
+                                .state
+                                .lock()
+                                .unwrap()
+                                .dispatch_task_map
+                                .get(&jid_owned)
+                                .cloned()
+                                .unwrap_or_else(|| "-".into());
+                            tracing::info!(
+                                "[AgentPool] PAW activity reset jid={jid_owned} dispatch_task={tid}"
+                            );
                             timeout_fut = Box::pin(tokio::time::sleep(timeout_dur));
                         }
                         None => {
@@ -1098,9 +1211,19 @@ impl AgentPool {
                 if !self.state.lock().unwrap().cores.contains(&jid_owned) {
                     return Err(anyhow::anyhow!("Agent destroyed during processing"));
                 }
+                tracing::info!(
+                    "[AgentPool] PAW success jid={jid_owned} dispatch_task={}",
+                    dispatch_task_id.as_deref().unwrap_or("-")
+                );
                 Ok(())
             }
-            LoopResult::Aborted(_reason) => Err(anyhow::anyhow!("Agent aborted")),
+            LoopResult::Aborted(reason) => {
+                tracing::warn!(
+                    "[AgentPool] PAW stopped jid={jid_owned} dispatch_task={} reason={reason}",
+                    dispatch_task_id.as_deref().unwrap_or("-")
+                );
+                Err(anyhow::anyhow!("Agent aborted"))
+            }
             LoopResult::Error(data) => {
                 let msg = format!("[{}] {}", data.code, data.message);
                 let transient: &[&str] = &[
@@ -1187,6 +1310,14 @@ impl AgentPool {
 
     /// Internal destroy — aborts pending op, tears down core, cleans state.
     pub(crate) async fn destroy_inner(&self, jid: &str) {
+        let dispatch_task = {
+            let s = self.state.lock().unwrap();
+            s.dispatch_task_map.get(jid).cloned()
+        };
+        tracing::warn!(
+            "[AgentPool] destroy_inner jid={jid} dispatch_task={}",
+            dispatch_task.as_deref().unwrap_or("-")
+        );
         // Abort any pending process_and_wait.
         let abort = {
             let mut s = self.state.lock().unwrap();
@@ -1675,7 +1806,22 @@ impl AgentPool {
                     if data.agent_id != MAIN_AGENT_ID {
                         return;
                     }
+                    let dispatch_task = pool
+                        .state
+                        .lock()
+                        .unwrap()
+                        .dispatch_task_map
+                        .get(&jid)
+                        .cloned()
+                        .unwrap_or_else(|| "-".into());
+                    tracing::info!(
+                        "[AgentPool] message_complete jid={jid} dispatch_task={dispatch_task} content_len={}",
+                        data.content.len()
+                    );
                     if data.content.trim().is_empty() {
+                        tracing::info!(
+                            "[AgentPool] message_complete empty content jid={jid} dispatch_task={dispatch_task}"
+                        );
                         return;
                     }
                     *last_reply.lock().unwrap() = data.content.clone();
@@ -1684,11 +1830,6 @@ impl AgentPool {
                         s.last_dispatch_replies
                             .insert(jid.clone(), data.content.clone());
                     }
-                    tracing::debug!(
-                        "[AgentPool] message_complete jid={} content_len={} forwarding reply",
-                        jid,
-                        data.content.len()
-                    );
                     pool.broadcast_reply_now(&jid, &data.content, bot_token.as_deref());
                     if let Some(logger) = pool.daily_logger.lock().unwrap().as_ref() {
                         logger.append(
@@ -1710,6 +1851,18 @@ impl AgentPool {
             self.core_api.on_state_update(
                 &jid_arg,
                 Box::new(move |data: StateUpdateData| {
+                    let dispatch_task = pool
+                        .state
+                        .lock()
+                        .unwrap()
+                        .dispatch_task_map
+                        .get(&jid)
+                        .cloned()
+                        .unwrap_or_else(|| "-".into());
+                    tracing::info!(
+                        "[AgentPool] state_update jid={jid} dispatch_task={dispatch_task} state={}",
+                        data.state
+                    );
                     if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
                         sink.notify_agent_state(&jid, &data.state);
                     }

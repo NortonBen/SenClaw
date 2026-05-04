@@ -630,6 +630,8 @@ pub trait ZenCore: Send + Sync {
     fn has_session_tool_results(&self) -> bool;
 
     fn add_or_update_mcp_server(&self, cfg: &McpServerConfig, scope: &str) -> Result<()>;
+    /// Pre-seed the permission allowlist (never-ask-again) from stored group config.
+    fn add_allowed_tool(&self, key: &str);
     fn respond_to_tool_permission(&self, response: ToolPermissionResponseData);
     fn respond_to_ask_question(&self, response: AskQuestionResponseData);
     fn respond_to_plan_exit(&self, response: PlanExitResponseData);

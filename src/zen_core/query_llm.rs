@@ -13,7 +13,7 @@ use futures::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::*;
 
@@ -42,8 +42,17 @@ pub async fn query_llm(
         .adapt
         .as_deref()
         .unwrap_or_else(|| resolve_adapter(&profile.provider));
+    info!(
+        "[llm] request start provider={} model={} adapter={} stream={} messages={} tools={}",
+        profile.provider,
+        profile.model_name,
+        adapt,
+        stream,
+        messages.len(),
+        tools.len()
+    );
 
-    match adapt {
+    let result = match adapt {
         "anthropic" => {
             query_anthropic(
                 client,
@@ -70,7 +79,33 @@ pub async fn query_llm(
             )
             .await
         }
+    };
+    match &result {
+        Ok(msg) => {
+            let blocks = msg.message.content.len();
+            let tool_calls = msg
+                .message
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
+            info!(
+                "[llm] request complete provider={} model={} blocks={} tool_calls={}",
+                profile.provider,
+                profile.model_name,
+                blocks,
+                tool_calls
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[llm] request error provider={} model={}: {e}",
+                profile.provider,
+                profile.model_name
+            );
+        }
     }
+    result
 }
 
 /// Auto-detect adapter from provider name.

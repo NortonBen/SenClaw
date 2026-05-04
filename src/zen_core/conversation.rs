@@ -16,6 +16,7 @@
 //! Port of TS `Conversation.ts`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::Client;
@@ -34,6 +35,10 @@ pub const INTERRUPT_MESSAGE: &str =
 
 /// Number of most-recent messages to keep during auto-compaction.
 const COMPACT_KEEP_RECENT: usize = 12;
+/// Hard cap for a single LLM request turn. Dispatch tasks have their own
+/// larger timeout, but the model call itself should not be able to hang
+/// silently with no message/tool events.
+const LLM_TURN_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Compact message history when context length is exceeded.
 /// Keeps the first user message (original task framing) and the most recent messages,
@@ -104,7 +109,14 @@ pub async fn query(
         }
 
         // 1. Call the LLM
-        let assistant_msg = match query_llm::query_llm(
+        info!(
+            "[{}] LLM turn start: messages={} tools={} stream={}",
+            config.agent_id,
+            messages.len(),
+            config.tools.len(),
+            config.stream
+        );
+        let llm_call = query_llm::query_llm(
             &config.http_client,
             &messages,
             &config.system_prompt,
@@ -113,11 +125,27 @@ pub async fn query(
             &config.profile,
             config.thinking,
             config.stream,
-        )
-        .await
-        {
-            Ok(msg) => msg,
-            Err(e) => {
+        );
+        let assistant_msg = match tokio::time::timeout(LLM_TURN_TIMEOUT, llm_call).await {
+            Err(_) => {
+                let msg = format!(
+                    "LLM request timed out after {}s without completing a turn",
+                    LLM_TURN_TIMEOUT.as_secs()
+                );
+                config
+                    .event_bus
+                    .emit(EngineEvent::SessionError(SessionErrorData {
+                        error_type: "error".into(),
+                        error: SessionErrorDetail {
+                            code: "LLM_TIMEOUT".into(),
+                            message: msg.clone(),
+                            details: None,
+                        },
+                    }));
+                return Err(anyhow::anyhow!(msg));
+            }
+            Ok(Ok(msg)) => msg,
+            Ok(Err(e)) => {
                 let classified = query_llm::LlmError::classify(&e);
                 if classified.should_emit() {
                     config
@@ -203,6 +231,13 @@ pub async fn query(
         let (text_content, reasoning, tool_uses) = extract_content(&assistant_msg);
 
         let has_tool_calls = !tool_uses.is_empty();
+        info!(
+            "[{}] LLM turn complete: text_len={} reasoning_len={} tool_calls={}",
+            config.agent_id,
+            text_content.len(),
+            reasoning.len(),
+            tool_uses.len()
+        );
         let tool_call_infos: Option<Vec<ToolCallInfo>> = if has_tool_calls {
             Some(
                 tool_uses

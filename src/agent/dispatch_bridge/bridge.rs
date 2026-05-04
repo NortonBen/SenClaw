@@ -32,6 +32,10 @@ pub type SendToAgentCallback = Arc<dyn Fn(&str, &str, &str, &str) + Send + Sync>
 /// so the sub-agent can be restored to its own working directory.
 pub type RevertWorkspaceCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Callback invoked when a persistent sub-agent must be stopped, for example
+/// after its dispatch task reaches the DispatchBridge timeout.
+pub type AbortAgentCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 /// Callback invoked when a dispatch task changes status. Arguments:
 /// `(task_id, new_status, task_label, parent_goal)` — used by CoworkManager
 /// to keep CoworkTask status in sync with DispatchTask lifecycle.
@@ -64,6 +68,9 @@ pub struct DispatchBridge {
     /// Workspace restore hand-off — invoked after the last in-flight task on
     /// a jid finishes.
     revert_workspace: Mutex<Option<RevertWorkspaceCallback>>,
+    /// Agent abort hand-off — invoked when a timed-out persistent task should
+    /// stop its underlying AgentPool process_and_wait loop.
+    abort_agent: Mutex<Option<AbortAgentCallback>>,
     /// Persona registry — required for virtual-agent dispatch (Phase 5).
     persona_registry: Mutex<Option<Arc<Mutex<PersonaRegistry>>>>,
     /// Virtual worker pool — required for virtual-agent dispatch (Phase 5).
@@ -109,6 +116,7 @@ impl DispatchBridge {
             on_admin_activity: Mutex::new(None),
             send_to_agent: Mutex::new(None),
             revert_workspace: Mutex::new(None),
+            abort_agent: Mutex::new(None),
             persona_registry: Mutex::new(None),
             virtual_worker_pool: Mutex::new(None),
             on_task_lifecycle: Mutex::new(None),
@@ -146,6 +154,12 @@ impl DispatchBridge {
     /// task on a sub-agent finishes.
     pub fn set_revert_workspace(&self, cb: RevertWorkspaceCallback) {
         *self.revert_workspace.lock().unwrap() = Some(cb);
+    }
+
+    /// Inject the sub-agent abort hand-off used when DispatchBridge times out
+    /// a persistent task before AgentPool's longer process_and_wait watchdog.
+    pub fn set_abort_agent(&self, cb: AbortAgentCallback) {
+        *self.abort_agent.lock().unwrap() = Some(cb);
     }
 
     /// Inject a callback fired on every task status transition (start/done/error/timeout).
@@ -576,6 +590,12 @@ impl DispatchBridge {
         }
     }
 
+    fn fire_abort_agent(&self, jid: &str, reason: &str) {
+        if let Some(cb) = self.abort_agent.lock().unwrap().as_ref() {
+            cb(jid, reason);
+        }
+    }
+
     // ---- Scheduler ====
 
     /// Polling tick: timeout-check active tasks, then launch ready tasks.
@@ -869,6 +889,9 @@ impl DispatchBridge {
         self.fire_task_lifecycle(task_id, "timeout", &task_label, &parent_goal);
         self.remove_active_task(task_id);
         tracing::warn!("[DispatchBridge] Task {task_id} timed out");
+        if !jid.is_empty() {
+            self.fire_abort_agent(jid, &format!("Dispatch task {task_id} timed out"));
+        }
         if let Some(folder) = completed_admin {
             self.activate_next_queued(&folder);
         }

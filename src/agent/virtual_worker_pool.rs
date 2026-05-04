@@ -42,6 +42,23 @@ pub struct TodoItem {
 /// Callback for forwarding virtual-agent todos to WsGateway.
 pub type TodosNotifyFn = Arc<dyn Fn(&str, &str, &[TodoItem]) + Send + Sync>;
 
+/// Callback wired from lib.rs so virtual agents can surface permission requests to admin UI.
+///
+/// Arguments: (virtual_jid, tool_name, title, content, options, response_sender)
+/// Caller stores the sender, notifies UI via PermissionBridge, and delivers the
+/// selected option string back through the sender when the user responds.
+pub type VirtualPermissionFn = Arc<
+    dyn Fn(
+        String,                              // virtual_jid
+        String,                              // tool_name
+        String,                              // title
+        serde_json::Value,                   // content
+        HashMap<String, String>,             // options
+        std::sync::mpsc::SyncSender<String>, // one-shot response channel
+    ) + Send
+    + Sync,
+>;
+
 // ===== Trait — abstracts sema-core lifecycle for virtual agents =====
 
 /// Abstracts the full sema-core lifecycle for a virtual agent run:
@@ -72,6 +89,8 @@ pub trait VirtualCoreApi: Send + Sync {
         cancel: Arc<AtomicBool>,
         todos_notify: Option<TodosNotifyFn>,
         extra_mcp_servers: &[McpServerConfig],
+        virtual_jid: &str,
+        permission_fn: Option<VirtualPermissionFn>,
     ) -> Result<String> {
         Err(anyhow::anyhow!("VirtualCoreApi not wired"))
     }
@@ -125,6 +144,9 @@ pub struct VirtualWorkerPool {
     >,
     /// Returns the current skip-permission state (follows main-agent config).
     get_skip_perms: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    /// Forward permission requests from virtual agents to the admin UI.
+    /// Set from lib.rs after PermissionBridge is available.
+    permission_fn: Mutex<Option<VirtualPermissionFn>>,
 }
 
 impl VirtualWorkerPool {
@@ -137,6 +159,7 @@ impl VirtualWorkerPool {
             extra_mcp_servers: Mutex::new(Vec::new()),
             on_bind_permission: Mutex::new(None),
             get_skip_perms: Mutex::new(None),
+            permission_fn: Mutex::new(None),
         }
     }
 
@@ -150,6 +173,12 @@ impl VirtualWorkerPool {
     /// Inject todos-notify callback (forward virtual-agent todos to WsGateway).
     pub fn set_todos_notify(&self, f: TodosNotifyFn) {
         *self.todos_notify.lock().unwrap() = Some(f);
+    }
+
+    /// Inject the permission-forwarding callback so virtual agents can show
+    /// approval prompts in the admin UI instead of silently auto-refusing.
+    pub fn set_virtual_permission_fn(&self, f: VirtualPermissionFn) {
+        *self.permission_fn.lock().unwrap() = Some(f);
     }
 
     /// Inject permission bridge binding.
@@ -376,6 +405,8 @@ impl VirtualWorkerPool {
         let persona_name = persona.name.clone();
         let task_id_captured = task_id.to_string();
         let extra_mcp_servers = self.extra_mcp_servers.lock().unwrap().clone();
+        let perm_fn = self.permission_fn.lock().unwrap().clone();
+        let virtual_jid_for_perm = format!("virtual:{task_id}");
 
         // Wrap the pool's todos_notify to send with the correct virtual JID
         // and persona name.
@@ -412,6 +443,8 @@ impl VirtualWorkerPool {
                 cancel,
                 todos_notify,
                 &extra_mcp_servers,
+                &virtual_jid_for_perm,
+                perm_fn,
             )
         })
         .await;
@@ -519,12 +552,14 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         tools: &[String],
         system_prompt: Option<&str>,
         _skills_extra_dirs: &[String],
-        _skip_perms: bool,
+        skip_perms: bool,
         prompt: &str,
         timeout: Duration,
         cancel: Arc<AtomicBool>,
         todos_notify: Option<TodosNotifyFn>,
         extra_mcp_servers: &[McpServerConfig],
+        virtual_jid: &str,
+        permission_fn: Option<VirtualPermissionFn>,
     ) -> Result<String> {
         use crate::zen_core::{EngineEvent, SessionState, ZenCore, ZenCoreOptions};
 
@@ -534,6 +569,10 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             instance_id: instance_id.to_string(),
             working_dir: working_dir.to_string(),
             agent_data_dir: agent_data_dir.to_string(),
+            skip_file_edit_permission: skip_perms,
+            skip_bash_exec_permission: skip_perms,
+            skip_skill_permission: skip_perms,
+            skip_mcp_tool_permission: skip_perms,
             system_prompt: system_prompt
                 .unwrap_or("You are a helpful AI assistant.")
                 .to_string(),
@@ -605,6 +644,51 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                                 })
                                 .collect();
                             notify(instance_id, "virtual", &todos);
+                        }
+                    }
+                    EngineEvent::ToolPermissionRequest(data) => {
+                        if let Some(ref perm_fn) = permission_fn {
+                            // Forward to admin UI via PermissionBridge and block
+                            // until the user responds (or we time out).
+                            let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1);
+                            perm_fn(
+                                virtual_jid.to_string(),
+                                data.tool_name.clone(),
+                                data.title.clone(),
+                                data.content.clone(),
+                                data.options.clone(),
+                                tx,
+                            );
+                            tracing::info!(
+                                "[VirtualAgent:{instance_id}] permission forwarded to admin UI, waiting for response tool={}",
+                                data.tool_name
+                            );
+                            let selected = rx
+                                .recv_timeout(std::time::Duration::from_secs(600))
+                                .unwrap_or_else(|_| {
+                                    tracing::warn!(
+                                        "[VirtualAgent:{instance_id}] permission response timed out; refusing tool={}",
+                                        data.tool_name
+                                    );
+                                    "refuse".to_string()
+                                });
+                            engine.respond_to_tool_permission(
+                                crate::zen_core::ToolPermissionResponseData {
+                                    tool_name: data.tool_name,
+                                    selected,
+                                },
+                            );
+                        } else {
+                            tracing::warn!(
+                                "[VirtualAgent:{instance_id}] no permission handler wired; auto-refusing tool={}",
+                                data.tool_name
+                            );
+                            engine.respond_to_tool_permission(
+                                crate::zen_core::ToolPermissionResponseData {
+                                    tool_name: data.tool_name,
+                                    selected: "refuse".to_string(),
+                                },
+                            );
                         }
                     }
                     _ => {}

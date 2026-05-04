@@ -136,6 +136,38 @@ impl super::Db {
         })
     }
 
+    /// Append a single tool name to a group's `allowed_tools` JSON array.
+    /// No-op if the tool is already in the list or the group does not exist.
+    pub fn append_group_allowed_tool(&self, jid: &str, tool: &str) -> Result<()> {
+        self.with_conn(|c| {
+            let raw: Option<String> = c
+                .query_row(
+                    "SELECT allowed_tools FROM groups WHERE jid = ?1",
+                    params![jid],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            let mut tools: Vec<String> = match raw.as_deref() {
+                Some(s) if !s.is_empty() && s != "null" => {
+                    serde_json::from_str(s).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+
+            let key = tool.to_string();
+            if !tools.contains(&key) {
+                tools.push(key);
+                let json = serde_json::to_string(&tools)?;
+                c.execute(
+                    "UPDATE groups SET allowed_tools = ?1 WHERE jid = ?2",
+                    params![json, jid],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn touch_group_active(&self, jid: &str, timestamp: &str) -> Result<()> {
         self.with_conn(|c| {
             c.execute(
