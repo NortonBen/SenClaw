@@ -109,9 +109,11 @@ pub fn evict_if_needed(entries: &[MemoryEntry]) -> Vec<MemoryEntry> {
 
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
-        .split(&[
-            ' ', '\t', '\n', ',', '.', '!', '?', ';', ':', '，', '。', '！', '？', '、',
-        ][..])
+        .split(
+            &[
+                ' ', '\t', '\n', ',', '.', '!', '?', ';', ':', '，', '。', '！', '？', '、',
+            ][..],
+        )
         .filter(|t| !t.is_empty())
         .map(|t| t.to_string())
         .collect()
@@ -265,8 +267,7 @@ mod tests {
     use super::*;
 
     fn make_entry(id: &str, content: &str, hits: u32, days_ago: f64) -> MemoryEntry {
-        let ts = chrono::Utc::now()
-            - chrono::Duration::seconds((days_ago * 86_400.0) as i64);
+        let ts = chrono::Utc::now() - chrono::Duration::seconds((days_ago * 86_400.0) as i64);
         MemoryEntry {
             id: id.to_string(),
             content: content.to_string(),

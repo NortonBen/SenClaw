@@ -95,7 +95,9 @@ pub(crate) async fn subagents_create(
         pr.lock().unwrap().reload();
     }
 
-    Ok(Json(serde_json::json!({ "ok": true, "filename": format!("{filename}.md") })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "filename": format!("{filename}.md") }),
+    ))
 }
 
 pub(crate) fn sanitize_persona_filename(name: &str) -> String {
@@ -168,10 +170,17 @@ pub(crate) async fn subagents_toggle(
     match action.as_str() {
         "enable" => enable_subagent(&name),
         "disable" => disable_subagent(&name),
-        _ => return Err(AppError(StatusCode::BAD_REQUEST, "action must be enable or disable".into())),
+        _ => {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "action must be enable or disable".into(),
+            ))
+        }
     }
     let disabled = is_subagent_disabled(&name);
-    Ok(Json(serde_json::json!({ "name": name, "disabled": disabled })))
+    Ok(Json(
+        serde_json::json!({ "name": name, "disabled": disabled }),
+    ))
 }
 
 #[cfg(test)]

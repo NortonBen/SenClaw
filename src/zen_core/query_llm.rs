@@ -45,12 +45,30 @@ pub async fn query_llm(
 
     match adapt {
         "anthropic" => {
-            query_anthropic(client, messages, system_prompt, tools, cancel, profile, thinking, stream)
-                .await
+            query_anthropic(
+                client,
+                messages,
+                system_prompt,
+                tools,
+                cancel,
+                profile,
+                thinking,
+                stream,
+            )
+            .await
         }
         _ => {
-            query_openai(client, messages, system_prompt, tools, cancel, profile, thinking, stream)
-                .await
+            query_openai(
+                client,
+                messages,
+                system_prompt,
+                tools,
+                cancel,
+                profile,
+                thinking,
+                stream,
+            )
+            .await
         }
     }
 }
@@ -70,17 +88,20 @@ fn resolve_adapter(provider: &str) -> &str {
 // ============================================================================
 
 fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
-    tools.iter().map(|t| {
-        let schema = t.input_schema();
-        serde_json::json!({
-            "type": "function",
-            "function": {
-                "name": t.name(),
-                "description": t.description(),
-                "parameters": schema,
-            }
+    tools
+        .iter()
+        .map(|t| {
+            let schema = t.input_schema();
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name(),
+                    "description": t.description(),
+                    "parameters": schema,
+                }
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Convert internal [`Message`] history to OpenAI Chat Completions `messages` JSON.
@@ -160,7 +181,8 @@ fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<
                             reasoning_buf.push_str(thinking);
                         }
                         ContentBlock::ToolUse { id, name, input } => {
-                            let args = serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
+                            let args =
+                                serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
                             tool_calls.push(serde_json::json!({
                                 "id": id,
                                 "type": "function",
@@ -208,7 +230,10 @@ async fn query_openai(
     _thinking: bool,
     stream: bool,
 ) -> Result<Message> {
-    let url = format!("{}/chat/completions", profile.base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/chat/completions",
+        profile.base_url.trim_end_matches('/')
+    );
 
     let api_messages = openai_messages_for_api(messages, system_prompt)?;
     let openai_tools = if tools.is_empty() {
@@ -352,7 +377,8 @@ fn parse_openai_non_stream(json: &Value) -> Result<Message> {
     let msg = &choice["message"];
 
     let text = msg["content"].as_str().unwrap_or("").to_string();
-    let reasoning = msg.get("reasoning_content")
+    let reasoning = msg
+        .get("reasoning_content")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -372,14 +398,17 @@ fn parse_openai_non_stream(json: &Value) -> Result<Message> {
 // ============================================================================
 
 fn anthropic_tools_for_api(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
-    tools.iter().map(|t| {
-        let schema = t.input_schema();
-        serde_json::json!({
-            "name": t.name(),
-            "description": t.description(),
-            "input_schema": schema,
+    tools
+        .iter()
+        .map(|t| {
+            let schema = t.input_schema();
+            serde_json::json!({
+                "name": t.name(),
+                "description": t.description(),
+                "input_schema": schema,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn anthropic_messages_for_api(messages: &[Message]) -> Vec<Value> {
@@ -410,7 +439,11 @@ fn anthropic_content_blocks(blocks: &[ContentBlock]) -> Value {
                     "input": input,
                 }));
             }
-            ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
                 parts.push(serde_json::json!({
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
@@ -439,10 +472,7 @@ async fn query_anthropic(
     thinking: bool,
     stream: bool,
 ) -> Result<Message> {
-    let url = format!(
-        "{}/v1/messages",
-        profile.base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/messages", profile.base_url.trim_end_matches('/'));
 
     let api_messages = anthropic_messages_for_api(messages);
     let anthropic_tools = if tools.is_empty() {
@@ -600,7 +630,8 @@ async fn parse_anthropic_stream(
     // Convert accumulated JSON strings to parsed objects
     for block in &mut tool_use_blocks {
         if let Some(json_str) = block.get("_input_json").and_then(|v| v.as_str()) {
-            block["input"] = serde_json::from_str(json_str).unwrap_or(Value::Object(Default::default()));
+            block["input"] =
+                serde_json::from_str(json_str).unwrap_or(Value::Object(Default::default()));
         }
     }
 
@@ -640,11 +671,7 @@ fn parse_anthropic_non_stream(json: &Value) -> Result<Message> {
 // Message construction helpers
 // ============================================================================
 
-fn build_assistant_message(
-    text: &str,
-    reasoning: &str,
-    tool_calls: &[Value],
-) -> Result<Message> {
+fn build_assistant_message(text: &str, reasoning: &str, tool_calls: &[Value]) -> Result<Message> {
     let mut content: Vec<ContentBlock> = Vec::new();
 
     if !reasoning.is_empty() {
@@ -774,7 +801,10 @@ impl LlmError {
         }
 
         // Auth
-        if msg_lower.contains("401") || msg_lower.contains("auth") || msg_lower.contains("unauthorized") {
+        if msg_lower.contains("401")
+            || msg_lower.contains("auth")
+            || msg_lower.contains("unauthorized")
+        {
             return Self {
                 code: "AUTH_ERROR".into(),
                 message: "API authentication failed — check API key".into(),
@@ -808,7 +838,8 @@ impl LlmError {
         }
 
         // JSON parse
-        if msg_lower.contains("json") || msg_lower.contains("parse") || msg_lower.contains("serde") {
+        if msg_lower.contains("json") || msg_lower.contains("parse") || msg_lower.contains("serde")
+        {
             return Self {
                 code: "API_RESPONSE_ERROR".into(),
                 message: format!("API response parse error: {msg}"),

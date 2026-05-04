@@ -1,5 +1,5 @@
-use std::fs;
 use std::collections::HashSet;
+use std::fs;
 use std::sync::Arc;
 
 use axum::{
@@ -10,9 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::clawhub::client::{
-    download_skill_zip, get_skill_meta, search_skills, DEFAULT_REGISTRY,
-};
+use crate::clawhub::client::{download_skill_zip, get_skill_meta, search_skills, DEFAULT_REGISTRY};
 use crate::clawhub::lockfile::{
     extract_zip_to_dir, read_lockfile, write_lockfile, write_skill_origin,
 };
@@ -68,8 +66,7 @@ pub(crate) async fn skills_remote_search(
         .await
         .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e.to_string()))?;
     let local_skills = load_all_local_skills(&s.config);
-    let local_names: HashSet<&str> =
-        local_skills.iter().map(|sk| sk.name.as_str()).collect();
+    let local_names: HashSet<&str> = local_skills.iter().map(|sk| sk.name.as_str()).collect();
     let results: Vec<serde_json::Value> = raw
         .into_iter()
         .map(|r| {
@@ -96,7 +93,10 @@ pub(crate) async fn skills_install(
     if slug.is_empty() {
         return Err(AppError(StatusCode::BAD_REQUEST, "slug required".into()));
     }
-    if !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(AppError(StatusCode::BAD_REQUEST, "invalid slug".into()));
     }
     let managed_dir = &s.config.paths.managed_skills_dir;
@@ -123,7 +123,11 @@ pub(crate) async fn skills_install(
         .await
         .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-    if meta.moderation.as_ref().map_or(false, |m| m.is_malware_blocked) {
+    if meta
+        .moderation
+        .as_ref()
+        .map_or(false, |m| m.is_malware_blocked)
+    {
         return Err(AppError(
             StatusCode::FORBIDDEN,
             format!("{slug} is flagged as malicious"),
@@ -134,7 +138,12 @@ pub(crate) async fn skills_install(
         .latest_version
         .as_ref()
         .map(|v| v.version.clone())
-        .ok_or_else(|| AppError(StatusCode::UNPROCESSABLE_ENTITY, "no version available".into()))?;
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "no version available".into(),
+            )
+        })?;
 
     let zip_buf = download_skill_zip(&slug, &version, Some(&registry), None)
         .await
@@ -178,7 +187,9 @@ pub(crate) async fn skills_install(
     }
     let _ = emit_skills_refresh(&s.config);
 
-    Ok(Json(serde_json::json!({ "ok": true, "slug": slug, "version": version })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "slug": slug, "version": version }),
+    ))
 }
 
 // ===== /api/skills/{name}/readme =====
@@ -228,12 +239,19 @@ pub(crate) async fn skills_toggle(
     match action.as_str() {
         "enable" => enable_skill(&name),
         "disable" => disable_skill(&name),
-        _ => return Err(AppError(StatusCode::BAD_REQUEST, "action must be enable or disable".into())),
+        _ => {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "action must be enable or disable".into(),
+            ))
+        }
     }
     if let Some(ref api) = s.agent_api {
         api.reload_all_skills();
     }
     let _ = emit_skills_refresh(&s.config);
     let disabled = is_skill_disabled(&name);
-    Ok(Json(serde_json::json!({ "name": name, "disabled": disabled })))
+    Ok(Json(
+        serde_json::json!({ "name": name, "disabled": disabled }),
+    ))
 }

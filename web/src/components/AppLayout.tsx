@@ -28,6 +28,8 @@ export function AppLayout({ sidebar, children, status }: Props) {
       <AgentConsole
         dispatchParents={ws.dispatchParents}
         agentTodos={ws.agentTodos}
+        taskBacklogs={ws.taskBacklogs}
+        agentConsoleEvents={ws.agentConsoleEvents}
         messages={ws.messages}
         groups={ws.groups}
         agentStates={ws.agentStates}

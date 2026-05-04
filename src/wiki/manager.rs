@@ -25,10 +25,7 @@ impl WikiManager {
         excluded.insert(".git".to_string());
         excluded.insert("node_modules".to_string());
         excluded.insert(".DS_Store".to_string());
-        Self {
-            wiki_dir,
-            excluded,
-        }
+        Self { wiki_dir, excluded }
     }
 
     /// Initialize git repo + base directory structure on first use.
@@ -42,7 +39,8 @@ impl WikiManager {
 
         self.git(&["init"]).await?;
         self.git(&["config", "user.name", "semaclaw"]).await?;
-        self.git(&["config", "user.email", "semaclaw@local"]).await?;
+        self.git(&["config", "user.email", "semaclaw@local"])
+            .await?;
 
         fs::write(self.wiki_dir.join(".gitignore"), ".DS_Store\n*.swp\n")?;
 
@@ -68,10 +66,7 @@ impl WikiManager {
         self.git(&["add", "-A"]).await?;
         self.git(&["commit", "-m", "wiki: initial commit"]).await?;
 
-        tracing::info!(
-            "[WikiManager] Initialized wiki at {:?}",
-            self.wiki_dir
-        );
+        tracing::info!("[WikiManager] Initialized wiki at {:?}", self.wiki_dir);
         Ok(())
     }
 
@@ -124,15 +119,13 @@ impl WikiManager {
                     }
                 })
                 .unwrap_or_default(),
-            source: source
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| {
-                    if existing_fm.source.is_empty() {
-                        "manual".to_string()
-                    } else {
-                        existing_fm.source
-                    }
-                }),
+            source: source.map(|s| s.to_string()).unwrap_or_else(|| {
+                if existing_fm.source.is_empty() {
+                    "manual".to_string()
+                } else {
+                    existing_fm.source
+                }
+            }),
         };
 
         let final_content = Self::inject_frontmatter(content, &fm);

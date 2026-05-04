@@ -241,17 +241,26 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE groups ADD COLUMN allowed_work_dirs TEXT", [])?;
     }
     if !group_cols.iter().any(|c| c == "group_type") {
-        conn.execute("ALTER TABLE groups ADD COLUMN group_type TEXT NOT NULL DEFAULT 'chat'", [])?;
+        conn.execute(
+            "ALTER TABLE groups ADD COLUMN group_type TEXT NOT NULL DEFAULT 'chat'",
+            [],
+        )?;
     }
 
     let task_cols = column_names(conn, "scheduled_tasks")?;
     if !task_cols.iter().any(|c| c == "script_path") {
-        conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN script_path TEXT", [])?;
+        conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN script_path TEXT",
+            [],
+        )?;
     }
 
     let agent_cols = column_names(conn, "agents")?;
     if !agent_cols.iter().any(|c| c == "core_prompt") {
-        conn.execute("ALTER TABLE agents ADD COLUMN core_prompt TEXT NOT NULL DEFAULT ''", [])?;
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN core_prompt TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
     }
     if !agent_cols.iter().any(|c| c == "model_id") {
         conn.execute("ALTER TABLE agents ADD COLUMN model_id TEXT", [])?;
@@ -259,7 +268,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     let ws_cols = column_names(conn, "cowork_workspaces")?;
     if !ws_cols.iter().any(|c| c == "working_dir") {
-        conn.execute("ALTER TABLE cowork_workspaces ADD COLUMN working_dir TEXT", [])?;
+        conn.execute(
+            "ALTER TABLE cowork_workspaces ADD COLUMN working_dir TEXT",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -282,11 +294,19 @@ pub(crate) fn apply_memory_tables(conn: &mut Connection, config: &Config) -> Res
         crate::config::EmbeddingProvider::Ollama => config.memory.ollama_model.clone(),
         crate::config::EmbeddingProvider::Local => {
             let m = config.memory.local_model.clone();
-            if m.is_empty() { "default".to_owned() } else { m }
+            if m.is_empty() {
+                "default".to_owned()
+            } else {
+                m
+            }
         }
         crate::config::EmbeddingProvider::Openai => {
             let m = config.memory.openai_model.clone();
-            if m.is_empty() { "text-embedding-3-small".to_owned() } else { m }
+            if m.is_empty() {
+                "text-embedding-3-small".to_owned()
+            } else {
+                m
+            }
         }
         crate::config::EmbeddingProvider::None => String::new(),
     };

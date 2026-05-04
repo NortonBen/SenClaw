@@ -9,11 +9,15 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Subcommand;
 
-use crate::clawhub::auth::{clear_stored_token, get_config_path, read_stored_token, write_stored_token};
+use crate::clawhub::auth::{
+    clear_stored_token, get_config_path, read_stored_token, write_stored_token,
+};
 use crate::clawhub::client::{
     download_skill_zip, get_skill_meta, publish_skill, search_skills, whoami, DEFAULT_REGISTRY,
 };
-use crate::clawhub::lockfile::{extract_zip_to_dir, read_lockfile, read_skill_origin, write_lockfile, write_skill_origin};
+use crate::clawhub::lockfile::{
+    extract_zip_to_dir, read_lockfile, read_skill_origin, write_lockfile, write_skill_origin,
+};
 use crate::clawhub::signal::emit_skills_refresh;
 use crate::config::Config;
 
@@ -84,7 +88,11 @@ fn format_relative_time(ts_ms: u64) -> String {
 }
 
 async fn resolve_group_skills_dir(config: &Config, group: &str) -> Result<PathBuf> {
-    if group.trim().is_empty() || group.contains('/') || group.contains('\\') || group.contains("..") {
+    if group.trim().is_empty()
+        || group.contains('/')
+        || group.contains('\\')
+        || group.contains("..")
+    {
         anyhow::bail!("Invalid group id: {group}");
     }
     let group_dir = config.paths.workspace_dir.join(group);
@@ -174,24 +182,35 @@ pub async fn run(cmd: ClawhubCmd) -> Result<()> {
         ClawhubCmd::Logout => cmd_logout().await,
         ClawhubCmd::Whoami => cmd_whoami().await,
         ClawhubCmd::Search { query, limit } => cmd_search(&query, limit).await,
-        ClawhubCmd::Install { slug, force, version, group } => {
-            cmd_install(&config, &slug, force, version.as_deref(), group.as_deref()).await
-        }
-        ClawhubCmd::Update { slug, all, force, version } => {
-            cmd_update(&config, slug.as_deref(), all, force, version.as_deref()).await
-        }
+        ClawhubCmd::Install {
+            slug,
+            force,
+            version,
+            group,
+        } => cmd_install(&config, &slug, force, version.as_deref(), group.as_deref()).await,
+        ClawhubCmd::Update {
+            slug,
+            all,
+            force,
+            version,
+        } => cmd_update(&config, slug.as_deref(), all, force, version.as_deref()).await,
         ClawhubCmd::List => cmd_list(&config).await,
         ClawhubCmd::Uninstall { slug, yes } => cmd_uninstall(&config, &slug, yes).await,
-        ClawhubCmd::Publish { path, dry_run, registry, tags } => {
-            cmd_publish(&path, dry_run, registry.as_deref(), &tags).await
-        }
+        ClawhubCmd::Publish {
+            path,
+            dry_run,
+            registry,
+            tags,
+        } => cmd_publish(&path, dry_run, registry.as_deref(), &tags).await,
     }
 }
 
 // ===== login =====
 
 async fn cmd_login(provided_token: Option<String>) -> Result<()> {
-    let mut token = provided_token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let mut token = provided_token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
 
     if token.is_none() {
         eprintln!("Get your API token at: https://clawhub.ai/settings/tokens");
@@ -212,7 +231,10 @@ async fn cmd_login(provided_token: Option<String>) -> Result<()> {
     })?;
 
     if !token.starts_with("clh_") {
-        anyhow::bail!("Login failed: invalid token format \"{}...\" (expected clh_...).", &token[..token.len().min(12)]);
+        anyhow::bail!(
+            "Login failed: invalid token format \"{}...\" (expected clh_...).",
+            &token[..token.len().min(12)]
+        );
     }
 
     write_stored_token(&token)?;
@@ -221,7 +243,11 @@ async fn cmd_login(provided_token: Option<String>) -> Result<()> {
     eprint!("Verifying token...\r");
     match whoami(Some(&get_registry()), Some(&token)).await {
         Ok(user) => {
-            let name = user.display_name.as_deref().or(user.handle.as_deref()).unwrap_or("(unknown)");
+            let name = user
+                .display_name
+                .as_deref()
+                .or(user.handle.as_deref())
+                .unwrap_or("(unknown)");
             eprint!("                  \r");
             println!("Login successful. Logged in as {name}");
             println!("Token saved to: {}", get_config_path().display());
@@ -252,14 +278,19 @@ async fn cmd_logout() -> Result<()> {
 // ===== whoami =====
 
 async fn cmd_whoami() -> Result<()> {
-    let token = read_stored_token().ok_or_else(|| {
-        anyhow::anyhow!("Not logged in. Run: senclaw clawhub login")
-    })?;
+    let token = read_stored_token()
+        .ok_or_else(|| anyhow::anyhow!("Not logged in. Run: senclaw clawhub login"))?;
 
     match whoami(Some(&get_registry()), Some(&token)).await {
         Ok(user) => {
-            println!("Handle:      {}", user.handle.as_deref().unwrap_or("(not set)"));
-            println!("DisplayName: {}", user.display_name.as_deref().unwrap_or("(not set)"));
+            println!(
+                "Handle:      {}",
+                user.handle.as_deref().unwrap_or("(not set)")
+            );
+            println!(
+                "DisplayName: {}",
+                user.display_name.as_deref().unwrap_or("(not set)")
+            );
             println!("Registry:    {}", DEFAULT_REGISTRY);
             println!("Config:      {}", get_config_path().display());
         }
@@ -287,10 +318,27 @@ async fn cmd_search(query: &str, limit: u32) -> Result<()> {
     }
 
     for r in &results {
-        let version = r.version.as_deref().map(|v| format!(" v{v}")).unwrap_or_default();
-        let age = r.updated_at.map(|ts| format!("  {}", format_relative_time(ts * 1000))).unwrap_or_default();
-        let summary = r.summary.as_deref().unwrap_or("").chars().take(60).collect::<String>();
-        let summary_str = if summary.is_empty() { String::new() } else { format!("  {summary}") };
+        let version = r
+            .version
+            .as_deref()
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default();
+        let age = r
+            .updated_at
+            .map(|ts| format!("  {}", format_relative_time(ts * 1000)))
+            .unwrap_or_default();
+        let summary = r
+            .summary
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .take(60)
+            .collect::<String>();
+        let summary_str = if summary.is_empty() {
+            String::new()
+        } else {
+            format!("  {summary}")
+        };
         println!("{}{}{}{}", r.slug, version, age, summary_str);
     }
     Ok(())
@@ -298,7 +346,13 @@ async fn cmd_search(query: &str, limit: u32) -> Result<()> {
 
 // ===== install =====
 
-async fn cmd_install(config: &Config, slug: &str, force: bool, version: Option<&str>, group: Option<&str>) -> Result<()> {
+async fn cmd_install(
+    config: &Config,
+    slug: &str,
+    force: bool,
+    version: Option<&str>,
+    group: Option<&str>,
+) -> Result<()> {
     let slug = require_slug(slug)?;
     let managed_dir = if let Some(group) = group {
         resolve_group_skills_dir(config, group).await?
@@ -308,7 +362,10 @@ async fn cmd_install(config: &Config, slug: &str, force: bool, version: Option<&
     let target = managed_dir.join(&slug);
 
     if !force && target.exists() {
-        anyhow::bail!("Already installed: {}\nUse --force to reinstall.", target.display());
+        anyhow::bail!(
+            "Already installed: {}\nUse --force to reinstall.",
+            target.display()
+        );
     }
 
     let registry = get_registry();
@@ -316,11 +373,22 @@ async fn cmd_install(config: &Config, slug: &str, force: bool, version: Option<&
     eprint!("Resolving {slug}...\r");
     let meta = get_skill_meta(&slug, Some(&registry), None).await?;
 
-    if meta.moderation.as_ref().map(|m| m.is_malware_blocked).unwrap_or(false) {
+    if meta
+        .moderation
+        .as_ref()
+        .map(|m| m.is_malware_blocked)
+        .unwrap_or(false)
+    {
         anyhow::bail!("Blocked: {slug} is flagged as malicious and cannot be installed.");
     }
 
-    if meta.moderation.as_ref().map(|m| m.is_suspicious).unwrap_or(false) && !force {
+    if meta
+        .moderation
+        .as_ref()
+        .map(|m| m.is_suspicious)
+        .unwrap_or(false)
+        && !force
+    {
         eprint!("                              \r");
         eprintln!("\nWarning: \"{slug}\" is flagged as suspicious.");
         eprintln!("   Review the skill code before use.\n");
@@ -348,36 +416,51 @@ async fn cmd_install(config: &Config, slug: &str, force: bool, version: Option<&
     }
     extract_zip_to_dir(&zip_buf, &target)?;
 
-    let _ = write_skill_origin(&target, &crate::clawhub::lockfile::SkillOrigin {
-        version: 1,
-        registry: DEFAULT_REGISTRY.to_string(),
-        slug: slug.clone(),
-        installed_version: resolved_version.clone(),
-        installed_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-    });
+    let _ = write_skill_origin(
+        &target,
+        &crate::clawhub::lockfile::SkillOrigin {
+            version: 1,
+            registry: DEFAULT_REGISTRY.to_string(),
+            slug: slug.clone(),
+            installed_version: resolved_version.clone(),
+            installed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        },
+    );
 
     let mut lock = read_lockfile(&managed_dir);
-    lock.skills.insert(slug.clone(), crate::clawhub::lockfile::LockfileEntry {
-        version: Some(resolved_version.clone()),
-        installed_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-    });
+    lock.skills.insert(
+        slug.clone(),
+        crate::clawhub::lockfile::LockfileEntry {
+            version: Some(resolved_version.clone()),
+            installed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        },
+    );
     write_lockfile(&managed_dir, &lock)?;
 
     eprint!("                                        \r");
-    println!("✓ Installed {slug}@{resolved_version} → {}", target.display());
+    println!(
+        "✓ Installed {slug}@{resolved_version} → {}",
+        target.display()
+    );
     let _ = emit_skills_refresh(config);
     Ok(())
 }
 
 // ===== update =====
 
-async fn cmd_update(config: &Config, slug_arg: Option<&str>, all: bool, force: bool, version: Option<&str>) -> Result<()> {
+async fn cmd_update(
+    config: &Config,
+    slug_arg: Option<&str>,
+    all: bool,
+    force: bool,
+    version: Option<&str>,
+) -> Result<()> {
     if slug_arg.is_none() && !all {
         anyhow::bail!("Provide <slug> or --all");
     }
@@ -390,7 +473,11 @@ async fn cmd_update(config: &Config, slug_arg: Option<&str>, all: bool, force: b
     let slugs: Vec<String> = if let Some(slug) = slug_arg {
         vec![require_slug(slug)?]
     } else {
-        lock.skills.keys().filter(|s| is_valid_slug(s)).cloned().collect()
+        lock.skills
+            .keys()
+            .filter(|s| is_valid_slug(s))
+            .cloned()
+            .collect()
     };
 
     if slugs.is_empty() {
@@ -404,7 +491,12 @@ async fn cmd_update(config: &Config, slug_arg: Option<&str>, all: bool, force: b
         eprint!("Checking {slug}...\r");
         match get_skill_meta(slug, Some(&registry), None).await {
             Ok(meta) => {
-                if meta.moderation.as_ref().map(|m| m.is_malware_blocked).unwrap_or(false) {
+                if meta
+                    .moderation
+                    .as_ref()
+                    .map(|m| m.is_malware_blocked)
+                    .unwrap_or(false)
+                {
                     eprint!("                    \r");
                     println!("{slug}: blocked as malicious, skipping");
                     continue;
@@ -427,33 +519,49 @@ async fn cmd_update(config: &Config, slug_arg: Option<&str>, all: bool, force: b
 
                 let target = managed_dir.join(slug);
                 eprint!("Updating {slug} → {target_version}...\r");
-                let zip_buf = download_skill_zip(slug, target_version, Some(&registry), None).await?;
+                let zip_buf =
+                    download_skill_zip(slug, target_version, Some(&registry), None).await?;
                 if target.exists() {
                     tokio::fs::remove_dir_all(&target).await?;
                 }
                 extract_zip_to_dir(&zip_buf, &target)?;
 
                 let existing_origin = read_skill_origin(&target);
-                let _ = write_skill_origin(&target, &crate::clawhub::lockfile::SkillOrigin {
-                    version: 1,
-                    registry: existing_origin.as_ref().map(|o| o.registry.clone()).unwrap_or_else(|| DEFAULT_REGISTRY.to_string()),
-                    slug: existing_origin.as_ref().map(|o| o.slug.clone()).unwrap_or_else(|| slug.clone()),
-                    installed_version: target_version.to_string(),
-                    installed_at: existing_origin.as_ref().map(|o| o.installed_at).unwrap_or_else(|| {
-                        std::time::SystemTime::now()
+                let _ = write_skill_origin(
+                    &target,
+                    &crate::clawhub::lockfile::SkillOrigin {
+                        version: 1,
+                        registry: existing_origin
+                            .as_ref()
+                            .map(|o| o.registry.clone())
+                            .unwrap_or_else(|| DEFAULT_REGISTRY.to_string()),
+                        slug: existing_origin
+                            .as_ref()
+                            .map(|o| o.slug.clone())
+                            .unwrap_or_else(|| slug.clone()),
+                        installed_version: target_version.to_string(),
+                        installed_at: existing_origin
+                            .as_ref()
+                            .map(|o| o.installed_at)
+                            .unwrap_or_else(|| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64
+                            }),
+                    },
+                );
+
+                lock.skills.insert(
+                    slug.clone(),
+                    crate::clawhub::lockfile::LockfileEntry {
+                        version: Some(target_version.to_string()),
+                        installed_at: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
-                            .as_millis() as u64
-                    }),
-                });
-
-                lock.skills.insert(slug.clone(), crate::clawhub::lockfile::LockfileEntry {
-                    version: Some(target_version.to_string()),
-                    installed_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
-                });
+                            .as_millis() as u64,
+                    },
+                );
                 eprint!("                                        \r");
                 println!("{slug}: updated → {target_version}");
             }
@@ -475,7 +583,8 @@ async fn cmd_list(config: &Config) -> Result<()> {
     let managed_dir = get_managed_dir(config);
     let lock = read_lockfile(&managed_dir);
     let mut entries: Vec<(_, _)> = lock.skills.iter().collect();
-    entries.sort_by(|(a, _): &(&String, &crate::clawhub::lockfile::LockfileEntry), (b, _)| a.cmp(b));
+    entries
+        .sort_by(|(a, _): &(&String, &crate::clawhub::lockfile::LockfileEntry), (b, _)| a.cmp(b));
 
     if entries.is_empty() {
         println!("No ClawHub skills installed.");
@@ -531,7 +640,12 @@ async fn cmd_uninstall(config: &Config, slug: &str, yes: bool) -> Result<()> {
 
 // ===== publish =====
 
-async fn cmd_publish(skill_path: &str, dry_run: bool, registry: Option<&str>, tags: &str) -> Result<()> {
+async fn cmd_publish(
+    skill_path: &str,
+    dry_run: bool,
+    registry: Option<&str>,
+    tags: &str,
+) -> Result<()> {
     let resolved = std::path::absolute(Path::new(skill_path))?;
 
     // Verify directory exists
@@ -539,17 +653,28 @@ async fn cmd_publish(skill_path: &str, dry_run: bool, registry: Option<&str>, ta
 
     // Read SKILL.md
     let skill_md_path = resolved.join("SKILL.md");
-    let skill_md = tokio::fs::read_to_string(&skill_md_path).await
+    let skill_md = tokio::fs::read_to_string(&skill_md_path)
+        .await
         .map_err(|_| anyhow::anyhow!("Error: SKILL.md not found in {}", resolved.display()))?;
 
     // Parse frontmatter
     let fm = parse_simple_frontmatter(&skill_md);
 
-    let display_name = fm.get("name").map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    let display_name = fm
+        .get("name")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Error: SKILL.md is missing the \"name\" field"))?;
 
-    let version = fm.get("version").map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Error: SKILL.md is missing the \"version\" field (required for publish)"))?;
+    let version = fm
+        .get("version")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Error: SKILL.md is missing the \"version\" field (required for publish)"
+            )
+        })?;
 
     let dir_slug = resolved
         .file_name()
@@ -557,17 +682,33 @@ async fn cmd_publish(skill_path: &str, dry_run: bool, registry: Option<&str>, ta
         .unwrap_or("")
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    let slug = fm.get("slug").map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    let slug = fm
+        .get("slug")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .unwrap_or(dir_slug);
 
-    let changelog = fm.get("changelog").map(|s| s.trim().to_string()).unwrap_or_default();
-    let tag_list: Vec<String> = tags.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    let changelog = fm
+        .get("changelog")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let tag_list: Vec<String> = tags
+        .split(',')
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
 
     println!("Skill:       {display_name}");
     println!("Slug:        {slug}");
@@ -598,7 +739,8 @@ async fn cmd_publish(skill_path: &str, dry_run: bool, registry: Option<&str>, ta
         files,
         registry,
         None,
-    ).await?;
+    )
+    .await?;
     eprint!("                       \r");
     println!("Published:   {}@{}", result.slug, result.version);
     println!("View at:     https://clawhub.ai/skills/{}", result.slug);
@@ -609,11 +751,17 @@ async fn cmd_publish(skill_path: &str, dry_run: bool, registry: Option<&str>, ta
 
 fn parse_simple_frontmatter(content: &str) -> std::collections::HashMap<String, String> {
     let mut result = std::collections::HashMap::new();
-    let rest = match content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n")) {
+    let rest = match content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
+    {
         Some(r) => r,
         None => return result,
     };
-    let body = match rest.split_once("\n---").or_else(|| rest.split_once("\r\n---")) {
+    let body = match rest
+        .split_once("\n---")
+        .or_else(|| rest.split_once("\r\n---"))
+    {
         Some((b, _)) => b,
         None => return result,
     };
@@ -622,16 +770,20 @@ fn parse_simple_frontmatter(content: &str) -> std::collections::HashMap<String, 
     let mut block_lines: Vec<String> = Vec::new();
     let mut in_block = false;
 
-    let flush_block = |key: &mut Option<String>, lines: &mut Vec<String>, in_block: &mut bool, result: &mut std::collections::HashMap<String, String>| {
-        if let Some(ref k) = key {
-            if *in_block {
-                result.insert(k.clone(), lines.join("\n").trim_end().to_string());
+    let flush_block =
+        |key: &mut Option<String>,
+         lines: &mut Vec<String>,
+         in_block: &mut bool,
+         result: &mut std::collections::HashMap<String, String>| {
+            if let Some(ref k) = key {
+                if *in_block {
+                    result.insert(k.clone(), lines.join("\n").trim_end().to_string());
+                }
             }
-        }
-        *key = None;
-        lines.clear();
-        *in_block = false;
-    };
+            *key = None;
+            lines.clear();
+            *in_block = false;
+        };
 
     for line in body.lines() {
         if in_block {
@@ -639,12 +791,22 @@ fn parse_simple_frontmatter(content: &str) -> std::collections::HashMap<String, 
                 block_lines.push(line.trim().to_string());
                 continue;
             }
-            flush_block(&mut current_key, &mut block_lines, &mut in_block, &mut result);
+            flush_block(
+                &mut current_key,
+                &mut block_lines,
+                &mut in_block,
+                &mut result,
+            );
         }
 
         if let Some((key, val)) = line.split_once(':') {
             let key = key.trim().to_string();
-            if !key.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+            if !key
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_alphabetic())
+                .unwrap_or(false)
+            {
                 continue;
             }
             let val = val.trim().to_string();
@@ -657,7 +819,12 @@ fn parse_simple_frontmatter(content: &str) -> std::collections::HashMap<String, 
             }
         }
     }
-    flush_block(&mut current_key, &mut block_lines, &mut in_block, &mut result);
+    flush_block(
+        &mut current_key,
+        &mut block_lines,
+        &mut in_block,
+        &mut result,
+    );
     result
 }
 
@@ -669,11 +836,16 @@ fn collect_skill_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     Ok(files)
 }
 
-fn walk_skill_dir(base_dir: &Path, current_dir: &Path, out: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
+fn walk_skill_dir(
+    base_dir: &Path,
+    current_dir: &Path,
+    out: &mut Vec<(String, Vec<u8>)>,
+) -> Result<()> {
     for entry in std::fs::read_dir(current_dir)? {
         let entry = entry?;
         let path = entry.path();
-        let rel = path.strip_prefix(base_dir)?
+        let rel = path
+            .strip_prefix(base_dir)?
             .to_string_lossy()
             .replace('\\', "/");
 

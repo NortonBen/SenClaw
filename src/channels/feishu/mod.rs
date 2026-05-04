@@ -7,17 +7,17 @@
 //!
 //! Connection mode: REST for sending, WS stub for receiving (TODO: full WS protocol).
 
-mod types;
-mod token;
 mod api;
-mod helpers;
-mod ws;
 mod channel;
+mod helpers;
 #[cfg(test)]
 mod tests;
+mod token;
+mod types;
+mod ws;
 
-pub use types::FeishuDomain;
 pub use channel::FeishuChannel;
+pub use types::FeishuDomain;
 
 // ===== Constants =====
 

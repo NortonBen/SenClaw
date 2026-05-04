@@ -15,7 +15,9 @@ pub struct HookManager {
 
 impl HookManager {
     pub fn new(config: HookConfig) -> Self {
-        Self { config: RwLock::new(config) }
+        Self {
+            config: RwLock::new(config),
+        }
     }
 
     pub fn empty() -> Self {
@@ -128,11 +130,10 @@ fn matches_regex(pattern: &str, text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::zen_core::hooks::types::{
-        HookEventConfig, HookDefinition, HookType, HookInput,
-        HookInputBase, PreToolUseInput,
+        HookDefinition, HookEventConfig, HookInput, HookInputBase, HookType, PreToolUseInput,
     };
-    use std::collections::HashMap;
     use chrono::Utc;
+    use std::collections::HashMap;
 
     fn base(event: HookEvent) -> HookInputBase {
         HookInputBase {
@@ -174,7 +175,10 @@ mod tests {
             tool_input: serde_json::json!({"command": "ls"}),
         });
 
-        assert_eq!(mgr.get_matching_hooks(&HookEvent::PreToolUse, &input).len(), 1);
+        assert_eq!(
+            mgr.get_matching_hooks(&HookEvent::PreToolUse, &input).len(),
+            1
+        );
     }
 
     #[test]
@@ -196,7 +200,9 @@ mod tests {
             tool_input: serde_json::json!({"command": "ls"}),
         });
 
-        assert!(mgr.get_matching_hooks(&HookEvent::PreToolUse, &input).is_empty());
+        assert!(mgr
+            .get_matching_hooks(&HookEvent::PreToolUse, &input)
+            .is_empty());
     }
 
     #[test]
@@ -223,8 +229,14 @@ mod tests {
             tool_input: serde_json::json!({"command": "ls -la"}),
         });
 
-        assert_eq!(mgr.get_matching_hooks(&HookEvent::PreToolUse, &matching).len(), 1);
-        assert!(mgr.get_matching_hooks(&HookEvent::PreToolUse, &non_matching).is_empty());
+        assert_eq!(
+            mgr.get_matching_hooks(&HookEvent::PreToolUse, &matching)
+                .len(),
+            1
+        );
+        assert!(mgr
+            .get_matching_hooks(&HookEvent::PreToolUse, &non_matching)
+            .is_empty());
     }
 
     #[test]

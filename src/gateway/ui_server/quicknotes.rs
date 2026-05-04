@@ -2,11 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-};
+use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Deserialize;
 
 use super::core::{AppError, UiState};
@@ -36,7 +32,12 @@ pub(crate) async fn quicknotes_save(
 
     let safe = raw_title
         .chars()
-        .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\x00'..='\x1f'))
+        .filter(|c| {
+            !matches!(
+                c,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\x00'..='\x1f'
+            )
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -45,7 +46,11 @@ pub(crate) async fn quicknotes_save(
         .take(60)
         .collect::<String>();
 
-    let safe = if safe.is_empty() { "quicknote".to_string() } else { safe };
+    let safe = if safe.is_empty() {
+        "quicknote".to_string()
+    } else {
+        safe
+    };
 
     let dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))

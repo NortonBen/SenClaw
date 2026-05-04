@@ -85,9 +85,9 @@ impl TaskScheduler {
         } else {
             TaskStatus::Active
         };
-        if let Err(e) =
-            self.db
-                .advance_task_next_run(&task.id, next_run.as_deref(), next_status)
+        if let Err(e) = self
+            .db
+            .advance_task_next_run(&task.id, next_run.as_deref(), next_status)
         {
             tracing::error!(task_id = %task.id, error = %e, "[TaskScheduler] advance failed");
             return;
@@ -176,7 +176,11 @@ mod tests {
     #[test]
     fn next_run_for_interval_uses_previous_next_run() {
         // 60_000 ms past the previous next_run.
-        let t = task(ScheduleType::Interval, "60000", Some("2026-04-28T00:00:00Z"));
+        let t = task(
+            ScheduleType::Interval,
+            "60000",
+            Some("2026-04-28T00:00:00Z"),
+        );
         let next = compute_next_run(&t).unwrap();
         let parsed = DateTime::parse_from_rfc3339(&next).unwrap();
         let prev = DateTime::parse_from_rfc3339("2026-04-28T00:00:00Z").unwrap();
@@ -236,7 +240,11 @@ mod tests {
         let cfg = crate::config::Config::from_env();
         let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
         // Insert a due task.
-        let mut t = task(ScheduleType::Interval, "60000", Some("2020-01-01T00:00:00Z"));
+        let mut t = task(
+            ScheduleType::Interval,
+            "60000",
+            Some("2020-01-01T00:00:00Z"),
+        );
         t.id = "due".into();
         db.insert_task(&t).unwrap();
         // Insert a far-future task.
@@ -269,7 +277,10 @@ mod tests {
         db.insert_task(&t).unwrap();
 
         let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
-        TaskScheduler::new(db.clone(), recorder, 60).tick().await.unwrap();
+        TaskScheduler::new(db.clone(), recorder, 60)
+            .tick()
+            .await
+            .unwrap();
 
         let after = db.list_all_tasks().unwrap();
         assert_eq!(after[0].status, TaskStatus::Completed);

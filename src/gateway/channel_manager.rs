@@ -43,7 +43,8 @@ impl ChannelManager {
     ) -> Result<Channel> {
         let id = db.insert_channel(platform_type, name, credentials_json, now)?;
         self.fire_changed();
-        db.get_channel(id)?.ok_or_else(|| anyhow::anyhow!("Channel {id} not found after insert"))
+        db.get_channel(id)?
+            .ok_or_else(|| anyhow::anyhow!("Channel {id} not found after insert"))
     }
 
     pub fn get(&self, db: &Db, id: i64) -> Result<Option<Channel>> {

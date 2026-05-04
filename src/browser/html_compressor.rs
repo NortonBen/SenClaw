@@ -49,38 +49,87 @@ enum SemanticRole {
 
 /// Tags that are always noise and should be removed entirely.
 const NOISE_TAGS: &[&str] = &[
-    "script", "style", "noscript", "iframe", "svg", "canvas",
-    "object", "embed", "applet", "audio", "video", "source",
-    "track", "map", "area",
+    "script", "style", "noscript", "iframe", "svg", "canvas", "object", "embed", "applet", "audio",
+    "video", "source", "track", "map", "area",
 ];
 
 /// Tags that are interactive and should be preserved with attributes.
 const INTERACTIVE_TAGS: &[&str] = &[
-    "a", "button", "input", "select", "textarea", "option",
-    "details", "summary", "label",
+    "a", "button", "input", "select", "textarea", "option", "details", "summary", "label",
 ];
 
 /// Tags that carry semantic meaning.
 const SEMANTIC_CONTAINER_TAGS: &[&str] = &[
-    "nav", "header", "footer", "main", "article", "section",
-    "aside", "figure", "figcaption", "dialog", "fieldset",
+    "nav",
+    "header",
+    "footer",
+    "main",
+    "article",
+    "section",
+    "aside",
+    "figure",
+    "figcaption",
+    "dialog",
+    "fieldset",
 ];
 
 /// Tags that are content-bearing.
 const CONTENT_TAGS: &[&str] = &[
-    "p", "h1", "h2", "h3", "h4", "h5", "h6",
-    "li", "dt", "dd", "td", "th", "caption",
-    "pre", "code", "blockquote", "address", "cite",
-    "strong", "em", "b", "i", "u", "mark", "small",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "dt",
+    "dd",
+    "td",
+    "th",
+    "caption",
+    "pre",
+    "code",
+    "blockquote",
+    "address",
+    "cite",
+    "strong",
+    "em",
+    "b",
+    "i",
+    "u",
+    "mark",
+    "small",
 ];
 
 /// Attributes worth preserving for LLM context.
 const KEEP_ATTRS: &[&str] = &[
-    "href", "src", "alt", "title", "placeholder", "type",
-    "name", "id", "value", "role", "aria-label", "aria-expanded",
-    "aria-selected", "aria-checked", "checked", "disabled",
-    "selected", "readonly", "required", "maxlength", "min",
-    "max", "step", "pattern", "for", "data-testid",
+    "href",
+    "src",
+    "alt",
+    "title",
+    "placeholder",
+    "type",
+    "name",
+    "id",
+    "value",
+    "role",
+    "aria-label",
+    "aria-expanded",
+    "aria-selected",
+    "aria-checked",
+    "checked",
+    "disabled",
+    "selected",
+    "readonly",
+    "required",
+    "maxlength",
+    "min",
+    "max",
+    "step",
+    "pattern",
+    "for",
+    "data-testid",
 ];
 
 /// Invisible/hidden-related attributes and values.
@@ -437,7 +486,10 @@ fn parse_lightweight(html: &str) -> Vec<HtmlNode> {
 
 /// Find a byte in a slice starting from a position.
 fn find_byte(data: &[u8], start: usize, target: u8) -> Option<usize> {
-    data[start..].iter().position(|&b| b == target).map(|p| start + p)
+    data[start..]
+        .iter()
+        .position(|&b| b == target)
+        .map(|p| start + p)
 }
 
 /// Find a subsequence of bytes in a slice.
@@ -576,9 +628,21 @@ fn classify_role(tag: &str, attrs: &HashMap<String, String>) -> SemanticRole {
     // Check role attribute for interactive roles
     if let Some(role) = attrs.get("role") {
         let interactive_roles = [
-            "button", "link", "textbox", "combobox", "checkbox",
-            "radio", "switch", "slider", "spinbutton", "searchbox",
-            "menuitem", "option", "tab", "listbox", "menu",
+            "button",
+            "link",
+            "textbox",
+            "combobox",
+            "checkbox",
+            "radio",
+            "switch",
+            "slider",
+            "spinbutton",
+            "searchbox",
+            "menuitem",
+            "option",
+            "tab",
+            "listbox",
+            "menu",
         ];
         if interactive_roles.contains(&role.as_str()) {
             return SemanticRole::Interactive;
@@ -604,13 +668,28 @@ fn classify_role(tag: &str, attrs: &HashMap<String, String>) -> SemanticRole {
 fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img"
-            | "input" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
 /// Filter attributes, keeping only those useful for LLM context.
-fn filter_attrs(attrs: &HashMap<String, String>, config: &CompressConfig) -> HashMap<String, String> {
+fn filter_attrs(
+    attrs: &HashMap<String, String>,
+    config: &CompressConfig,
+) -> HashMap<String, String> {
     let mut filtered = HashMap::new();
     for key in KEEP_ATTRS {
         if let Some(val) = attrs.get(*key) {
@@ -688,7 +767,11 @@ fn process_node(
 
             let text = if node.text.is_empty() {
                 // For generic containers, text comes from children
-                children.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ")
+                children
+                    .iter()
+                    .map(|c| c.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
                 truncate_text(&node.text, config.max_text_len)
             };
@@ -809,7 +892,11 @@ mod tests {
         let result = compress_html(html, &CompressConfig::snapshot());
         assert_eq!(result.interactive_elements.len(), 3);
         // Indices should be assigned
-        let indices: Vec<u32> = result.interactive_elements.iter().filter_map(|e| e.index).collect();
+        let indices: Vec<u32> = result
+            .interactive_elements
+            .iter()
+            .filter_map(|e| e.index)
+            .collect();
         assert_eq!(indices, vec![1, 2, 3]);
     }
 
@@ -823,7 +910,8 @@ mod tests {
 
     #[test]
     fn test_attr_filtering() {
-        let html = r#"<a href="/page" data-track="x" onclick="fn()" class="link" id="main-link">Link</a>"#;
+        let html =
+            r#"<a href="/page" data-track="x" onclick="fn()" class="link" id="main-link">Link</a>"#;
         let result = compress_html(html, &CompressConfig::snapshot());
         let el = &result.interactive_elements[0];
         assert!(el.attrs.contains_key("href"));

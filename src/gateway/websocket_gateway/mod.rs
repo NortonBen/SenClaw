@@ -25,18 +25,18 @@
 //!   { type: 'list:dispatch' }
 //!   { type: 'agent:control', groupJid, action, query? }
 
-mod wire;
-mod state;
-mod gateway;
 mod browser;
-mod notify;
 mod connection;
-mod handlers;
-mod entity_handlers;
 mod cowork_handlers;
+mod entity_handlers;
+mod gateway;
+mod handlers;
 mod helpers;
+mod notify;
+mod state;
 #[cfg(test)]
 mod tests;
+mod wire;
 
 // Re-export public API
 pub(crate) use browser::BrowserRelay;

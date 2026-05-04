@@ -23,8 +23,7 @@ pub(super) fn load_global_config(path: &Path) -> GlobalConfig {
 
 pub(super) fn save_global_config(path: &Path, cfg: &GlobalConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create dir {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(cfg)?;
     fs::write(path, json)?;
@@ -73,8 +72,7 @@ pub fn sync_groups_from_config(
 ) -> (usize, usize, usize) {
     let cfg = load_global_config(&config.paths.global_config_path);
     let config_groups = cfg.groups.unwrap_or_default();
-    let config_jids: HashSet<&str> =
-        config_groups.iter().map(|g| g.jid.as_str()).collect();
+    let config_jids: HashSet<&str> = config_groups.iter().map(|g| g.jid.as_str()).collect();
     let now = super::manager::chrono_now();
     let mut added = 0usize;
     let mut updated = 0usize;
@@ -97,7 +95,10 @@ pub fn sync_groups_from_config(
             folder: entry.folder.clone(),
             name: entry.name.clone(),
             channel: entry.channel.clone().unwrap_or_default(),
-            group_type: entry.group_type.clone().unwrap_or_else(|| "chat".to_string()),
+            group_type: entry
+                .group_type
+                .clone()
+                .unwrap_or_else(|| "chat".to_string()),
             is_admin: false,
             requires_trigger: entry.requires_trigger.unwrap_or(true),
             allowed_tools: entry.allowed_tools.clone(),
@@ -143,7 +144,7 @@ pub fn get_agent_allowed_work_dirs(
 ) -> Option<Option<Vec<String>>> {
     let cfg = load_global_config(config_path);
     match cfg.agents.and_then(|a| a.get(folder).cloned()) {
-        None => None,                             // not present in config
+        None => None,                                 // not present in config
         Some(entry) => Some(entry.allowed_work_dirs), // null = switching disallowed
     }
 }

@@ -10,14 +10,8 @@ use super::FEISHU_MAX_LEN;
 
 #[test]
 fn test_jid_roundtrip() {
-    assert_eq!(
-        make_jid("p2p", "ou_abc123"),
-        "feishu:user:ou_abc123"
-    );
-    assert_eq!(
-        make_jid("group", "oc_xyz789"),
-        "feishu:group:oc_xyz789"
-    );
+    assert_eq!(make_jid("p2p", "ou_abc123"), "feishu:user:ou_abc123");
+    assert_eq!(make_jid("group", "oc_xyz789"), "feishu:group:oc_xyz789");
     assert_eq!(jid_to_chat_id("feishu:user:ou_abc"), Some("ou_abc"));
     assert_eq!(jid_to_chat_id("feishu:group:oc_xyz"), Some("oc_xyz"));
     assert_eq!(jid_to_chat_id("tg:user:123"), None);
@@ -26,10 +20,7 @@ fn test_jid_roundtrip() {
 #[test]
 fn test_receive_id_type() {
     assert_eq!(jid_to_receive_id_type("feishu:user:ou_abc"), "open_id");
-    assert_eq!(
-        jid_to_receive_id_type("feishu:group:oc_xyz"),
-        "chat_id"
-    );
+    assert_eq!(jid_to_receive_id_type("feishu:group:oc_xyz"), "chat_id");
 }
 
 #[test]
@@ -43,14 +34,8 @@ fn test_owns_jid() {
 
 #[test]
 fn test_domain_base_url() {
-    assert_eq!(
-        FeishuDomain::Feishu.base_url(),
-        "https://open.feishu.cn"
-    );
-    assert_eq!(
-        FeishuDomain::Lark.base_url(),
-        "https://open.larksuite.com"
-    );
+    assert_eq!(FeishuDomain::Feishu.base_url(), "https://open.feishu.cn");
+    assert_eq!(FeishuDomain::Lark.base_url(), "https://open.larksuite.com");
     assert_eq!(
         FeishuDomain::Custom("https://open.example.com".into()).base_url(),
         "https://open.example.com"
@@ -140,9 +125,8 @@ fn test_check_bot_mention() {
 
 #[test]
 fn test_remove_bot_mention() {
-    let mentions = vec![
-        serde_json::json!({"key": "@bot", "id": {"open_id": "bot123"}, "name": "Bot"}),
-    ];
+    let mentions =
+        vec![serde_json::json!({"key": "@bot", "id": {"open_id": "bot123"}, "name": "Bot"})];
     let text = "@bot hello world";
     let result = remove_bot_mention_placeholders(text, Some(&mentions), "bot123");
     assert_eq!(result, "hello world");
@@ -151,9 +135,8 @@ fn test_remove_bot_mention() {
 
 #[test]
 fn test_remove_bot_mention_no_match() {
-    let mentions = vec![
-        serde_json::json!({"key": "@user", "id": {"open_id": "user456"}, "name": "User"}),
-    ];
+    let mentions =
+        vec![serde_json::json!({"key": "@user", "id": {"open_id": "user456"}, "name": "User"})];
     let text = "@bot hello world";
     let result = remove_bot_mention_placeholders(text, Some(&mentions), "bot123");
     assert_eq!(result, "@bot hello world");

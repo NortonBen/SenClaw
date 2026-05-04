@@ -103,6 +103,14 @@ impl WebSocketGateway {
             "overdueMs": overdue_ms,
             "suggestedIntervalMs": interval_ms + overdue_ms,
         });
+        tracing::info!(
+            "[WsGateway] emit task:backlog task_id={task_id} chat_jid={chat_jid} \
+             prompt_len={} interval_ms={interval_ms} overdue_ms={overdue_ms} \
+             suggested_interval_ms={}",
+            prompt.len(),
+            interval_ms + overdue_ms
+        );
+        tracing::debug!(target: "senclaw::ws", payload = %msg, "emit task:backlog payload");
         self.broadcast_to_admins(&msg).await;
     }
 
@@ -162,6 +170,24 @@ impl WebSocketGateway {
             "type": "dispatch:update",
             "parents": parents,
         });
+        let parent_count = parents.as_array().map(|a| a.len()).unwrap_or(0);
+        let task_count = parents
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|p| {
+                        p.get("tasks")
+                            .and_then(|v| v.as_array())
+                            .map(|t| t.len())
+                            .unwrap_or(0)
+                    })
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        tracing::info!(
+            "[WsGateway] emit dispatch:update parents={parent_count} tasks={task_count}"
+        );
+        tracing::debug!(target: "senclaw::ws", payload = %msg, "emit dispatch:update payload");
         self.broadcast_to_admins(&msg).await;
     }
 
@@ -177,6 +203,25 @@ impl WebSocketGateway {
             "agentName": agent_name,
             "todos": todos,
         });
+        let todo_count = todos.as_array().map(|a| a.len()).unwrap_or(0);
+        let completed_count = todos
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|item| {
+                        item.get("status")
+                            .and_then(|s| s.as_str())
+                            .map(|s| s == "completed")
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        tracing::info!(
+            "[WsGateway] emit agent:todos agent_jid={agent_jid} agent_name={agent_name} \
+             todos={todo_count} completed={completed_count}"
+        );
+        tracing::debug!(target: "senclaw::ws", payload = %msg, "emit agent:todos payload");
         self.broadcast_to_admins(&msg).await;
     }
 
@@ -196,10 +241,8 @@ impl WebSocketGateway {
     }
 
     pub async fn notify_group_migrated(&self, old_jid: &str, new_binding: &GroupBinding) {
-        self.broadcast_to_all(
-            &serde_json::json!({"type": "group:unregistered", "jid": old_jid}),
-        )
-        .await;
+        self.broadcast_to_all(&serde_json::json!({"type": "group:unregistered", "jid": old_jid}))
+            .await;
         self.broadcast_to_all(
             &serde_json::json!({"type": "group:registered", "group": to_group_info(new_binding)}),
         )

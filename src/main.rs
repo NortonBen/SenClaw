@@ -2,11 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "senclaw",
-    version,
-    about = "SenClaw — multi-group AI gateway"
-)]
+#[command(name = "senclaw", version, about = "SenClaw — multi-group AI gateway")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -38,7 +34,6 @@ enum Command {
     },
 
     // ===== MCP servers (spawned as subprocesses by sema-core) =====
-
     /// Start the schedule MCP server (stdio JSON-RPC)
     ScheduleServer,
     /// Start the workspace MCP server (stdio JSON-RPC)
@@ -91,9 +86,7 @@ async fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
     }
 
     match cli.command.unwrap_or(Command::Start) {

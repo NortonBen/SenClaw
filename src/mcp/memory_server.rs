@@ -12,9 +12,9 @@ use std::sync::Arc;
 use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
 
-use rmcp::ServiceExt;
 use crate::memory::embedding::{create_embedding_provider, EmbeddingProvider};
 use crate::memory::fts_search::{self, SearchOptions};
+use rmcp::ServiceExt;
 
 // ===== MCP stdio server =====
 
@@ -63,7 +63,9 @@ impl McpMemoryServer {
     #[rmcp::tool(description = "Search memories using hybrid FTS5 + vector search")]
     async fn memory_search(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<MemorySearchParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemorySearchParams,
+        >,
     ) -> String {
         let (db, provider) = match self.open_db_and_provider() {
             Ok(v) => v,
@@ -78,14 +80,17 @@ impl McpMemoryServer {
     #[rmcp::tool(description = "Retrieve a specific memory file by path and line range")]
     fn memory_get(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<MemoryGetParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemoryGetParams,
+        >,
     ) -> String {
         let db = match self.open_db_and_provider() {
             Ok((db, _)) => db,
             Err(e) => return format!("Error: {e}"),
         };
         let srv = MemoryServer::new(db, &self.folder, &self.agents_dir, None);
-        srv.memory_get(&p.rel_path, p.start_line, p.end_line).content
+        srv.memory_get(&p.rel_path, p.start_line, p.end_line)
+            .content
     }
 }
 
@@ -101,8 +106,7 @@ pub async fn run_stdio_server() -> Result<()> {
 
     let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
     let folder = std::env::var("SENCLAW_FOLDER").context("SENCLAW_FOLDER not set")?;
-    let agents_dir = std::env::var("SENCLAW_AGENTS_DIR")
-        .context("SENCLAW_AGENTS_DIR not set")?;
+    let agents_dir = std::env::var("SENCLAW_AGENTS_DIR").context("SENCLAW_AGENTS_DIR not set")?;
 
     let server = McpMemoryServer {
         db_path,
@@ -152,8 +156,7 @@ impl MemoryServer {
             source: source.map(|s| s.to_owned()),
         };
 
-        let provider_ref: Option<&dyn EmbeddingProvider> =
-            self.embedding_provider.as_deref();
+        let provider_ref: Option<&dyn EmbeddingProvider> = self.embedding_provider.as_deref();
 
         let raw_results = match fts_search::hybrid_search(
             &self.db,
@@ -184,7 +187,11 @@ impl MemoryServer {
         for (i, r) in results.iter().enumerate() {
             let path_parts: Vec<&str> = r.path.split(&['/', '\\'][..]).collect();
             let display_path = if path_parts.len() >= 2 {
-                format!("{}/{}", path_parts[path_parts.len() - 2], path_parts[path_parts.len() - 1])
+                format!(
+                    "{}/{}",
+                    path_parts[path_parts.len() - 2],
+                    path_parts[path_parts.len() - 1]
+                )
             } else {
                 r.path.clone()
             };
@@ -217,7 +224,11 @@ impl MemoryServer {
     ) -> ToolResult {
         let abs_path = match resolve_memory_path(&self.agents_dir, &self.folder, rel_path) {
             Some(p) => p,
-            None => return ToolResult::err(format!("File not found (path traversal blocked): {rel_path}")),
+            None => {
+                return ToolResult::err(format!(
+                    "File not found (path traversal blocked): {rel_path}"
+                ))
+            }
         };
 
         if !abs_path.exists() {
@@ -233,10 +244,7 @@ impl MemoryServer {
         let total_lines = lines.len() as u32;
 
         let start = (start_line.unwrap_or(1)).saturating_sub(1).min(total_lines);
-        let end = end_line
-            .unwrap_or(total_lines)
-            .min(total_lines)
-            .max(start);
+        let end = end_line.unwrap_or(total_lines).min(total_lines).max(start);
 
         let slice = &lines[start as usize..end as usize];
         let header = format!(
@@ -255,9 +263,8 @@ impl MemoryServer {
 fn resolve_memory_path(agents_dir: &Path, folder: &str, relative_path: &str) -> Option<PathBuf> {
     let agent_dir = agents_dir.join(folder);
 
-    let safe_check = |p: &PathBuf| -> bool {
-        p.starts_with(&agent_dir) || p.as_path() == agent_dir.as_path()
-    };
+    let safe_check =
+        |p: &PathBuf| -> bool { p.starts_with(&agent_dir) || p.as_path() == agent_dir.as_path() };
 
     // Try direct join
     let c1 = agent_dir.join(relative_path);

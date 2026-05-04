@@ -100,24 +100,20 @@ impl ExternalMcpServerConfig {
             return Err("server name is required".into());
         }
         match self.transport {
-            McpTransportType::Stdio => {
-                match &self.command {
-                    None => Err("command is required for stdio transport".into()),
-                    Some(c) if c.trim().is_empty() => {
-                        Err("command must not be empty for stdio transport".into())
-                    }
-                    _ => Ok(()),
+            McpTransportType::Stdio => match &self.command {
+                None => Err("command is required for stdio transport".into()),
+                Some(c) if c.trim().is_empty() => {
+                    Err("command must not be empty for stdio transport".into())
                 }
-            }
-            McpTransportType::Sse | McpTransportType::Http => {
-                match &self.url {
-                    None => Err("url is required for sse/http transports".into()),
-                    Some(u) if u.trim().is_empty() => {
-                        Err("url must not be empty for sse/http transports".into())
-                    }
-                    _ => Ok(()),
+                _ => Ok(()),
+            },
+            McpTransportType::Sse | McpTransportType::Http => match &self.url {
+                None => Err("url is required for sse/http transports".into()),
+                Some(u) if u.trim().is_empty() => {
+                    Err("url must not be empty for sse/http transports".into())
                 }
-            }
+                _ => Ok(()),
+            },
         }
     }
 }
@@ -142,7 +138,11 @@ pub struct McpToolDef {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "inputSchema")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "inputSchema"
+    )]
     pub input_schema: Option<serde_json::Value>,
 }
 
@@ -209,9 +209,7 @@ impl McpConfigManager {
                     McpConfigFile::default()
                 }
             },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                McpConfigFile::default()
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => McpConfigFile::default(),
             Err(e) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -290,8 +288,7 @@ impl McpConfigManager {
             McpScopeType::Project => Self::project_config_path(working_dir),
         };
         let mut cfg = self.load_config(&path);
-        cfg.mcp_servers
-            .insert(server.name.clone(), server.clone());
+        cfg.mcp_servers.insert(server.name.clone(), server.clone());
         self.save_config(&path, &cfg)
     }
 
@@ -553,9 +550,7 @@ mod tests {
                 headers: HashMap::new(),
             },
         );
-        user_mgr
-            .save_project_config(&work_dir, &proj_cfg)
-            .unwrap();
+        user_mgr.save_project_config(&work_dir, &proj_cfg).unwrap();
 
         // Project should win
         let merged = user_mgr.load_merged(&work_dir);

@@ -8,8 +8,8 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::db::Db;
-use crate::types::{Agent, GroupBinding};
 use crate::gateway::group_manager::{ensure_agent_dirs, write_soul_md, GroupManager};
+use crate::types::{Agent, GroupBinding};
 
 pub struct AgentManager {
     on_changed: Mutex<Option<Box<dyn Fn() + Send + 'static>>>,
@@ -55,7 +55,16 @@ impl AgentManager {
         // Write user's core_prompt to SOUL.md (overrides the default template)
         write_soul_md(config, folder, name, core_prompt);
 
-        let id = db.insert_agent(folder, name, requires_trigger, allowed_tools, allowed_work_dirs, core_prompt, model_id, now)?;
+        let id = db.insert_agent(
+            folder,
+            name,
+            requires_trigger,
+            allowed_tools,
+            allowed_work_dirs,
+            core_prompt,
+            model_id,
+            now,
+        )?;
 
         // Auto-create a default web-only group for the new agent
         let default_group = GroupBinding {
@@ -77,7 +86,8 @@ impl AgentManager {
         group_manager.register(db, config, &default_group);
 
         self.fire_changed();
-        db.get_agent(id)?.ok_or_else(|| anyhow::anyhow!("Agent {id} not found after insert"))
+        db.get_agent(id)?
+            .ok_or_else(|| anyhow::anyhow!("Agent {id} not found after insert"))
     }
 
     pub fn get(&self, db: &Db, id: i64) -> Result<Option<Agent>> {
@@ -113,7 +123,17 @@ impl AgentManager {
         model_id: Option<&str>,
         now: &str,
     ) -> Result<()> {
-        db.update_agent(id, name, requires_trigger, allowed_tools, allowed_work_dirs, core_prompt, clear_model_id, model_id, now)?;
+        db.update_agent(
+            id,
+            name,
+            requires_trigger,
+            allowed_tools,
+            allowed_work_dirs,
+            core_prompt,
+            clear_model_id,
+            model_id,
+            now,
+        )?;
 
         // Sync SOUL.md when core_prompt changes
         if let Some(cp) = core_prompt {

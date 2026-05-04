@@ -38,11 +38,10 @@ pub fn write_stored_token(token: &str) -> Result<(), anyhow::Error> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut existing: ClawhubLocalConfig =
-        fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+    let mut existing: ClawhubLocalConfig = fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     existing.token = Some(token.to_string());
     let json = serde_json::to_string_pretty(&existing)?;
     fs::write(&config_path, json + "\n")?;

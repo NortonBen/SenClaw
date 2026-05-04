@@ -128,7 +128,10 @@ async fn manager_remove_server() {
         .unwrap();
     assert_eq!(mgr.get_all_servers().await.len(), 1);
 
-    let removed = mgr.remove("to-remove", McpScopeType::Project).await.unwrap();
+    let removed = mgr
+        .remove("to-remove", McpScopeType::Project)
+        .await
+        .unwrap();
     assert!(removed);
     assert_eq!(mgr.get_all_servers().await.len(), 0);
 }
@@ -145,7 +148,11 @@ async fn manager_builtin_servers_listed() {
     assert_eq!(builtins.len(), 8);
     // Each has a name starting with senclaw-
     for s in &builtins {
-        assert!(s.name.starts_with("senclaw-"), "unexpected name: {}", s.name);
+        assert!(
+            s.name.starts_with("senclaw-"),
+            "unexpected name: {}",
+            s.name
+        );
         assert!(!s.tools.is_empty(), "no tools for {}", s.name);
     }
 }

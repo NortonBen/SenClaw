@@ -46,15 +46,10 @@ impl Tool for GlobTool {
         true
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let pattern = input.get("pattern")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let search_path = input.get("path")
+    async fn call(&self, input: Value, ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+        let search_path = input
+            .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(ctx.working_dir);
 
@@ -84,13 +79,20 @@ impl Tool for GlobTool {
         let output_text = if files.is_empty() {
             "No files found".to_string()
         } else {
-            let mut s = files.iter().take(MAX_DISPLAY).cloned().collect::<Vec<_>>().join("\n");
+            let mut s = files
+                .iter()
+                .take(MAX_DISPLAY)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             let remaining = num_files.saturating_sub(MAX_DISPLAY);
             if remaining > 0 {
                 s.push_str(&format!("\n... (+{remaining} files)"));
             }
             if truncated {
-                s.push_str("\n(Results are truncated. Consider using a more specific path or pattern.)");
+                s.push_str(
+                    "\n(Results are truncated. Consider using a more specific path or pattern.)",
+                );
             }
             s
         };
@@ -110,22 +112,18 @@ impl Tool for GlobTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         let num = data.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
         let title = format!(
             "pattern: \"{}\"",
             data.get("pattern").and_then(|v| v.as_str()).unwrap_or("")
         );
-        let summary = format!(
-            "Found {} {}",
-            num,
-            if num == 1 { "file" } else { "files" }
-        );
-        ToolResultMessage { title, summary, content: data.clone() }
+        let summary = format!("Found {} {}", num, if num == 1 { "file" } else { "files" });
+        ToolResultMessage {
+            title,
+            summary,
+            content: data.clone(),
+        }
     }
 
     fn get_display_title(&self, input: &Value) -> String {

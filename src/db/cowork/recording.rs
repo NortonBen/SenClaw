@@ -23,12 +23,20 @@ impl super::super::Db {
 
     pub fn get_cowork_recording_session(&self, id: &str) -> Result<Option<CoworkRecordingSession>> {
         self.with_conn(|c| {
-            c.query_row("SELECT * FROM cowork_recording_sessions WHERE id=?1", params![id], |r| Ok(row_to_cowork_recording_session(r)))
-                .optional()?.transpose()
+            c.query_row(
+                "SELECT * FROM cowork_recording_sessions WHERE id=?1",
+                params![id],
+                |r| Ok(row_to_cowork_recording_session(r)),
+            )
+            .optional()?
+            .transpose()
         })
     }
 
-    pub fn list_cowork_recording_sessions(&self, workspace_id: &str) -> Result<Vec<CoworkRecordingSession>> {
+    pub fn list_cowork_recording_sessions(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<CoworkRecordingSession>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare("SELECT * FROM cowork_recording_sessions WHERE workspace_id=?1 ORDER BY started_at DESC")?;
             let rows: Vec<_> = stmt.query_map(params![workspace_id], |r| Ok(row_to_cowork_recording_session(r)))?
@@ -37,11 +45,32 @@ impl super::super::Db {
         })
     }
 
-    pub fn update_cowork_recording_session(&self, id: &str, ended_at: Option<&str>, event_count: Option<i64>, total_tokens: Option<i64>) -> Result<()> {
+    pub fn update_cowork_recording_session(
+        &self,
+        id: &str,
+        ended_at: Option<&str>,
+        event_count: Option<i64>,
+        total_tokens: Option<i64>,
+    ) -> Result<()> {
         self.with_conn(|c| {
-            if let Some(e) = ended_at { c.execute("UPDATE cowork_recording_sessions SET ended_at=?1 WHERE id=?2", params![e, id])?; }
-            if let Some(ec) = event_count { c.execute("UPDATE cowork_recording_sessions SET event_count=?1 WHERE id=?2", params![ec, id])?; }
-            if let Some(tt) = total_tokens { c.execute("UPDATE cowork_recording_sessions SET total_tokens=?1 WHERE id=?2", params![tt, id])?; }
+            if let Some(e) = ended_at {
+                c.execute(
+                    "UPDATE cowork_recording_sessions SET ended_at=?1 WHERE id=?2",
+                    params![e, id],
+                )?;
+            }
+            if let Some(ec) = event_count {
+                c.execute(
+                    "UPDATE cowork_recording_sessions SET event_count=?1 WHERE id=?2",
+                    params![ec, id],
+                )?;
+            }
+            if let Some(tt) = total_tokens {
+                c.execute(
+                    "UPDATE cowork_recording_sessions SET total_tokens=?1 WHERE id=?2",
+                    params![tt, id],
+                )?;
+            }
             Ok(())
         })
     }

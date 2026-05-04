@@ -1,7 +1,9 @@
 use anyhow::Result;
 use rusqlite::params;
 
-use crate::types::{RunStatus, ScheduleType, ScheduledTask, TaskRunLog, TaskRunLogInsert, TaskStatus};
+use crate::types::{
+    RunStatus, ScheduleType, ScheduledTask, TaskRunLog, TaskRunLogInsert, TaskStatus,
+};
 
 use super::rows::row_to_task;
 
@@ -67,8 +69,7 @@ impl super::Db {
 
     pub fn list_all_tasks(&self) -> Result<Vec<ScheduledTask>> {
         self.with_conn(|c| {
-            let mut stmt =
-                c.prepare("SELECT * FROM scheduled_tasks ORDER BY created_at DESC")?;
+            let mut stmt = c.prepare("SELECT * FROM scheduled_tasks ORDER BY created_at DESC")?;
             let rows = stmt
                 .query_map([], |r| Ok(row_to_task(r)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;

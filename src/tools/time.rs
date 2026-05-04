@@ -50,15 +50,8 @@ impl Tool for TimeTool {
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let tz_str = input
-            .get("timezone")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let tz_str = input.get("timezone").and_then(|v| v.as_str()).unwrap_or("");
 
         let tz = if tz_str.is_empty() {
             *chrono::Local::now().offset()
@@ -91,11 +84,7 @@ impl Tool for TimeTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         ToolResultMessage {
             title: "Time".into(),
             summary: data
@@ -120,11 +109,9 @@ fn parse_offset(s: &str) -> std::result::Result<chrono::FixedOffset, String> {
     let sign = if s.starts_with('-') { -1 } else { 1 };
     let s = s.trim_start_matches(&['+', '-'][..]);
     let mut parts = s.splitn(2, ':');
-    let hours: i32 = parts
-        .next()
-        .unwrap_or("")
-        .parse()
-        .map_err(|_| format!("Invalid timezone offset: \"{s}\". Expected format: +07:00, -05:00, or Z."))?;
+    let hours: i32 = parts.next().unwrap_or("").parse().map_err(|_| {
+        format!("Invalid timezone offset: \"{s}\". Expected format: +07:00, -05:00, or Z.")
+    })?;
     let minutes: i32 = parts
         .next()
         .unwrap_or("0")
@@ -206,7 +193,8 @@ mod tests {
             response_registry: None,
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(tool.validate_input(&serde_json::json!({"timezone": "invalid"}), &ctx));
+        let result =
+            rt.block_on(tool.validate_input(&serde_json::json!({"timezone": "invalid"}), &ctx));
         assert!(result.is_err());
     }
 
@@ -220,7 +208,13 @@ mod tests {
             parse_offset("-05:00").unwrap(),
             chrono::FixedOffset::east_opt(-5 * 3600).unwrap()
         );
-        assert_eq!(parse_offset("Z").unwrap(), chrono::FixedOffset::east_opt(0).unwrap());
-        assert_eq!(parse_offset("UTC").unwrap(), chrono::FixedOffset::east_opt(0).unwrap());
+        assert_eq!(
+            parse_offset("Z").unwrap(),
+            chrono::FixedOffset::east_opt(0).unwrap()
+        );
+        assert_eq!(
+            parse_offset("UTC").unwrap(),
+            chrono::FixedOffset::east_opt(0).unwrap()
+        );
     }
 }

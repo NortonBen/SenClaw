@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use super::types::{ApiResponse, BotInfoResponse, FeishuBotInfo, SendMessageBody, UserInfoResponse};
+use super::types::{
+    ApiResponse, BotInfoResponse, FeishuBotInfo, SendMessageBody, UserInfoResponse,
+};
 use super::APP_INIT_TIMEOUT_SECS;
 
 // ===== Bot info API =====
@@ -31,10 +33,7 @@ pub(crate) async fn fetch_bot_info(
         .as_str()
         .context("bot missing open_id")?
         .to_string();
-    let name = bot["bot_name"]
-        .as_str()
-        .unwrap_or("Feishu Bot")
-        .to_string();
+    let name = bot["bot_name"].as_str().unwrap_or("Feishu Bot").to_string();
 
     Ok(FeishuBotInfo { open_id, name })
 }

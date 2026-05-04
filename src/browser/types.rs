@@ -153,7 +153,10 @@ pub enum ActionResult {
     #[serde(rename = "ok")]
     Ok { data: serde_json::Value },
     #[serde(rename = "error")]
-    Error { message: String, code: Option<String> },
+    Error {
+        message: String,
+        code: Option<String>,
+    },
 }
 
 impl ActionResult {

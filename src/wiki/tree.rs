@@ -52,8 +52,7 @@ impl WikiManager {
                     children: Some(children),
                     frontmatter: None,
                 });
-            } else if entry.file_type().map_or(false, |t| t.is_file())
-                && name_str.ends_with(".md")
+            } else if entry.file_type().map_or(false, |t| t.is_file()) && name_str.ends_with(".md")
             {
                 let fm = fs::read_to_string(entry.path())
                     .ok()

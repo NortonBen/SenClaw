@@ -86,10 +86,7 @@ pub(crate) async fn handle_subscribe(
     // Push current dispatch state + agent todos for admin groups.
     let is_admin = {
         let guard = clients.lock().await;
-        guard
-            .get(client_idx)
-            .map(|c| c.is_admin)
-            .unwrap_or(false)
+        guard.get(client_idx).map(|c| c.is_admin).unwrap_or(false)
     };
     if is_admin {
         let parents = state.api.get_dispatch_parents();
@@ -114,7 +111,10 @@ pub(crate) async fn handle_subscribe(
                     .get("agentName")
                     .and_then(|v| v.as_str())
                     .unwrap_or(agent_jid);
-                let todos_arr = entry.get("todos").cloned().unwrap_or(serde_json::Value::Null);
+                let todos_arr = entry
+                    .get("todos")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 send_json(
                     sender,
                     &serde_json::json!({
@@ -144,7 +144,10 @@ pub(crate) async fn handle_subscribe(
                     .get("agentName")
                     .and_then(|v| v.as_str())
                     .unwrap_or(agent_jid);
-                let tools_arr = entry.get("tools").cloned().unwrap_or(serde_json::Value::Null);
+                let tools_arr = entry
+                    .get("tools")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 send_json(
                     sender,
                     &serde_json::json!({
@@ -265,7 +268,10 @@ pub(crate) async fn handle_list_groups(
         }
     }
 
-    send_json(sender, &serde_json::json!({"type": "groups", "groups": groups}));
+    send_json(
+        sender,
+        &serde_json::json!({"type": "groups", "groups": groups}),
+    );
 }
 
 pub(crate) async fn handle_register_group(
@@ -351,7 +357,10 @@ pub(crate) async fn handle_register_group(
                 .ok()
                 .and_then(|re| {
                     let c = re.captures(&resolved_jid)?;
-                    Some((c.get(1)?.as_str().to_string(), c.get(2)?.as_str().to_string()))
+                    Some((
+                        c.get(1)?.as_str().to_string(),
+                        c.get(2)?.as_str().to_string(),
+                    ))
                 })
             {
                 resolved_jid = format!("tg:{bot_user_id}:{}:{}", caps.0, caps.1);
@@ -391,30 +400,32 @@ pub(crate) async fn handle_register_group(
         } else {
             resolved_channel.clone()
         },
-        group_type: msg["groupType"]
-            .as_str()
-            .unwrap_or("chat")
-            .to_string(),
+        group_type: msg["groupType"].as_str().unwrap_or("chat").to_string(),
         is_admin: false,
-        requires_trigger: msg["requiresTrigger"]
-            .as_bool()
-            .unwrap_or(existing.as_ref().map(|e| e.requires_trigger).unwrap_or(true)),
+        requires_trigger: msg["requiresTrigger"].as_bool().unwrap_or(
+            existing
+                .as_ref()
+                .map(|e| e.requires_trigger)
+                .unwrap_or(true),
+        ),
         allowed_tools: if msg.get("allowedTools").is_some() {
-            msg["allowedTools"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            msg["allowedTools"].as_array().map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
         } else {
             existing.as_ref().and_then(|e| e.allowed_tools.clone())
         },
         allowed_paths: None,
         allowed_work_dirs: if msg.get("allowedWorkDirs").is_some() {
-            msg["allowedWorkDirs"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            msg["allowedWorkDirs"].as_array().map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
         } else {
-            existing
-                .as_ref()
-                .and_then(|e| e.allowed_work_dirs.clone())
+            existing.as_ref().and_then(|e| e.allowed_work_dirs.clone())
         },
         bot_token: resolved_token.or(existing.as_ref().and_then(|e| e.bot_token.clone())),
         max_messages: if msg.get("maxMessages").is_some() {
@@ -525,9 +536,9 @@ pub(crate) async fn handle_unregister_group(
     if group.channel == "qq" && group.bot_token.is_some() {
         let app_id = group.bot_token.as_deref().unwrap_or("");
         let all = state.group_manager.list(&state.db).unwrap_or_default();
-        let still_used = all.iter().any(|g| {
-            g.jid != jid && g.channel == "qq" && g.bot_token.as_deref() == Some(app_id)
-        });
+        let still_used = all
+            .iter()
+            .any(|g| g.jid != jid && g.channel == "qq" && g.bot_token.as_deref() == Some(app_id));
         if !still_used {
             let _ = delete_qq_app(&state.config.paths.global_config_path, app_id);
         }
@@ -582,25 +593,25 @@ pub(crate) async fn handle_update_group(
         updates.is_admin = Some(v);
     }
     if msg.get("allowedTools").is_some() {
-        updates.allowed_tools = Some(
-            msg["allowedTools"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
-        );
+        updates.allowed_tools = Some(msg["allowedTools"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        }));
     }
     if msg.get("allowedPaths").is_some() {
-        updates.allowed_paths = Some(
-            msg["allowedPaths"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
-        );
+        updates.allowed_paths = Some(msg["allowedPaths"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        }));
     }
     if msg.get("allowedWorkDirs").is_some() {
-        updates.allowed_work_dirs = Some(
-            msg["allowedWorkDirs"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
-        );
+        updates.allowed_work_dirs = Some(msg["allowedWorkDirs"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        }));
     }
     if msg.get("botToken").is_some() {
         updates.bot_token = Some(msg["botToken"].as_str().map(String::from));
@@ -653,10 +664,7 @@ pub(crate) async fn handle_message_send(
     // Admin command interception.
     let is_admin = {
         let guard = clients.lock().await;
-        guard
-            .get(client_idx)
-            .map(|c| c.is_admin)
-            .unwrap_or(false)
+        guard.get(client_idx).map(|c| c.is_admin).unwrap_or(false)
     };
     if is_admin {
         let is_reset = text.trim() == "/reset"
@@ -785,7 +793,10 @@ pub(crate) async fn handle_list_tasks(
     let jid = msg["groupJid"].as_str();
     let tasks = if let Some(jid) = jid {
         if let Some(group) = state.group_manager.get(&state.db, jid) {
-            state.db.get_tasks_by_group(&group.folder).unwrap_or_default()
+            state
+                .db
+                .get_tasks_by_group(&group.folder)
+                .unwrap_or_default()
         } else {
             send_json(
                 sender,
@@ -1082,7 +1093,10 @@ pub(crate) async fn handle_list_feishu_apps(
             })
         })
         .collect();
-    send_json(sender, &serde_json::json!({"type": "feishu-apps", "apps": list}));
+    send_json(
+        sender,
+        &serde_json::json!({"type": "feishu-apps", "apps": list}),
+    );
 }
 
 pub(crate) async fn handle_list_dispatch(
@@ -1099,9 +1113,7 @@ pub(crate) async fn handle_list_dispatch(
     }
     let parents = state.api.get_dispatch_parents();
     let parent_count = parents.as_array().map(|a| a.len()).unwrap_or(0);
-    tracing::info!(
-        "[WsGateway] list:dispatch client #{client_idx}: {parent_count} parent(s)"
-    );
+    tracing::info!("[WsGateway] list:dispatch client #{client_idx}: {parent_count} parent(s)");
     send_json(
         sender,
         &serde_json::json!({"type": "dispatch:update", "parents": parents}),

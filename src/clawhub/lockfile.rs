@@ -95,10 +95,7 @@ pub fn read_skill_origin(skill_folder: &Path) -> Option<SkillOrigin> {
     Some(parsed)
 }
 
-pub fn write_skill_origin(
-    skill_folder: &Path,
-    origin: &SkillOrigin,
-) -> Result<(), anyhow::Error> {
+pub fn write_skill_origin(skill_folder: &Path, origin: &SkillOrigin) -> Result<(), anyhow::Error> {
     let p = origin_path(skill_folder);
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent)?;
@@ -190,9 +187,8 @@ pub fn zip_files(files: &HashMap<String, Vec<u8>>) -> Result<Vec<u8>, anyhow::Er
     let mut buf = Vec::new();
     {
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let options =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         for (name, data) in files {
             archive.start_file(name, options)?;
             std::io::Write::write_all(&mut archive, data)?;
@@ -228,7 +224,9 @@ mod tests {
         let read = read_lockfile(&tmp);
         assert_eq!(read.skills.len(), 1);
         assert_eq!(
-            read.skills.get("test-skill").and_then(|e| e.version.as_deref()),
+            read.skills
+                .get("test-skill")
+                .and_then(|e| e.version.as_deref()),
             Some("1.0.0")
         );
         fs::remove_dir_all(&tmp).ok();

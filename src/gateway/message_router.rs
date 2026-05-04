@@ -153,10 +153,7 @@ impl MessageRouter {
 
         // 3. Trigger check
         if !should_trigger(&msg, &group) {
-            tracing::info!(
-                "[MessageRouter] Trigger check failed for {}",
-                msg.chat_jid
-            );
+            tracing::info!("[MessageRouter] Trigger check failed for {}", msg.chat_jid);
             return;
         }
 
@@ -195,7 +192,12 @@ impl MessageRouter {
     }
 
     /// Dispatch a task directly (bypasses trigger/command checks).
-    pub async fn dispatch_task(&self, jid: &str, prompt: &str, callbacks: Option<DispatchTaskCallbacks>) {
+    pub async fn dispatch_task(
+        &self,
+        jid: &str,
+        prompt: &str,
+        callbacks: Option<DispatchTaskCallbacks>,
+    ) {
         let Some(group) = self.group_manager.get(&self.db, jid) else {
             tracing::warn!("[MessageRouter] dispatchTask: no group for {jid}");
             return;
@@ -217,7 +219,9 @@ impl MessageRouter {
                         (cb.on_started)();
                     }
                     if let Err(e) = agent_api.process_and_wait(&jid_owned, &g, &p).await {
-                        tracing::error!("[MessageRouter] dispatchTask agent error for {jid_owned}: {e:#}");
+                        tracing::error!(
+                            "[MessageRouter] dispatchTask agent error for {jid_owned}: {e:#}"
+                        );
                     }
                     if let Some(ref cb) = callbacks {
                         (cb.on_completed)();
@@ -242,7 +246,10 @@ impl MessageRouter {
             &old_jid,
             &msg.chat_jid,
         )?;
-        tracing::info!("[MessageRouter] Pending binding completed: {old_jid} → {}", msg.chat_jid);
+        tracing::info!(
+            "[MessageRouter] Pending binding completed: {old_jid} → {}",
+            msg.chat_jid
+        );
         self.agent_api.destroy(&old_jid).await;
         let guard = self.on_jid_migrated.lock().await;
         if let Some(ref cb) = *guard {
@@ -270,11 +277,10 @@ impl MessageRouter {
             let channel_token = creds["botToken"].as_str().unwrap_or("");
             // Match: explicit token in creds, or empty (uses default env token)
             if channel_token == bot_token || channel_token.is_empty() {
-                if let Ok(count) = self.binding_manager.complete_pending_new_model(
-                    &self.db,
-                    ch.id,
-                    &msg.chat_jid,
-                ) {
+                if let Ok(count) =
+                    self.binding_manager
+                        .complete_pending_new_model(&self.db, ch.id, &msg.chat_jid)
+                {
                     if count > 0 {
                         tracing::info!(
                             "[MessageRouter] Telegram pending binding completed for {} on channel '{}'",
@@ -299,10 +305,7 @@ impl MessageRouter {
         self.complete_pending_binding(msg, pending).await
     }
 
-    async fn complete_pending_feishu_binding(
-        &self,
-        msg: &IncomingMessage,
-    ) -> Option<GroupBinding> {
+    async fn complete_pending_feishu_binding(&self, msg: &IncomingMessage) -> Option<GroupBinding> {
         let app_id = msg.bot_token.as_deref().unwrap_or("");
         if app_id.is_empty() {
             return None;
@@ -318,16 +321,11 @@ impl MessageRouter {
         if app_id.is_empty() {
             return None;
         }
-        let pending = self
-            .group_manager
-            .find_pending_qq_binding(&self.db, app_id);
+        let pending = self.group_manager.find_pending_qq_binding(&self.db, app_id);
         self.complete_pending_binding(msg, pending).await
     }
 
-    async fn complete_pending_wechat_binding(
-        &self,
-        msg: &IncomingMessage,
-    ) -> Option<GroupBinding> {
+    async fn complete_pending_wechat_binding(&self, msg: &IncomingMessage) -> Option<GroupBinding> {
         let folder = msg.bot_token.as_deref().unwrap_or("");
         if folder.is_empty() {
             return None;
@@ -375,11 +373,17 @@ impl MessageRouter {
         let limit = self.config.agent.max_messages_per_group;
         // Raw platform message log
         if let Err(e) = self.db.insert_message(&stored, limit) {
-            tracing::error!("[MessageRouter] Failed to store channel message {}: {e:#}", msg.id);
+            tracing::error!(
+                "[MessageRouter] Failed to store channel message {}: {e:#}",
+                msg.id
+            );
         }
         // Conversation history
         if let Err(e) = self.db.insert_group_message(&stored, limit) {
-            tracing::error!("[MessageRouter] Failed to store group message {}: {e:#}", msg.id);
+            tracing::error!(
+                "[MessageRouter] Failed to store group message {}: {e:#}",
+                msg.id
+            );
         }
     }
 }

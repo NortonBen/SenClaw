@@ -80,18 +80,10 @@ pub(crate) async fn handle_browser_connection(
                 let text_str = text.to_string();
                 match serde_json::from_str::<ExtensionMessage>(&text_str) {
                     Ok(msg) => {
-                        handle_extension_message(
-                            &pending,
-                            &tabs,
-                            &crawl_engine,
-                            msg,
-                        )
-                        .await;
+                        handle_extension_message(&pending, &tabs, &crawl_engine, msg).await;
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "[BrowserGateway] Failed to parse extension message: {e}"
-                        );
+                        tracing::warn!("[BrowserGateway] Failed to parse extension message: {e}");
                     }
                 }
             }
@@ -128,14 +120,9 @@ pub(crate) async fn handle_browser_mcp_connection(
                 let text_str = text.to_string();
                 match serde_json::from_str::<DaemonMessage>(&text_str) {
                     Ok(dm) => {
-                        let response = relay_mcp_request(
-                            relay.ext_tx(),
-                            &pending,
-                            &tabs,
-                            &crawl_engine,
-                            dm,
-                        )
-                        .await;
+                        let response =
+                            relay_mcp_request(relay.ext_tx(), &pending, &tabs, &crawl_engine, dm)
+                                .await;
 
                         let resp_json =
                             serde_json::to_string(&response).unwrap_or_else(|e| {
@@ -144,26 +131,18 @@ pub(crate) async fn handle_browser_mcp_connection(
                                     e
                                 )
                             });
-                        if ws_sink
-                            .send(Message::Text(resp_json.into()))
-                            .await
-                            .is_err()
-                        {
+                        if ws_sink.send(Message::Text(resp_json.into())).await.is_err() {
                             break;
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "[BrowserGateway] Failed to parse MCP message: {e}"
-                        );
+                        tracing::warn!("[BrowserGateway] Failed to parse MCP message: {e}");
                         let err = serde_json::json!({
                             "type": "Response",
                             "status": "error",
                             "message": format!("parse error: {e}"),
                         });
-                        let _ = ws_sink
-                            .send(Message::Text(err.to_string().into()))
-                            .await;
+                        let _ = ws_sink.send(Message::Text(err.to_string().into())).await;
                     }
                 }
             }
@@ -272,10 +251,7 @@ async fn relay_mcp_request(
     }
 
     match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-        Ok(Ok(result)) => ExtensionMessage::Response {
-            request_id,
-            result,
-        },
+        Ok(Ok(result)) => ExtensionMessage::Response { request_id, result },
         Ok(Err(_)) => error_response(request_id, "Response channel closed"),
         Err(_) => {
             pending.lock().await.remove(&request_id);
@@ -368,7 +344,9 @@ async fn handle_extension_message(
             pages_total,
             current_url,
         } => {
-            crawl_engine.update_progress(&job_id, pages_crawled, pages_total, &current_url).await;
+            crawl_engine
+                .update_progress(&job_id, pages_crawled, pages_total, &current_url)
+                .await;
         }
         ExtensionMessage::CrawlResult {
             job_id,
@@ -382,9 +360,7 @@ async fn handle_extension_message(
             duration_ms: _,
         } => {
             crawl_engine.mark_complete(&job_id).await;
-            tracing::info!(
-                "[BrowserGateway] Crawl complete: {job_id} ({total_pages} pages)"
-            );
+            tracing::info!("[BrowserGateway] Crawl complete: {job_id} ({total_pages} pages)");
         }
         ExtensionMessage::ScreenshotFrame { .. } => {}
         ExtensionMessage::Heartbeat {

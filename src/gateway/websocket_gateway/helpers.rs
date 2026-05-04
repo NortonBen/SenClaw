@@ -61,11 +61,11 @@ pub(crate) async fn send_error(
 ) {
     let guard = clients.lock().await;
     if let Some(client) = guard.get(client_idx) {
-        let _ = client
-            .sender
-            .send(Message::Text(
-                serde_json::json!({"type": "error", "message": message}).to_string().into(),
-            ));
+        let _ = client.sender.send(Message::Text(
+            serde_json::json!({"type": "error", "message": message})
+                .to_string()
+                .into(),
+        ));
     }
 }
 

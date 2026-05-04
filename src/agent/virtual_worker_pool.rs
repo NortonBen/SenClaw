@@ -31,7 +31,11 @@ pub struct VirtualRunResult {
 pub struct TodoItem {
     pub content: String,
     pub status: String,
-    #[serde(default, rename = "activeForm", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "activeForm",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub active_form: Option<String>,
 }
 
@@ -82,8 +86,16 @@ const VIRTUAL_EXCLUDED_TOOLS: &[&str] = &["Task", "AskUserQuestion"];
 
 /// All non-admin pooled tools (used when persona doesn't specify a custom tool list).
 const ALL_POOLED_TOOLS: &[&str] = &[
-    "Bash", "Glob", "Grep", "Read", "Write", "Edit",
-    "TodoWrite", "Skill", "NotebookEdit", "ExitPlanMode",
+    "Bash",
+    "Glob",
+    "Grep",
+    "Read",
+    "Write",
+    "Edit",
+    "TodoWrite",
+    "Skill",
+    "NotebookEdit",
+    "ExitPlanMode",
 ];
 
 // ===== Internal: running instance tracking =====
@@ -108,8 +120,9 @@ pub struct VirtualWorkerPool {
     extra_mcp_servers: Mutex<Vec<McpServerConfig>>,
     /// Permission bridge callback: called to bind a virtual agent core for permission forwarding.
     /// Returns a cleanup function.
-    on_bind_permission:
-        Mutex<Option<Box<dyn Fn(&str, &str, bool) -> Option<Box<dyn FnOnce() + Send>> + Send + Sync>>>,
+    on_bind_permission: Mutex<
+        Option<Box<dyn Fn(&str, &str, bool) -> Option<Box<dyn FnOnce() + Send>> + Send + Sync>>,
+    >,
     /// Returns the current skip-permission state (follows main-agent config).
     get_skip_perms: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
 }
@@ -240,7 +253,12 @@ impl VirtualWorkerPool {
 
     /// Get the current active count for a persona.
     pub fn get_active_count(&self, persona_name: &str) -> u32 {
-        *self.active_counts.lock().unwrap().get(persona_name).unwrap_or(&0)
+        *self
+            .active_counts
+            .lock()
+            .unwrap()
+            .get(persona_name)
+            .unwrap_or(&0)
     }
 
     /// Force-stop a virtual task by task ID.
@@ -307,11 +325,7 @@ impl VirtualWorkerPool {
         // Prepare temp agent data dir
         tokio::fs::create_dir_all(temp_dir).await?;
         if !persona.system_prompt.is_empty() {
-            tokio::fs::write(
-                temp_dir.join("CLAUDE.md"),
-                persona.system_prompt.as_bytes(),
-            )
-            .await?;
+            tokio::fs::write(temp_dir.join("CLAUDE.md"), persona.system_prompt.as_bytes()).await?;
         }
 
         // Resolve tool set (exclude VIRTUAL_EXCLUDED_TOOLS)
@@ -365,17 +379,19 @@ impl VirtualWorkerPool {
 
         // Wrap the pool's todos_notify to send with the correct virtual JID
         // and persona name.
-        let todos_notify: Option<TodosNotifyFn> = self
-            .todos_notify
-            .lock()
-            .unwrap()
-            .clone()
-            .map(move |notify| {
-                let virtual_jid = format!("virtual:{task_id_captured}");
-                Arc::new(move |_instance_id: &str, _label: &str, todos: &[TodoItem]| {
-                    notify(&virtual_jid, &persona_name, todos);
-                }) as TodosNotifyFn
-            });
+        let todos_notify: Option<TodosNotifyFn> =
+            self.todos_notify
+                .lock()
+                .unwrap()
+                .clone()
+                .map(move |notify| {
+                    let virtual_jid = format!("virtual:{task_id_captured}");
+                    Arc::new(
+                        move |_instance_id: &str, _label: &str, todos: &[TodoItem]| {
+                            notify(&virtual_jid, &persona_name, todos);
+                        },
+                    ) as TodosNotifyFn
+                });
 
         let result = tokio::task::spawn_blocking(move || {
             let sys_prompt_opt = if sys_prompt.is_empty() {
@@ -510,9 +526,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         todos_notify: Option<TodosNotifyFn>,
         extra_mcp_servers: &[McpServerConfig],
     ) -> Result<String> {
-        use crate::zen_core::{
-            EngineEvent, SessionState, ZenCore, ZenCoreOptions,
-        };
+        use crate::zen_core::{EngineEvent, SessionState, ZenCore, ZenCoreOptions};
 
         let handle = tokio::runtime::Handle::current();
 
@@ -562,7 +576,8 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             }
 
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            let result = handle.block_on(async { tokio::time::timeout(remaining, rx.recv()).await });
+            let result =
+                handle.block_on(async { tokio::time::timeout(remaining, rx.recv()).await });
 
             match result {
                 Ok(Ok(event)) => match event {

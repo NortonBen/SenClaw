@@ -37,8 +37,7 @@ pub const CTRL_HISTORY_RESP: i32 = 10;
 
 /// Called when the app sends a control frame that requires server handling.
 /// Arguments: (sender_id, control_type, metadata_json)
-pub type ControlCallback =
-    Arc<dyn Fn(String, i32, String) + Send + Sync + 'static>;
+pub type ControlCallback = Arc<dyn Fn(String, i32, String) + Send + Sync + 'static>;
 
 pub struct AppChannel {
     hub_url: String,
@@ -153,7 +152,10 @@ impl Channel for AppChannel {
             while let Some(msg) = msg_rx.recv().await {
                 match msg.payload {
                     Some(relay_message::Payload::EncryptedData(ref data)) => {
-                        info!("[AppChannel] Received message: {} from {}", msg.message_id, msg.sender_id);
+                        info!(
+                            "[AppChannel] Received message: {} from {}",
+                            msg.message_id, msg.sender_id
+                        );
                         match client_for_inbound.decrypt_payload(data) {
                             Ok(text) => {
                                 info!("[AppChannel] Decrypted from {}: {}", msg.sender_id, text);
@@ -204,7 +206,10 @@ impl Channel for AppChannel {
 
         *self.client.lock().await = Some(client_arc);
         self.connected.store(true, Ordering::SeqCst);
-        info!("[AppChannel] Connected to relay for channel {}", self.channel_id);
+        info!(
+            "[AppChannel] Connected to relay for channel {}",
+            self.channel_id
+        );
         Ok(())
     }
 
@@ -218,7 +223,12 @@ impl Channel for AppChannel {
         self.connected.load(Ordering::SeqCst)
     }
 
-    async fn send_message(&self, chat_jid: &str, text: &str, _bot_token: Option<&str>) -> Result<()> {
+    async fn send_message(
+        &self,
+        chat_jid: &str,
+        text: &str,
+        _bot_token: Option<&str>,
+    ) -> Result<()> {
         let lock = self.client.lock().await;
         if let Some(ref client) = *lock {
             info!("[AppChannel] Sending to {}: {}", chat_jid, text);
@@ -228,7 +238,12 @@ impl Channel for AppChannel {
         }
     }
 
-    async fn set_typing(&self, _chat_jid: &str, typing: bool, _bot_token: Option<&str>) -> Result<()> {
+    async fn set_typing(
+        &self,
+        _chat_jid: &str,
+        typing: bool,
+        _bot_token: Option<&str>,
+    ) -> Result<()> {
         let lock = self.client.lock().await;
         if let Some(ref client) = *lock {
             let ctrl = if typing { 3 } else { 4 };
@@ -269,20 +284,40 @@ impl Channel for AppChannel {
 // Allow Arc<AppChannel> to be used in the channels Vec<Box<dyn Channel>>.
 #[async_trait]
 impl Channel for Arc<AppChannel> {
-    fn id(&self) -> &'static str { self.as_ref().id() }
-    async fn connect(&self) -> Result<()> { self.as_ref().connect().await }
-    async fn disconnect(&self) -> Result<()> { self.as_ref().disconnect().await }
-    fn is_connected(&self) -> bool { self.as_ref().is_connected() }
+    fn id(&self) -> &'static str {
+        self.as_ref().id()
+    }
+    async fn connect(&self) -> Result<()> {
+        self.as_ref().connect().await
+    }
+    async fn disconnect(&self) -> Result<()> {
+        self.as_ref().disconnect().await
+    }
+    fn is_connected(&self) -> bool {
+        self.as_ref().is_connected()
+    }
     async fn send_message(&self, jid: &str, text: &str, bt: Option<&str>) -> Result<()> {
         self.as_ref().send_message(jid, text, bt).await
     }
     async fn set_typing(&self, jid: &str, typing: bool, bt: Option<&str>) -> Result<()> {
         self.as_ref().set_typing(jid, typing, bt).await
     }
-    async fn send_file(&self, jid: &str, path: &str, cap: Option<&str>, bt: Option<&str>) -> Result<()> {
+    async fn send_file(
+        &self,
+        jid: &str,
+        path: &str,
+        cap: Option<&str>,
+        bt: Option<&str>,
+    ) -> Result<()> {
         self.as_ref().send_file(jid, path, cap, bt).await
     }
-    fn owns_jid(&self, jid: &str) -> bool { self.as_ref().owns_jid(jid) }
-    fn on_message(&self, h: MessageCallback) { self.as_ref().on_message(h) }
-    fn on_metadata(&self, h: MetadataCallback) { self.as_ref().on_metadata(h) }
+    fn owns_jid(&self, jid: &str) -> bool {
+        self.as_ref().owns_jid(jid)
+    }
+    fn on_message(&self, h: MessageCallback) {
+        self.as_ref().on_message(h)
+    }
+    fn on_metadata(&self, h: MetadataCallback) {
+        self.as_ref().on_metadata(h)
+    }
 }

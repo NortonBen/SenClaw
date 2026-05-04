@@ -56,17 +56,20 @@ impl Tool for EditTool {
         input: &Value,
         _ctx: &ToolContext<'_>,
     ) -> std::result::Result<(), String> {
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if path.is_empty() {
             return Err("file_path is required".to_string());
         }
 
-        let old = input.get("old_string")
+        let old = input
+            .get("old_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let new = input.get("new_string")
+        let new = input
+            .get("new_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
@@ -85,27 +88,26 @@ impl Tool for EditTool {
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let path = input.get("file_path")
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let old_string = input.get("old_string")
+        let old_string = input
+            .get("old_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let new_string = input.get("new_string")
+        let new_string = input
+            .get("new_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let replace_all = input.get("replace_all")
+        let replace_all = input
+            .get("replace_all")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
         let p = PathBuf::from(path);
-        let content = std::fs::read_to_string(&p)
-            .context("Failed to read file")?;
+        let content = std::fs::read_to_string(&p).context("Failed to read file")?;
 
         // Find the old_string
         let occurrences = content.match_indices(old_string).count();
@@ -135,7 +137,8 @@ impl Tool for EditTool {
             content.replace(old_string, new_string)
         } else {
             let pos = content.find(old_string).unwrap();
-            let mut result = String::with_capacity(content.len() + new_string.len() - old_string.len());
+            let mut result =
+                String::with_capacity(content.len() + new_string.len() - old_string.len());
             result.push_str(&content[..pos]);
             result.push_str(new_string);
             result.push_str(&content[pos + old_string.len()..]);
@@ -146,10 +149,10 @@ impl Tool for EditTool {
             bail!("old_string and new_string are identical — no change made");
         }
 
-        std::fs::write(&p, &new_content)
-            .context("Failed to write file")?;
+        std::fs::write(&p, &new_content).context("Failed to write file")?;
 
-        let fname = p.file_name()
+        let fname = p
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string());
         let summary = format!(
@@ -167,20 +170,22 @@ impl Tool for EditTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         ToolResultMessage {
             title: "Edit".into(),
-            summary: format!("{} replacements", data.get("replacements").and_then(|v| v.as_u64()).unwrap_or(0)),
+            summary: format!(
+                "{} replacements",
+                data.get("replacements")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            ),
             content: data.clone(),
         }
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("file");
         let fname = std::path::Path::new(path)
@@ -192,7 +197,8 @@ impl Tool for EditTool {
 
     fn gen_tool_permission(&self, input: &Value) -> Option<ToolPermissionInfo> {
         let title = self.get_display_title(input);
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 

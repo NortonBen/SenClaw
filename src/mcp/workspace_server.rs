@@ -41,7 +41,9 @@ impl McpWorkspaceServer {
     #[rmcp::tool(description = "Switch the agent workspace directory")]
     fn workspace_switch(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<WorkspaceSwitchParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            WorkspaceSwitchParams,
+        >,
     ) -> String {
         self.inner().workspace_switch(&p.target_path).content
     }
@@ -69,16 +71,13 @@ pub async fn run_stdio_server() -> Result<()> {
 
     let state_file = std::env::var("SENCLAW_WORKSPACE_STATE_FILE")
         .context("SENCLAW_WORKSPACE_STATE_FILE not set")?;
-    let default_workspace = std::env::var("SENCLAW_DEFAULT_WORKSPACE")
-        .context("SENCLAW_DEFAULT_WORKSPACE not set")?;
+    let default_workspace =
+        std::env::var("SENCLAW_DEFAULT_WORKSPACE").context("SENCLAW_DEFAULT_WORKSPACE not set")?;
     let allowed_raw = std::env::var("SENCLAW_ALLOWED_WORK_DIRS").unwrap_or_default();
     let allowed_work_dirs: Option<Vec<String>> = if allowed_raw.is_empty() {
         None
     } else {
-        Some(
-            serde_json::from_str(&allowed_raw)
-                .context("parse SENCLAW_ALLOWED_WORK_DIRS")?,
-        )
+        Some(serde_json::from_str(&allowed_raw).context("parse SENCLAW_ALLOWED_WORK_DIRS")?)
     };
 
     let server = McpWorkspaceServer {
@@ -153,11 +152,8 @@ impl WorkspaceServer {
                     .canonicalize()
                     .unwrap_or_else(|_| target_path.to_path_buf());
                 dirs.iter().any(|allowed| {
-                    let ok_normalized = allowed
-                        .canonicalize()
-                        .unwrap_or_else(|_| allowed.clone());
-                    normalized == ok_normalized
-                        || normalized.starts_with(&ok_normalized)
+                    let ok_normalized = allowed.canonicalize().unwrap_or_else(|_| allowed.clone());
+                    normalized == ok_normalized || normalized.starts_with(&ok_normalized)
                 })
             }
         }
@@ -176,17 +172,11 @@ impl WorkspaceServer {
         let resolved = PathBuf::from(target_path);
 
         if !resolved.exists() {
-            return ToolResult::err(format!(
-                "Directory does not exist: {}",
-                resolved.display()
-            ));
+            return ToolResult::err(format!("Directory does not exist: {}", resolved.display()));
         }
 
         if !resolved.is_dir() {
-            return ToolResult::err(format!(
-                "Path is not a directory: {}",
-                resolved.display()
-            ));
+            return ToolResult::err(format!("Path is not a directory: {}", resolved.display()));
         }
 
         if !self.is_path_allowed(&resolved) {

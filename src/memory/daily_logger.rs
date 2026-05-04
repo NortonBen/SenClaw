@@ -67,7 +67,11 @@ impl DailyLogger {
         if !log_file.exists() {
             buf.push_str(&format!("# {today}\n"));
         }
-        buf.push_str(&format!("\n## {time} [{}]\n\n{}\n", role.label(), content.trim()));
+        buf.push_str(&format!(
+            "\n## {time} [{}]\n\n{}\n",
+            role.label(),
+            content.trim()
+        ));
 
         let mut f = fs::OpenOptions::new()
             .create(true)
@@ -84,7 +88,9 @@ impl DailyLogger {
     /// Errors are silently swallowed (matches TS — best-effort housekeeping).
     pub fn cleanup(&self, folder: &str) {
         let mem_dir = self.memory_dir(folder);
-        let Ok(entries) = fs::read_dir(&mem_dir) else { return };
+        let Ok(entries) = fs::read_dir(&mem_dir) else {
+            return;
+        };
 
         let mut files: Vec<String> = entries
             .filter_map(|e| e.ok())
@@ -108,7 +114,9 @@ impl DailyLogger {
 }
 
 fn is_date_filename(name: &str) -> bool {
-    let Some(stem) = name.strip_suffix(".md") else { return false };
+    let Some(stem) = name.strip_suffix(".md") else {
+        return false;
+    };
     if stem.len() != 10 {
         return false;
     }
@@ -169,7 +177,10 @@ mod tests {
         logger.append("g1", Role::Assistant, "second");
         let content = read_today(tmp.path(), "g1");
         // exactly one h1 header
-        assert_eq!(content.matches("\n# ").count() + content.starts_with("# ") as usize, 1);
+        assert_eq!(
+            content.matches("\n# ").count() + content.starts_with("# ") as usize,
+            1
+        );
         assert!(content.contains("first"));
         assert!(content.contains("second"));
         assert!(content.contains("[User]"));

@@ -35,10 +35,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 // Re-export key types
-pub use config_manager::{ConfigManager, ProjectConfig, ProjectConfigPatch, with_conf_manager};
+pub use config_manager::{with_conf_manager, ConfigManager, ProjectConfig, ProjectConfigPatch};
 pub use engine::ZenEngine;
-pub use events::{EventBus, EngineEvent, ResponseRegistry};
-pub use model_manager::{ModelManager, ModelUpdateData, TaskConfig, with_model_manager};
+pub use events::{EngineEvent, EventBus, ResponseRegistry};
+pub use model_manager::{with_model_manager, ModelManager, ModelUpdateData, TaskConfig};
 pub use state::StateManager;
 
 /// Agent id used for root-agent events.
@@ -237,7 +237,11 @@ pub struct ToolExecutionErrorData {
 pub struct TodosUpdateItem {
     pub content: String,
     pub status: String,
-    #[serde(default, rename = "activeForm", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "activeForm",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub active_form: Option<String>,
 }
 
@@ -458,10 +462,7 @@ pub trait Tool: Send + Sync {
     fn get_display_title(&self, input: &serde_json::Value) -> String;
 
     /// Generate permission request UI info.
-    fn gen_tool_permission(
-        &self,
-        input: &serde_json::Value,
-    ) -> Option<ToolPermissionInfo> {
+    fn gen_tool_permission(&self, input: &serde_json::Value) -> Option<ToolPermissionInfo> {
         let _ = input;
         None
     }

@@ -4,8 +4,8 @@
 //!   wiki_create_node, wiki_search, doc_read_blocks, doc_write_blocks.
 //! Uses Feishu / Lark REST API via reqwest.
 
-use anyhow::Context;
 use crate::mcp::schedule_server::ToolResult;
+use anyhow::Context;
 
 use rmcp::ServiceExt;
 
@@ -51,7 +51,10 @@ impl LarkClient {
 
         let client = reqwest::Client::new();
         let res = client
-            .post(format!("{}/open-apis/auth/v3/tenant_access_token/internal", self.base_url))
+            .post(format!(
+                "{}/open-apis/auth/v3/tenant_access_token/internal",
+                self.base_url
+            ))
             .json(&serde_json::json!({
                 "app_id": self.app_id,
                 "app_secret": self.app_secret,
@@ -61,10 +64,7 @@ impl LarkClient {
             .map_err(|e| format!("Token request failed: {e}"))?;
 
         let body: serde_json::Value = res.json().await.map_err(|e| format!("Token parse: {e}"))?;
-        let code = body
-            .get("code")
-            .and_then(|c| c.as_i64())
-            .unwrap_or(-1);
+        let code = body.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
 
         if code != 0 {
             let msg = body
@@ -79,17 +79,19 @@ impl LarkClient {
             .and_then(|t| t.as_str())
             .ok_or("Missing tenant_access_token")?
             .to_owned();
-        let expire = body
-            .get("expire")
-            .and_then(|e| e.as_i64())
-            .unwrap_or(7200);
+        let expire = body.get("expire").and_then(|e| e.as_i64()).unwrap_or(7200);
 
         let expires_at = chrono::Utc::now().timestamp_millis() + (expire as i64 * 1000);
         *self.tenant_token.lock().unwrap() = Some((token.clone(), expires_at));
         Ok(token)
     }
 
-    async fn call_api(&self, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<serde_json::Value, String> {
+    async fn call_api(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
         let token = self.get_token().await?;
         let client = reqwest::Client::new();
         let url = format!("{}{}", self.base_url, path);
@@ -107,25 +109,24 @@ impl LarkClient {
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8");
 
-        let req = if let Some(b) = body {
-            req.json(b)
-        } else {
-            req
-        };
+        let req = if let Some(b) = body { req.json(b) } else { req };
 
-        let res = req.send().await.map_err(|e| format!("API call failed: {e}"))?;
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("API call failed: {e}"))?;
         let status = res.status();
-        let body: serde_json::Value = res.json().await.map_err(|e| format!("Response parse: {e}"))?;
+        let body: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e| format!("Response parse: {e}"))?;
 
         if !status.is_success() {
             let msg = body
                 .get("msg")
                 .and_then(|m| m.as_str())
                 .unwrap_or("request failed");
-            let code = body
-                .get("code")
-                .and_then(|c| c.as_i64())
-                .unwrap_or(0);
+            let code = body.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
             return Err(format!("Feishu API error ({code}): {msg}"));
         }
 
@@ -157,7 +158,11 @@ impl FeishuWikiServer {
         if let Some(t) = page_token {
             query.push_str(&format!("&page_token={t}"));
         }
-        match self.client.call_api("GET", &format!("/open-apis/wiki/v2/spaces?{query}"), None).await {
+        match self
+            .client
+            .call_api("GET", &format!("/open-apis/wiki/v2/spaces?{query}"), None)
+            .await
+        {
             Ok(res) => {
                 let data = res.get("data");
                 let items = data.and_then(|d| d.get("items")).and_then(|i| i.as_array());
@@ -193,7 +198,11 @@ impl FeishuWikiServer {
     pub async fn wiki_get_space(&self, space_id: &str) -> ToolResult {
         match self
             .client
-            .call_api("GET", &format!("/open-apis/wiki/v2/spaces/{space_id}"), None)
+            .call_api(
+                "GET",
+                &format!("/open-apis/wiki/v2/spaces/{space_id}"),
+                None,
+            )
             .await
         {
             Ok(res) => {
@@ -223,10 +232,18 @@ impl FeishuWikiServer {
         if let Some(t) = page_token {
             params.push(("page_token", t.to_owned()));
         }
-        let query = params.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
+        let query = params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
         match self
             .client
-            .call_api("GET", &format!("/open-apis/wiki/v2/spaces/{space_id}/nodes?{query}"), None)
+            .call_api(
+                "GET",
+                &format!("/open-apis/wiki/v2/spaces/{space_id}/nodes?{query}"),
+                None,
+            )
             .await
         {
             Ok(res) => {
@@ -249,8 +266,15 @@ impl FeishuWikiServer {
                             })
                             .collect();
                         let mut result = lines.join("\n");
-                        if data.and_then(|d| d.get("has_more")).and_then(|h| h.as_bool()).unwrap_or(false) {
-                            if let Some(pt) = data.and_then(|d| d.get("page_token")).and_then(|t| t.as_str()) {
+                        if data
+                            .and_then(|d| d.get("has_more"))
+                            .and_then(|h| h.as_bool())
+                            .unwrap_or(false)
+                        {
+                            if let Some(pt) = data
+                                .and_then(|d| d.get("page_token"))
+                                .and_then(|t| t.as_str())
+                            {
                                 result.push_str(&format!("\n\n_More results: page_token=`{pt}`_"));
                             }
                         }
@@ -322,7 +346,10 @@ impl FeishuWikiServer {
                         }
                         if obj_type == "docx" {
                             lines.push(String::new());
-                            lines.push("Use doc_write_blocks to write content (document_id = obj_token)".into());
+                            lines.push(
+                                "Use doc_write_blocks to write content (document_id = obj_token)"
+                                    .into(),
+                            );
                         }
                         ToolResult::ok(lines.join("\n"))
                     }
@@ -342,13 +369,15 @@ impl FeishuWikiServer {
         page_size: Option<u32>,
         page_token: Option<&str>,
     ) -> ToolResult {
-        let mut params = vec![
-            ("page_size".to_owned(), page_size.unwrap_or(20).to_string()),
-        ];
+        let mut params = vec![("page_size".to_owned(), page_size.unwrap_or(20).to_string())];
         if let Some(t) = page_token {
             params.push(("page_token".to_owned(), t.to_owned()));
         }
-        let qs = params.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
+        let qs = params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
         let url = format!("/open-apis/wiki/v2/search?{qs}");
 
         let mut body = serde_json::json!({
@@ -374,10 +403,18 @@ impl FeishuWikiServer {
                                 format!("- **{title}** — space: {space}, node_token: `{node_token}`, type: {obj_type}")
                             })
                             .collect();
-                        let mut result = format!("Search \"{query}\" found {} results:\n\n", items.len())
-                            + &lines.join("\n");
-                        if data.and_then(|d| d.get("has_more")).and_then(|h| h.as_bool()).unwrap_or(false) {
-                            if let Some(pt) = data.and_then(|d| d.get("page_token")).and_then(|t| t.as_str()) {
+                        let mut result =
+                            format!("Search \"{query}\" found {} results:\n\n", items.len())
+                                + &lines.join("\n");
+                        if data
+                            .and_then(|d| d.get("has_more"))
+                            .and_then(|h| h.as_bool())
+                            .unwrap_or(false)
+                        {
+                            if let Some(pt) = data
+                                .and_then(|d| d.get("page_token"))
+                                .and_then(|t| t.as_str())
+                            {
                                 result.push_str(&format!("\n\n_More results: page_token=`{pt}`_"));
                             }
                         }
@@ -402,7 +439,11 @@ impl FeishuWikiServer {
         if let Some(t) = page_token {
             params.push(("page_token", t.to_owned()));
         }
-        let query = params.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
+        let query = params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
         match self
             .client
             .call_api(
@@ -428,8 +469,10 @@ impl FeishuWikiServer {
                                 // Extract text content
                                 if let Some(obj) = b.as_object() {
                                     for (k, v) in obj {
-                                        if !matches!(k.as_str(), "block_id" | "block_type" | "parent_id" | "children")
-                                            && v.is_object()
+                                        if !matches!(
+                                            k.as_str(),
+                                            "block_id" | "block_type" | "parent_id" | "children"
+                                        ) && v.is_object()
                                         {
                                             out["content"] = v.clone();
                                             break;
@@ -443,8 +486,15 @@ impl FeishuWikiServer {
                             })
                             .collect();
                         let mut result = serde_json::to_string_pretty(&blocks).unwrap_or_default();
-                        if data.and_then(|d| d.get("has_more")).and_then(|h| h.as_bool()).unwrap_or(false) {
-                            if let Some(pt) = data.and_then(|d| d.get("page_token")).and_then(|t| t.as_str()) {
+                        if data
+                            .and_then(|d| d.get("has_more"))
+                            .and_then(|h| h.as_bool())
+                            .unwrap_or(false)
+                        {
+                            if let Some(pt) = data
+                                .and_then(|d| d.get("page_token"))
+                                .and_then(|t| t.as_str())
+                            {
                                 result.push_str(&format!("\n\n_More blocks: page_token=`{pt}`_"));
                             }
                         }
@@ -467,21 +517,37 @@ impl FeishuWikiServer {
         index: Option<u32>,
     ) -> ToolResult {
         let type_map: std::collections::HashMap<&str, u32> = [
-            ("text", 2), ("heading1", 3), ("heading2", 4), ("heading3", 5),
-            ("heading4", 6), ("heading5", 7), ("heading6", 8), ("heading7", 9),
-            ("heading8", 10), ("heading9", 11), ("bullet", 12), ("ordered", 13),
-            ("code", 14), ("todo", 17), ("divider", 22),
-        ].iter().cloned().collect();
+            ("text", 2),
+            ("heading1", 3),
+            ("heading2", 4),
+            ("heading3", 5),
+            ("heading4", 6),
+            ("heading5", 7),
+            ("heading6", 8),
+            ("heading7", 9),
+            ("heading8", 10),
+            ("heading9", 11),
+            ("bullet", 12),
+            ("ordered", 13),
+            ("code", 14),
+            ("todo", 17),
+            ("divider", 22),
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         let mut children = Vec::new();
         for b in &blocks {
             let block_type = match type_map.get(b.block_type.as_str()) {
                 Some(t) => *t,
-                None => return ToolResult::err(format!(
-                    "Unsupported block type: \"{}\". Supported: {}",
-                    b.block_type,
-                    type_map.keys().copied().collect::<Vec<_>>().join(", ")
-                )),
+                None => {
+                    return ToolResult::err(format!(
+                        "Unsupported block type: \"{}\". Supported: {}",
+                        b.block_type,
+                        type_map.keys().copied().collect::<Vec<_>>().join(", ")
+                    ))
+                }
             };
 
             if b.block_type == "divider" {
@@ -537,13 +603,16 @@ impl FeishuWikiServer {
             .client
             .call_api(
                 "POST",
-                &format!("/open-apis/docx/v1/documents/{document_id}/blocks/{parent_block_id}/children"),
+                &format!(
+                    "/open-apis/docx/v1/documents/{document_id}/blocks/{parent_block_id}/children"
+                ),
                 Some(&data),
             )
             .await
         {
             Ok(res) => {
-                let created = res.get("data")
+                let created = res
+                    .get("data")
                     .and_then(|d| d.get("children"))
                     .and_then(|c| c.as_array())
                     .map(|a| a.len())
@@ -556,7 +625,9 @@ impl FeishuWikiServer {
                         children
                             .iter()
                             .filter_map(|c| {
-                                c.get("block_id").and_then(|id| id.as_str()).map(|s| format!("`{s}`"))
+                                c.get("block_id")
+                                    .and_then(|id| id.as_str())
+                                    .map(|s| format!("`{s}`"))
                             })
                             .collect()
                     })
@@ -694,15 +765,22 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "List accessible Feishu/Lark wiki spaces")]
     async fn wiki_list_spaces(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ListSpacesParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ListSpacesParams,
+        >,
     ) -> String {
-        self.inner().wiki_list_spaces(p.page_size, p.page_token.as_deref()).await.content
+        self.inner()
+            .wiki_list_spaces(p.page_size, p.page_token.as_deref())
+            .await
+            .content
     }
 
     #[rmcp::tool(description = "Get details of a specific wiki space")]
     async fn wiki_get_space(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SpaceIdParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SpaceIdParams,
+        >,
     ) -> String {
         self.inner().wiki_get_space(&p.space_id).await.content
     }
@@ -710,10 +788,17 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "List child nodes in a wiki space or parent node")]
     async fn wiki_list_nodes(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ListNodesParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ListNodesParams,
+        >,
     ) -> String {
         self.inner()
-            .wiki_list_nodes(&p.space_id, p.parent_node_token.as_deref(), p.page_size, p.page_token.as_deref())
+            .wiki_list_nodes(
+                &p.space_id,
+                p.parent_node_token.as_deref(),
+                p.page_size,
+                p.page_token.as_deref(),
+            )
             .await
             .content
     }
@@ -721,7 +806,9 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "Get details of a specific wiki node by token")]
     async fn wiki_get_node(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TokenParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TokenParams,
+        >,
     ) -> String {
         self.inner().wiki_get_node(&p.token).await.content
     }
@@ -729,10 +816,17 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "Create a new node (doc or folder) in a wiki space")]
     async fn wiki_create_node(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CreateNodeParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CreateNodeParams,
+        >,
     ) -> String {
         self.inner()
-            .wiki_create_node(&p.space_id, &p.obj_type, p.title.as_deref(), p.parent_node_token.as_deref())
+            .wiki_create_node(
+                &p.space_id,
+                &p.obj_type,
+                p.title.as_deref(),
+                p.parent_node_token.as_deref(),
+            )
             .await
             .content
     }
@@ -740,10 +834,17 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "Search wiki nodes by query text")]
     async fn wiki_search(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SearchParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SearchParams,
+        >,
     ) -> String {
         self.inner()
-            .wiki_search(&p.query, p.space_id.as_deref(), p.page_size, p.page_token.as_deref())
+            .wiki_search(
+                &p.query,
+                p.space_id.as_deref(),
+                p.page_size,
+                p.page_token.as_deref(),
+            )
             .await
             .content
     }
@@ -751,7 +852,9 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "Read blocks from a Feishu/Lark document")]
     async fn doc_read_blocks(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<DocBlocksParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            DocBlocksParams,
+        >,
     ) -> String {
         self.inner()
             .doc_read_blocks(&p.document_id, p.page_size, p.page_token.as_deref())
@@ -762,7 +865,9 @@ impl McpFeishuWikiServer {
     #[rmcp::tool(description = "Write content blocks to a Feishu/Lark document")]
     async fn doc_write_blocks(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<WriteBlocksParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            WriteBlocksParams,
+        >,
     ) -> String {
         self.inner()
             .doc_write_blocks(&p.document_id, &p.parent_block_id, p.blocks, p.index)

@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
 use super::types::{
-    AskQuestionRequestData, CompactExecData, CompactStartData,
-    MessageCompleteData, SessionErrorData, StateUpdateData, TodoSnapshot, TodosUpdateItem,
-    ToolPermissionRequestData,
+    AskQuestionRequestData, CompactExecData, CompactStartData, MessageCompleteData,
+    SessionErrorData, StateUpdateData, TodoSnapshot, TodosUpdateItem, ToolPermissionRequestData,
 };
 use crate::agent::permission_bridge::{AskQuestionPayload, PermissionPayload};
 use crate::config::Config;
@@ -209,5 +208,6 @@ pub(crate) struct CoreHandlers {
     pub session_error: Option<Arc<dyn Fn(SessionErrorData) + Send + Sync>>,
     pub tool_permission_request: Option<Arc<dyn Fn(ToolPermissionRequestData) + Send + Sync>>,
     pub ask_question_request: Option<Arc<dyn Fn(AskQuestionRequestData) + Send + Sync>>,
-    pub conversation_usage: Option<Arc<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>>,
+    pub conversation_usage:
+        Option<Arc<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>>,
 }

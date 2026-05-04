@@ -2,9 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::types::{AbortFn, ActivityResetFn, CleanupFn, UnwatchFn};
 use super::traits::CachedTools;
 use super::types::CachedTodos;
+use super::types::{AbortFn, ActivityResetFn, CleanupFn, UnwatchFn};
 
 /// Internal mutable state for [`AgentPool`]. All fields are accessed behind a
 /// single [`std::sync::Mutex`].
@@ -31,7 +31,8 @@ pub(crate) struct State {
 
     // process_and_wait event bridge (per-jid) — sender set by PAW before
     // process_user_input, forwarded to by bind_events persistent handlers.
-    pub process_event_txs: HashMap<String, tokio::sync::mpsc::UnboundedSender<super::types::ProcessEvent>>,
+    pub process_event_txs:
+        HashMap<String, tokio::sync::mpsc::UnboundedSender<super::types::ProcessEvent>>,
 
     // process_and_wait runtime state.
     pub active_timer_resets: HashMap<String, ActivityResetFn>,

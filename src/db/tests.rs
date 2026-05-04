@@ -43,9 +43,15 @@ fn group_upsert_get_list_delete() {
     db.upsert_group(&g).unwrap();
     let got = db.get_group(&g.jid).unwrap().unwrap();
     assert_eq!(got.folder, g.folder);
-    assert_eq!(got.allowed_tools.as_deref(), Some(&["Read".into(), "Grep".into()][..]));
+    assert_eq!(
+        got.allowed_tools.as_deref(),
+        Some(&["Read".into(), "Grep".into()][..])
+    );
     assert_eq!(got.allowed_paths, None);
-    assert_eq!(got.allowed_work_dirs.as_deref(), Some(&["/tmp/work".into()][..]));
+    assert_eq!(
+        got.allowed_work_dirs.as_deref(),
+        Some(&["/tmp/work".into()][..])
+    );
 
     let mut g2 = g.clone();
     g2.name = "Renamed".into();
@@ -215,9 +221,12 @@ fn router_state_get_set() {
     db.set_router_state("k", "v2").unwrap();
     assert_eq!(db.get_router_state("k").unwrap().as_deref(), Some("v2"));
 
-    db.set_last_agent_timestamp("tg:group:1", "2026-04-28T00:00:00Z").unwrap();
+    db.set_last_agent_timestamp("tg:group:1", "2026-04-28T00:00:00Z")
+        .unwrap();
     assert_eq!(
-        db.get_last_agent_timestamp("tg:group:1").unwrap().as_deref(),
+        db.get_last_agent_timestamp("tg:group:1")
+            .unwrap()
+            .as_deref(),
         Some("2026-04-28T00:00:00Z")
     );
 }
@@ -242,7 +251,8 @@ fn delete_messages_and_timestamp() {
     }
     assert_eq!(db.count_messages("tg:group:1").unwrap(), 5);
 
-    db.set_last_agent_timestamp("tg:group:1", "2026-04-28T00:00:04Z").unwrap();
+    db.set_last_agent_timestamp("tg:group:1", "2026-04-28T00:00:04Z")
+        .unwrap();
     assert!(db.get_last_agent_timestamp("tg:group:1").unwrap().is_some());
 
     let deleted = db.delete_messages_for_jid("tg:group:1").unwrap();
@@ -300,5 +310,8 @@ fn migration_adds_missing_columns_on_existing_db() {
     let db = Db::open_at(tmp.path(), &cfg()).unwrap();
     db.upsert_group(&sample_group()).unwrap();
     let got = db.get_group("tg:group:1").unwrap().unwrap();
-    assert_eq!(got.allowed_work_dirs.as_deref(), Some(&["/tmp/work".into()][..]));
+    assert_eq!(
+        got.allowed_work_dirs.as_deref(),
+        Some(&["/tmp/work".into()][..])
+    );
 }

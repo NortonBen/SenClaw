@@ -61,7 +61,9 @@ impl GroupManager {
             channel: updates.channel.unwrap_or(existing.channel),
             group_type: updates.group_type.unwrap_or(existing.group_type),
             is_admin: updates.is_admin.unwrap_or(existing.is_admin),
-            requires_trigger: updates.requires_trigger.unwrap_or(existing.requires_trigger),
+            requires_trigger: updates
+                .requires_trigger
+                .unwrap_or(existing.requires_trigger),
             allowed_tools: merge_opt_opt(updates.allowed_tools, existing.allowed_tools),
             allowed_paths: merge_opt_opt(updates.allowed_paths, existing.allowed_paths),
             allowed_work_dirs: merge_opt_opt(updates.allowed_work_dirs, existing.allowed_work_dirs),
@@ -92,14 +94,18 @@ impl GroupManager {
         if bot_token.is_empty() {
             return None;
         }
-        db.get_group(&format!("tg:pending:{bot_token}")).ok().flatten()
+        db.get_group(&format!("tg:pending:{bot_token}"))
+            .ok()
+            .flatten()
     }
 
     pub fn find_pending_feishu_binding(&self, db: &Db, app_id: &str) -> Option<GroupBinding> {
         if app_id.is_empty() {
             return None;
         }
-        db.get_group(&format!("feishu:pending:{app_id}")).ok().flatten()
+        db.get_group(&format!("feishu:pending:{app_id}"))
+            .ok()
+            .flatten()
     }
 
     pub fn find_pending_qq_binding(&self, db: &Db, app_id: &str) -> Option<GroupBinding> {
@@ -222,12 +228,7 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
 
 // ===== ensure_admin_group =====
 
-pub fn ensure_admin_group(
-    db: &Db,
-    gm: &GroupManager,
-    config: &Config,
-    bot_user_id: Option<u64>,
-) {
+pub fn ensure_admin_group(db: &Db, gm: &GroupManager, config: &Config, bot_user_id: Option<u64>) {
     let admin_user_id = &config.admin.telegram_user_id;
     let admin_feishu_open_id = &config.admin.feishu_open_id;
 
@@ -239,10 +240,7 @@ pub fn ensure_admin_group(
         };
         (j, "telegram")
     } else if !admin_feishu_open_id.is_empty() {
-        (
-            format!("feishu:user:{admin_feishu_open_id}"),
-            "feishu",
-        )
+        (format!("feishu:user:{admin_feishu_open_id}"), "feishu")
     } else {
         ("web:main".to_string(), "")
     };
@@ -251,9 +249,10 @@ pub fn ensure_admin_group(
     let now = chrono_now();
 
     // folder UNIQUE constraint
-    let existing_by_folder = gm.list(db).ok().and_then(|all| {
-        all.into_iter().find(|g| g.folder == *folder)
-    });
+    let existing_by_folder = gm
+        .list(db)
+        .ok()
+        .and_then(|all| all.into_iter().find(|g| g.folder == *folder));
 
     // When Telegram is disconnected, keep existing bot-aware jid
     if bot_user_id.is_none() && !admin_user_id.is_empty() {
@@ -284,7 +283,9 @@ pub fn ensure_admin_group(
         if jid != legacy_jid {
             if gm.get(db, &legacy_jid).is_some() {
                 gm.unregister(db, config, &legacy_jid);
-                tracing::info!("[GroupManager] Removed legacy jid {legacy_jid} (superseded by {jid})");
+                tracing::info!(
+                    "[GroupManager] Removed legacy jid {legacy_jid} (superseded by {jid})"
+                );
             }
         }
     }
@@ -299,9 +300,17 @@ pub fn ensure_admin_group(
         name: existing
             .as_ref()
             .map(|e| e.name.clone())
-            .unwrap_or_else(|| format!("{folder} ({})", if channel.is_empty() { "web" } else { channel })),
+            .unwrap_or_else(|| {
+                format!(
+                    "{folder} ({})",
+                    if channel.is_empty() { "web" } else { channel }
+                )
+            }),
         channel: channel.to_string(),
-        group_type: existing.as_ref().map(|e| e.group_type.clone()).unwrap_or_else(|| "chat".to_string()),
+        group_type: existing
+            .as_ref()
+            .map(|e| e.group_type.clone())
+            .unwrap_or_else(|| "chat".to_string()),
         is_admin: folder == "main",
         requires_trigger: false,
         allowed_tools: None,
@@ -326,7 +335,10 @@ pub fn ensure_admin_group(
     } else {
         "registered"
     };
-    tracing::info!("[GroupManager] Admin group {action}: {} → agents/{folder}/", binding.jid);
+    tracing::info!(
+        "[GroupManager] Admin group {action}: {} → agents/{folder}/",
+        binding.jid
+    );
 }
 
 pub fn ensure_wechat_admin_group(
@@ -339,9 +351,10 @@ pub fn ensure_wechat_admin_group(
     let now = chrono_now();
 
     // folder UNIQUE constraint
-    let existing_by_folder = gm.list(db).ok().and_then(|all| {
-        all.into_iter().find(|g| g.folder == *folder)
-    });
+    let existing_by_folder = gm
+        .list(db)
+        .ok()
+        .and_then(|all| all.into_iter().find(|g| g.folder == *folder));
     if let Some(ref existing) = existing_by_folder {
         if existing.jid != owner_jid {
             gm.unregister(db, config, &existing.jid);
@@ -364,10 +377,17 @@ pub fn ensure_wechat_admin_group(
             .map(|e| e.name.clone())
             .unwrap_or_else(|| folder.to_string()),
         channel: "wechat".to_string(),
-        group_type: existing.as_ref().map(|e| e.group_type.clone()).unwrap_or_else(|| "chat".to_string()),
+        group_type: existing
+            .as_ref()
+            .map(|e| e.group_type.clone())
+            .unwrap_or_else(|| "chat".to_string()),
         is_admin,
         requires_trigger: false,
-        allowed_tools: if is_admin { None } else { existing.as_ref().and_then(|e| e.allowed_tools.clone()) },
+        allowed_tools: if is_admin {
+            None
+        } else {
+            existing.as_ref().and_then(|e| e.allowed_tools.clone())
+        },
         allowed_paths: existing.as_ref().and_then(|e| e.allowed_paths.clone()),
         allowed_work_dirs: existing.as_ref().and_then(|e| e.allowed_work_dirs.clone()),
         bot_token: None,
@@ -418,7 +438,10 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
             .map(|e| e.name.clone())
             .unwrap_or_else(|| folder.clone()),
         channel: "app".to_string(),
-        group_type: existing.as_ref().map(|e| e.group_type.clone()).unwrap_or_else(|| "chat".to_string()),
+        group_type: existing
+            .as_ref()
+            .map(|e| e.group_type.clone())
+            .unwrap_or_else(|| "chat".to_string()),
         is_admin: false,
         requires_trigger: false,
         allowed_tools: existing.as_ref().and_then(|e| e.allowed_tools.clone()),
@@ -435,8 +458,10 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
 
     gm.register(db, config, &binding);
 
-    let action = if existing.is_some() { "updated" } else { "registered" };
-    tracing::info!(
-        "[GroupManager] App group {action}: {chat_jid} → agents/{folder}/"
-    );
+    let action = if existing.is_some() {
+        "updated"
+    } else {
+        "registered"
+    };
+    tracing::info!("[GroupManager] App group {action}: {chat_jid} → agents/{folder}/");
 }

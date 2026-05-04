@@ -21,23 +21,48 @@ impl super::super::Db {
         })
     }
 
-    pub fn get_cowork_member(&self, workspace_id: &str, member_id: &str) -> Result<Option<CoworkMember>> {
+    pub fn get_cowork_member(
+        &self,
+        workspace_id: &str,
+        member_id: &str,
+    ) -> Result<Option<CoworkMember>> {
         self.with_conn(|c| {
-            c.query_row("SELECT * FROM cowork_members WHERE workspace_id=?1 AND member_id=?2", params![workspace_id, member_id], |r| Ok(row_to_cowork_member(r)))
-                .optional()?.transpose()
+            c.query_row(
+                "SELECT * FROM cowork_members WHERE workspace_id=?1 AND member_id=?2",
+                params![workspace_id, member_id],
+                |r| Ok(row_to_cowork_member(r)),
+            )
+            .optional()?
+            .transpose()
         })
     }
 
     pub fn list_cowork_members(&self, workspace_id: &str) -> Result<Vec<CoworkMember>> {
         self.with_conn(|c| {
-            let mut stmt = c.prepare("SELECT * FROM cowork_members WHERE workspace_id=?1 ORDER BY joined_at")?;
-            let rows: Vec<_> = stmt.query_map(params![workspace_id], |r| Ok(row_to_cowork_member(r)))?
+            let mut stmt =
+                c.prepare("SELECT * FROM cowork_members WHERE workspace_id=?1 ORDER BY joined_at")?;
+            let rows: Vec<_> = stmt
+                .query_map(params![workspace_id], |r| Ok(row_to_cowork_member(r)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter().collect()
         })
     }
 
-    pub fn update_cowork_member(&self, workspace_id: &str, member_id: &str, role: Option<&str>, persona: Option<&str>, responsibilities: Option<&str>, triggers: Option<&str>, handoff_rules: Option<&str>, acceptance_criteria: Option<&str>, output_format: Option<&str>, sla: Option<&str>, limits: Option<&str>, now: &str) -> Result<()> {
+    pub fn update_cowork_member(
+        &self,
+        workspace_id: &str,
+        member_id: &str,
+        role: Option<&str>,
+        persona: Option<&str>,
+        responsibilities: Option<&str>,
+        triggers: Option<&str>,
+        handoff_rules: Option<&str>,
+        acceptance_criteria: Option<&str>,
+        output_format: Option<&str>,
+        sla: Option<&str>,
+        limits: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
         self.with_conn(|c| {
             if let Some(r) = role { c.execute("UPDATE cowork_members SET role=?1,updated_at=?2 WHERE workspace_id=?3 AND member_id=?4", params![r, now, workspace_id, member_id])?; }
             if let Some(p) = persona { c.execute("UPDATE cowork_members SET persona=?1,updated_at=?2 WHERE workspace_id=?3 AND member_id=?4", params![p, now, workspace_id, member_id])?; }
@@ -54,7 +79,10 @@ impl super::super::Db {
 
     pub fn delete_cowork_member(&self, workspace_id: &str, member_id: &str) -> Result<()> {
         self.with_conn(|c| {
-            c.execute("DELETE FROM cowork_members WHERE workspace_id=?1 AND member_id=?2", params![workspace_id, member_id])?;
+            c.execute(
+                "DELETE FROM cowork_members WHERE workspace_id=?1 AND member_id=?2",
+                params![workspace_id, member_id],
+            )?;
             Ok(())
         })
     }

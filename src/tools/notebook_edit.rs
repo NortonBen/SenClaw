@@ -62,7 +62,8 @@ impl Tool for NotebookEditTool {
         input: &Value,
         _ctx: &ToolContext<'_>,
     ) -> std::result::Result<(), String> {
-        let path = input.get("notebook_path")
+        let path = input
+            .get("notebook_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if path.is_empty() {
@@ -75,65 +76,77 @@ impl Tool for NotebookEditTool {
         if p.extension().map(|e| e != "ipynb").unwrap_or(true) {
             return Err("Only .ipynb files are supported".to_string());
         }
-        let cell_number = input.get("cell_number").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let cell_number = input
+            .get("cell_number")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
         if cell_number < 0 {
             return Err("Cell number must be non-negative".to_string());
         }
-        let edit_mode = input.get("edit_mode").and_then(|v| v.as_str()).unwrap_or("replace");
+        let edit_mode = input
+            .get("edit_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("replace");
         if edit_mode == "insert" && input.get("cell_type").is_none() {
             return Err("Must include cell_type when using edit_mode=insert".to_string());
         }
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let notebook_path = input.get("notebook_path")
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let notebook_path = input
+            .get("notebook_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let cell_number = input.get("cell_number")
+        let cell_number = input
+            .get("cell_number")
             .and_then(|v| v.as_i64())
             .unwrap_or(0) as usize;
-        let new_source = input.get("new_source")
+        let new_source = input
+            .get("new_source")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let cell_type = input.get("cell_type")
-            .and_then(|v| v.as_str());
-        let edit_mode = input.get("edit_mode")
+        let cell_type = input.get("cell_type").and_then(|v| v.as_str());
+        let edit_mode = input
+            .get("edit_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("replace");
 
         let p = PathBuf::from(notebook_path);
 
-        let content = std::fs::read_to_string(&p)
-            .context("Failed to read notebook")?;
-        let mut notebook: Value = serde_json::from_str(&content)
-            .context("Notebook is not valid JSON")?;
+        let content = std::fs::read_to_string(&p).context("Failed to read notebook")?;
+        let mut notebook: Value =
+            serde_json::from_str(&content).context("Notebook is not valid JSON")?;
 
-        let language = notebook.get("metadata")
+        let language = notebook
+            .get("metadata")
             .and_then(|m| m.get("language_info"))
             .and_then(|l| l.get("name"))
             .and_then(|n| n.as_str())
             .unwrap_or("python")
             .to_string();
 
-        let cells = notebook.get_mut("cells")
+        let cells = notebook
+            .get_mut("cells")
             .and_then(|c| c.as_array_mut())
             .ok_or_else(|| anyhow::anyhow!("Notebook has no cells array"))?;
 
         match edit_mode {
             "delete" => {
                 if cell_number >= cells.len() {
-                    bail!("Cell {cell_number} out of bounds (notebook has {} cells)", cells.len());
+                    bail!(
+                        "Cell {cell_number} out of bounds (notebook has {} cells)",
+                        cells.len()
+                    );
                 }
                 cells.remove(cell_number);
             }
             "insert" => {
                 if cell_number > cells.len() {
-                    bail!("Cell {cell_number} out of bounds for insert (max {})", cells.len());
+                    bail!(
+                        "Cell {cell_number} out of bounds for insert (max {})",
+                        cells.len()
+                    );
                 }
                 let ct = cell_type.unwrap_or("code");
                 let mut new_cell = serde_json::json!({
@@ -146,9 +159,13 @@ impl Tool for NotebookEditTool {
                 }
                 cells.insert(cell_number, new_cell);
             }
-            _ => { // replace
+            _ => {
+                // replace
                 if cell_number >= cells.len() {
-                    bail!("Cell {cell_number} out of bounds (notebook has {} cells)", cells.len());
+                    bail!(
+                        "Cell {cell_number} out of bounds (notebook has {} cells)",
+                        cells.len()
+                    );
                 }
                 let cell = &mut cells[cell_number];
                 cell["source"] = serde_json::json!(new_source);
@@ -161,8 +178,7 @@ impl Tool for NotebookEditTool {
         }
 
         let updated = serde_json::to_string_pretty(&notebook)?;
-        std::fs::write(&p, &updated)
-            .context("Failed to write notebook")?;
+        std::fs::write(&p, &updated).context("Failed to write notebook")?;
 
         let summary = match edit_mode {
             "delete" => format!("Deleted cell {cell_number}"),
@@ -183,13 +199,15 @@ impl Tool for NotebookEditTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
-        let nb = data.get("notebook_path").and_then(|v| v.as_str()).unwrap_or("");
-        let cell = data.get("cell_number").and_then(|v| v.as_u64()).unwrap_or(0);
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
+        let nb = data
+            .get("notebook_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let cell = data
+            .get("cell_number")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         ToolResultMessage {
             title: format!("{nb} cell:{cell}"),
             summary: format!("Updated cell {cell}"),
@@ -198,7 +216,10 @@ impl Tool for NotebookEditTool {
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let path = input.get("notebook_path").and_then(|v| v.as_str()).unwrap_or("notebook");
+        let path = input
+            .get("notebook_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("notebook");
         let fname = std::path::Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -212,7 +233,10 @@ impl Tool for NotebookEditTool {
 
     fn gen_tool_permission(&self, input: &Value) -> Option<ToolPermissionInfo> {
         let title = self.get_display_title(input);
-        let path = input.get("notebook_path").and_then(|v| v.as_str()).unwrap_or("");
+        let path = input
+            .get("notebook_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         Some(ToolPermissionInfo {
             title,
             content: serde_json::json!({"path": path}),

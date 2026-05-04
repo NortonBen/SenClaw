@@ -21,7 +21,12 @@ impl super::super::Db {
         })
     }
 
-    pub fn list_cowork_messages(&self, workspace_id: &str, limit: u32, since: Option<&str>) -> Result<Vec<CoworkMessage>> {
+    pub fn list_cowork_messages(
+        &self,
+        workspace_id: &str,
+        limit: u32,
+        since: Option<&str>,
+    ) -> Result<Vec<CoworkMessage>> {
         self.with_conn(|c| {
             if let Some(s) = since {
                 let mut stmt = c.prepare("SELECT * FROM cowork_messages WHERE workspace_id=?1 AND created_at>?2 ORDER BY created_at ASC LIMIT ?3")?;
@@ -38,6 +43,12 @@ impl super::super::Db {
     }
 
     pub fn mark_cowork_message_read(&self, id: &str) -> Result<()> {
-        self.with_conn(|c| { c.execute("UPDATE cowork_messages SET is_read=1 WHERE id=?1", params![id])?; Ok(()) })
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE cowork_messages SET is_read=1 WHERE id=?1",
+                params![id],
+            )?;
+            Ok(())
+        })
     }
 }

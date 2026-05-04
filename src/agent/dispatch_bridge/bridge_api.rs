@@ -70,11 +70,7 @@ impl DispatchBridgeApi for DispatchBridge {
     }
 
     fn resume_admin(&self, folder: &str) {
-        self.inner
-            .lock()
-            .unwrap()
-            .paused_admins
-            .remove(folder);
+        self.inner.lock().unwrap().paused_admins.remove(folder);
         tracing::info!("[DispatchBridge] resumeAdmin({folder}): scheduling unblocked");
     }
 

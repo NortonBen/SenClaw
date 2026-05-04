@@ -19,8 +19,23 @@ const MAX_DISPLAY_LINES: usize = 10;
 
 /// Commands banned in all circumstances.
 const BANNED_COMMANDS: &[&str] = &[
-    "alias", "curl", "curlie", "wget", "axel", "aria2c", "nc", "telnet", "lynx",
-    "w3m", "links", "httpie", "xh", "http-prompt", "chrome", "firefox", "safari",
+    "alias",
+    "curl",
+    "curlie",
+    "wget",
+    "axel",
+    "aria2c",
+    "nc",
+    "telnet",
+    "lynx",
+    "w3m",
+    "links",
+    "httpie",
+    "xh",
+    "http-prompt",
+    "chrome",
+    "firefox",
+    "safari",
 ];
 
 pub struct BashTool;
@@ -65,9 +80,7 @@ impl Tool for BashTool {
         input: &Value,
         ctx: &ToolContext<'_>,
     ) -> std::result::Result<(), String> {
-        let command = input.get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
         if command.trim().is_empty() {
             return Err("Command is required".to_string());
         }
@@ -87,17 +100,15 @@ impl Tool for BashTool {
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let command = input.get("command")
+    async fn call(&self, input: Value, ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let command = input
+            .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        let timeout_ms = input.get("timeout")
+        let timeout_ms = input
+            .get("timeout")
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_TIMEOUT_MS)
             .min(MAX_TIMEOUT_MS);
@@ -133,7 +144,8 @@ impl Tool for BashTool {
                 }
 
                 let truncated = if output_text.len() > MAX_OUTPUT_LENGTH {
-                    let cutoff = output_text.char_indices()
+                    let cutoff = output_text
+                        .char_indices()
                         .nth(MAX_OUTPUT_LENGTH)
                         .map(|(i, _)| i)
                         .unwrap_or(output_text.len());
@@ -156,40 +168,33 @@ impl Tool for BashTool {
                     result_for_assistant: output_text,
                 }])
             }
-            Ok(Ok(Err(e))) => {
-                Ok(vec![ToolOutput::Result {
-                    data: serde_json::json!({"error": true}),
-                    result_for_assistant: format!("Command execution failed: {e}"),
-                }])
-            }
-            Ok(Err(e)) => {
-                Ok(vec![ToolOutput::Result {
-                    data: serde_json::json!({"error": true}),
-                    result_for_assistant: format!("Internal task error: {e}"),
-                }])
-            }
-            Err(_elapsed) => {
-                Ok(vec![ToolOutput::Result {
-                    data: serde_json::json!({"timeout": true}),
-                    result_for_assistant: format!(
-                        "Command timed out after {timeout_ms}ms"
-                    ),
-                }])
-            }
+            Ok(Ok(Err(e))) => Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({"error": true}),
+                result_for_assistant: format!("Command execution failed: {e}"),
+            }]),
+            Ok(Err(e)) => Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({"error": true}),
+                result_for_assistant: format!("Internal task error: {e}"),
+            }]),
+            Err(_elapsed) => Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({"timeout": true}),
+                result_for_assistant: format!("Command timed out after {timeout_ms}ms"),
+            }]),
         }
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
-        let title = data.get("title")
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
+        let title = data
+            .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Bash")
             .to_string();
 
-        let summary = if data.get("timeout").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let summary = if data
+            .get("timeout")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             "Timed out".into()
         } else if data.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1) == 0 {
             "Completed".into()
@@ -205,7 +210,8 @@ impl Tool for BashTool {
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let cmd = input.get("command")
+        let cmd = input
+            .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("Bash");
         get_title(cmd)
@@ -213,11 +219,10 @@ impl Tool for BashTool {
 
     fn gen_tool_permission(&self, input: &Value) -> Option<ToolPermissionInfo> {
         let title = self.get_display_title(input);
-        let cmd = input.get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
-        let description = input.get("description")
+        let description = input
+            .get("description")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 

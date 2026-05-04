@@ -206,7 +206,11 @@ fn notify_reply_resolves_earliest_processing_task() {
     bridge.notify_reply("jid-a", "old-result");
 
     let parents = bridge.get_parents();
-    let by_id: HashMap<_, _> = parents[0].tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    let by_id: HashMap<_, _> = parents[0]
+        .tasks
+        .iter()
+        .map(|t| (t.id.as_str(), t))
+        .collect();
     assert_eq!(by_id["d_old"].status, DispatchTaskStatus::Done);
     assert_eq!(by_id["d_new"].status, DispatchTaskStatus::Processing);
     let _ = std::fs::remove_file(path);

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::zen_core::events::EngineEvent;
 use crate::zen_core::state::StateManager;
-use crate::zen_core::{Tool, ToolContext, ToolOutput, TodosUpdateItem};
+use crate::zen_core::{TodosUpdateItem, Tool, ToolContext, ToolOutput};
 
 pub struct TodoWriteTool {
     state: Arc<Mutex<StateManager>>,
@@ -73,15 +73,19 @@ impl Tool for TodoWriteTool {
         if todos.is_empty() {
             return Ok(());
         }
-        let in_progress: Vec<_> = todos.iter().filter(|t| {
-            t.get("status").and_then(|s| s.as_str()) == Some("in_progress")
-        }).collect();
+        let in_progress: Vec<_> = todos
+            .iter()
+            .filter(|t| t.get("status").and_then(|s| s.as_str()) == Some("in_progress"))
+            .collect();
         if in_progress.len() > 1 {
             return Err("Only one task can be in_progress at a time".to_string());
         }
         for (i, todo) in todos.iter().enumerate() {
             let content = todo.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            let active = todo.get("activeForm").and_then(|a| a.as_str()).unwrap_or("");
+            let active = todo
+                .get("activeForm")
+                .and_then(|a| a.as_str())
+                .unwrap_or("");
             if content.trim().is_empty() {
                 return Err(format!("Todo at index {i} has empty content"));
             }
@@ -92,19 +96,29 @@ impl Tool for TodoWriteTool {
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
+    async fn call(&self, input: Value, ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
         let todos = input.get("todos").and_then(|v| v.as_array());
 
         let items: Vec<TodosUpdateItem> = match todos {
-            Some(arr) if !arr.is_empty() => arr.iter().map(|t| TodosUpdateItem {
-                content: t.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string(),
-                status: t.get("status").and_then(|s| s.as_str()).unwrap_or("pending").to_string(),
-                active_form: t.get("activeForm").and_then(|a| a.as_str()).map(String::from),
-            }).collect(),
+            Some(arr) if !arr.is_empty() => arr
+                .iter()
+                .map(|t| TodosUpdateItem {
+                    content: t
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    status: t
+                        .get("status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("pending")
+                        .to_string(),
+                    active_form: t
+                        .get("activeForm")
+                        .and_then(|a| a.as_str())
+                        .map(String::from),
+                })
+                .collect(),
             _ => Vec::new(),
         };
 
@@ -112,12 +126,15 @@ impl Tool for TodoWriteTool {
             // Check for incomplete tasks before clearing
             let mut state = self.state.lock().unwrap();
             let current = state.todos(ctx.agent_id);
-            let incomplete: Vec<_> = current.iter()
+            let incomplete: Vec<_> = current
+                .iter()
                 .filter(|t| t.status == "pending" || t.status == "in_progress")
                 .collect();
 
             if !incomplete.is_empty() {
-                let list = current.iter().enumerate()
+                let list = current
+                    .iter()
+                    .enumerate()
                     .map(|(i, t)| format!("{}. [{}] {}", i + 1, t.status, t.content))
                     .collect::<Vec<_>>()
                     .join("\n");

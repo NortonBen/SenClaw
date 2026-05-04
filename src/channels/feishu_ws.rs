@@ -164,7 +164,10 @@ impl PbFrame {
 
     /// Get a header value by key.
     pub fn header(&self, key: &str) -> Option<&str> {
-        self.headers.iter().find(|h| h.key == key).map(|h| h.value.as_str())
+        self.headers
+            .iter()
+            .find(|h| h.key == key)
+            .map(|h| h.value.as_str())
     }
 
     /// Encode to protobuf wire format.
@@ -209,8 +212,8 @@ impl PbFrame {
         let len = data.len();
 
         while pos < len {
-            let tag_val = get_varint(data, &mut pos)
-                .ok_or_else(|| anyhow::anyhow!("truncated tag"))?;
+            let tag_val =
+                get_varint(data, &mut pos).ok_or_else(|| anyhow::anyhow!("truncated tag"))?;
             let field_num = (tag_val >> 3) as u8;
             let wt = (tag_val & 0x07) as u8;
 
@@ -228,8 +231,7 @@ impl PbFrame {
                     method = get_varint(data, &mut pos).context("method")? as i32;
                 }
                 (5, wire_type::LEN_DELIM) => {
-                    let hdr_len = get_varint(data, &mut pos)
-                        .context("header len")? as usize;
+                    let hdr_len = get_varint(data, &mut pos).context("header len")? as usize;
                     if pos + hdr_len > len {
                         anyhow::bail!("header payload truncated");
                     }
@@ -238,7 +240,8 @@ impl PbFrame {
                     pos += hdr_len;
                 }
                 (6, wire_type::LEN_DELIM) => {
-                    let s_len = get_varint(data, &mut pos).context("payload_encoding len")? as usize;
+                    let s_len =
+                        get_varint(data, &mut pos).context("payload_encoding len")? as usize;
                     if pos + s_len > len {
                         anyhow::bail!("payload_encoding truncated");
                     }
@@ -454,9 +457,10 @@ pub async fn start_event_listener(
         ..Default::default()
     };
 
-    let (conn, _resp) = tokio_tungstenite::connect_async_with_config(&ws_url, Some(ws_config), false)
-        .await
-        .context("WS connect")?;
+    let (conn, _resp) =
+        tokio_tungstenite::connect_async_with_config(&ws_url, Some(ws_config), false)
+            .await
+            .context("WS connect")?;
 
     info!("[FeishuWS:{app_id}] Connected");
 
@@ -473,10 +477,7 @@ pub async fn start_event_listener(
         app_id.clone(),
     ));
 
-    Ok(WsConnection {
-        cancel_tx,
-        handle,
-    })
+    Ok(WsConnection { cancel_tx, handle })
 }
 
 impl WsConnection {
@@ -646,8 +647,14 @@ mod tests {
             service: 3,
             method: 1,
             headers: vec![
-                PbHeader { key: "type".into(), value: "ping".into() },
-                PbHeader { key: "k2".into(), value: "v2".into() },
+                PbHeader {
+                    key: "type".into(),
+                    value: "ping".into(),
+                },
+                PbHeader {
+                    key: "k2".into(),
+                    value: "v2".into(),
+                },
             ],
             payload_encoding: Some("json".into()),
             payload_type: None,

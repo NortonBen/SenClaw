@@ -57,10 +57,7 @@ impl Tool for SkillTool {
         input: &Value,
         _ctx: &ToolContext<'_>,
     ) -> std::result::Result<(), String> {
-        let skill_name = input
-            .get("skill")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let skill_name = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
         if skill_name.is_empty() {
             return Err("skill name is required".to_string());
         }
@@ -68,17 +65,17 @@ impl Tool for SkillTool {
             let available = self.registry.names().join(", ");
             return Err(format!(
                 "Skill \"{skill_name}\" not found. Available skills: {}",
-                if available.is_empty() { "none" } else { &available }
+                if available.is_empty() {
+                    "none"
+                } else {
+                    &available
+                }
             ));
         }
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
         let skill_name = input
             .get("skill")
             .and_then(|v| v.as_str())
@@ -132,14 +129,15 @@ impl Tool for SkillTool {
             .get("skillName")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown");
-        let base_dir = data
-            .get("baseDir")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let base_dir = data.get("baseDir").and_then(|v| v.as_str()).unwrap_or("");
         let allowed_tools: Vec<String> = data
             .get("allowedTools")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let skill_content = data
             .get("skillContent")
@@ -168,10 +166,7 @@ impl Tool for SkillTool {
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let skill = input
-            .get("skill")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
         if skill.is_empty() {
             "Skill".into()
         } else {
@@ -194,9 +189,7 @@ fn gen_result_for_assistant(
     args: Option<&str>,
 ) -> String {
     let mut result = format!("# Skill Activated: {skill_name}\n\n");
-    result.push_str(&format!(
-        "Base directory for this skill: {base_dir}\n\n"
-    ));
+    result.push_str(&format!("Base directory for this skill: {base_dir}\n\n"));
     if let Some(a) = args {
         result.push_str(&format!("Arguments: {a}\n\n"));
     }
@@ -221,9 +214,7 @@ fn gen_result_for_assistant(
         "Now that you have loaded the skill instructions, please proceed with the task based on the guidelines above.",
     );
     if let Some(a) = args {
-        result.push_str(&format!(
-            " Remember to process the provided arguments: {a}"
-        ));
+        result.push_str(&format!(" Remember to process the provided arguments: {a}"));
     }
     result
 }

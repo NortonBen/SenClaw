@@ -373,7 +373,11 @@ pub(crate) async fn mcp_servers_test(
     axum::extract::Json(body): axum::extract::Json<TestToolBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = mcp_mgr(&s)?;
-    let args = if body.args.is_null() { serde_json::json!({}) } else { body.args };
+    let args = if body.args.is_null() {
+        serde_json::json!({})
+    } else {
+        body.args
+    };
     match mgr.test_tool(&name, &body.tool, args).await {
         Ok(result) => Ok(Json(serde_json::json!({
             "ok": true,

@@ -9,8 +9,8 @@ use rand::Rng;
 use serde::Deserialize;
 
 use crate::gateway::group_manager::{
-    get_thinking_enabled, load_llm_configs, remove_llm_config,
-    save_llm_config, set_active_llm_config, set_active_quick_llm_config, LlmConfig,
+    get_thinking_enabled, load_llm_configs, remove_llm_config, save_llm_config,
+    set_active_llm_config, set_active_quick_llm_config, LlmConfig,
 };
 
 use super::core::{AppError, UiState};
@@ -123,11 +123,8 @@ pub(crate) async fn llm_config_set_active(
     Json(body): Json<ActiveLlmBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if body.llm_type == "quick" {
-        set_active_quick_llm_config(
-            &s.config.paths.global_config_path,
-            body.id.as_deref(),
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        set_active_quick_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         Ok(Json(serde_json::json!({ "activeQuickId": body.id })))
     } else {
         set_active_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
@@ -167,8 +164,7 @@ pub(crate) async fn llm_config_fetch_models(
 /// Fetch model list from a provider's /models endpoint.
 async fn fetch_models(base_url: &str, api_key: &str, adapt: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();
-    let is_anthropic = adapt == "anthropic"
-        && base_url.contains("anthropic.com");
+    let is_anthropic = adapt == "anthropic" && base_url.contains("anthropic.com");
 
     let models_url = if is_anthropic {
         let base = base_url.trim_end_matches("/v1");

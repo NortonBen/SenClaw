@@ -22,14 +22,15 @@ use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::*;
 use super::hooks::HookManager;
+use super::*;
 use crate::zen_core::events::ResponseRegistry;
 use crate::zen_core::query_llm;
 use crate::zen_core::run_tools::{self, PermissionChecker, RunContext};
 
 /// Interruption message inserted when the session is aborted.
-pub const INTERRUPT_MESSAGE: &str = "Session was interrupted. The current operation has been cancelled.";
+pub const INTERRUPT_MESSAGE: &str =
+    "Session was interrupted. The current operation has been cancelled.";
 
 /// Number of most-recent messages to keep during auto-compaction.
 const COMPACT_KEEP_RECENT: usize = 12;
@@ -119,9 +120,9 @@ pub async fn query(
             Err(e) => {
                 let classified = query_llm::LlmError::classify(&e);
                 if classified.should_emit() {
-                    config.event_bus.emit(EngineEvent::SessionError(
-                        classified.to_session_error(),
-                    ));
+                    config
+                        .event_bus
+                        .emit(EngineEvent::SessionError(classified.to_session_error()));
                 }
                 if classified.is_context_length && !compacted {
                     warn!(
@@ -129,19 +130,25 @@ pub async fn query(
                         msg_count = messages.len(),
                         "Context length exceeded — auto-compacting"
                     );
-                    config.event_bus.emit(EngineEvent::CompactStart(
-                        CompactStartData { message_count: messages.len() },
-                    ));
+                    config
+                        .event_bus
+                        .emit(EngineEvent::CompactStart(CompactStartData {
+                            message_count: messages.len(),
+                        }));
                     let did_compact = compact_messages(&mut messages);
-                    config.event_bus.emit(EngineEvent::CompactExec(
-                        CompactExecData {
-                            err_msg: if did_compact { None } else { Some("compaction had no effect".into()) },
+                    config
+                        .event_bus
+                        .emit(EngineEvent::CompactExec(CompactExecData {
+                            err_msg: if did_compact {
+                                None
+                            } else {
+                                Some("compaction had no effect".into())
+                            },
                             token_before: 0,
                             token_compact: 0,
                             compact_rate: 0.0,
                             summary: None,
-                        },
-                    ));
+                        }));
                     if did_compact {
                         info!(
                             agent_id = %config.agent_id,
@@ -163,13 +170,18 @@ pub async fn query(
         // Checkpoint 1: after LLM response, before tool execution
         if cancel.is_cancelled() {
             info!("[{}] cancelled after LLM response", config.agent_id);
-            let pending_tools = assistant_msg.message.content.iter().filter_map(|b| {
-                if let ContentBlock::ToolUse { id, .. } = b {
-                    Some(create_tool_result_stop(id))
-                } else {
-                    None
-                }
-            }).collect::<Vec<_>>();
+            let pending_tools = assistant_msg
+                .message
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::ToolUse { id, .. } = b {
+                        Some(create_tool_result_stop(id))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
 
             let mut interrupt_content: Vec<ContentBlock> = pending_tools;
             interrupt_content.push(ContentBlock::Text {
@@ -178,12 +190,12 @@ pub async fn query(
             messages.push(assistant_msg);
             messages.push(create_user_message(interrupt_content));
 
-            config.event_bus.emit(EngineEvent::SessionInterrupted(
-                SessionInterruptedData {
+            config
+                .event_bus
+                .emit(EngineEvent::SessionInterrupted(SessionInterruptedData {
                     agent_id: config.agent_id.to_string(),
                     content: INTERRUPT_MESSAGE.to_string(),
-                },
-            ));
+                }));
             return Ok(messages);
         }
 
@@ -211,15 +223,15 @@ pub async fn query(
             None
         };
 
-        config.event_bus.emit(EngineEvent::MessageComplete(
-            MessageCompleteData {
+        config
+            .event_bus
+            .emit(EngineEvent::MessageComplete(MessageCompleteData {
                 agent_id: config.agent_id.to_string(),
                 reasoning,
                 content: text_content.clone(),
                 has_tool_calls: has_tool_calls,
                 tool_calls: tool_call_infos,
-            },
-        ));
+            }));
 
         // 3. Emit conversation:usage (subagents skip this)
         if !config.is_subagent {
@@ -229,11 +241,11 @@ pub async fn query(
                 msgs
             };
             let _usage = estimate_usage(&updated);
-            config.event_bus.emit(EngineEvent::ConversationUsage(
-                ConversationUsageData {
+            config
+                .event_bus
+                .emit(EngineEvent::ConversationUsage(ConversationUsageData {
                     usage: _usage,
-                },
-            ));
+                }));
         }
 
         // 4. No tools → done
@@ -301,12 +313,12 @@ pub async fn query(
                 messages.push(create_user_message(all_results));
             }
 
-            config.event_bus.emit(EngineEvent::SessionInterrupted(
-                SessionInterruptedData {
+            config
+                .event_bus
+                .emit(EngineEvent::SessionInterrupted(SessionInterruptedData {
                     agent_id: config.agent_id.to_string(),
                     content: INTERRUPT_MESSAGE.to_string(),
-                },
-            ));
+                }));
             return Ok(messages);
         }
 

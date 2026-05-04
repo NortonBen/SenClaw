@@ -13,19 +13,16 @@ use crate::types::AgentApi;
 use super::state::State;
 use super::traits::{AgentEventSink, CachedTools, CoreApi};
 use super::types::{
-    AskQuestionRequestData, CachedTodos, CompactExecData, CompactStartData,
-    MessageCompleteData, ProcessEvent, ReplyFn, SendReplyFn, SessionErrorData, StateUpdateData,
-    TodoSnapshot, TodosUpdateItem, ToolPermissionRequestData, TypingFn, AGENT_TIMEOUT_MS,
-    MAIN_AGENT_ID,
+    AskQuestionRequestData, CachedTodos, CompactExecData, CompactStartData, MessageCompleteData,
+    ProcessEvent, ReplyFn, SendReplyFn, SessionErrorData, StateUpdateData, TodoSnapshot,
+    TodosUpdateItem, ToolPermissionRequestData, TypingFn, AGENT_TIMEOUT_MS, MAIN_AGENT_ID,
 };
 use super::workspace::WorkspaceStateFile;
 use crate::agent::dispatch_bridge::{
     build_dispatch_resume_hint, AdminActivityCallback, DispatchBridgeApi,
 };
 use crate::agent::group_queue::GroupQueue;
-use crate::agent::permission_bridge::{
-    AskQuestionPayload, PermissionBridge, PermissionPayload,
-};
+use crate::agent::permission_bridge::{AskQuestionPayload, PermissionBridge, PermissionPayload};
 use crate::agent::session_bridge;
 use crate::config::{Config, FeishuConfig};
 use crate::db::Db;

@@ -89,19 +89,15 @@ impl Tool for GrepTool {
         true
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let pattern = input.get("pattern")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let path = input.get("path")
+    async fn call(&self, input: Value, ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+        let path = input
+            .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(ctx.working_dir);
         let glob_filter = input.get("glob").and_then(|v| v.as_str());
-        let output_mode = input.get("output_mode")
+        let output_mode = input
+            .get("output_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("files_with_matches");
         let after_context = input.get("-A").and_then(|v| v.as_u64());
@@ -109,18 +105,32 @@ impl Tool for GrepTool {
         let context = input.get("-C").and_then(|v| v.as_u64());
         let case_insensitive = input.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
         let file_type = input.get("type").and_then(|v| v.as_str());
-        let head_limit = input.get("head_limit").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let head_limit = input
+            .get("head_limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
         let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let multiline = input.get("multiline").and_then(|v| v.as_bool()).unwrap_or(false);
+        let multiline = input
+            .get("multiline")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let mut args: Vec<String> = Vec::new();
 
         // Output mode
         match output_mode {
-            "files_with_matches" => { args.push("-l".into()); }
-            "content" => { args.push("-n".into()); }
-            "count" => { args.push("-c".into()); }
-            _ => { args.push("-l".into()); }
+            "files_with_matches" => {
+                args.push("-l".into());
+            }
+            "content" => {
+                args.push("-n".into());
+            }
+            "count" => {
+                args.push("-c".into());
+            }
+            _ => {
+                args.push("-l".into());
+            }
         }
 
         // Case sensitivity
@@ -164,8 +174,13 @@ impl Tool for GrepTool {
         args.push(pattern.to_string());
 
         let absolute_path = PathBuf::from(path);
-        let search_dir: PathBuf = if absolute_path.is_dir() { absolute_path } else {
-            absolute_path.parent().map(|p| p.to_path_buf()).unwrap_or(absolute_path)
+        let search_dir: PathBuf = if absolute_path.is_dir() {
+            absolute_path
+        } else {
+            absolute_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(absolute_path)
         };
 
         // Try rg first, fall back to grep
@@ -176,7 +191,11 @@ impl Tool for GrepTool {
             Err(_) => {
                 // Fallback to grep
                 let grep_args = build_grep_args(
-                    pattern, &search_dir, output_mode, case_insensitive, file_type
+                    pattern,
+                    &search_dir,
+                    output_mode,
+                    case_insensitive,
+                    file_type,
                 );
                 match run_grep(&grep_args, &search_dir) {
                     Ok(lines) => (lines, 0),
@@ -193,9 +212,10 @@ impl Tool for GrepTool {
         let mut processed = apply_offset_limit(&raw_lines, offset, head_limit);
         let num_files = if output_mode == "content" {
             // Count actual match lines (not context lines, not separators)
-            processed.iter().filter(|l| {
-                *l != "--" && (l.contains(":") || l.contains(':'))
-            }).count()
+            processed
+                .iter()
+                .filter(|l| *l != "--" && (l.contains(":") || l.contains(':')))
+                .count()
         } else {
             processed.len()
         };
@@ -216,11 +236,7 @@ impl Tool for GrepTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         let num = data.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
         let title = get_title(
             data.get("pattern").and_then(|v| v.as_str()).unwrap_or(""),
@@ -232,7 +248,11 @@ impl Tool for GrepTool {
             num,
             if num == 1 { "match" } else { "matches" }
         );
-        ToolResultMessage { title, summary, content: data.clone() }
+        ToolResultMessage {
+            title,
+            summary,
+            content: data.clone(),
+        }
     }
 
     fn get_display_title(&self, input: &Value) -> String {
@@ -253,25 +273,36 @@ fn get_title(pattern: &str, path: &str, glob: Option<&str>) -> String {
         parts.push(format!("path: \"{}\"", path));
     }
     let s = parts.join(", ");
-    if s.len() > 100 { format!("{}...", &s[..100]) } else { s }
+    if s.len() > 100 {
+        format!("{}...", &s[..100])
+    } else {
+        s
+    }
 }
 
 fn build_display(lines: &[String], num: usize, working_dir: &str) -> String {
     if num == 0 {
         return "No matches found".into();
     }
-    let display: Vec<String> = lines.iter().take(MAX_DISPLAY).map(|line| {
-        // Convert absolute paths to relative
-        if let Some(captures) = regex::Regex::new(r"^(.+?):(\d+)(:.*)?$").unwrap().captures(line) {
-            let file_path = captures.get(1).unwrap().as_str();
-            let line_num = captures.get(2).unwrap().as_str();
-            let rest = captures.get(3).map(|m| m.as_str()).unwrap_or("");
-            if let Ok(rel) = PathBuf::from(file_path).strip_prefix(working_dir) {
-                return format!("{}:{}{}", rel.display(), line_num, rest);
+    let display: Vec<String> = lines
+        .iter()
+        .take(MAX_DISPLAY)
+        .map(|line| {
+            // Convert absolute paths to relative
+            if let Some(captures) = regex::Regex::new(r"^(.+?):(\d+)(:.*)?$")
+                .unwrap()
+                .captures(line)
+            {
+                let file_path = captures.get(1).unwrap().as_str();
+                let line_num = captures.get(2).unwrap().as_str();
+                let rest = captures.get(3).map(|m| m.as_str()).unwrap_or("");
+                if let Ok(rel) = PathBuf::from(file_path).strip_prefix(working_dir) {
+                    return format!("{}:{}{}", rel.display(), line_num, rest);
+                }
             }
-        }
-        line.clone()
-    }).collect();
+            line.clone()
+        })
+        .collect();
     let mut s = display.join("\n");
     let remaining = num.saturating_sub(MAX_DISPLAY);
     if remaining > 0 {
@@ -285,23 +316,21 @@ fn build_display(lines: &[String], num: usize, working_dir: &str) -> String {
 
 fn apply_offset_limit(lines: &[String], offset: usize, limit: usize) -> Vec<String> {
     let skipped: Vec<String> = lines.iter().skip(offset).cloned().collect();
-    if limit > 0 { skipped.into_iter().take(limit).collect() } else { skipped }
+    if limit > 0 {
+        skipped.into_iter().take(limit).collect()
+    } else {
+        skipped
+    }
 }
 
 fn run_rg(args: &[String], dir: &PathBuf) -> Result<Vec<String>> {
-    let output = Command::new("rg")
-        .args(args)
-        .current_dir(dir)
-        .output()?;
+    let output = Command::new("rg").args(args).current_dir(dir).output()?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(stdout.lines().map(String::from).collect())
 }
 
 fn run_grep(args: &[String], dir: &PathBuf) -> Result<Vec<String>> {
-    let output = Command::new("grep")
-        .args(args)
-        .current_dir(dir)
-        .output()?;
+    let output = Command::new("grep").args(args).current_dir(dir).output()?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(stdout.lines().map(String::from).collect())
 }
@@ -315,11 +344,19 @@ fn build_grep_args(
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["-r".into(), "-H".into()];
     match output_mode {
-        "files_with_matches" => { args.push("-l".into()); }
-        "count" => { args.push("-c".into()); }
-        _ => { args.push("-n".into()); }
+        "files_with_matches" => {
+            args.push("-l".into());
+        }
+        "count" => {
+            args.push("-c".into());
+        }
+        _ => {
+            args.push("-n".into());
+        }
     }
-    if case_insensitive { args.push("-i".into()); }
+    if case_insensitive {
+        args.push("-i".into());
+    }
     if let Some(t) = file_type {
         args.push("--include".into());
         args.push(format!("*.{}", t));

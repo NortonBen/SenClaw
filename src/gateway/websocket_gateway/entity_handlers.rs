@@ -10,8 +10,8 @@ use crate::util::local_time::local_iso_string_now;
 use super::helpers::{broadcast_to_all_inner, require_admin, require_auth, send_json};
 use super::state::{WsClient, WsState};
 use super::wire::{
-    to_agent_info, to_binding_with_relations, to_channel_info, AgentInfoWire, BindingWithRelationsWire,
-    ChannelInfoWire,
+    to_agent_info, to_binding_with_relations, to_channel_info, AgentInfoWire,
+    BindingWithRelationsWire, ChannelInfoWire,
 };
 
 pub(crate) async fn handle_list_channels(
@@ -155,12 +155,16 @@ pub(crate) async fn handle_register_agent(
         return;
     }
     let requires_trigger = msg["requiresTrigger"].as_bool().unwrap_or(true);
-    let allowed_tools: Option<Vec<String>> = msg["allowedTools"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-    let allowed_work_dirs: Option<Vec<String>> = msg["allowedWorkDirs"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let allowed_tools: Option<Vec<String>> = msg["allowedTools"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
+    let allowed_work_dirs: Option<Vec<String>> = msg["allowedWorkDirs"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
     let core_prompt = msg["corePrompt"].as_str().unwrap_or("");
     let model_id = msg["modelId"].as_str();
     let now = local_iso_string_now();
@@ -411,10 +415,9 @@ pub(crate) async fn handle_update_channel(
         .as_object()
         .map(|c| serde_json::to_string(&c).unwrap_or_default());
     let now = local_iso_string_now();
-    if let Err(e) =
-        state
-            .channel_manager
-            .update(&state.db, id, name, credentials.as_deref(), &now)
+    if let Err(e) = state
+        .channel_manager
+        .update(&state.db, id, name, credentials.as_deref(), &now)
     {
         send_json(
             sender,
@@ -459,16 +462,20 @@ pub(crate) async fn handle_update_agent(
     }
     let name = msg["name"].as_str();
     let requires_trigger = msg["requiresTrigger"].as_bool();
-    let allowed_tools: Option<Vec<String>> = msg["allowedTools"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let allowed_tools: Option<Vec<String>> = msg["allowedTools"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
     // allowedWorkDirs: absent = don't touch; null or [] = clear to NULL
     let allowed_work_dirs: Option<Vec<String>> = if msg["allowedWorkDirs"].is_null() {
         Some(vec![])
     } else {
-        msg["allowedWorkDirs"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        msg["allowedWorkDirs"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
     };
     let core_prompt = msg["corePrompt"].as_str();
     // modelId: explicit null = clear; absent = don't touch; string = set
@@ -532,13 +539,11 @@ pub(crate) async fn handle_update_binding(
     let jid = msg["jid"].as_str();
     let bot_token_override = msg["botTokenOverride"].as_str();
     let max_messages = msg["maxMessages"].as_u64().map(|n| n as u32);
-    if let Err(e) = state.binding_manager.update(
-        &state.db,
-        id,
-        jid,
-        bot_token_override,
-        max_messages,
-    ) {
+    if let Err(e) =
+        state
+            .binding_manager
+            .update(&state.db, id, jid, bot_token_override, max_messages)
+    {
         send_json(
             sender,
             &serde_json::json!({"type": "error", "message": format!("{e}")}),

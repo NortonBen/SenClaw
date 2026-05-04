@@ -8,11 +8,11 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::zen_core::query_llm;
 use crate::zen_core::{
     create_user_message, ContentBlock, ModelProfile, Tool, ToolContext, ToolOutput,
     ToolResultMessage,
 };
-use crate::zen_core::query_llm;
 
 use super::types::{HookDefinition, HookOutput};
 
@@ -32,17 +32,42 @@ struct NullTool;
 
 #[async_trait::async_trait]
 impl Tool for NullTool {
-    fn name(&self) -> &str { "null" }
-    fn description(&self) -> &str { "Placeholder tool. Do not call." }
-    fn input_schema(&self) -> serde_json::Value { serde_json::json!({"type": "object", "properties": {}}) }
-    fn is_read_only(&self) -> bool { true }
-    async fn call(&self, _: serde_json::Value, _: &ToolContext<'_>) -> anyhow::Result<Vec<ToolOutput>> {
-        Ok(vec![ToolOutput::Result { data: serde_json::Value::Null, result_for_assistant: String::new() }])
+    fn name(&self) -> &str {
+        "null"
     }
-    fn gen_tool_result_message(&self, _: &serde_json::Value, _: &serde_json::Value) -> ToolResultMessage {
-        ToolResultMessage { title: String::new(), summary: String::new(), content: serde_json::Value::Null }
+    fn description(&self) -> &str {
+        "Placeholder tool. Do not call."
     }
-    fn get_display_title(&self, _: &serde_json::Value) -> String { String::new() }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    async fn call(
+        &self,
+        _: serde_json::Value,
+        _: &ToolContext<'_>,
+    ) -> anyhow::Result<Vec<ToolOutput>> {
+        Ok(vec![ToolOutput::Result {
+            data: serde_json::Value::Null,
+            result_for_assistant: String::new(),
+        }])
+    }
+    fn gen_tool_result_message(
+        &self,
+        _: &serde_json::Value,
+        _: &serde_json::Value,
+    ) -> ToolResultMessage {
+        ToolResultMessage {
+            title: String::new(),
+            summary: String::new(),
+            content: serde_json::Value::Null,
+        }
+    }
+    fn get_display_title(&self, _: &serde_json::Value) -> String {
+        String::new()
+    }
 }
 
 /// Execute a prompt hook — query the configured LLM and parse its JSON decision.
@@ -118,7 +143,10 @@ pub async fn execute_prompt_hook(
         }
     }
 
-    info!("[hooks] Prompt hook response: {}", &result_text[..result_text.len().min(200)]);
+    info!(
+        "[hooks] Prompt hook response: {}",
+        &result_text[..result_text.len().min(200)]
+    );
 
     Ok(parse_prompt_response(&result_text))
 }

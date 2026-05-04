@@ -106,8 +106,10 @@ mod tests {
 
     #[test]
     fn test_disabled_subagents_lifecycle() {
-        let tmp = std::env::temp_dir()
-            .join(format!("test-disabled-subagents-{}.json", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "test-disabled-subagents-{}.json",
+            uuid::Uuid::new_v4()
+        ));
         *DISABLED_FILE.lock().unwrap() = tmp.clone();
         invalidate_disabled_subagents_cache();
 

@@ -20,19 +20,13 @@ pub enum SkillsCmd {
         json: bool,
     },
     /// Show details for a specific skill
-    Info {
-        name: String,
-    },
+    Info { name: String },
     /// Check skill sources
     Check,
     /// Disable a skill by name
-    Disable {
-        name: String,
-    },
+    Disable { name: String },
     /// Re-enable a disabled skill
-    Enable {
-        name: String,
-    },
+    Enable { name: String },
     /// Signal the daemon to reload skill registries
     Refresh,
 }
@@ -70,7 +64,11 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
             }
 
             for (i, s) in skills.iter().enumerate() {
-                let version = s.version.as_deref().map(|v| format!(" v{v}")).unwrap_or_default();
+                let version = s
+                    .version
+                    .as_deref()
+                    .map(|v| format!(" v{v}"))
+                    .unwrap_or_default();
                 let disabled_tag = if disabled.contains(&s.name) {
                     "  [disabled]"
                 } else {
@@ -105,7 +103,10 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
                 "enabled"
             };
             println!("Name:        {}", skill.name);
-            println!("Version:     {}", skill.version.as_deref().unwrap_or("(not set)"));
+            println!(
+                "Version:     {}",
+                skill.version.as_deref().unwrap_or("(not set)")
+            );
             println!("Source:      {}", skill.source);
             println!("Status:      {status}");
             println!("Directory:   {}", skill.dir.display());
@@ -143,7 +144,8 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
 
             // Warn about duplicate names
             let all_skills: Vec<_> = sources.iter().flat_map(|def| scan_source(def)).collect();
-            let mut name_count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            let mut name_count: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
             for s in &all_skills {
                 *name_count.entry(&s.name).or_insert(0) += 1;
             }
@@ -191,7 +193,9 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
             println!(
                 "Enabled: {}{}",
                 name,
-                skill.map(|s| format!("  [{}]", s.source)).unwrap_or_default()
+                skill
+                    .map(|s| format!("  [{}]", s.source))
+                    .unwrap_or_default()
             );
             let _ = emit_skills_refresh(&config);
         }

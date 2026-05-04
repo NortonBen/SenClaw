@@ -89,10 +89,7 @@ impl WebSocketGateway {
 
     /// Build the axum route for WebSocket upgrade at `/ws`.
     /// Returns the router and handles for external event injection.
-    pub fn route(
-        &self,
-        state: Arc<super::state::WsState>,
-    ) -> axum::Router {
+    pub fn route(&self, state: Arc<super::state::WsState>) -> axum::Router {
         let clients = self.clients.clone();
         let states = self.last_known_states.clone();
         let token = self.token.clone();
@@ -109,9 +106,7 @@ impl WebSocketGateway {
                 let state = state.clone();
                 async move {
                     ws.on_upgrade(move |socket| {
-                        super::connection::handle_connection(
-                            socket, clients, states, token, state,
-                        )
+                        super::connection::handle_connection(socket, clients, states, token, state)
                     })
                 }
             })
@@ -160,7 +155,11 @@ impl WebSocketGateway {
         tracing::info!(
             "[WsGateway] broadcast_to_admins type={msg_type} sent={sent}/{total} client(s)"
         );
-        if sent == 0 && (msg_type == "dispatch:update" || msg_type == "agent:todos") {
+        if sent == 0
+            && (msg_type == "dispatch:update"
+                || msg_type == "agent:todos"
+                || msg_type == "task:backlog")
+        {
             tracing::warn!(
                 "[WsGateway] {msg_type} fired but NO admin clients connected — \
                  web client must subscribe to an is_admin group first"

@@ -24,10 +24,7 @@ pub fn build_cowork_task_prompt(
     ));
 
     // Task
-    p.push_str(&format!(
-        "<task>\n  <title>{}</title>\n",
-        task.title
-    ));
+    p.push_str(&format!("<task>\n  <title>{}</title>\n", task.title));
     if let Some(ref desc) = task.description {
         if !desc.is_empty() && desc != &task.title {
             p.push_str(&format!("  <description>{}</description>\n", desc));
@@ -424,13 +421,7 @@ mod tests {
             joined_at: "2026-01-01T00:00:00Z".into(),
             updated_at: "2026-01-01T00:00:00Z".into(),
         };
-        let p = build_cowork_task_prompt(
-            &sample_task(),
-            &minimal,
-            &sample_workspace(),
-            &[],
-            &[],
-        );
+        let p = build_cowork_task_prompt(&sample_task(), &minimal, &sample_workspace(), &[], &[]);
         assert!(p.contains("Implement login page"));
         assert!(!p.contains("<persona>"));
         assert!(!p.contains("<responsibilities>"));

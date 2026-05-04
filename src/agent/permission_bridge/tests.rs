@@ -88,9 +88,11 @@ fn test_resolve_permission_first_responder_wins() {
         });
     }
 
-    let options: HashMap<String, String> =
-        [("allow".into(), "Allow".into()), ("refuse".into(), "Refuse".into())]
-            .into();
+    let options: HashMap<String, String> = [
+        ("allow".into(), "Allow".into()),
+        ("refuse".into(), "Refuse".into()),
+    ]
+    .into();
     bridge.handle_permission_request(
         "Bash",
         "Run command?",
@@ -120,9 +122,5 @@ fn test_handle_callback_unknown_prefix() {
 #[test]
 fn test_resolve_ask_question_batch_not_found() {
     let bridge = PermissionBridge::new(stub_api(), None);
-    assert!(!bridge.resolve_ask_question_batch(
-        "nonexistent",
-        &serde_json::json!({"0": 0}),
-        None
-    ));
+    assert!(!bridge.resolve_ask_question_batch("nonexistent", &serde_json::json!({"0": 0}), None));
 }

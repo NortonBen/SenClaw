@@ -229,9 +229,15 @@ struct SearchParams {
     safe_search: bool,
 }
 
-fn default_search_engine2() -> String { "google".into() }
-fn default_num_results2() -> u8 { 10 }
-fn default_true_val() -> bool { true }
+fn default_search_engine2() -> String {
+    "google".into()
+}
+fn default_num_results2() -> u8 {
+    10
+}
+fn default_true_val() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct CrawlParams {
@@ -256,11 +262,21 @@ struct CrawlParams {
     wait_between_pages_ms: u32,
 }
 
-fn default_depth() -> u8 { 2 }
-fn default_max_pages() -> u16 { 50 }
-fn default_extract_type() -> String { "text".into() }
-fn default_per_page_timeout() -> u32 { 10000 }
-fn default_wait_between() -> u32 { 1000 }
+fn default_depth() -> u8 {
+    2
+}
+fn default_max_pages() -> u16 {
+    50
+}
+fn default_extract_type() -> String {
+    "text".into()
+}
+fn default_per_page_timeout() -> u32 {
+    10000
+}
+fn default_wait_between() -> u32 {
+    1000
+}
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct CrawlStatusParams {
@@ -306,10 +322,7 @@ impl McpBrowserServer {
 
     /// Send a DaemonMessage to the gateway and wait for the response.
     /// Opens a fresh WebSocket connection for each request (stateless).
-    async fn do_request(
-        &self,
-        msg: DaemonMessage,
-    ) -> Result<ActionResult, String> {
+    async fn do_request(&self, msg: DaemonMessage) -> Result<ActionResult, String> {
         let url = format!("ws://127.0.0.1:{}/browser-mcp", self.ws_port);
 
         let (mut ws, _) = tokio_tungstenite::connect_async(&url)
@@ -317,8 +330,7 @@ impl McpBrowserServer {
             .map_err(|e| format!("Bridge connection failed: {e}"))?;
 
         // Send the request
-        let payload = serde_json::to_string(&msg)
-            .map_err(|e| format!("serialize error: {e}"))?;
+        let payload = serde_json::to_string(&msg).map_err(|e| format!("serialize error: {e}"))?;
         ws.send(Message::Text(payload.into()))
             .await
             .map_err(|e| format!("send error: {e}"))?;
@@ -386,10 +398,14 @@ impl McpBrowserServer {
 impl McpBrowserServer {
     // ===== Navigation =====
 
-    #[rmcp::tool(description = "Navigate to a URL in a browser tab. Creates a new tab if tab_id is not specified.")]
+    #[rmcp::tool(
+        description = "Navigate to a URL in a browser tab. Creates a new tab if tab_id is not specified."
+    )]
     async fn browser_navigate(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<NavigateParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            NavigateParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Navigate {
@@ -399,7 +415,9 @@ impl McpBrowserServer {
             })
             .await
         {
-            Ok(ActionResult::Ok { data }) => serde_json::to_string_pretty(&data).unwrap_or_default(),
+            Ok(ActionResult::Ok { data }) => {
+                serde_json::to_string_pretty(&data).unwrap_or_default()
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
@@ -408,7 +426,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Create a new browser tab. Optionally navigate to a URL.")]
     async fn browser_new_tab(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<NewTabParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            NewTabParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::NewTab {
@@ -417,7 +437,9 @@ impl McpBrowserServer {
             })
             .await
         {
-            Ok(ActionResult::Ok { data }) => serde_json::to_string_pretty(&data).unwrap_or_default(),
+            Ok(ActionResult::Ok { data }) => {
+                serde_json::to_string_pretty(&data).unwrap_or_default()
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
@@ -426,7 +448,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Close a browser tab by its tab_id.")]
     async fn browser_close_tab(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CloseTabParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CloseTabParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::CloseTab {
@@ -435,7 +459,9 @@ impl McpBrowserServer {
             })
             .await
         {
-            Ok(ActionResult::Ok { data }) => serde_json::to_string_pretty(&data).unwrap_or_default(),
+            Ok(ActionResult::Ok { data }) => {
+                serde_json::to_string_pretty(&data).unwrap_or_default()
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
@@ -444,10 +470,13 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "List all open browser tabs.")]
     async fn browser_list_tabs(&self) -> String {
         let rid = Self::request_id();
-        match self.do_request(DaemonMessage::ListTabs {
-            request_id: rid,
-        }).await {
-            Ok(ActionResult::Ok { data }) => serde_json::to_string_pretty(&data).unwrap_or_default(),
+        match self
+            .do_request(DaemonMessage::ListTabs { request_id: rid })
+            .await
+        {
+            Ok(ActionResult::Ok { data }) => {
+                serde_json::to_string_pretty(&data).unwrap_or_default()
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
@@ -456,7 +485,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Switch to a specific tab, making it the active tab.")]
     async fn browser_switch_tab(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SwitchTabParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SwitchTabParams,
+        >,
     ) -> String {
         let tab_id = p.tab_id.clone();
         match self
@@ -475,7 +506,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Go back to the previous page in the tab's history.")]
     async fn browser_go_back(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TabActionParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TabActionParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::GoBack {
@@ -493,7 +526,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Go forward to the next page in the tab's history.")]
     async fn browser_go_forward(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TabActionParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TabActionParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::GoForward {
@@ -511,7 +546,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Reload the current page in the tab.")]
     async fn browser_reload(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TabActionParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TabActionParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Reload {
@@ -528,10 +565,14 @@ impl McpBrowserServer {
 
     // ===== Page Interaction =====
 
-    #[rmcp::tool(description = "Click on an element by its index (from snapshot). Requires permission for state-changing operations.")]
+    #[rmcp::tool(
+        description = "Click on an element by its index (from snapshot). Requires permission for state-changing operations."
+    )]
     async fn browser_click(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ClickParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ClickParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Click {
@@ -547,10 +588,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Type text into an input element by its index (from snapshot). Set submit=true to press Enter after typing.")]
+    #[rmcp::tool(
+        description = "Type text into an input element by its index (from snapshot). Set submit=true to press Enter after typing."
+    )]
     async fn browser_type(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TypeParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TypeParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Type {
@@ -571,7 +616,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Select an option in a dropdown element by its index.")]
     async fn browser_select_option(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SelectOptionParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SelectOptionParams,
+        >,
     ) -> String {
         let option_text = p.option_text.clone();
         let idx = p.index;
@@ -584,16 +631,22 @@ impl McpBrowserServer {
             })
             .await
         {
-            Ok(ActionResult::Ok { .. }) => format!("Selected '{}' in element #{}", option_text, idx),
+            Ok(ActionResult::Ok { .. }) => {
+                format!("Selected '{}' in element #{}", option_text, idx)
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
     }
 
-    #[rmcp::tool(description = "Scroll the page. Direction: 'up' or 'down'. Amount: pixels (e.g. '300') or pages (e.g. '0.5').")]
+    #[rmcp::tool(
+        description = "Scroll the page. Direction: 'up' or 'down'. Amount: pixels (e.g. '300') or pages (e.g. '0.5')."
+    )]
     async fn browser_scroll(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ScrollParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ScrollParams,
+        >,
     ) -> String {
         let amount = Self::parse_amount(p.amount.as_deref());
         match self
@@ -614,7 +667,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Hover the mouse over an element by its index.")]
     async fn browser_hover(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<HoverParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            HoverParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Hover {
@@ -630,10 +685,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Press a keyboard key. Common keys: Enter, Escape, Tab, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, Backspace, Delete, PageDown, PageUp, Home, End.")]
+    #[rmcp::tool(
+        description = "Press a keyboard key. Common keys: Enter, Escape, Tab, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, Backspace, Delete, PageDown, PageUp, Home, End."
+    )]
     async fn browser_press_key(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<PressKeyParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            PressKeyParams,
+        >,
     ) -> String {
         let key = p.key.clone();
         match self
@@ -650,10 +709,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Upload files to a file input element by its index. Requires explicit permission.")]
+    #[rmcp::tool(
+        description = "Upload files to a file input element by its index. Requires explicit permission."
+    )]
     async fn browser_upload_file(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<UploadFileParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            UploadFileParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::UploadFile {
@@ -670,10 +733,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Execute JavaScript on the page. Supports async/await. Returns the script's return value as JSON. Requires explicit permission.")]
+    #[rmcp::tool(
+        description = "Execute JavaScript on the page. Supports async/await. Returns the script's return value as JSON. Requires explicit permission."
+    )]
     async fn browser_execute_js(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ExecuteJsParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ExecuteJsParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::ExecuteJs {
@@ -683,16 +750,22 @@ impl McpBrowserServer {
             })
             .await
         {
-            Ok(ActionResult::Ok { data }) => serde_json::to_string_pretty(&data).unwrap_or_default(),
+            Ok(ActionResult::Ok { data }) => {
+                serde_json::to_string_pretty(&data).unwrap_or_default()
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
     }
 
-    #[rmcp::tool(description = "Wait for a condition. Types: 'time' (wait N ms), 'text' (wait for text to appear), 'text_gone' (wait for text to disappear), 'navigation' (wait for page load).")]
+    #[rmcp::tool(
+        description = "Wait for a condition. Types: 'time' (wait N ms), 'text' (wait for text to appear), 'text_gone' (wait for text to disappear), 'navigation' (wait for page load)."
+    )]
     async fn browser_wait(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<WaitParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            WaitParams,
+        >,
     ) -> String {
         let condition = match p.wait_type.as_str() {
             "time" => WaitCondition::Time {
@@ -728,10 +801,14 @@ impl McpBrowserServer {
 
     // ===== Observation =====
 
-    #[rmcp::tool(description = "Capture the accessibility snapshot of the current page. Returns interactive elements with indices, text content, and compressed HTML. Use this before interacting with the page to understand what elements are available.")]
+    #[rmcp::tool(
+        description = "Capture the accessibility snapshot of the current page. Returns interactive elements with indices, text content, and compressed HTML. Use this before interacting with the page to understand what elements are available."
+    )]
     async fn browser_snapshot(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SnapshotParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SnapshotParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::GetSnapshot {
@@ -766,10 +843,9 @@ impl McpBrowserServer {
                         });
                         // Include interactive elements list
                         if !compressed.interactive_elements.is_empty() {
-                            out["interactive_elements"] = serde_json::to_value(
-                                &compressed.interactive_elements,
-                            )
-                            .unwrap_or_default();
+                            out["interactive_elements"] =
+                                serde_json::to_value(&compressed.interactive_elements)
+                                    .unwrap_or_default();
                         }
                         return serde_json::to_string_pretty(&out).unwrap_or_default();
                     }
@@ -781,10 +857,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Take a screenshot of the page. Supports viewport, full-page, and element-specific captures.")]
+    #[rmcp::tool(
+        description = "Take a screenshot of the page. Supports viewport, full-page, and element-specific captures."
+    )]
     async fn browser_screenshot(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ScreenshotParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ScreenshotParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::GetScreenshot {
@@ -801,7 +881,8 @@ impl McpBrowserServer {
                 let mut out = data.clone();
                 if let Some(obj) = out.as_object_mut() {
                     if obj.contains_key("data") {
-                        let data_len = obj.get("data")
+                        let data_len = obj
+                            .get("data")
                             .and_then(|v| v.as_str())
                             .map(|s| s.len())
                             .unwrap_or(0);
@@ -822,7 +903,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Extract text content from the page or a specific element.")]
     async fn browser_extract_text(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ExtractTextParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ExtractTextParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::ExtractText {
@@ -851,10 +934,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Extract all links from the page or a specific element. Returns URLs and their text.")]
+    #[rmcp::tool(
+        description = "Extract all links from the page or a specific element. Returns URLs and their text."
+    )]
     async fn browser_extract_links(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ExtractLinksParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ExtractLinksParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::ExtractLinks {
@@ -875,7 +962,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Extract an HTML table from the page as JSON array of objects.")]
     async fn browser_extract_table(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ExtractTableParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ExtractTableParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::ExtractTable {
@@ -893,10 +982,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Extract structured data from the page using a JSON schema. The LLM analyzes page content and maps it to the schema fields. Useful for product listings, article metadata, search results, contact info, pricing tables.")]
+    #[rmcp::tool(
+        description = "Extract structured data from the page using a JSON schema. The LLM analyzes page content and maps it to the schema fields. Useful for product listings, article metadata, search results, contact info, pricing tables."
+    )]
     async fn browser_extract_structured(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ExtractStructuredParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ExtractStructuredParams,
+        >,
     ) -> String {
         // Structured extraction: first get the text, then the extension/LLM maps to schema.
         // For now, delegate to the extension's execution.
@@ -947,10 +1040,14 @@ impl McpBrowserServer {
 
     // ===== Search & Crawl =====
 
-    #[rmcp::tool(description = "Search Google or Bing and return structured results. Use for research, fact-checking, or finding documentation.")]
+    #[rmcp::tool(
+        description = "Search Google or Bing and return structured results. Use for research, fact-checking, or finding documentation."
+    )]
     async fn browser_search(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SearchParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SearchParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Search {
@@ -970,10 +1067,14 @@ impl McpBrowserServer {
         }
     }
 
-    #[rmcp::tool(description = "Start a deep crawl from a URL. Follows links matching patterns up to a configurable depth. Returns structured content from visited pages. Supports same-domain filtering, link pattern matching, per-page time budgets, and polite crawling delays.")]
+    #[rmcp::tool(
+        description = "Start a deep crawl from a URL. Follows links matching patterns up to a configurable depth. Returns structured content from visited pages. Supports same-domain filtering, link pattern matching, per-page time budgets, and polite crawling delays."
+    )]
     async fn browser_crawl(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CrawlParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CrawlParams,
+        >,
     ) -> String {
         let job_id = Uuid::new_v4().to_string();
         let start_url = p.start_url.clone();
@@ -992,30 +1093,33 @@ impl McpBrowserServer {
             })
             .await
         {
-            Ok(ActionResult::Ok { .. }) => {
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "job_id": job_id,
-                    "status": "started",
-                    "message": "Crawl job started. Use browser_crawl_status to check progress."
-                }))
-                .unwrap_or_default()
-            }
+            Ok(ActionResult::Ok { .. }) => serde_json::to_string_pretty(&serde_json::json!({
+                "job_id": job_id,
+                "status": "started",
+                "message": "Crawl job started. Use browser_crawl_status to check progress."
+            }))
+            .unwrap_or_default(),
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
     }
 
-    #[rmcp::tool(description = "Check the status of a crawl job. Returns pages crawled, total pages, and collected results.")]
+    #[rmcp::tool(
+        description = "Check the status of a crawl job. Returns pages crawled, total pages, and collected results."
+    )]
     async fn browser_crawl_status(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CrawlStatusParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CrawlStatusParams,
+        >,
     ) -> String {
         let rid = Self::request_id();
         let job_id = p.job_id.clone();
         // Use GetStatus to read crawl engine state via the bridge
-        match self.do_request(DaemonMessage::GetStatus {
-            request_id: rid,
-        }).await {
+        match self
+            .do_request(DaemonMessage::GetStatus { request_id: rid })
+            .await
+        {
             Ok(ActionResult::Ok { data }) => {
                 // Extract crawl_jobs from status response
                 if let Some(jobs) = data.get("active_crawl_jobs") {
@@ -1036,10 +1140,14 @@ impl McpBrowserServer {
 
     // ===== Form & Auth =====
 
-    #[rmcp::tool(description = "Fill multiple form fields at once. Automatically finds fields by label, placeholder, name, or CSS selector. Set submit=true to submit the form after filling.")]
+    #[rmcp::tool(
+        description = "Fill multiple form fields at once. Automatically finds fields by label, placeholder, name, or CSS selector. Set submit=true to submit the form after filling."
+    )]
     async fn browser_fill_form(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<FillFormParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            FillFormParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::FillForm {
@@ -1059,7 +1167,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Click on an element and wait for navigation to complete.")]
     async fn browser_click_and_wait(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ClickAndWaitParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ClickAndWaitParams,
+        >,
     ) -> String {
         match self
             .do_request(DaemonMessage::Click {
@@ -1093,13 +1203,18 @@ impl McpBrowserServer {
 
     // ===== Session =====
 
-    #[rmcp::tool(description = "Get the current status of the browser bridge: connection state, tab count, active tab.")]
+    #[rmcp::tool(
+        description = "Get the current status of the browser bridge: connection state, tab count, active tab."
+    )]
     async fn browser_get_status(&self) -> String {
         let rid = Self::request_id();
-        match self.do_request(DaemonMessage::GetStatus {
-            request_id: rid,
-        }).await {
-            Ok(ActionResult::Ok { data }) => serde_json::to_string_pretty(&data).unwrap_or_default(),
+        match self
+            .do_request(DaemonMessage::GetStatus { request_id: rid })
+            .await
+        {
+            Ok(ActionResult::Ok { data }) => {
+                serde_json::to_string_pretty(&data).unwrap_or_default()
+            }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,
         }
@@ -1108,7 +1223,9 @@ impl McpBrowserServer {
     #[rmcp::tool(description = "Stop an ongoing task (navigation, crawl, etc.) on a tab.")]
     async fn browser_stop_task(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<StopTaskParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            StopTaskParams,
+        >,
     ) -> String {
         // Stop by reloading the tab
         match self
@@ -1159,9 +1276,7 @@ pub async fn run_stdio_server() -> Result<()> {
 
     // Start MCP stdio server — each tool call will open a fresh WS connection
     let server = McpBrowserServer { ws_port };
-    let service = server
-        .serve(rmcp::transport::io::stdio())
-        .await?;
+    let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
 
     Ok(())

@@ -252,9 +252,7 @@ pub(crate) async fn handle_cowork_member_update(
         &now,
     ) {
         Ok(()) => {
-            if let Ok(Some(member)) =
-                state.cowork_manager.get_member(&state.db, ws_id, member_id)
-            {
+            if let Ok(Some(member)) = state.cowork_manager.get_member(&state.db, ws_id, member_id) {
                 send_json(
                     sender,
                     &serde_json::json!({"type":"cowork:member:updated","workspaceId":ws_id,"member":member}),
@@ -286,7 +284,10 @@ pub(crate) async fn handle_cowork_member_remove(
         );
         return;
     }
-    match state.cowork_manager.remove_member(&state.db, ws_id, member_id) {
+    match state
+        .cowork_manager
+        .remove_member(&state.db, ws_id, member_id)
+    {
         Ok(()) => {
             send_json(
                 sender,
@@ -566,9 +567,18 @@ pub(crate) async fn handle_cowork_message_send(
         .unwrap_or(false);
 
     if has_members {
-        let agent_api = state.agent_api.as_ref().map(|api| (Arc::clone(api), Arc::clone(&state.db)));
+        let agent_api = state
+            .agent_api
+            .as_ref()
+            .map(|api| (Arc::clone(api), Arc::clone(&state.db)));
         match state.cowork_manager.process_user_message(
-            &state.db, ws_id, from, content, &now, agent_api, Arc::clone(&state.cowork_manager),
+            &state.db,
+            ws_id,
+            from,
+            content,
+            &now,
+            agent_api,
+            Arc::clone(&state.cowork_manager),
         ) {
             Ok((cmsg, tasks)) => {
                 send_json(

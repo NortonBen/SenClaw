@@ -15,10 +15,26 @@ use crate::memory::tokenizer::tokenize_optimized;
 
 static REWRITE_RULES: LazyLock<Vec<(&str, Regex, &str)>> = LazyLock::new(|| {
     vec![
-        ("remove Chinese interrogatives", Regex::new(r"^(为什么|怎么|如何|什么|哪个|哪些)\s*").unwrap(), ""),
-        ("remove English interrogatives", Regex::new(r"^(why|how|what|which|where|when|who)\s+").unwrap(), ""),
-        ("remove Chinese particles", Regex::new(r"(^|\s)(会|能|可以|应该)(\s|$)").unwrap(), "$1$3"),
-        ("remove English particles", Regex::new(r"\s+(should|could|can|will|would)\s+").unwrap(), " "),
+        (
+            "remove Chinese interrogatives",
+            Regex::new(r"^(为什么|怎么|如何|什么|哪个|哪些)\s*").unwrap(),
+            "",
+        ),
+        (
+            "remove English interrogatives",
+            Regex::new(r"^(why|how|what|which|where|when|who)\s+").unwrap(),
+            "",
+        ),
+        (
+            "remove Chinese particles",
+            Regex::new(r"(^|\s)(会|能|可以|应该)(\s|$)").unwrap(),
+            "$1$3",
+        ),
+        (
+            "remove English particles",
+            Regex::new(r"\s+(should|could|can|will|would)\s+").unwrap(),
+            " ",
+        ),
         ("normalize spaces", Regex::new(r"\s+").unwrap(), " "),
     ]
 });
@@ -56,7 +72,10 @@ pub fn smart_rewrite_query(query: &str) -> String {
 
 use std::collections::{HashMap, HashSet};
 
-fn synonym_map() -> (HashMap<&'static str, Vec<&'static str>>, HashMap<&'static str, Vec<&'static str>>) {
+fn synonym_map() -> (
+    HashMap<&'static str, Vec<&'static str>>,
+    HashMap<&'static str, Vec<&'static str>>,
+) {
     let zh_to_en: HashMap<&str, Vec<&str>> = HashMap::from([
         ("内存", vec!["memory"]),
         ("内存泄漏", vec!["memory", "leak"]),

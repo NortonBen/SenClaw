@@ -127,7 +127,10 @@ mod tests {
     fn test_disabled_skills_lifecycle() {
         let _guard = TEST_MUTEX.lock().unwrap();
         test_reset();
-        let tmp = std::env::temp_dir().join(format!("test-disabled-skills-{}.json", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "test-disabled-skills-{}.json",
+            uuid::Uuid::new_v4()
+        ));
         set_disabled_skills_file(tmp.clone());
 
         // Start empty
@@ -167,7 +170,8 @@ mod tests {
     fn test_multiple_disabled() {
         let _guard = TEST_MUTEX.lock().unwrap();
         test_reset();
-        let tmp = std::env::temp_dir().join(format!("test-disabled-multi-{}.json", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("test-disabled-multi-{}.json", uuid::Uuid::new_v4()));
         set_disabled_skills_file(tmp.clone());
 
         disable_skill("pdf");

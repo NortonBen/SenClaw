@@ -24,9 +24,7 @@ impl WikiManager {
                 .next()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "(root)".to_string());
-            let cat = by_category
-                .entry(top_dir)
-                .or_insert((0, String::new()));
+            let cat = by_category.entry(top_dir).or_insert((0, String::new()));
             cat.0 += 1;
             if updated > cat.1 {
                 cat.1 = updated.clone();

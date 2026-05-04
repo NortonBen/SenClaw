@@ -88,8 +88,7 @@ impl StateManager {
     }
 
     pub fn set_message_history(&mut self, agent_id: &str, messages: Vec<Message>) {
-        self.message_histories
-            .insert(agent_id.to_owned(), messages);
+        self.message_histories.insert(agent_id.to_owned(), messages);
     }
 
     // ============================================================
@@ -170,10 +169,7 @@ impl StateManager {
     // ============================================================
 
     fn agent_state(&self, agent_id: &str) -> AgentState {
-        self.states
-            .get(agent_id)
-            .cloned()
-            .unwrap_or_default()
+        self.states.get(agent_id).cloned().unwrap_or_default()
     }
 
     pub fn current_state(&self, agent_id: &str) -> SessionState {

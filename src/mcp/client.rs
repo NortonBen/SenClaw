@@ -103,14 +103,17 @@ impl McpClient {
 
         // Initialize handshake
         client
-            .request("initialize", Some(serde_json::json!({
-                "protocolVersion": "0.1.0",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "senclaw-engine",
-                    "version": "0.1.0"
-                }
-            })))
+            .request(
+                "initialize",
+                Some(serde_json::json!({
+                    "protocolVersion": "0.1.0",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "senclaw-engine",
+                        "version": "0.1.0"
+                    }
+                })),
+            )
             .await?;
 
         info!("MCP {name} initialized");
@@ -124,11 +127,7 @@ impl McpClient {
             .get("tools")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
-        debug!(
-            "MCP {}: {} tool(s) available",
-            self._name,
-            tools.len()
-        );
+        debug!("MCP {}: {} tool(s) available", self._name, tools.len());
         Ok(tools)
     }
 
@@ -277,8 +276,7 @@ impl SharedMcpRegistry {
             let mut reg = self.inner.lock().unwrap();
             reg.kill(name);
         }
-        let (client, tools) =
-            McpRegistry::spawn_client(name, command, args, env).await?;
+        let (client, tools) = McpRegistry::spawn_client(name, command, args, env).await?;
         let mut reg = self.inner.lock().unwrap();
         reg.clients.insert(name.to_string(), client);
         Ok(tools)

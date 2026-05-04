@@ -54,7 +54,8 @@ impl Tool for ReadTool {
         input: &Value,
         _ctx: &ToolContext<'_>,
     ) -> std::result::Result<(), String> {
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if path.is_empty() {
@@ -70,22 +71,19 @@ impl Tool for ReadTool {
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let path = input.get("file_path")
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let offset = input.get("offset")
+        let offset = input
+            .get("offset")
             .and_then(|v| v.as_u64())
             .unwrap_or(1)
             .max(1);
         let limit = input.get("limit").and_then(|v| v.as_u64());
 
-        let content = std::fs::read_to_string(path)
-            .context("Failed to read file")?;
+        let content = std::fs::read_to_string(path).context("Failed to read file")?;
 
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len() as u64;
@@ -107,11 +105,14 @@ impl Tool for ReadTool {
         }
 
         let selected: Vec<&str> = lines[start..end].to_vec();
-        let output = selected.iter()
-            .map(|l| if l.len() > MAX_LINE_LENGTH {
-                format!("{}... [line truncated]", &l[..MAX_LINE_LENGTH])
-            } else {
-                l.to_string()
+        let output = selected
+            .iter()
+            .map(|l| {
+                if l.len() > MAX_LINE_LENGTH {
+                    format!("{}... [line truncated]", &l[..MAX_LINE_LENGTH])
+                } else {
+                    l.to_string()
+                }
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -126,20 +127,20 @@ impl Tool for ReadTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         ToolResultMessage {
             title: "Read".into(),
-            summary: format!("{} lines", data.get("lines").and_then(|v| v.as_u64()).unwrap_or(0)),
+            summary: format!(
+                "{} lines",
+                data.get("lines").and_then(|v| v.as_u64()).unwrap_or(0)
+            ),
             content: data.clone(),
         }
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("file");
         let fname = std::path::Path::new(path)

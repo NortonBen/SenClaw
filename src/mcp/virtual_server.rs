@@ -150,9 +150,7 @@ impl VirtualServer {
             }
         };
 
-        let timeout = timeout_seconds
-            .map(|t| t.clamp(10, 1800))
-            .unwrap_or(600);
+        let timeout = timeout_seconds.map(|t| t.clamp(10, 1800)).unwrap_or(600);
 
         let workspace = self.read_current_workspace();
 
@@ -197,16 +195,28 @@ struct McpVirtualServer {
 impl McpVirtualServer {
     #[rmcp::tool(description = "List available virtual personas")]
     fn list_personas(&self) -> String {
-        let srv = VirtualServer::new(&self.agents_config_dir, &self.admin_folder, &self.default_workspace, None);
+        let srv = VirtualServer::new(
+            &self.agents_config_dir,
+            &self.admin_folder,
+            &self.default_workspace,
+            None,
+        );
         srv.list_personas().content
     }
 
     #[rmcp::tool(description = "Run a virtual persona with a prompt")]
     async fn run_persona(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<RunPersonaParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RunPersonaParams,
+        >,
     ) -> String {
-        let srv = VirtualServer::new(&self.agents_config_dir, &self.admin_folder, &self.default_workspace, None);
+        let srv = VirtualServer::new(
+            &self.agents_config_dir,
+            &self.admin_folder,
+            &self.default_workspace,
+            None,
+        );
         srv.run_persona(&p.persona_name, &p.prompt, p.timeout_seconds)
             .await
             .content
@@ -223,12 +233,12 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let agents_config_dir = std::env::var("SENCLAW_AGENTS_CONFIG_DIR")
-        .context("SENCLAW_AGENTS_CONFIG_DIR not set")?;
+    let agents_config_dir =
+        std::env::var("SENCLAW_AGENTS_CONFIG_DIR").context("SENCLAW_AGENTS_CONFIG_DIR not set")?;
     let admin_folder =
         std::env::var("SENCLAW_ADMIN_FOLDER").context("SENCLAW_ADMIN_FOLDER not set")?;
-    let default_workspace = std::env::var("SENCLAW_DEFAULT_WORKSPACE")
-        .context("SENCLAW_DEFAULT_WORKSPACE not set")?;
+    let default_workspace =
+        std::env::var("SENCLAW_DEFAULT_WORKSPACE").context("SENCLAW_DEFAULT_WORKSPACE not set")?;
 
     let server = McpVirtualServer {
         agents_config_dir: PathBuf::from(agents_config_dir),
@@ -248,7 +258,11 @@ mod tests {
     #[test]
     fn scan_personas_from_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join("coder.md"), "# Coder\nWrites production code").unwrap();
+        fs::write(
+            tmp.path().join("coder.md"),
+            "# Coder\nWrites production code",
+        )
+        .unwrap();
         fs::write(tmp.path().join("tester.md"), "# Tester\nRuns test suites").unwrap();
         fs::write(tmp.path().join("readme.txt"), "not a persona").unwrap();
 

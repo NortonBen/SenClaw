@@ -12,14 +12,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::agent::dispatch_bridge::{
-    DispatchBridge, DispatchTask, DispatchTaskStatus,
-};
+use crate::agent::dispatch_bridge::{DispatchBridge, DispatchTask, DispatchTaskStatus};
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::{
-    AgentApi, CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkWorkspace,
-    CoworkTemplate, GroupBinding, TemplateMember, TemplateBoard, TemplateBoardSection,
+    AgentApi, CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkTemplate,
+    CoworkWorkspace, GroupBinding, TemplateBoard, TemplateBoardSection, TemplateMember,
 };
 
 pub struct CoworkManager {
@@ -96,8 +94,14 @@ impl CoworkManager {
         let now = chrono::Utc::now().to_rfc3339();
         if let Err(e) = db.update_cowork_task(
             &cowork_task_id,
-            None, None, Some(cowork_status),
-            None, None, None, None, None,
+            None,
+            None,
+            Some(cowork_status),
+            None,
+            None,
+            None,
+            None,
+            None,
             &now,
         ) {
             tracing::warn!(
@@ -130,15 +134,18 @@ impl CoworkManager {
         let task_id = task.id.clone();
         let member_id = member.member_id.clone();
         let workspace_id_owned = workspace_id.to_string();
-        let jid = member.jid.clone().unwrap_or_else(|| {
-            format!("cowork:{}:{}", workspace_id, member.member_id)
-        });
+        let jid = member
+            .jid
+            .clone()
+            .unwrap_or_else(|| format!("cowork:{}:{}", workspace_id, member.member_id));
         let folder = member.member_id.clone();
         let allowed_dirs = member.subdir.clone().map(|d| vec![d]);
 
         tracing::info!(
             "[Cowork] Dispatching task {} to agent {} (jid={})",
-            task_id, member_id, jid
+            task_id,
+            member_id,
+            jid
         );
 
         // Resolve context for prompt
@@ -146,8 +153,12 @@ impl CoworkManager {
             Ok(Some(ws)) => ws,
             _ => return,
         };
-        let board = db.get_cowork_board_entries(&workspace_id_owned, None).unwrap_or_default();
-        let all_tasks = db.list_cowork_tasks(&workspace_id_owned, None).unwrap_or_default();
+        let board = db
+            .get_cowork_board_entries(&workspace_id_owned, None)
+            .unwrap_or_default();
+        let all_tasks = db
+            .list_cowork_tasks(&workspace_id_owned, None)
+            .unwrap_or_default();
 
         // Find completed dependency tasks
         let dependent_results: Vec<CoworkTask> = if let Some(ref deps_json) = task.depends_on {
@@ -196,19 +207,26 @@ impl CoworkManager {
             let now = chrono::Utc::now().to_rfc3339();
             let _ = db_clone.update_cowork_task(
                 &task_id,
-                None,   // title
-                None,   // description
+                None, // title
+                None, // description
                 Some("in_progress"),
-                None,   // assignee
-                None,   // reviewer
-                None,   // priority
-                None,   // depends_on
-                None,   // attachments
+                None, // assignee
+                None, // reviewer
+                None, // priority
+                None, // depends_on
+                None, // attachments
                 &now,
             );
 
             // Insert a status message
-            let dispatch_msg_id = format!("cwmsg-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+            let dispatch_msg_id = format!(
+                "cwmsg-{}",
+                Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("0000")
+            );
             let _ = db_clone.insert_cowork_message(&CoworkMessage {
                 id: dispatch_msg_id,
                 workspace_id: workspace_id_owned.clone(),
@@ -236,14 +254,26 @@ impl CoworkManager {
             );
             let _ = db_clone.update_cowork_task(
                 &task_id,
-                None, None,
+                None,
+                None,
                 Some(new_status),
-                None, None, None, None, None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 &now2,
             );
 
             // Insert a completion message
-            let done_msg_id = format!("cwmsg-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+            let done_msg_id = format!(
+                "cwmsg-{}",
+                Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("0000")
+            );
             let content = if new_status == "done" {
                 format!("{member_id} completed task: {task_title}")
             } else {
@@ -254,7 +284,11 @@ impl CoworkManager {
                 workspace_id: workspace_id_owned.clone(),
                 from_member: member_id.clone(),
                 to_member: Some("user".into()),
-                message_type: if new_status == "done" { "result".into() } else { "alert".into() },
+                message_type: if new_status == "done" {
+                    "result".into()
+                } else {
+                    "alert".into()
+                },
                 content,
                 attachments: None,
                 task_id: Some(task_id.clone()),
@@ -280,13 +314,24 @@ impl CoworkManager {
         self_arc: Arc<CoworkManager>,
     ) -> Result<(CoworkMessage, Vec<CoworkTask>)> {
         // 1. Save the message
-        let msg_id = format!("cwmsg-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+        let msg_id = format!(
+            "cwmsg-{}",
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0000")
+        );
         let msg = CoworkMessage {
             id: msg_id,
             workspace_id: workspace_id.to_string(),
             from_member: from_user.to_string(),
             to_member: None,
-            message_type: if from_user == "user" { "status".to_string() } else { "handoff".to_string() },
+            message_type: if from_user == "user" {
+                "status".to_string()
+            } else {
+                "handoff".to_string()
+            },
             content: content.to_string(),
             attachments: None,
             task_id: None,
@@ -305,7 +350,8 @@ impl CoworkManager {
         }
 
         // 3. Find the lead/orchestrator agent (first worker or lead role)
-        let lead = members.iter()
+        let lead = members
+            .iter()
             .find(|m| m.role == "lead" || m.role == "worker")
             .or_else(|| members.first());
 
@@ -317,14 +363,16 @@ impl CoworkManager {
                 content.to_string()
             };
             let task = self.create_task(
-                db, workspace_id, &task_title,
-                Some(content),                          // full message as description
-                Some(&agent.member_id),                  // assignee
-                None,                                    // reviewer
+                db,
+                workspace_id,
+                &task_title,
+                Some(content),          // full message as description
+                Some(&agent.member_id), // assignee
+                None,                   // reviewer
                 Some("high"),
-                None,                                    // depends_on
+                None, // depends_on
                 from_user,
-                None,                                    // attachments
+                None, // attachments
                 now,
             )?;
             created_tasks.push(task);
@@ -334,7 +382,8 @@ impl CoworkManager {
         //    create standby tasks for them too
         for member in &members {
             if let Some(ref triggers_json) = member.triggers {
-                if let Ok(triggers) = serde_json::from_str::<Vec<serde_json::Value>>(triggers_json) {
+                if let Ok(triggers) = serde_json::from_str::<Vec<serde_json::Value>>(triggers_json)
+                {
                     for trigger in &triggers {
                         let trigger_type = trigger["type"].as_str().unwrap_or("");
                         let should_fire = match trigger_type {
@@ -360,10 +409,23 @@ impl CoworkManager {
                             }
                             _ => false,
                         };
-                        if should_fire && !created_tasks.iter().any(|t| t.assignee.as_deref() == Some(&member.member_id)) {
+                        if should_fire
+                            && !created_tasks
+                                .iter()
+                                .any(|t| t.assignee.as_deref() == Some(&member.member_id))
+                        {
                             let task = self.create_task(
-                                db, workspace_id,
-                                &format!("[from {}] {}", from_user, if content.len() > 60 { &content[..60] } else { content }),
+                                db,
+                                workspace_id,
+                                &format!(
+                                    "[from {}] {}",
+                                    from_user,
+                                    if content.len() > 60 {
+                                        &content[..60]
+                                    } else {
+                                        content
+                                    }
+                                ),
                                 Some(content),
                                 Some(&member.member_id),
                                 None,
@@ -384,6 +446,10 @@ impl CoworkManager {
         //    fall back to direct process_and_wait per-task dispatch.
         let dag_bridge = self.dispatch_bridge.lock().unwrap().clone();
         if let Some(ref bridge) = dag_bridge {
+            tracing::info!(
+                "[Cowork] DAG bridge active — routing {} task(s) through dispatch",
+                created_tasks.len()
+            );
             // DAG path: convert CoworkTasks → DispatchTasks, enqueue as parent.
             let workspace = match db.get_cowork_workspace(workspace_id) {
                 Ok(Some(ws)) => ws,
@@ -392,7 +458,9 @@ impl CoworkManager {
                     return Ok((msg, created_tasks));
                 }
             };
-            let board = db.get_cowork_board_entries(workspace_id, None).unwrap_or_default();
+            let board = db
+                .get_cowork_board_entries(workspace_id, None)
+                .unwrap_or_default();
 
             let dispatch_tasks: Vec<DispatchTask> = created_tasks
                 .iter()
@@ -522,6 +590,10 @@ impl CoworkManager {
             }
         } else if let Some((ref api, ref db_arc)) = agent_api {
             // Fallback: direct process_and_wait per-task dispatch (no DAG).
+            tracing::info!(
+                "[Cowork] No DAG bridge — dispatching {} task(s) via direct process_and_wait",
+                created_tasks.len()
+            );
             for task in &created_tasks {
                 let assignee_id = task.assignee.as_deref().unwrap_or("");
                 if let Some(member) = members.iter().find(|m| m.member_id == assignee_id) {
@@ -535,6 +607,11 @@ impl CoworkManager {
                     );
                 }
             }
+        } else {
+            tracing::warn!(
+                "[Cowork] No DAG bridge AND no agent_api — {} task(s) created but will NOT be dispatched",
+                created_tasks.len()
+            );
         }
 
         self.fire_changed();
@@ -554,12 +631,13 @@ impl CoworkManager {
         working_dir: Option<&str>,
         now: &str,
     ) -> Result<CoworkWorkspace> {
-        let id = format!("ws-{}", &name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "-"));
-        let root_dir = config
-            .paths
-            .workspace_dir
-            .join("cowork")
-            .join(&id);
+        let id = format!(
+            "ws-{}",
+            &name
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+        );
+        let root_dir = config.paths.workspace_dir.join("cowork").join(&id);
 
         // Create workspace directory structure
         fs::create_dir_all(root_dir.join("board")).ok();
@@ -611,9 +689,7 @@ impl CoworkManager {
 
     pub fn delete_workspace(&self, db: &Db, id: &str) -> Result<()> {
         // Fetch workspace first to get root_dir before deleting the DB record
-        let root_dir = db
-            .get_cowork_workspace(id)?
-            .map(|ws| ws.root_dir);
+        let root_dir = db.get_cowork_workspace(id)?.map(|ws| ws.root_dir);
 
         db.delete_cowork_workspace(id)?;
 
@@ -717,19 +793,24 @@ impl CoworkManager {
         now: &str,
     ) -> Result<()> {
         db.update_cowork_member(
-            workspace_id, member_id, role, persona, responsibilities, triggers,
-            handoff_rules, acceptance_criteria, output_format, sla, limits, now,
+            workspace_id,
+            member_id,
+            role,
+            persona,
+            responsibilities,
+            triggers,
+            handoff_rules,
+            acceptance_criteria,
+            output_format,
+            sla,
+            limits,
+            now,
         )?;
         self.fire_changed();
         Ok(())
     }
 
-    pub fn remove_member(
-        &self,
-        db: &Db,
-        workspace_id: &str,
-        member_id: &str,
-    ) -> Result<()> {
+    pub fn remove_member(&self, db: &Db, workspace_id: &str, member_id: &str) -> Result<()> {
         db.delete_cowork_member(workspace_id, member_id)?;
         self.fire_changed();
         Ok(())
@@ -760,7 +841,14 @@ impl CoworkManager {
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("Board entry disappeared after update"))?
         } else {
-            let id = format!("be-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+            let id = format!(
+                "be-{}",
+                Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("0000")
+            );
             let e = CoworkBoardEntry {
                 id,
                 workspace_id: workspace_id.to_string(),
@@ -828,7 +916,14 @@ impl CoworkManager {
         attachments: Option<&str>,
         now: &str,
     ) -> Result<CoworkTask> {
-        let id = format!("cwt-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+        let id = format!(
+            "cwt-{}",
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0000")
+        );
         let task = CoworkTask {
             id,
             workspace_id: workspace_id.to_string(),
@@ -880,8 +975,16 @@ impl CoworkManager {
         now: &str,
     ) -> Result<()> {
         db.update_cowork_task(
-            id, title, description, status, assignee, reviewer, priority,
-            depends_on, attachments, now,
+            id,
+            title,
+            description,
+            status,
+            assignee,
+            reviewer,
+            priority,
+            depends_on,
+            attachments,
+            now,
         )?;
         self.fire_changed();
         Ok(())
@@ -934,7 +1037,14 @@ impl CoworkManager {
         attachments: Option<&str>,
         now: &str,
     ) -> Result<CoworkMessage> {
-        let id = format!("cwm-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"));
+        let id = format!(
+            "cwm-{}",
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0000")
+        );
         let msg = CoworkMessage {
             id,
             workspace_id: workspace_id.to_string(),
@@ -1426,19 +1536,42 @@ impl CoworkManager {
                         jid: None,
                         subdir: m.subdir.clone(),
                         persona: m.persona.clone(),
-                        responsibilities: m.responsibilities.as_ref().map(|r| serde_json::to_string(r).unwrap_or_default()),
-                        triggers: m.triggers.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default()),
-                        handoff_rules: m.handoff.as_ref().map(|h| serde_json::to_string(h).unwrap_or_default()),
-                        acceptance_criteria: m.acceptance_criteria.as_ref().map(|a| serde_json::to_string(a).unwrap_or_default()),
-                        output_format: m.output.as_ref().map(|o| serde_json::to_string(o).unwrap_or_default()),
-                        sla: m.sla.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default()),
-                        limits: m.limits.as_ref().map(|l| serde_json::to_string(l).unwrap_or_default()),
+                        responsibilities: m
+                            .responsibilities
+                            .as_ref()
+                            .map(|r| serde_json::to_string(r).unwrap_or_default()),
+                        triggers: m
+                            .triggers
+                            .as_ref()
+                            .map(|t| serde_json::to_string(t).unwrap_or_default()),
+                        handoff_rules: m
+                            .handoff
+                            .as_ref()
+                            .map(|h| serde_json::to_string(h).unwrap_or_default()),
+                        acceptance_criteria: m
+                            .acceptance_criteria
+                            .as_ref()
+                            .map(|a| serde_json::to_string(a).unwrap_or_default()),
+                        output_format: m
+                            .output
+                            .as_ref()
+                            .map(|o| serde_json::to_string(o).unwrap_or_default()),
+                        sla: m
+                            .sla
+                            .as_ref()
+                            .map(|s| serde_json::to_string(s).unwrap_or_default()),
+                        limits: m
+                            .limits
+                            .as_ref()
+                            .map(|l| serde_json::to_string(l).unwrap_or_default()),
                         joined_at: now.to_string(),
                         updated_at: now.to_string(),
                     };
 
                     // Create agent subdir
-                    let agent_dir = PathBuf::from(&ws.root_dir).join("agents").join(&m.agent_folder);
+                    let agent_dir = PathBuf::from(&ws.root_dir)
+                        .join("agents")
+                        .join(&m.agent_folder);
                     fs::create_dir_all(&agent_dir).ok();
 
                     db.insert_cowork_member(&member).ok();
@@ -1449,9 +1582,15 @@ impl CoworkManager {
                     for section in &board.sections {
                         let content = section.template.as_deref().unwrap_or("");
                         self.upsert_board_entry(
-                            db, &ws.id, &section.section_type, Some(&section.title),
-                            content, "system", now,
-                        ).ok();
+                            db,
+                            &ws.id,
+                            &section.section_type,
+                            Some(&section.title),
+                            content,
+                            "system",
+                            now,
+                        )
+                        .ok();
                     }
                 }
             }

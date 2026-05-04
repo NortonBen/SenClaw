@@ -134,12 +134,7 @@ pub trait AgentApi: Send + Sync {
     async fn broadcast_reply(&self, chat_jid: &str, text: &str, bot_token: Option<&str>);
 
     /// Process a prompt through the agent. Blocks until the agent finishes.
-    async fn process_and_wait(
-        &self,
-        jid: &str,
-        group: &GroupBinding,
-        prompt: &str,
-    ) -> Result<()>;
+    async fn process_and_wait(&self, jid: &str, group: &GroupBinding, prompt: &str) -> Result<()>;
 
     /// Destroy/cleanup agent state for a JID (after JID migration).
     async fn destroy(&self, jid: &str);

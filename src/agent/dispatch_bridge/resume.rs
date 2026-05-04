@@ -24,7 +24,10 @@ pub fn build_dispatch_resume_hint(
         "[System Note] You have previously dispatched the following tasks via dispatch_task. They are still running; do not recreate or redispatch them:".to_string(),
     ];
     for parent in &parents {
-        lines.push(format!("- Task group {} (goal: {})", parent.id, parent.goal));
+        lines.push(format!(
+            "- Task group {} (goal: {})",
+            parent.id, parent.goal
+        ));
         for task in &parent.tasks {
             let preview: String = task.prompt.chars().take(80).collect();
             lines.push(format!(
@@ -36,6 +39,8 @@ pub fn build_dispatch_resume_hint(
             ));
         }
     }
-    lines.push("You will be notified when these tasks complete. Please wait for results.".to_string());
+    lines.push(
+        "You will be notified when these tasks complete. Please wait for results.".to_string(),
+    );
     Some(lines.join("\n"))
 }

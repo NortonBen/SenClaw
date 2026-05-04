@@ -32,12 +32,7 @@ pub trait PermissionBridgeApi: Send + Sync {
     }
 
     /// Send a plain text message (fallback when buttons aren't supported).
-    fn send_message(
-        &self,
-        chat_jid: &str,
-        text: &str,
-        bot_token: Option<&str>,
-    ) -> Result<()> {
+    fn send_message(&self, chat_jid: &str, text: &str, bot_token: Option<&str>) -> Result<()> {
         Ok(())
     }
 

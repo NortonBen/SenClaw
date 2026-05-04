@@ -51,7 +51,10 @@ pub struct ModelConfiguration {
 
 impl Default for ModelConfiguration {
     fn default() -> Self {
-        Self { model_profiles: Vec::new(), model_pointers: ModelPointers::default() }
+        Self {
+            model_profiles: Vec::new(),
+            model_pointers: ModelPointers::default(),
+        }
     }
 }
 
@@ -103,7 +106,10 @@ impl ModelManager {
     /// Create a new instance backed by `config_path`.
     pub fn new(config_path: PathBuf) -> Self {
         let config = load_model_config(&config_path).unwrap_or_default();
-        Self { config: Mutex::new(config), config_path }
+        Self {
+            config: Mutex::new(config),
+            config_path,
+        }
     }
 
     // ------------------------------------------------------------------ read
@@ -144,9 +150,16 @@ impl ModelManager {
         let profile = model_profile_from_input(input);
         let mut cfg = self.config.lock().unwrap();
 
-        match cfg.model_profiles.iter().position(|p| p.name == profile.name) {
+        match cfg
+            .model_profiles
+            .iter()
+            .position(|p| p.name == profile.name)
+        {
             Some(idx) => {
-                info!("[ModelManager] updating existing profile '{}'", profile.name);
+                info!(
+                    "[ModelManager] updating existing profile '{}'",
+                    profile.name
+                );
                 cfg.model_profiles[idx] = profile;
             }
             None => {
@@ -224,7 +237,10 @@ impl ModelManager {
             .with_context(|| format!("quick model '{}'", task.quick))?;
         cfg.model_pointers.main = task.main.clone();
         cfg.model_pointers.quick = task.quick.clone();
-        info!("[ModelManager] main → '{}', quick → '{}'", task.main, task.quick);
+        info!(
+            "[ModelManager] main → '{}', quick → '{}'",
+            task.main, task.quick
+        );
         let data = build_update_data(&cfg);
         drop(cfg);
         self.save()?;
@@ -236,8 +252,7 @@ impl ModelManager {
     pub fn save(&self) -> Result<()> {
         let cfg = self.config.lock().unwrap();
         let dir = self.config_path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("create config dir {dir:?}"))?;
+        std::fs::create_dir_all(dir).with_context(|| format!("create config dir {dir:?}"))?;
         let json = serde_json::to_string_pretty(&*cfg)?;
         std::fs::write(&self.config_path, json)
             .with_context(|| format!("write model config {:?}", self.config_path))?;
@@ -441,7 +456,10 @@ mod tests {
         mgr.add_model(sample_input("small")).unwrap();
         mgr.switch_current_model("big").unwrap();
         let data = mgr
-            .apply_task_model_config(TaskConfig { main: "big".into(), quick: "small".into() })
+            .apply_task_model_config(TaskConfig {
+                main: "big".into(),
+                quick: "small".into(),
+            })
             .unwrap();
         assert_eq!(data.task_config.quick, "small");
     }

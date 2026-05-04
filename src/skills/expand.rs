@@ -85,7 +85,9 @@ fn read_skill_name(dir: &Path) -> Option<String> {
             if let Some(col) = line.find(':') {
                 let key = line[..col].trim();
                 if key == "name" {
-                    let val = line[col + 1..].trim().trim_matches(|c| c == '"' || c == '\'');
+                    let val = line[col + 1..]
+                        .trim()
+                        .trim_matches(|c| c == '"' || c == '\'');
                     return Some(val.to_string());
                 }
             }
@@ -124,7 +126,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("test-skill-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let md = dir.join("SKILL.md");
-        fs::write(&md, "---\nname: test-skill\ndescription: A test\n---\n\n# Body\n").unwrap();
+        fs::write(
+            &md,
+            "---\nname: test-skill\ndescription: A test\n---\n\n# Body\n",
+        )
+        .unwrap();
 
         let name = read_skill_name(&dir);
         assert_eq!(name, Some("test-skill".to_string()));

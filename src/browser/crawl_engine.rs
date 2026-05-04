@@ -87,9 +87,12 @@ impl CrawlEngine {
             }
 
             // Exclude pattern check
-            if job.config.exclude_patterns.iter().any(|p| {
-                regex_match(p, &url)
-            }) {
+            if job
+                .config
+                .exclude_patterns
+                .iter()
+                .any(|p| regex_match(p, &url))
+            {
                 continue;
             }
 
@@ -142,9 +145,7 @@ impl CrawlEngine {
     ) {
         let jobs = self.jobs.read().await;
         if let Some(job) = jobs.get(job_id) {
-            tracing::debug!(
-                "[CrawlEngine] Job {job_id}: {pages_crawled}/{pages_total} pages"
-            );
+            tracing::debug!("[CrawlEngine] Job {job_id}: {pages_crawled}/{pages_total} pages");
         }
     }
 

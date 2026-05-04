@@ -1,6 +1,6 @@
-pub mod workspaces;
-pub mod members;
 pub mod board;
-pub mod tasks;
+pub mod members;
 pub mod messages;
 pub mod recording;
+pub mod tasks;
+pub mod workspaces;

@@ -123,7 +123,11 @@ impl MemoryManager {
                     let files: Vec<_> = changed_files
                         .iter()
                         .map(|abs_path| {
-                            let source = if abs_path.contains("/memory/") { "memory" } else { "session" };
+                            let source = if abs_path.contains("/memory/") {
+                                "memory"
+                            } else {
+                                "session"
+                            };
                             (abs_path.clone(), source.to_string())
                         })
                         .collect();
@@ -138,7 +142,8 @@ impl MemoryManager {
             DirtyWork::SyncFiles(files) => {
                 for (abs_path, source) in &files {
                     let existing = self.get_file_record(abs_path, folder);
-                    self.sync_file(abs_path, folder, source, existing.as_ref()).await;
+                    self.sync_file(abs_path, folder, source, existing.as_ref())
+                        .await;
                 }
             }
             DirtyWork::FullRescan => {
@@ -159,12 +164,20 @@ impl MemoryManager {
     }
 
     /// Read a memory file fragment by path + line range.
-    pub fn read_file(&self, folder: &str, relative_path: &str, start_line: Option<u32>, end_line: Option<u32>) -> Option<String> {
+    pub fn read_file(
+        &self,
+        folder: &str,
+        relative_path: &str,
+        start_line: Option<u32>,
+        end_line: Option<u32>,
+    ) -> Option<String> {
         let abs_path = self.resolve_memory_path(folder, relative_path)?;
         let content = fs::read_to_string(&abs_path).ok()?;
         let lines: Vec<&str> = content.lines().collect();
         let start = start_line.unwrap_or(1).saturating_sub(1) as usize;
-        let end = end_line.map(|e| e.min(lines.len() as u32) as usize).unwrap_or(lines.len());
+        let end = end_line
+            .map(|e| e.min(lines.len() as u32) as usize)
+            .unwrap_or(lines.len());
         if start >= lines.len() {
             return Some(String::new());
         }
@@ -174,7 +187,9 @@ impl MemoryManager {
     /// Mark a folder as dirty; re-sync before next search.
     pub fn mark_dirty(&self, folder: &str, changed_file: Option<&str>) {
         let mut dirty = self.dirty.lock().unwrap();
-        let entry = dirty.entry(folder.to_string()).or_insert_with(|| Some(HashSet::new()));
+        let entry = dirty
+            .entry(folder.to_string())
+            .or_insert_with(|| Some(HashSet::new()));
         if let Some(ref mut files) = entry {
             if let Some(path) = changed_file {
                 files.insert(path.to_string());
@@ -210,7 +225,10 @@ impl MemoryManager {
         // MEMORY.md
         let memory_md = agent_dir.join("MEMORY.md");
         if memory_md.exists() {
-            disk_files.insert(memory_md.to_string_lossy().to_string(), (memory_md.to_string_lossy().to_string(), "memory"));
+            disk_files.insert(
+                memory_md.to_string_lossy().to_string(),
+                (memory_md.to_string_lossy().to_string(), "memory"),
+            );
         }
 
         // memory/*.md
@@ -226,12 +244,19 @@ impl MemoryManager {
             }
         }
 
-        tracing::info!("[MemoryManager] sync_folder({folder}): {} disk files found", disk_files.len());
+        tracing::info!(
+            "[MemoryManager] sync_folder({folder}): {} disk files found",
+            disk_files.len()
+        );
 
         // Compare with DB
         let db_files = self.list_files(folder);
-        let db_file_map: HashMap<&str, &FileRecord> = db_files.iter().map(|f| (f.path.as_str(), f)).collect();
-        tracing::info!("[MemoryManager] sync_folder({folder}): {} DB files, syncing...", db_files.len());
+        let db_file_map: HashMap<&str, &FileRecord> =
+            db_files.iter().map(|f| (f.path.as_str(), f)).collect();
+        tracing::info!(
+            "[MemoryManager] sync_folder({folder}): {} DB files, syncing...",
+            db_files.len()
+        );
 
         // Delete files no longer on disk
         for f in &db_files {
@@ -286,7 +311,9 @@ impl MemoryManager {
         // Chunk
         let raw_chunks = chunk_text(&content, self.chunker_options.clone());
         if raw_chunks.is_empty() {
-            tracing::warn!("[MemoryManager] sync_file: no chunks produced for {abs_path} (file may be empty)");
+            tracing::warn!(
+                "[MemoryManager] sync_file: no chunks produced for {abs_path} (file may be empty)"
+            );
             return;
         }
 
@@ -308,7 +335,11 @@ impl MemoryManager {
             folder,
             source,
             &hash,
-            stat.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0),
+            stat.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
             stat.len() as i64,
             &raw_chunks,
             &embeddings,
@@ -326,7 +357,10 @@ impl MemoryManager {
         chunks: &[crate::memory::chunker::Chunk],
         embeddings: &Option<Vec<Vec<f32>>>,
     ) {
-        let model = self.embedding_provider.as_ref().map(|p| p.model().to_string());
+        let model = self
+            .embedding_provider
+            .as_ref()
+            .map(|p| p.model().to_string());
 
         let _ = self.db.with_conn(|conn| {
             // Upsert file record
@@ -389,9 +423,8 @@ impl MemoryManager {
     fn remove_chunks(&self, abs_path: &str, folder: &str) {
         let _ = self.db.with_conn(|conn| {
             // Get chunk IDs to clean up vec table
-            let mut stmt = conn.prepare(
-                "SELECT id FROM memory_chunks WHERE path = ?1 AND folder = ?2"
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT id FROM memory_chunks WHERE path = ?1 AND folder = ?2")?;
             let ids: Vec<String> = stmt
                 .query_map(rusqlite::params![abs_path, folder], |row| row.get(0))?
                 .filter_map(|r| r.ok())
@@ -405,7 +438,10 @@ impl MemoryManager {
                         "DELETE FROM memory_chunks_vec WHERE chunk_id IN ({})",
                         placeholders.join(",")
                     );
-                    let params: Vec<&dyn rusqlite::types::ToSql> = batch.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+                    let params: Vec<&dyn rusqlite::types::ToSql> = batch
+                        .iter()
+                        .map(|s| s as &dyn rusqlite::types::ToSql)
+                        .collect();
                     let _ = conn.execute(&sql, params.as_slice());
                 }
             }
@@ -419,25 +455,27 @@ impl MemoryManager {
     }
 
     fn list_files(&self, folder: &str) -> Vec<FileRecord> {
-        self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+        self.db
+            .with_conn(|conn| {
+                let mut stmt = conn.prepare(
                 "SELECT path, folder, source, hash, mtime, size FROM memory_files WHERE folder = ?1"
             )?;
-            let records = stmt
-                .query_map(rusqlite::params![folder], |row| {
-                    Ok(FileRecord {
-                        path: row.get(0)?,
-                        folder: row.get(1)?,
-                        source: row.get(2)?,
-                        hash: row.get(3)?,
-                        mtime: row.get(4)?,
-                        size: row.get(5)?,
-                    })
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            Ok(records)
-        }).unwrap_or_default()
+                let records = stmt
+                    .query_map(rusqlite::params![folder], |row| {
+                        Ok(FileRecord {
+                            path: row.get(0)?,
+                            folder: row.get(1)?,
+                            source: row.get(2)?,
+                            hash: row.get(3)?,
+                            mtime: row.get(4)?,
+                            size: row.get(5)?,
+                        })
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(records)
+            })
+            .unwrap_or_default()
     }
 
     fn get_file_record(&self, abs_path: &str, folder: &str) -> Option<FileRecord> {
@@ -463,7 +501,10 @@ impl MemoryManager {
 
     fn start_watching(self: &Arc<Self>, folder: &str) {
         let token = CancellationToken::new();
-        self.watcher_tokens.lock().unwrap().insert(folder.to_string(), token.clone());
+        self.watcher_tokens
+            .lock()
+            .unwrap()
+            .insert(folder.to_string(), token.clone());
 
         let this = Arc::clone(self);
         let folder = folder.to_string();
@@ -488,7 +529,9 @@ impl MemoryManager {
 
                 // Check MEMORY.md
                 if let Ok(meta) = fs::metadata(&memory_md) {
-                    let mtime = meta.modified().ok()
+                    let mtime = meta
+                        .modified()
+                        .ok()
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
@@ -497,7 +540,13 @@ impl MemoryManager {
                         last_mtimes.insert(memory_md.clone(), mtime);
                         let source = "memory";
                         let existing = this.get_file_record(&memory_md.to_string_lossy(), &folder);
-                        this.sync_file(&memory_md.to_string_lossy(), &folder, source, existing.as_ref()).await;
+                        this.sync_file(
+                            &memory_md.to_string_lossy(),
+                            &folder,
+                            source,
+                            existing.as_ref(),
+                        )
+                        .await;
                     }
                 }
 
@@ -507,7 +556,9 @@ impl MemoryManager {
                         let path = entry.path();
                         if path.extension().map(|e| e == "md").unwrap_or(false) {
                             if let Ok(meta) = fs::metadata(&path) {
-                                let mtime = meta.modified().ok()
+                                let mtime = meta
+                                    .modified()
+                                    .ok()
                                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                                     .map(|d| d.as_millis() as i64)
                                     .unwrap_or(0);
@@ -517,7 +568,8 @@ impl MemoryManager {
                                     let abs = path.to_string_lossy().to_string();
                                     let source = "memory";
                                     let existing = this.get_file_record(&abs, &folder);
-                                    this.sync_file(&abs, &folder, source, existing.as_ref()).await;
+                                    this.sync_file(&abs, &folder, source, existing.as_ref())
+                                        .await;
                                 }
                             }
                         }
@@ -536,7 +588,9 @@ impl MemoryManager {
         let base = agent_dir.canonicalize().ok()?;
 
         let is_safe = |p: &Path| -> bool {
-            p.canonicalize().ok().map_or(false, |canon| canon.starts_with(&base))
+            p.canonicalize()
+                .ok()
+                .map_or(false, |canon| canon.starts_with(&base))
         };
 
         // Try direct join
@@ -565,7 +619,13 @@ pub fn format_search_results(results: &[SearchResult]) -> String {
     let mut lines = vec!["Relevant memories:".to_string()];
     for (i, r) in results.iter().enumerate() {
         let parts: Vec<&str> = r.path.split(&['/', '\\']).collect();
-        let display_path = parts.iter().rev().take(2).copied().collect::<Vec<_>>().join("/");
+        let display_path = parts
+            .iter()
+            .rev()
+            .take(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("/");
         lines.push(format!(
             "[{}] {}:{}-{} (score: {:.2})",
             i + 1,

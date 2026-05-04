@@ -39,10 +39,7 @@ pub fn format_messages_for_agent(messages: &[StoredMessage]) -> String {
 
 /// Load messages after the last agent timestamp for a group, and format for agent input.
 pub fn build_prompt_for_group(db: &Db, chat_jid: &str) -> (String, Option<String>) {
-    let since = db
-        .get_last_agent_timestamp(chat_jid)
-        .ok()
-        .flatten();
+    let since = db.get_last_agent_timestamp(chat_jid).ok().flatten();
     let messages = db
         .get_group_messages(chat_jid, since.as_deref())
         .unwrap_or_default();

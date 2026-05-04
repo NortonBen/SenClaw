@@ -48,7 +48,8 @@ impl Tool for WriteTool {
         input: &Value,
         _ctx: &ToolContext<'_>,
     ) -> std::result::Result<(), String> {
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if path.is_empty() {
@@ -57,30 +58,24 @@ impl Tool for WriteTool {
         Ok(())
     }
 
-    async fn call(
-        &self,
-        input: Value,
-        _ctx: &ToolContext<'_>,
-    ) -> Result<Vec<ToolOutput>> {
-        let path = input.get("file_path")
+    async fn call(&self, input: Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let content = input.get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
         let p = PathBuf::from(path);
 
         // Ensure parent directory exists
         if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create parent directory")?;
+            std::fs::create_dir_all(parent).context("Failed to create parent directory")?;
         }
 
-        std::fs::write(&p, content)
-            .context("Failed to write file")?;
+        std::fs::write(&p, content).context("Failed to write file")?;
 
-        let fname = p.file_name()
+        let fname = p
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string());
         let size = content.len();
@@ -95,20 +90,20 @@ impl Tool for WriteTool {
         }])
     }
 
-    fn gen_tool_result_message(
-        &self,
-        data: &Value,
-        _input: &Value,
-    ) -> ToolResultMessage {
+    fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         ToolResultMessage {
             title: "Write".into(),
-            summary: format!("{} bytes", data.get("size").and_then(|v| v.as_u64()).unwrap_or(0)),
+            summary: format!(
+                "{} bytes",
+                data.get("size").and_then(|v| v.as_u64()).unwrap_or(0)
+            ),
             content: data.clone(),
         }
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("file");
         let fname = std::path::Path::new(path)
@@ -120,7 +115,8 @@ impl Tool for WriteTool {
 
     fn gen_tool_permission(&self, input: &Value) -> Option<ToolPermissionInfo> {
         let title = self.get_display_title(input);
-        let path = input.get("file_path")
+        let path = input
+            .get("file_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 

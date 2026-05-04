@@ -82,11 +82,10 @@ pub(crate) fn parse_text_content(content: &str, message_type: &str) -> String {
 
 // ===== Mention handling =====
 
-pub(crate) fn check_bot_mention(
-    mentions: Option<&[serde_json::Value]>,
-    bot_open_id: &str,
-) -> bool {
-    let Some(mentions) = mentions else { return false };
+pub(crate) fn check_bot_mention(mentions: Option<&[serde_json::Value]>, bot_open_id: &str) -> bool {
+    let Some(mentions) = mentions else {
+        return false;
+    };
     if bot_open_id.is_empty() {
         return false;
     }
@@ -103,7 +102,9 @@ pub(crate) fn remove_bot_mention_placeholders(
     mentions: Option<&[serde_json::Value]>,
     bot_open_id: &str,
 ) -> String {
-    let Some(mentions) = mentions else { return text.to_string() };
+    let Some(mentions) = mentions else {
+        return text.to_string();
+    };
     if bot_open_id.is_empty() {
         return text.to_string();
     }

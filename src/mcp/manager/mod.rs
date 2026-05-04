@@ -8,10 +8,10 @@
 //! querying tools across all MCP servers regardless of origin.
 
 pub mod service;
-pub mod types;
-pub mod utils;
 #[cfg(test)]
 mod tests;
+pub mod types;
+pub mod utils;
 
 // Re-exports for external consumers
 pub use service::McpManager;

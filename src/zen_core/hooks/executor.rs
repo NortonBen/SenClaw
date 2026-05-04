@@ -28,7 +28,12 @@ pub struct ExecuteHooksOptions<'a> {
 
 impl Default for ExecuteHooksOptions<'_> {
     fn default() -> Self {
-        Self { env: HashMap::new(), cancel: None, client: None, profile: None }
+        Self {
+            env: HashMap::new(),
+            cancel: None,
+            client: None,
+            profile: None,
+        }
     }
 }
 
@@ -54,7 +59,9 @@ pub async fn execute_hooks(
         "[hooks] Executing {} hook(s) for event {:?}{}",
         hooks.len(),
         event,
-        input.match_query().map_or(String::new(), |q| format!(" (match: {q})")),
+        input
+            .match_query()
+            .map_or(String::new(), |q| format!(" (match: {q})")),
     );
 
     // Serialize input once
@@ -113,7 +120,10 @@ pub async fn execute_hooks(
             Err(e) => {
                 let msg = e.to_string();
                 info!("[hooks] Hook error: {msg}");
-                errors.push(HookError { hook: hook.clone(), error: msg });
+                errors.push(HookError {
+                    hook: hook.clone(),
+                    error: msg,
+                });
             }
         }
     }
@@ -131,12 +141,11 @@ async fn run_one_hook(
 ) -> anyhow::Result<HookOutput> {
     use super::types::HookType;
     match hook.hook_type {
-        HookType::Command => {
-            execute_command_hook(hook, input_json, env, cancel).await
-        }
+        HookType::Command => execute_command_hook(hook, input_json, env, cancel).await,
         HookType::Prompt => {
             let client = client.ok_or_else(|| anyhow::anyhow!("No HTTP client for prompt hook"))?;
-            let profile = profile.ok_or_else(|| anyhow::anyhow!("No model profile for prompt hook"))?;
+            let profile =
+                profile.ok_or_else(|| anyhow::anyhow!("No model profile for prompt hook"))?;
             execute_prompt_hook(hook, input_json, client, profile, cancel).await
         }
     }

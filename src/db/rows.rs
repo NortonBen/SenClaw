@@ -95,16 +95,16 @@ pub(crate) fn row_to_group(row: &Row<'_>) -> Result<GroupBinding> {
         folder: row.get("folder")?,
         name: row.get("name")?,
         channel: row.get::<_, Option<String>>("channel")?.unwrap_or_default(),
-        group_type: row.get::<_, Option<String>>("group_type")?.unwrap_or_else(|| "chat".to_string()),
+        group_type: row
+            .get::<_, Option<String>>("group_type")?
+            .unwrap_or_else(|| "chat".to_string()),
         is_admin: row.get::<_, i64>("is_admin")? != 0,
         requires_trigger: row.get::<_, i64>("requires_trigger")? != 0,
         allowed_tools: parse_json_array(row.get("allowed_tools")?),
         allowed_paths: parse_json_array(row.get("allowed_paths")?),
         allowed_work_dirs: parse_json_array(row.get("allowed_work_dirs")?),
         bot_token: row.get("bot_token")?,
-        max_messages: row
-            .get::<_, Option<i64>>("max_messages")?
-            .map(|n| n as u32),
+        max_messages: row.get::<_, Option<i64>>("max_messages")?.map(|n| n as u32),
         last_active: row.get("last_active")?,
         added_at: row.get("added_at")?,
     })
@@ -148,7 +148,9 @@ pub(crate) fn row_to_cowork_workspace(row: &Row<'_>) -> Result<CoworkWorkspace> 
         id: row.get("id")?,
         name: row.get("name")?,
         description: row.get("description")?,
-        status: row.get::<_, Option<String>>("status")?.unwrap_or_else(|| "active".into()),
+        status: row
+            .get::<_, Option<String>>("status")?
+            .unwrap_or_else(|| "active".into()),
         root_dir: row.get("root_dir")?,
         working_dir: row.get("working_dir")?,
         created_at: row.get("created_at")?,
@@ -198,10 +200,14 @@ pub(crate) fn row_to_cowork_task(row: &Row<'_>) -> Result<CoworkTask> {
         workspace_id: row.get("workspace_id")?,
         title: row.get("title")?,
         description: row.get("description")?,
-        status: row.get::<_, Option<String>>("status")?.unwrap_or_else(|| "todo".into()),
+        status: row
+            .get::<_, Option<String>>("status")?
+            .unwrap_or_else(|| "todo".into()),
         assignee: row.get("assignee")?,
         reviewer: row.get("reviewer")?,
-        priority: row.get::<_, Option<String>>("priority")?.unwrap_or_else(|| "medium".into()),
+        priority: row
+            .get::<_, Option<String>>("priority")?
+            .unwrap_or_else(|| "medium".into()),
         depends_on: row.get("depends_on")?,
         attachments: row.get("attachments")?,
         created_by: row.get("created_by")?,

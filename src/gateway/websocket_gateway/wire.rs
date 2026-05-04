@@ -22,15 +22,9 @@ pub(crate) struct GroupInfo {
     pub(crate) allowed_work_dirs: Option<Vec<String>>,
     #[serde(rename = "maxMessages")]
     pub(crate) max_messages: Option<u32>,
-    #[serde(
-        rename = "agentId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
     pub(crate) agent_id: Option<i64>,
-    #[serde(
-        rename = "channelId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "channelId", skip_serializing_if = "Option::is_none")]
     pub(crate) channel_id: Option<i64>,
 }
 

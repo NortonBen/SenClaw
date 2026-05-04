@@ -32,8 +32,13 @@ impl GroupQueue {
     }
 
     pub async fn enqueue(self: &Arc<Self>, jid: &str, task: BoxedTask) {
-        self.inner.queues.lock().await
-            .entry(jid.to_string()).or_default().push(task);
+        self.inner
+            .queues
+            .lock()
+            .await
+            .entry(jid.to_string())
+            .or_default()
+            .push(task);
 
         let was_idle = {
             let mut running = self.inner.running.lock().await;
@@ -56,7 +61,10 @@ impl GroupQueue {
         let mut queues = self.inner.queues.lock().await;
         if let Some(q) = queues.get_mut(jid) {
             if !q.is_empty() {
-                tracing::info!("[GroupQueue] Clearing {} pending task(s) for {jid}", q.len());
+                tracing::info!(
+                    "[GroupQueue] Clearing {} pending task(s) for {jid}",
+                    q.len()
+                );
                 q.clear();
             }
         }
@@ -64,33 +72,49 @@ impl GroupQueue {
 }
 
 /// Standalone drain loop — owns the Arc, so futures are 'static + Send.
-fn run_drain(gq: Arc<GroupQueue>, jid: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+fn run_drain(
+    gq: Arc<GroupQueue>,
+    jid: String,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
-    let permit = gq.semaphore.acquire().await.expect("semaphore closed");
+        let permit = gq.semaphore.acquire().await.expect("semaphore closed");
 
-    loop {
-        let next = {
-            let mut queues = gq.inner.queues.lock().await;
-            queues.get_mut(&jid)
-                .and_then(|q| if q.is_empty() { None } else { Some(q.remove(0)) })
-        };
+        loop {
+            let next = {
+                let mut queues = gq.inner.queues.lock().await;
+                queues.get_mut(&jid).and_then(|q| {
+                    if q.is_empty() {
+                        None
+                    } else {
+                        Some(q.remove(0))
+                    }
+                })
+            };
 
-        match next {
-            Some(task) => { task.await; }
-            None => break,
+            match next {
+                Some(task) => {
+                    task.await;
+                }
+                None => break,
+            }
         }
-    }
 
-    // Explicitly drop permit before mutating gq for re-scheduling
-    drop(permit);
-    gq.inner.running.lock().await.remove(&jid);
+        // Explicitly drop permit before mutating gq for re-scheduling
+        drop(permit);
+        gq.inner.running.lock().await.remove(&jid);
 
-    let has_more = gq.inner.queues.lock().await
-        .get(&jid).map(|q| !q.is_empty()).unwrap_or(false);
+        let has_more = gq
+            .inner
+            .queues
+            .lock()
+            .await
+            .get(&jid)
+            .map(|q| !q.is_empty())
+            .unwrap_or(false);
 
-    if has_more {
-        gq.inner.running.lock().await.insert(jid.clone(), true);
-        tokio::spawn(run_drain(gq, jid));
-    }
+        if has_more {
+            gq.inner.running.lock().await.insert(jid.clone(), true);
+            tokio::spawn(run_drain(gq, jid));
+        }
     })
 }

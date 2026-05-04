@@ -71,7 +71,5 @@ pub fn delete_qq_app(config_path: &Path, app_id: &str) -> Result<()> {
 }
 
 pub fn get_qq_apps(config_path: &Path) -> HashMap<String, QqAppConfig> {
-    load_global_config(config_path)
-        .qq_apps
-        .unwrap_or_default()
+    load_global_config(config_path).qq_apps.unwrap_or_default()
 }

@@ -27,17 +27,17 @@ use rusqlite::Connection;
 use crate::config::Config;
 
 mod helpers;
-mod schema;
 mod rows;
+mod schema;
 
-mod groups;
-mod messages;
-mod channels;
 mod agents;
 mod bindings;
-mod scheduled_tasks;
-mod router_state;
+mod channels;
 mod embedding;
+mod groups;
+mod messages;
+mod router_state;
+mod scheduled_tasks;
 
 pub mod cowork;
 
@@ -62,17 +62,21 @@ impl Db {
     /// Open a DB at an explicit path — used by tests + when callers want to
     /// override the configured location.
     pub fn open_at(path: &Path, config: &Config) -> Result<Self> {
-        let mut conn = Connection::open(path)
-            .with_context(|| format!("open sqlite {}", path.display()))?;
+        let mut conn =
+            Connection::open(path).with_context(|| format!("open sqlite {}", path.display()))?;
         Self::apply_pragmas_and_schema(&mut conn, config)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// In-memory DB. Used by integration tests and CLI dry-runs.
     pub fn open_in_memory(config: &Config) -> Result<Self> {
         let mut conn = Connection::open_in_memory()?;
         Self::apply_pragmas_and_schema(&mut conn, config)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn apply_pragmas_and_schema(conn: &mut Connection, config: &Config) -> Result<()> {
@@ -88,7 +92,10 @@ impl Db {
         f(&guard)
     }
 
-    pub(crate) fn with_conn_mut<R>(&self, f: impl FnOnce(&mut Connection) -> Result<R>) -> Result<R> {
+    pub(crate) fn with_conn_mut<R>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<R>,
+    ) -> Result<R> {
         let mut guard = self.conn.lock().expect("db mutex poisoned");
         f(&mut guard)
     }

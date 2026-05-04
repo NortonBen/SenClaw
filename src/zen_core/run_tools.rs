@@ -12,11 +12,11 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use super::*;
 use super::hooks::{
-    self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput, HookInputBase,
-    HookManager, PostToolUseInput, PreToolUseInput,
+    self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput, HookInputBase, HookManager,
+    PostToolUseInput, PreToolUseInput,
 };
+use super::*;
 
 /// Abstract permission checker — injected by the engine so RunTools doesn't
 /// need to know about PermissionManager internals.
@@ -87,7 +87,9 @@ pub async fn run_tools(
     // Determine if all tools are read-only
     let all_read_only = tool_uses.iter().all(|tu| {
         if let ContentBlock::ToolUse { name, .. } = tu {
-            ctx.tools.iter().any(|t| t.name() == name && t.is_read_only())
+            ctx.tools
+                .iter()
+                .any(|t| t.name() == name && t.is_read_only())
         } else {
             false
         }
@@ -241,7 +243,8 @@ async fn run_single_tool(
                     profile: ctx.hook_profile.as_ref(),
                     ..Default::default()
                 },
-            ).await;
+            )
+            .await;
 
             if result.blocked {
                 let reason = result.reason.unwrap_or_else(|| "Blocked by hook".into());
@@ -273,7 +276,11 @@ async fn run_single_tool(
             return vec![create_tool_result_stop(&tool_id)];
         }
 
-        match ctx.permission_checker.check(tool.as_ref(), &input, cancel, ctx.agent_id).await {
+        match ctx
+            .permission_checker
+            .check(tool.as_ref(), &input, cancel, ctx.agent_id)
+            .await
+        {
             Ok(true) => {
                 // Permission granted — proceed
             }
@@ -342,7 +349,8 @@ async fn run_single_tool(
                                         profile: ctx.hook_profile.as_ref(),
                                         ..Default::default()
                                     },
-                                ).await;
+                                )
+                                .await;
                             }
                         }
 
@@ -378,11 +386,16 @@ async fn run_single_tool(
 // ============================================================================
 
 /// Validate tool input against the tool's JSON Schema.
-fn validate_tool_input(tool: &Arc<dyn Tool>, input: &serde_json::Value) -> std::result::Result<(), String> {
+fn validate_tool_input(
+    tool: &Arc<dyn Tool>,
+    input: &serde_json::Value,
+) -> std::result::Result<(), String> {
     let schema = tool.input_schema();
 
     // If schema is empty or just {}, skip validation
-    if schema.is_null() || (schema.is_object() && schema.as_object().map_or(false, |o| o.is_empty())) {
+    if schema.is_null()
+        || (schema.is_object() && schema.as_object().map_or(false, |o| o.is_empty()))
+    {
         return Ok(());
     }
 
@@ -391,7 +404,9 @@ fn validate_tool_input(tool: &Arc<dyn Tool>, input: &serde_json::Value) -> std::
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
         for field in required {
             if let Some(field_name) = field.as_str() {
-                if input.get(field_name).is_none() || input.get(field_name) == Some(&serde_json::Value::Null) {
+                if input.get(field_name).is_none()
+                    || input.get(field_name) == Some(&serde_json::Value::Null)
+                {
                     return Err(format!("Missing required field: {field_name}"));
                 }
             }
@@ -412,8 +427,12 @@ mod tests {
     struct TestReadTool;
     #[async_trait::async_trait]
     impl Tool for TestReadTool {
-        fn name(&self) -> &str { "read" }
-        fn description(&self) -> &str { "Read a file" }
+        fn name(&self) -> &str {
+            "read"
+        }
+        fn description(&self) -> &str {
+            "Read a file"
+        }
         fn input_schema(&self) -> serde_json::Value {
             serde_json::json!({
                 "type": "object",
@@ -423,24 +442,44 @@ mod tests {
                 "required": ["path"]
             })
         }
-        fn is_read_only(&self) -> bool { true }
-        async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        fn is_read_only(&self) -> bool {
+            true
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> Result<Vec<ToolOutput>> {
             Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({"content": "hello"}),
                 result_for_assistant: "hello".into(),
             }])
         }
-        fn gen_tool_result_message(&self, _data: &serde_json::Value, _input: &serde_json::Value) -> ToolResultMessage {
-            ToolResultMessage { title: "Read".into(), summary: "Read file".into(), content: serde_json::json!({}) }
+        fn gen_tool_result_message(
+            &self,
+            _data: &serde_json::Value,
+            _input: &serde_json::Value,
+        ) -> ToolResultMessage {
+            ToolResultMessage {
+                title: "Read".into(),
+                summary: "Read file".into(),
+                content: serde_json::json!({}),
+            }
         }
-        fn get_display_title(&self, _input: &serde_json::Value) -> String { "Read file".into() }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            "Read file".into()
+        }
     }
 
     struct TestWriteTool;
     #[async_trait::async_trait]
     impl Tool for TestWriteTool {
-        fn name(&self) -> &str { "write" }
-        fn description(&self) -> &str { "Write a file" }
+        fn name(&self) -> &str {
+            "write"
+        }
+        fn description(&self) -> &str {
+            "Write a file"
+        }
         fn input_schema(&self) -> serde_json::Value {
             serde_json::json!({
                 "type": "object",
@@ -451,20 +490,39 @@ mod tests {
                 "required": ["path", "content"]
             })
         }
-        fn is_read_only(&self) -> bool { false }
-        async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> Result<Vec<ToolOutput>> {
             Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({"written": true}),
                 result_for_assistant: "written".into(),
             }])
         }
-        fn gen_tool_result_message(&self, _data: &serde_json::Value, _input: &serde_json::Value) -> ToolResultMessage {
-            ToolResultMessage { title: "Write".into(), summary: "Wrote file".into(), content: serde_json::json!({}) }
+        fn gen_tool_result_message(
+            &self,
+            _data: &serde_json::Value,
+            _input: &serde_json::Value,
+        ) -> ToolResultMessage {
+            ToolResultMessage {
+                title: "Write".into(),
+                summary: "Wrote file".into(),
+                content: serde_json::json!({}),
+            }
         }
-        fn get_display_title(&self, _input: &serde_json::Value) -> String { "Write file".into() }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            "Write file".into()
+        }
     }
 
-    fn test_ctx<'a>(tools: &'a [Arc<dyn Tool>], checker: &'a dyn PermissionChecker) -> RunContext<'a> {
+    fn test_ctx<'a>(
+        tools: &'a [Arc<dyn Tool>],
+        checker: &'a dyn PermissionChecker,
+    ) -> RunContext<'a> {
         RunContext {
             agent_id: "main",
             working_dir: "/tmp",
@@ -496,10 +554,14 @@ mod tests {
             },
             &cancel,
             &ctx,
-        ).await;
+        )
+        .await;
 
         assert_eq!(results.len(), 1);
-        if let ContentBlock::ToolResult { content, is_error, .. } = &results[0] {
+        if let ContentBlock::ToolResult {
+            content, is_error, ..
+        } = &results[0]
+        {
             assert!(!is_error);
             assert_eq!(content, "hello");
         } else {
@@ -521,10 +583,14 @@ mod tests {
             },
             &cancel,
             &ctx,
-        ).await;
+        )
+        .await;
 
         assert_eq!(results.len(), 1);
-        if let ContentBlock::ToolResult { content, is_error, .. } = &results[0] {
+        if let ContentBlock::ToolResult {
+            content, is_error, ..
+        } = &results[0]
+        {
             assert!(*is_error);
             assert!(content.contains("No such tool"));
         } else {
@@ -547,7 +613,8 @@ mod tests {
             },
             &cancel,
             &ctx,
-        ).await;
+        )
+        .await;
 
         assert_eq!(results.len(), 1);
         if let ContentBlock::ToolResult { is_error, .. } = &results[0] {
@@ -573,7 +640,8 @@ mod tests {
             },
             &cancel,
             &ctx,
-        ).await;
+        )
+        .await;
 
         assert_eq!(results.len(), 1);
         if let ContentBlock::ToolResult { content, .. } = &results[0] {

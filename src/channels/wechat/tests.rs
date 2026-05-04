@@ -2,8 +2,8 @@ use crate::channels::Channel;
 
 use super::channel::WeChatChannel;
 use super::helpers::{
-    extract_text, jid_to_user_id, markdown_to_plain, split_text, user_id_to_jid,
-    ITEM_TYPE_IMAGE, ITEM_TYPE_TEXT, ITEM_TYPE_VOICE,
+    extract_text, jid_to_user_id, markdown_to_plain, split_text, user_id_to_jid, ITEM_TYPE_IMAGE,
+    ITEM_TYPE_TEXT, ITEM_TYPE_VOICE,
 };
 use super::types::{WeixinMessageItem, WeixinTextItem};
 

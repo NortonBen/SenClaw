@@ -92,13 +92,8 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
             gq.enqueue(
                 &jid_key,
                 Box::pin(async move {
-                    let _ = types::AgentApi::process_and_wait(
-                        agent_pool.as_ref(),
-                        &jid,
-                        &g,
-                        &t,
-                    )
-                    .await;
+                    let _ =
+                        types::AgentApi::process_and_wait(agent_pool.as_ref(), &jid, &g, &t).await;
                 }),
             )
             .await;
@@ -360,8 +355,8 @@ fn wire_app_channel_controls(
     db_channel_id: i64,
 ) {
     use channels::app::{
-        CTRL_AGENT_LIST_RESP, CTRL_AGENT_LIST_REQ, CTRL_AGENT_SELECT,
-        CTRL_HISTORY_REQ, CTRL_HISTORY_RESP,
+        CTRL_AGENT_LIST_REQ, CTRL_AGENT_LIST_RESP, CTRL_AGENT_SELECT, CTRL_HISTORY_REQ,
+        CTRL_HISTORY_RESP,
     };
 
     let app_for_cb = Arc::clone(app);
@@ -1050,9 +1045,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             agent_pool: agent_pool.clone(),
         });
 
-        let browser_relay = Arc::new(
-            gateway::websocket_gateway::BrowserRelay::new(),
-        );
+        let browser_relay = Arc::new(gateway::websocket_gateway::BrowserRelay::new());
 
         let ws_state = Arc::new(gateway::websocket_gateway::WsState {
             config: Arc::new(cfg.clone()),
@@ -1106,7 +1099,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 tokio::spawn(async move {
                     gw.broadcast_to_all(&serde_json::json!({
                         "type": "cowork:changed",
-                    })).await;
+                    }))
+                    .await;
                 });
             }));
         }
@@ -1136,11 +1130,46 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             let db = Arc::clone(&db);
             dispatch_bridge.set_send_to_agent(Arc::new(
                 move |jid: &str, task_id: &str, prompt: &str, workspace_dir: &str| {
-                    let Some(binding) = gm.get(&db, jid) else {
-                        tracing::warn!(
-                            "[DispatchBridge] send_to_agent: no binding for {jid}, dropping task {task_id}"
-                        );
-                        return;
+                    tracing::info!(
+                        "[DispatchBridge] send_to_agent: jid={jid} task={task_id} ws={workspace_dir} prompt_len={}",
+                        prompt.len()
+                    );
+                    let binding: types::GroupBinding = match gm.get(&db, jid) {
+                        Some(b) => b,
+                        None => {
+                            // Cowork agents don't have GroupManager entries — their
+                            // JID is synthetic (cowork:{ws_id}:{member_id}). Build a
+                            // GroupBinding on the fly so the agent can execute.
+                            if jid.starts_with("cowork:") {
+                                let parts: Vec<&str> = jid.splitn(3, ':').collect();
+                                let member_id = parts.get(2).unwrap_or(&"agent");
+                                types::GroupBinding {
+                                    jid: jid.to_string(),
+                                    folder: member_id.to_string(),
+                                    name: format!("cowork-{member_id}"),
+                                    channel: "web".to_string(),
+                                    group_type: "cowork".to_string(),
+                                    is_admin: false,
+                                    requires_trigger: false,
+                                    allowed_tools: None,
+                                    allowed_paths: None,
+                                    allowed_work_dirs: if workspace_dir.is_empty() {
+                                        None
+                                    } else {
+                                        Some(vec![workspace_dir.to_string()])
+                                    },
+                                    bot_token: None,
+                                    max_messages: None,
+                                    last_active: None,
+                                    added_at: chrono::Utc::now().to_rfc3339(),
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "[DispatchBridge] send_to_agent: no binding for {jid}, dropping task {task_id}"
+                                );
+                                return;
+                            }
+                        }
                     };
                     if !workspace_dir.is_empty() {
                         pool.set_dispatch_workspace(jid, workspace_dir);

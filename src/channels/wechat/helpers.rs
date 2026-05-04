@@ -94,7 +94,10 @@ pub(crate) fn save_account(account_id: &str, data: &WeixinAccountData) {
 
 pub(crate) fn load_sync_buf(account_id: &str) -> String {
     let p = sync_buf_path(account_id);
-    std::fs::read_to_string(&p).unwrap_or_default().trim().to_string()
+    std::fs::read_to_string(&p)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 pub(crate) fn save_sync_buf(account_id: &str, buf: &str) {

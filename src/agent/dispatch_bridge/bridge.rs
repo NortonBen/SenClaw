@@ -6,15 +6,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use crate::agent::persona_registry::PersonaRegistry;
-use crate::agent::virtual_worker_pool::VirtualWorkerPool;
-use crate::types::GroupBinding;
 use super::dag::{build_augmented_prompt, is_ready};
 use super::locks::{acquire_lock, lock_path_for};
 use super::types::{
     AdminActivityCallback, DispatchAgent, DispatchParent, DispatchState, DispatchTask,
     DispatchTaskStatus,
 };
+use crate::agent::persona_registry::PersonaRegistry;
+use crate::agent::virtual_worker_pool::VirtualWorkerPool;
+use crate::types::GroupBinding;
 
 // ===== Real DispatchBridge =====
 
@@ -26,8 +26,7 @@ pub type WsNotifyCallback = Arc<dyn Fn(&serde_json::Value) + Send + Sync>;
 /// Callback invoked when the scheduler decides a task is ready to run.
 /// Arguments: `(jid, task_id, augmented_prompt, workspace_dir)`. An empty
 /// `workspace_dir` means "do not switch the sub-agent's working directory".
-pub type SendToAgentCallback =
-    Arc<dyn Fn(&str, &str, &str, &str) + Send + Sync>;
+pub type SendToAgentCallback = Arc<dyn Fn(&str, &str, &str, &str) + Send + Sync>;
 
 /// Callback invoked when the last in-flight dispatch task on `jid` finishes,
 /// so the sub-agent can be restored to its own working directory.
@@ -327,7 +326,9 @@ impl DispatchBridge {
 
     pub(super) fn add_active_task(&self, task_id: &str, jid: &str) {
         let mut inner = self.inner.lock().unwrap();
-        inner.active_tasks.insert(task_id.to_string(), jid.to_string());
+        inner
+            .active_tasks
+            .insert(task_id.to_string(), jid.to_string());
         inner
             .active_agent_tasks
             .entry(jid.to_string())
@@ -592,9 +593,12 @@ impl DispatchBridge {
             let last = self.last_notified_parents_json.lock().unwrap();
             if parents_json != *last {
                 drop(last);
+                let task_count = state.parents.iter().map(|p| p.tasks.len()).sum::<usize>();
                 tracing::info!(
-                    "[DispatchBridge] External state change detected ({} parent(s))",
-                    state.parents.len()
+                    "[DispatchBridge] External state change detected parents={} tasks={} — \
+                     broadcasting dispatch:update from daemon",
+                    state.parents.len(),
+                    task_count
                 );
                 if let Some(cb) = self.ws_notify.lock().unwrap().as_ref() {
                     let v = serde_json::to_value(&state.parents).unwrap_or(serde_json::Value::Null);
@@ -617,7 +621,9 @@ impl DispatchBridge {
                 if task.status != DispatchTaskStatus::Processing || task.is_virtual {
                     continue;
                 }
-                let Some(deadline_str) = &task.timeout_at else { continue };
+                let Some(deadline_str) = &task.timeout_at else {
+                    continue;
+                };
                 let Ok(deadline) = chrono::DateTime::parse_from_rfc3339(deadline_str) else {
                     continue;
                 };
@@ -704,7 +710,9 @@ impl DispatchBridge {
             };
             let max = {
                 let reg = registry.lock().unwrap();
-                let Some(p) = reg.get(persona_name) else { return false };
+                let Some(p) = reg.get(persona_name) else {
+                    return false;
+                };
                 p.max_concurrent
             };
             return pool.get_active_count(persona_name) < max;
@@ -719,9 +727,8 @@ impl DispatchBridge {
         let augmented = build_augmented_prompt(parent, task);
         let started_at = chrono::Utc::now();
         let started_at_iso = started_at.to_rfc3339();
-        let timeout_at_iso = (started_at
-            + chrono::Duration::seconds(task.timeout_seconds as i64))
-        .to_rfc3339();
+        let timeout_at_iso =
+            (started_at + chrono::Duration::seconds(task.timeout_seconds as i64)).to_rfc3339();
 
         let task_id = task.id.clone();
         let task_label = task.label.clone();
@@ -769,9 +776,7 @@ impl DispatchBridge {
             let (Some(pool), Some(registry)) = (pool, registry) else {
                 self.mark_task_error(
                     &task.id,
-                    &format!(
-                        "Virtual agent setup error: persona \"{persona_name}\" not available"
-                    ),
+                    &format!("Virtual agent setup error: persona \"{persona_name}\" not available"),
                 );
                 return;
             };
@@ -809,7 +814,9 @@ impl DispatchBridge {
                 let outcome = pool
                     .run(&persona, &augmented, &cwd, Some(&task_id), timeout)
                     .await;
-                let Some(arc) = weak.and_then(|w| w.upgrade()) else { return };
+                let Some(arc) = weak.and_then(|w| w.upgrade()) else {
+                    return;
+                };
                 match outcome {
                     Ok(r) => arc.mark_task_done(&task_id, &r.result),
                     Err(e) => arc.mark_task_error(&task_id, &e.to_string()),
@@ -879,7 +886,9 @@ impl DispatchBridge {
                 if p.status != "done" {
                     return true;
                 }
-                let Some(ts) = &p.completed_at else { return true };
+                let Some(ts) = &p.completed_at else {
+                    return true;
+                };
                 let Ok(completed) = chrono::DateTime::parse_from_rfc3339(ts) else {
                     return true;
                 };

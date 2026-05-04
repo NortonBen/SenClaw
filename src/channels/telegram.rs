@@ -64,7 +64,11 @@ fn split_message(text: &str) -> Vec<String> {
     parts
 }
 
-fn check_mention(text: &str, entities: &[teloxide::types::MessageEntity], bot_username: &str) -> bool {
+fn check_mention(
+    text: &str,
+    entities: &[teloxide::types::MessageEntity],
+    bot_username: &str,
+) -> bool {
     let lower_bot = format!("@{}", bot_username.to_lowercase());
     for entity in entities {
         if entity.kind == teloxide::types::MessageEntityKind::Mention {
@@ -141,13 +145,10 @@ impl TelegramChannel {
         let bot = Bot::with_client(token, http_client);
 
         // Fetch bot info with timeout
-        let me = tokio::time::timeout(
-            Duration::from_secs(BOT_INIT_TIMEOUT_SECS),
-            bot.get_me(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("bot.init() timed out"))?
-        .context("getMe failed")?;
+        let me = tokio::time::timeout(Duration::from_secs(BOT_INIT_TIMEOUT_SECS), bot.get_me())
+            .await
+            .map_err(|_| anyhow::anyhow!("bot.init() timed out"))?
+            .context("getMe failed")?;
 
         let username = me.username.clone().unwrap_or_default();
         let bot_user_id = me.id.0 as u64;
@@ -172,7 +173,15 @@ impl TelegramChannel {
         let username_clone = username.clone();
 
         tokio::spawn(async move {
-            listen_loop(bot, token_owned, username_clone, bot_user_id, handlers, meta_handlers).await;
+            listen_loop(
+                bot,
+                token_owned,
+                username_clone,
+                bot_user_id,
+                handlers,
+                meta_handlers,
+            )
+            .await;
         });
 
         tracing::info!("[TelegramChannel] Bot @{username} started");
@@ -295,7 +304,11 @@ impl Channel for TelegramChannel {
     fn get_bot_username(&self, bot_token: Option<&str>) -> Option<String> {
         // Use try_lock to avoid blocking; returns None if lock is contended.
         let token = bot_token.unwrap_or(&self.default_token);
-        self.bots.try_lock().ok()?.get(token).map(|e| e.username.clone())
+        self.bots
+            .try_lock()
+            .ok()?
+            .get(token)
+            .map(|e| e.username.clone())
     }
 
     async fn send_with_buttons(
@@ -363,7 +376,9 @@ impl Channel for TelegramChannel {
         // Spawn typing indicator loop
         tokio::spawn(async move {
             loop {
-                let _ = bot.send_chat_action(Recipient::Id(chat_id), ChatAction::Typing).await;
+                let _ = bot
+                    .send_chat_action(Recipient::Id(chat_id), ChatAction::Typing)
+                    .await;
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(TYPING_INTERVAL_SECS)) => {},
                     _ = &mut rx => break,
@@ -393,7 +408,13 @@ async fn listen_loop(
 
     let mut offset: i32 = 0;
     loop {
-        let updates = match bot.get_updates().offset(offset).timeout(POLL_TIMEOUT_SECS as u32).send().await {
+        let updates = match bot
+            .get_updates()
+            .offset(offset)
+            .timeout(POLL_TIMEOUT_SECS as u32)
+            .send()
+            .await
+        {
             Ok(u) => u,
             Err(e) => {
                 tracing::warn!("[TelegramChannel] getUpdates error for @{bot_username}: {e}");

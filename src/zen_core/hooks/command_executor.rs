@@ -2,9 +2,9 @@
 //!
 //! Port of TS `hooks/CommandExecutor.ts`.
 
-use std::collections::HashMap;
 #[cfg(unix)]
 use libc;
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use tokio::io::AsyncWriteExt;
@@ -112,7 +112,10 @@ pub async fn execute_command_hook(
     match serde_json::from_str::<HookOutput>(trimmed) {
         Ok(output) => Ok(output),
         Err(e) => {
-            warn!("[hooks] Command stdout was not valid JSON ({e}): {}", &trimmed[..trimmed.len().min(100)]);
+            warn!(
+                "[hooks] Command stdout was not valid JSON ({e}): {}",
+                &trimmed[..trimmed.len().min(100)]
+            );
             Ok(HookOutput {
                 response: Some(trimmed.to_string()),
                 ..Default::default()

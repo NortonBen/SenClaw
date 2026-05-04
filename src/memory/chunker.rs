@@ -152,10 +152,7 @@ mod tests {
     fn splits_when_over_chunk_size() {
         // 10 lines of 20 words each = 200 tokens; chunk_size=50 forces splits.
         let line: String = (0..20).map(|i| format!("w{i} ")).collect();
-        let text = (0..10)
-            .map(|_| line.trim())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = (0..10).map(|_| line.trim()).collect::<Vec<_>>().join("\n");
         let chunks = chunk_text(
             &text,
             ChunkerOptions {

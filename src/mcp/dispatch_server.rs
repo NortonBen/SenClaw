@@ -45,12 +45,13 @@ impl FsPersonaResolver {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "md") {
-                    let mut name = path.file_stem()
+                    let mut name = path
+                        .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("unknown")
                         .to_owned();
                     let mut description = String::from("(no description)");
-                    
+
                     if let Ok(content) = fs::read_to_string(&path) {
                         let mut in_frontmatter = false;
                         let mut found_fm = false;
@@ -67,11 +68,18 @@ impl FsPersonaResolver {
                             }
                             if in_frontmatter {
                                 if trimmed.starts_with("name:") {
-                                    name = trimmed["name:".len()..].trim().trim_matches(&['"', '\''][..]).to_owned();
+                                    name = trimmed["name:".len()..]
+                                        .trim()
+                                        .trim_matches(&['"', '\''][..])
+                                        .to_owned();
                                 } else if trimmed.starts_with("description:") {
-                                    description = trimmed["description:".len()..].trim().trim_matches(&['"', '\''][..]).to_owned();
+                                    description = trimmed["description:".len()..]
+                                        .trim()
+                                        .trim_matches(&['"', '\''][..])
+                                        .to_owned();
                                 }
-                            } else if !found_fm && !trimmed.is_empty() && !trimmed.starts_with('#') {
+                            } else if !found_fm && !trimmed.is_empty() && !trimmed.starts_with('#')
+                            {
                                 description = trimmed.trim_matches(&['"', '\''][..]).to_owned();
                                 break;
                             }
@@ -122,7 +130,24 @@ impl DispatchServer {
     }
 
     fn modify_state(&self, f: impl FnOnce(&mut DispatchState)) {
-        let _ = crate::agent::dispatch_bridge::modify_state_file(&self.state_path, f);
+        match crate::agent::dispatch_bridge::modify_state_file(&self.state_path, f) {
+            Ok(state) => {
+                let task_count = state.parents.iter().map(|p| p.tasks.len()).sum::<usize>();
+                tracing::info!(
+                    "[McpDispatchServer] wrote dispatch state path={} parents={} tasks={} \
+                     (daemon DispatchBridge will broadcast on next poll)",
+                    self.state_path.display(),
+                    state.parents.len(),
+                    task_count
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[McpDispatchServer] failed to write dispatch state path={}: {e}",
+                    self.state_path.display()
+                );
+            }
+        }
     }
 
     fn next_id(state: &mut DispatchState, prefix: char) -> String {
@@ -142,11 +167,7 @@ impl DispatchServer {
             .map(|s| s.to_owned())
     }
 
-    fn resolve_agent(
-        &self,
-        state: &DispatchState,
-        agent_name: &str,
-    ) -> Option<ResolvedAgent> {
+    fn resolve_agent(&self, state: &DispatchState, agent_name: &str) -> Option<ResolvedAgent> {
         // persona:{name} format
         if let Some(persona_name) = agent_name.strip_prefix("persona:") {
             if self.persona_resolver.as_ref()?.get(persona_name).is_some() {
@@ -161,14 +182,16 @@ impl DispatchServer {
         }
 
         let lower = agent_name.to_lowercase();
-        state.agents.iter().find(|a| {
-            a.name.to_lowercase() == lower || a.id.to_lowercase() == lower
-        }).map(|a| ResolvedAgent {
-            id: a.id.clone(),
-            jid: a.jid.clone(),
-            is_virtual: false,
-            persona_name: None,
-        })
+        state
+            .agents
+            .iter()
+            .find(|a| a.name.to_lowercase() == lower || a.id.to_lowercase() == lower)
+            .map(|a| ResolvedAgent {
+                id: a.id.clone(),
+                jid: a.jid.clone(),
+                is_virtual: false,
+                persona_name: None,
+            })
     }
 
     // ===== DAG cycle detection (DFS) =====
@@ -224,10 +247,7 @@ impl DispatchServer {
                 } else {
                     a.channel.as_str()
                 };
-                lines.push(format!(
-                    "- {} (id: {}, channel: {})",
-                    a.name, a.id, channel
-                ));
+                lines.push(format!("- {} (id: {}, channel: {})", a.name, a.id, channel));
             }
         }
 
@@ -277,7 +297,12 @@ impl DispatchServer {
             } else {
                 label_set.insert(label.clone());
             }
-            normalized.push((label, t.agent_name.clone(), t.prompt.clone(), t.depends_on.clone()));
+            normalized.push((
+                label,
+                t.agent_name.clone(),
+                t.prompt.clone(),
+                t.depends_on.clone(),
+            ));
         }
 
         // Validate dependsOn references
@@ -294,7 +319,11 @@ impl DispatchServer {
         if !errors.is_empty() {
             return ToolResult::err(format!(
                 "Error:\n{}",
-                errors.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n")
+                errors
+                    .iter()
+                    .map(|e| format!("  - {e}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ));
         }
 
@@ -334,9 +363,10 @@ impl DispatchServer {
             parent_id = Self::next_id(s, 'p');
             let now = chrono::Utc::now().to_rfc3339();
 
-            let has_active = s.parents.iter().any(
-                |p| p.admin_folder == self.admin_folder && p.status == "active",
-            );
+            let has_active = s
+                .parents
+                .iter()
+                .any(|p| p.admin_folder == self.admin_folder && p.status == "active");
             is_queued = has_active;
 
             let parent = DispatchParent {
@@ -382,7 +412,11 @@ impl DispatchServer {
         if !errors.is_empty() {
             return ToolResult::err(format!(
                 "Error:\n{}",
-                errors.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n")
+                errors
+                    .iter()
+                    .map(|e| format!("  - {e}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ));
         }
 
@@ -404,6 +438,12 @@ impl DispatchServer {
         } else {
             "Status: ACTIVE (starting immediately)"
         };
+        tracing::info!(
+            "[McpDispatchServer] create_parent parent_id={parent_id} status={} tasks={} goal_len={}",
+            if is_queued { "queued" } else { "active" },
+            normalized.len(),
+            goal.len()
+        );
 
         ToolResult::ok(format!(
             "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
@@ -422,7 +462,8 @@ impl DispatchServer {
     ) -> ToolResult {
         let start_task = {
             let state = self.read_state();
-            state.parents
+            state
+                .parents
                 .iter()
                 .find(|p| p.id == parent_id)
                 .and_then(|p| p.tasks.iter().find(|t| t.label == task_label))
@@ -575,18 +616,26 @@ impl McpDispatchServer {
         self.inner().list_agents().content
     }
 
-    #[rmcp::tool(description = "Create a parent dispatch with multiple tasks. Returns parent ID and task labels for dispatch_task calls.")]
+    #[rmcp::tool(
+        description = "Create a parent dispatch with multiple tasks. Returns parent ID and task labels for dispatch_task calls."
+    )]
     fn create_parent(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CreateParentParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CreateParentParams,
+        >,
     ) -> String {
-        self.inner().create_parent(&p.goal, p.tasks, p.timeout_seconds).content
+        self.inner()
+            .create_parent(&p.goal, p.tasks, p.timeout_seconds)
+            .content
     }
 
     #[rmcp::tool(description = "Dispatch a task within a parent and wait for its result")]
     async fn dispatch_task(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<DispatchTaskParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            DispatchTaskParams,
+        >,
     ) -> String {
         self.inner()
             .dispatch_task(&p.parent_id, &p.task_label, p.timeout_seconds)

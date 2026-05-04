@@ -19,15 +19,15 @@ use crate::channels::{Channel, MessageCallback, MetadataCallback};
 use crate::types::{ChatType, IncomingMessage, InlineButton};
 
 use super::api::run_qr_login;
+use super::helpers::PendingMenuEntry;
 use super::helpers::{
     extract_text, jid_to_user_id, load_account, load_context_tokens, load_sync_buf,
     markdown_to_plain, random_hex, random_wechat_uin, save_account, save_context_tokens,
-    save_sync_buf, split_text, user_id_to_jid, BACKOFF_DELAY_SECS,
-    DEFAULT_API_TIMEOUT_MS, DEFAULT_BASE_URL, DEFAULT_LONG_POLL_TIMEOUT_MS,
-    MAX_CONSECUTIVE_FAILURES, MENU_TTL_SECS, MSG_STATE_FINISH, MSG_TYPE_BOT, MSG_TYPE_USER,
-    RETRY_DELAY_SECS, SESSION_EXPIRED_ERRCODE, WECHAT_MAX_LEN, ITEM_TYPE_TEXT,
+    save_sync_buf, split_text, user_id_to_jid, BACKOFF_DELAY_SECS, DEFAULT_API_TIMEOUT_MS,
+    DEFAULT_BASE_URL, DEFAULT_LONG_POLL_TIMEOUT_MS, ITEM_TYPE_TEXT, MAX_CONSECUTIVE_FAILURES,
+    MENU_TTL_SECS, MSG_STATE_FINISH, MSG_TYPE_BOT, MSG_TYPE_USER, RETRY_DELAY_SECS,
+    SESSION_EXPIRED_ERRCODE, WECHAT_MAX_LEN,
 };
-use super::helpers::PendingMenuEntry;
 use super::types::{
     GetUpdatesResponse, MessageItem, SendMessageMsg, SendMessageRequest, TextItem,
     WeixinAccountData,
@@ -100,9 +100,8 @@ impl WeChatChannel {
                         }
                     }
 
-                    let is_api_error =
-                        resp.ret.map_or(false, |r| r != 0)
-                            || resp.errcode.map_or(false, |e| e != 0);
+                    let is_api_error = resp.ret.map_or(false, |r| r != 0)
+                        || resp.errcode.map_or(false, |e| e != 0);
 
                     if is_api_error {
                         if resp.errcode == Some(SESSION_EXPIRED_ERRCODE)
@@ -184,12 +183,17 @@ impl WeChatChannel {
                             );
 
                             let incoming = IncomingMessage {
-                                id: msg
-                                    .message_id
-                                    .map(|mid| mid.to_string())
-                                    .unwrap_or_else(|| {
-                                        format!("{from_user_id}-{}", std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_millis())
-                                    }),
+                                id: msg.message_id.map(|mid| mid.to_string()).unwrap_or_else(
+                                    || {
+                                        format!(
+                                            "{from_user_id}-{}",
+                                            std::time::UNIX_EPOCH
+                                                .elapsed()
+                                                .unwrap_or_default()
+                                                .as_millis()
+                                        )
+                                    },
+                                ),
                                 chat_jid: chat_jid.clone(),
                                 sender_jid: chat_jid.clone(),
                                 sender_name: sender_name.to_string(),
@@ -266,11 +270,7 @@ impl WeChatChannel {
         serde_json::from_str(&text).with_context(|| format!("parse getUpdates: {text}"))
     }
 
-    async fn send_message_internal(
-        &self,
-        chat_jid: &str,
-        text: &str,
-    ) -> Result<()> {
+    async fn send_message_internal(&self, chat_jid: &str, text: &str) -> Result<()> {
         let token = {
             let guard = self.token.lock().await;
             guard
@@ -297,7 +297,14 @@ impl WeChatChannel {
 
         let plain = markdown_to_plain(text);
         for chunk in split_text(&plain, WECHAT_MAX_LEN) {
-            let client_id = format!("senclaw-{}-{}", std::time::UNIX_EPOCH.elapsed().unwrap_or_default().as_millis(), random_hex(4));
+            let client_id = format!(
+                "senclaw-{}-{}",
+                std::time::UNIX_EPOCH
+                    .elapsed()
+                    .unwrap_or_default()
+                    .as_millis(),
+                random_hex(4)
+            );
             let body = SendMessageRequest {
                 msg: SendMessageMsg {
                     from_user_id: String::new(),
@@ -307,9 +314,7 @@ impl WeChatChannel {
                     message_state: MSG_STATE_FINISH,
                     item_list: vec![MessageItem {
                         item_type: ITEM_TYPE_TEXT,
-                        text_item: Some(TextItem {
-                            text: chunk,
-                        }),
+                        text_item: Some(TextItem { text: chunk }),
                     }],
                     context_token: Some(context_token.clone()),
                 },
@@ -514,7 +519,10 @@ impl Channel for WeChatChannel {
         tracing::info!(
             "[WeChatChannel] Connected (accountId={} baseUrl={})",
             self.account_id,
-            { let g = self.base_url.lock().await; g.clone() }
+            {
+                let g = self.base_url.lock().await;
+                g.clone()
+            }
         );
         Ok(())
     }
@@ -585,24 +593,66 @@ impl Channel for WeChatChannel {
 // Delegate Channel trait for Arc<WeChatChannel> so polling can own an Arc clone.
 #[async_trait]
 impl Channel for Arc<WeChatChannel> {
-    fn id(&self) -> &'static str { self.as_ref().id() }
-    async fn connect(&self) -> Result<()> { self.as_ref().connect().await }
-    async fn disconnect(&self) -> Result<()> { self.as_ref().disconnect().await }
-    fn is_connected(&self) -> bool { self.as_ref().is_connected() }
-    async fn send_message(&self, chat_jid: &str, text: &str, bot_token: Option<&str>) -> Result<()> {
+    fn id(&self) -> &'static str {
+        self.as_ref().id()
+    }
+    async fn connect(&self) -> Result<()> {
+        self.as_ref().connect().await
+    }
+    async fn disconnect(&self) -> Result<()> {
+        self.as_ref().disconnect().await
+    }
+    fn is_connected(&self) -> bool {
+        self.as_ref().is_connected()
+    }
+    async fn send_message(
+        &self,
+        chat_jid: &str,
+        text: &str,
+        bot_token: Option<&str>,
+    ) -> Result<()> {
         self.as_ref().send_message(chat_jid, text, bot_token).await
     }
-    async fn send_file(&self, chat_jid: &str, file_path: &str, caption: Option<&str>, bot_token: Option<&str>) -> Result<()> {
-        self.as_ref().send_file(chat_jid, file_path, caption, bot_token).await
+    async fn send_file(
+        &self,
+        chat_jid: &str,
+        file_path: &str,
+        caption: Option<&str>,
+        bot_token: Option<&str>,
+    ) -> Result<()> {
+        self.as_ref()
+            .send_file(chat_jid, file_path, caption, bot_token)
+            .await
     }
-    fn owns_jid(&self, chat_jid: &str) -> bool { self.as_ref().owns_jid(chat_jid) }
-    fn on_message(&self, handler: MessageCallback) { self.as_ref().on_message(handler) }
-    fn on_metadata(&self, handler: MetadataCallback) { self.as_ref().on_metadata(handler) }
-    fn get_bot_username(&self, bot_token: Option<&str>) -> Option<String> { self.as_ref().get_bot_username(bot_token) }
-    async fn send_with_buttons(&self, chat_jid: &str, text: &str, buttons: &[InlineButton], bot_token: Option<&str>) -> Result<()> {
-        self.as_ref().send_with_buttons(chat_jid, text, buttons, bot_token).await
+    fn owns_jid(&self, chat_jid: &str) -> bool {
+        self.as_ref().owns_jid(chat_jid)
     }
-    async fn set_typing(&self, chat_jid: &str, active: bool, bot_token: Option<&str>) -> Result<()> {
+    fn on_message(&self, handler: MessageCallback) {
+        self.as_ref().on_message(handler)
+    }
+    fn on_metadata(&self, handler: MetadataCallback) {
+        self.as_ref().on_metadata(handler)
+    }
+    fn get_bot_username(&self, bot_token: Option<&str>) -> Option<String> {
+        self.as_ref().get_bot_username(bot_token)
+    }
+    async fn send_with_buttons(
+        &self,
+        chat_jid: &str,
+        text: &str,
+        buttons: &[InlineButton],
+        bot_token: Option<&str>,
+    ) -> Result<()> {
+        self.as_ref()
+            .send_with_buttons(chat_jid, text, buttons, bot_token)
+            .await
+    }
+    async fn set_typing(
+        &self,
+        chat_jid: &str,
+        active: bool,
+        bot_token: Option<&str>,
+    ) -> Result<()> {
         self.as_ref().set_typing(chat_jid, active, bot_token).await
     }
 }

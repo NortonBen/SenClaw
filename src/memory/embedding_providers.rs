@@ -39,17 +39,27 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: String) -> Self {
-        Self { client: build_client().expect("reqwest"), api_key, base_url }
+        Self {
+            client: build_client().expect("reqwest"),
+            api_key,
+            base_url,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for OpenAiProvider {
-    fn name(&self) -> &str { "openai" }
+    fn name(&self) -> &str {
+        "openai"
+    }
 
-    fn model(&self) -> &str { "text-embedding-3-small" }
+    fn model(&self) -> &str {
+        "text-embedding-3-small"
+    }
 
-    fn dimensions(&self) -> u32 { 1536 }
+    fn dimensions(&self) -> u32 {
+        1536
+    }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut all: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
@@ -94,8 +104,8 @@ impl OpenAiProvider {
 
             match res {
                 Ok(r) if r.status().is_success() => {
-                    let body: OpenAiResponse = r.json().await
-                        .context("parse OpenAI embedding response")?;
+                    let body: OpenAiResponse =
+                        r.json().await.context("parse OpenAI embedding response")?;
                     let mut sorted = body.data;
                     sorted.sort_by_key(|d| d.index);
                     return Ok(sorted.into_iter().map(|d| d.embedding).collect());
@@ -111,8 +121,7 @@ impl OpenAiProvider {
                 }
                 Err(e) => {
                     if attempt < MAX_RETRIES - 1 {
-                        sleep(jitter_ms(attempt))
-                        .await;
+                        sleep(jitter_ms(attempt)).await;
                         continue;
                     }
                     return Err(e.into());
@@ -147,16 +156,24 @@ impl OpenRouterProvider {
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for OpenRouterProvider {
-    fn name(&self) -> &str { "openrouter" }
+    fn name(&self) -> &str {
+        "openrouter"
+    }
 
-    fn model(&self) -> &str { &self.model }
+    fn model(&self) -> &str {
+        &self.model
+    }
 
-    fn dimensions(&self) -> u32 { *self.dims.lock().unwrap() }
+    fn dimensions(&self) -> u32 {
+        *self.dims.lock().unwrap()
+    }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut out = Vec::with_capacity(texts.len());
         for t in texts {
-            let vec = Self::embed_single(&self.client, &self.api_key, &self.base_url, &self.model, t).await?;
+            let vec =
+                Self::embed_single(&self.client, &self.api_key, &self.base_url, &self.model, t)
+                    .await?;
             if out.is_empty() && !vec.is_empty() {
                 *self.dims.lock().unwrap() = vec.len() as u32;
             }
@@ -186,9 +203,15 @@ impl OpenRouterProvider {
 
             match res {
                 Ok(r) if r.status().is_success() => {
-                    let body: OpenAiResponse = r.json().await
+                    let body: OpenAiResponse = r
+                        .json()
+                        .await
                         .context("parse OpenRouter embedding response")?;
-                    return Ok(body.data.first().map(|d| d.embedding.clone()).unwrap_or_default());
+                    return Ok(body
+                        .data
+                        .first()
+                        .map(|d| d.embedding.clone())
+                        .unwrap_or_default());
                 }
                 Ok(r) => {
                     let status = r.status();
@@ -201,8 +224,7 @@ impl OpenRouterProvider {
                 }
                 Err(e) => {
                     if attempt < MAX_RETRIES - 1 {
-                        sleep(jitter_ms(attempt))
-                        .await;
+                        sleep(jitter_ms(attempt)).await;
                         continue;
                     }
                     return Err(e.into());
@@ -240,17 +262,24 @@ struct OllamaResponse {
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for OllamaProvider {
-    fn name(&self) -> &str { "ollama" }
+    fn name(&self) -> &str {
+        "ollama"
+    }
 
-    fn model(&self) -> &str { &self.model }
+    fn model(&self) -> &str {
+        &self.model
+    }
 
-    fn dimensions(&self) -> u32 { *self.dims.lock().unwrap() }
+    fn dimensions(&self) -> u32 {
+        *self.dims.lock().unwrap()
+    }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut out = Vec::with_capacity(texts.len());
         for t in texts {
             let url = format!("{}/api/embeddings", self.base_url.trim_end_matches('/'));
-            let res = self.client
+            let res = self
+                .client
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .json(&serde_json::json!({ "model": self.model, "prompt": t }))
@@ -277,8 +306,12 @@ impl EmbeddingProvider for OllamaProvider {
 
 fn normalize_ollama_model(model: &str) -> String {
     let t = model.trim();
-    if t.is_empty() { return "nomic-embed-text".into(); }
-    if let Some(stripped) = t.strip_prefix("ollama/") { return stripped.to_owned(); }
+    if t.is_empty() {
+        return "nomic-embed-text".into();
+    }
+    if let Some(stripped) = t.strip_prefix("ollama/") {
+        return stripped.to_owned();
+    }
     if regex::Regex::new(r"(?i)^(text-embedding-3|text-embedding-ada|embedding.*openai)")
         .unwrap()
         .is_match(t)
@@ -315,9 +348,7 @@ pub struct LocalProvider {
     /// Lazily initialised ONNX session. The field only exists when the feature
     /// is enabled so the crate compiles without fastembed in the dep graph.
     #[cfg(feature = "local-embed")]
-    engine: std::sync::Arc<
-        tokio::sync::OnceCell<std::sync::Arc<fastembed::TextEmbedding>>,
-    >,
+    engine: std::sync::Arc<tokio::sync::OnceCell<std::sync::Arc<fastembed::TextEmbedding>>>,
 }
 
 impl LocalProvider {
@@ -361,14 +392,26 @@ impl LocalProvider {
 /// large → 1024, base → 768, everything else (small/MiniLM) → 384.
 fn local_dims_hint(model: &str) -> u32 {
     let m = model.to_lowercase();
-    if m.contains("large") { 1024 } else if m.contains("base") { 768 } else { 384 }
+    if m.contains("large") {
+        1024
+    } else if m.contains("base") {
+        768
+    } else {
+        384
+    }
 }
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for LocalProvider {
-    fn name(&self) -> &str { "local" }
-    fn model(&self) -> &str { &self.model }
-    fn dimensions(&self) -> u32 { self.dims }
+    fn name(&self) -> &str {
+        "local"
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    fn dimensions(&self) -> u32 {
+        self.dims
+    }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         embed_local(self, texts).await
@@ -401,7 +444,9 @@ async fn embed_local(p: &LocalProvider, texts: &[String]) -> Result<Vec<Vec<f32>
     let texts = texts.to_vec();
     // Run inference on a blocking thread — ONNX Runtime is CPU-bound.
     tokio::task::spawn_blocking(move || {
-        engine.embed(texts, None).map_err(|e| anyhow::anyhow!("{e}"))
+        engine
+            .embed(texts, None)
+            .map_err(|e| anyhow::anyhow!("{e}"))
     })
     .await
     .context("spawn_blocking panicked during embed")?
@@ -443,7 +488,9 @@ pub(super) mod local_onnx {
         let opts = InitOptions::new(em)
             .with_cache_dir(cache_dir)
             .with_show_download_progress(true);
-        tracing::info!("[LocalEmbed] Loading '{model_name}' (downloads on first run to ~/.senclaw/models/)");
+        tracing::info!(
+            "[LocalEmbed] Loading '{model_name}' (downloads on first run to ~/.senclaw/models/)"
+        );
         TextEmbedding::try_new(opts).map_err(|e| anyhow::anyhow!("{e}"))
     }
 
@@ -511,8 +558,8 @@ pub(super) mod local_onnx {
             bail!("No ONNX model found in '{path}'. Expected 'model.onnx' or 'onnx/model.onnx'.");
         };
 
-        let onnx_file = fs::read(&onnx_path)
-            .with_context(|| format!("Cannot read {}", onnx_path.display()))?;
+        let onnx_file =
+            fs::read(&onnx_path).with_context(|| format!("Cannot read {}", onnx_path.display()))?;
 
         let read_opt = |name: &str| -> Vec<u8> { fs::read(dir.join(name)).unwrap_or_default() };
 

@@ -68,14 +68,18 @@ impl BrowserBridge {
         let ext_addr = format!("127.0.0.1:{}", self.ext_port);
         let ext_listener = tokio::net::TcpListener::bind(&ext_addr)
             .await
-            .context(format!("[BrowserBridge] Failed to bind extension port {ext_addr}"))?;
+            .context(format!(
+                "[BrowserBridge] Failed to bind extension port {ext_addr}"
+            ))?;
         tracing::info!("[BrowserBridge] Extension listener on ws://{ext_addr}");
 
         // Start internal MCP listener
         let int_addr = format!("127.0.0.1:{}", self.int_port);
         let int_listener = tokio::net::TcpListener::bind(&int_addr)
             .await
-            .context(format!("[BrowserBridge] Failed to bind internal port {int_addr}"))?;
+            .context(format!(
+                "[BrowserBridge] Failed to bind internal port {int_addr}"
+            ))?;
         tracing::info!("[BrowserBridge] Internal MCP listener on ws://{int_addr}");
 
         // Spawn extension accept loop
@@ -93,7 +97,9 @@ impl BrowserBridge {
                             let ws = match tokio_tungstenite::accept_async(stream).await {
                                 Ok(ws) => ws,
                                 Err(e) => {
-                                    tracing::error!("[BrowserBridge] Extension WS upgrade failed: {e}");
+                                    tracing::error!(
+                                        "[BrowserBridge] Extension WS upgrade failed: {e}"
+                                    );
                                     continue;
                                 }
                             };
@@ -198,15 +204,14 @@ impl BrowserBridge {
                                         // Try DaemonMessage (MCP client request)
                                         match serde_json::from_str::<DaemonMessage>(&text_str) {
                                             Ok(dm) => {
-                                                let response =
-                                                    relay_mcp_request(
-                                                        &ext_tx_clone,
-                                                        &pending_clone,
-                                                        &tabs_clone,
-                                                        &crawl_clone,
-                                                        dm,
-                                                    )
-                                                    .await;
+                                                let response = relay_mcp_request(
+                                                    &ext_tx_clone,
+                                                    &pending_clone,
+                                                    &tabs_clone,
+                                                    &crawl_clone,
+                                                    dm,
+                                                )
+                                                .await;
 
                                                 let resp_json = serde_json::to_string(&response)
                                                     .unwrap_or_else(|e| {
@@ -287,9 +292,7 @@ impl BrowserBridge {
 
         if !sent {
             self.pending.lock().await.remove(&request_id);
-            return Err(anyhow::anyhow!(
-                "[BrowserBridge] Extension not connected"
-            ));
+            return Err(anyhow::anyhow!("[BrowserBridge] Extension not connected"));
         }
 
         // Wait for response with timeout
@@ -429,10 +432,7 @@ async fn relay_mcp_request(
 
     // Wait for response with timeout
     match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-        Ok(Ok(result)) => ExtensionMessage::Response {
-            request_id,
-            result,
-        },
+        Ok(Ok(result)) => ExtensionMessage::Response { request_id, result },
         Ok(Err(_)) => ExtensionMessage::Response {
             request_id,
             result: ActionResult::Error {
@@ -528,7 +528,9 @@ async fn handle_extension_message(
             pages_total,
             current_url,
         } => {
-            crawl_engine.update_progress(&job_id, pages_crawled, pages_total, &current_url).await;
+            crawl_engine
+                .update_progress(&job_id, pages_crawled, pages_total, &current_url)
+                .await;
         }
         ExtensionMessage::CrawlResult {
             job_id,

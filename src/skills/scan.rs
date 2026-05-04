@@ -81,7 +81,10 @@ fn parse_frontmatter(content: &str) -> HashMap<String, String> {
     for line in fm.lines() {
         if let Some(col) = line.find(':') {
             let key = line[..col].trim().to_string();
-            let val = line[col + 1..].trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+            let val = line[col + 1..]
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_string();
             if !key.is_empty() {
                 result.insert(key, val);
             }

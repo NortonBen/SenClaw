@@ -54,14 +54,24 @@ impl BindingManager {
                     anyhow::bail!(
                         "Channel '{}' (platform: {}) already has an agent bound. \
                          Only Senclaw Connector channels support multiple bindings.",
-                        ch.name, ch.platform_type
+                        ch.name,
+                        ch.platform_type
                     );
                 }
             }
         }
-        let id = db.insert_binding(jid, agent_id, channel_id, is_admin, bot_token_override, max_messages, now)?;
+        let id = db.insert_binding(
+            jid,
+            agent_id,
+            channel_id,
+            is_admin,
+            bot_token_override,
+            max_messages,
+            now,
+        )?;
         self.fire_changed();
-        db.get_binding(id)?.ok_or_else(|| anyhow::anyhow!("Binding {id} not found after insert"))
+        db.get_binding(id)?
+            .ok_or_else(|| anyhow::anyhow!("Binding {id} not found after insert"))
     }
 
     pub fn get(&self, db: &Db, id: i64) -> Result<Option<Binding>> {
@@ -106,12 +116,7 @@ impl BindingManager {
 
     /// Complete a pending binding (jid=NULL) when the first message arrives.
     /// Returns the now-complete Binding if found and updated.
-    pub fn complete_pending(
-        &self,
-        db: &Db,
-        channel_id: i64,
-        jid: &str,
-    ) -> Result<Option<Binding>> {
+    pub fn complete_pending(&self, db: &Db, channel_id: i64, jid: &str) -> Result<Option<Binding>> {
         let pending = db.get_pending_bindings_for_channel(channel_id)?;
         if let Some(b) = pending.into_iter().next() {
             db.complete_pending_binding(b.id, jid)?;
@@ -123,12 +128,7 @@ impl BindingManager {
 
     /// Complete all pending (jid=NULL) bindings for a channel by assigning the real JID.
     /// Returns the number of rows updated.
-    pub fn complete_pending_new_model(
-        &self,
-        db: &Db,
-        channel_id: i64,
-        jid: &str,
-    ) -> Result<usize> {
+    pub fn complete_pending_new_model(&self, db: &Db, channel_id: i64, jid: &str) -> Result<usize> {
         let pending = db.get_pending_bindings_for_channel(channel_id)?;
         let mut count = 0;
         for b in pending {

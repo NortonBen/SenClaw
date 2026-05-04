@@ -35,9 +35,15 @@ impl CachedEmbeddingProvider {
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for CachedEmbeddingProvider {
-    fn name(&self) -> &str { self.inner.name() }
-    fn model(&self) -> &str { self.inner.model() }
-    fn dimensions(&self) -> u32 { self.inner.dimensions() }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn model(&self) -> &str {
+        self.inner.model()
+    }
+    fn dimensions(&self) -> u32 {
+        self.inner.dimensions()
+    }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut results: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
@@ -45,7 +51,10 @@ impl EmbeddingProvider for CachedEmbeddingProvider {
 
         for (i, text) in texts.iter().enumerate() {
             let hash = text_hash(text);
-            if let Ok(Some(buf)) = self.db.get_cached_embedding(self.name(), self.model(), &hash) {
+            if let Ok(Some(buf)) = self
+                .db
+                .get_cached_embedding(self.name(), self.model(), &hash)
+            {
                 if buf.len() % 4 == 0 {
                     let floats: Vec<f32> = buf
                         .chunks_exact(4)
@@ -68,9 +77,10 @@ impl EmbeddingProvider for CachedEmbeddingProvider {
 
                 let hash = text_hash(text);
                 let buf: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
-                if let Err(e) = self.db.insert_cached_embedding(
-                    self.name(), self.model(), &hash, &buf,
-                ) {
+                if let Err(e) =
+                    self.db
+                        .insert_cached_embedding(self.name(), self.model(), &hash, &buf)
+                {
                     tracing::warn!(error = %e, "[Embedding] cache insert failed");
                 }
             }
@@ -117,7 +127,9 @@ pub fn create_embedding_provider(
 
     if provider == EmbeddingProviderKind::Openrouter {
         let api_key = if config.memory.openrouter_api_key.is_empty() {
-            tracing::warn!("[Embedding] Falling back to FTS-only: openrouter selected but no API key");
+            tracing::warn!(
+                "[Embedding] Falling back to FTS-only: openrouter selected but no API key"
+            );
             return None;
         } else {
             config.memory.openrouter_api_key.clone()

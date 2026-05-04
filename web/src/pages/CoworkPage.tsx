@@ -3,7 +3,7 @@ import {
   Typography, Button, Card, Space, Tag, Modal, Form, Input, Select,
   Breadcrumb, Layout, Flex, Tabs, Badge, Avatar, Tooltip, Popconfirm,
   Empty, Dropdown, List, Divider, message, Spin, Segmented, Upload, Statistic,
-  Row, Col, Progress
+  Row, Col, Progress, Steps, Timeline, Collapse
 } from 'antd';
 import {
   PlusOutlined, TeamOutlined, ProjectOutlined, MessageOutlined,
@@ -13,8 +13,10 @@ import {
   RobotOutlined, SendOutlined, ReloadOutlined, MoreOutlined,
   BugOutlined, ArrowRightOutlined, InboxOutlined,
   FileOutlined, FileTextOutlined, FolderOutlined, FolderOpenOutlined, DownloadOutlined, UploadOutlined, PaperClipOutlined,
-  LaptopOutlined, CloudOutlined
+  LaptopOutlined, CloudOutlined, BranchesOutlined, LoadingOutlined,
+  NodeIndexOutlined, ApartmentOutlined
 } from '@ant-design/icons';
+import type { DispatchParent, DispatchTask as DTask } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -198,6 +200,16 @@ export function CoworkPage() {
   }, [api]);
 
   useEffect(() => { loadWorkspaces(); loadTemplates(); }, [loadWorkspaces, loadTemplates]);
+
+  // Auto-refresh when cowork:changed events arrive via WebSocket
+  useEffect(() => {
+    if (selectedWs) {
+      loadTasks(selectedWs.id);
+      loadMessages(selectedWs.id);
+      loadBoard(selectedWs.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws.coworkChanged]);
 
   // Compute workspace file entries at current navigation depth
   const wsEntries = useMemo(() => {
@@ -814,6 +826,126 @@ export function CoworkPage() {
                         />
                         <Button icon={<SendOutlined />} onClick={handleSendMessage} disabled={!msgText.trim()}>Send</Button>
                       </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'workflow',
+                  label: <Space><BranchesOutlined />Active Workflow {
+                    (() => {
+                      const wsDispatchParents = (ws.dispatchParents || []).filter(p =>
+                        p.sharedWorkspace && selectedWs && p.sharedWorkspace.includes(selectedWs.id));
+                      const activeCount = wsDispatchParents.filter(p => p.status === 'active' || p.status === 'queued').length;
+                      return activeCount > 0 ? <Badge count={activeCount} size="small" style={{ marginLeft: 4 }} /> : null;
+                    })()
+                  }</Space>,
+                  children: (
+                    <div style={{ overflowY: 'auto', padding: 16, height: 'calc(100vh - 180px)' }}>
+                      {loading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
+                        (() => {
+                          // Show dispatch parents whose shared workspace matches the selected workspace
+                          const wsDispatchParents = (ws.dispatchParents || []).filter(p => {
+                            if (!p.sharedWorkspace || !selectedWs) return false;
+                            return p.sharedWorkspace.includes(selectedWs.id) || p.sharedWorkspace === selectedWs.rootDir;
+                          });
+                          if (wsDispatchParents.length === 0) {
+                            return (
+                              <Empty description={
+                                <Space direction="vertical" size={4}>
+                                  <Text>No active workflows</Text>
+                                  <Text type="secondary" style={{ fontSize: 11 }}>
+                                    Send a message to kick off a multi-agent workflow
+                                  </Text>
+                                </Space>
+                              } />
+                            );
+                          }
+                          const STATUS_TAG: Record<string, string> = {
+                            queued: 'default', active: 'processing', done: 'success',
+                          };
+                          const TASK_STATUS_TAG: Record<string, string> = {
+                            registered: 'default', processing: 'processing',
+                            done: 'success', error: 'error', timeout: 'warning',
+                          };
+                          return wsDispatchParents.map((parent: DispatchParent) => (
+                            <Card
+                              key={parent.id}
+                              size="small"
+                              title={
+                                <Space>
+                                  <Tag color={STATUS_TAG[parent.status] || 'default'}>{parent.status}</Tag>
+                                  <Text strong style={{ fontSize: 13 }}>{parent.goal.slice(0, 80)}{parent.goal.length > 80 ? '...' : ''}</Text>
+                                </Space>
+                              }
+                              extra={
+                                <Space size={4}>
+                                  <Text type="secondary" style={{ fontSize: 10 }}>
+                                    {parent.tasks.filter(t => t.status === 'done').length}/{parent.tasks.length} done
+                                  </Text>
+                                  <Progress
+                                    percent={parent.tasks.length > 0 ? Math.round(parent.tasks.filter(t => t.status === 'done').length / parent.tasks.length * 100) : 0}
+                                    size="small"
+                                    style={{ width: 60 }}
+                                    showInfo={false}
+                                  />
+                                </Space>
+                              }
+                              style={{ marginBottom: 12, borderRadius: 10 }}
+                            >
+                              <Timeline
+                                items={parent.tasks.map((task: DTask) => {
+                                  let color: string = 'gray';
+                                  let dot: React.ReactNode = <ClockCircleOutlined />;
+                                  if (task.status === 'processing') { color = '#1890ff'; dot = <LoadingOutlined />; }
+                                  if (task.status === 'done') { color = '#52c41a'; dot = <CheckCircleOutlined />; }
+                                  if (task.status === 'error') { color = '#ff4d4f'; dot = <ExclamationCircleOutlined />; }
+                                  if (task.status === 'timeout') { color = '#faad14'; dot = <ClockCircleOutlined />; }
+                                  return {
+                                    color,
+                                    dot,
+                                    children: (
+                                      <div key={task.id} style={{ marginLeft: 4 }}>
+                                        <Flex justify="space-between" align="center">
+                                          <Space size={4}>
+                                            <Text style={{ fontSize: 12 }}>{task.label}</Text>
+                                            <Tag color={TASK_STATUS_TAG[task.status] || 'default'} style={{ fontSize: 10, lineHeight: '16px' }}>
+                                              {task.status}
+                                            </Tag>
+                                          </Space>
+                                          <Space size={4}>
+                                            {task.agentId && (
+                                              <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                                                <RobotOutlined style={{ fontSize: 9 }} /> {task.agentId}
+                                              </Tag>
+                                            )}
+                                            {task.dependsOn.length > 0 && (
+                                              <Tooltip title={`Depends on: ${task.dependsOn.join(', ')}`}>
+                                                <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px' }}>
+                                                  <ApartmentOutlined style={{ fontSize: 9 }} /> {task.dependsOn.length}
+                                                </Tag>
+                                              </Tooltip>
+                                            )}
+                                          </Space>
+                                        </Flex>
+                                        {task.result && (
+                                          <Text type="secondary" style={{ fontSize: 11, marginTop: 2, display: 'block' }}>
+                                            {task.result.slice(0, 120)}{task.result.length > 120 ? '...' : ''}
+                                          </Text>
+                                        )}
+                                      </div>
+                                    ),
+                                  };
+                                })}
+                              />
+                              <div style={{ marginTop: 4 }}>
+                                <Text type="secondary" style={{ fontSize: 10 }}>
+                                  Parent: {parent.id} | Admin: {parent.adminFolder} | Created: {parent.createdAt ? new Date(parent.createdAt).toLocaleTimeString() : '-'}
+                                </Text>
+                              </div>
+                            </Card>
+                          ));
+                        })()
+                      )}
                     </div>
                   ),
                 },

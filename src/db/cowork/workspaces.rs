@@ -23,26 +23,60 @@ impl super::super::Db {
 
     pub fn get_cowork_workspace(&self, id: &str) -> Result<Option<CoworkWorkspace>> {
         self.with_conn(|c| {
-            c.query_row("SELECT * FROM cowork_workspaces WHERE id=?1", params![id], |r| Ok(row_to_cowork_workspace(r)))
-                .optional()?.transpose()
+            c.query_row(
+                "SELECT * FROM cowork_workspaces WHERE id=?1",
+                params![id],
+                |r| Ok(row_to_cowork_workspace(r)),
+            )
+            .optional()?
+            .transpose()
         })
     }
 
     pub fn list_cowork_workspaces(&self) -> Result<Vec<CoworkWorkspace>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare("SELECT * FROM cowork_workspaces ORDER BY created_at DESC")?;
-            let rows: Vec<_> = stmt.query_map([], |r| Ok(row_to_cowork_workspace(r)))?
+            let rows: Vec<_> = stmt
+                .query_map([], |r| Ok(row_to_cowork_workspace(r)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter().collect()
         })
     }
 
-    pub fn update_cowork_workspace(&self, id: &str, name: Option<&str>, description: Option<&str>, status: Option<&str>, working_dir: Option<&str>, now: &str) -> Result<()> {
+    pub fn update_cowork_workspace(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        status: Option<&str>,
+        working_dir: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
         self.with_conn(|c| {
-            if let Some(n) = name { c.execute("UPDATE cowork_workspaces SET name=?1,updated_at=?2 WHERE id=?3", params![n, now, id])?; }
-            if let Some(d) = description { c.execute("UPDATE cowork_workspaces SET description=?1,updated_at=?2 WHERE id=?3", params![d, now, id])?; }
-            if let Some(s) = status { c.execute("UPDATE cowork_workspaces SET status=?1,updated_at=?2 WHERE id=?3", params![s, now, id])?; }
-            if let Some(w) = working_dir { c.execute("UPDATE cowork_workspaces SET working_dir=?1,updated_at=?2 WHERE id=?3", params![w, now, id])?; }
+            if let Some(n) = name {
+                c.execute(
+                    "UPDATE cowork_workspaces SET name=?1,updated_at=?2 WHERE id=?3",
+                    params![n, now, id],
+                )?;
+            }
+            if let Some(d) = description {
+                c.execute(
+                    "UPDATE cowork_workspaces SET description=?1,updated_at=?2 WHERE id=?3",
+                    params![d, now, id],
+                )?;
+            }
+            if let Some(s) = status {
+                c.execute(
+                    "UPDATE cowork_workspaces SET status=?1,updated_at=?2 WHERE id=?3",
+                    params![s, now, id],
+                )?;
+            }
+            if let Some(w) = working_dir {
+                c.execute(
+                    "UPDATE cowork_workspaces SET working_dir=?1,updated_at=?2 WHERE id=?3",
+                    params![w, now, id],
+                )?;
+            }
             Ok(())
         })
     }

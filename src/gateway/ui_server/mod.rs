@@ -7,18 +7,18 @@
 //! LLM config endpoints (`/api/llm-config/*`) are stubbed — they require the
 //! `sema-code-core` model manager which hasn't been ported yet.
 
-pub mod types;
-pub mod core;
 mod config_handler;
-mod skills;
-mod subagents;
-mod quicknotes;
-mod llm_config;
-mod wiki;
-mod mcp;
+pub mod core;
 mod cowork;
+mod llm_config;
+mod mcp;
+mod quicknotes;
+mod skills;
 mod spa;
+mod subagents;
+pub mod types;
+mod wiki;
 
 // Re-exports for external use
-pub use core::{AppError, UiApi, UiState, build_router, start_ui_server};
+pub use core::{build_router, start_ui_server, AppError, UiApi, UiState};
 pub use types::AdminPermissionsConfig;

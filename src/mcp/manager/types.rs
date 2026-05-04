@@ -1,8 +1,10 @@
 //! Data types for the MCP manager — runtime server state and built-in server info.
 
-use serde::{Deserialize, Serialize};
-use crate::mcp::config::{ExternalMcpServerConfig, McpScopeType, McpServerInfo, McpServerStatus, McpToolDef};
+use crate::mcp::config::{
+    ExternalMcpServerConfig, McpScopeType, McpServerInfo, McpServerStatus, McpToolDef,
+};
 use crate::mcp::external_client::ExternalMcpClient;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Runtime state per external server
@@ -58,5 +60,3 @@ pub struct BuiltInServerInfo {
     /// Full tool definitions for this built-in server.
     pub tools: Vec<McpToolDef>,
 }
-
-

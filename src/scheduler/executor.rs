@@ -39,10 +39,7 @@ impl TaskExecutor for DefaultTaskExecutor {
                     group_folder = %task.group_folder,
                     "[TaskScheduler] isolated task (will be dispatched as a fresh session when agent pool is wired)"
                 );
-                Ok(format!(
-                    "[isolated] task queued: {}",
-                    task.prompt
-                ))
+                Ok(format!("[isolated] task queued: {}", task.prompt))
             }
             ContextMode::Group => {
                 info!(
@@ -103,20 +100,14 @@ impl DefaultTaskExecutor {
 
     /// Script mode: execute a shell command.
     async fn execute_script(&self, task: &ScheduledTask) -> anyhow::Result<String> {
-        let cmd = task
-            .script_command
-            .as_deref()
-            .unwrap_or(&task.prompt);
+        let cmd = task.script_command.as_deref().unwrap_or(&task.prompt);
         info!(
             task_id = %task.id,
             command = %cmd,
             "[TaskScheduler] script"
         );
 
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg(cmd)
-            .output()?;
+        let output = Command::new("bash").arg("-c").arg(cmd).output()?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -133,7 +124,10 @@ impl DefaultTaskExecutor {
         }
 
         if !output.status.success() {
-            result.push_str(&format!("\nExit code: {}", output.status.code().unwrap_or(-1)));
+            result.push_str(&format!(
+                "\nExit code: {}",
+                output.status.code().unwrap_or(-1)
+            ));
         }
 
         Ok(result)
@@ -141,20 +135,14 @@ impl DefaultTaskExecutor {
 
     /// Script-agent mode: shell output is fed back to the agent (stub).
     async fn execute_script_agent(&self, task: &ScheduledTask) -> anyhow::Result<String> {
-        let cmd = task
-            .script_command
-            .as_deref()
-            .unwrap_or(&task.prompt);
+        let cmd = task.script_command.as_deref().unwrap_or(&task.prompt);
         info!(
             task_id = %task.id,
             command = %cmd,
             "[TaskScheduler] script-agent"
         );
 
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg(cmd)
-            .output()?;
+        let output = Command::new("bash").arg("-c").arg(cmd).output()?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

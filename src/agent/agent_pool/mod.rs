@@ -17,15 +17,12 @@ pub use types::AGENT_TIMEOUT_MS;
 pub(crate) use types::MAIN_AGENT_ID;
 
 // Re-export public payload types
-pub use types::{
-    CachedTodos, PermissionsConfig, TodoSnapshot,
-};
+pub use types::{CachedTodos, PermissionsConfig, TodoSnapshot};
 
 // Re-export event data types
 pub use types::{
-    AskQuestionRequestData, CompactExecData, CompactStartData,
-    MessageCompleteData, SessionErrorData, StateUpdateData,
-    TodosUpdateItem, ToolPermissionRequestData,
+    AskQuestionRequestData, CompactExecData, CompactStartData, MessageCompleteData,
+    SessionErrorData, StateUpdateData, TodosUpdateItem, ToolPermissionRequestData,
 };
 
 // Re-export traits

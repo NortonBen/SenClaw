@@ -167,10 +167,8 @@ impl PersonaRegistry {
                 Ok(Some(mut persona)) => {
                     let key = persona.name.clone();
                     if new_map.contains_key(&key) {
-                        let file_base = file_path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("");
+                        let file_base =
+                            file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                         if new_map.contains_key(file_base) {
                             tracing::warn!(
                                 "[PersonaRegistry] Duplicate name \"{}\" and filename \"{}\" both taken, skipping {}",
@@ -255,10 +253,7 @@ fn parse_file(file_path: &Path) -> Result<Option<PersonaConfig>, anyhow::Error> 
         }
     }
 
-    let file_name = file_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let file_name = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     let name = fm.remove("name").unwrap_or_else(|| file_name.to_string());
 
@@ -294,7 +289,10 @@ fn parse_file(file_path: &Path) -> Result<Option<PersonaConfig>, anyhow::Error> 
             "[PersonaRegistry] \"{name}\" systemPrompt too long ({} chars), truncating to {MAX_SYSTEM_PROMPT_LENGTH}",
             system_prompt.len()
         );
-        system_prompt = system_prompt.chars().take(MAX_SYSTEM_PROMPT_LENGTH).collect();
+        system_prompt = system_prompt
+            .chars()
+            .take(MAX_SYSTEM_PROMPT_LENGTH)
+            .collect();
     }
 
     Ok(Some(PersonaConfig {
@@ -434,7 +432,10 @@ description: Verbose
         .unwrap();
 
         let persona = parse_file(&file_path).unwrap().unwrap();
-        assert_eq!(persona.system_prompt.chars().count(), MAX_SYSTEM_PROMPT_LENGTH);
+        assert_eq!(
+            persona.system_prompt.chars().count(),
+            MAX_SYSTEM_PROMPT_LENGTH
+        );
     }
 
     #[test]

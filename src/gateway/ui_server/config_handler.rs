@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-};
+use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Deserialize;
 
 use crate::gateway::group_manager::{

@@ -26,6 +26,7 @@ const PAGE_SIZE = 5;
 export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
   const { token } = theme.useToken();
   const [input, setInput]           = useState('');
+  const [isComposing, setIsComposing] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const bottomRef                   = useRef<HTMLDivElement>(null);
@@ -34,6 +35,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   const prevMessagesLenRef          = useRef(messages.length);
   const prevGroupJidRef             = useRef(group.jid);
   const preserveScrollRef           = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  const isComposingRef              = useRef(false);
 
   const isProcessing = agentState === 'processing';
   const isPaused     = agentState === 'paused';
@@ -109,6 +111,8 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
 
   // ── Send / pause / resume single handler ──
   const handleActionButton = () => {
+    if (isComposingRef.current) return;
+
     if (isProcessing) {
       // No-op while compacting (button disabled; belt-and-suspenders)
       if (isCompacting) return;
@@ -131,10 +135,22 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (!isProcessing) handleActionButton();
     }
+  };
+
+  const handleCompositionStart = () => {
+    isComposingRef.current = true;
+    setIsComposing(true);
+  };
+
+  const handleCompositionEnd = () => {
+    isComposingRef.current = false;
+    setIsComposing(false);
   };
 
   // Auto-resize textarea
@@ -148,6 +164,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
 
   // ── Action button disabled rules ──
   const actionButtonDisabled =
+    isComposing ||                              // wait for IME/bộ gõ to commit text
     (agentState === 'idle' && !input.trim()) ||   // idle: need text to send
     (isProcessing && isCompacting);               // compacting: pause disabled
 
@@ -321,6 +338,8 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             onInput={handleInput}
             disabled={isProcessing}
           />

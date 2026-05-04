@@ -218,11 +218,7 @@ impl SseTransport {
             .with_context(|| format!("SSE connect failed: {sse_url}"))?;
 
         if !response.status().is_success() {
-            bail!(
-                "SSE connect HTTP {} for {}",
-                response.status(),
-                sse_url
-            );
+            bail!("SSE connect HTTP {} for {}", response.status(), sse_url);
         }
 
         // Extract session ID from response headers (Mcp-Session-Id)
@@ -276,8 +272,7 @@ impl SseTransport {
                                     Ok(resp) => {
                                         debug!(
                                             "MCP SSE {} — received message id={:?}",
-                                            task_name,
-                                            resp.id
+                                            task_name, resp.id
                                         );
                                         if tx.send(resp).is_err() {
                                             // Receiver dropped, stop
@@ -630,10 +625,7 @@ impl ExternalMcpClient {
         // Send initialized notification
         let _ = self
             .transport
-            .request(
-                "notifications/initialized",
-                None,
-            )
+            .request("notifications/initialized", None)
             .await;
 
         info!("MCP external {} — initialized", self.name);
@@ -717,7 +709,8 @@ mod tests {
 
     #[test]
     fn json_rpc_response_deserializes_error() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid request"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid request"}}"#;
         let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().message, "Invalid request");

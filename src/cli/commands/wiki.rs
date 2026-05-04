@@ -79,20 +79,40 @@ pub async fn run(cmd: WikiCmd) -> Result<()> {
                 println!("{text}");
             }
         }
-        WikiCmd::Save { path, tags, source, msg } => {
+        WikiCmd::Save {
+            path,
+            tags,
+            source,
+            msg,
+        } => {
             let content = read_stdin();
             if content.trim().is_empty() {
                 anyhow::bail!("no content received on stdin");
             }
-            let tag_list: Option<Vec<String>> = tags
-                .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
-            wm.write_file(&path, &content, Some(&source), tag_list.as_deref(), msg.as_deref()).await?;
+            let tag_list: Option<Vec<String>> = tags.map(|t| {
+                t.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            });
+            wm.write_file(
+                &path,
+                &content,
+                Some(&source),
+                tag_list.as_deref(),
+                msg.as_deref(),
+            )
+            .await?;
             let result = serde_json::json!({ "path": path, "action": "created" });
             println!("{result}");
         }
         WikiCmd::Search { query, limit, tags } => {
-            let tag_list: Option<Vec<String>> = tags
-                .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
+            let tag_list: Option<Vec<String>> = tags.map(|t| {
+                t.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            });
             let results = wm.search(&query, tag_list.as_deref(), Some(limit))?;
             if results.is_empty() {
                 println!("No results found.");
@@ -115,7 +135,10 @@ pub async fn run(cmd: WikiCmd) -> Result<()> {
             let stats = wm.get_stats()?;
             println!("Wiki Statistics");
             println!("-------------------------------------");
-            println!("Total: {} docs | {} directories", stats.total_files, stats.total_dirs);
+            println!(
+                "Total: {} docs | {} directories",
+                stats.total_files, stats.total_dirs
+            );
             println!();
 
             if !stats.by_category.is_empty() {
@@ -130,7 +153,10 @@ pub async fn run(cmd: WikiCmd) -> Result<()> {
             }
 
             if !stats.by_tag.is_empty() {
-                let top_tags: Vec<String> = stats.by_tag.iter().take(10)
+                let top_tags: Vec<String> = stats
+                    .by_tag
+                    .iter()
+                    .take(10)
                     .map(|t| format!("[{}×{}]", t.tag, t.count))
                     .collect();
                 println!("Top tags: {}", top_tags.join(" "));

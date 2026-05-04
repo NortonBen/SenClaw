@@ -96,13 +96,7 @@ impl PermissionManager {
         }
     }
 
-    pub fn update_skip_flags(
-        &mut self,
-        file_edit: bool,
-        bash: bool,
-        skill: bool,
-        mcp: bool,
-    ) {
+    pub fn update_skip_flags(&mut self, file_edit: bool, bash: bool, skill: bool, mcp: bool) {
         self.skip_file_edit = file_edit;
         self.skip_bash = bash;
         self.skip_skill = skill;
@@ -138,7 +132,11 @@ impl PermissionManager {
         self.allowed_tools.lock().unwrap().contains(key)
     }
 
-    fn get_permission_key(tool: &dyn Tool, input: &serde_json::Value, prefix: Option<&str>) -> String {
+    fn get_permission_key(
+        tool: &dyn Tool,
+        input: &serde_json::Value,
+        prefix: Option<&str>,
+    ) -> String {
         let name = tool.name();
         if name == "Bash" {
             if let Some(p) = prefix {
@@ -169,14 +167,25 @@ impl PermissionManager {
         SAFE_COMMANDS.contains(&main)
     }
 
-    fn build_options(tool: &dyn Tool, input: &serde_json::Value, prefix: Option<&str>) -> HashMap<String, String> {
+    fn build_options(
+        tool: &dyn Tool,
+        input: &serde_json::Value,
+        prefix: Option<&str>,
+    ) -> HashMap<String, String> {
         let name = tool.name();
         if name == "Bash" {
-            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let command = input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if let Some(p) = prefix {
                 let mut opts = HashMap::new();
                 opts.insert("agree".into(), "Confirm".into());
-                opts.insert("allow".into(), format!("Confirm, never ask for `{p}` commands in this project"));
+                opts.insert(
+                    "allow".into(),
+                    format!("Confirm, never ask for `{p}` commands in this project"),
+                );
                 opts.insert("refuse".into(), "Reject".into());
                 return opts;
             }
@@ -195,7 +204,10 @@ impl PermissionManager {
         if Self::is_file_edit_tool(name) {
             let mut opts = HashMap::new();
             opts.insert("agree".into(), "Confirm".into());
-            opts.insert("allow".into(), "Confirm, never ask for file editing in this project".into());
+            opts.insert(
+                "allow".into(),
+                "Confirm, never ask for file editing in this project".into(),
+            );
             opts.insert("refuse".into(), "Reject".into());
             return opts;
         }
@@ -204,7 +216,10 @@ impl PermissionManager {
             let skill_name = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
             let mut opts = HashMap::new();
             opts.insert("agree".into(), "Confirm".into());
-            opts.insert("allow".into(), format!("Confirm, never ask for {skill_name} Skill in this project"));
+            opts.insert(
+                "allow".into(),
+                format!("Confirm, never ask for {skill_name} Skill in this project"),
+            );
             opts.insert("refuse".into(), "Reject".into());
             return opts;
         }
@@ -212,14 +227,20 @@ impl PermissionManager {
         if Self::is_mcp_tool(name) {
             let mut opts = HashMap::new();
             opts.insert("agree".into(), "Confirm".into());
-            opts.insert("allow".into(), format!("Confirm, never ask for {name} in this project"));
+            opts.insert(
+                "allow".into(),
+                format!("Confirm, never ask for {name} in this project"),
+            );
             opts.insert("refuse".into(), "Reject".into());
             return opts;
         }
 
         let mut opts = HashMap::new();
         opts.insert("agree".into(), "Allow".into());
-        opts.insert("allow".into(), format!("Allow, never ask for {name} in this project"));
+        opts.insert(
+            "allow".into(),
+            format!("Allow, never ask for {name} in this project"),
+        );
         opts.insert("refuse".into(), "Reject".into());
         opts
     }
@@ -240,13 +261,16 @@ impl PermissionManager {
         let request = ToolPermissionRequestData {
             agent_id: agent_id.to_string(),
             tool_name: name.clone(),
-            title: permission_info.as_ref().map_or(name.clone(), |p| p.title.clone()),
+            title: permission_info
+                .as_ref()
+                .map_or(name.clone(), |p| p.title.clone()),
             content: permission_info.map_or(serde_json::Value::Null, |p| p.content),
             options,
         };
 
         // Emit to event bus (for UI)
-        self.event_bus.emit(EngineEvent::ToolPermissionRequest(request));
+        self.event_bus
+            .emit(EngineEvent::ToolPermissionRequest(request));
 
         // Register response waiter
         let mut rx = self.response_registry.register_tool_permission(&name);
@@ -311,7 +335,9 @@ impl PermissionChecker for PermissionManager {
                 debug!("[{name}] global edit permission active");
                 return Ok(true);
             }
-            return self.request_permission(tool, input, None, cancel, agent_id).await;
+            return self
+                .request_permission(tool, input, None, cancel, agent_id)
+                .await;
         }
 
         // 2. Bash tool
@@ -324,7 +350,9 @@ impl PermissionChecker for PermissionManager {
             if Self::is_safe_command(command) || self.is_allowed(&key) {
                 return Ok(true);
             }
-            return self.request_permission(tool, input, None, cancel, agent_id).await;
+            return self
+                .request_permission(tool, input, None, cancel, agent_id)
+                .await;
         }
 
         // 3. Skill tool
@@ -336,7 +364,9 @@ impl PermissionChecker for PermissionManager {
             if self.is_allowed(&key) {
                 return Ok(true);
             }
-            return self.request_permission(tool, input, None, cancel, agent_id).await;
+            return self
+                .request_permission(tool, input, None, cancel, agent_id)
+                .await;
         }
 
         // 4. MCP tools
@@ -347,7 +377,9 @@ impl PermissionChecker for PermissionManager {
             if self.is_allowed(name) {
                 return Ok(true);
             }
-            return self.request_permission(tool, input, None, cancel, agent_id).await;
+            return self
+                .request_permission(tool, input, None, cancel, agent_id)
+                .await;
         }
 
         // Other non-readonly tools — default allow
@@ -367,25 +399,77 @@ mod tests {
     struct TestBashTool;
     #[async_trait::async_trait]
     impl Tool for TestBashTool {
-        fn name(&self) -> &str { "Bash" }
-        fn description(&self) -> &str { "Execute bash" }
-        fn input_schema(&self) -> serde_json::Value { serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}) }
-        fn is_read_only(&self) -> bool { false }
-        async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> { Ok(vec![]) }
-        fn gen_tool_result_message(&self, _data: &serde_json::Value, _input: &serde_json::Value) -> ToolResultMessage { ToolResultMessage { title: "Bash".into(), summary: "".into(), content: serde_json::json!({}) } }
-        fn get_display_title(&self, _input: &serde_json::Value) -> String { "Bash".into() }
+        fn name(&self) -> &str {
+            "Bash"
+        }
+        fn description(&self) -> &str {
+            "Execute bash"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]})
+        }
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> Result<Vec<ToolOutput>> {
+            Ok(vec![])
+        }
+        fn gen_tool_result_message(
+            &self,
+            _data: &serde_json::Value,
+            _input: &serde_json::Value,
+        ) -> ToolResultMessage {
+            ToolResultMessage {
+                title: "Bash".into(),
+                summary: "".into(),
+                content: serde_json::json!({}),
+            }
+        }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            "Bash".into()
+        }
     }
 
     struct TestEditTool;
     #[async_trait::async_trait]
     impl Tool for TestEditTool {
-        fn name(&self) -> &str { "Edit" }
-        fn description(&self) -> &str { "Edit file" }
-        fn input_schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        fn is_read_only(&self) -> bool { false }
-        async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> { Ok(vec![]) }
-        fn gen_tool_result_message(&self, _data: &serde_json::Value, _input: &serde_json::Value) -> ToolResultMessage { ToolResultMessage { title: "Edit".into(), summary: "".into(), content: serde_json::json!({}) } }
-        fn get_display_title(&self, _input: &serde_json::Value) -> String { "Edit".into() }
+        fn name(&self) -> &str {
+            "Edit"
+        }
+        fn description(&self) -> &str {
+            "Edit file"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> Result<Vec<ToolOutput>> {
+            Ok(vec![])
+        }
+        fn gen_tool_result_message(
+            &self,
+            _data: &serde_json::Value,
+            _input: &serde_json::Value,
+        ) -> ToolResultMessage {
+            ToolResultMessage {
+                title: "Edit".into(),
+                summary: "".into(),
+                content: serde_json::json!({}),
+            }
+        }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            "Edit".into()
+        }
     }
 
     #[test]
@@ -408,10 +492,18 @@ mod tests {
     #[test]
     fn permission_key_for_bash() {
         let tool = TestBashTool;
-        let key = PermissionManager::get_permission_key(&tool, &serde_json::json!({"command": "npm test"}), None);
+        let key = PermissionManager::get_permission_key(
+            &tool,
+            &serde_json::json!({"command": "npm test"}),
+            None,
+        );
         assert_eq!(key, "Bash(npm test)");
 
-        let key_with_prefix = PermissionManager::get_permission_key(&tool, &serde_json::json!({"command": "npm test"}), Some("npm"));
+        let key_with_prefix = PermissionManager::get_permission_key(
+            &tool,
+            &serde_json::json!({"command": "npm test"}),
+            Some("npm"),
+        );
         assert_eq!(key_with_prefix, "Bash(npm:*)");
     }
 
@@ -424,7 +516,15 @@ mod tests {
 
         let tool = TestBashTool;
         let cancel = CancellationToken::new();
-        assert!(pm.check(&tool, &serde_json::json!({"command": "rm -rf /"}), &cancel, "main").await.unwrap());
+        assert!(pm
+            .check(
+                &tool,
+                &serde_json::json!({"command": "rm -rf /"}),
+                &cancel,
+                "main"
+            )
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -435,7 +535,15 @@ mod tests {
 
         let tool = TestBashTool;
         let cancel = CancellationToken::new();
-        assert!(pm.check(&tool, &serde_json::json!({"command": "ls"}), &cancel, "main").await.unwrap());
+        assert!(pm
+            .check(
+                &tool,
+                &serde_json::json!({"command": "ls"}),
+                &cancel,
+                "main"
+            )
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -447,7 +555,15 @@ mod tests {
 
         let tool = TestBashTool;
         let cancel = CancellationToken::new();
-        assert!(pm.check(&tool, &serde_json::json!({"command": "npm test"}), &cancel, "main").await.unwrap());
+        assert!(pm
+            .check(
+                &tool,
+                &serde_json::json!({"command": "npm test"}),
+                &cancel,
+                "main"
+            )
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -459,6 +575,9 @@ mod tests {
 
         let tool = TestEditTool;
         let cancel = CancellationToken::new();
-        assert!(pm.check(&tool, &serde_json::json!({}), &cancel, "main").await.unwrap());
+        assert!(pm
+            .check(&tool, &serde_json::json!({}), &cancel, "main")
+            .await
+            .unwrap());
     }
 }

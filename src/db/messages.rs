@@ -191,7 +191,11 @@ impl super::Db {
         })
     }
 
-    pub fn get_group_messages(&self, chat_jid: &str, since: Option<&str>) -> Result<Vec<StoredMessage>> {
+    pub fn get_group_messages(
+        &self,
+        chat_jid: &str,
+        since: Option<&str>,
+    ) -> Result<Vec<StoredMessage>> {
         self.with_conn(|c| {
             let rows: Vec<rusqlite::Result<Result<StoredMessage>>> = if let Some(since) = since {
                 let mut stmt = c.prepare(

@@ -68,9 +68,7 @@ impl McpManager {
                 continue;
             }
             // Determine scope: check if this name exists in project config
-            let project_cfg = self
-                .config_mgr
-                .load_project_config(&self.working_dir);
+            let project_cfg = self.config_mgr.load_project_config(&self.working_dir);
             let scope = if project_cfg.mcp_servers.contains_key(name) {
                 McpScopeType::Project
             } else {
@@ -210,9 +208,7 @@ impl McpManager {
                 let merged = self.config_mgr.load_merged(&self.working_dir);
                 match merged.mcp_servers.get(name) {
                     Some(cfg) => {
-                        let project = self
-                            .config_mgr
-                            .load_project_config(&self.working_dir);
+                        let project = self.config_mgr.load_project_config(&self.working_dir);
                         let scope = if project.mcp_servers.contains_key(name) {
                             McpScopeType::Project
                         } else {
@@ -268,7 +264,9 @@ impl McpManager {
             BuiltInServerInfo {
                 name: "senclaw-schedule".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in scheduling service for recurring and one-off tasks.".into()),
+                description: Some(
+                    "Built-in scheduling service for recurring and one-off tasks.".into(),
+                ),
                 tools: vec![
                     t("add_schedule", "Schedule a new recurring or one-off task"),
                     t("list_schedules", "List all scheduled tasks for a group"),
@@ -279,7 +277,9 @@ impl McpManager {
             BuiltInServerInfo {
                 name: "senclaw-workspace".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in workspace management for agent working directories.".into()),
+                description: Some(
+                    "Built-in workspace management for agent working directories.".into(),
+                ),
                 tools: vec![
                     t("workspace_switch", "Switch the agent workspace directory"),
                     t("workspace_reset", "Reset workspace to default directory"),
@@ -289,7 +289,9 @@ impl McpManager {
             BuiltInServerInfo {
                 name: "senclaw-send".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in messaging service for sending text and files to chats.".into()),
+                description: Some(
+                    "Built-in messaging service for sending text and files to chats.".into(),
+                ),
                 tools: vec![
                     t("send_text", "Send a text message to a chat"),
                     t("send_file", "Send a file to a chat via HTTP bridge"),
@@ -298,20 +300,36 @@ impl McpManager {
             BuiltInServerInfo {
                 name: "senclaw-memory".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in memory service using hybrid FTS5 + vector search.".into()),
+                description: Some(
+                    "Built-in memory service using hybrid FTS5 + vector search.".into(),
+                ),
                 tools: vec![
-                    t("memory_search", "Search memories using hybrid FTS5 + vector search"),
-                    t("memory_get", "Retrieve a specific memory file by path and line range"),
+                    t(
+                        "memory_search",
+                        "Search memories using hybrid FTS5 + vector search",
+                    ),
+                    t(
+                        "memory_get",
+                        "Retrieve a specific memory file by path and line range",
+                    ),
                 ],
             },
             BuiltInServerInfo {
                 name: "senclaw-dispatch".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in task dispatching and agent coordination service.".into()),
+                description: Some(
+                    "Built-in task dispatching and agent coordination service.".into(),
+                ),
                 tools: vec![
                     t("list_personas", "List all registered agents and personas"),
-                    t("create_parent", "Create a parent dispatch with multiple tasks"),
-                    t("dispatch_task", "Dispatch a task within a parent and wait for its result"),
+                    t(
+                        "create_parent",
+                        "Create a parent dispatch with multiple tasks",
+                    ),
+                    t(
+                        "dispatch_task",
+                        "Dispatch a task within a parent and wait for its result",
+                    ),
                 ],
             },
             BuiltInServerInfo {
@@ -330,18 +348,29 @@ impl McpManager {
                 tools: vec![
                     t("list_spaces", "List accessible Feishu/Lark wiki spaces"),
                     t("get_space", "Get details of a specific wiki space"),
-                    t("list_nodes", "List child nodes in a wiki space or parent node"),
+                    t(
+                        "list_nodes",
+                        "List child nodes in a wiki space or parent node",
+                    ),
                     t("get_node", "Get details of a specific wiki node by token"),
-                    t("create_node", "Create a new node (doc or folder) in a wiki space"),
+                    t(
+                        "create_node",
+                        "Create a new node (doc or folder) in a wiki space",
+                    ),
                     t("search_nodes", "Search wiki nodes by query text"),
                     t("read_doc", "Read blocks from a Feishu/Lark document"),
-                    t("write_doc", "Write content blocks to a Feishu/Lark document"),
+                    t(
+                        "write_doc",
+                        "Write content blocks to a Feishu/Lark document",
+                    ),
                 ],
             },
             BuiltInServerInfo {
                 name: "senclaw-browser".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in headless browser automation and web scraping service.".into()),
+                description: Some(
+                    "Built-in headless browser automation and web scraping service.".into(),
+                ),
                 tools: vec![
                     t("browser_navigate", "Navigate to a URL in a browser tab"),
                     t("browser_new_tab", "Create a new browser tab"),
@@ -353,19 +382,37 @@ impl McpManager {
                     t("browser_reload", "Reload the current page"),
                     t("browser_click", "Click on an element by its index"),
                     t("browser_type", "Type text into an input element"),
-                    t("browser_select_option", "Select an option in a dropdown element"),
+                    t(
+                        "browser_select_option",
+                        "Select an option in a dropdown element",
+                    ),
                     t("browser_scroll", "Scroll the page up or down"),
                     t("browser_hover", "Hover the mouse over an element"),
                     t("browser_press_key", "Press a keyboard key"),
-                    t("browser_upload_file", "Upload files to a file input element"),
+                    t(
+                        "browser_upload_file",
+                        "Upload files to a file input element",
+                    ),
                     t("browser_execute_js", "Execute JavaScript on the page"),
-                    t("browser_wait", "Wait for a condition (time, text, navigation)"),
-                    t("browser_snapshot", "Capture accessibility snapshot and interactive elements"),
-                    t("browser_screenshot", "Take a screenshot of the page or element"),
+                    t(
+                        "browser_wait",
+                        "Wait for a condition (time, text, navigation)",
+                    ),
+                    t(
+                        "browser_snapshot",
+                        "Capture accessibility snapshot and interactive elements",
+                    ),
+                    t(
+                        "browser_screenshot",
+                        "Take a screenshot of the page or element",
+                    ),
                     t("browser_extract_text", "Extract text content from the page"),
                     t("browser_extract_links", "Extract all links from the page"),
                     t("browser_extract_table", "Extract an HTML table as JSON"),
-                    t("browser_extract_structured", "Extract structured data using a JSON schema"),
+                    t(
+                        "browser_extract_structured",
+                        "Extract structured data using a JSON schema",
+                    ),
                     t("browser_search", "Search Google or Bing and return results"),
                     t("browser_crawl", "Start a deep crawl from a URL"),
                     t("browser_crawl_status", "Check the status of a crawl job"),
@@ -431,7 +478,10 @@ impl McpManager {
                         } else {
                             Some(t.description.clone())
                         },
-                        input_schema: if t.input_schema.is_null() || t.input_schema.is_object() && t.input_schema.as_object().map_or(false, |o| o.is_empty()) {
+                        input_schema: if t.input_schema.is_null()
+                            || t.input_schema.is_object()
+                                && t.input_schema.as_object().map_or(false, |o| o.is_empty())
+                        {
                             None
                         } else {
                             Some(t.input_schema.clone())
@@ -556,7 +606,9 @@ impl McpManager {
     ) -> Result<serde_json::Value> {
         let external = self.external.read().await;
         if !external.contains_key(server_name) {
-            anyhow::bail!("Built-in server tools cannot be tested from the UI. Use the agent to invoke them.");
+            anyhow::bail!(
+                "Built-in server tools cannot be tested from the UI. Use the agent to invoke them."
+            );
         }
         drop(external);
         let full_name = format!("mcp__{}__{}", server_name, tool_name);
@@ -565,9 +617,7 @@ impl McpManager {
 
     /// Clean up all external connections.
     pub async fn dispose(&self) {
-        let names: Vec<String> = {
-            self.external.read().await.keys().cloned().collect()
-        };
+        let names: Vec<String> = { self.external.read().await.keys().cloned().collect() };
         for name in &names {
             let _ = self.disconnect_server(name).await;
         }

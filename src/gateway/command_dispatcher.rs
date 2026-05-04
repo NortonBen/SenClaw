@@ -40,7 +40,10 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
 
     if let Some(caps) = re_task_logs().captures(t) {
         let task_id = caps.get(1)?.as_str();
-        let limit: u32 = caps.get(2).map(|m| m.as_str().parse().unwrap_or(20)).unwrap_or(20);
+        let limit: u32 = caps
+            .get(2)
+            .map(|m| m.as_str().parse().unwrap_or(20))
+            .unwrap_or(20);
         let logs = db.get_task_run_logs(task_id, limit).unwrap_or_default();
         return Some(format_task_logs(task_id, &logs));
     }
@@ -58,7 +61,9 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
             return Some(format!("❌ Failed to update task {task_id}"));
         }
         let label = match action.as_str() {
-            "pause" => "paused", "resume" => "resumed", _ => "cancelled",
+            "pause" => "paused",
+            "resume" => "resumed",
+            _ => "cancelled",
         };
         return Some(format!("✅ Task {task_id} {label}"));
     }
@@ -87,7 +92,9 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
         let jid = chat_jid?;
         let count = db.delete_group_messages_for_jid(jid).unwrap_or(0);
         let _ = db.delete_agent_timestamp(jid);
-        return Some(format!("🗑️ Session reset — cleared {count} messages for {jid}"));
+        return Some(format!(
+            "🗑️ Session reset — cleared {count} messages for {jid}"
+        ));
     }
 
     None
@@ -100,15 +107,18 @@ fn re_help() -> &'static Regex {
     &RE
 }
 fn re_list_tasks() -> &'static Regex {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?list[_\s]tasks?(?:\s+(\S+))?$").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^/?list[_\s]tasks?(?:\s+(\S+))?$").unwrap());
     &RE
 }
 fn re_task_logs() -> &'static Regex {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?task[_\s]logs?\s+(\S+)(?:\s+(\d+))?$").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^/?task[_\s]logs?\s+(\S+)(?:\s+(\d+))?$").unwrap());
     &RE
 }
 fn re_manage_task() -> &'static Regex {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?(pause|resume|cancel)[_\s]task\s+(\S+)$").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^/?(pause|resume|cancel)[_\s]task\s+(\S+)$").unwrap());
     &RE
 }
 fn re_del_task() -> &'static Regex {
@@ -120,7 +130,8 @@ fn re_history() -> &'static Regex {
     &RE
 }
 fn re_reset() -> &'static Regex {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^/?reset[_\s]?(session)?$").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^/?reset[_\s]?(session)?$").unwrap());
     &RE
 }
 
@@ -175,7 +186,10 @@ fn format_task_logs(task_id: &str, logs: &[TaskRunLog]) -> String {
         return format!("📜 Task {task_id} No execution records yet");
     }
     let mut lines = vec![
-        format!("📜 Execution Logs — {task_id} (latest {} entries)", logs.len()),
+        format!(
+            "📜 Execution Logs — {task_id} (latest {} entries)",
+            logs.len()
+        ),
         String::new(),
     ];
     for log in logs {

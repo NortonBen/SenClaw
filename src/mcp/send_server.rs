@@ -61,8 +61,7 @@ pub async fn run_stdio_server() -> Result<()> {
         .context("SENCLAW_SEND_BRIDGE_PORT not set")?
         .parse()
         .context("invalid SENCLAW_SEND_BRIDGE_PORT")?;
-    let chat_jid =
-        std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
+    let chat_jid = std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
     let is_admin = std::env::var("SENCLAW_IS_ADMIN")
         .map(|v| v == "1")
         .unwrap_or(false);
@@ -87,7 +86,9 @@ impl McpSendServer {
     #[rmcp::tool(description = "Send a text message to a chat")]
     async fn send_message(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SendMessageParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SendMessageParams,
+        >,
     ) -> String {
         let srv = SendServer::new(
             self.bridge_port,
@@ -104,7 +105,9 @@ impl McpSendServer {
     #[rmcp::tool(description = "Send a file to a chat via HTTP bridge")]
     async fn send_file(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SendFileParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SendFileParams,
+        >,
     ) -> String {
         let srv = SendServer::new(
             self.bridge_port,
@@ -180,9 +183,7 @@ impl SendServer {
         let db = self.db.as_ref()?;
         match db.get_group(target_jid) {
             Ok(Some(_)) => None,
-            Ok(None) => Some(format!(
-                "Target {target_jid} is not in registered groups"
-            )),
+            Ok(None) => Some(format!("Target {target_jid} is not in registered groups")),
             Err(e) => Some(format!("DB validation failed: {e}")),
         }
     }

@@ -85,20 +85,12 @@ impl FeishuChannel {
         tracing::info!("[FeishuChannel] add_app: starting {app_id} (domain={domain:?})");
 
         // Fetch bot info (with timeout)
-        let bot_info = tokio::time::timeout(
-            Duration::from_secs(APP_INIT_TIMEOUT_SECS),
-            async {
-                let token = get_or_refresh_token(
-                    &self.http,
-                    &base_url,
-                    app_id,
-                    app_secret,
-                    &self.tokens,
-                )
-                .await?;
-                fetch_bot_info(&self.http, &base_url, &token).await
-            },
-        )
+        let bot_info = tokio::time::timeout(Duration::from_secs(APP_INIT_TIMEOUT_SECS), async {
+            let token =
+                get_or_refresh_token(&self.http, &base_url, app_id, app_secret, &self.tokens)
+                    .await?;
+            fetch_bot_info(&self.http, &base_url, &token).await
+        })
         .await
         .map_err(|_| anyhow::anyhow!("add_app timed out after {APP_INIT_TIMEOUT_SECS}s"))??;
 
@@ -179,11 +171,7 @@ impl FeishuChannel {
 
     // ===== Sender name cache =====
 
-    async fn resolve_sender_name(
-        &self,
-        entry: &AppEntry,
-        open_id: &str,
-    ) -> String {
+    async fn resolve_sender_name(&self, entry: &AppEntry, open_id: &str) -> String {
         if open_id.is_empty() {
             return "Unknown".to_string();
         }
@@ -199,7 +187,10 @@ impl FeishuChannel {
         }
 
         // Fetch from API
-        let token = match self.get_token(&entry.app_id, &entry.app_secret, &entry.base_url).await {
+        let token = match self
+            .get_token(&entry.app_id, &entry.app_secret, &entry.base_url)
+            .await
+        {
             Ok(t) => t,
             Err(_) => return format!("{}...", &open_id[..open_id.len().min(8)]),
         };
@@ -320,8 +311,8 @@ impl Channel for FeishuChannel {
             .and_then(|n| n.to_str())
             .unwrap_or("file");
 
-        let file_key = upload_file(&self.http, &entry.base_url, &token, file_path, file_name)
-            .await?;
+        let file_key =
+            upload_file(&self.http, &entry.base_url, &token, file_path, file_name).await?;
 
         let content = serde_json::json!({"file_key": file_key}).to_string();
         call_api(
@@ -384,10 +375,7 @@ impl Channel for FeishuChannel {
             .await?;
 
         let truncated = if text.len() > FEISHU_CARD_MAX_LEN {
-            format!(
-                "{}…(content truncated)",
-                &text[..FEISHU_CARD_MAX_LEN]
-            )
+            format!("{}…(content truncated)", &text[..FEISHU_CARD_MAX_LEN])
         } else {
             text.to_string()
         };
@@ -395,13 +383,12 @@ impl Channel for FeishuChannel {
         let actions: Vec<serde_json::Value> = buttons
             .iter()
             .map(|btn| {
-                let btn_type = if btn.callback_data.contains("refuse")
-                    || btn.callback_data.contains("deny")
-                {
-                    "danger"
-                } else {
-                    "primary"
-                };
+                let btn_type =
+                    if btn.callback_data.contains("refuse") || btn.callback_data.contains("deny") {
+                        "danger"
+                    } else {
+                        "primary"
+                    };
                 serde_json::json!({
                     "tag": "button",
                     "text": { "tag": "plain_text", "content": btn.label },

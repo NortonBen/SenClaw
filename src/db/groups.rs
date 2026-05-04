@@ -93,12 +93,16 @@ impl super::Db {
     pub fn rename_group_jid(&self, old_jid: &str, new_jid: &str) -> Result<Option<GroupBinding>> {
         self.with_conn_mut(|c| {
             let existing: Option<GroupBinding> = c
-                .query_row("SELECT * FROM groups WHERE jid = ?1", params![old_jid], |r| {
-                    Ok(row_to_group(r))
-                })
+                .query_row(
+                    "SELECT * FROM groups WHERE jid = ?1",
+                    params![old_jid],
+                    |r| Ok(row_to_group(r)),
+                )
                 .optional()?
                 .transpose()?;
-            let Some(mut binding) = existing else { return Ok(None) };
+            let Some(mut binding) = existing else {
+                return Ok(None);
+            };
             binding.jid = new_jid.to_owned();
 
             let tx = c.transaction()?;

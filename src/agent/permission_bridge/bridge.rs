@@ -7,8 +7,8 @@ use crate::types::InlineButton;
 
 use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
 use super::types::{
-    AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission,
-    PermissionOption, PermissionPayload,
+    AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission, PermissionOption,
+    PermissionPayload,
 };
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
@@ -168,11 +168,11 @@ impl PermissionBridge {
                 };
 
                 let label = if let Some(arr) = selection.as_array() {
-                    let labels: Vec<String> =
-                        arr.iter()
-                            .filter_map(|v| v.as_i64().map(resolve_option))
-                            .filter(|s| !s.is_empty())
-                            .collect();
+                    let labels: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_i64().map(resolve_option))
+                        .filter(|s| !s.is_empty())
+                        .collect();
                     labels.join(",")
                 } else if let Some(n) = selection.as_i64() {
                     resolve_option(n)
@@ -224,9 +224,8 @@ impl PermissionBridge {
         let raw_content = format_content(content);
         let content_str = truncate_content(&raw_content, self.max_content_length);
 
-        let text = format!(
-            "🔐 *Permission Request*\n\nTool: {tool_name}\n{title}\n\n{content_str}"
-        );
+        let text =
+            format!("🔐 *Permission Request*\n\nTool: {tool_name}\n{title}\n\n{content_str}");
 
         let buttons: Vec<InlineButton> = options
             .iter()
@@ -241,9 +240,9 @@ impl PermissionBridge {
         // Try channel send with buttons
         if !is_web {
             if self.api.supports_buttons(chat_jid) {
-                if let Err(e) =
-                    self.api
-                        .send_with_buttons(chat_jid, &text, &buttons, bot_token)
+                if let Err(e) = self
+                    .api
+                    .send_with_buttons(chat_jid, &text, &buttons, bot_token)
                 {
                     tracing::warn!(
                         "[PermissionBridge] send_with_buttons failed for {chat_jid}: {e}"
@@ -265,11 +264,8 @@ impl PermissionBridge {
                     ),
                     bot_token,
                 );
-                self.api.respond_to_tool_permission(
-                    group_jid,
-                    tool_name,
-                    "refuse",
-                );
+                self.api
+                    .respond_to_tool_permission(group_jid, tool_name, "refuse");
                 self.pending_permissions.lock().unwrap().remove(&request_id);
                 return;
             }
@@ -340,9 +336,9 @@ impl PermissionBridge {
                         callback_data: format!("{PREFIX_ASK}:{request_id}:{qi}:{oi}"),
                     })
                     .collect();
-                if let Err(e) =
-                    self.api
-                        .send_with_buttons(chat_jid, &text, &buttons, bot_token)
+                if let Err(e) = self
+                    .api
+                    .send_with_buttons(chat_jid, &text, &buttons, bot_token)
                 {
                     tracing::warn!(
                         "[PermissionBridge] ask-question send_with_buttons failed for {chat_jid}: {e}"
@@ -394,7 +390,11 @@ impl PermissionBridge {
         let request_id = &rest[..colon];
         let option_key = &rest[colon + 1..];
 
-        let pending = self.pending_permissions.lock().unwrap().remove(request_id)?;
+        let pending = self
+            .pending_permissions
+            .lock()
+            .unwrap()
+            .remove(request_id)?;
 
         self.fire_activity(&pending.chat_jid);
 

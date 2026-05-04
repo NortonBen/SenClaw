@@ -33,7 +33,9 @@ pub(crate) async fn get_tenant_access_token(
             body.msg
         );
     }
-    let token = body.tenant_access_token.context("missing token in response")?;
+    let token = body
+        .tenant_access_token
+        .context("missing token in response")?;
     let expire = body.expire.unwrap_or(7200);
     let expires_at = now_secs() + expire - TOKEN_REFRESH_MARGIN_SECS;
     Ok(CachedToken { token, expires_at })

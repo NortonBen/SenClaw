@@ -1,10 +1,10 @@
-use std::fs;
-use std::path::PathBuf;
 use axum::{
     body::Body,
     http::{header, HeaderMap, StatusCode},
     response::Response,
 };
+use std::fs;
+use std::path::PathBuf;
 
 use super::types::path_to_mime;
 

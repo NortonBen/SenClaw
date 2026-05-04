@@ -3,11 +3,10 @@
 //! Tools: schedule_task, list_tasks, pause_task, cancel_task.
 //! Operates directly on the SQLite `scheduled_tasks` table through [`Db`].
 
-
-use rmcp::ServiceExt;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use cron::Schedule;
+use rmcp::ServiceExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -53,7 +52,9 @@ impl McpScheduleServer {
     #[rmcp::tool(description = "Schedule a new recurring or one-off task")]
     async fn schedule_task(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ScheduleTaskParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ScheduleTaskParams,
+        >,
     ) -> String {
         let srv = ScheduleServer::new();
         let result = srv
@@ -77,7 +78,9 @@ impl McpScheduleServer {
     #[rmcp::tool(description = "List all scheduled tasks for a group")]
     fn list_tasks(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ListTasksParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ListTasksParams,
+        >,
     ) -> String {
         let srv = ScheduleServer::new();
         let result = srv.list_tasks(&self.db, &p.group_folder);
@@ -87,7 +90,9 @@ impl McpScheduleServer {
     #[rmcp::tool(description = "Pause a scheduled task")]
     fn pause_task(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TaskActionParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TaskActionParams,
+        >,
     ) -> String {
         let srv = ScheduleServer::new();
         let result = srv.pause_task(&self.db, &p.task_id, &p.group_folder);
@@ -97,7 +102,9 @@ impl McpScheduleServer {
     #[rmcp::tool(description = "Cancel a scheduled task")]
     fn cancel_task(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TaskActionParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TaskActionParams,
+        >,
     ) -> String {
         let srv = ScheduleServer::new();
         let result = srv.cancel_task(&self.db, &p.task_id, &p.group_folder);
@@ -147,11 +154,17 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn ok(text: String) -> Self {
-        Self { content: text, is_error: false }
+        Self {
+            content: text,
+            is_error: false,
+        }
     }
 
     pub fn err(text: String) -> Self {
-        Self { content: text, is_error: true }
+        Self {
+            content: text,
+            is_error: true,
+        }
     }
 }
 
@@ -179,8 +192,10 @@ impl ScheduleServer {
             .map(|s| ContextMode::parse(s))
             .unwrap_or(ContextMode::Notify);
 
-        if matches!(resolved_mode, ContextMode::Script | ContextMode::ScriptAgent)
-            && script_command.is_none()
+        if matches!(
+            resolved_mode,
+            ContextMode::Script | ContextMode::ScriptAgent
+        ) && script_command.is_none()
         {
             return ToolResult::err(
                 "Error: script_command is required for script and script-agent modes".into(),
@@ -343,11 +358,7 @@ mod tests {
 
     #[test]
     fn compute_next_run_once() {
-        let result = compute_next_run(
-            &ScheduleType::Once,
-            "2026-12-25T00:00:00+00:00",
-        )
-        .unwrap();
+        let result = compute_next_run(&ScheduleType::Once, "2026-12-25T00:00:00+00:00").unwrap();
         assert!(result.contains("2026-12-25"));
     }
 

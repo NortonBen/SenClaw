@@ -198,9 +198,10 @@ pub fn cleanup_embedding_cache(
             "DELETE FROM embedding_cache WHERE provider = ?1 AND model = ?2",
             params![p, m],
         )?,
-        (Some(p), None) => {
-            conn.execute("DELETE FROM embedding_cache WHERE provider = ?1", params![p])?
-        }
+        (Some(p), None) => conn.execute(
+            "DELETE FROM embedding_cache WHERE provider = ?1",
+            params![p],
+        )?,
         (None, _) => conn.execute("DELETE FROM embedding_cache", [])?,
     };
     Ok(changed)
@@ -256,14 +257,21 @@ mod tests {
         // Second call must not error.
         apply_memory_schema(&mut c, false, 1536, "").unwrap();
         let tables: Vec<String> = c
-            .prepare("SELECT name FROM sqlite_master WHERE type IN ('table','virtual') ORDER BY name")
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','virtual') ORDER BY name",
+            )
             .unwrap()
             .query_map([], |r| r.get::<_, String>(0))
             .unwrap()
             .filter_map(Result::ok)
             .collect();
-        for needed in ["memory_files", "memory_chunks", "memory_chunks_fts",
-                       "embedding_cache", "memory_meta"] {
+        for needed in [
+            "memory_files",
+            "memory_chunks",
+            "memory_chunks_fts",
+            "embedding_cache",
+            "memory_meta",
+        ] {
             assert!(tables.iter().any(|t| t == needed), "missing {needed}");
         }
     }
@@ -291,7 +299,8 @@ mod tests {
             "INSERT INTO memory_files (path, folder, source, hash, mtime, size)
              VALUES ('/x', 'main', 'memory', 'h', 1, 1)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         c.execute(
             "INSERT INTO memory_chunks (id, folder, path, source, start_line, end_line, hash, text, embedding, model)
              VALUES ('c1', 'main', '/x', 'memory', 1, 1, 'h', 't', x'01', 'openai:a:1536')",
@@ -325,14 +334,24 @@ mod tests {
     fn cleanup_cache_filters() {
         let mut c = open_in_memory();
         apply_memory_schema(&mut c, false, 1536, "").unwrap();
-        for (p, m, h) in [("openai", "x", "h1"), ("openai", "y", "h2"), ("ollama", "x", "h3")] {
+        for (p, m, h) in [
+            ("openai", "x", "h1"),
+            ("openai", "y", "h2"),
+            ("ollama", "x", "h3"),
+        ] {
             c.execute(
                 "INSERT INTO embedding_cache (provider, model, hash, embedding) VALUES (?1, ?2, ?3, x'00')",
                 params![p, m, h],
             ).unwrap();
         }
-        assert_eq!(cleanup_embedding_cache(&c, Some("openai"), Some("x")).unwrap(), 1);
-        assert_eq!(cleanup_embedding_cache(&c, Some("openai"), None).unwrap(), 1);
+        assert_eq!(
+            cleanup_embedding_cache(&c, Some("openai"), Some("x")).unwrap(),
+            1
+        );
+        assert_eq!(
+            cleanup_embedding_cache(&c, Some("openai"), None).unwrap(),
+            1
+        );
         assert_eq!(cleanup_embedding_cache(&c, None, None).unwrap(), 1);
     }
 }

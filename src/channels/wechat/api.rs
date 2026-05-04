@@ -14,7 +14,10 @@ pub(crate) struct QrLoginResult {
     pub(crate) user_id: Option<String>,
 }
 
-pub(crate) async fn run_qr_login(http: &reqwest::Client, api_base_url: &str) -> Result<QrLoginResult> {
+pub(crate) async fn run_qr_login(
+    http: &reqwest::Client,
+    api_base_url: &str,
+) -> Result<QrLoginResult> {
     let base = if api_base_url.ends_with('/') {
         api_base_url.to_string()
     } else {
@@ -79,9 +82,7 @@ pub(crate) async fn run_qr_login(http: &reqwest::Client, api_base_url: &str) -> 
             "expired" => {
                 refresh_count += 1;
                 if refresh_count > MAX_QR_REFRESH {
-                    anyhow::bail!(
-                        "QR code expired multiple times, please restart login flow"
-                    );
+                    anyhow::bail!("QR code expired multiple times, please restart login flow");
                 }
                 println!(
                     "\n[WeChatChannel] QR code expired, refreshing ({refresh_count}/{})...",
@@ -96,7 +97,11 @@ pub(crate) async fn run_qr_login(http: &reqwest::Client, api_base_url: &str) -> 
                     .context("refresh QR code")?;
                 qr_data = resp2.json().await.context("parse refreshed QR")?;
                 if let Ok(qr_img) = qrcode::QrCode::new(&qr_data.qrcode_img_content) {
-                    let rendered: String = qr_img.render::<char>().quiet_zone(false).module_dimensions(2, 1).build();
+                    let rendered: String = qr_img
+                        .render::<char>()
+                        .quiet_zone(false)
+                        .module_dimensions(2, 1)
+                        .build();
                     for line in rendered.split('\n') {
                         println!("  {line}");
                     }

@@ -107,7 +107,10 @@ impl ConfigManager {
     /// Create a new instance backed by `config_path`.
     pub fn new(config_path: PathBuf) -> Self {
         let global_config = load_global_config(&config_path).unwrap_or_default();
-        Self { global_config: Mutex::new(global_config), config_path }
+        Self {
+            global_config: Mutex::new(global_config),
+            config_path,
+        }
     }
 
     // ------------------------------------------------------------------ read
@@ -179,8 +182,7 @@ impl ConfigManager {
     pub fn save(&self) -> Result<()> {
         let cfg = self.global_config.lock().unwrap();
         let dir = self.config_path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("create config dir {:?}", dir))?;
+        std::fs::create_dir_all(dir).with_context(|| format!("create config dir {:?}", dir))?;
         let json = serde_json::to_string_pretty(&*cfg)?;
         std::fs::write(&self.config_path, json)
             .with_context(|| format!("write config {:?}", self.config_path))?;

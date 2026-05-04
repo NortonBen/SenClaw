@@ -184,10 +184,7 @@ pub async fn get_skill_meta(
 ) -> Result<SkillMeta, anyhow::Error> {
     let registry = registry.unwrap_or(DEFAULT_REGISTRY);
     let token = resolve_token(token).await;
-    let url = registry_url(
-        &format!("/api/v1/skills/{}", urlencoding(slug)),
-        registry,
-    );
+    let url = registry_url(&format!("/api/v1/skills/{}", urlencoding(slug)), registry);
     fetch_json(&url, token.as_deref()).await
 }
 
@@ -242,7 +239,8 @@ pub async fn whoami(
 ) -> Result<WhoamiResult, anyhow::Error> {
     let registry = registry.unwrap_or(DEFAULT_REGISTRY);
     let token = resolve_token(token).await;
-    let token = token.ok_or_else(|| anyhow::anyhow!("Not logged in. Run: senclaw clawhub login"))?;
+    let token =
+        token.ok_or_else(|| anyhow::anyhow!("Not logged in. Run: senclaw clawhub login"))?;
     let url = registry_url("/api/v1/whoami", registry);
 
     #[derive(Deserialize)]
@@ -266,7 +264,8 @@ pub async fn publish_skill(
 ) -> Result<PublishResult, anyhow::Error> {
     let registry = registry.unwrap_or(DEFAULT_REGISTRY);
     let token = resolve_token(token).await;
-    let token = token.ok_or_else(|| anyhow::anyhow!("Not logged in. Run: senclaw clawhub login"))?;
+    let token =
+        token.ok_or_else(|| anyhow::anyhow!("Not logged in. Run: senclaw clawhub login"))?;
     let url = registry_url("/api/v1/skills", registry);
 
     let payload = serde_json::json!({
@@ -277,8 +276,7 @@ pub async fn publish_skill(
         "tags": tags,
     });
 
-    let mut form = multipart::Form::new()
-        .text("payload", payload.to_string());
+    let mut form = multipart::Form::new().text("payload", payload.to_string());
 
     for (name, data) in files {
         let part = multipart::Part::bytes(data)

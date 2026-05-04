@@ -77,11 +77,7 @@ mod tests {
     #[test]
     fn test_all_personas_have_content() {
         for p in BUILTIN_PERSONAS {
-            assert!(
-                !p.content.is_empty(),
-                "{} should have content",
-                p.filename
-            );
+            assert!(!p.content.is_empty(), "{} should have content", p.filename);
             assert!(
                 p.content.contains("---"),
                 "{} should have frontmatter",
@@ -92,8 +88,7 @@ mod tests {
 
     #[test]
     fn test_install_creates_files() {
-        let tmp = std::env::temp_dir()
-            .join(format!("test-personas-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("test-personas-{}", uuid::Uuid::new_v4()));
         install_builtin_personas(&tmp);
 
         for p in BUILTIN_PERSONAS {
@@ -108,8 +103,7 @@ mod tests {
 
     #[test]
     fn test_install_skips_existing() {
-        let tmp = std::env::temp_dir()
-            .join(format!("test-personas-skip-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("test-personas-skip-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).unwrap();
 
         // Pre-create a file with custom content

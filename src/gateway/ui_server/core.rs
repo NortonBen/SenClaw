@@ -17,8 +17,6 @@ use crate::db::Db;
 use crate::mcp::manager::McpManager;
 use crate::wiki::manager::WikiManager;
 
-use super::types::AdminPermissionsConfig;
-use super::spa::spa_fallback;
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::cowork::{
     cowork_board_get, cowork_board_update, cowork_documents_upload, cowork_files_download,
@@ -43,9 +41,11 @@ use super::skills::{
     skills_install, skills_list, skills_readme, skills_readme_save, skills_remote_search,
     skills_toggle,
 };
+use super::spa::spa_fallback;
 use super::subagents::{
     subagents_create, subagents_list, subagents_readme, subagents_readme_save, subagents_toggle,
 };
+use super::types::AdminPermissionsConfig;
 use super::wiki::{
     wiki_dir_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
     wiki_tree, wiki_write,
@@ -117,17 +117,29 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/skills", get(skills_list))
         .route("/api/skills/remote-search", get(skills_remote_search))
         .route("/api/skills/install", post(skills_install))
-        .route("/api/skills/:name/readme", get(skills_readme).put(skills_readme_save))
+        .route(
+            "/api/skills/:name/readme",
+            get(skills_readme).put(skills_readme_save),
+        )
         .route("/api/skills/:name/:action", post(skills_toggle))
         .route("/api/subagents", get(subagents_list))
         .route("/api/subagents/create", post(subagents_create))
-        .route("/api/subagents/:name/readme", get(subagents_readme).put(subagents_readme_save))
+        .route(
+            "/api/subagents/:name/readme",
+            get(subagents_readme).put(subagents_readme_save),
+        )
         .route("/api/subagents/:name/:action", post(subagents_toggle))
         .route("/api/thinking", post(thinking_handler))
-        .route("/api/admin-permissions", get(admin_perms_get).post(admin_perms_set))
+        .route(
+            "/api/admin-permissions",
+            get(admin_perms_get).post(admin_perms_set),
+        )
         .route("/api/quicknotes", post(quicknotes_save))
         // LLM config (specific routes before parameterized)
-        .route("/api/llm-config", get(llm_config_list).post(llm_config_create))
+        .route(
+            "/api/llm-config",
+            get(llm_config_list).post(llm_config_create),
+        )
         .route("/api/llm-config/active", post(llm_config_set_active))
         .route("/api/llm-config/test", post(llm_config_test))
         .route("/api/llm-config/models", post(llm_config_fetch_models))
@@ -142,10 +154,19 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/wiki/mkdir", post(wiki_mkdir))
         .route("/api/wiki/dir", delete(wiki_dir_delete))
         // MCP server management
-        .route("/api/mcp-servers", get(mcp_servers_list).post(mcp_servers_save))
-        .route("/api/mcp-servers/:name", get(mcp_servers_get).delete(mcp_servers_delete))
+        .route(
+            "/api/mcp-servers",
+            get(mcp_servers_list).post(mcp_servers_save),
+        )
+        .route(
+            "/api/mcp-servers/:name",
+            get(mcp_servers_get).delete(mcp_servers_delete),
+        )
         .route("/api/mcp-servers/:name/connect", post(mcp_servers_connect))
-        .route("/api/mcp-servers/:name/disconnect", post(mcp_servers_disconnect))
+        .route(
+            "/api/mcp-servers/:name/disconnect",
+            post(mcp_servers_disconnect),
+        )
         .route("/api/mcp-servers/:name/tools", post(mcp_servers_tools))
         .route("/api/mcp-servers/:name/test", post(mcp_servers_test))
         .route("/api/mcp-servers/:name/enabled", post(mcp_servers_enabled))
@@ -154,24 +175,63 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         // Cowork API
         .route("/api/cowork/templates", get(cowork_templates_list))
         .route("/api/cowork/templates/:name", get(cowork_templates_get))
-        .route("/api/cowork/workspaces", get(cowork_ws_list).post(cowork_ws_create))
-        .route("/api/cowork/workspaces/:id", get(cowork_ws_get).patch(cowork_ws_update).delete(cowork_ws_delete))
-        .route("/api/cowork/workspaces/:id/members", get(cowork_members_list).post(cowork_members_add))
-        .route("/api/cowork/workspaces/:id/members/:mid", patch(cowork_members_update).delete(cowork_members_remove))
+        .route(
+            "/api/cowork/workspaces",
+            get(cowork_ws_list).post(cowork_ws_create),
+        )
+        .route(
+            "/api/cowork/workspaces/:id",
+            get(cowork_ws_get)
+                .patch(cowork_ws_update)
+                .delete(cowork_ws_delete),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/members",
+            get(cowork_members_list).post(cowork_members_add),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/members/:mid",
+            patch(cowork_members_update).delete(cowork_members_remove),
+        )
         .route("/api/cowork/workspaces/:id/board", get(cowork_board_get))
-        .route("/api/cowork/workspaces/:id/board/:section", patch(cowork_board_update))
-        .route("/api/cowork/workspaces/:id/tasks", get(cowork_tasks_list).post(cowork_tasks_create))
-        .route("/api/cowork/workspaces/:id/tasks/:tid", get(cowork_tasks_get).patch(cowork_tasks_update).delete(cowork_tasks_delete))
-        .route("/api/cowork/workspaces/:id/tasks/:tid/comments", get(cowork_task_comments_list).post(cowork_task_comments_add))
-        .route("/api/cowork/workspaces/:id/messages", get(cowork_messages_list).post(cowork_messages_send))
-        .route("/api/cowork/workspaces/:id/documents", post(cowork_documents_upload))
+        .route(
+            "/api/cowork/workspaces/:id/board/:section",
+            patch(cowork_board_update),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/tasks",
+            get(cowork_tasks_list).post(cowork_tasks_create),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/tasks/:tid",
+            get(cowork_tasks_get)
+                .patch(cowork_tasks_update)
+                .delete(cowork_tasks_delete),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/tasks/:tid/comments",
+            get(cowork_task_comments_list).post(cowork_task_comments_add),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/messages",
+            get(cowork_messages_list).post(cowork_messages_send),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/documents",
+            post(cowork_documents_upload),
+        )
         .route("/api/cowork/workspaces/:id/files", get(cowork_files_list))
-        .route("/api/cowork/workspaces/:id/files/download", get(cowork_files_download))
+        .route(
+            "/api/cowork/workspaces/:id/files/download",
+            get(cowork_files_download),
+        )
         .route("/api/cowork/workspaces/:id/browse", get(cowork_ws_browse))
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback
-        .fallback(get(move |headers: HeaderMap| spa_fallback(dist_dir.clone(), headers)))
+        .fallback(get(move |headers: HeaderMap| {
+            spa_fallback(dist_dir.clone(), headers)
+        }))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

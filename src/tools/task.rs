@@ -190,8 +190,10 @@ impl Tool for TaskTool {
             None => {
                 let available: Vec<&str> =
                     self.agent_configs.iter().map(|a| a.name.as_str()).collect();
-                let error_msg =
-                    format!("Unknown agent type: {subagent_type}. Available: {}", available.join(", "));
+                let error_msg = format!(
+                    "Unknown agent type: {subagent_type}. Available: {}",
+                    available.join(", ")
+                );
                 return Ok(vec![ToolOutput::Result {
                     data: serde_json::json!({
                         "agentType": subagent_type,
@@ -203,15 +205,19 @@ impl Tool for TaskTool {
             }
         };
 
-        debug!("Starting {} agent with prompt: {}", agent_config.name, prompt);
+        debug!(
+            "Starting {} agent with prompt: {}",
+            agent_config.name, prompt
+        );
 
         // 2. Emit task:agent:start
-        self.event_bus.emit(EngineEvent::TaskAgentStart(TaskAgentStartData {
-            task_id: task_id.clone(),
-            subagent_type: agent_config.name.clone(),
-            description: description.clone(),
-            prompt: prompt.clone(),
-        }));
+        self.event_bus
+            .emit(EngineEvent::TaskAgentStart(TaskAgentStartData {
+                task_id: task_id.clone(),
+                subagent_type: agent_config.name.clone(),
+                description: description.clone(),
+                prompt: prompt.clone(),
+            }));
 
         // 3. Build subagent system prompt
         let system_prompt = agent_config.prompt.clone();
@@ -278,23 +284,24 @@ impl Tool for TaskTool {
                 let is_interrupted = abort.is_cancelled();
                 let duration_ms = start.elapsed().as_millis() as u64;
 
-                self.event_bus.emit(EngineEvent::TaskAgentEnd(TaskAgentEndData {
-                    task_id: task_id.clone(),
-                    status: if is_interrupted {
-                        "interrupted".to_string()
-                    } else {
-                        "completed".to_string()
-                    },
-                    content: format!(
-                        "{} agent {}",
-                        agent_config.name,
-                        if is_interrupted {
-                            "interrupted"
+                self.event_bus
+                    .emit(EngineEvent::TaskAgentEnd(TaskAgentEndData {
+                        task_id: task_id.clone(),
+                        status: if is_interrupted {
+                            "interrupted".to_string()
                         } else {
-                            "completed"
-                        }
-                    ),
-                }));
+                            "completed".to_string()
+                        },
+                        content: format!(
+                            "{} agent {}",
+                            agent_config.name,
+                            if is_interrupted {
+                                "interrupted"
+                            } else {
+                                "completed"
+                            }
+                        ),
+                    }));
 
                 Ok(vec![ToolOutput::Result {
                     data: serde_json::json!({
@@ -314,11 +321,12 @@ impl Tool for TaskTool {
                     format!("Subagent execution failed: {e}")
                 };
 
-                self.event_bus.emit(EngineEvent::TaskAgentEnd(TaskAgentEndData {
-                    task_id,
-                    status: "failed".to_string(),
-                    content: error_msg.clone(),
-                }));
+                self.event_bus
+                    .emit(EngineEvent::TaskAgentEnd(TaskAgentEndData {
+                        task_id,
+                        status: "failed".to_string(),
+                        content: error_msg.clone(),
+                    }));
 
                 Ok(vec![ToolOutput::Result {
                     data: serde_json::json!({
