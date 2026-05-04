@@ -75,9 +75,9 @@ pub struct WebSocketGateway {
     pub(crate) token: Option<String>,
     pub(crate) clients: Arc<Mutex<Vec<super::state::WsClient>>>,
     pub(crate) last_known_states: Arc<Mutex<HashMap<String, String>>>,
-    /// Pending permission:request messages keyed by requestId.
+    /// Pending permission:request and question:request messages keyed by requestId.
     /// Stored so they can be replayed as a snapshot when an admin client (re)connects.
-    pub(crate) pending_permissions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pub(crate) pending_interactions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
 impl WebSocketGateway {
@@ -87,7 +87,7 @@ impl WebSocketGateway {
             token,
             clients: Arc::new(Mutex::new(Vec::new())),
             last_known_states: Arc::new(Mutex::new(HashMap::new())),
-            pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+            pending_interactions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -96,19 +96,19 @@ impl WebSocketGateway {
     pub fn route(&self, state: Arc<super::state::WsState>) -> axum::Router {
         let clients = self.clients.clone();
         let states = self.last_known_states.clone();
-        let pending_perms = self.pending_permissions.clone();
+        let pending_interactions = self.pending_interactions.clone();
         let token = self.token.clone();
 
         let main_route = {
             let clients = clients.clone();
             let states = states.clone();
-            let pending_perms = pending_perms.clone();
+            let pending_interactions = pending_interactions.clone();
             let token = token.clone();
             let state = state.clone();
             axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| {
                 let clients = clients.clone();
                 let states = states.clone();
-                let pending_perms = pending_perms.clone();
+                let pending_interactions = pending_interactions.clone();
                 let token = token.clone();
                 let state = state.clone();
                 async move {
@@ -117,7 +117,7 @@ impl WebSocketGateway {
                             socket,
                             clients,
                             states,
-                            pending_perms,
+                            pending_interactions,
                             token,
                             state,
                         )

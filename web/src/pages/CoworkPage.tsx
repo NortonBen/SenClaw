@@ -115,6 +115,11 @@ export function CoworkPage() {
   const [taskForm] = Form.useForm();
   const [memberForm] = Form.useForm();
 
+  // Board edit dialog state
+  const [boardEditModalOpen, setBoardEditModalOpen] = useState(false);
+  const [boardEditSection, setBoardEditSection] = useState('');
+  const [boardEditContent, setBoardEditContent] = useState('');
+
   // API helpers
   const api = useCallback(async (path: string, opts?: RequestInit) => {
     const resp = await fetch(path, opts);
@@ -773,10 +778,10 @@ export function CoworkPage() {
                                 title={<Text strong style={{ textTransform: 'capitalize' }}>{section}</Text>}
                                 style={{ marginBottom: 12, borderRadius: 8 }}
                                 extra={
-                                  <Button type="link" size="small" onClick={() => {
-                                    const c = entry?.content || '';
-                                    const newContent = prompt(`Edit ${section}:`, c);
-                                    if (newContent !== null && newContent !== c) handleUpdateBoard(section, newContent);
+                                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => {
+                                    setBoardEditSection(section);
+                                    setBoardEditContent(entry?.content || '');
+                                    setBoardEditModalOpen(true);
                                   }}>Edit</Button>
                                 }
                               >
@@ -817,12 +822,19 @@ export function CoworkPage() {
                           )
                         )}
                       </div>
-                      <div style={{ padding: '8px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8 }}>
-                        <Input
-                          placeholder="Type a status update..."
+                      <div style={{ padding: '8px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                        <TextArea
+                          placeholder="Type a status update... (Enter to send, Shift+Enter for new line)"
                           value={msgText}
                           onChange={e => setMsgText(e.target.value)}
-                          onPressEnter={handleSendMessage}
+                          autoSize={{ minRows: 1, maxRows: 6 }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSendMessage();
+                            }
+                          }}
+                          style={{ flex: 1, resize: 'none' }}
                         />
                         <Button icon={<SendOutlined />} onClick={handleSendMessage} disabled={!msgText.trim()}>Send</Button>
                       </div>
@@ -1490,6 +1502,42 @@ export function CoworkPage() {
               </Space>
             </Form.Item>
           </Form>
+        </Modal>
+
+        {/* Board Section Edit Modal */}
+        <Modal
+          title={
+            <Space>
+              <AppstoreOutlined />
+              <span style={{ textTransform: 'capitalize' }}>Edit — {boardEditSection}</span>
+            </Space>
+          }
+          open={boardEditModalOpen}
+          onCancel={() => setBoardEditModalOpen(false)}
+          onOk={async () => {
+            const original = board.find(e => e.section === boardEditSection)?.content || '';
+            if (boardEditContent !== original) {
+              await handleUpdateBoard(boardEditSection, boardEditContent);
+            }
+            setBoardEditModalOpen(false);
+          }}
+          okText="Save"
+          cancelText="Cancel"
+          destroyOnClose
+          width={640}
+        >
+          <div style={{ marginTop: 12 }}>
+            <TextArea
+              value={boardEditContent}
+              onChange={e => setBoardEditContent(e.target.value)}
+              rows={12}
+              placeholder={`Enter ${boardEditSection} content (supports Markdown)...`}
+              style={{ fontFamily: 'Menlo, Monaco, monospace', fontSize: 13 }}
+            />
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+              Markdown được hỗ trợ. Nội dung sẽ được lưu vào board section "{boardEditSection}".
+            </Text>
+          </div>
         </Modal>
 
         {/* Member Add/Edit Modal */}

@@ -80,7 +80,7 @@ impl WebSocketGateway {
             obj.insert("requestId".into(), request_id.into());
         }
         // Store for admin subscribe snapshot replay (so reconnecting admins see pending requests).
-        self.pending_permissions
+        self.pending_interactions
             .lock()
             .await
             .insert(request_id.to_string(), msg.clone());
@@ -135,7 +135,17 @@ impl WebSocketGateway {
             obj.insert("groupJid".into(), chat_jid.into());
             obj.insert("requestId".into(), request_id.into());
         }
+        tracing::info!(
+            "[WsGateway] notify question:request id={request_id} chat_jid={chat_jid}"
+        );
+        // Store for admin subscribe snapshot replay.
+        self.pending_interactions
+            .lock()
+            .await
+            .insert(request_id.to_string(), msg.clone());
+        // Broadcast to group subscribers + admins not already subscribed (no duplicate).
         self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
     }
 
     pub async fn notify_permission_resolved(
@@ -146,7 +156,7 @@ impl WebSocketGateway {
         option_label: &str,
     ) {
         // Remove from pending store so reconnecting admins don't see resolved requests.
-        self.pending_permissions.lock().await.remove(request_id);
+        self.pending_interactions.lock().await.remove(request_id);
         let msg = serde_json::json!({
             "type": "permission:resolved",
             "groupJid": chat_jid,
@@ -168,6 +178,8 @@ impl WebSocketGateway {
         request_id: &str,
         answers: &serde_json::Value,
     ) {
+        // Remove from pending store.
+        self.pending_interactions.lock().await.remove(request_id);
         let msg = serde_json::json!({
             "type": "question:resolved",
             "groupJid": chat_jid,
@@ -175,6 +187,7 @@ impl WebSocketGateway {
             "answers": answers,
         });
         self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
     }
 
     pub async fn notify_dispatch_update(&self, parents: &serde_json::Value) {

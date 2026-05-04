@@ -14,7 +14,7 @@ pub(crate) async fn handle_connection(
     ws: WebSocket,
     clients: Arc<Mutex<Vec<WsClient>>>,
     last_known_states: Arc<Mutex<HashMap<String, String>>>,
-    pending_permissions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pending_interactions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     token: Option<String>,
     state: Arc<WsState>,
 ) {
@@ -70,7 +70,7 @@ pub(crate) async fn handle_connection(
                     &parsed,
                     &clients,
                     &last_known_states,
-                    &pending_permissions,
+                    &pending_interactions,
                     &token,
                     &state,
                 )
@@ -97,7 +97,7 @@ async fn handle_message(
     msg: &serde_json::Value,
     clients: &Arc<Mutex<Vec<WsClient>>>,
     last_known_states: &Arc<Mutex<HashMap<String, String>>>,
-    pending_permissions: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pending_interactions: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
     token: &Option<String>,
     state: &Arc<WsState>,
 ) {
@@ -119,7 +119,7 @@ async fn handle_message(
                 client_idx,
                 &sender,
                 last_known_states,
-                pending_permissions,
+                pending_interactions,
                 state,
                 msg,
             )

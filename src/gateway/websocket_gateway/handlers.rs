@@ -48,7 +48,7 @@ pub(crate) async fn handle_subscribe(
     client_idx: usize,
     sender: &tokio::sync::mpsc::UnboundedSender<Message>,
     last_known_states: &Arc<Mutex<HashMap<String, String>>>,
-    pending_permissions: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pending_interactions: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
@@ -161,17 +161,17 @@ pub(crate) async fn handle_subscribe(
             }
         }
 
-        // Replay any pending permission:request messages so the Agent Console
-        // shows approvals that were issued before this client connected/reconnected.
-        let pending = pending_permissions.lock().await.clone();
+        // Replay any pending permission:request / question:request messages so the
+        // Agent Console shows interactions issued before this client connected/reconnected.
+        let pending = pending_interactions.lock().await.clone();
         let pending_count = pending.len();
         if pending_count > 0 {
             tracing::info!(
                 "[WsGateway] subscribe snapshot client #{client_idx}: \
-                 replaying {pending_count} pending permission request(s)"
+                 replaying {pending_count} pending interaction(s) (permissions/questions)"
             );
-            for (_, perm_msg) in &pending {
-                send_json(sender, perm_msg);
+            for (_, interaction_msg) in &pending {
+                send_json(sender, interaction_msg);
             }
         }
     }
