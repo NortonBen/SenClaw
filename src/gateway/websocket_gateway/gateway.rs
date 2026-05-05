@@ -18,6 +18,16 @@ pub trait WsGatewayApi: Send + Sync {
     fn enqueue_and_process(&self, _group_jid: &str, _group: &GroupBinding, _text: &str) {}
     /// Resolve a pending permission request.
     fn resolve_permission(&self, _request_id: &str, _option_key: &str) {}
+    /// Add/replace a tool auto-accept rule.
+    fn add_tool_rule(&self, _rule: crate::agent::permission_bridge::types::ToolAutoAcceptRule) {}
+    /// Remove a tool auto-accept rule by ID.
+    fn remove_tool_rule(&self, _rule_id: &str) {}
+    /// Update an existing rule (replaces by ID).
+    fn update_tool_rule(&self, _rule: crate::agent::permission_bridge::types::ToolAutoAcceptRule) {}
+    /// Set the global "accept all" flag.
+    fn set_accept_all(&self, _enabled: bool) {}
+    /// Get all current rules (for sending to newly connected client).
+    fn get_tool_rules(&self) -> Vec<crate::agent::permission_bridge::types::ToolAutoAcceptRule> { vec![] }
     /// Resolve a pending ask-question batch.
     fn resolve_ask_question(
         &self,

@@ -8,7 +8,7 @@ use crate::types::InlineButton;
 use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
 use super::types::{
     AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission, PermissionOption,
-    PermissionPayload,
+    PermissionPayload, RuleAction, RuleMatcherType, ToolAutoAcceptRule,
 };
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
@@ -17,6 +17,10 @@ pub struct PermissionBridge {
     pub(crate) pending_ask_questions: Mutex<HashMap<String, PendingAskQuestion>>,
     max_content_length: usize,
     api: Arc<dyn PermissionBridgeApi>,
+
+    // Tool auto-accept rules
+    tool_rules: Mutex<Vec<ToolAutoAcceptRule>>,
+    accept_all: Mutex<bool>,
 
     // Callback setters (set once during daemon wiring)
     pub(crate) on_activity: Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>,
@@ -40,12 +44,93 @@ impl PermissionBridge {
             pending_ask_questions: Mutex::new(HashMap::new()),
             max_content_length: max_content_length.unwrap_or(200),
             api,
+            tool_rules: Mutex::new(Vec::new()),
+            accept_all: Mutex::new(false),
             on_activity: Mutex::new(None),
             on_permission_request: Mutex::new(None),
             on_ask_question_request: Mutex::new(None),
             on_permission_resolved: Mutex::new(None),
             on_ask_question_resolved: Mutex::new(None),
             on_tool_allowed: Mutex::new(None),
+        }
+    }
+
+    // ===== Rule management =====
+
+    pub fn add_rule(&self, rule: ToolAutoAcceptRule) {
+        let mut rules = self.tool_rules.lock().unwrap();
+        rules.retain(|r| r.id != rule.id); // replace if same id
+        tracing::info!("[PermissionBridge] add_rule id={} server={:?} tool={:?} action={:?} enabled={}", rule.id, rule.matcher.server, rule.matcher.tool, rule.action, rule.enabled);
+        rules.push(rule);
+    }
+
+    pub fn remove_rule(&self, rule_id: &str) {
+        self.tool_rules.lock().unwrap().retain(|r| r.id != rule_id);
+    }
+
+    pub fn update_rule(&self, rule: ToolAutoAcceptRule) {
+        let mut rules = self.tool_rules.lock().unwrap();
+        if let Some(existing) = rules.iter_mut().find(|r| r.id == rule.id) {
+            *existing = rule;
+        }
+    }
+
+    pub fn set_accept_all(&self, enabled: bool) {
+        *self.accept_all.lock().unwrap() = enabled;
+    }
+
+    pub fn get_rules(&self) -> Vec<ToolAutoAcceptRule> {
+        self.tool_rules.lock().unwrap().clone()
+    }
+
+    /// Check if `tool_name` (sema-core format, e.g. `mcp__browser__search`) is auto-accepted.
+    fn should_auto_accept(&self, tool_name: &str) -> bool {
+        if *self.accept_all.lock().unwrap() {
+            return true;
+        }
+        let rules = self.tool_rules.lock().unwrap();
+        rules.iter().any(|r| r.enabled && Self::rule_matches(r, tool_name) && matches!(r.action, RuleAction::AutoAccept | RuleAction::AutoAcceptAndAllow))
+    }
+
+    fn rule_matches(rule: &ToolAutoAcceptRule, tool_name: &str) -> bool {
+        match rule.matcher.matcher_type {
+            RuleMatcherType::Always => true,
+            RuleMatcherType::ToolExact => {
+                rule.matcher.tool_name.as_deref() == Some(tool_name)
+            }
+            RuleMatcherType::McpServer => {
+                let Some(server) = rule.matcher.server.as_deref() else { return false };
+                // sema-core tool name format: mcp__{server_normalized}__{tool}
+                // Normalize: "senclaw-browser" → try "senclaw_browser" and also strip "senclaw-" → "browser"
+                let normalized = server.replace('-', "_");
+                let without_prefix = server.strip_prefix("senclaw-").unwrap_or(server).replace('-', "_");
+                let prefix_full = format!("mcp__{normalized}__");
+                let prefix_short = format!("mcp__{without_prefix}__");
+                let prefix = if tool_name.starts_with(&prefix_full) {
+                    &prefix_full
+                } else if tool_name.starts_with(&prefix_short) {
+                    &prefix_short
+                } else {
+                    return false;
+                };
+                // If tool is None/empty, match all tools of this server
+                match rule.matcher.tool.as_deref() {
+                    None | Some("") => true,
+                    Some(expected_tool) => {
+                        let actual_tool = &tool_name[prefix.len()..];
+                        actual_tool == expected_tool
+                    }
+                }
+            }
+            RuleMatcherType::McpGlob | RuleMatcherType::BashGlob => {
+                let Some(pattern) = rule.matcher.pattern.as_deref() else { return false };
+                glob_match(pattern, tool_name)
+            }
+            RuleMatcherType::BashRegex => {
+                let Some(pattern) = rule.matcher.pattern.as_deref() else { return false };
+                regex::Regex::new(pattern).map(|re| re.is_match(tool_name)).unwrap_or(false)
+            }
+            RuleMatcherType::ToolCategory => false, // not applicable for MCP tools
         }
     }
 
@@ -236,6 +321,19 @@ impl PermissionBridge {
         chat_jid: &str,
         bot_token: Option<&str>,
     ) {
+        // Auto-accept if a matching rule exists — no UI prompt needed.
+        let rule_count = self.tool_rules.lock().unwrap().len();
+        let accept_all = *self.accept_all.lock().unwrap();
+        tracing::info!("[PermissionBridge] permission request tool={tool_name} accept_all={accept_all} rules={rule_count}");
+        if self.should_auto_accept(tool_name) {
+            tracing::info!(
+                "[PermissionBridge] auto-accepting tool={tool_name} group={group_jid}"
+            );
+            self.api.respond_to_tool_permission(group_jid, tool_name, "allow");
+            self.fire_activity(chat_jid);
+            return;
+        }
+
         let request_id = short_id();
         {
             let mut map = self.pending_permissions.lock().unwrap();
@@ -515,4 +613,29 @@ impl PermissionBridge {
 
         Some(format!("✅ Selected: {question_label}"))
     }
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_dp(&p, &t)
+}
+
+fn glob_dp(p: &[char], t: &[char]) -> bool {
+    let (m, n) = (p.len(), t.len());
+    let mut dp = vec![vec![false; n + 1]; m + 1];
+    dp[0][0] = true;
+    for i in 1..=m {
+        if p[i - 1] == '*' { dp[i][0] = dp[i - 1][0]; }
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            if p[i - 1] == '*' {
+                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+            } else if p[i - 1] == '?' || p[i - 1] == t[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1];
+            }
+        }
+    }
+    dp[m][n]
 }

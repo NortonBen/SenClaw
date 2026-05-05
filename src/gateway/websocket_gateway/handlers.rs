@@ -187,6 +187,17 @@ pub(crate) async fn handle_subscribe(
         }
     }
 
+    // Send current tool auto-accept rules to newly connected client.
+    {
+        let rules = state.api.get_tool_rules();
+        if !rules.is_empty() {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "permission:rules", "rules": rules}),
+            );
+        }
+    }
+
     // Load and push chat history so the Web UI shows past conversation.
     if let Ok(messages) = state.db.get_group_messages(&jid, None) {
         if !messages.is_empty() {
@@ -765,6 +776,61 @@ pub(crate) async fn handle_permission_response(
         return;
     }
     state.api.resolve_permission(&request_id, &option_key);
+}
+
+pub(crate) async fn handle_tool_rule_add(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    if let Ok(rule) = serde_json::from_value::<crate::agent::permission_bridge::types::ToolAutoAcceptRule>(msg["rule"].clone()) {
+        state.api.add_tool_rule(rule.clone());
+        send_json(sender, &serde_json::json!({"type": "permission:rule:added", "rule": rule}));
+    }
+}
+
+pub(crate) async fn handle_tool_rule_remove(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    if let Some(rule_id) = msg["ruleId"].as_str() {
+        state.api.remove_tool_rule(rule_id);
+        send_json(sender, &serde_json::json!({"type": "permission:rule:removed", "ruleId": rule_id}));
+    }
+}
+
+pub(crate) async fn handle_tool_rule_update(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    if let Ok(rule) = serde_json::from_value::<crate::agent::permission_bridge::types::ToolAutoAcceptRule>(msg["rule"].clone()) {
+        state.api.update_tool_rule(rule.clone());
+        send_json(sender, &serde_json::json!({"type": "permission:rule:updated", "rule": rule}));
+    }
+}
+
+pub(crate) async fn handle_tool_accept_all(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    let enabled = msg["enabled"].as_bool().unwrap_or(false);
+    state.api.set_accept_all(enabled);
+    send_json(sender, &serde_json::json!({"type": "permission:accept-all:updated", "enabled": enabled}));
 }
 
 pub(crate) async fn handle_question_response(

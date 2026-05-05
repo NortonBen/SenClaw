@@ -147,6 +147,18 @@ async fn handle_message(
             super::handlers::handle_permission_response(clients, client_idx, &sender, state, msg)
                 .await
         }
+        "permission:rule:add" => {
+            super::handlers::handle_tool_rule_add(clients, client_idx, &sender, state, msg).await
+        }
+        "permission:rule:remove" => {
+            super::handlers::handle_tool_rule_remove(clients, client_idx, &sender, state, msg).await
+        }
+        "permission:rule:update" => {
+            super::handlers::handle_tool_rule_update(clients, client_idx, &sender, state, msg).await
+        }
+        "permission:accept-all" => {
+            super::handlers::handle_tool_accept_all(clients, client_idx, &sender, state, msg).await
+        }
         "question:response" => {
             super::handlers::handle_question_response(clients, client_idx, &sender, state, msg)
                 .await

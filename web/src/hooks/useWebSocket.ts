@@ -339,6 +339,15 @@ export function useWebSocket(): WsHook {
             for (const jid of subscribedRef.current) {
               rawSend({ type: 'subscribe', groupJid: jid });
             }
+            // Re-sync tool auto-accept rules to backend (in-memory, lost on restart)
+            {
+              const rules = loadRules();
+              const acceptAll = loadAcceptAll();
+              if (acceptAll) rawSend({ type: 'permission:accept-all', enabled: true });
+              for (const rule of rules) {
+                rawSend({ type: 'permission:rule:add', rule });
+              }
+            }
             break;
           case 'groups': {
             const incoming = (msg.groups as GroupInfo[]) ?? [];

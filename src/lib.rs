@@ -125,6 +125,36 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         let _ = self.agent_pool.resolve_permission(request_id, option_key);
     }
 
+    fn add_tool_rule(&self, rule: crate::agent::permission_bridge::types::ToolAutoAcceptRule) {
+        if let Some(bridge) = self.agent_pool.permission_bridge() {
+            bridge.add_rule(rule);
+        }
+    }
+
+    fn remove_tool_rule(&self, rule_id: &str) {
+        if let Some(bridge) = self.agent_pool.permission_bridge() {
+            bridge.remove_rule(rule_id);
+        }
+    }
+
+    fn update_tool_rule(&self, rule: crate::agent::permission_bridge::types::ToolAutoAcceptRule) {
+        if let Some(bridge) = self.agent_pool.permission_bridge() {
+            bridge.update_rule(rule);
+        }
+    }
+
+    fn set_accept_all(&self, enabled: bool) {
+        if let Some(bridge) = self.agent_pool.permission_bridge() {
+            bridge.set_accept_all(enabled);
+        }
+    }
+
+    fn get_tool_rules(&self) -> Vec<crate::agent::permission_bridge::types::ToolAutoAcceptRule> {
+        self.agent_pool.permission_bridge()
+            .map(|b| b.get_rules())
+            .unwrap_or_default()
+    }
+
     fn resolve_ask_question(
         &self,
         request_id: &str,

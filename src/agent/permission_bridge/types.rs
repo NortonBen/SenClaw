@@ -2,7 +2,49 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+// ===== Tool auto-accept rules (mirrors frontend ToolAutoAcceptRule) =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleAction {
+    AutoAccept,
+    AutoDeny,
+    ForceRequest,
+    AutoAcceptAndAllow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleMatcherType {
+    BashGlob,
+    BashRegex,
+    ToolExact,
+    McpServer,
+    McpGlob,
+    ToolCategory,
+    Always,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleMatcher {
+    #[serde(rename = "type")]
+    pub matcher_type: RuleMatcherType,
+    pub pattern: Option<String>,
+    pub tool_name: Option<String>,
+    pub server: Option<String>,
+    pub tool: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolAutoAcceptRule {
+    pub id: String,
+    pub matcher: RuleMatcher,
+    pub action: RuleAction,
+    pub enabled: bool,
+    pub description: Option<String>,
+}
 
 // ===== Public payload types (mirrors TS PermissionPayload / AskQuestionPayload) =====
 
