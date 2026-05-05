@@ -60,7 +60,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent }: Pro
       <div className="flex flex-col h-full">
         {/* TOP: Logo & Name */}
         <div className="px-5 py-4 flex items-center gap-3 border-b" style={{ borderColor: token.colorBorderSecondary }}>
-          <img src="/logo.png" alt="SenClaw" className="w-8 h-8 object-contain" />
+          <img src="/logo.svg" alt="SenClaw" className="w-8 h-8 object-contain" />
           <span className="font-bold text-lg tracking-tight" style={{ color: token.colorTextHeading }}>SenClaw</span>
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${animate ? 'animate-pulse' : ''}`} style={{ background: color }} />
         </div>
