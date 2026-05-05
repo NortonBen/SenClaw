@@ -14,7 +14,7 @@ import {
   BugOutlined, ArrowRightOutlined, InboxOutlined,
   FileOutlined, FileTextOutlined, FolderOutlined, FolderOpenOutlined, DownloadOutlined, UploadOutlined, PaperClipOutlined,
   LaptopOutlined, CloudOutlined, BranchesOutlined, LoadingOutlined,
-  NodeIndexOutlined, ApartmentOutlined
+  NodeIndexOutlined, ApartmentOutlined, CrownOutlined
 } from '@ant-design/icons';
 import type { DispatchParent, DispatchTask as DTask } from '../types';
 import { useNavigate } from 'react-router-dom';
@@ -46,7 +46,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 const BOARD_SECTIONS = ['brief', 'guidelines', 'progress', 'reference', 'decisions'];
 
-const KANBAN_COLUMNS: CoworkTask['status'][] = ['backlog', 'todo', 'in_progress', 'review', 'done'];
+const KANBAN_COLUMNS: CoworkTask['status'][] = ['backlog', 'todo', 'in_progress', 'done', 'blocked'];
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -91,6 +91,7 @@ export function CoworkPage() {
   const [wsFiles, setWsFiles] = useState<any[]>([]);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+  const [fileIsBinary, setFileIsBinary] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [members, setMembers] = useState<CoworkMember[]>([]);
 
@@ -175,6 +176,7 @@ export function CoworkPage() {
       const data = await api(`/api/cowork/workspaces/${wsId}/files?path=${encodeURIComponent(filePath)}`);
       setSelectedFilePath(filePath);
       setFileContent(data.content || '');
+      setFileIsBinary(data.isBinary || false);
     } catch { /* ignore */ }
     finally { setFileLoading(false); }
   }, [api]);
@@ -248,6 +250,7 @@ export function CoworkPage() {
     setLoading(true);
     setSelectedFilePath(null);
     setFileContent(null);
+    setFileIsBinary(false);
     setWdEntries([]); setWdPath(''); setWdFilePath(null); setWdContent(null);
     setWsNavPath('');
     Promise.all([
@@ -258,6 +261,32 @@ export function CoworkPage() {
   // Create workspace
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
+  const [wsFsPickerOpen, setWsFsPickerOpen] = useState(false);
+  const [wsFsPickerLoading, setWsFsPickerLoading] = useState(false);
+  const [wsFsPickerAbsPath, setWsFsPickerAbsPath] = useState('');
+  const [wsFsPickerHome, setWsFsPickerHome] = useState('');
+  const [wsFsPickerRoot, setWsFsPickerRoot] = useState('');
+  const [wsFsQuickPaths, setWsFsQuickPaths] = useState<{ label: string; path: string }[]>([]);
+  const [wsFsPickerParent, setWsFsPickerParent] = useState<string | null>(null);
+  const [wsFsPickerEntries, setWsFsPickerEntries] = useState<any[]>([]);
+
+  const loadWsFsBrowse = useCallback(async (path?: string) => {
+    setWsFsPickerLoading(true);
+    try {
+      const q = path ? `?path=${encodeURIComponent(path)}` : '';
+      const data = await api(`/api/cowork/fs-browse${q}`);
+      setWsFsPickerAbsPath(String(data.absolutePath ?? ''));
+      setWsFsPickerHome(String(data.homePath ?? ''));
+      setWsFsPickerRoot(String(data.rootPath ?? ''));
+      setWsFsQuickPaths(Array.isArray(data.quickPaths) ? data.quickPaths : []);
+      setWsFsPickerParent(data.parentPath != null ? String(data.parentPath) : null);
+      setWsFsPickerEntries(data.entries || []);
+    } catch (e: any) {
+      message.error(e.message || 'Could not open folder');
+    } finally {
+      setWsFsPickerLoading(false);
+    }
+  }, [api]);
 
   const handleCreateWorkspace = async (values: any) => {
     try {
@@ -457,7 +486,12 @@ export function CoworkPage() {
     } catch (e: any) { message.error(e.message); }
   };
 
-  const tasksByStatus = (status: string) => tasks.filter(t => t.status === status);
+  const tasksByStatus = (status: string) => {
+    if (status === 'in_progress') {
+      return tasks.filter(t => t.status === 'in_progress' || t.status === 'review');
+    }
+    return tasks.filter(t => t.status === status);
+  };
 
   // Stats
   const activeWSCount = workspaces.filter(w => w.status === 'active').length;
@@ -620,7 +654,21 @@ export function CoworkPage() {
                 <TextArea rows={3} placeholder="What is this workspace for?" />
               </Form.Item>
               <Form.Item name="workingDir" label="Working Directory (project folder)">
-                <Input placeholder="/path/to/project — agent work dir" />
+                <Input
+                  placeholder="/path/to/project — agent work dir"
+                  addonAfter={
+                    <Button
+                      type="text"
+                      icon={<FolderOpenOutlined />}
+                      onClick={() => {
+                        setWsFsPickerOpen(true);
+                        loadWsFsBrowse();
+                      }}
+                      title="Chọn thư mục trên máy chạy Senclaw (Home, gốc hệ thống, …)"
+                      style={{ height: 30 }}
+                    />
+                  }
+                />
               </Form.Item>
               <Form.Item name="template" label="Template (optional)">
                 <Select
@@ -659,6 +707,106 @@ export function CoworkPage() {
                 </Space>
               </Form.Item>
             </Form>
+          </Modal>
+
+          <Modal
+            title={<Space><FolderOpenOutlined />Working directory — pick folder</Space>}
+            open={wsFsPickerOpen}
+            onCancel={() => setWsFsPickerOpen(false)}
+            footer={
+              <Flex justify="space-between" align="center" style={{ width: '100%' }}>
+                <Text type="secondary" style={{ fontSize: 11, flex: 1, marginRight: 12 }} ellipsis>
+                  {wsFsPickerHome ? <>Home: {wsFsPickerHome}</> : null}
+                </Text>
+                <Space>
+                  <Button onClick={() => setWsFsPickerOpen(false)}>Cancel</Button>
+                  <Button
+                    type="primary"
+                    disabled={!wsFsPickerAbsPath}
+                    onClick={() => {
+                      wsForm.setFieldsValue({ workingDir: wsFsPickerAbsPath });
+                      setWsFsPickerOpen(false);
+                    }}
+                  >
+                    Use this folder
+                  </Button>
+                </Space>
+              </Flex>
+            }
+            width={560}
+            destroyOnClose
+          >
+            <div style={{ marginBottom: 12 }}>
+              <Flex gap={8} wrap="wrap" align="center" style={{ marginBottom: 8 }}>
+                <Button
+                  size="small"
+                  icon={<HomeOutlined />}
+                  onClick={() => loadWsFsBrowse()}
+                >
+                  Home
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!wsFsPickerRoot}
+                  onClick={() => wsFsPickerRoot && loadWsFsBrowse(wsFsPickerRoot)}
+                  title={wsFsPickerRoot || 'Filesystem root'}
+                >
+                  Gốc hệ thống
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!wsFsPickerParent}
+                  onClick={() => wsFsPickerParent && loadWsFsBrowse(wsFsPickerParent)}
+                >
+                  Lên một cấp
+                </Button>
+              </Flex>
+              {wsFsQuickPaths.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
+                    Thư mục hệ thống
+                  </Text>
+                  <Space size={[4, 4]} wrap>
+                    {wsFsQuickPaths.map((q) => (
+                      <Button
+                        key={q.path}
+                        size="small"
+                        type="default"
+                        onClick={() => loadWsFsBrowse(q.path)}
+                      >
+                        {q.label}
+                      </Button>
+                    ))}
+                  </Space>
+                </div>
+              )}
+              <Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                {wsFsPickerAbsPath || '—'}
+              </Text>
+            </div>
+            {wsFsPickerLoading ? (
+              <Spin style={{ display: 'block', padding: 48, textAlign: 'center' }} />
+            ) : (
+              <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                <List
+                  size="small"
+                  dataSource={wsFsPickerEntries}
+                  locale={{ emptyText: <Empty description="No subfolders" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+                  renderItem={(e: any) => (
+                    <List.Item
+                      style={{ cursor: 'pointer', padding: '8px 12px' }}
+                      onClick={() => loadWsFsBrowse(e.path)}
+                    >
+                      <FolderOutlined style={{ color: '#faad14', marginRight: 10 }} />
+                      <Text style={{ fontSize: 13 }}>{e.name}</Text>
+                    </List.Item>
+                  )}
+                />
+              </div>
+            )}
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>
+              Duyệt thư mục trên máy chạy Senclaw. Home = thư mục người dùng; Gốc hệ thống = ổ / đĩa gốc (ví dụ <code>/</code> hoặc <code>C:\</code>). Chọn thư mục rồi bấm "Use this folder".
+            </Text>
           </Modal>
         </Layout>
       </AppLayout>
@@ -742,6 +890,9 @@ export function CoworkPage() {
                                   <Text style={{ fontSize: 13 }}>{task.title}</Text>
                                   <Flex justify="space-between" align="center" style={{ marginTop: 4 }}>
                                     <Space size={4}>
+                                      {task.status === 'review' && (
+                                        <Tag style={{ fontSize: 10, lineHeight: '16px' }} color="purple">Review</Tag>
+                                      )}
                                       {task.priority !== 'medium' && (
                                         <Tag style={{ fontSize: 10, lineHeight: '16px' }} color={PRIORITY_COLORS[task.priority]}>{task.priority}</Tag>
                                       )}
@@ -988,10 +1139,20 @@ export function CoworkPage() {
                                   size="small"
                                   title={
                                     <Space>
-                                      <Avatar icon={<RobotOutlined />} size={28} style={{ backgroundColor: '#1890ff' }} />
+                                      <Avatar
+                                        icon={m.role === 'lead' ? <CrownOutlined /> : <RobotOutlined />}
+                                        size={28}
+                                        style={{ backgroundColor: m.role === 'lead' ? '#faad14' : m.role === 'reviewer' ? '#722ed1' : '#1890ff' }}
+                                      />
                                       <span>{m.memberId}</span>
                                       {m.subdir && <Tag style={{ fontSize: 10, fontFamily: 'monospace' }}>{m.subdir}/</Tag>}
-                                      <Tag color={m.role === 'reviewer' ? 'purple' : 'blue'} style={{ fontSize: 10 }}>{m.role}</Tag>
+                                      <Tag
+                                        color={m.role === 'lead' ? 'gold' : m.role === 'reviewer' ? 'purple' : 'blue'}
+                                        icon={m.role === 'lead' ? <CrownOutlined /> : undefined}
+                                        style={{ fontSize: 10 }}
+                                      >
+                                        {m.role}
+                                      </Tag>
                                     </Space>
                                   }
                                   extra={
@@ -1197,7 +1358,7 @@ export function CoworkPage() {
                           value={resTab}
                           onChange={val => {
                             setResTab(val as string);
-                            setSelectedFilePath(null); setFileContent(null);
+                            setSelectedFilePath(null); setFileContent(null); setFileIsBinary(false);
                             setWdFilePath(null); setWdContent(null);
                           }}
                           options={[
@@ -1356,7 +1517,7 @@ export function CoworkPage() {
                                       onClick={() => {
                                         if (f.isDir) {
                                           setWsNavPath(f.path);
-                                          setSelectedFilePath(null); setFileContent(null);
+                                          setSelectedFilePath(null); setFileContent(null); setFileIsBinary(false);
                                         } else {
                                           loadFileContent(selectedWs!.id, f.path);
                                         }
@@ -1381,7 +1542,10 @@ export function CoworkPage() {
                               selectedFilePath && fileContent !== null ? (
                                 <div>
                                   <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
-                                    <Text strong>{selectedFilePath.split('/').pop()}</Text>
+                                    <Space>
+                                      <Text strong>{selectedFilePath.split('/').pop()}</Text>
+                                      {fileIsBinary && <Tag color="orange" size="small">Binary</Tag>}
+                                    </Space>
                                     <Space>
                                       <Text type="secondary" style={{ fontSize: 11 }}>{selectedFilePath}</Text>
                                       <a href={`/api/cowork/workspaces/${selectedWs!.id}/files/download?path=${encodeURIComponent(selectedFilePath)}`} download>
@@ -1389,7 +1553,13 @@ export function CoworkPage() {
                                       </a>
                                     </Space>
                                   </Flex>
-                                  <Card style={{ borderRadius: 8 }}>
+                                  <Card
+                                    style={{
+                                      borderRadius: 8,
+                                      background: fileIsBinary ? '#fffbe6' : undefined,
+                                      borderColor: fileIsBinary ? '#ffd591' : undefined,
+                                    }}
+                                  >
                                     {selectedFilePath.endsWith('.md') || selectedFilePath.endsWith('.markdown') ? (
                                       <div
                                         style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}
@@ -1398,9 +1568,11 @@ export function CoworkPage() {
                                     ) : (
                                       <pre style={{
                                         whiteSpace: 'pre-wrap', fontFamily: 'Menlo, Monaco, monospace',
-                                        fontSize: 12, lineHeight: 1.5, margin: 0, padding: 12,
-                                        background: '#f6f8fa', borderRadius: 6,
+                                        fontSize: fileIsBinary ? 11 : 12, lineHeight: 1.5, margin: 0, padding: 12,
+                                        background: fileIsBinary ? '#fff7e6' : '#f6f8fa',
+                                        borderRadius: 6,
                                         maxHeight: 'calc(100vh - 340px)', overflow: 'auto',
+                                        color: fileIsBinary ? '#8c6b1f' : undefined,
                                       }}>{fileContent}</pre>
                                     )}
                                   </Card>
@@ -1474,9 +1646,18 @@ export function CoworkPage() {
                     <Space>
                       <RobotOutlined style={{ fontSize: 11, color: '#1890ff' }} />
                       <span>{opt.label}</span>
-                      {members.find(m => m.memberId === opt.value)?.role && (
-                        <Tag style={{ fontSize: 10, lineHeight: '16px' }}>{members.find(m => m.memberId === opt.value)?.role}</Tag>
-                      )}
+                      {(() => {
+                        const role = members.find(m => m.memberId === opt.value)?.role;
+                        return role ? (
+                          <Tag
+                            color={role === 'lead' ? 'gold' : role === 'reviewer' ? 'purple' : 'blue'}
+                            icon={role === 'lead' ? <CrownOutlined /> : undefined}
+                            style={{ fontSize: 10, lineHeight: '16px' }}
+                          >
+                            {role}
+                          </Tag>
+                        ) : null;
+                      })()}
                     </Space>
                   )}
                 />
@@ -1487,7 +1668,7 @@ export function CoworkPage() {
             </Flex>
             {editingTask && (
               <Form.Item name="status" label="Status">
-                <Select options={KANBAN_COLUMNS.map(s => ({ value: s, label: STATUS_LABELS[s] }))} />
+                <Select options={['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked'].map(s => ({ value: s, label: STATUS_LABELS[s] ?? s }))} />
               </Form.Item>
             )}
             <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
@@ -1563,6 +1744,7 @@ export function CoworkPage() {
                 <Flex gap={12}>
                   <Form.Item name="role" label="Role" style={{ flex: 1 }} initialValue="worker">
                     <Select options={[
+                      { value: 'lead', label: 'Lead — orchestrates, assigns tasks' },
                       { value: 'worker', label: 'Worker — executes implementation' },
                       { value: 'reviewer', label: 'Reviewer — reviews and approves' },
                     ]} />

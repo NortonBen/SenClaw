@@ -83,7 +83,25 @@ impl super::super::Db {
 
     pub fn delete_cowork_workspace(&self, id: &str) -> Result<()> {
         self.with_conn(|c| {
-            c.execute("DELETE FROM cowork_workspaces WHERE id=?1", params![id])?;
+            let tx = c.unchecked_transaction()?;
+            tx.execute(
+                "DELETE FROM cowork_task_comments WHERE task_id IN \
+                 (SELECT id FROM cowork_tasks WHERE workspace_id=?1)",
+                params![id],
+            )?;
+            tx.execute("DELETE FROM cowork_tasks WHERE workspace_id=?1", params![id])?;
+            tx.execute("DELETE FROM cowork_messages WHERE workspace_id=?1", params![id])?;
+            tx.execute(
+                "DELETE FROM cowork_board_entries WHERE workspace_id=?1",
+                params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM cowork_recording_sessions WHERE workspace_id=?1",
+                params![id],
+            )?;
+            tx.execute("DELETE FROM cowork_members WHERE workspace_id=?1", params![id])?;
+            tx.execute("DELETE FROM cowork_workspaces WHERE id=?1", params![id])?;
+            tx.commit()?;
             Ok(())
         })
     }

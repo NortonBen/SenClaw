@@ -11,9 +11,9 @@ interface CrawlJobState {
   startTime: number;
 }
 
-type ProgressCallback = (jobId: JobId, pagesCrawled: number, pagesTotal: number, currentUrl: string) => void;
-type ResultCallback = (jobId: JobId, pageResult: CrawlPageResult) => void;
-type CompleteCallback = (jobId: JobId, totalPages: number, durationMs: number) => void;
+type ProgressCallback = (jobId: JobId, pagesCrawled: number, pagesTotal: number, currentUrl: string, agentId?: string) => void;
+type ResultCallback = (jobId: JobId, pageResult: CrawlPageResult, agentId?: string) => void;
+type CompleteCallback = (jobId: JobId, totalPages: number, durationMs: number, agentId?: string) => void;
 
 export class CrawlEngine {
   private jobs: Map<JobId, CrawlJobState> = new Map();
@@ -107,12 +107,13 @@ export class CrawlEngine {
         job.results.push(result);
         job.pagesCrawled++;
 
-        this.onResult?.(jobId, result);
+        this.onResult?.(jobId, result, job.config.agent_id);
         this.onProgress?.(
           jobId,
           job.pagesCrawled,
           Math.min(job.config.max_pages, job.queue.length + job.pagesCrawled),
           url,
+          job.config.agent_id,
         );
 
         // Discover new links if not at max depth
@@ -135,7 +136,7 @@ export class CrawlEngine {
       job.status = 'completed';
     }
 
-    this.onComplete?.(jobId, job.pagesCrawled, Date.now() - job.startTime);
+    this.onComplete?.(jobId, job.pagesCrawled, Date.now() - job.startTime, job.config.agent_id);
     this.jobs.delete(jobId);
   }
 

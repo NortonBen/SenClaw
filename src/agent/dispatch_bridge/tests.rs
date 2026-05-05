@@ -431,3 +431,51 @@ fn cancel_admin_parents_marks_active_jids_and_clears_tasks() {
     assert!(!bridge.has_active_jid_tasks("jid-a"));
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn cancel_parents_for_shared_workspace_only_matching_root() {
+    let path = tmp_state_path("cancel_ws_root");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            s.parents.push(DispatchParent {
+                id: "p-a".into(),
+                goal: "g1".into(),
+                admin_folder: "lead-a".into(),
+                shared_workspace: Some("/tmp/cowork-ws-a".into()),
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![make_task("d-a", "t-a", "jid-a")],
+            });
+            s.parents.push(DispatchParent {
+                id: "p-b".into(),
+                goal: "g2".into(),
+                admin_folder: "lead-b".into(),
+                shared_workspace: Some("/tmp/cowork-ws-b".into()),
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![make_task("d-b", "t-b", "jid-b")],
+            });
+        })
+        .unwrap();
+    bridge.add_active_task("d-a", "jid-a");
+    bridge.add_active_task("d-b", "jid-b");
+
+    let affected = bridge.cancel_parents_for_shared_workspace("/tmp/cowork-ws-a/");
+    assert_eq!(affected, vec!["jid-a".to_string()]);
+
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].status, "done");
+    assert_eq!(parents[0].tasks[0].status, DispatchTaskStatus::Error);
+    assert_eq!(
+        parents[0].tasks[0].result.as_deref(),
+        Some("Cancelled: cowork workspace deleted")
+    );
+    assert_eq!(parents[1].status, "active");
+    assert_eq!(parents[1].tasks[0].status, DispatchTaskStatus::Processing);
+    assert!(!bridge.has_active_jid_tasks("jid-a"));
+    assert!(bridge.has_active_jid_tasks("jid-b"));
+    let _ = std::fs::remove_file(path);
+}

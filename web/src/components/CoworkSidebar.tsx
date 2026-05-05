@@ -55,9 +55,6 @@ export function CoworkSidebar({
             <Tooltip title="Refresh">
               <Button type="text" size="small" icon={<ReloadOutlined />} onClick={onRefresh} />
             </Tooltip>
-            <Tooltip title="New workspace">
-              <Button type="text" size="small" icon={<PlusOutlined />} onClick={onCreateWorkspace} />
-            </Tooltip>
           </Space>
         </Flex>
         <Input

@@ -2,7 +2,53 @@
 //! context, board knowledge, member persona, responsibilities, acceptance
 //! criteria, and dependency results.
 
+use std::fs;
+use std::path::PathBuf;
+
 use crate::types::{CoworkBoardEntry, CoworkMember, CoworkTask, CoworkWorkspace};
+
+/// Explain where shared uploads live and list `shared/` so all agents see the same files.
+pub fn shared_workspace_files_context(workspace: &CoworkWorkspace) -> String {
+    let shared = PathBuf::from(&workspace.root_dir).join("shared");
+    let mut lines: Vec<String> = vec![
+        format!("Workspace root (agent cwd / symlink target): {}", workspace.root_dir),
+        format!("UI uploads and shared artifacts: {}", shared.display()),
+    ];
+    if let Some(ref wd) = workspace.working_dir {
+        if !wd.is_empty() {
+            lines.push(format!("Project working directory (implementation tree): {wd}"));
+        }
+    }
+    if shared.is_dir() {
+        if let Ok(rd) = fs::read_dir(&shared) {
+            let mut names: Vec<String> = rd
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') {
+                        return None;
+                    }
+                    let p = e.path();
+                    let suffix = if p.is_dir() { "/" } else { "" };
+                    Some(format!("shared/{}{}", name, suffix))
+                })
+                .collect();
+            names.sort();
+            if names.is_empty() {
+                lines.push("shared/ is empty — add files via Cowork UI (create workspace or Resources).".to_string());
+            } else {
+                lines.push("Contents of shared/ (read these paths relative to workspace root):".to_string());
+                lines.extend(names.into_iter().map(|n| format!("  - {n}")));
+            }
+        }
+    } else {
+        lines.push(
+            "shared/ does not exist yet — it is created when you upload reference documents."
+                .to_string(),
+        );
+    }
+    lines.join("\n")
+}
 
 /// Build a prompt for a cowork agent to execute a task.
 ///
@@ -18,10 +64,19 @@ pub fn build_cowork_task_prompt(
     let mut p = String::new();
 
     // Workspace identity
-    p.push_str(&format!(
-        "<workspace>\n  <name>{}</name>\n</workspace>\n\n",
-        workspace.name
-    ));
+    p.push_str("<workspace>\n");
+    p.push_str(&format!("  <name>{}</name>\n", workspace.name));
+    if let Some(ref wd) = workspace.working_dir {
+        if !wd.is_empty() {
+            p.push_str(&format!("  <working_directory>{}</working_directory>\n", wd));
+        }
+    }
+    p.push_str(&format!("  <root_directory>{}</root_directory>\n", workspace.root_dir));
+    p.push_str("</workspace>\n\n");
+
+    p.push_str("<shared_files>\n");
+    p.push_str(&shared_workspace_files_context(workspace));
+    p.push_str("\n</shared_files>\n\n");
 
     // Task
     p.push_str(&format!("<task>\n  <title>{}</title>\n", task.title));

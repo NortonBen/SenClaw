@@ -177,6 +177,16 @@ impl ZenEngine {
             filtered.retain(|t| t.name() != "TodoWrite");
         }
 
+        // Cowork agents use synthetic JIDs (`cowork:{workspace}:{member}`). Interactive
+        // ask tools block on WS `question:request`; dispatch often has no subscriber
+        // answering for that JID, so tasks appear "stuck" until timeout.
+        if self.instance_id.starts_with("cowork:") {
+            filtered.retain(|t| {
+                let n = t.name();
+                n != "AskUser" && n != "AskUserQuestion"
+            });
+        }
+
         filtered
     }
 

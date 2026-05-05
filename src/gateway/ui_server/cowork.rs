@@ -17,6 +17,110 @@ use crate::db::Db;
 use super::core::{AppError, UiState};
 use super::types::path_to_mime;
 
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+/// Format bytes as a hex dump preview (similar to xxd command)
+fn format_hex_preview(bytes: &[u8], max_bytes: usize) -> String {
+    let bytes_to_show = &bytes[..bytes.len().min(max_bytes)];
+    let mut lines = Vec::new();
+
+    for (i, chunk) in bytes_to_show.chunks(16).enumerate() {
+        let offset = i * 16;
+
+        // Hex part
+        let hex_part: Vec<String> = chunk
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        let hex_str = hex_part.join(" ");
+        let hex_padded = format!("{:48}", hex_str); // Pad to align columns
+
+        // ASCII part
+        let ascii_part: String = chunk
+            .iter()
+            .map(|&b| {
+                if b.is_ascii_graphic() || b == b' ' {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+
+        lines.push(format!("{:08x}: {}  {}", offset, hex_padded, ascii_part));
+    }
+
+    lines.join("\n")
+}
+
+/// OS filesystem root (e.g. `/` or `C:\`).
+fn filesystem_root() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var("SystemDrive")
+            .map(|d| {
+                let d = d.trim_end_matches('\\').to_string();
+                PathBuf::from(format!(r"{}\", d))
+            })
+            .unwrap_or_else(|_| PathBuf::from(r"C:\"))
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/")
+    }
+}
+
+/// Shortcuts to common system directories (only returned if they exist).
+fn system_quick_paths() -> Vec<(String, PathBuf)> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            ("System".to_string(), PathBuf::from("/System")),
+            ("Applications".to_string(), PathBuf::from("/Applications")),
+            ("Library".to_string(), PathBuf::from("/Library")),
+            ("usr/local".to_string(), PathBuf::from("/usr/local")),
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            ("opt".to_string(), PathBuf::from("/opt")),
+            ("usr".to_string(), PathBuf::from("/usr")),
+            ("etc".to_string(), PathBuf::from("/etc")),
+            ("var".to_string(), PathBuf::from("/var")),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+        let sys = sys.trim_end_matches('\\').to_string();
+        vec![
+            (
+                "Program Files".to_string(),
+                PathBuf::from(format!(r"{}\Program Files", sys)),
+            ),
+            (
+                "Program Files (x86)".to_string(),
+                PathBuf::from(format!(r"{}\Program Files (x86)", sys)),
+            ),
+            (
+                "Windows".to_string(),
+                PathBuf::from(format!(r"{}\Windows", sys)),
+            ),
+        ]
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    )))]
+    {
+        vec![]
+    }
+}
+
 // ===== Cowork helpers =====
 
 pub(crate) fn cowork_mgr(s: &UiState) -> Result<&CoworkManager, AppError> {
@@ -89,16 +193,37 @@ pub(crate) async fn cowork_ws_browse(
 
     // If target is a file, return its content
     if canonical_target.is_file() {
-        let content = fs::read_to_string(&canonical_target)
-            .unwrap_or_else(|_| "[binary or unreadable]".into());
         let mime = path_to_mime(&canonical_target.to_string_lossy());
-        let is_binary = content.contains('\0') || mime == "application/octet-stream";
+        let size = canonical_target.metadata().map(|m| m.len()).unwrap_or(0);
+
+        // Try reading as text first - a file is binary if:
+        // 1. It can't be read as valid UTF-8, OR
+        // 2. Its content contains null bytes
+        let content_result = fs::read_to_string(&canonical_target);
+        let is_binary = match &content_result {
+            Ok(text) => text.contains('\0'),
+            Err(_) => true, // Failed to read as UTF-8, treat as binary
+        };
+
+        let content = if is_binary {
+            // Read bytes and create hex preview
+            let bytes = fs::read(&canonical_target).unwrap_or_default();
+            let hex_preview = format_hex_preview(&bytes, 256); // First 256 bytes
+            format!("[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
+                size,
+                bytes.len().min(256),
+                hex_preview
+            )
+        } else {
+            content_result.unwrap_or_default()
+        };
+
         return Ok(Json(serde_json::json!({
             "path": rel,
-            "content": if is_binary { "[binary file]" } else { &content },
+            "content": content,
             "mime": mime,
             "isBinary": is_binary,
-            "size": canonical_target.metadata().map(|m| m.len()).unwrap_or(0),
+            "size": size,
             "isFile": true,
             "workingDir": working_dir,
         })));
@@ -145,14 +270,117 @@ pub(crate) async fn cowork_ws_browse(
 
     Ok(Json(serde_json::json!({
         "entries": entries,
-        "path": rel,
-        "isDir": true,
+        "path": canonical_target.to_string_lossy(),
         "workingDir": working_dir,
     })))
 }
 
-pub(crate) fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
+/// Browse filesystem for folder picking (Create Workspace) — local UI only; starts at user home.
+pub(crate) async fn cowork_fs_browse(
+    State(s): State<Arc<UiState>>,
+    Query(q): Query<BrowseQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _ = cowork_mgr(&s)?;
+
+    let home = dirs::home_dir().ok_or_else(|| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not resolve home directory".into(),
+        )
+    })?;
+
+    let target = match q.path.as_deref() {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => home.clone(),
+    };
+
+    let canonical = target.canonicalize().map_err(|_| {
+        AppError(
+            StatusCode::NOT_FOUND,
+            format!(
+                "Path not found or inaccessible: {}",
+                target.to_string_lossy()
+            ),
+        )
+    })?;
+
+    if !canonical.is_dir() {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Not a directory".into(),
+        ));
+    }
+
+    let home_canon = home
+        .canonicalize()
+        .unwrap_or_else(|_| home.clone());
+
+    let root_base = filesystem_root();
+    let root_canon = root_base.canonicalize().unwrap_or(root_base);
+
+    let quick_paths: Vec<serde_json::Value> = system_quick_paths()
+        .into_iter()
+        .filter_map(|(label, p)| {
+            let c = p.canonicalize().ok()?;
+            if c.is_dir() {
+                Some(serde_json::json!({
+                    "label": label,
+                    "path": c.to_string_lossy(),
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let parent_path = canonical
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
+
+    let mut entries = Vec::new();
+    if let Ok(read_dir) = fs::read_dir(&canonical) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Ok(meta) = path.metadata() {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let abs = path.to_string_lossy().to_string();
+                entries.push(serde_json::json!({
+                    "name": name,
+                    "path": abs,
+                    "isDir": true,
+                    "size": meta.len(),
+                    "modified": meta.modified().ok().map(|t| {
+                        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                    }),
+                }));
+            }
+        }
+    }
+
+    entries.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+
+    Ok(Json(serde_json::json!({
+        "entries": entries,
+        "absolutePath": canonical.to_string_lossy(),
+        "parentPath": parent_path,
+        "homePath": home_canon.to_string_lossy(),
+        "rootPath": root_canon.to_string_lossy(),
+        "quickPaths": quick_paths,
+    })))
 }
 
 // ===== Cowork Templates =====
@@ -620,7 +848,6 @@ pub(crate) struct SendMessageBody {
     from_member: String,
     content: String,
     #[serde(default = "default_message_type")]
-    #[allow(dead_code)]
     message_type: String,
 }
 
@@ -656,6 +883,7 @@ pub(crate) async fn cowork_messages_send(
             &ws_id,
             &body.from_member,
             &body.content,
+            Some(body.message_type.as_str()),
             &now,
             agent_api,
             mgr_arc,
@@ -772,22 +1000,47 @@ pub(crate) async fn cowork_files_list(
             return Err(AppError(StatusCode::BAD_REQUEST, "Not a file".into()));
         }
 
-        let content = fs::read_to_string(&full_path).map_err(|e| {
-            AppError(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read: {e}"),
-            )
-        })?;
-
         let mime = path_to_mime(&full_path.to_string_lossy());
-        let is_binary = content.contains('\0') || mime == "application/octet-stream";
+        let size = full_path.metadata().map(|m| m.len()).unwrap_or(0);
+
+        // Try reading as text first - a file is binary if:
+        // 1. It can't be read as valid UTF-8, OR
+        // 2. Its content contains null bytes
+        let content_result = fs::read_to_string(&full_path);
+        let is_binary = match &content_result {
+            Ok(text) => text.contains('\0'),
+            Err(_) => true, // Failed to read as UTF-8, treat as binary
+        };
+
+        let content = if is_binary {
+            // Read bytes and create hex preview
+            let bytes = fs::read(&full_path).map_err(|e| {
+                AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read: {e}"),
+                )
+            })?;
+            let hex_preview = format_hex_preview(&bytes, 256); // First 256 bytes
+            format!("[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
+                size,
+                bytes.len().min(256),
+                hex_preview
+            )
+        } else {
+            content_result.map_err(|e| {
+                AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read: {e}"),
+                )
+            })?
+        };
 
         Ok(Json(serde_json::json!({
             "path": full_path.strip_prefix(&base).unwrap_or(&full_path).to_string_lossy(),
-            "content": if is_binary { "[binary file]" } else { &content },
+            "content": content,
             "mime": mime,
             "isBinary": is_binary,
-            "size": full_path.metadata().map(|m| m.len()).unwrap_or(0),
+            "size": size,
         })))
     } else {
         // List files recursively

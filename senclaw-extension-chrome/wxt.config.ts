@@ -2,8 +2,7 @@ import { defineConfig } from 'wxt';
 
 export default defineConfig({
   outDir: 'dist',
-  // module-react removed due to Vite version conflicts in dev mode
-  // React.createElement is used directly (no JSX transform needed)
+  modules: ['@wxt-dev/module-react'],
   srcDir: 'src',
   manifest: {
     name: 'SenClaw Extension',
@@ -17,6 +16,7 @@ export default defineConfig({
     },
     permissions: [
       'tabs',
+      'tabGroups',
       'activeTab',
       'storage',
       'scripting',

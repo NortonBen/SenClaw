@@ -548,6 +548,7 @@ pub(crate) async fn handle_cowork_message_send(
 ) {
     let ws_id = msg["workspaceId"].as_str().unwrap_or("");
     let from = msg["fromMember"].as_str().unwrap_or("");
+    let message_type = msg["messageType"].as_str();
     if ws_id.is_empty() || from.is_empty() {
         send_json(
             sender,
@@ -576,6 +577,7 @@ pub(crate) async fn handle_cowork_message_send(
             ws_id,
             from,
             content,
+            message_type,
             &now,
             agent_api,
             Arc::clone(&state.cowork_manager),

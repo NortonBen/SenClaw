@@ -201,6 +201,7 @@ impl CoworkManager {
 
         let task_title = task.title.clone();
         let db_clone = Arc::clone(&db);
+        let agent_api_followup = Arc::clone(&agent_api);
 
         tokio::spawn(async move {
             // Mark in_progress
@@ -289,131 +290,94 @@ impl CoworkManager {
                 } else {
                     "alert".into()
                 },
-                content,
+                content: content.clone(),
                 attachments: None,
                 task_id: Some(task_id.clone()),
                 is_read: false,
                 created_at: now2.clone(),
             });
 
+            if new_status == "done" {
+                if let Ok(members) = db_clone.list_cowork_members(&workspace_id_owned) {
+                    let mut followup = Vec::new();
+                    let msg_type = "result";
+                    if manager
+                        .collect_triggered_tasks(
+                            &db_clone,
+                            &workspace_id_owned,
+                            &members,
+                            &member_id,
+                            msg_type,
+                            &content,
+                            &[],
+                            &now2,
+                            &mut followup,
+                        )
+                        .is_ok()
+                        && !followup.is_empty()
+                    {
+                        let _ = manager.dispatch_cowork_tasks_batch(
+                            &db_clone,
+                            &workspace_id_owned,
+                            &members,
+                            &followup,
+                            &content,
+                            Some((Arc::clone(&agent_api_followup), Arc::clone(&db_clone))),
+                            Arc::clone(&manager),
+                        );
+                    }
+                }
+            }
+
             manager.fire_changed();
         });
     }
 
-    /// Process a user message in the workspace: save it, create tasks for agents,
-    /// and optionally dispatch tasks to agents for execution.
-    /// Returns (message, created_tasks).
-    pub fn process_user_message(
+    /// Match member triggers against an incoming message and append new tasks to `out`.
+    fn collect_triggered_tasks(
         &self,
         db: &Db,
         workspace_id: &str,
+        members: &[CoworkMember],
         from_user: &str,
+        resolved_message_type: &str,
         content: &str,
+        already_created: &[CoworkTask],
         now: &str,
-        agent_api: Option<(Arc<dyn AgentApi>, Arc<Db>)>,
-        self_arc: Arc<CoworkManager>,
-    ) -> Result<(CoworkMessage, Vec<CoworkTask>)> {
-        // 1. Save the message
-        let msg_id = format!(
-            "cwmsg-{}",
-            Uuid::new_v4()
-                .to_string()
-                .split('-')
-                .next()
-                .unwrap_or("0000")
-        );
-        let msg = CoworkMessage {
-            id: msg_id,
-            workspace_id: workspace_id.to_string(),
-            from_member: from_user.to_string(),
-            to_member: None,
-            message_type: if from_user == "user" {
-                "status".to_string()
-            } else {
-                "handoff".to_string()
-            },
-            content: content.to_string(),
-            attachments: None,
-            task_id: None,
-            is_read: false,
-            created_at: now.to_string(),
-        };
-        db.insert_cowork_message(&msg)?;
-
-        // 2. Get workspace members (agents)
-        let members = db.list_cowork_members(workspace_id)?;
-        let mut created_tasks = Vec::new();
-
-        if members.is_empty() {
-            self.fire_changed();
-            return Ok((msg, created_tasks));
-        }
-
-        // 3. Find the lead/orchestrator agent (first worker or lead role)
-        let lead = members
-            .iter()
-            .find(|m| m.role == "lead" || m.role == "worker")
-            .or_else(|| members.first());
-
-        if let Some(agent) = lead {
-            // Create a planning/execution task for the lead agent
-            let task_title = if content.len() > 80 {
-                format!("{}...", &content[..80])
-            } else {
-                content.to_string()
-            };
-            let task = self.create_task(
-                db,
-                workspace_id,
-                &task_title,
-                Some(content),          // full message as description
-                Some(&agent.member_id), // assignee
-                None,                   // reviewer
-                Some("high"),
-                None, // depends_on
-                from_user,
-                None, // attachments
-                now,
-            )?;
-            created_tasks.push(task);
-        }
-
-        // 4. Check handoff rules — if other agents have triggers matching this message,
-        //    create standby tasks for them too
-        for member in &members {
+        out: &mut Vec<CoworkTask>,
+    ) -> Result<()> {
+        for member in members {
             if let Some(ref triggers_json) = member.triggers {
                 if let Ok(triggers) = serde_json::from_str::<Vec<serde_json::Value>>(triggers_json)
                 {
                     for trigger in &triggers {
                         let trigger_type = trigger["type"].as_str().unwrap_or("");
+                        let pool: Vec<&CoworkTask> = already_created.iter().chain(out.iter()).collect();
                         let should_fire = match trigger_type {
                             "message_received" => {
                                 let from_filter = trigger["from"].as_str();
-                                from_filter.map_or(true, |f| f == from_user)
+                                let from_ok = from_filter.map_or(true, |f| f == from_user);
+                                let type_filter = trigger["messageType"].as_str();
+                                let type_ok = match type_filter {
+                                    None => true,
+                                    Some(mt) => resolved_message_type == mt,
+                                };
+                                from_ok && type_ok
                             }
                             "on_mention" => {
                                 let from_filter = trigger["from"].as_str();
                                 from_filter.map_or(false, |f| f == from_user)
                             }
-                            "task_assigned" => {
-                                // Fire when a task is being assigned to this member
-                                // (this member is the assignee of a newly created task)
-                                true
-                            }
-                            "task_status_changed" => {
-                                // Fire when task status changes (e.g. lead → worker handoff)
-                                let status_filter = trigger["status"].as_str();
-                                status_filter.map_or(true, |s| {
-                                    s == "in_progress" || s == "review" || s == "done"
-                                })
-                            }
+                            "task_assigned" => pool.iter().any(|t| {
+                                t.assignee.as_deref() == Some(member.member_id.as_str())
+                            }),
+                            "task_status_changed" => false,
                             _ => false,
                         };
-                        if should_fire
-                            && !created_tasks
-                                .iter()
-                                .any(|t| t.assignee.as_deref() == Some(&member.member_id))
-                        {
+                        let duplicate_assignee = pool
+                            .iter()
+                            .any(|t| t.assignee.as_deref() == Some(member.member_id.as_str()));
+                        if should_fire && !duplicate_assignee {
                             let task = self.create_task(
                                 db,
                                 workspace_id,
@@ -435,27 +399,40 @@ impl CoworkManager {
                                 None,
                                 now,
                             )?;
-                            created_tasks.push(task);
+                            out.push(task);
                         }
                     }
                 }
             }
         }
+        Ok(())
+    }
 
-        // 5. Dispatch tasks — prefer DAG dispatch bridge when available;
-        //    fall back to direct process_and_wait per-task dispatch.
+    /// DAG or direct dispatch for a set of cowork tasks (already persisted).
+    fn dispatch_cowork_tasks_batch(
+        &self,
+        db: &Db,
+        workspace_id: &str,
+        members: &[CoworkMember],
+        created_tasks: &[CoworkTask],
+        goal: &str,
+        agent_api: Option<(Arc<dyn AgentApi>, Arc<Db>)>,
+        self_arc: Arc<CoworkManager>,
+    ) -> Result<()> {
+        if created_tasks.is_empty() {
+            return Ok(());
+        }
         let dag_bridge = self.dispatch_bridge.lock().unwrap().clone();
         if let Some(ref bridge) = dag_bridge {
             tracing::info!(
-                "[Cowork] DAG bridge active — routing {} task(s) through dispatch",
+                "[Cowork] DAG bridge — routing {} task(s) through dispatch",
                 created_tasks.len()
             );
-            // DAG path: convert CoworkTasks → DispatchTasks, enqueue as parent.
             let workspace = match db.get_cowork_workspace(workspace_id) {
                 Ok(Some(ws)) => ws,
                 _ => {
                     self.fire_changed();
-                    return Ok((msg, created_tasks));
+                    return Ok(());
                 }
             };
             let board = db
@@ -472,7 +449,6 @@ impl CoworkManager {
                         .and_then(|m| m.jid.clone())
                         .unwrap_or_else(|| format!("cowork:{}:{}", workspace_id, agent_id));
 
-                    // Resolve depends_on: CoworkTask IDs → DispatchTask labels (task titles)
                     let depends_on: Vec<String> = task
                         .depends_on
                         .as_ref()
@@ -487,7 +463,6 @@ impl CoworkManager {
                         })
                         .collect();
 
-                    // Build cowork-aware prompt
                     let deps: Vec<CoworkTask> = created_tasks
                         .iter()
                         .filter(|t| {
@@ -524,16 +499,15 @@ impl CoworkManager {
                         &deps,
                     );
 
-                    // Infer timeout from member SLA
                     let timeout_seconds: u64 = member
                         .and_then(|m| m.sla.as_ref())
                         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
                         .and_then(|v| v.get("maxDurationPerTaskMinutes").and_then(|t| t.as_i64()))
                         .map(|mins| (mins * 60) as u64)
-                        .unwrap_or(1800); // default 30 min
+                        .unwrap_or(1800);
 
                     DispatchTask {
-                        id: String::new(), // filled by enqueue_parent
+                        id: String::new(),
                         label: task.title.clone(),
                         agent_id,
                         agent_jid,
@@ -541,7 +515,7 @@ impl CoworkManager {
                         prompt,
                         status: DispatchTaskStatus::Registered,
                         result: None,
-                        created_at: String::new(), // filled by enqueue_parent
+                        created_at: String::new(),
                         started_at: None,
                         timeout_seconds,
                         timeout_at: None,
@@ -552,7 +526,6 @@ impl CoworkManager {
                 })
                 .collect();
 
-            let goal = content.to_string();
             let admin_folder = members
                 .iter()
                 .find(|m| m.role == "lead")
@@ -561,7 +534,7 @@ impl CoworkManager {
                 .unwrap_or_else(|| "cowork".into());
 
             match bridge.enqueue_parent(
-                goal,
+                goal.to_string(),
                 admin_folder,
                 Some(workspace.root_dir.clone()),
                 dispatch_tasks,
@@ -571,7 +544,6 @@ impl CoworkManager {
                         "[Cowork] Enqueued DAG parent {parent_id} with {} task(s)",
                         task_ids.len()
                     );
-                    // Store dispatch_task_id → cowork_task_id mapping for status sync.
                     {
                         let mut map = self.dispatch_task_map.lock().unwrap();
                         for (i, dispatch_id) in task_ids.iter().enumerate() {
@@ -589,12 +561,11 @@ impl CoworkManager {
                 }
             }
         } else if let Some((ref api, ref db_arc)) = agent_api {
-            // Fallback: direct process_and_wait per-task dispatch (no DAG).
             tracing::info!(
                 "[Cowork] No DAG bridge — dispatching {} task(s) via direct process_and_wait",
                 created_tasks.len()
             );
-            for task in &created_tasks {
+            for task in created_tasks {
                 let assignee_id = task.assignee.as_deref().unwrap_or("");
                 if let Some(member) = members.iter().find(|m| m.member_id == assignee_id) {
                     self.send_to_cowork_agent(
@@ -609,10 +580,122 @@ impl CoworkManager {
             }
         } else {
             tracing::warn!(
-                "[Cowork] No DAG bridge AND no agent_api — {} task(s) created but will NOT be dispatched",
+                "[Cowork] No DAG bridge AND no agent_api — {} task(s) not dispatched",
                 created_tasks.len()
             );
         }
+
+        self.fire_changed();
+        Ok(())
+    }
+
+    /// Process a user message in the workspace: save it, create tasks for agents,
+    /// and optionally dispatch tasks to agents for execution.
+    /// Returns (message, created_tasks).
+    pub fn process_user_message(
+        &self,
+        db: &Db,
+        workspace_id: &str,
+        from_user: &str,
+        content: &str,
+        incoming_message_type: Option<&str>,
+        now: &str,
+        agent_api: Option<(Arc<dyn AgentApi>, Arc<Db>)>,
+        self_arc: Arc<CoworkManager>,
+    ) -> Result<(CoworkMessage, Vec<CoworkTask>)> {
+        // 1. Save the message
+        let msg_id = format!(
+            "cwmsg-{}",
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0000")
+        );
+        let resolved_type = incoming_message_type
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if from_user == "user" {
+                    "status"
+                } else {
+                    "handoff"
+                }
+            })
+            .to_string();
+        let msg = CoworkMessage {
+            id: msg_id,
+            workspace_id: workspace_id.to_string(),
+            from_member: from_user.to_string(),
+            to_member: None,
+            message_type: resolved_type.clone(),
+            content: content.to_string(),
+            attachments: None,
+            task_id: None,
+            is_read: false,
+            created_at: now.to_string(),
+        };
+        db.insert_cowork_message(&msg)?;
+
+        // 2. Get workspace members (agents)
+        let members = db.list_cowork_members(workspace_id)?;
+        let mut created_tasks = Vec::new();
+
+        if members.is_empty() {
+            self.fire_changed();
+            return Ok((msg, created_tasks));
+        }
+
+        // 3. Assign the primary planning task to the lead (if any), not the first worker.
+        let lead = members.iter().find(|m| m.role == "lead").or_else(|| members.first());
+
+        if let Some(agent) = lead {
+            // Create a planning/execution task for the lead agent
+            let task_title = if content.len() > 80 {
+                format!("{}...", &content[..80])
+            } else {
+                content.to_string()
+            };
+            let task = self.create_task(
+                db,
+                workspace_id,
+                &task_title,
+                Some(content),          // full message as description
+                Some(&agent.member_id), // assignee
+                None,                   // reviewer
+                Some("high"),
+                None, // depends_on
+                from_user,
+                None, // attachments
+                now,
+            )?;
+            created_tasks.push(task);
+        }
+
+        // 4–5. Triggers → extra tasks → dispatch (shared with agent-result follow-ups)
+        let mut triggered = Vec::new();
+        self.collect_triggered_tasks(
+            db,
+            workspace_id,
+            &members,
+            from_user,
+            &resolved_type,
+            content,
+            &created_tasks,
+            now,
+            &mut triggered,
+        )?;
+        created_tasks.extend(triggered);
+
+        self.dispatch_cowork_tasks_batch(
+            db,
+            workspace_id,
+            &members,
+            &created_tasks,
+            content,
+            agent_api,
+            self_arc,
+        )?;
 
         self.fire_changed();
         Ok((msg, created_tasks))
@@ -688,8 +771,17 @@ impl CoworkManager {
     }
 
     pub fn delete_workspace(&self, db: &Db, id: &str) -> Result<()> {
-        // Fetch workspace first to get root_dir before deleting the DB record
-        let root_dir = db.get_cowork_workspace(id)?.map(|ws| ws.root_dir);
+        let ws = db.get_cowork_workspace(id)?;
+        let root_dir = ws.as_ref().map(|w| w.root_dir.clone());
+
+        {
+            let mut map = self.dispatch_task_map.lock().unwrap();
+            map.retain(|_, (_, wid)| wid != id);
+        }
+
+        if let (Some(ref dir), Some(bridge)) = (root_dir.as_ref(), self.get_dispatch_bridge()) {
+            let _ = bridge.cancel_parents_for_shared_workspace(dir);
+        }
 
         db.delete_cowork_workspace(id)?;
 
@@ -1085,87 +1177,107 @@ impl CoworkManager {
         let dir = &config.paths.workspace_templates_dir;
         fs::create_dir_all(dir).ok();
 
-        // Don't overwrite existing templates
-        if dir.join("software-dev.json").exists() {
-            return;
-        }
-
         let builtins: Vec<CoworkTemplate> = vec![
             CoworkTemplate {
                 name: "Software Development".into(),
-                description: "Multi-agent software development workflow with code, review, and test agents".into(),
+                description: "Technical lead, implementation, and QA — linear handoffs with task dependencies (no separate review role)".into(),
                 icon: Some("CodeOutlined".into()),
                 members: vec![
+                    TemplateMember {
+                        agent_folder: "lead-agent".into(),
+                        role: "lead".into(),
+                        subdir: Some("lead".into()),
+                        persona: Some(
+                            "Technical lead / PM. Read user goals and Board, produce a short plan, then create or delegate concrete tasks with clear assignees and depends_on order (implement → test). Record decisions on the Board.".into(),
+                        ),
+                        responsibilities: Some(vec![
+                            "Keep Board brief, progress, and decisions accurate".into(),
+                            "Break work into ordered tasks: assign implementation to code-agent, verification to test-agent; set depends_on so tests run only after implementation tasks complete".into(),
+                            "Unblock the team when dependencies or scope change".into(),
+                        ]),
+                        triggers: Some(vec![
+                            serde_json::from_str(
+                                r#"{"type":"task_assigned","condition":"assignee == me"}"#,
+                            )
+                            .unwrap(),
+                            serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
+                                .unwrap(),
+                        ]),
+                        handoff: Some(vec![
+                            serde_json::from_str(
+                                r#"{"when":"task_complete","to":"code-agent","type":"handoff"}"#,
+                            )
+                            .unwrap(),
+                        ]),
+                        acceptance_criteria: Some(vec![
+                            "Every active task has a clear owner and acceptance criteria".into(),
+                            "Board progress section updated when milestones move".into(),
+                        ]),
+                        output: Some(
+                            serde_json::from_str(
+                                r#"{"format":"markdown","requiredSections":["Plan","Assignments","Risks","Board Updates"]}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        sla: Some(
+                            serde_json::from_str(
+                                r#"{"maxDurationPerTaskMinutes":45,"maxTokenPerTask":40000}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        limits: Some(
+                            serde_json::from_str(r#"{"deniedTools":["Bash","Write","Edit"]}"#)
+                                .unwrap(),
+                        ),
+                    },
                     TemplateMember {
                         agent_folder: "code-agent".into(),
                         role: "worker".into(),
                         subdir: Some("impl".into()),
-                        persona: Some("Senior backend engineer. Prioritize correctness and performance. Always write unit tests for public functions.".into()),
+                        persona: Some("Senior engineer. Implement features, own code quality: self-review (diff, clippy/tests), document risks in the task outcome. No separate reviewer role — you are responsible for production-readiness before handoff to QA.".into()),
                         responsibilities: Some(vec![
-                            "Implement tasks tagged \"backend\" or \"feature\"".into(),
-                            "Write unit tests and integration tests for your code".into(),
-                            "Fix bugs assigned after review cycle".into(),
-                            "Update Board progress section after each feature".into(),
+                            "Implement assigned tasks; keep changes scoped and tested".into(),
+                            "Run project checks (e.g. cargo test / clippy) and fix issues before marking done".into(),
+                            "Update Board progress; attach or summarize relevant paths under shared/ when useful".into(),
                         ]),
                         triggers: Some(vec![
                             serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
-                            serde_json::from_str(r#"{"when":"task_complete","to":"review-agent","type":"review_request"}"#).unwrap(),
+                            serde_json::from_str(
+                                r#"{"when":"task_complete","to":"test-agent","type":"handoff"}"#,
+                            )
+                            .unwrap(),
                         ]),
                         acceptance_criteria: Some(vec![
-                            "cargo test passes".into(),
-                            "cargo clippy has no warnings".into(),
-                            "No new unwrap() in production paths".into(),
+                            "Required tests pass".into(),
+                            "Static checks clean (e.g. clippy) where applicable".into(),
+                            "Summary lists files touched and follow-ups".into(),
                         ]),
                         output: Some(serde_json::from_str(r#"{"format":"markdown","requiredSections":["Summary","Files Changed","Test Results","Notes"],"attachDiff":true}"#).unwrap()),
                         sla: Some(serde_json::from_str(r#"{"maxDurationPerTaskMinutes":60,"maxTokenPerTask":50000}"#).unwrap()),
                         limits: Some(serde_json::from_str(r#"{"allowedBashCommands":["cargo build","cargo test","cargo clippy","git diff"]}"#).unwrap()),
                     },
                     TemplateMember {
-                        agent_folder: "review-agent".into(),
-                        role: "reviewer".into(),
-                        subdir: Some("review".into()),
-                        persona: Some("Senior engineer specialized in code review. Focus on correctness, security, and performance. Provide specific, actionable feedback.".into()),
-                        responsibilities: Some(vec![
-                            "Review code from code-agent when receiving handoff".into(),
-                            "Record important review decisions to Board \"decisions\"".into(),
-                            "Approve or reject with clear reasoning".into(),
-                        ]),
-                        triggers: Some(vec![
-                            serde_json::from_str(r#"{"type":"message_received","from":"code-agent","messageType":"review_request"}"#).unwrap(),
-                        ]),
-                        handoff: Some(vec![
-                            serde_json::from_str(r#"{"when":"task_complete","to":"code-agent","type":"result"}"#).unwrap(),
-                        ]),
-                        acceptance_criteria: Some(vec![
-                            "Full diff has been read".into(),
-                            "Test coverage verified".into(),
-                            "Key decisions recorded to Board".into(),
-                        ]),
-                        output: None,
-                        sla: None,
-                        limits: Some(serde_json::from_str(r#"{"deniedTools":["Write","Edit","Bash"]}"#).unwrap()),
-                    },
-                    TemplateMember {
                         agent_folder: "test-agent".into(),
                         role: "worker".into(),
                         subdir: Some("tests".into()),
-                        persona: Some("QA engineer specialized in thorough testing. Focus on edge cases, error paths, and concurrent scenarios.".into()),
+                        persona: Some("QA engineer. After implementation tasks complete (or via handoff from code-agent), expand integration coverage, run the suite, and report failures with reproduction steps.".into()),
                         responsibilities: Some(vec![
-                            "Write integration tests after review-agent approves".into(),
-                            "Run full test suite when requested".into(),
-                            "Report coverage and failed tests".into(),
+                            "Add or extend tests that lock in acceptance criteria".into(),
+                            "Run full test suite when triggered by assignment or handoff from code-agent".into(),
+                            "Report coverage, flakiness, and regressions on the Board if needed".into(),
                         ]),
                         triggers: Some(vec![
-                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"code-agent"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"message_received","from":"code-agent","messageType":"result"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
-                            serde_json::from_str(r#"{"when":"task_complete","to":"review-agent","type":"status"}"#).unwrap(),
+                            serde_json::from_str(r#"{"when":"task_complete","to":"lead-agent","type":"status"}"#).unwrap(),
                         ]),
                         acceptance_criteria: Some(vec![
-                            "Test coverage >= 80%".into(),
-                            "No flaky tests".into(),
+                            "Test coverage targets met for new code".into(),
+                            "No flaky tests introduced".into(),
                         ]),
                         output: None,
                         sla: None,
@@ -1176,15 +1288,62 @@ impl CoworkManager {
                     sections: vec![
                         TemplateBoardSection { section_type: "brief".into(), title: "Project Brief".into(), template: Some("Describe the project and its goals...".into()) },
                         TemplateBoardSection { section_type: "guidelines".into(), title: "Development Guidelines".into(), template: Some("- Language/framework: ...\n- Coding conventions: ...\n- Testing requirements: ...".into()) },
-                        TemplateBoardSection { section_type: "decisions".into(), title: "Architecture Decisions".into(), template: Some("(decisions will be auto-recorded by review-agent)".into()) },
+                        TemplateBoardSection { section_type: "decisions".into(), title: "Architecture Decisions".into(), template: Some("(lead records notable decisions after each milestone)".into()) },
                     ],
                 }),
             },
             CoworkTemplate {
                 name: "Research".into(),
-                description: "Research workflow with researcher, synthesizer, and critic agents".into(),
+                description: "Research workflow with a research lead plus researcher, synthesizer, and critic agents".into(),
                 icon: Some("SearchOutlined".into()),
                 members: vec![
+                    TemplateMember {
+                        agent_folder: "research-lead".into(),
+                        role: "lead".into(),
+                        subdir: Some("lead".into()),
+                        persona: Some(
+                            "Research lead. Frames questions, scope, and success criteria; routes work between research, synthesis, and critique.".into(),
+                        ),
+                        responsibilities: Some(vec![
+                            "Maintain research brief and Board reference expectations".into(),
+                            "Assign or sequence tasks for researcher, synthesizer, and critic".into(),
+                            "Close the loop when findings are ready for stakeholders".into(),
+                        ]),
+                        triggers: Some(vec![
+                            serde_json::from_str(
+                                r#"{"type":"task_assigned","condition":"assignee == me"}"#,
+                            )
+                            .unwrap(),
+                            serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
+                                .unwrap(),
+                        ]),
+                        handoff: Some(vec![
+                            serde_json::from_str(
+                                r#"{"when":"task_complete","to":"researcher","type":"handoff"}"#,
+                            )
+                            .unwrap(),
+                        ]),
+                        acceptance_criteria: Some(vec![
+                            "Research scope and deliverables are explicit".into(),
+                            "Board brief matches stakeholder intent".into(),
+                        ]),
+                        output: Some(
+                            serde_json::from_str(
+                                r#"{"format":"markdown","requiredSections":["Scope","Work Plan","Board"]}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        sla: Some(
+                            serde_json::from_str(
+                                r#"{"maxDurationPerTaskMinutes":60,"maxTokenPerTask":50000}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        limits: Some(
+                            serde_json::from_str(r#"{"deniedTools":["Bash","Write","Edit"]}"#)
+                                .unwrap(),
+                        ),
+                    },
                     TemplateMember {
                         agent_folder: "researcher".into(),
                         role: "worker".into(),
@@ -1263,9 +1422,55 @@ impl CoworkManager {
             },
             CoworkTemplate {
                 name: "Content Pipeline".into(),
-                description: "Content creation workflow with writer, editor, and fact-checker agents".into(),
+                description: "Content creation with a content lead plus writer, editor, and fact-checker agents".into(),
                 icon: Some("EditOutlined".into()),
                 members: vec![
+                    TemplateMember {
+                        agent_folder: "content-lead".into(),
+                        role: "lead".into(),
+                        subdir: Some("lead".into()),
+                        persona: Some(
+                            "Content lead / editor-in-chief. Aligns brief, tone, and deadlines across writer, editor, and fact-checker.".into(),
+                        ),
+                        responsibilities: Some(vec![
+                            "Own Board brief and style expectations".into(),
+                            "Sequence drafts → editorial → fact-check before publish".into(),
+                            "Resolve conflicting feedback between roles".into(),
+                        ]),
+                        triggers: Some(vec![
+                            serde_json::from_str(
+                                r#"{"type":"task_assigned","condition":"assignee == me"}"#,
+                            )
+                            .unwrap(),
+                            serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
+                                .unwrap(),
+                        ]),
+                        handoff: Some(vec![
+                            serde_json::from_str(
+                                r#"{"when":"task_complete","to":"writer","type":"handoff"}"#,
+                            )
+                            .unwrap(),
+                        ]),
+                        acceptance_criteria: Some(vec![
+                            "Writer has a complete brief (audience, length, tone, deadline)".into(),
+                            "Fact-check happens after structural edit sign-off".into(),
+                        ]),
+                        output: Some(
+                            serde_json::from_str(
+                                r#"{"format":"markdown","requiredSections":["Brief Summary","Pipeline Status","Decisions"]}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        sla: Some(
+                            serde_json::from_str(
+                                r#"{"maxDurationPerTaskMinutes":45,"maxTokenPerTask":40000}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        limits: Some(
+                            serde_json::from_str(r#"{"deniedTools":["Bash"]}"#).unwrap(),
+                        ),
+                    },
                     TemplateMember {
                         agent_folder: "writer".into(),
                         role: "worker".into(),
@@ -1335,9 +1540,55 @@ impl CoworkManager {
             },
             CoworkTemplate {
                 name: "Data Analysis".into(),
-                description: "Analyst + Visualizer agents for data processing, statistics, and chart generation".into(),
+                description: "Analytics lead coordinating analyst and visualizer for statistics and chart generation".into(),
                 icon: Some("BarChartOutlined".into()),
                 members: vec![
+                    TemplateMember {
+                        agent_folder: "analysis-lead".into(),
+                        role: "lead".into(),
+                        subdir: Some("lead".into()),
+                        persona: Some(
+                            "Analytics lead. Clarifies questions, data contracts, and outputs; coordinates analyst and visualizer.".into(),
+                        ),
+                        responsibilities: Some(vec![
+                            "Lock analysis brief and success metrics on the Board".into(),
+                            "Decide when results move from analysis to visualization".into(),
+                            "Ensure caveats and data lineage are documented".into(),
+                        ]),
+                        triggers: Some(vec![
+                            serde_json::from_str(
+                                r#"{"type":"task_assigned","condition":"assignee == me"}"#,
+                            )
+                            .unwrap(),
+                            serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
+                                .unwrap(),
+                        ]),
+                        handoff: Some(vec![
+                            serde_json::from_str(
+                                r#"{"when":"task_complete","to":"analyst","type":"handoff"}"#,
+                            )
+                            .unwrap(),
+                        ]),
+                        acceptance_criteria: Some(vec![
+                            "Data sources and freshness are stated before deep analysis".into(),
+                            "Final artifact list (tables, charts, narrative) is agreed".into(),
+                        ]),
+                        output: Some(
+                            serde_json::from_str(
+                                r#"{"format":"markdown","requiredSections":["Questions","Data","Deliverables"]}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        sla: Some(
+                            serde_json::from_str(
+                                r#"{"maxDurationPerTaskMinutes":45,"maxTokenPerTask":45000}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        limits: Some(
+                            serde_json::from_str(r#"{"deniedTools":["Bash"]}"#).unwrap(),
+                        ),
+                    },
                     TemplateMember {
                         agent_folder: "analyst".into(),
                         role: "worker".into(),
@@ -1398,9 +1649,55 @@ impl CoworkManager {
             },
             CoworkTemplate {
                 name: "API Backend".into(),
-                description: "Backend engineer + Test agent for REST API development with OpenAPI specs".into(),
+                description: "API/backend lead plus engineer and test agent for REST APIs with OpenAPI specs".into(),
                 icon: Some("ApiOutlined".into()),
                 members: vec![
+                    TemplateMember {
+                        agent_folder: "backend-lead".into(),
+                        role: "lead".into(),
+                        subdir: Some("lead".into()),
+                        persona: Some(
+                            "Backend/API lead. Aligns OpenAPI contracts, release readiness, and test strategy between implementation and API testing.".into(),
+                        ),
+                        responsibilities: Some(vec![
+                            "Maintain API brief and non-functional requirements on the Board".into(),
+                            "Gate handoffs from implementation to formal API testing".into(),
+                            "Track breaking changes and versioning decisions".into(),
+                        ]),
+                        triggers: Some(vec![
+                            serde_json::from_str(
+                                r#"{"type":"task_assigned","condition":"assignee == me"}"#,
+                            )
+                            .unwrap(),
+                            serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
+                                .unwrap(),
+                        ]),
+                        handoff: Some(vec![
+                            serde_json::from_str(
+                                r#"{"when":"task_complete","to":"backend-dev","type":"handoff"}"#,
+                            )
+                            .unwrap(),
+                        ]),
+                        acceptance_criteria: Some(vec![
+                            "OpenAPI reflects agreed contract before wide endpoint work".into(),
+                            "Exit criteria for api-tester are explicit per milestone".into(),
+                        ]),
+                        output: Some(
+                            serde_json::from_str(
+                                r#"{"format":"markdown","requiredSections":["Contract Notes","Milestones","Board"]}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        sla: Some(
+                            serde_json::from_str(
+                                r#"{"maxDurationPerTaskMinutes":45,"maxTokenPerTask":40000}"#,
+                            )
+                            .unwrap(),
+                        ),
+                        limits: Some(
+                            serde_json::from_str(r#"{"deniedTools":["Bash"]}"#).unwrap(),
+                        ),
+                    },
                     TemplateMember {
                         agent_folder: "backend-dev".into(),
                         role: "worker".into(),
@@ -1468,9 +1765,13 @@ impl CoworkManager {
             },
         ];
 
+        // Write each built-in JSON only if missing (do not overwrite user edits).
         for tmpl in &builtins {
             let filename = tmpl.name.to_lowercase().replace(' ', "-") + ".json";
             let path = dir.join(&filename);
+            if path.exists() {
+                continue;
+            }
             if let Ok(json) = serde_json::to_string_pretty(tmpl) {
                 fs::write(&path, json).ok();
             }

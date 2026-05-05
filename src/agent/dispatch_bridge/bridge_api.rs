@@ -75,60 +75,9 @@ impl DispatchBridgeApi for DispatchBridge {
     }
 
     fn cancel_admin_parents(&self, folder: &str) -> Vec<String> {
-        let mut affected: Vec<String> = Vec::new();
-        let mut to_remove: Vec<String> = Vec::new();
-        let mut virtual_to_cancel: Vec<String> = Vec::new();
-        let now = chrono::Utc::now().to_rfc3339();
-        let _ = self.modify_state(|state| {
-            for parent in &mut state.parents {
-                if parent.admin_folder != folder {
-                    continue;
-                }
-                if parent.status != "active" && parent.status != "queued" {
-                    continue;
-                }
-                for task in &mut parent.tasks {
-                    match task.status {
-                        DispatchTaskStatus::Processing => {
-                            if task.is_virtual {
-                                virtual_to_cancel.push(task.id.clone());
-                            } else if !task.agent_jid.is_empty() {
-                                affected.push(task.agent_jid.clone());
-                            }
-                            to_remove.push(task.id.clone());
-                            task.status = DispatchTaskStatus::Error;
-                            task.result = Some("Cancelled: admin agent stopped".into());
-                            task.completed_at = Some(now.clone());
-                        }
-                        DispatchTaskStatus::Registered => {
-                            task.status = DispatchTaskStatus::Error;
-                            task.result = Some("Cancelled: admin agent stopped".into());
-                            task.completed_at = Some(now.clone());
-                        }
-                        _ => {}
-                    }
-                }
-                parent.status = "done".into();
-                parent.completed_at = Some(now.clone());
-            }
-        });
-        for id in &to_remove {
-            self.remove_active_task(id);
-        }
-        if !virtual_to_cancel.is_empty() {
-            if let Some(pool) = self.virtual_worker_pool.lock().unwrap().clone() {
-                for id in &virtual_to_cancel {
-                    pool.cancel_task(id);
-                }
-            }
-        }
-        self.inner.lock().unwrap().paused_admins.remove(folder);
-        if !affected.is_empty() {
-            tracing::info!(
-                "[DispatchBridge] cancelAdminParents({folder}): cancelled tasks for jids: {}",
-                affected.join(", ")
-            );
-        }
-        affected
+        self.cancel_active_parents_where(
+            |p| p.admin_folder == folder,
+            "Cancelled: admin agent stopped",
+        )
     }
 }

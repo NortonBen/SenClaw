@@ -6,6 +6,7 @@
 export type TabId = string;
 export type JobId = string;
 export type RequestId = string;
+export type AgentId = string;
 
 export interface SnapshotElement {
   index: number;
@@ -48,6 +49,8 @@ export interface SearchResults {
 
 export interface CrawlConfig {
   job_id: JobId;
+  agent_id: AgentId;
+  tab_id?: TabId;
   start_url: string;
   depth: number;
   max_pages: number;
@@ -99,46 +102,46 @@ export type ActionResult =
 // ===== Daemon -> Extension =====
 
 export type DaemonMessage =
-  | { type: 'Navigate'; request_id: RequestId; url: string; tab_id?: TabId }
-  | { type: 'NewTab'; request_id: RequestId; url?: string }
-  | { type: 'CloseTab'; request_id: RequestId; tab_id: TabId }
-  | { type: 'SwitchTab'; request_id: RequestId; tab_id: TabId }
-  | { type: 'GoBack'; request_id: RequestId; tab_id?: TabId }
-  | { type: 'GoForward'; request_id: RequestId; tab_id?: TabId }
-  | { type: 'Reload'; request_id: RequestId; tab_id?: TabId }
-  | { type: 'Click'; request_id: RequestId; tab_id?: TabId; index: number }
-  | { type: 'Type'; request_id: RequestId; tab_id?: TabId; index: number; text: string; submit: boolean }
-  | { type: 'SelectOption'; request_id: RequestId; tab_id?: TabId; index: number; option_text: string }
-  | { type: 'Scroll'; request_id: RequestId; tab_id?: TabId; direction: string; amount: ScrollAmount }
-  | { type: 'Hover'; request_id: RequestId; tab_id?: TabId; index: number }
-  | { type: 'PressKey'; request_id: RequestId; tab_id?: TabId; key: string }
-  | { type: 'UploadFile'; request_id: RequestId; tab_id?: TabId; index: number; file_paths: string[] }
-  | { type: 'ExecuteJs'; request_id: RequestId; tab_id?: TabId; script: string }
-  | { type: 'WaitFor'; request_id: RequestId; tab_id?: TabId; condition: WaitCondition }
-  | { type: 'GetSnapshot'; request_id: RequestId; tab_id?: TabId; depth?: number; compress_html?: boolean }
-  | { type: 'GetScreenshot'; request_id: RequestId; tab_id?: TabId; full_page: boolean; format: string; quality?: number }
-  | { type: 'ExtractText'; request_id: RequestId; tab_id?: TabId; selector?: string }
-  | { type: 'ExtractLinks'; request_id: RequestId; tab_id?: TabId; selector?: string }
-  | { type: 'ExtractTable'; request_id: RequestId; tab_id?: TabId; selector?: string }
-  | { type: 'Search'; request_id: RequestId; query: string; engine: string; num_results: number; language?: string }
-  | { type: 'CrawlStart'; job_id: JobId; start_url: string; depth: number; max_pages: number; link_patterns: string[]; exclude_patterns: string[]; same_domain: boolean }
-  | { type: 'CrawlPause'; job_id: JobId }
-  | { type: 'CrawlResume'; job_id: JobId }
-  | { type: 'CrawlStop'; job_id: JobId }
-  | { type: 'FillForm'; request_id: RequestId; tab_id?: TabId; fields: FormField[]; submit: boolean }
-  | { type: 'ListTabs'; request_id: RequestId }
-  | { type: 'GetStatus'; request_id: RequestId };
+  | { type: 'Navigate'; request_id: RequestId; agent_id: AgentId; url: string; tab_id?: TabId; active?: boolean }
+  | { type: 'NewTab'; request_id: RequestId; agent_id: AgentId; url?: string; active?: boolean }
+  | { type: 'CloseTab'; request_id: RequestId; agent_id: AgentId; tab_id: TabId }
+  | { type: 'SwitchTab'; request_id: RequestId; agent_id: AgentId; tab_id: TabId }
+  | { type: 'GoBack'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId }
+  | { type: 'GoForward'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId }
+  | { type: 'Reload'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId }
+  | { type: 'Click'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number }
+  | { type: 'Type'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; text: string; submit: boolean }
+  | { type: 'SelectOption'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; option_text: string }
+  | { type: 'Scroll'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; direction: string; amount: ScrollAmount }
+  | { type: 'Hover'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number }
+  | { type: 'PressKey'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; key: string }
+  | { type: 'UploadFile'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; file_paths: string[] }
+  | { type: 'ExecuteJs'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; script: string }
+  | { type: 'WaitFor'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; condition: WaitCondition }
+  | { type: 'GetSnapshot'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; depth?: number; compress_html?: boolean }
+  | { type: 'GetScreenshot'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; full_page: boolean; format: string; quality?: number }
+  | { type: 'ExtractText'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
+  | { type: 'ExtractLinks'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
+  | { type: 'ExtractTable'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
+  | { type: 'Search'; request_id: RequestId; agent_id: AgentId; query: string; engine: string; num_results: number; language?: string }
+  | { type: 'CrawlStart'; job_id: JobId; agent_id: AgentId; start_url: string; depth: number; max_pages: number; link_patterns: string[]; exclude_patterns: string[]; same_domain: boolean; active?: boolean }
+  | { type: 'CrawlPause'; job_id: JobId; agent_id: AgentId }
+  | { type: 'CrawlResume'; job_id: JobId; agent_id: AgentId }
+  | { type: 'CrawlStop'; job_id: JobId; agent_id: AgentId }
+  | { type: 'FillForm'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; fields: FormField[]; submit: boolean }
+  | { type: 'ListTabs'; request_id: RequestId; agent_id?: AgentId }
+  | { type: 'GetStatus'; request_id: RequestId; agent_id?: AgentId };
 
 // ===== Extension -> Daemon =====
 
 export type ExtensionMessage =
-  | { type: 'Response'; request_id: RequestId } & ActionResult
-  | { type: 'TabCreated'; tab_id: TabId; url: string; window_id: number }
-  | { type: 'TabUpdated'; tab_id: TabId; url: string; title: string; status: string }
-  | { type: 'TabClosed'; tab_id: TabId }
-  | { type: 'CrawlProgress'; job_id: JobId; pages_crawled: number; pages_total: number; current_url: string }
-  | { type: 'CrawlResult'; job_id: JobId; page_result: CrawlPageResult }
-  | { type: 'CrawlComplete'; job_id: JobId; total_pages: number; duration_ms: number }
-  | { type: 'ScreenshotFrame'; tab_id: TabId; data: string; format: string }
+  | { type: 'Response'; request_id: RequestId; agent_id?: AgentId } & ActionResult
+  | { type: 'TabCreated'; tab_id: TabId; agent_id: AgentId; url: string; window_id: number; group_id?: number }
+  | { type: 'TabUpdated'; tab_id: TabId; agent_id: AgentId; url: string; title: string; status: string; group_id?: number }
+  | { type: 'TabClosed'; tab_id: TabId; agent_id: AgentId }
+  | { type: 'CrawlProgress'; job_id: JobId; agent_id: AgentId; pages_crawled: number; pages_total: number; current_url: string }
+  | { type: 'CrawlResult'; job_id: JobId; agent_id: AgentId; page_result: CrawlPageResult }
+  | { type: 'CrawlComplete'; job_id: JobId; agent_id: AgentId; total_pages: number; duration_ms: number }
+  | { type: 'ScreenshotFrame'; tab_id: TabId; agent_id?: AgentId; data: string; format: string }
   | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId }
   | { type: 'UserInstruction'; text: string };

@@ -25,7 +25,7 @@ use super::cowork::{
     cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete, cowork_tasks_get,
     cowork_tasks_list, cowork_tasks_update, cowork_templates_get, cowork_templates_list,
     cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get, cowork_ws_list,
-    cowork_ws_update,
+    cowork_ws_update, cowork_fs_browse,
 };
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
@@ -175,6 +175,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         // Cowork API
         .route("/api/cowork/templates", get(cowork_templates_list))
         .route("/api/cowork/templates/:name", get(cowork_templates_get))
+        .route("/api/cowork/fs-browse", get(cowork_fs_browse))
         .route(
             "/api/cowork/workspaces",
             get(cowork_ws_list).post(cowork_ws_create),

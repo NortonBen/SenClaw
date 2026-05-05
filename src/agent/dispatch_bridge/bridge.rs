@@ -224,6 +224,99 @@ impl DispatchBridge {
         Ok((parent_id, task_ids))
     }
 
+    /// Compare cowork workspace roots ignoring trailing path separators.
+    fn cowork_root_paths_match(stored: Option<&str>, root: &str) -> bool {
+        let Some(s) = stored else {
+            return false;
+        };
+        if root.trim().is_empty() {
+            return false;
+        }
+        let a = s.trim().trim_end_matches(['/', '\\']);
+        let b = root.trim().trim_end_matches(['/', '\\']);
+        !a.is_empty() && a == b
+    }
+
+    /// Cancel active/queued parents matching `pred`. Used by admin-folder cancel
+    /// and by Cowork workspace teardown.
+    pub(super) fn cancel_active_parents_where(
+        &self,
+        mut pred: impl FnMut(&DispatchParent) -> bool,
+        cancel_note: &str,
+    ) -> Vec<String> {
+        let mut affected: Vec<String> = Vec::new();
+        let mut to_remove: Vec<String> = Vec::new();
+        let mut virtual_to_cancel: Vec<String> = Vec::new();
+        let mut admins_to_unpause: HashSet<String> = HashSet::new();
+        let now = chrono::Utc::now().to_rfc3339();
+        let note = cancel_note.to_string();
+        let _ = self.modify_state(|state| {
+            for parent in &mut state.parents {
+                if !pred(parent) {
+                    continue;
+                }
+                if parent.status != "active" && parent.status != "queued" {
+                    continue;
+                }
+                admins_to_unpause.insert(parent.admin_folder.clone());
+                for task in &mut parent.tasks {
+                    match task.status {
+                        DispatchTaskStatus::Processing => {
+                            if task.is_virtual {
+                                virtual_to_cancel.push(task.id.clone());
+                            } else if !task.agent_jid.is_empty() {
+                                affected.push(task.agent_jid.clone());
+                            }
+                            to_remove.push(task.id.clone());
+                            task.status = DispatchTaskStatus::Error;
+                            task.result = Some(note.clone());
+                            task.completed_at = Some(now.clone());
+                        }
+                        DispatchTaskStatus::Registered => {
+                            task.status = DispatchTaskStatus::Error;
+                            task.result = Some(note.clone());
+                            task.completed_at = Some(now.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                parent.status = "done".into();
+                parent.completed_at = Some(now.clone());
+            }
+        });
+        for id in &to_remove {
+            self.remove_active_task(id);
+        }
+        if !virtual_to_cancel.is_empty() {
+            if let Some(pool) = self.virtual_worker_pool.lock().unwrap().clone() {
+                for id in &virtual_to_cancel {
+                    pool.cancel_task(id);
+                }
+            }
+        }
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for folder in &admins_to_unpause {
+                inner.paused_admins.remove(folder);
+            }
+        }
+        if !affected.is_empty() {
+            tracing::info!(
+                "[DispatchBridge] cancel_active_parents_where: cancelled tasks for jids: {}",
+                affected.join(", ")
+            );
+        }
+        affected
+    }
+
+    /// Cancel DAG parents created for a Cowork workspace (`shared_workspace` path).
+    pub fn cancel_parents_for_shared_workspace(&self, root_dir: &str) -> Vec<String> {
+        self.cancel_active_parents_where(
+            |p| Self::cowork_root_paths_match(p.shared_workspace.as_deref(), root_dir),
+            "Cancelled: cowork workspace deleted",
+        )
+    }
+
     /// Boot-time recovery + heartbeat startup. Mirrors TS `start()`:
     /// 1. Mark any leftover `active`/`queued` parents from a previous run as
     ///    `done` with their in-flight tasks marked `error: "Interrupted: …"`.
