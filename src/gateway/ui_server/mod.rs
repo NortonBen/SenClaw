@@ -10,9 +10,11 @@
 mod config_handler;
 pub mod core;
 mod cowork;
+mod embedding_config;
 mod llm_config;
 mod mcp;
 mod quicknotes;
+mod space;
 mod skills;
 mod spa;
 mod subagents;

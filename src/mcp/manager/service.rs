@@ -350,8 +350,14 @@ impl McpManager {
                     t("wiki_tree", "List the wiki directory tree"),
                     t("wiki_read", "Read a markdown page by relative path"),
                     t("wiki_write", "Create or update a markdown page"),
-                    t("wiki_search", "Search wiki pages by title, filename, or tags"),
-                    t("wiki_stats", "Detailed stats (categories, tags, recent files)"),
+                    t(
+                        "wiki_search",
+                        "Search wiki pages by title, filename, or tags",
+                    ),
+                    t(
+                        "wiki_stats",
+                        "Detailed stats (categories, tags, recent files)",
+                    ),
                     t("wiki_mkdir", "Create a subdirectory under the wiki"),
                 ],
             },

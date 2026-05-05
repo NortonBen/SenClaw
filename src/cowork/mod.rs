@@ -352,7 +352,8 @@ impl CoworkManager {
                 {
                     for trigger in &triggers {
                         let trigger_type = trigger["type"].as_str().unwrap_or("");
-                        let pool: Vec<&CoworkTask> = already_created.iter().chain(out.iter()).collect();
+                        let pool: Vec<&CoworkTask> =
+                            already_created.iter().chain(out.iter()).collect();
                         let should_fire = match trigger_type {
                             "message_received" => {
                                 let from_filter = trigger["from"].as_str();
@@ -368,9 +369,9 @@ impl CoworkManager {
                                 let from_filter = trigger["from"].as_str();
                                 from_filter.map_or(false, |f| f == from_user)
                             }
-                            "task_assigned" => pool.iter().any(|t| {
-                                t.assignee.as_deref() == Some(member.member_id.as_str())
-                            }),
+                            "task_assigned" => pool
+                                .iter()
+                                .any(|t| t.assignee.as_deref() == Some(member.member_id.as_str())),
                             "task_status_changed" => false,
                             _ => false,
                         };
@@ -647,7 +648,10 @@ impl CoworkManager {
         }
 
         // 3. Assign the primary planning task to the lead (if any), not the first worker.
-        let lead = members.iter().find(|m| m.role == "lead").or_else(|| members.first());
+        let lead = members
+            .iter()
+            .find(|m| m.role == "lead")
+            .or_else(|| members.first());
 
         if let Some(agent) = lead {
             // Create a planning/execution task for the lead agent

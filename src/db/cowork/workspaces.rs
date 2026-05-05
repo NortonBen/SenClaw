@@ -89,8 +89,14 @@ impl super::super::Db {
                  (SELECT id FROM cowork_tasks WHERE workspace_id=?1)",
                 params![id],
             )?;
-            tx.execute("DELETE FROM cowork_tasks WHERE workspace_id=?1", params![id])?;
-            tx.execute("DELETE FROM cowork_messages WHERE workspace_id=?1", params![id])?;
+            tx.execute(
+                "DELETE FROM cowork_tasks WHERE workspace_id=?1",
+                params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM cowork_messages WHERE workspace_id=?1",
+                params![id],
+            )?;
             tx.execute(
                 "DELETE FROM cowork_board_entries WHERE workspace_id=?1",
                 params![id],
@@ -99,7 +105,10 @@ impl super::super::Db {
                 "DELETE FROM cowork_recording_sessions WHERE workspace_id=?1",
                 params![id],
             )?;
-            tx.execute("DELETE FROM cowork_members WHERE workspace_id=?1", params![id])?;
+            tx.execute(
+                "DELETE FROM cowork_members WHERE workspace_id=?1",
+                params![id],
+            )?;
             tx.execute("DELETE FROM cowork_workspaces WHERE id=?1", params![id])?;
             tx.commit()?;
             Ok(())

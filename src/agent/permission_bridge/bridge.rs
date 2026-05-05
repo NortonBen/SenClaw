@@ -30,8 +30,7 @@ pub struct PermissionBridge {
         Mutex<Option<Box<dyn Fn(&str, &str, HashMap<String, String>) + Send + Sync>>>,
     /// Fired when user selects "allow" (never ask again) for a tool.
     /// Signature: `(group_jid, tool_name)` — used to persist the approval to DB.
-    pub(crate) on_tool_allowed:
-        Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
+    pub(crate) on_tool_allowed: Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
 }
 
 impl PermissionBridge {

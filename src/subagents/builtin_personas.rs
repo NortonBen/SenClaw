@@ -38,6 +38,10 @@ const BUILTIN_PERSONAS: &[BuiltinPersona] = &[
         filename: "browser-agent",
         content: include_str!("../../assets/builtin-personas/browser-agent.md"),
     },
+    BuiltinPersona {
+        filename: "space-assistant",
+        content: include_str!("../../assets/builtin-personas/space-assistant.md"),
+    },
 ];
 
 /// Install builtin personas to `virtual_agents_dir`.

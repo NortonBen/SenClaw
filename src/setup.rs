@@ -121,24 +121,8 @@ pub fn run_setup_if_needed(config_path: &Path) {
         }
     } else {
         println!("Current permission policy: {}", describe(&cfg));
-        match ask_yes_no(
-            "Reconfigure now? (Will auto-skip after 2 minutes of inactivity)",
-            SETUP_TIMEOUT_SECS,
-        ) {
-            None => {
-                println!(
-                    "Timed out. Continuing with current policy: {}",
-                    describe(&cfg)
-                );
-                println!("Starting...");
-                return;
-            }
-            Some(false) => {
-                println!("Starting...");
-                return;
-            }
-            Some(true) => {} // continue
-        }
+        println!("Starting...");
+        return;
     }
 
     // Policy selection

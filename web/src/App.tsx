@@ -9,6 +9,7 @@ import { PluginsPage } from './pages/PluginsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { CoworkPage } from './pages/CoworkPage';
 import { CodePage } from './pages/CodePage';
+import { SpacePage } from './pages/SpacePage';
 
 export function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -46,6 +47,7 @@ export function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="cowork" element={<CoworkPage />} />
           <Route path="code" element={<CodePage />} />
+          <Route path="space/*" element={<SpacePage />} />
         </Routes>
       </AppContext.Provider>
     </ConfigProvider>

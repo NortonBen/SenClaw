@@ -66,6 +66,18 @@ pub fn workspace_mcp_config(
     cfg
 }
 
+// ===== SpaceTool =====
+
+pub fn space_mcp_config(db_path: &str, group_folder: &str, chat_jid: &str) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-space", "space-server");
+    cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
+    cfg.env
+        .insert("SENCLAW_GROUP_FOLDER".into(), group_folder.to_owned());
+    cfg.env
+        .insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
+    cfg
+}
+
 // ===== MemoryTool =====
 
 pub fn memory_mcp_config(

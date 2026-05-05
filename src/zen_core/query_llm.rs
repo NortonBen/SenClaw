@@ -91,10 +91,7 @@ pub async fn query_llm(
                 .count();
             info!(
                 "[llm] request complete provider={} model={} blocks={} tool_calls={}",
-                profile.provider,
-                profile.model_name,
-                blocks,
-                tool_calls
+                profile.provider, profile.model_name, blocks, tool_calls
             );
         }
         Err(e) => {

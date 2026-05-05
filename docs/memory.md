@@ -309,7 +309,7 @@ flowchart LR
         OAI[OpenAI<br/>text-embedding-3-small<br/>1536 dims]
         ORT[OpenRouter<br/>nvidia/llama-nemotron<br/>auto dims]
         OLL[Ollama<br/>nomic-embed-text<br/>auto dims]
-        LOC[Local<br/>fastembed/ONNX Runtime<br/>384-1024 dims]
+        LOC[Local<br/>candle/pure-Rust BERT<br/>384-1024 dims]
     end
 
     subgraph "Cache Layer"
@@ -340,11 +340,13 @@ flowchart LR
 
 **Vector search hiện tại:** sqlite-vec chưa được wired (extension chưa load) → fallback về **manual BLOB scan**: deserialize từng embedding từ `memory_chunks.embedding BLOB`, tính `cosine_distance()`, sắp xếp, normalize về 0–1.
 
-### Local Provider — ONNX Runtime (fastembed)
+### Local Provider — Pure Rust (candle/BERT)
 
-Kích hoạt bằng Cargo feature:
+Kích hoạt bằng Cargo feature — **không cần ONNX Runtime hay C++ library**:
 ```bash
-cargo build --features local-embed
+cargo build --features local-embed              # CPU only
+cargo build --features local-embed-metal        # + Apple Silicon Metal
+
 SENCLAW_EMBEDDING_PROVIDER=local
 SENCLAW_LOCAL_MODEL=paraphrase-multilingual-MiniLM-L12-v2   # optional
 SENCLAW_LOCAL_MODEL_PATH=/path/to/model                      # optional — custom model
@@ -358,15 +360,19 @@ OnceCell::get_or_try_init()
       │
 spawn_blocking (giải phóng tokio thread pool)
       │
-      ├─ SENCLAW_LOCAL_MODEL_PATH set? → init_from_path() — load từ thư mục local
-      └─ Không → init_from_hub() — download từ HuggingFace Hub lần đầu
+      ├─ SENCLAW_LOCAL_MODEL_PATH set? → load_from_path() — thư mục local
+      └─ Không → load_from_hub() — download HuggingFace Hub lần đầu
                   cache vào ~/.senclaw/models/
       │
-Arc<TextEmbedding> (ONNX Runtime session)
+Arc<CandleEngine> { BertModel + Tokenizer + Device }
 — lần sau reuse session, không load lại
 ```
 
-Các lần gọi sau đó reuse ONNX session. Inference chạy trên `spawn_blocking` thread.
+**Pipeline inference (mỗi lần embed):**
+1. `encode_batch()` — truncate max 512 tokens, pad to batch-longest
+2. `BertModel::forward()` → `[batch, seq_len, hidden_size]`
+3. Mean pool (masked, bỏ padding) → `[batch, hidden_size]`
+4. L2 normalize → unit vectors cho cosine similarity
 
 **Models được hỗ trợ (HuggingFace Hub):**
 
@@ -382,9 +388,9 @@ Các lần gọi sau đó reuse ONNX session. Inference chạy trên `spawn_bloc
 | `multilingual-e5-base` | 768 | Đa ngôn ngữ |
 | `multilingual-e5-large` | 1024 | Đa ngôn ngữ, tốt nhất |
 
-**Custom model path:** thư mục phải chứa `model.onnx` (hoặc `onnx/model.onnx`) + `tokenizer.json`. Khi dùng `MODEL_PATH`, `SENCLAW_LOCAL_MODEL` vẫn dùng để hint dimensions.
+**Custom model path:** thư mục phải chứa `model.safetensors` + `tokenizer.json` + `config.json`.
 
-**Heuristic dimensions (khi metadata không có):** tên chứa "large" → 1024, "base" → 768, còn lại → 384.
+**Heuristic dimensions:** tên chứa "large" → 1024, "base" → 768, còn lại → 384.
 
 ### MCP Memory Server
 

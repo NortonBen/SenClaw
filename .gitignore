@@ -57,3 +57,6 @@ hub-backend/server
 test_parse
 test_parse.rs
 test_prompt.sh
+
+
+*.tar.gz

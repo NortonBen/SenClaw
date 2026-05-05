@@ -284,6 +284,97 @@ pub(crate) fn column_names(conn: &Connection, table: &str) -> Result<Vec<String>
     Ok(names)
 }
 
+/// Apply Space (personal productivity) tables.
+pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS space_notes (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL DEFAULT '',
+            body        TEXT NOT NULL DEFAULT '',
+            body_html   TEXT,
+            tags        TEXT NOT NULL DEFAULT '[]',
+            folder_id   TEXT,
+            pinned      INTEGER NOT NULL DEFAULT 0,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            deleted_at  INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS space_note_folders (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            parent_id   TEXT,
+            created_at  INTEGER NOT NULL
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS space_notes_fts USING fts5(
+            id UNINDEXED, title, body,
+            content=space_notes, content_rowid=rowid
+        );
+
+        CREATE TABLE IF NOT EXISTS space_events (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            description TEXT,
+            start_at    INTEGER NOT NULL,
+            end_at      INTEGER NOT NULL,
+            all_day     INTEGER DEFAULT 0,
+            location    TEXT,
+            color       TEXT,
+            recurrence  TEXT,
+            reminder_min INTEGER,
+            task_id     TEXT,
+            source      TEXT DEFAULT 'manual',
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            deleted_at  INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_space_events_start ON space_events(start_at);
+
+        CREATE TABLE IF NOT EXISTS space_email_accounts (
+            id          TEXT PRIMARY KEY,
+            label       TEXT NOT NULL,
+            email       TEXT NOT NULL,
+            imap_host   TEXT NOT NULL,
+            imap_port   INTEGER NOT NULL DEFAULT 993,
+            smtp_host   TEXT NOT NULL,
+            smtp_port   INTEGER NOT NULL DEFAULT 587,
+            username    TEXT NOT NULL,
+            password    TEXT NOT NULL,
+            use_tls     INTEGER DEFAULT 1,
+            created_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS space_email_cache (
+            id          TEXT PRIMARY KEY,
+            account_id  TEXT NOT NULL,
+            folder      TEXT NOT NULL DEFAULT 'INBOX',
+            subject     TEXT,
+            from_addr   TEXT,
+            to_addrs    TEXT,
+            date        INTEGER,
+            body_text   TEXT,
+            body_html   TEXT,
+            flags       TEXT DEFAULT '[]',
+            synced_at   INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_space_email_cache_account ON space_email_cache(account_id, folder, date);
+
+        CREATE TABLE IF NOT EXISTS space_apps (
+            id          TEXT PRIMARY KEY,
+            manifest    TEXT NOT NULL,
+            enabled     INTEGER DEFAULT 1,
+            installed_at INTEGER NOT NULL,
+            last_seen_at INTEGER
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
 /// Apply memory schema if embedding is enabled.
 pub(crate) fn apply_memory_tables(conn: &mut Connection, config: &Config) -> Result<()> {
     let provider = config.memory.embedding_provider;

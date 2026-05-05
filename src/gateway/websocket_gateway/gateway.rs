@@ -193,8 +193,7 @@ impl WebSocketGateway {
         let raw = msg.to_string();
         let clients = self.clients.lock().await;
         for client in clients.iter() {
-            if client.authenticated && client.is_admin && !client.subscriptions.contains(skip_jid)
-            {
+            if client.authenticated && client.is_admin && !client.subscriptions.contains(skip_jid) {
                 let _ = client.sender.send(Message::Text(raw.clone().into()));
             }
         }

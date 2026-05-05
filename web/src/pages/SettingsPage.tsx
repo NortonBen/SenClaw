@@ -8,6 +8,7 @@ import {
   ThunderboltOutlined,
   TeamOutlined,
   FilterOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -18,6 +19,7 @@ import { AgentSettings } from '../components/settings/AgentSettings';
 import { GroupSettings } from '../components/settings/GroupSettings';
 import { LLMSettings } from '../components/settings/LLMSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
+import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -28,7 +30,8 @@ type SettingsSection =
   | 'channels'
   | 'groups'
   | 'agents'
-  | 'llm';
+  | 'llm'
+  | 'embedding';
 
 export const SettingsPage: React.FC = () => {
   const { ws } = useAppContext();
@@ -49,6 +52,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'groups', icon: <TeamOutlined />, label: 'Groups' },
       { key: 'agents', icon: <UserOutlined />, label: 'Agents' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
+      { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
     ],
     []
   );
@@ -94,6 +98,8 @@ export const SettingsPage: React.FC = () => {
         );
       case 'llm':
         return <LLMSettings />;
+      case 'embedding':
+        return <EmbeddingSettings />;
       default:
         return null;
     }

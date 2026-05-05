@@ -8,6 +8,7 @@ import {
   BookOutlined,
   BulbFilled,
   CodeOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { WsStatus } from '../types';
@@ -41,6 +42,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent }: Pro
     if (path.startsWith('/plugins')) return 'plugins';
     if (path.startsWith('/cowork')) return 'cowork';
     if (path.startsWith('/code')) return 'code';
+    if (path.startsWith('/space')) return 'space';
     return '';
   };
 
@@ -64,31 +66,42 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent }: Pro
         </div>
 
         {/* TOP MENU: Horizontal Tabs */}
-        <div className="flex items-center gap-1 p-2 border-b" style={{ borderColor: token.colorBorderSecondary }}>
-          <Button
-            type={currentKey === 'chats' ? 'primary' : 'text'}
-            icon={<MessageOutlined />}
-            onClick={() => navigate('/chats')}
-            className="flex-1 flex justify-center"
-          >
-            Chat
-          </Button>
-          <Button
-            type={currentKey === 'cowork' ? 'primary' : 'text'}
-            icon={<CoffeeOutlined />}
-            onClick={() => navigate('/cowork')}
-            className="flex-1 flex justify-center"
-          >
-            Cowork
-          </Button>
-          <Button
-            type={currentKey === 'code' ? 'primary' : 'text'}
-            icon={<CodeOutlined />}
-            onClick={() => navigate('/code')}
-            className="flex-1 flex justify-center"
-          >
-            Code
-          </Button>
+        <div className="flex items-center justify-around py-2 px-2" style={{ borderColor: token.colorBorderSecondary }}>
+          <Tooltip title="Chat">
+            <Button
+              type={currentKey === 'chats' ? 'primary' : 'text'}
+              icon={<MessageOutlined />}
+              onClick={() => navigate('/chats')}
+              className="flex-1 flex justify-center"
+              title="Chat"
+            ></Button>
+          </Tooltip>
+          <Tooltip title="Space">
+            <Button
+              type={currentKey === 'space' ? 'primary' : 'text'}
+              icon={<AppstoreOutlined />}
+              onClick={() => navigate('/space')}
+              className="flex-1 flex justify-center"
+            >
+            </Button>
+          </Tooltip>
+          <Tooltip title="Cowork">
+            <Button
+              type={currentKey === 'cowork' ? 'primary' : 'text'}
+              icon={<CoffeeOutlined />}
+              onClick={() => navigate('/cowork')}
+              className="flex-1 flex justify-center"
+            ></Button>
+          </Tooltip>
+          <Tooltip title="Code">
+            <Button
+              type={currentKey === 'code' ? 'primary' : 'text'}
+              icon={<CodeOutlined />}
+              onClick={() => navigate('/code')}
+              className="flex-1 flex justify-center"
+            >
+            </Button>
+          </Tooltip>
         </div>
 
         {/* MIDDLE: Dynamic Injected Content */}

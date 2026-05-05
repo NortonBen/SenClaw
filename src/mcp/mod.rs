@@ -7,13 +7,14 @@ pub mod client;
 pub mod config;
 pub mod dispatch_server;
 pub mod external_client;
-pub mod wiki_server;
 pub mod helper;
 pub mod manager;
 pub mod memory_server;
 pub mod schedule_server;
 pub mod send_server;
+pub mod space_server;
 pub mod virtual_server;
+pub mod wiki_server;
 pub mod workspace_server;
 
 pub use client::{McpToolInfo, SharedMcpRegistry};

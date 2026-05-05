@@ -20,13 +20,14 @@ use crate::wiki::manager::WikiManager;
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::cowork::{
     cowork_board_get, cowork_board_update, cowork_documents_upload, cowork_files_download,
-    cowork_files_list, cowork_members_add, cowork_members_list, cowork_members_remove,
-    cowork_members_update, cowork_messages_list, cowork_messages_send, cowork_task_comments_add,
-    cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete, cowork_tasks_get,
-    cowork_tasks_list, cowork_tasks_update, cowork_templates_get, cowork_templates_list,
-    cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get, cowork_ws_list,
-    cowork_ws_update, cowork_fs_browse,
+    cowork_files_list, cowork_fs_browse, cowork_members_add, cowork_members_list,
+    cowork_members_remove, cowork_members_update, cowork_messages_list, cowork_messages_send,
+    cowork_task_comments_add, cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete,
+    cowork_tasks_get, cowork_tasks_list, cowork_tasks_update, cowork_templates_get,
+    cowork_templates_list, cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get,
+    cowork_ws_list, cowork_ws_update,
 };
+use super::embedding_config::{embedding_config_get, embedding_config_save};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test,
@@ -37,6 +38,16 @@ use super::mcp::{
     mcp_servers_tools,
 };
 use super::quicknotes::quicknotes_save;
+use super::space::{
+    space_apps_delete, space_apps_list, space_apps_register,
+    space_email_accounts_create, space_email_accounts_delete, space_email_accounts_list,
+    space_email_draft, space_email_inbox, space_email_read, space_email_search, space_email_send,
+    space_events_create, space_events_delete, space_events_list, space_events_set_reminder,
+    space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
+    space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_list,
+    space_sync_apple_calendar, space_sync_apple_notes, space_sync_gmail,
+    space_sync_google_calendar, space_today_summary,
+};
 use super::skills::{
     skills_install, skills_list, skills_readme, skills_readme_save, skills_remote_search,
     skills_toggle,
@@ -144,6 +155,11 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/llm-config/test", post(llm_config_test))
         .route("/api/llm-config/models", post(llm_config_fetch_models))
         .route("/api/llm-config/:id", delete(llm_config_delete))
+        // Embedding provider config
+        .route(
+            "/api/embedding-config",
+            get(embedding_config_get).post(embedding_config_save),
+        )
         // Wiki API
         .route("/api/wiki/tree", get(wiki_tree))
         .route("/api/wiki/file", get(wiki_read).put(wiki_write))
@@ -227,6 +243,42 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(cowork_files_download),
         )
         .route("/api/cowork/workspaces/:id/browse", get(cowork_ws_browse))
+        // ── Space API ─────────────────────────────────────────────────────────
+        // Notes
+        .route("/api/space/notes", get(space_notes_list).post(space_notes_create))
+        .route("/api/space/notes/search", get(space_notes_search))
+        .route(
+            "/api/space/notes/:id",
+            axum::routing::put(space_notes_update).delete(space_notes_delete),
+        )
+        // Calendar
+        .route("/api/space/calendar/events", get(space_events_list).post(space_events_create))
+        .route("/api/space/calendar/events/:id", delete(space_events_delete))
+        .route("/api/space/calendar/events/:id/reminder", post(space_events_set_reminder))
+        .route("/api/space/calendar/today", get(space_today_summary))
+        // Email
+        .route("/api/space/email/inbox", get(space_email_inbox))
+        .route("/api/space/email/messages/:id", get(space_email_read))
+        .route("/api/space/email/search", get(space_email_search))
+        .route("/api/space/email/send", post(space_email_send))
+        .route("/api/space/email/draft", post(space_email_draft))
+        .route(
+            "/api/space/email/accounts",
+            get(space_email_accounts_list).post(space_email_accounts_create),
+        )
+        .route("/api/space/email/accounts/:id", delete(space_email_accounts_delete))
+        // Schedules
+        .route("/api/space/schedules", get(space_schedules_list).post(space_schedules_create))
+        .route("/api/space/schedules/:id", delete(space_schedules_cancel))
+        // Apps
+        .route("/api/space/apps", get(space_apps_list))
+        .route("/api/space/apps/register", post(space_apps_register))
+        .route("/api/space/apps/:id", delete(space_apps_delete))
+        // External sync
+        .route("/api/space/sync/google-calendar", post(space_sync_google_calendar))
+        .route("/api/space/sync/apple-calendar", post(space_sync_apple_calendar))
+        .route("/api/space/sync/apple-notes", post(space_sync_apple_notes))
+        .route("/api/space/sync/gmail", post(space_sync_gmail))
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback

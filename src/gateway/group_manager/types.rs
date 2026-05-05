@@ -66,6 +66,31 @@ pub struct TelegramBotConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingConfig {
+    /// Provider: "openai" | "openrouter" | "ollama" | "local" | "none"
+    pub provider: String,
+    #[serde(rename = "apiKey", default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(rename = "baseURL", default, skip_serializing_if = "String::is_empty")]
+    pub base_url: String,
+    #[serde(
+        rename = "modelName",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub model_name: String,
+    /// Local model path (only for provider="local")
+    #[serde(
+        rename = "modelPath",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub model_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub id: String,
     pub label: String,
@@ -156,6 +181,12 @@ pub(super) struct GlobalConfig {
         rename = "thinkingEnabled"
     )]
     pub(super) thinking_enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "embeddingConfig"
+    )]
+    pub(super) embedding_config: Option<EmbeddingConfig>,
 }
 
 /// Fields that can be updated on a [`GroupBinding`].

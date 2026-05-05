@@ -1,4 +1,4 @@
-//! App Connector channel adapter using gRPC relay.
+//! App Connector channel adapter using WebSocket relay.
 //!
 //! JID format: `app:{channel_id}:user:{sender_id}`
 //!
@@ -21,11 +21,13 @@ use std::sync::{Arc, RwLock};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
+use tokio::time::Duration;
 use tracing::{error, info, warn};
 
 use crate::channels::{Channel, MessageCallback, MetadataCallback};
-use crate::clawhub::relay_client::{RelayClient, RelayMessageHandler};
-use crate::proto::relay::relay_message;
+use crate::clawhub::relay_client::{
+    RelayClient, RelayInboundMessage, RelayInboundPayload, RelayMessageHandler,
+};
 use crate::types::{ChatType, IncomingMessage};
 use chrono;
 
@@ -94,56 +96,37 @@ impl AppChannel {
             Err(anyhow!("AppChannel not connected"))
         }
     }
-}
 
-#[async_trait]
-impl Channel for AppChannel {
-    fn id(&self) -> &'static str {
-        "app"
-    }
+    /// Runs relay handshake and inbound processing. Idempotent if already connected.
+    async fn establish_relay(this: &AppChannel) -> Result<()> {
+        if this.is_connected() {
+            return Ok(());
+        }
 
-    async fn connect(&self) -> Result<()> {
-        let hub_url = self.hub_url.clone();
-        let channel_id = self.channel_id.clone();
-        let access_token = self.access_token.clone();
-        let encryption_key = self.encryption_key;
+        let hub_url = this.hub_url.clone();
+        let channel_id = this.channel_id.clone();
+        let access_token = this.access_token.clone();
+        let encryption_key = this.encryption_key;
 
-        let handlers = Arc::clone(&self.handlers);
-        let control_handler = Arc::clone(&self.control_handler);
+        let handlers = Arc::clone(&this.handlers);
+        let control_handler = Arc::clone(&this.control_handler);
         let cid = channel_id.clone();
 
         let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel(100);
 
-        let handler: RelayMessageHandler = Arc::new(move |msg| {
+        let handler: RelayMessageHandler = Arc::new(move |msg: RelayInboundMessage| {
             let _ = msg_tx.try_send(msg);
         });
 
-        info!(
-            "[AppChannel] Connecting to relay at {} for channel {}",
-            hub_url, channel_id
-        );
-        let mut backoff_secs = 2u64;
-        let client: RelayClient = loop {
-            match RelayClient::connect(
-                hub_url.clone(),
-                channel_id.clone(),
-                "semaclaw-daemon".to_string(),
-                access_token.clone(),
-                encryption_key,
-                Some(Arc::clone(&handler)),
-            )
-            .await
-            {
-                Ok(c) => break c,
-                Err(e) => {
-                    error!(
-                        "[AppChannel] Failed to connect to relay: {e}; retrying in {backoff_secs}s"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                    backoff_secs = (backoff_secs * 2).min(60);
-                }
-            }
-        };
+        let client = RelayClient::connect(
+            hub_url,
+            channel_id.clone(),
+            "semaclaw-daemon".to_string(),
+            access_token,
+            encryption_key,
+            Some(handler),
+        )
+        .await?;
 
         let client_arc = Arc::new(client);
         let client_for_inbound = Arc::clone(&client_arc);
@@ -151,12 +134,18 @@ impl Channel for AppChannel {
         tokio::spawn(async move {
             while let Some(msg) = msg_rx.recv().await {
                 match msg.payload {
-                    Some(relay_message::Payload::EncryptedData(ref data)) => {
+                    RelayInboundPayload::Encrypted {
+                        nonce_b64,
+                        ciphertext_b64,
+                        tag_b64,
+                    } => {
                         info!(
                             "[AppChannel] Received message: {} from {}",
                             msg.message_id, msg.sender_id
                         );
-                        match client_for_inbound.decrypt_payload(data) {
+                        match client_for_inbound
+                            .decrypt_payload(&nonce_b64, &ciphertext_b64, &tag_b64)
+                        {
                             Ok(text) => {
                                 info!("[AppChannel] Decrypted from {}: {}", msg.sender_id, text);
                                 let incoming = IncomingMessage {
@@ -180,8 +169,11 @@ impl Channel for AppChannel {
                             Err(e) => error!("[AppChannel] Decrypt failed: {e}"),
                         }
                     }
-                    Some(relay_message::Payload::Control(ref ctrl)) => {
-                        let ctrl_type = ctrl.r#type;
+                    RelayInboundPayload::Control {
+                        control_type,
+                        metadata,
+                    } => {
+                        let ctrl_type = control_type;
                         // Server-sent keepalives (PING/PONG/ACK) — ignore silently.
                         // App-initiated types (≥ AGENT_LIST_REQ) are forwarded to the handler.
                         if ctrl_type >= CTRL_AGENT_LIST_REQ {
@@ -190,27 +182,69 @@ impl Channel for AppChannel {
                                 ctrl_type, msg.sender_id
                             );
                             if let Some(ref h) = *control_handler.read().unwrap() {
-                                h(msg.sender_id.clone(), ctrl_type, ctrl.metadata.clone());
+                                h(msg.sender_id.clone(), ctrl_type, metadata.clone());
                             }
                         }
                     }
-                    _ => {
-                        warn!(
-                            "[AppChannel] Unknown payload in message: {}",
-                            msg.message_id
-                        );
-                    }
+                    RelayInboundPayload::Ping | RelayInboundPayload::Pong => {}
                 }
             }
         });
 
-        *self.client.lock().await = Some(client_arc);
-        self.connected.store(true, Ordering::SeqCst);
-        info!(
-            "[AppChannel] Connected to relay for channel {}",
-            self.channel_id
-        );
+        *this.client.lock().await = Some(client_arc);
+        this.connected.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Connect to the hub relay without blocking daemon startup: first attempt runs in a
+    /// background task (with exponential backoff) so local relay/port-down does not stall boot.
+    pub fn connect_nonblocking(this: Arc<AppChannel>) {
+        info!(
+            "[AppChannel] Scheduling relay connection for channel {} at {}",
+            this.channel_id, this.hub_url
+        );
+        tokio::spawn(async move {
+            let mut backoff_secs = 2u64;
+            let mut logged_first_failure = false;
+            loop {
+                match Self::establish_relay(this.as_ref()).await {
+                    Ok(()) => {
+                        info!(
+                            "[AppChannel] Connected to relay for channel {}",
+                            this.channel_id
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        if !logged_first_failure {
+                            warn!(
+                                "[AppChannel] Relay not reachable at startup ({e}); retrying in background for channel {}",
+                                this.channel_id
+                            );
+                            logged_first_failure = true;
+                        } else {
+                            error!(
+                                "[AppChannel] Failed to connect to relay: {e}; retrying in {backoff_secs}s"
+                            );
+                        }
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                        backoff_secs = (backoff_secs * 2).min(60);
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[async_trait]
+impl Channel for AppChannel {
+    fn id(&self) -> &'static str {
+        "app"
+    }
+
+    async fn connect(&self) -> Result<()> {
+        // Single attempt; does not retry (use `Arc<AppChannel>` + `connect_nonblocking` for prod).
+        Self::establish_relay(self).await
     }
 
     async fn disconnect(&self) -> Result<()> {
@@ -288,7 +322,8 @@ impl Channel for Arc<AppChannel> {
         self.as_ref().id()
     }
     async fn connect(&self) -> Result<()> {
-        self.as_ref().connect().await
+        AppChannel::connect_nonblocking(Arc::clone(self));
+        Ok(())
     }
     async fn disconnect(&self) -> Result<()> {
         self.as_ref().disconnect().await

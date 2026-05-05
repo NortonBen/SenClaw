@@ -135,9 +135,7 @@ impl WebSocketGateway {
             obj.insert("groupJid".into(), chat_jid.into());
             obj.insert("requestId".into(), request_id.into());
         }
-        tracing::info!(
-            "[WsGateway] notify question:request id={request_id} chat_jid={chat_jid}"
-        );
+        tracing::info!("[WsGateway] notify question:request id={request_id} chat_jid={chat_jid}");
         // Store for admin subscribe snapshot replay.
         self.pending_interactions
             .lock()

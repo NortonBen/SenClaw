@@ -49,14 +49,14 @@ pub type TodosNotifyFn = Arc<dyn Fn(&str, &str, &[TodoItem]) + Send + Sync>;
 /// selected option string back through the sender when the user responds.
 pub type VirtualPermissionFn = Arc<
     dyn Fn(
-        String,                              // virtual_jid
-        String,                              // tool_name
-        String,                              // title
-        serde_json::Value,                   // content
-        HashMap<String, String>,             // options
-        std::sync::mpsc::SyncSender<String>, // one-shot response channel
-    ) + Send
-    + Sync,
+            String,                              // virtual_jid
+            String,                              // tool_name
+            String,                              // title
+            serde_json::Value,                   // content
+            HashMap<String, String>,             // options
+            std::sync::mpsc::SyncSender<String>, // one-shot response channel
+        ) + Send
+        + Sync,
 >;
 
 // ===== Trait — abstracts sema-core lifecycle for virtual agents =====

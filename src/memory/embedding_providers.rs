@@ -366,14 +366,26 @@ impl LocalProvider {
 /// large → 1024, base → 768, everything else (small/MiniLM) → 384.
 fn local_dims_hint(model: &str) -> u32 {
     let m = model.to_lowercase();
-    if m.contains("large") { 1024 } else if m.contains("base") { 768 } else { 384 }
+    if m.contains("large") {
+        1024
+    } else if m.contains("base") {
+        768
+    } else {
+        384
+    }
 }
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for LocalProvider {
-    fn name(&self) -> &str { "local" }
-    fn model(&self) -> &str { &self.model }
-    fn dimensions(&self) -> u32 { self.dims }
+    fn name(&self) -> &str {
+        "local"
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    fn dimensions(&self) -> u32 {
+        self.dims
+    }
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         embed_local(self, texts).await
     }
@@ -386,18 +398,27 @@ async fn embed_local(p: &LocalProvider, texts: &[String]) -> Result<Vec<Vec<f32>
     let engine = p
         .engine
         .get_or_try_init(|| {
-            let model = p.model.clone();
-            let path = p.model_path.clone();
+            let model_name = p.model.clone();
+            let model_path = p.model_path.clone();
             async move {
                 let cache_dir = dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join(".senclaw")
                     .join("models");
+
+                // Resolve file paths — async download when fetching from HF Hub.
+                let (config, tokenizer, weights) = match model_path.as_deref() {
+                    Some(p) => local_candle::files_from_path(p)?,
+                    None => local_candle::files_from_hub(&model_name, cache_dir).await?,
+                };
+
+                // Load model on a blocking thread (mmap + BERT init are CPU-bound).
                 let eng = tokio::task::spawn_blocking(move || {
-                    local_candle::CandleEngine::load(&model, path.as_deref(), cache_dir)
+                    local_candle::CandleEngine::from_files(config, tokenizer, weights)
                 })
                 .await
                 .context("spawn_blocking panicked during model init")??;
+
                 Ok::<_, anyhow::Error>(std::sync::Arc::new(eng))
             }
         })
@@ -427,11 +448,10 @@ pub(super) mod local_candle {
     use candle_core::{DType, Device, Tensor};
     use candle_nn::VarBuilder;
     use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-    use hf_hub::api::sync::ApiBuilder;
     use std::path::PathBuf;
     use tokenizers::{
-        PaddingDirection, PaddingParams, PaddingStrategy,
-        TruncationDirection, TruncationParams, TruncationStrategy,
+        PaddingDirection, PaddingParams, PaddingStrategy, TruncationDirection, TruncationParams,
+        TruncationStrategy,
     };
 
     pub struct CandleEngine {
@@ -445,13 +465,14 @@ pub(super) mod local_candle {
     unsafe impl Sync for CandleEngine {}
 
     impl CandleEngine {
-        pub fn load(model_name: &str, model_path: Option<&str>, cache_dir: PathBuf) -> Result<Self> {
+        /// Load model from already-resolved local file paths.
+        /// Designed to run inside `spawn_blocking` — no network I/O.
+        pub fn from_files(
+            config_path: PathBuf,
+            tokenizer_path: PathBuf,
+            weights_path: PathBuf,
+        ) -> Result<Self> {
             let device = best_device();
-
-            let (config_path, tokenizer_path, weights_path) = match model_path {
-                Some(p) => load_from_path(p)?,
-                None => load_from_hub(model_name, cache_dir)?,
-            };
 
             let config: BertConfig = serde_json::from_reader(
                 std::fs::File::open(&config_path)
@@ -488,7 +509,11 @@ pub(super) mod local_candle {
                 "[LocalEmbed] Ready — hidden_size={} device={device:?}",
                 config.hidden_size,
             );
-            Ok(Self { model, tokenizer, device })
+            Ok(Self {
+                model,
+                tokenizer,
+                device,
+            })
         }
 
         pub fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -550,38 +575,92 @@ pub(super) mod local_candle {
     }
 
     fn mean_pool(hidden: &Tensor, attn_mask: &Tensor) -> Result<Tensor> {
-        // Expand mask to [batch, seq_len, 1] then broadcast-multiply with hidden
+        // mask: [batch, seq_len, 1] for broadcasting against [batch, seq_len, hidden]
         let mask = attn_mask.unsqueeze(2)?.to_dtype(DType::F32)?;
-        let sum = hidden.broadcast_mul(&mask)?.sum(1)?;
-        let count = mask.sum(1)?;
-        Ok((sum / count)?)
+        let sum = hidden.broadcast_mul(&mask)?.sum(1)?; // [batch, hidden]
+        let count = mask.sum(1)?; // [batch, 1]
+        Ok(sum.broadcast_div(&count)?) // broadcast [batch,1] → [batch,hidden]
     }
 
-    // ── HuggingFace Hub download ──────────────────────────────────────────────
+    // ── HuggingFace Hub download (async, reqwest 0.12) ────────────────────────
+    //
+    // hf-hub 0.3's sync API (ureq) fails on HF's relative-URL redirects.
+    // We use our existing reqwest (already in deps) which handles them correctly.
 
-    fn load_from_hub(model_name: &str, cache_dir: PathBuf) -> Result<(PathBuf, PathBuf, PathBuf)> {
+    pub async fn files_from_hub(
+        model_name: &str,
+        cache_dir: PathBuf,
+    ) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let repo_id = resolve_repo(model_name)?;
         tracing::info!(
             "[LocalEmbed] Fetching '{repo_id}' → {}",
             cache_dir.display()
         );
-        let api = ApiBuilder::new()
-            .with_cache_dir(cache_dir)
-            .build()
-            .context("build hf-hub api")?;
-        let repo = api.model(repo_id.to_string());
-        let config = repo.get("config.json").context("fetch config.json")?;
-        let tokenizer = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
-        let weights = repo
-            .get("model.safetensors")
-            .or_else(|_| repo.get("pytorch_model.safetensors"))
-            .context("fetch model.safetensors (not found in repo)")?;
+
+        let config = fetch_hf_file(repo_id, "config.json", &cache_dir).await?;
+        let tokenizer = fetch_hf_file(repo_id, "tokenizer.json", &cache_dir).await?;
+        let weights = match fetch_hf_file(repo_id, "model.safetensors", &cache_dir).await {
+            Ok(p) => p,
+            Err(_) => fetch_hf_file(repo_id, "pytorch_model.safetensors", &cache_dir)
+                .await
+                .context("fetch model weights (model.safetensors not found)")?,
+        };
+
         Ok((config, tokenizer, weights))
+    }
+
+    /// Download one file from HuggingFace Hub with simple disk cache.
+    /// Cache path: `{cache_dir}/{repo_id.replace('/','--')}/{filename}`
+    async fn fetch_hf_file(repo_id: &str, filename: &str, cache_dir: &PathBuf) -> Result<PathBuf> {
+        use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let dest = cache_dir.join(repo_id.replace('/', "--")).join(filename);
+
+        if dest.exists() {
+            return Ok(dest);
+        }
+
+        tokio::fs::create_dir_all(dest.parent().unwrap())
+            .await
+            .context("create cache dir")?;
+
+        let url = format!("https://huggingface.co/{repo_id}/resolve/main/{filename}");
+        tracing::info!("[LocalEmbed] Downloading {url}");
+
+        // reqwest follows redirects (including HF's relative Location URLs) automatically.
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("HTTP request")?
+            .error_for_status()
+            .context("HTTP error")?;
+
+        let tmp = dest.with_extension("tmp");
+        let mut file = tokio::fs::File::create(&tmp)
+            .await
+            .context("create tmp file")?;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            file.write_all(&chunk.context("stream chunk")?)
+                .await
+                .context("write chunk")?;
+        }
+        file.flush().await?;
+        drop(file);
+
+        tokio::fs::rename(&tmp, &dest)
+            .await
+            .context("rename tmp → dest")?;
+        Ok(dest)
     }
 
     // ── Local directory ───────────────────────────────────────────────────────
 
-    fn load_from_path(path: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
+    pub fn files_from_path(path: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let dir = std::path::Path::new(path);
         anyhow::ensure!(dir.exists(), "SENCLAW_LOCAL_MODEL_PATH not found: '{path}'");
 
@@ -590,9 +669,8 @@ pub(super) mod local_candle {
         } else {
             anyhow::bail!(
                 "No model.safetensors found in '{path}'.\n\
-                 Convert from PyTorch: python -c \"\
-                 from transformers import AutoModel; \
-                 m = AutoModel.from_pretrained('{path}'); \
+                 Convert: python -c \"from transformers import AutoModel; \
+                 m=AutoModel.from_pretrained('{path}'); \
                  m.save_pretrained('{path}', safe_serialization=True)\""
             )
         };
@@ -645,5 +723,249 @@ pub(super) mod local_candle {
              For a custom model set SENCLAW_LOCAL_MODEL_PATH to a directory \
              with model.safetensors + tokenizer.json + config.json."
         )
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── dims heuristic ────────────────────────────────────────────────────────
+
+    #[test]
+    fn dims_hint_large() {
+        assert_eq!(local_dims_hint("bge-large-en-v1.5"), 1024);
+        assert_eq!(local_dims_hint("multilingual-e5-large"), 1024);
+    }
+
+    #[test]
+    fn dims_hint_base() {
+        assert_eq!(local_dims_hint("bge-base-en-v1.5"), 768);
+        assert_eq!(local_dims_hint("multilingual-e5-base"), 768);
+    }
+
+    #[test]
+    fn dims_hint_small_and_minilm() {
+        assert_eq!(local_dims_hint("all-MiniLM-L6-v2"), 384);
+        assert_eq!(local_dims_hint("all-MiniLM-L12-v2"), 384);
+        assert_eq!(
+            local_dims_hint("paraphrase-multilingual-MiniLM-L12-v2"),
+            384
+        );
+        assert_eq!(local_dims_hint("multilingual-e5-small"), 384);
+    }
+
+    // ── LocalProvider metadata (no network) ───────────────────────────────────
+
+    #[test]
+    fn local_provider_defaults() {
+        let p = LocalProvider::new(None, None);
+        assert_eq!(p.name(), "local");
+        assert_eq!(p.model(), "paraphrase-multilingual-MiniLM-L12-v2");
+        assert_eq!(p.dimensions(), 384);
+    }
+
+    #[test]
+    fn local_provider_custom_model() {
+        let p = LocalProvider::new(Some("bge-large-en-v1.5".into()), None);
+        assert_eq!(p.model(), "bge-large-en-v1.5");
+        assert_eq!(p.dimensions(), 1024);
+    }
+
+    // ── Ollama model name normalisation ───────────────────────────────────────
+
+    #[test]
+    fn ollama_strips_prefix() {
+        let p = OllamaProvider::new(
+            "http://localhost:11434".into(),
+            "ollama/nomic-embed-text".into(),
+        );
+        assert_eq!(p.model(), "nomic-embed-text");
+    }
+
+    #[test]
+    fn ollama_maps_openai_model_to_nomic() {
+        let p = OllamaProvider::new(
+            "http://localhost:11434".into(),
+            "text-embedding-3-small".into(),
+        );
+        assert_eq!(p.model(), "nomic-embed-text");
+    }
+
+    #[test]
+    fn ollama_empty_defaults_to_nomic() {
+        let p = OllamaProvider::new("http://localhost:11434".into(), "".into());
+        assert_eq!(p.model(), "nomic-embed-text");
+    }
+
+    // ── resolve_repo (feature-gated) ──────────────────────────────────────────
+
+    #[cfg(feature = "local-embed")]
+    mod candle_tests {
+        use super::super::{local_candle::resolve_repo, LocalProvider};
+
+        #[test]
+        fn resolve_known_models() {
+            assert_eq!(
+                resolve_repo("paraphrase-multilingual-MiniLM-L12-v2").unwrap(),
+                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            );
+            assert_eq!(
+                resolve_repo("all-MiniLM-L6-v2").unwrap(),
+                "sentence-transformers/all-MiniLM-L6-v2"
+            );
+            assert_eq!(
+                resolve_repo("all-MiniLM-L12-v2").unwrap(),
+                "sentence-transformers/all-MiniLM-L12-v2"
+            );
+            assert_eq!(
+                resolve_repo("bge-small-en-v1.5").unwrap(),
+                "BAAI/bge-small-en-v1.5"
+            );
+            assert_eq!(
+                resolve_repo("bge-base-en-v1.5").unwrap(),
+                "BAAI/bge-base-en-v1.5"
+            );
+            assert_eq!(
+                resolve_repo("bge-large-en-v1.5").unwrap(),
+                "BAAI/bge-large-en-v1.5"
+            );
+            assert_eq!(
+                resolve_repo("multilingual-e5-small").unwrap(),
+                "intfloat/multilingual-e5-small"
+            );
+            assert_eq!(
+                resolve_repo("multilingual-e5-base").unwrap(),
+                "intfloat/multilingual-e5-base"
+            );
+            assert_eq!(
+                resolve_repo("multilingual-e5-large").unwrap(),
+                "intfloat/multilingual-e5-large"
+            );
+        }
+
+        #[test]
+        fn resolve_with_org_prefix() {
+            // "sentence-transformers/all-MiniLM-L6-v2" → strips org, matches tail
+            assert_eq!(
+                resolve_repo("sentence-transformers/all-MiniLM-L6-v2").unwrap(),
+                "sentence-transformers/all-MiniLM-L6-v2"
+            );
+        }
+
+        #[test]
+        fn resolve_e5_shorthand() {
+            assert_eq!(
+                resolve_repo("e5-small").unwrap(),
+                "intfloat/multilingual-e5-small"
+            );
+            assert_eq!(
+                resolve_repo("e5-base").unwrap(),
+                "intfloat/multilingual-e5-base"
+            );
+            assert_eq!(
+                resolve_repo("e5-large").unwrap(),
+                "intfloat/multilingual-e5-large"
+            );
+        }
+
+        #[test]
+        fn resolve_unknown_errors() {
+            assert!(resolve_repo("gpt-4-turbo").is_err());
+            assert!(resolve_repo("").is_err());
+        }
+
+        // ── CandleEngine integration (downloads model on first run) ───────────
+        //
+        // Skipped in CI — requires network + ~90MB download.
+        // Run manually: cargo test --features local-embed -- --ignored --nocapture
+
+        #[tokio::test]
+        #[ignore = "requires network and ~90MB HuggingFace download"]
+        async fn embed_minilm_l6_produces_unit_vectors() {
+            use crate::memory::embedding::EmbeddingProvider as _;
+            let provider = LocalProvider::new(Some("all-MiniLM-L6-v2".into()), None);
+
+            let texts = vec![
+                "The cat sat on the mat.".to_string(),
+                "A dog lay on the rug.".to_string(),
+                "Rust is a systems programming language.".to_string(),
+            ];
+            let embeddings = provider.embed(&texts).await.unwrap();
+
+            assert_eq!(embeddings.len(), 3);
+            for (i, emb) in embeddings.iter().enumerate() {
+                assert_eq!(emb.len(), 384, "dim mismatch at index {i}");
+                let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                assert!(
+                    (norm - 1.0).abs() < 1e-4,
+                    "embedding {i} not unit vector: norm={norm}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        #[ignore = "requires network and ~90MB HuggingFace download"]
+        async fn similar_texts_closer_than_dissimilar() {
+            use crate::memory::embedding::EmbeddingProvider as _;
+            let provider = LocalProvider::new(Some("all-MiniLM-L6-v2".into()), None);
+
+            let texts = vec![
+                "The cat sat on the mat.".to_string(),            // 0
+                "A cat is resting on the floor mat.".to_string(), // 1 — similar to 0
+                "Quantum mechanics describes subatomic particles.".to_string(), // 2 — unrelated
+            ];
+            let embs = provider.embed(&texts).await.unwrap();
+
+            let cosine =
+                |a: &[f32], b: &[f32]| -> f32 { a.iter().zip(b).map(|(x, y)| x * y).sum() };
+
+            let sim_01 = cosine(&embs[0], &embs[1]);
+            let sim_02 = cosine(&embs[0], &embs[2]);
+
+            assert!(
+                sim_01 > sim_02,
+                "expected similar texts to score higher: sim(0,1)={sim_01:.4} sim(0,2)={sim_02:.4}"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore = "requires network and ~90MB HuggingFace download"]
+        async fn embed_multilingual_same_meaning_similar() {
+            use crate::memory::embedding::EmbeddingProvider as _;
+            let provider =
+                LocalProvider::new(Some("paraphrase-multilingual-MiniLM-L12-v2".into()), None);
+
+            // Same meaning in English and Vietnamese
+            let texts = vec![
+                "Memory management in Rust".to_string(),
+                "Quản lý bộ nhớ trong Rust".to_string(),
+                "The weather is nice today".to_string(),
+            ];
+            let embs = provider.embed(&texts).await.unwrap();
+            let cosine =
+                |a: &[f32], b: &[f32]| -> f32 { a.iter().zip(b).map(|(x, y)| x * y).sum() };
+
+            let sim_en_vi = cosine(&embs[0], &embs[1]);
+            let sim_en_unrelated = cosine(&embs[0], &embs[2]);
+
+            assert!(
+                sim_en_vi > sim_en_unrelated,
+                "multilingual: EN↔VI same-meaning should score higher than unrelated: {sim_en_vi:.4} vs {sim_en_unrelated:.4}"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore = "requires network and ~90MB HuggingFace download"]
+        async fn embed_empty_batch_returns_empty() {
+            use crate::memory::embedding::EmbeddingProvider as _;
+            let provider = LocalProvider::new(Some("all-MiniLM-L6-v2".into()), None);
+            let result = provider.embed(&[] as &[String]).await.unwrap();
+            assert!(result.is_empty());
+        }
     }
 }

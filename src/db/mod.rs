@@ -84,6 +84,7 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         schema::apply_schema(conn)?;
         schema::apply_memory_tables(conn, config)?;
+        schema::apply_space_tables(conn)?;
         Ok(())
     }
 

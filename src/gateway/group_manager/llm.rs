@@ -5,7 +5,9 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::config::{load_global_config, save_global_config};
-use super::types::{AdminPermissions, AdminPermissionsSection, LlmConfig, LlmConfigResult};
+use super::types::{
+    AdminPermissions, AdminPermissionsSection, EmbeddingConfig, LlmConfig, LlmConfigResult,
+};
 
 // ===== Admin permissions config =====
 
@@ -86,5 +88,16 @@ pub fn set_active_llm_config(config_path: &Path, id: Option<&str>) -> Result<()>
 pub fn set_active_quick_llm_config(config_path: &Path, id: Option<&str>) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.active_quick_llm_config_id = id.map(|s| s.to_string());
+    save_global_config(config_path, &cfg)
+}
+// ===== Embedding config =====
+
+pub fn load_embedding_config(config_path: &Path) -> Option<EmbeddingConfig> {
+    load_global_config(config_path).embedding_config
+}
+
+pub fn save_embedding_config(config_path: &Path, c: &EmbeddingConfig) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.embedding_config = Some(c.clone());
     save_global_config(config_path, &cfg)
 }

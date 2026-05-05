@@ -30,10 +30,7 @@ fn format_hex_preview(bytes: &[u8], max_bytes: usize) -> String {
         let offset = i * 16;
 
         // Hex part
-        let hex_part: Vec<String> = chunk
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect();
+        let hex_part: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
         let hex_str = hex_part.join(" ");
         let hex_padded = format!("{:48}", hex_str); // Pad to align columns
 
@@ -111,11 +108,7 @@ fn system_quick_paths() -> Vec<(String, PathBuf)> {
             ),
         ]
     }
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "linux",
-        target_os = "windows"
-    )))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         vec![]
     }
@@ -209,7 +202,8 @@ pub(crate) async fn cowork_ws_browse(
             // Read bytes and create hex preview
             let bytes = fs::read(&canonical_target).unwrap_or_default();
             let hex_preview = format_hex_preview(&bytes, 256); // First 256 bytes
-            format!("[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
+            format!(
+                "[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
                 size,
                 bytes.len().min(256),
                 hex_preview
@@ -305,15 +299,10 @@ pub(crate) async fn cowork_fs_browse(
     })?;
 
     if !canonical.is_dir() {
-        return Err(AppError(
-            StatusCode::BAD_REQUEST,
-            "Not a directory".into(),
-        ));
+        return Err(AppError(StatusCode::BAD_REQUEST, "Not a directory".into()));
     }
 
-    let home_canon = home
-        .canonicalize()
-        .unwrap_or_else(|_| home.clone());
+    let home_canon = home.canonicalize().unwrap_or_else(|_| home.clone());
 
     let root_base = filesystem_root();
     let root_canon = root_base.canonicalize().unwrap_or(root_base);
@@ -333,9 +322,7 @@ pub(crate) async fn cowork_fs_browse(
         })
         .collect();
 
-    let parent_path = canonical
-        .parent()
-        .map(|p| p.to_string_lossy().to_string());
+    let parent_path = canonical.parent().map(|p| p.to_string_lossy().to_string());
 
     let mut entries = Vec::new();
     if let Ok(read_dir) = fs::read_dir(&canonical) {
@@ -1021,7 +1008,8 @@ pub(crate) async fn cowork_files_list(
                 )
             })?;
             let hex_preview = format_hex_preview(&bytes, 256); // First 256 bytes
-            format!("[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
+            format!(
+                "[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
                 size,
                 bytes.len().min(256),
                 hex_preview

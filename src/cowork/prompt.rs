@@ -11,12 +11,17 @@ use crate::types::{CoworkBoardEntry, CoworkMember, CoworkTask, CoworkWorkspace};
 pub fn shared_workspace_files_context(workspace: &CoworkWorkspace) -> String {
     let shared = PathBuf::from(&workspace.root_dir).join("shared");
     let mut lines: Vec<String> = vec![
-        format!("Workspace root (agent cwd / symlink target): {}", workspace.root_dir),
+        format!(
+            "Workspace root (agent cwd / symlink target): {}",
+            workspace.root_dir
+        ),
         format!("UI uploads and shared artifacts: {}", shared.display()),
     ];
     if let Some(ref wd) = workspace.working_dir {
         if !wd.is_empty() {
-            lines.push(format!("Project working directory (implementation tree): {wd}"));
+            lines.push(format!(
+                "Project working directory (implementation tree): {wd}"
+            ));
         }
     }
     if shared.is_dir() {
@@ -35,9 +40,15 @@ pub fn shared_workspace_files_context(workspace: &CoworkWorkspace) -> String {
                 .collect();
             names.sort();
             if names.is_empty() {
-                lines.push("shared/ is empty — add files via Cowork UI (create workspace or Resources).".to_string());
+                lines.push(
+                    "shared/ is empty — add files via Cowork UI (create workspace or Resources)."
+                        .to_string(),
+                );
             } else {
-                lines.push("Contents of shared/ (read these paths relative to workspace root):".to_string());
+                lines.push(
+                    "Contents of shared/ (read these paths relative to workspace root):"
+                        .to_string(),
+                );
                 lines.extend(names.into_iter().map(|n| format!("  - {n}")));
             }
         }
@@ -68,10 +79,16 @@ pub fn build_cowork_task_prompt(
     p.push_str(&format!("  <name>{}</name>\n", workspace.name));
     if let Some(ref wd) = workspace.working_dir {
         if !wd.is_empty() {
-            p.push_str(&format!("  <working_directory>{}</working_directory>\n", wd));
+            p.push_str(&format!(
+                "  <working_directory>{}</working_directory>\n",
+                wd
+            ));
         }
     }
-    p.push_str(&format!("  <root_directory>{}</root_directory>\n", workspace.root_dir));
+    p.push_str(&format!(
+        "  <root_directory>{}</root_directory>\n",
+        workspace.root_dir
+    ));
     p.push_str("</workspace>\n\n");
 
     p.push_str("<shared_files>\n");

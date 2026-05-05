@@ -44,7 +44,7 @@ axum = { version = "0.7", features = ["ws", "macros"] }
 axum-extra = { version = "0.9", features = ["multipart"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 
 # SQLite + vector + FTS
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -100,7 +100,6 @@ schemars = "1"
 candle-core = { version = "0.8", optional = true }
 candle-nn = { version = "0.8", optional = true }
 candle-transformers = { version = "0.8", optional = true }
-hf-hub = { version = "0.3", optional = true }
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
 
 # Tokio utilities (CancellationToken for zen-core abort)
@@ -117,7 +116,7 @@ tonic-build = "0.12"
 # Pure-Rust local embeddings via candle (BERT/sentence-transformers, HuggingFace Hub).
 # Build: cargo build --features local-embed
 # Build with Apple Silicon Metal: cargo build --features local-embed-metal
-local-embed = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
+local-embed = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
 local-embed-metal = ["local-embed", "candle-core/metal"]
 
 [profile.release]

@@ -178,7 +178,9 @@ impl McpWikiServer {
         self.inner().wiki_read(&p.path).content
     }
 
-    #[rmcp::tool(description = "Create or update a markdown wiki page (auto frontmatter + git commit)")]
+    #[rmcp::tool(
+        description = "Create or update a markdown wiki page (auto frontmatter + git commit)"
+    )]
     async fn wiki_write(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<

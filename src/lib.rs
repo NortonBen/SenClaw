@@ -57,8 +57,7 @@ struct RealWsApi {
 struct RealPermissionApi {
     agent_pool: Arc<agent::agent_pool::AgentPool>,
     /// Pending virtual-agent permission responses: key = "virtual_jid::tool_name"
-    virtual_perm_senders:
-        Arc<Mutex<HashMap<String, std::sync::mpsc::SyncSender<String>>>>,
+    virtual_perm_senders: Arc<Mutex<HashMap<String, std::sync::mpsc::SyncSender<String>>>>,
 }
 
 impl agent::permission_bridge::PermissionBridgeApi for RealPermissionApi {
@@ -513,13 +512,9 @@ fn wire_app_channel_controls(
                     let payload: Vec<serde_json::Value> = messages
                         .iter()
                         .map(|m| {
-                            let role = if m.is_bot_reply {
-                                "agent"
-                            } else if m.is_from_me {
-                                "user"
-                            } else {
-                                "assistant"
-                            };
+                            // Keep mobile protocol explicit: only "user" or "agent".
+                            // Non-bot messages are treated as user-side messages.
+                            let role = if m.is_bot_reply { "agent" } else { "user" };
 
                             serde_json::json!({
                                 "id":        m.message_id,
@@ -789,16 +784,14 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                     Arc::new(cfg.clone()),
                                     ch_record.id,
                                 );
-                                match app_arc.connect().await {
-                                    Ok(()) if app_arc.is_connected() => {
-                                        tracing::info!(
-                                            "[SenClaw] AppChannel from DB (id={}) connected",
-                                            ch_record.id
-                                        );
-                                        channels.push(Box::new(Arc::clone(&app_arc)));
-                                    }
-                                    _ => {}
-                                }
+                                channels::app::AppChannel::connect_nonblocking(Arc::clone(
+                                    &app_arc,
+                                ));
+                                tracing::info!(
+                                    "[SenClaw] AppChannel from DB (id={}) registered (relay in background)",
+                                    ch_record.id
+                                );
+                                channels.push(Box::new(Arc::clone(&app_arc)));
                             }
                         }
                     }
