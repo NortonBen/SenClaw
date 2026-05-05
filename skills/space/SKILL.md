@@ -46,6 +46,32 @@ space_note_delete(id)
 
 ---
 
+## Current Time (call first!)
+
+```
+space_current_time()
+```
+
+Returns current local system time with pre-computed ranges. **Always call this before any time-relative query.**
+
+Response includes:
+- `now_ms` — current Unix timestamp (ms)
+- `display` — formatted Vietnamese string, e.g. "Thứ ba, 05/05/2026 14:30"
+- `timezone` — e.g. "UTC+7"
+- `today.start_ms` / `today.end_ms` — start/end of today
+- `this_week.start_ms` / `this_week.end_ms` — this week (Sun–Sat)
+- `this_month.start_ms` / `this_month.end_ms` — this month
+- `tomorrow.start_ms`, `yesterday.start_ms`
+
+```
+// Example: list all events today
+const t = await space_current_time();
+space_event_list({ from: t.today.start_ms, to: t.today.end_ms })
+
+// Example: event at 3pm today
+space_event_create({ start_at: t.today.start_ms + 15*3600*1000, ... })
+```
+
 ## Calendar
 
 ### Create an event

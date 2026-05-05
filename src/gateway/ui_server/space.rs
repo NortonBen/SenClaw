@@ -264,6 +264,40 @@ pub(crate) struct EventListQuery {
     to: i64,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct EventSearchQuery {
+    #[serde(default)]
+    q: Option<String>,
+    /// "today" | "tomorrow" | "YYYY-MM-DD"
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    from: Option<i64>,
+    #[serde(default)]
+    to: Option<i64>,
+    #[serde(default = "default_limit")]
+    limit: u32,
+}
+
+pub(crate) async fn space_events_search(
+    State(s): State<Arc<UiState>>,
+    Query(q): Query<EventSearchQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db_arc = s
+        .db
+        .clone()
+        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+
+    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
+    let result = srv.event_search(q.q, q.date, q.from, q.to, q.limit);
+
+    if result.is_error {
+        return Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, result.content));
+    }
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
+    Ok(Json(v))
+}
+
 pub(crate) async fn space_events_list(
     State(s): State<Arc<UiState>>,
     Query(q): Query<EventListQuery>,
@@ -348,6 +382,57 @@ pub(crate) async fn space_events_create(
     let v: serde_json::Value =
         serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EventUpdateBody {
+    title: Option<String>,
+    description: Option<String>,
+    start_at: Option<i64>,
+    end_at: Option<i64>,
+    location: Option<String>,
+    color: Option<String>,
+    reminder_min: Option<i64>,
+    #[serde(default)]
+    all_day: Option<bool>,
+}
+
+pub(crate) async fn space_events_update(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(b): Json<EventUpdateBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    db.with_conn(|conn| {
+        if let Some(v) = &b.title {
+            conn.execute("UPDATE space_events SET title=?1 WHERE id=?2", params![v, id])?;
+        }
+        if b.description.is_some() {
+            conn.execute("UPDATE space_events SET description=?1 WHERE id=?2", params![b.description, id])?;
+        }
+        if let Some(v) = b.start_at {
+            conn.execute("UPDATE space_events SET start_at=?1 WHERE id=?2", params![v, id])?;
+        }
+        if let Some(v) = b.end_at {
+            conn.execute("UPDATE space_events SET end_at=?1 WHERE id=?2", params![v, id])?;
+        }
+        if b.location.is_some() {
+            conn.execute("UPDATE space_events SET location=?1 WHERE id=?2", params![b.location, id])?;
+        }
+        if b.color.is_some() {
+            conn.execute("UPDATE space_events SET color=?1 WHERE id=?2", params![b.color, id])?;
+        }
+        if b.reminder_min.is_some() {
+            conn.execute("UPDATE space_events SET reminder_min=?1 WHERE id=?2", params![b.reminder_min, id])?;
+        }
+        if let Some(v) = b.all_day {
+            conn.execute("UPDATE space_events SET all_day=?1 WHERE id=?2", params![v as i32, id])?;
+        }
+        Ok(())
+    })
+    .map_err(internal)?;
+
+    Ok(Json(serde_json::json!({ "success": true, "id": id })))
 }
 
 pub(crate) async fn space_events_delete(

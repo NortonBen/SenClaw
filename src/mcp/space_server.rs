@@ -7,7 +7,7 @@
 //! Tool namespace: `space:*`
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{Datelike, Local, TimeZone, Utc};
 use rmcp::ServiceExt;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,51 @@ struct EventListParams {
     from: i64,
     /// Unix ms — range end
     to: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct EventUpdateParams {
+    /// ID of the event to update
+    event_id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    /// Unix milliseconds
+    #[serde(default)]
+    start_at: Option<i64>,
+    /// Unix milliseconds
+    #[serde(default)]
+    end_at: Option<i64>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    all_day: Option<bool>,
+    #[serde(default)]
+    color: Option<String>,
+    /// Minutes before event to send reminder
+    #[serde(default)]
+    reminder_min: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct EventSearchParams {
+    /// Keyword to search in title, description, location (leave empty to search by date only)
+    #[serde(default)]
+    query: Option<String>,
+    /// Natural-language or ISO date string for a specific day, e.g. "today", "tomorrow",
+    /// "2026-05-10", "next Monday". If provided, only events on that day are returned.
+    #[serde(default)]
+    date: Option<String>,
+    /// Unix ms — search window start (overrides `date` if both given)
+    #[serde(default)]
+    from: Option<i64>,
+    /// Unix ms — search window end (overrides `date` if both given)
+    #[serde(default)]
+    to: Option<i64>,
+    /// Max results (default 50)
+    #[serde(default)]
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -284,6 +329,51 @@ impl McpSpaceServer {
     }
 
     #[rmcp::tool(
+        description = "Cập nhật sự kiện lịch. Update any field of an existing calendar event by id. \
+                       Only provided fields are changed — omit fields you don't want to modify. \
+                       start_at and end_at are Unix milliseconds."
+    )]
+    fn space_event_update(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            EventUpdateParams,
+        >,
+    ) -> String {
+        self.inner()
+            .event_update(
+                p.event_id,
+                p.title,
+                p.description,
+                p.start_at,
+                p.end_at,
+                p.location,
+                p.all_day,
+                p.color,
+                p.reminder_min,
+            )
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Tìm kiếm sự kiện theo từ khóa và/hoặc ngày. \
+                       Search events by keyword (title/description/location) and/or date. \
+                       `date` accepts natural language: 'today', 'tomorrow', 'yesterday', \
+                       'hôm nay', 'ngày mai', or ISO format 'YYYY-MM-DD'. \
+                       `query` filters by keyword within the matched date range. \
+                       Examples: {date:'today'}, {query:'họp'}, {query:'react', date:'2026-05-10'}."
+    )]
+    fn space_event_search(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            EventSearchParams,
+        >,
+    ) -> String {
+        self.inner()
+            .event_search(p.query, p.date, p.from, p.to, p.limit.unwrap_or(50))
+            .content
+    }
+
+    #[rmcp::tool(
         description = "Xóa sự kiện và hủy nhắc nhở. Delete a calendar event and cancel its reminder task."
     )]
     fn space_event_delete(
@@ -312,6 +402,114 @@ impl McpSpaceServer {
                 &self.chat_jid,
             )
             .content
+    }
+
+    #[rmcp::tool(
+        description = "Lấy giờ hệ thống local hiện tại. Get the current local system time with full context: \
+                       unix timestamp (ms), ISO datetime, Vietnamese formatted string, timezone offset, \
+                       day-of-week, and pre-computed start/end ms for today, this week, and this month. \
+                       ALWAYS call this first before any query that involves relative time \
+                       (hôm nay, tuần này, ngày mai, lúc mấy giờ, etc.)."
+    )]
+    fn space_current_time(&self) -> String {
+        use chrono::{Datelike, Duration, Local, Timelike, Weekday};
+        let now = Local::now();
+        let today_start = now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .and_then(|dt| Local.from_local_datetime(&dt).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(now.timestamp_millis());
+        let today_end = now
+            .date_naive()
+            .and_hms_opt(23, 59, 59)
+            .and_then(|dt| Local.from_local_datetime(&dt).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(now.timestamp_millis());
+
+        // Start of week (Sunday = 0)
+        let days_from_sun = now.weekday().num_days_from_sunday() as i64;
+        let week_start_date = now.date_naive() - Duration::days(days_from_sun);
+        let week_end_date = week_start_date + Duration::days(6);
+        let week_start_ms = week_start_date
+            .and_hms_opt(0, 0, 0)
+            .and_then(|dt| Local.from_local_datetime(&dt).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(today_start);
+        let week_end_ms = week_end_date
+            .and_hms_opt(23, 59, 59)
+            .and_then(|dt| Local.from_local_datetime(&dt).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(today_end);
+
+        // Start/end of month
+        let month_start = now.date_naive().with_day(1).unwrap_or(now.date_naive());
+        let month_end = if now.month() == 12 {
+            chrono::NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+        }
+        .map(|d| d.pred_opt().unwrap_or(d))
+        .unwrap_or(now.date_naive());
+        let month_start_ms = month_start
+            .and_hms_opt(0, 0, 0)
+            .and_then(|dt| Local.from_local_datetime(&dt).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(today_start);
+        let month_end_ms = month_end
+            .and_hms_opt(23, 59, 59)
+            .and_then(|dt| Local.from_local_datetime(&dt).single())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(today_end);
+
+        let day_names_vi = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
+        let dow_vi = day_names_vi[now.weekday().num_days_from_sunday() as usize];
+        let tz_offset = now.offset().local_minus_utc() / 3600;
+        let tz_sign = if tz_offset >= 0 { "+" } else { "" };
+
+        let result = serde_json::json!({
+            "now_ms": now.timestamp_millis(),
+            "iso": now.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "display": format!("{}, {:02}/{:02}/{} {:02}:{:02}",
+                dow_vi, now.day(), now.month(), now.year(),
+                now.hour(), now.minute()),
+            "timezone": format!("UTC{tz_sign}{tz_offset}"),
+            "year": now.year(),
+            "month": now.month(),
+            "day": now.day(),
+            "hour": now.hour(),
+            "minute": now.minute(),
+            "day_of_week": now.weekday().num_days_from_sunday(),
+            "day_of_week_vi": dow_vi,
+            "today": {
+                "start_ms": today_start,
+                "end_ms": today_end,
+                "iso_date": now.format("%Y-%m-%d").to_string(),
+            },
+            "this_week": {
+                "start_ms": week_start_ms,
+                "end_ms": week_end_ms,
+                "start_date": week_start_date.format("%Y-%m-%d").to_string(),
+                "end_date": week_end_date.format("%Y-%m-%d").to_string(),
+            },
+            "this_month": {
+                "start_ms": month_start_ms,
+                "end_ms": month_end_ms,
+                "start_date": month_start.format("%Y-%m-%d").to_string(),
+                "end_date": month_end.format("%Y-%m-%d").to_string(),
+            },
+            "tomorrow": {
+                "start_ms": today_start + 86_400_000,
+                "end_ms": today_end + 86_400_000,
+                "iso_date": (now.date_naive() + Duration::days(1)).format("%Y-%m-%d").to_string(),
+            },
+            "yesterday": {
+                "start_ms": today_start - 86_400_000,
+                "end_ms": today_end - 86_400_000,
+                "iso_date": (now.date_naive() - Duration::days(1)).format("%Y-%m-%d").to_string(),
+            },
+        });
+        result.to_string()
     }
 
     #[rmcp::tool(
@@ -718,6 +916,125 @@ impl SpaceServer {
         }
     }
 
+    pub fn event_update(
+        &self,
+        event_id: String,
+        title: Option<String>,
+        description: Option<String>,
+        start_at: Option<i64>,
+        end_at: Option<i64>,
+        location: Option<String>,
+        all_day: Option<bool>,
+        color: Option<String>,
+        reminder_min: Option<i64>,
+    ) -> ToolResult {
+        let result = self.db.with_conn(|conn| {
+            if let Some(v) = &title {
+                conn.execute("UPDATE space_events SET title=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+            }
+            if description.is_some() {
+                conn.execute("UPDATE space_events SET description=?1 WHERE id=?2 AND deleted_at IS NULL", params![description, event_id])?;
+            }
+            if let Some(v) = start_at {
+                conn.execute("UPDATE space_events SET start_at=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+            }
+            if let Some(v) = end_at {
+                conn.execute("UPDATE space_events SET end_at=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+            }
+            if location.is_some() {
+                conn.execute("UPDATE space_events SET location=?1 WHERE id=?2 AND deleted_at IS NULL", params![location, event_id])?;
+            }
+            if let Some(v) = all_day {
+                conn.execute("UPDATE space_events SET all_day=?1 WHERE id=?2 AND deleted_at IS NULL", params![v as i32, event_id])?;
+            }
+            if color.is_some() {
+                conn.execute("UPDATE space_events SET color=?1 WHERE id=?2 AND deleted_at IS NULL", params![color, event_id])?;
+            }
+            if let Some(v) = reminder_min {
+                conn.execute("UPDATE space_events SET reminder_min=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+            }
+            Ok(())
+        });
+        match result {
+            Ok(_) => ToolResult::ok(serde_json::json!({ "success": true, "id": event_id }).to_string()),
+            Err(e) => ToolResult::err(format!("Update event failed: {e}")),
+        }
+    }
+
+    /// Search events by keyword and/or date.
+    /// `date` accepts: "today", "tomorrow", "yesterday", ISO date "YYYY-MM-DD".
+    /// Returns events sorted by start_at ascending.
+    pub fn event_search(
+        &self,
+        query: Option<String>,
+        date: Option<String>,
+        from_ms: Option<i64>,
+        to_ms: Option<i64>,
+        limit: u32,
+    ) -> ToolResult {
+        // Resolve time window
+        let (range_from, range_to) = if let (Some(f), Some(t)) = (from_ms, to_ms) {
+            (f, t)
+        } else if let Some(ref d) = date {
+            match resolve_date(d) {
+                Some((f, t)) => (f, t),
+                None => {
+                    return ToolResult::err(format!(
+                        "Không nhận dạng được ngày: '{d}'. \
+                         Dùng 'today', 'tomorrow', 'yesterday' hoặc định dạng YYYY-MM-DD."
+                    ));
+                }
+            }
+        } else {
+            // Default: next 30 days
+            let now = Utc::now().timestamp_millis();
+            (now, now + 30 * 24 * 3600 * 1000)
+        };
+
+        let kw = query.as_deref().unwrap_or("").trim().to_lowercase();
+        let result = self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, title, description, start_at, end_at, all_day, location, color, reminder_min, source
+                 FROM space_events
+                 WHERE deleted_at IS NULL
+                   AND start_at >= ?1 AND start_at <= ?2
+                 ORDER BY start_at ASC
+                 LIMIT ?3",
+            )?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(params![range_from, range_to, limit as i64], |row| {
+                    Ok(serde_json::json!({
+                        "id":           row.get::<_,String>(0)?,
+                        "title":        row.get::<_,String>(1)?,
+                        "description":  row.get::<_,Option<String>>(2)?,
+                        "start_at":     row.get::<_,i64>(3)?,
+                        "end_at":       row.get::<_,i64>(4)?,
+                        "all_day":      row.get::<_,i32>(5)? != 0,
+                        "location":     row.get::<_,Option<String>>(6)?,
+                        "color":        row.get::<_,Option<String>>(7)?,
+                        "reminder_min": row.get::<_,Option<i64>>(8)?,
+                        "source":       row.get::<_,String>(9)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .filter(|ev| {
+                    if kw.is_empty() {
+                        return true;
+                    }
+                    let title = ev["title"].as_str().unwrap_or("").to_lowercase();
+                    let desc = ev["description"].as_str().unwrap_or("").to_lowercase();
+                    let loc = ev["location"].as_str().unwrap_or("").to_lowercase();
+                    title.contains(&kw) || desc.contains(&kw) || loc.contains(&kw)
+                })
+                .collect();
+            Ok(rows)
+        });
+        match result {
+            Ok(rows) => ToolResult::ok(serde_json::to_string_pretty(&rows).unwrap_or_default()),
+            Err(e) => ToolResult::err(format!("Search events failed: {e}")),
+        }
+    }
+
     pub fn event_delete(&self, event_id: String) -> ToolResult {
         let now = Utc::now().timestamp_millis();
         let result = self.db.with_conn(|conn| {
@@ -1109,6 +1426,48 @@ struct EmailAccountRow {
     username: String,
     password_enc: String,
     use_tls: bool,
+}
+
+// ─── Date resolution helper ───────────────────────────────────────────────────
+
+/// Parse a natural-language or ISO date string into a (start_ms, end_ms) day range.
+/// Returns None when the string is not recognized.
+fn resolve_date(s: &str) -> Option<(i64, i64)> {
+    use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
+
+    let s = s.trim().to_lowercase();
+    let today = Local::now().date_naive();
+
+    let date: NaiveDate = match s.as_str() {
+        "today" | "hôm nay" | "hom nay" => today,
+        "tomorrow" | "ngày mai" | "ngay mai" => today + Duration::days(1),
+        "yesterday" | "hôm qua" | "hom qua" => today - Duration::days(1),
+        "next monday" | "thứ 2 tuần sau" => {
+            let days = (7 - today.weekday().num_days_from_monday() as i64 + 7) % 7;
+            today + Duration::days(if days == 0 { 7 } else { days })
+        }
+        "this week" | "tuần này" => today, // treat as "from today through end of week" below
+        _ => {
+            // Try ISO date YYYY-MM-DD or DD/MM/YYYY
+            if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                d
+            } else if let Ok(d) = NaiveDate::parse_from_str(&s, "%d/%m/%Y") {
+                d
+            } else if let Ok(d) = NaiveDate::parse_from_str(&s, "%d-%m-%Y") {
+                d
+            } else {
+                return None;
+            }
+        }
+    };
+
+    let start = Local.from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
+        .single()?
+        .timestamp_millis();
+    let end = Local.from_local_datetime(&date.and_hms_opt(23, 59, 59)?)
+        .single()?
+        .timestamp_millis();
+    Some((start, end))
 }
 
 // ─── stdio server entry point ─────────────────────────────────────────────────

@@ -74,6 +74,7 @@ export interface UseSpaceHook {
   eventsLoading: boolean;
   loadEvents: (from: number, to: number) => Promise<void>;
   createEvent: (payload: Omit<SpaceEvent, 'id' | 'source'>) => Promise<SpaceEvent | null>;
+  updateEvent: (id: string, patch: Partial<Omit<SpaceEvent, 'id' | 'source'>>) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
   todaySummary: TodaySummary | null;
   loadTodaySummary: () => Promise<void>;
@@ -194,6 +195,13 @@ export function useSpace(): UseSpaceHook {
     }
   }, []);
 
+  const updateEvent = useCallback(async (id: string, patch: Partial<Omit<SpaceEvent, 'id' | 'source'>>) => {
+    try {
+      await apiFetch(`/api/space/calendar/events/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      setEvents(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+    } catch {}
+  }, []);
+
   const deleteEvent = useCallback(async (id: string) => {
     try {
       await apiFetch(`/api/space/calendar/events/${id}`, { method: 'DELETE' });
@@ -273,7 +281,7 @@ export function useSpace(): UseSpaceHook {
 
   return {
     notes, notesLoading, loadNotes, createNote, updateNote, deleteNote, searchNotes,
-    events, eventsLoading, loadEvents, createEvent, deleteEvent, todaySummary, loadTodaySummary,
+    events, eventsLoading, loadEvents, createEvent, updateEvent, deleteEvent, todaySummary, loadTodaySummary,
     emails, emailsLoading, loadEmails, readEmail, searchEmails,
     schedules, schedulesLoading, loadSchedules, createSchedule, cancelSchedule,
   };

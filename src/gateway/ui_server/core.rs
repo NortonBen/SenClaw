@@ -42,7 +42,8 @@ use super::space::{
     space_apps_delete, space_apps_list, space_apps_register,
     space_email_accounts_create, space_email_accounts_delete, space_email_accounts_list,
     space_email_draft, space_email_inbox, space_email_read, space_email_search, space_email_send,
-    space_events_create, space_events_delete, space_events_list, space_events_set_reminder,
+    space_events_create, space_events_delete, space_events_list, space_events_search,
+    space_events_set_reminder, space_events_update,
     space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
     space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_list,
     space_sync_apple_calendar, space_sync_apple_notes, space_sync_gmail,
@@ -253,7 +254,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         // Calendar
         .route("/api/space/calendar/events", get(space_events_list).post(space_events_create))
-        .route("/api/space/calendar/events/:id", delete(space_events_delete))
+        .route("/api/space/calendar/events/search", get(space_events_search))
+        .route("/api/space/calendar/events/:id", patch(space_events_update).delete(space_events_delete))
         .route("/api/space/calendar/events/:id/reminder", post(space_events_set_reminder))
         .route("/api/space/calendar/today", get(space_today_summary))
         // Email
