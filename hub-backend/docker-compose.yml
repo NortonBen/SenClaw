@@ -1,0 +1,19 @@
+services:
+  hub-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: senclaw-hub-backend:latest
+    container_name: senclaw-hub-backend
+    ports:
+      - "${HUB_BACKEND_PORT:-18080}:18080"
+    environment:
+      SHARED_PORT: ":18080"
+      # Gửi cho client (REST); từ máy host thường là localhost + cổng publish
+      GRPC_URL: "${GRPC_URL:-127.0.0.1:18080}"
+    volumes:
+      - hub_backend_data:/data
+    restart: unless-stopped
+
+volumes:
+  hub_backend_data:

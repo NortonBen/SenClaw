@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   grpc: ^5.1.0
   protobuf: ^6.0.0
+  web_socket_channel: ^3.0.3
+  fixnum: ^1.1.0
   cryptography: ^2.5.0
   mobile_scanner: ^5.2.1
   flutter_secure_storage: ^9.0.0

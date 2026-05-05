@@ -7,7 +7,6 @@ import '../services/crypto_service.dart';
 import '../services/config_service.dart';
 import '../services/language_service.dart';
 import '../services/logger_service.dart';
-import '../generated/channel_relay.pbenum.dart';
 import 'welcome_screen.dart';
 import 'connection_qr_screen.dart';
 import 'agent_select_screen.dart';
@@ -20,12 +19,14 @@ class ChatMessage {
   final Duration? latency;
   final String role; // 'user', 'agent', 'other'
 
-  ChatMessage(this.text, this.isFromMe,
-      {this.isHistory = false,
-      this.timestamp,
-      this.latency,
-      String? role})
-      : role = role ?? (isFromMe ? 'user' : 'agent');
+  ChatMessage(
+    this.text,
+    this.isFromMe, {
+    this.isHistory = false,
+    this.timestamp,
+    this.latency,
+    String? role,
+  }) : role = role ?? (isFromMe ? 'user' : 'agent');
 }
 
 class ChatScreen extends StatefulWidget {
@@ -36,6 +37,8 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const _agentListTimeout = Duration(seconds: 40);
+
   final _config = ConfigService();
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
@@ -83,13 +86,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _initRelay() async {
     final hub = await _config.hubUrl;
-    final grpc = await _config.grpcUrl;
+    final relay = await _config.relayUrl;
     final cid = await _config.channelId;
     final token = await _config.accessToken;
     final key = await _config.encryptionKey;
 
-    final url = (grpc != null && grpc.isNotEmpty) ? grpc : hub;
-    if (url == null || cid == null || token == null || key == null) return;
+    final url = (relay ?? hub)?.trim();
+    if (url == null ||
+        url.isEmpty ||
+        cid == null ||
+        token == null ||
+        key == null)
+      return;
 
     final encKey = await CryptoService.deriveKey(key);
     Log.i('[Chat] Khởi tạo relay — channel=$cid url=$url');
@@ -104,16 +112,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _relay!.incomingMessages.listen((text) {
       if (!mounted) return;
-      Log.d('[Chat] Tin nhắn mới từ agent: "${text.length > 60 ? text.substring(0, 60) : text}…"');
-      
+      Log.d(
+        '[Chat] Tin nhắn mới từ agent: "${text.length > 60 ? text.substring(0, 60) : text}…"',
+      );
+
       Duration? latency;
       if (_lastSendTime != null) {
         latency = DateTime.now().difference(_lastSendTime!);
         _lastSendTime = null; // reset sau khi nhận được chunk đầu tiên
       }
 
-      setState(() => _messages.add(ChatMessage(text, false,
-          latency: latency, timestamp: DateTime.now(), role: 'agent')));
+      setState(
+        () => _messages.add(
+          ChatMessage(
+            text,
+            false,
+            latency: latency,
+            timestamp: DateTime.now(),
+            role: 'agent',
+          ),
+        ),
+      );
       _scrollToBottom();
     });
 
@@ -137,12 +156,23 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     });
 
-    _loadTimeout = Timer(const Duration(seconds: 20), () {
+    _loadTimeout = Timer(_agentListTimeout, () {
       if (!mounted || _agentLoaded) return;
-      Log.w('[Chat] Timeout — chưa nhận được danh sách agent sau 20 giây');
+      final hubOk = _relay?.hasReceivedInboundHubData ?? false;
+      if (hubOk) {
+        Log.w(
+          '[Chat] Timeout — hub đã phản hồi nhưng chưa có AGENT_LIST (cần Senclaw kết nối cùng kênh)',
+        );
+      } else {
+        Log.w(
+          '[Chat] Timeout — không có tin từ hub (mạng, domain, ghép cặp hoặc hub)',
+        );
+      }
       setState(() {
         _loadTimedOut = true;
-        _statusText = 'Không nhận được phản hồi từ server';
+        _statusText = hubOk
+            ? 'Hub đã kết nối — chưa có Senclaw trên kênh này. Hãy chạy Senclaw với relay tới cùng hub.'
+            : 'Không nhận được phản hồi từ hub — kiểm tra mạng, domain và ghép cặp (token/kênh).';
       });
     });
   }
@@ -151,7 +181,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
 
     _loadTimeout?.cancel();
-    Log.i('[Chat] Nhận danh sách agent: ${agents.length} — ${agents.map((a) => a.name).join(', ')}');
+    Log.i(
+      '[Chat] Nhận danh sách agent: ${agents.length} — ${agents.map((a) => a.name).join(', ')}',
+    );
 
     setState(() {
       _agents = agents;
@@ -188,7 +220,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onHistory(List<HistoryMessage> history) {
     if (!mounted) return;
     Log.i(
-        '[Chat] Nhận lịch sử: ${history.length} tin cho agent "${_selectedAgent?.name}"');
+      '[Chat] Nhận lịch sử: ${history.length} tin cho agent "${_selectedAgent?.name}"',
+    );
 
     final histMsgs = history.map((m) {
       final ts = DateTime.tryParse(m.timestamp)?.toLocal();
@@ -197,9 +230,7 @@ class _ChatScreenState extends State<ChatScreen> {
         m.isFromMe,
         isHistory: true,
         timestamp: ts,
-        role: m.role.isEmpty
-            ? (m.isBotReply ? 'agent' : 'user')
-            : m.role,
+        role: m.role.isEmpty ? (m.isBotReply ? 'agent' : 'user') : m.role,
       );
     }).toList();
 
@@ -228,8 +259,10 @@ class _ChatScreenState extends State<ChatScreen> {
       _isLoadingMore = true;
       _currentPage++;
     });
-    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ,
-        jsonEncode({'page': _currentPage, 'pageSize': 20}));
+    _relay?.sendControl(
+      RelayControlType.historyReq,
+      jsonEncode({'page': _currentPage, 'pageSize': 20}),
+    );
   }
 
   void _selectAgent(AgentInfo agent, {bool sendSelect = true}) {
@@ -249,12 +282,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (sendSelect) {
       _relay?.sendControl(
-        ControlMessage_Type.AGENT_SELECT,
+        RelayControlType.agentSelect,
         jsonEncode({'folder': agent.folder}),
       );
     }
-    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ,
-        jsonEncode({'page': 1, 'pageSize': 20}));
+    _relay?.sendControl(
+      RelayControlType.historyReq,
+      jsonEncode({'page': 1, 'pageSize': 20}),
+    );
   }
 
   void _reloadAgentList() {
@@ -263,20 +298,24 @@ class _ChatScreenState extends State<ChatScreen> {
       _agentLoaded = false;
       _statusText = 'Đang tải lại danh sách agent…';
     });
-    _relay?.sendControl(ControlMessage_Type.AGENT_LIST_REQ, '{}');
+    _relay?.sendControl(RelayControlType.agentListReq, '{}');
   }
 
   void _reloadHistory() {
     if (_selectedAgent == null) return;
-    Log.i('[Chat] Người dùng yêu cầu tải lại lịch sử cho "${_selectedAgent!.name}"');
+    Log.i(
+      '[Chat] Người dùng yêu cầu tải lại lịch sử cho "${_selectedAgent!.name}"',
+    );
     setState(() {
       _historyLoaded = false;
       _currentPage = 1;
       _hasMoreHistory = true;
       _messages.clear();
     });
-    _relay?.sendControl(ControlMessage_Type.HISTORY_REQ,
-        jsonEncode({'page': 1, 'pageSize': 20}));
+    _relay?.sendControl(
+      RelayControlType.historyReq,
+      jsonEncode({'page': 1, 'pageSize': 20}),
+    );
   }
 
   void _retryLoad() {
@@ -322,18 +361,26 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF16162E),
-        title: Text(t('logout_confirm_title'),
-            style: const TextStyle(color: Colors.white)),
-        content: Text(t('logout_confirm_msg'),
-            style: const TextStyle(color: Colors.white70)),
+        title: Text(
+          t('logout_confirm_title'),
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          t('logout_confirm_msg'),
+          style: const TextStyle(color: Colors.white70),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(t('cancel'))),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t('cancel')),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(t('logout'),
-                  style: const TextStyle(color: Colors.redAccent))),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              t('logout'),
+              style: const TextStyle(color: Colors.redAccent),
+            ),
+          ),
         ],
       ),
     );
@@ -355,16 +402,17 @@ class _ChatScreenState extends State<ChatScreen> {
       await _relay!.sendMessage(text);
       setState(() {
         _lastSendTime = DateTime.now();
-        _messages.add(ChatMessage(text, true,
-            timestamp: DateTime.now(), role: 'user'));
+        _messages.add(
+          ChatMessage(text, true, timestamp: DateTime.now(), role: 'user'),
+        );
         _messageController.clear();
       });
       _scrollToBottom();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi gửi: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Lỗi gửi: $e')));
       }
     }
   }
@@ -415,15 +463,21 @@ class _ChatScreenState extends State<ChatScreen> {
                       shape: BoxShape.circle,
                       color: Colors.purpleAccent.withOpacity(0.2),
                     ),
-                    child: const Icon(Icons.smart_toy_outlined,
-                        color: Colors.purpleAccent, size: 22),
+                    child: const Icon(
+                      Icons.smart_toy_outlined,
+                      color: Colors.purpleAccent,
+                      size: 22,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  const Text('SenClaw',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
+                  const Text(
+                    'SenClaw',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -550,17 +604,24 @@ class _ChatScreenState extends State<ChatScreen> {
           color: value ? color.withOpacity(0.08) : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: value ? color.withOpacity(0.25) : Colors.white.withOpacity(0.06),
+            color: value
+                ? color.withOpacity(0.25)
+                : Colors.white.withOpacity(0.06),
           ),
         ),
         child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 2,
+          ),
           leading: Container(
             width: 34,
             height: 34,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: value ? color.withOpacity(0.18) : Colors.white.withOpacity(0.05),
+              color: value
+                  ? color.withOpacity(0.18)
+                  : Colors.white.withOpacity(0.05),
             ),
             child: Icon(icon, color: value ? color : Colors.white38, size: 18),
           ),
@@ -607,8 +668,7 @@ class _ChatScreenState extends State<ChatScreen> {
       opacity: disabled ? 0.35 : 1.0,
       child: ListTile(
         leading: Icon(icon, color: iconColor, size: 22),
-        title: Text(label,
-            style: TextStyle(color: labelColor, fontSize: 14)),
+        title: Text(label, style: TextStyle(color: labelColor, fontSize: 14)),
         onTap: disabled ? null : onTap,
         contentPadding: const EdgeInsets.symmetric(horizontal: 20),
         dense: true,
@@ -641,9 +701,10 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Text(
                 agentName.isNotEmpty ? agentName[0].toUpperCase() : 'A',
                 style: const TextStyle(
-                    color: Colors.purpleAccent,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold),
+                  color: Colors.purpleAccent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -651,15 +712,19 @@ class _ChatScreenState extends State<ChatScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(agentName,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold)),
+                Text(
+                  agentName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 if (_selectedAgent != null)
-                  Text(_selectedAgent!.folder,
-                      style: const TextStyle(
-                          color: Colors.white38, fontSize: 10)),
+                  Text(
+                    _selectedAgent!.folder,
+                    style: const TextStyle(color: Colors.white38, fontSize: 10),
+                  ),
               ],
             ),
             if (_agents.length > 1) ...[
@@ -686,8 +751,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildConnectingBanner() {
     return Container(
-      color: (_loadTimedOut ? Colors.redAccent : Colors.cyanAccent)
-          .withOpacity(0.07),
+      color: (_loadTimedOut ? Colors.redAccent : Colors.cyanAccent).withOpacity(
+        0.07,
+      ),
       padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 16),
       child: Row(
         children: [
@@ -696,13 +762,16 @@ class _ChatScreenState extends State<ChatScreen> {
               width: 12,
               height: 12,
               child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(Colors.cyanAccent)),
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+              ),
             )
           else
-            const Icon(Icons.warning_amber_rounded,
-                color: Colors.orangeAccent, size: 14),
+            const Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.orangeAccent,
+              size: 14,
+            ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -717,10 +786,13 @@ class _ChatScreenState extends State<ChatScreen> {
             TextButton(
               onPressed: _retryLoad,
               style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: Size.zero),
-              child: const Text('Thử lại',
-                  style: TextStyle(color: Colors.cyanAccent, fontSize: 12)),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+              ),
+              child: const Text(
+                'Thử lại',
+                style: TextStyle(color: Colors.cyanAccent, fontSize: 12),
+              ),
             ),
         ],
       ),
@@ -736,13 +808,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.purpleAccent)),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Colors.purpleAccent,
+                    ),
+                  ),
                   const SizedBox(height: 16),
-                  Text(_statusText,
-                      style: const TextStyle(
-                          color: Colors.white38, fontSize: 13),
-                      textAlign: TextAlign.center),
+                  Text(
+                    _statusText,
+                    style: const TextStyle(color: Colors.white38, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
                 ],
               ),
       );
@@ -753,23 +828,37 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.smart_toy_outlined,
-                color: Colors.white24, size: 48),
+            const Icon(
+              Icons.smart_toy_outlined,
+              color: Colors.white24,
+              size: 48,
+            ),
             const SizedBox(height: 12),
-            const Text('Không có agent nào được bind với kênh này.',
-                style: TextStyle(color: Colors.white38)),
+            const Text(
+              'Không có agent nào được bind với kênh này.',
+              style: TextStyle(color: Colors.white38),
+            ),
             const SizedBox(height: 6),
-            const Text('Vào Web UI → Channels → bind agent cho kênh app này',
-                style: TextStyle(color: Colors.white24, fontSize: 12),
-                textAlign: TextAlign.center),
+            const Text(
+              'Vào Web UI → Channels → bind agent cho kênh app này',
+              style: TextStyle(color: Colors.white24, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
               onPressed: _reloadAgentList,
-              icon: const Icon(Icons.refresh, color: Colors.purpleAccent, size: 16),
-              label: const Text('Tải lại',
-                  style: TextStyle(color: Colors.purpleAccent, fontSize: 13)),
+              icon: const Icon(
+                Icons.refresh,
+                color: Colors.purpleAccent,
+                size: 16,
+              ),
+              label: const Text(
+                'Tải lại',
+                style: TextStyle(color: Colors.purpleAccent, fontSize: 13),
+              ),
               style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.purpleAccent)),
+                side: const BorderSide(color: Colors.purpleAccent),
+              ),
             ),
           ],
         ),
@@ -787,9 +876,10 @@ class _ChatScreenState extends State<ChatScreen> {
         if (i == _messages.length) return _buildTypingIndicator();
 
         final msg = _messages[i];
-        
+
         // Hiện phân cách lịch sử nếu đây là tin nhắn cuối cùng từ lịch sử
-        final isLastHistory = msg.isHistory &&
+        final isLastHistory =
+            msg.isHistory &&
             (i + 1 >= _messages.length || !_messages[i + 1].isHistory);
 
         return Column(
@@ -798,9 +888,10 @@ class _ChatScreenState extends State<ChatScreen> {
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
               ),
             _buildBubble(msg),
             if (isLastHistory) _buildHistorySeparator(),
@@ -817,8 +908,10 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(child: Divider(color: Colors.white12)),
           const SizedBox(width: 8),
-          const Text('Lịch sử',
-              style: TextStyle(color: Colors.white24, fontSize: 11)),
+          const Text(
+            'Lịch sử',
+            style: TextStyle(color: Colors.white24, fontSize: 11),
+          ),
           const SizedBox(width: 8),
           Expanded(child: Divider(color: Colors.white12)),
         ],
@@ -849,18 +942,21 @@ class _ChatScreenState extends State<ChatScreen> {
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 3),
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
         child: Column(
-          crossAxisAlignment:
-              isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isUser
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: isUser
-                    ? Colors.purpleAccent
-                        .withOpacity(msg.isHistory ? 0.1 : 0.18)
+                    ? Colors.purpleAccent.withOpacity(
+                        msg.isHistory ? 0.1 : 0.18,
+                      )
                     : Colors.white.withOpacity(msg.isHistory ? 0.05 : 0.1),
                 borderRadius: BorderRadius.only(
                   topLeft: const Radius.circular(16),
@@ -870,16 +966,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 border: Border.all(
                   color: isUser
-                      ? Colors.purpleAccent
-                          .withOpacity(msg.isHistory ? 0.15 : 0.3)
+                      ? Colors.purpleAccent.withOpacity(
+                          msg.isHistory ? 0.15 : 0.3,
+                        )
                       : Colors.white.withOpacity(0.06),
                 ),
               ),
               child: Text(
                 msg.text,
                 style: TextStyle(
-                    color: msg.isHistory ? Colors.white60 : Colors.white,
-                    fontSize: 14),
+                  color: msg.isHistory ? Colors.white60 : Colors.white,
+                  fontSize: 14,
+                ),
               ),
             ),
             const SizedBox(height: 2),
@@ -897,9 +995,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     Text(
                       '•  Phản hồi: ${(msg.latency!.inMilliseconds / 1000).toStringAsFixed(1)}s',
                       style: TextStyle(
-                          color: Colors.cyanAccent.withOpacity(0.4),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500),
+                        color: Colors.cyanAccent.withOpacity(0.4),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ],
                 ],
@@ -928,16 +1027,19 @@ class _ChatScreenState extends State<ChatScreen> {
               width: 12,
               height: 12,
               child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(Colors.white54)),
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white54),
+              ),
             ),
             const SizedBox(width: 8),
-            Text('${_selectedAgent?.name ?? 'Agent'} đang soạn…',
-                style: const TextStyle(
-                    color: Colors.white54,
-                    fontSize: 12,
-                    fontStyle: FontStyle.italic)),
+            Text(
+              '${_selectedAgent?.name ?? 'Agent'} đang soạn…',
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
           ],
         ),
       ),
@@ -968,8 +1070,10 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           IconButton(
-            icon: Icon(Icons.send,
-                color: enabled ? Colors.purpleAccent : Colors.white24),
+            icon: Icon(
+              Icons.send,
+              color: enabled ? Colors.purpleAccent : Colors.white24,
+            ),
             onPressed: enabled ? _send : null,
           ),
         ],
@@ -981,19 +1085,28 @@ class _ChatScreenState extends State<ChatScreen> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.wifi_off_rounded, color: Colors.orangeAccent, size: 48),
+        const Icon(
+          Icons.wifi_off_rounded,
+          color: Colors.orangeAccent,
+          size: 48,
+        ),
         const SizedBox(height: 16),
-        Text(_statusText,
-            style: const TextStyle(color: Colors.white60, fontSize: 13),
-            textAlign: TextAlign.center),
+        Text(
+          _statusText,
+          style: const TextStyle(color: Colors.white60, fontSize: 13),
+          textAlign: TextAlign.center,
+        ),
         const SizedBox(height: 20),
         OutlinedButton.icon(
           onPressed: _retryLoad,
           icon: const Icon(Icons.refresh, color: Colors.purpleAccent),
-          label: const Text('Thử lại',
-              style: TextStyle(color: Colors.purpleAccent)),
+          label: const Text(
+            'Thử lại',
+            style: TextStyle(color: Colors.purpleAccent),
+          ),
           style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Colors.purpleAccent)),
+            side: const BorderSide(color: Colors.purpleAccent),
+          ),
         ),
       ],
     );

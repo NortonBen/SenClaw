@@ -6,20 +6,21 @@ import (
 	"net/http"
 
 	"semaclaw/hub-backend/internal/models"
+	"semaclaw/hub-backend/internal/relay"
 	"semaclaw/hub-backend/internal/store"
 )
 
 type Server struct {
-	mux     *http.ServeMux
-	store   *store.Store
-	grpcURL string
+	mux   *http.ServeMux
+	store *store.Store
+	relay *relay.Server
 }
 
-func NewServer(store *store.Store, grpcURL string) *Server {
+func NewServer(store *store.Store, relayServer *relay.Server) *Server {
 	s := &Server{
-		mux:     http.NewServeMux(),
-		store:   store,
-		grpcURL: grpcURL,
+		mux:   http.NewServeMux(),
+		store: store,
+		relay: relayServer,
 	}
 	s.routes()
 	return s
@@ -40,10 +41,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
-	// Channel Sync API
-	s.mux.HandleFunc("GET /v1/agents", s.handleGetAgents())
-	s.mux.HandleFunc("GET /v1/messages/{agentId}", s.handleGetMessages())
-
 	// Registry API
 	s.mux.HandleFunc("GET /v1/search", s.handleSearch())
 	s.mux.HandleFunc("GET /v1/skills/{slug}", s.handleGetSkill())
@@ -55,26 +52,7 @@ func (s *Server) routes() {
 	// Channels Auth API
 	s.mux.HandleFunc("POST /v1/channels/register", s.handleRegisterChannel())
 	s.mux.HandleFunc("POST /v1/channels/verify", s.handleVerifyChannel())
-}
-
-func (s *Server) handleGetAgents() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		agents := []models.Agent{
-			{ID: "agent-1", Name: "SemaClaw Default", Status: "idle"},
-		}
-		json.NewEncoder(w).Encode(agents)
-	}
-}
-
-func (s *Server) handleGetMessages() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		agentId := r.PathValue("agentId")
-		// MOCK
-		messages := []models.Message{
-			{ID: "msg-1", Role: "agent", Content: "Hello from " + agentId, IsEncrypted: false},
-		}
-		json.NewEncoder(w).Encode(messages)
-	}
+	s.mux.HandleFunc("GET /v1/relay/ws", s.relay.HandleWebSocket)
 }
 
 func (s *Server) handleSearch() http.HandlerFunc {
@@ -159,12 +137,11 @@ func (s *Server) handleVerifyChannel() http.HandlerFunc {
 		valid := s.store.VerifyChannel(req.ChannelID, req.AccessToken)
 		w.Header().Set("Content-Type", "application/json")
 
-		log.Println("Verifying channel: ", req.ChannelID, s.grpcURL)
+		log.Println("Verifying channel: ", req.ChannelID)
 
 		if valid {
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"valid":    true,
-				"grpc_url": s.grpcURL,
+				"valid": true,
 			})
 		} else {
 			json.NewEncoder(w).Encode(map[string]interface{}{

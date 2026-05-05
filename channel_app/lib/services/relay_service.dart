@@ -1,17 +1,28 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:grpc/grpc.dart';
 import 'package:fixnum/fixnum.dart';
-import '../generated/channel_relay.pbgrpc.dart';
-import '../generated/channel_relay.pbenum.dart';
+import 'package:web_socket_channel/io.dart';
 import '../models/agent_model.dart';
 import 'crypto_service.dart';
 import 'logger_service.dart';
 
+class RelayControlType {
+  static const int ping = 0;
+  static const int pong = 1;
+  static const int ack = 2;
+  static const int typingStart = 3;
+  static const int typingStop = 4;
+  static const int disconnect = 5;
+  static const int agentListReq = 6;
+  static const int agentListResp = 7;
+  static const int agentSelect = 8;
+  static const int historyReq = 9;
+  static const int historyResp = 10;
+}
+
 class RelayService {
-  late ClientChannel _channel;
-  late ChannelRelayClient _client;
+  final String _hubUrl;
   late CryptoService _crypto;
   final String channelId;
   final String senderId;
@@ -29,17 +40,23 @@ class RelayService {
   final _historyController = StreamController<List<HistoryMessage>>.broadcast();
   Stream<List<HistoryMessage>> get historyUpdates => _historyController.stream;
 
-  final _outboundController = StreamController<RelayMessage>.broadcast();
+  final _outboundController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  IOWebSocketChannel? _ws;
 
-  StreamSubscription? _responseSubscription;
+  StreamSubscription? _wsSubscription;
   StreamSubscription? _sessionOutboundSubscription;
   Timer? _reconnectTimer;
   Timer? _keepAliveTimer;
-  StreamController<RelayMessage>? _sessionCtrl;
   bool _isDisposed = false;
   bool _isConnected = false;
   bool _isConnecting = false;
+
+  /// Any frame from hub (e.g. heartbeat PING) — proves TLS/stream works; agent list still needs Senclaw peer.
+  bool _hasInboundData = false;
   int _reconnectDelaySecs = 2;
+
+  bool get hasReceivedInboundHubData => _hasInboundData;
 
   RelayService({
     required String hubUrl,
@@ -47,40 +64,9 @@ class RelayService {
     required this.senderId,
     required this.accessToken,
     required List<int> encryptionKey,
-  }) {
-    String host = '';
-    int port = 443;
-    bool isSecure = false;
-
-    try {
-      if (!hubUrl.contains('://')) {
-        final parts = hubUrl.split(':');
-        host = parts[0];
-        if (parts.length > 1) port = int.parse(parts[1]);
-      } else {
-        final uri = Uri.parse(hubUrl);
-        host = uri.host;
-        port = uri.port == 0 ? (uri.scheme == 'https' ? 443 : 80) : uri.port;
-        isSecure = uri.scheme == 'https';
-      }
-    } catch (e) {
-      Log.e('Error parsing hub URL: $hubUrl — $e');
-      host = '127.0.0.1';
-      port = 50051;
-    }
-
-    _channel = ClientChannel(
-      host,
-      port: port,
-      options: ChannelOptions(
-        credentials: isSecure
-            ? const ChannelCredentials.secure()
-            : const ChannelCredentials.insecure(),
-      ),
-    );
-    _client = ChannelRelayClient(_channel);
+  }) : _hubUrl = hubUrl {
     _crypto = CryptoService(encryptionKey);
-    Log.i('RelayService: $host:$port (secure=$isSecure)');
+    Log.i('RelayService WS endpoint source: ${hubUrl.trim()}');
   }
 
   void start() => _connect();
@@ -88,70 +74,98 @@ class RelayService {
   void _connect() async {
     if (_isDisposed || _isConnected || _isConnecting) return;
     _isConnecting = true;
+    _hasInboundData = false;
 
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
-    Log.i('RelayService: connecting...');
 
     try {
-      final sessionCtrl = StreamController<RelayMessage>();
-      _sessionCtrl = sessionCtrl;
-
-      _sessionOutboundSubscription = _outboundController.stream.listen(
-        sessionCtrl.add,
-        onError: (e) => Log.e('Outbound error: $e'),
+      final wsUri = _buildWsUri(_hubUrl, channelId, accessToken);
+      final ws = IOWebSocketChannel.connect(
+        wsUri.toString(),
+        pingInterval: const Duration(seconds: 25),
+        connectTimeout: const Duration(seconds: 15),
       );
+      _ws = ws;
 
-      final responseStream = _client.stream(
-        sessionCtrl.stream,
-        options: CallOptions(metadata: {
-          'channel_id': channelId,
-          'access_token': accessToken,
-        }),
-      );
+      _sessionOutboundSubscription = _outboundController.stream.listen((msg) {
+        _ws?.sink.add(jsonEncode(msg));
+      }, onError: (e) => Log.e('Outbound error: $e'));
 
-      // Handshake + agent list request sent directly to session (not via broadcast)
-      sessionCtrl.add(_makeControl(ControlMessage_Type.PING, ''));
-      sessionCtrl.add(_makeControl(ControlMessage_Type.AGENT_LIST_REQ, '{}'));
-
-      _responseSubscription = responseStream.listen(
-        (msg) async {
+      _wsSubscription = ws.stream.listen(
+        (dynamic raw) async {
+          _hasInboundData = true;
           if (!_isConnected) {
             _isConnected = true;
-            _isConnecting = false;
             _reconnectDelaySecs = 2; // reset backoff on success
             Log.i('RelayService: connected');
-            _startKeepAlive(sessionCtrl);
+            _startKeepAlive();
           }
 
-          if (msg.channelId != channelId) return;
+          Map<String, dynamic> msg;
+          try {
+            if (raw is String) {
+              msg = jsonDecode(raw) as Map<String, dynamic>;
+            } else if (raw is List<int> || raw is Uint8List) {
+              final text = utf8.decode((raw as List<int>));
+              msg = jsonDecode(text) as Map<String, dynamic>;
+            } else {
+              Log.d('RelayService: ignoring unsupported ws frame');
+              return;
+            }
+          } catch (e) {
+            Log.e('RelayService decode error: $e');
+            return;
+          }
 
-          if (msg.hasEncryptedData()) {
-            final enc = msg.encryptedData;
+          final frameType = (msg['type'] ?? '') as String;
+          final msgId = (msg['message_id'] ?? '') as String;
+          final msgChannel = (msg['channel_id'] ?? '') as String;
+          Log.i('Relay stream received frame: $frameType id=$msgId');
+          if (msgChannel != channelId) return;
+
+          if (frameType == 'encrypted') {
             try {
+              final nonce = base64Decode((msg['nonce'] ?? '') as String);
+              final cipher = base64Decode((msg['ciphertext'] ?? '') as String);
+              final tag = base64Decode((msg['tag'] ?? '') as String);
               final text = await _crypto.decrypt(
-                Uint8List.fromList(enc.nonce),
-                Uint8List.fromList(enc.ciphertext),
-                Uint8List.fromList(enc.tag),
+                Uint8List.fromList(nonce),
+                Uint8List.fromList(cipher),
+                Uint8List.fromList(tag),
               );
               _incomingController.add(text);
             } catch (e) {
               Log.e('Decrypt failed: $e');
             }
-          } else if (msg.hasControl()) {
-            _handleControl(msg.control);
+          } else if (frameType == 'control') {
+            _handleControl(
+              (msg['control_type'] ?? 0) as int,
+              (msg['metadata'] ?? '') as String,
+            );
+          } else if (frameType == 'ping') {
+            _ws?.sink.add(jsonEncode(_makePingPongFrame('pong')));
+          } else if (frameType == 'pong') {
+            // keepalive acknowledgement; no app-level action needed
           }
         },
         onDone: () {
           Log.i('Relay stream closed');
-          _handleDisconnect(sessionCtrl);
+          _handleDisconnect();
         },
         onError: (e) {
           Log.e('Relay stream error: $e');
-          _handleDisconnect(sessionCtrl);
+          _handleDisconnect();
         },
         cancelOnError: true,
       );
+      // Handshake + agent list request sent directly right after stream active.
+      ws.sink.add(jsonEncode(_makePingPongFrame('ping')));
+      ws.sink.add(
+        jsonEncode(_makeControl(RelayControlType.agentListReq, '{}')),
+      );
+      // Stream subscription is active; hub may not send before first heartbeat (see hub StartHeartbeat).
+      _isConnecting = false;
     } catch (e) {
       Log.e('Failed to connect: $e');
       _isConnecting = false;
@@ -159,24 +173,21 @@ class RelayService {
     }
   }
 
-  void _startKeepAlive(StreamController<RelayMessage> sessionCtrl) {
+  void _startKeepAlive() {
     _keepAliveTimer?.cancel();
     _keepAliveTimer = Timer.periodic(const Duration(seconds: 25), (_) {
       if (_isDisposed || !_isConnected) return;
-      sessionCtrl.add(_makeControl(ControlMessage_Type.PING, ''));
+      _ws?.sink.add(jsonEncode(_makePingPongFrame('ping')));
     });
   }
 
-  void _handleControl(ControlMessage ctrl) {
-    final type = ctrl.type;
-    final meta = ctrl.metadata;
-
+  void _handleControl(int type, String meta) {
     switch (type) {
-      case ControlMessage_Type.TYPING_START:
+      case RelayControlType.typingStart:
         _typingController.add(true);
-      case ControlMessage_Type.TYPING_STOP:
+      case RelayControlType.typingStop:
         _typingController.add(false);
-      case ControlMessage_Type.AGENT_LIST_RESP:
+      case RelayControlType.agentListResp:
         try {
           final raw = jsonDecode(meta) as List<dynamic>;
           final agents = raw
@@ -186,7 +197,7 @@ class RelayService {
         } catch (e) {
           Log.e('AGENT_LIST_RESP parse error: $e');
         }
-      case ControlMessage_Type.HISTORY_RESP:
+      case RelayControlType.historyResp:
         try {
           Log.d('HISTORY_RESP raw meta: $meta');
           final raw = jsonDecode(meta) as List<dynamic>;
@@ -198,56 +209,72 @@ class RelayService {
           Log.e('HISTORY_RESP parse error: $e');
         }
       default:
-        Log.d('Control type=${type.value} meta=$meta');
+        Log.d('Control type=$type meta=$meta');
     }
   }
 
   /// Send a control frame to the server.
-  void sendControl(ControlMessage_Type type, String metadata) {
+  void sendControl(int type, String metadata) {
     if (_isDisposed) return;
     _outboundController.add(_makeControl(type, metadata));
   }
 
-  RelayMessage _makeControl(ControlMessage_Type type, String metadata) {
-    return RelayMessage(
-      messageId: DateTime.now().millisecondsSinceEpoch.toString(),
-      channelId: channelId,
-      senderId: senderId,
-      timestamp: Int64(DateTime.now().millisecondsSinceEpoch),
-      control: ControlMessage(type: type, metadata: metadata),
-    );
+  Map<String, dynamic> _makeControl(int type, String metadata) {
+    return {
+      'type': 'control',
+      'message_id': DateTime.now().millisecondsSinceEpoch.toString(),
+      'channel_id': channelId,
+      'sender_id': senderId,
+      'timestamp': Int64(DateTime.now().millisecondsSinceEpoch).toInt(),
+      'control_type': type,
+      'metadata': metadata,
+    };
+  }
+
+  Map<String, dynamic> _makePingPongFrame(String frameType) {
+    return {
+      'type': frameType,
+      'message_id': DateTime.now().millisecondsSinceEpoch.toString(),
+      'channel_id': channelId,
+      'sender_id': senderId,
+      'timestamp': Int64(DateTime.now().millisecondsSinceEpoch).toInt(),
+    };
   }
 
   Future<void> sendMessage(String text) async {
     try {
       final encrypted = await _crypto.encrypt(text);
-      _outboundController.add(RelayMessage(
-        messageId: DateTime.now().millisecondsSinceEpoch.toString(),
-        channelId: channelId,
-        senderId: senderId,
-        timestamp: Int64(DateTime.now().millisecondsSinceEpoch),
-        encryptedData: EncryptedData(
-          nonce: Uint8List.fromList(encrypted.nonce),
-          ciphertext: Uint8List.fromList(encrypted.cipherText),
-          tag: Uint8List.fromList(encrypted.mac.bytes),
-        ),
-      ));
+      final tagBytes = encrypted.mac.bytes;
+      _outboundController.add({
+        'type': 'encrypted',
+        'message_id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'channel_id': channelId,
+        'sender_id': senderId,
+        'timestamp': Int64(DateTime.now().millisecondsSinceEpoch).toInt(),
+        'nonce': base64Encode(encrypted.nonce),
+        'ciphertext': base64Encode(encrypted.cipherText),
+        'tag': base64Encode(tagBytes),
+      });
     } catch (e) {
       Log.e('Send failed: $e');
       rethrow;
     }
   }
 
-  void _handleDisconnect(StreamController<RelayMessage> sessionCtrl) {
-    if (!_isConnected && !_isConnecting) return; // already handled
+  void _handleDisconnect() {
+    if (!_isConnected && !_isConnecting && _wsSubscription == null) {
+      return;
+    }
     _isConnected = false;
     _isConnecting = false;
+    _hasInboundData = false;
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
     _sessionOutboundSubscription?.cancel();
-    _responseSubscription?.cancel();
-    if (!sessionCtrl.isClosed) sessionCtrl.close();
-    _sessionCtrl = null;
+    _wsSubscription?.cancel();
+    _wsSubscription = null;
+    _ws?.sink.close();
+    _ws = null;
     if (!_isDisposed) _scheduleReconnect();
   }
 
@@ -267,8 +294,9 @@ class RelayService {
     _reconnectTimer?.cancel();
     _keepAliveTimer?.cancel();
     _sessionOutboundSubscription?.cancel();
-    _responseSubscription?.cancel();
-    if (_sessionCtrl != null && !_sessionCtrl!.isClosed) _sessionCtrl!.close();
+    _wsSubscription?.cancel();
+    await _ws?.sink.close();
+    _ws = null;
     await Future.wait([
       _incomingController.close(),
       _outboundController.close(),
@@ -276,6 +304,31 @@ class RelayService {
       _agentListController.close(),
       _historyController.close(),
     ]);
-    await _channel.shutdown();
+  }
+
+  Uri _buildWsUri(String rawHub, String channelId, String accessToken) {
+    final input = rawHub.trim();
+    final withScheme = input.contains('://') ? input : 'https://$input';
+    final parsed = Uri.parse(withScheme);
+
+    final scheme = switch (parsed.scheme.toLowerCase()) {
+      'http' => 'ws',
+      'https' => 'wss',
+      'ws' => 'ws',
+      'wss' => 'wss',
+      _ => 'wss',
+    };
+    // Keep relay endpoint fixed and consistent with SenClaw Rust client.
+    const path = '/v1/relay/ws';
+
+    return parsed.replace(
+      scheme: scheme,
+      path: path,
+      queryParameters: {
+        ...parsed.queryParameters,
+        'channel_id': channelId,
+        'access_token': accessToken,
+      },
+    );
   }
 }

@@ -1,21 +1,65 @@
-use crate::proto::relay::channel_relay_client::ChannelRelayClient;
-use crate::proto::relay::*;
 use crate::util::crypto::Crypto;
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
+use futures::{SinkExt, StreamExt};
+use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::Channel;
+use tokio::time::{self, Duration, MissedTickBehavior};
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::info;
 
-pub type RelayMessageHandler = Arc<dyn Fn(RelayMessage) + Send + Sync + 'static>;
+pub type RelayMessageHandler = Arc<dyn Fn(RelayInboundMessage) + Send + Sync + 'static>;
+
+#[derive(Debug, Clone)]
+pub struct RelayInboundMessage {
+    pub channel_id: String,
+    pub sender_id: String,
+    pub message_id: String,
+    pub payload: RelayInboundPayload,
+}
+
+#[derive(Debug, Clone)]
+pub enum RelayInboundPayload {
+    Encrypted {
+        nonce_b64: String,
+        ciphertext_b64: String,
+        tag_b64: String,
+    },
+    Control {
+        control_type: i32,
+        metadata: String,
+    },
+    Ping,
+    Pong,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelayFrame {
+    #[serde(rename = "type")]
+    frame_type: String,
+    channel_id: String,
+    sender_id: String,
+    timestamp: i64,
+    message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control_type: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ciphertext: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
+}
 
 pub struct RelayClient {
-    client: ChannelRelayClient<Channel>,
     crypto: Arc<Crypto>,
     channel_id: String,
     sender_id: String,
-    outbound_tx: mpsc::Sender<RelayMessage>,
+    outbound_tx: mpsc::Sender<RelayFrame>,
 }
 
 impl RelayClient {
@@ -27,69 +71,69 @@ impl RelayClient {
         encryption_key: [u8; 32],
         handler: Option<RelayMessageHandler>,
     ) -> Result<Self> {
-        info!("Connecting to gRPC relay at {}...", hub_url);
-        let is_https = hub_url.starts_with("https://");
-        let mut endpoint = Channel::from_shared(hub_url.clone()).context("invalid relay URL")?;
-        if is_https {
-            let tls = tonic::transport::ClientTlsConfig::new().with_native_roots();
-            endpoint = endpoint.tls_config(tls).context("TLS config")?;
-        }
-        let channel = endpoint
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .connect()
+        let ws_url = build_ws_url(&hub_url, &channel_id, &access_token)?;
+        info!("Connecting to WebSocket relay at {}...", ws_url);
+        let (ws_stream, _) = connect_async(ws_url.as_str())
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to connect to gRPC relay: {e}");
-                anyhow!(e)
-            })?;
-        info!("gRPC channel established.");
+            .map_err(|e| anyhow!("Failed to connect to relay websocket: {e}"))?;
+        info!("WebSocket channel established.");
 
-        let client = ChannelRelayClient::new(channel);
         let crypto = Arc::new(Crypto::new(encryption_key));
-        let (outbound_tx, outbound_rx) = mpsc::channel(100);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel::<RelayFrame>(100);
+        let (mut ws_write, mut ws_read) = ws_stream.split();
 
-        let mut client_clone = client.clone();
-        let outbound_stream = ReceiverStream::new(outbound_rx);
-
-        let mut request = tonic::Request::new(outbound_stream);
-        info!("Establishing gRPC stream for channel_id: {}", channel_id);
-        request
-            .metadata_mut()
-            .insert("channel_id", channel_id.parse()?);
-        request
-            .metadata_mut()
-            .insert("access_token", access_token.parse()?);
+        info!(
+            "Establishing WebSocket stream for channel_id: {}",
+            channel_id
+        );
         // Send initial handshake message to unblock the stream
-        let handshake_msg = RelayMessage {
+        let handshake_msg = RelayFrame {
+            frame_type: "ping".to_string(),
             channel_id: channel_id.clone(),
             sender_id: sender_id.clone(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             message_id: format!("handshake-{}", uuid::Uuid::new_v4()),
-            payload: Some(relay_message::Payload::Control(ControlMessage {
-                r#type: 0, // PING
-                metadata: String::new(),
-            })),
+            control_type: None,
+            metadata: None,
+            nonce: None,
+            ciphertext: None,
+            tag: None,
         };
-        let _ = outbound_tx.send(handshake_msg).await;
-
-        // Establish the stream immediately
-        let response: tonic::Response<tonic::Streaming<RelayMessage>> =
-            client_clone.stream(request).await?;
-        let mut inbound_stream = response.into_inner();
+        ws_write
+            .send(WsMessage::Text(serde_json::to_string(&handshake_msg)?))
+            .await?;
 
         let cid_clone = channel_id.clone();
-        let crypto_clone = Arc::clone(&crypto);
-
-        // Spawn inbound processor
+        let sid_clone = sender_id.clone();
+        let handler_inbound = handler.clone();
+        let pong_tx = outbound_tx.clone();
         tokio::spawn(async move {
             info!(
                 "Inbound relay stream processor started for channel: {}",
                 cid_clone
             );
-            while let Ok(Some(msg)) = inbound_stream.message().await {
-                // Suppress noisy logs for server heartbeat / control frames
-                let is_control = matches!(msg.payload, Some(relay_message::Payload::Control(_)));
-                if !is_control {
+            while let Some(frame) = ws_read.next().await {
+                let frame = match frame {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::warn!("Inbound relay stream read error for {}: {}", cid_clone, e);
+                        break;
+                    }
+                };
+                let msg = match frame {
+                    WsMessage::Text(text) => match serde_json::from_str::<RelayFrame>(&text) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("Failed to decode inbound relay JSON: {}", e);
+                            continue;
+                        }
+                    },
+                    WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
+                    WsMessage::Binary(_) => continue,
+                    WsMessage::Close(_) => break,
+                    _ => continue,
+                };
+                if msg.frame_type == "encrypted" {
                     info!(
                         "Relay stream received message: {} from {}",
                         msg.message_id, msg.sender_id
@@ -104,15 +148,88 @@ impl RelayClient {
                     continue;
                 }
 
-                if let Some(ref h) = handler {
-                    h(msg);
+                let inbound_payload = match msg.frame_type.as_str() {
+                    "encrypted" => RelayInboundPayload::Encrypted {
+                        nonce_b64: msg.nonce.unwrap_or_default(),
+                        ciphertext_b64: msg.ciphertext.unwrap_or_default(),
+                        tag_b64: msg.tag.unwrap_or_default(),
+                    },
+                    "control" => RelayInboundPayload::Control {
+                        control_type: msg.control_type.unwrap_or_default(),
+                        metadata: msg.metadata.unwrap_or_default(),
+                    },
+                    "ping" => {
+                        let pong = RelayFrame {
+                            frame_type: "pong".to_string(),
+                            channel_id: msg.channel_id.clone(),
+                            // Reply as current client identity, not the sender we received from.
+                            sender_id: sid_clone.clone(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                            message_id: format!("pong-{}", uuid::Uuid::new_v4()),
+                            control_type: None,
+                            metadata: None,
+                            nonce: None,
+                            ciphertext: None,
+                            tag: None,
+                        };
+                        let _ = pong_tx.try_send(pong);
+                        RelayInboundPayload::Ping
+                    }
+                    "pong" => RelayInboundPayload::Pong,
+                    _ => continue,
+                };
+
+                if let Some(ref h) = handler_inbound {
+                    h(RelayInboundMessage {
+                        channel_id: msg.channel_id,
+                        sender_id: msg.sender_id,
+                        message_id: msg.message_id,
+                        payload: inbound_payload,
+                    });
                 }
             }
             tracing::warn!("Inbound relay stream closed for channel: {}", cid_clone);
         });
 
+        let cid_outbound = channel_id.clone();
+        tokio::spawn(async move {
+            let mut ping_tick = time::interval(Duration::from_secs(25));
+            ping_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = ping_tick.tick() => {
+                        if let Err(e) = ws_write.send(WsMessage::Ping(Vec::new())).await {
+                            tracing::warn!(
+                                "Relay websocket ping failed for channel {}: {}",
+                                cid_outbound,
+                                e
+                            );
+                            break;
+                        }
+                    }
+                    maybe_msg = outbound_rx.recv() => {
+                        let Some(msg) = maybe_msg else { break; };
+                        let payload = match serde_json::to_string(&msg) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::error!("Failed to encode relay outbound JSON: {}", e);
+                                continue;
+                            }
+                        };
+                        if let Err(e) = ws_write.send(WsMessage::Text(payload)).await {
+                            tracing::warn!(
+                                "Outbound relay stream closed for channel {}: {}",
+                                cid_outbound,
+                                e
+                            );
+                            continue;
+                        }
+                    }
+                }
+            }
+        });
+
         Ok(Self {
-            client,
             crypto,
             channel_id,
             sender_id,
@@ -127,16 +244,17 @@ impl RelayClient {
             "Sending relay message ({} bytes encrypted)",
             ciphertext.len()
         );
-        let msg = RelayMessage {
+        let msg = RelayFrame {
+            frame_type: "encrypted".to_string(),
             channel_id: self.channel_id.clone(),
             sender_id: self.sender_id.clone(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             message_id: uuid::Uuid::new_v4().to_string(),
-            payload: Some(relay_message::Payload::EncryptedData(EncryptedData {
-                nonce,
-                ciphertext,
-                tag,
-            })),
+            control_type: None,
+            metadata: None,
+            nonce: Some(base64::engine::general_purpose::STANDARD.encode(nonce)),
+            ciphertext: Some(base64::engine::general_purpose::STANDARD.encode(ciphertext)),
+            tag: Some(base64::engine::general_purpose::STANDARD.encode(tag)),
         };
 
         self.outbound_tx.send(msg).await?;
@@ -144,25 +262,71 @@ impl RelayClient {
     }
 
     pub async fn send_control(&self, control_type: i32, metadata: String) -> Result<()> {
-        let msg = RelayMessage {
+        let msg = RelayFrame {
+            frame_type: "control".to_string(),
             channel_id: self.channel_id.clone(),
             sender_id: self.sender_id.clone(),
             timestamp: chrono::Utc::now().timestamp_millis(),
             message_id: uuid::Uuid::new_v4().to_string(),
-            payload: Some(relay_message::Payload::Control(ControlMessage {
-                r#type: control_type,
-                metadata,
-            })),
+            control_type: Some(control_type),
+            metadata: Some(metadata),
+            nonce: None,
+            ciphertext: None,
+            tag: None,
         };
 
         self.outbound_tx.send(msg).await?;
         Ok(())
     }
 
-    pub fn decrypt_payload(&self, data: &EncryptedData) -> Result<String> {
+    pub fn decrypt_payload(
+        &self,
+        nonce_b64: &str,
+        ciphertext_b64: &str,
+        tag_b64: &str,
+    ) -> Result<String> {
+        let nonce = base64::engine::general_purpose::STANDARD
+            .decode(nonce_b64)
+            .context("invalid nonce b64")?;
+        let ciphertext = base64::engine::general_purpose::STANDARD
+            .decode(ciphertext_b64)
+            .context("invalid ciphertext b64")?;
+        let tag = base64::engine::general_purpose::STANDARD
+            .decode(tag_b64)
+            .context("invalid tag b64")?;
         let plaintext = self
             .crypto
-            .decrypt(&data.nonce, &data.ciphertext, &data.tag)?;
+            .decrypt(&nonce, &ciphertext, &tag)?;
         String::from_utf8(plaintext).map_err(|e| anyhow!("Invalid UTF-8: {}", e))
     }
+}
+
+fn build_ws_url(hub_url: &str, channel_id: &str, access_token: &str) -> Result<Url> {
+    let trimmed = hub_url.trim();
+    let base = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{}", trimmed)
+    };
+    let mut url = Url::parse(&base).context("invalid relay URL")?;
+
+    // Relay endpoint is fixed on the same host/port as hub API.
+    url.set_path("/v1/relay/ws");
+    match url.scheme() {
+        "http" => {
+            url.set_scheme("ws")
+                .map_err(|_| anyhow!("failed to set ws scheme"))?;
+        }
+        "https" => {
+            url.set_scheme("wss")
+                .map_err(|_| anyhow!("failed to set wss scheme"))?;
+        }
+        "ws" | "wss" => {}
+        s => return Err(anyhow!("unsupported relay URL scheme: {}", s)),
+    }
+
+    url.query_pairs_mut()
+        .append_pair("channel_id", channel_id)
+        .append_pair("access_token", access_token);
+    Ok(url)
 }

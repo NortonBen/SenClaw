@@ -14,12 +14,12 @@ class AgentInfo {
   });
 
   factory AgentInfo.fromJson(Map<String, dynamic> json) => AgentInfo(
-        jid: json['jid'] as String? ?? '',
-        folder: json['folder'] as String? ?? '',
-        name: json['name'] as String? ?? '',
-        channel: json['channel'] as String? ?? '',
-        isAdmin: json['isAdmin'] as bool? ?? false,
-      );
+    jid: json['jid'] as String? ?? '',
+    folder: json['folder'] as String? ?? '',
+    name: json['name'] as String? ?? '',
+    channel: json['channel'] as String? ?? '',
+    isAdmin: json['isAdmin'] as bool? ?? false,
+  );
 
   @override
   String toString() => 'AgentInfo(name=$name, folder=$folder)';
@@ -44,14 +44,21 @@ class HistoryMessage {
     this.role = 'user',
   });
 
+  static String _normalizeRole(Map<String, dynamic> json) {
+    final raw = (json['role'] ?? '').toString().toLowerCase();
+    if (raw == 'agent' || raw == 'assistant') return 'agent';
+    if (raw == 'user') return 'user';
+    if (json['isBotReply'] == true) return 'agent';
+    return 'user';
+  }
+
   factory HistoryMessage.fromJson(Map<String, dynamic> json) => HistoryMessage(
-        id: (json['id'] ?? '').toString(),
-        sender: (json['sender'] ?? '').toString(),
-        content: (json['content'] ?? '').toString(),
-        timestamp: (json['timestamp'] ?? '').toString(),
-        isFromMe: json['isFromMe'] as bool? ?? false,
-        isBotReply: json['isBotReply'] as bool? ?? false,
-        role: (json['role'] ?? (json['isBotReply'] == true ? 'agent' : 'user'))
-            .toString(),
-      );
+    id: (json['id'] ?? '').toString(),
+    sender: (json['sender'] ?? '').toString(),
+    content: (json['content'] ?? '').toString(),
+    timestamp: (json['timestamp'] ?? '').toString(),
+    isFromMe: json['isFromMe'] as bool? ?? false,
+    isBotReply: json['isBotReply'] as bool? ?? false,
+    role: _normalizeRole(json),
+  );
 }

@@ -13,7 +13,8 @@ class PairingScreen extends StatefulWidget {
   State<PairingScreen> createState() => _PairingScreenState();
 }
 
-class _PairingScreenState extends State<PairingScreen> with SingleTickerProviderStateMixin {
+class _PairingScreenState extends State<PairingScreen>
+    with SingleTickerProviderStateMixin {
   final _config = ConfigService();
   final MobileScannerController controller = MobileScannerController();
   late AnimationController _animationController;
@@ -38,7 +39,7 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     double scanWindowSize = 250;
-    
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -67,7 +68,7 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
               }
             },
           ),
-          
+
           // Cut-out Overlay & Animation
           AnimatedBuilder(
             animation: _animationController,
@@ -89,7 +90,10 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
               children: [
                 // Top Action Bar
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 10,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -100,7 +104,11 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
                             color: Colors.white.withOpacity(0.2),
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.close, color: Colors.white, size: 20),
+                          child: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 20,
+                          ),
                         ),
                         onPressed: () => Navigator.pop(context),
                       ),
@@ -108,7 +116,7 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 40),
                 Text(
                   t('scan_hint'),
@@ -119,9 +127,9 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
                     letterSpacing: 0.5,
                   ),
                 ),
-                
+
                 const Spacer(),
-                
+
                 // Bottom Instructions List - Centered under QR
                 Padding(
                   padding: const EdgeInsets.only(bottom: 60),
@@ -158,7 +166,9 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
           if (_isProcessing)
             Container(
               color: Colors.black54,
-              child: const Center(child: CircularProgressIndicator(color: Colors.white)),
+              child: const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
             ),
         ],
       ),
@@ -199,29 +209,27 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
       debugPrint('Token: $token');
       debugPrint('-------------------');
 
-      // Read configured hub from storage
-      final savedHub = await _config.hubUrl;
-      final hub = savedHub ?? qrHub;
+      // Prefer manually configured hub URL from welcome settings.
+      // Fall back to QR hub only when settings value is empty.
+      final savedHub = (await _config.hubUrl)?.trim();
+      final hub = (savedHub != null && savedHub.isNotEmpty) ? savedHub : qrHub;
 
       if (hub != null && cid != null && key != null && token != null) {
         try {
           final response = await http.post(
-            Uri.parse('${hub.endsWith('/') ? hub.substring(0, hub.length - 1) : hub}/v1/channels/verify'),
+            Uri.parse(
+              '${hub.endsWith('/') ? hub.substring(0, hub.length - 1) : hub}/v1/channels/verify',
+            ),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'channel_id': cid,
-              'access_token': token,
-            }),
+            body: jsonEncode({'channel_id': cid, 'access_token': token}),
           );
 
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body);
             if (data['valid'] == true) {
-              final grpcUrl = data['grpc_url'] ?? '127.0.0.1:50051';
-              
               await _config.savePairingData(
                 hubUrl: hub,
-                grpcUrl: grpcUrl,
+                relayUrl: hub,
                 channelId: cid,
                 encryptionKey: key,
                 accessToken: token,
@@ -237,25 +245,29 @@ class _PairingScreenState extends State<PairingScreen> with SingleTickerProvider
             } else {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Verification failed: Invalid token')),
+                  const SnackBar(
+                    content: Text('Verification failed: Invalid token'),
+                  ),
                 );
               }
             }
           } else {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Failed to verify channel with Hub')),
+                const SnackBar(
+                  content: Text('Failed to verify channel with Hub'),
+                ),
               );
             }
           }
         } catch (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Connection error: $e')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Connection error: $e')));
           }
         }
-        
+
         setState(() => _isProcessing = false);
       } else {
         setState(() => _isProcessing = false);
@@ -279,8 +291,9 @@ class ScannerOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final backgroundPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
-    
+    final backgroundPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+
     final cutoutRect = Rect.fromCenter(
       center: Offset(size.width / 2, size.height / 2),
       width: scanWindowSize,
@@ -289,10 +302,7 @@ class ScannerOverlayPainter extends CustomPainter {
 
     final cutoutPath = Path()
       ..addRRect(
-        RRect.fromRectAndRadius(
-          cutoutRect,
-          const Radius.circular(24),
-        ),
+        RRect.fromRectAndRadius(cutoutRect, const Radius.circular(24)),
       );
 
     final backgroundPaint = Paint()
@@ -325,51 +335,106 @@ class ScannerOverlayPainter extends CustomPainter {
       false,
       borderPaint,
     );
-    canvas.drawLine(Offset(cutoutRect.left + radius, cutoutRect.top), Offset(cutoutRect.left + cornerSize, cutoutRect.top), borderPaint);
-    canvas.drawLine(Offset(cutoutRect.left, cutoutRect.top + radius), Offset(cutoutRect.left, cutoutRect.top + cornerSize), borderPaint);
+    canvas.drawLine(
+      Offset(cutoutRect.left + radius, cutoutRect.top),
+      Offset(cutoutRect.left + cornerSize, cutoutRect.top),
+      borderPaint,
+    );
+    canvas.drawLine(
+      Offset(cutoutRect.left, cutoutRect.top + radius),
+      Offset(cutoutRect.left, cutoutRect.top + cornerSize),
+      borderPaint,
+    );
 
     // Top Right
     canvas.drawArc(
-      Rect.fromLTWH(cutoutRect.right - radius * 2, cutoutRect.top, radius * 2, radius * 2),
+      Rect.fromLTWH(
+        cutoutRect.right - radius * 2,
+        cutoutRect.top,
+        radius * 2,
+        radius * 2,
+      ),
       -1.57,
       1.57,
       false,
       borderPaint,
     );
-    canvas.drawLine(Offset(cutoutRect.right - cornerSize, cutoutRect.top), Offset(cutoutRect.right - radius, cutoutRect.top), borderPaint);
-    canvas.drawLine(Offset(cutoutRect.right, cutoutRect.top + radius), Offset(cutoutRect.right, cutoutRect.top + cornerSize), borderPaint);
+    canvas.drawLine(
+      Offset(cutoutRect.right - cornerSize, cutoutRect.top),
+      Offset(cutoutRect.right - radius, cutoutRect.top),
+      borderPaint,
+    );
+    canvas.drawLine(
+      Offset(cutoutRect.right, cutoutRect.top + radius),
+      Offset(cutoutRect.right, cutoutRect.top + cornerSize),
+      borderPaint,
+    );
 
     // Bottom Left
     canvas.drawArc(
-      Rect.fromLTWH(cutoutRect.left, cutoutRect.bottom - radius * 2, radius * 2, radius * 2),
+      Rect.fromLTWH(
+        cutoutRect.left,
+        cutoutRect.bottom - radius * 2,
+        radius * 2,
+        radius * 2,
+      ),
       1.57,
       1.57,
       false,
       borderPaint,
     );
-    canvas.drawLine(Offset(cutoutRect.left + radius, cutoutRect.bottom), Offset(cutoutRect.left + cornerSize, cutoutRect.bottom), borderPaint);
-    canvas.drawLine(Offset(cutoutRect.left, cutoutRect.bottom - cornerSize), Offset(cutoutRect.left, cutoutRect.bottom - radius), borderPaint);
+    canvas.drawLine(
+      Offset(cutoutRect.left + radius, cutoutRect.bottom),
+      Offset(cutoutRect.left + cornerSize, cutoutRect.bottom),
+      borderPaint,
+    );
+    canvas.drawLine(
+      Offset(cutoutRect.left, cutoutRect.bottom - cornerSize),
+      Offset(cutoutRect.left, cutoutRect.bottom - radius),
+      borderPaint,
+    );
 
     // Bottom Right
     canvas.drawArc(
-      Rect.fromLTWH(cutoutRect.right - radius * 2, cutoutRect.bottom - radius * 2, radius * 2, radius * 2),
+      Rect.fromLTWH(
+        cutoutRect.right - radius * 2,
+        cutoutRect.bottom - radius * 2,
+        radius * 2,
+        radius * 2,
+      ),
       0,
       1.57,
       false,
       borderPaint,
     );
-    canvas.drawLine(Offset(cutoutRect.right - cornerSize, cutoutRect.bottom), Offset(cutoutRect.right - radius, cutoutRect.bottom), borderPaint);
-    canvas.drawLine(Offset(cutoutRect.right, cutoutRect.bottom - radius), Offset(cutoutRect.right, cutoutRect.bottom - cornerSize), borderPaint);
+    canvas.drawLine(
+      Offset(cutoutRect.right - cornerSize, cutoutRect.bottom),
+      Offset(cutoutRect.right - radius, cutoutRect.bottom),
+      borderPaint,
+    );
+    canvas.drawLine(
+      Offset(cutoutRect.right, cutoutRect.bottom - radius),
+      Offset(cutoutRect.right, cutoutRect.bottom - cornerSize),
+      borderPaint,
+    );
 
     // 3. Draw Scanning Line
     final linePaint = Paint()
-      ..shader = LinearGradient(
-        colors: [
-          Colors.blueAccent.withOpacity(0),
-          Colors.blueAccent.withOpacity(0.5),
-          Colors.blueAccent.withOpacity(0),
-        ],
-      ).createShader(Rect.fromLTWH(cutoutRect.left, cutoutRect.top + scanWindowSize * scanLinePosition - 10, scanWindowSize, 20))
+      ..shader =
+          LinearGradient(
+            colors: [
+              Colors.blueAccent.withOpacity(0),
+              Colors.blueAccent.withOpacity(0.5),
+              Colors.blueAccent.withOpacity(0),
+            ],
+          ).createShader(
+            Rect.fromLTWH(
+              cutoutRect.left,
+              cutoutRect.top + scanWindowSize * scanLinePosition - 10,
+              scanWindowSize,
+              20,
+            ),
+          )
       ..style = PaintingStyle.fill;
 
     canvas.drawRect(
@@ -395,8 +460,8 @@ class ScannerOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ScannerOverlayPainter oldDelegate) {
-    return oldDelegate.scanWindowSize != scanWindowSize || 
-           oldDelegate.overlayColor != overlayColor ||
-           oldDelegate.scanLinePosition != scanLinePosition;
+    return oldDelegate.scanWindowSize != scanWindowSize ||
+        oldDelegate.overlayColor != overlayColor ||
+        oldDelegate.scanLinePosition != scanLinePosition;
   }
 }

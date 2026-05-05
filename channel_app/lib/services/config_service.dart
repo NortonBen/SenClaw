@@ -8,7 +8,7 @@ class ConfigService {
   final _storage = const FlutterSecureStorage();
 
   static const String _keyHubUrl = 'hub_url';
-  static const String _keyGrpcUrl = 'grpc_url';
+  static const String _keyRelayUrl = 'relay_url';
   static const String _keyChannelId = 'channel_id';
   static const String _keyEncryptionKey = 'encryption_key';
   static const String _keyAccessToken = 'access_token';
@@ -20,7 +20,7 @@ class ConfigService {
   static const String _keyFeatureWiki = 'feature_wiki';
 
   Future<String?> get hubUrl => _storage.read(key: _keyHubUrl);
-  Future<String?> get grpcUrl => _storage.read(key: _keyGrpcUrl);
+  Future<String?> get relayUrl => _storage.read(key: _keyRelayUrl);
   Future<String?> get channelId => _storage.read(key: _keyChannelId);
   Future<String?> get encryptionKey => _storage.read(key: _keyEncryptionKey);
   Future<String?> get accessToken => _storage.read(key: _keyAccessToken);
@@ -39,11 +39,16 @@ class ConfigService {
       (await _storage.read(key: _keyFeatureWiki)) != 'false';
 
   Future<void> setHubUrl(String v) => _storage.write(key: _keyHubUrl, value: v);
-  Future<void> setGrpcUrl(String v) => _storage.write(key: _keyGrpcUrl, value: v);
-  Future<void> setChannelId(String v) => _storage.write(key: _keyChannelId, value: v);
-  Future<void> setEncryptionKey(String v) => _storage.write(key: _keyEncryptionKey, value: v);
-  Future<void> setAccessToken(String v) => _storage.write(key: _keyAccessToken, value: v);
-  Future<void> setLanguageCode(String v) => _storage.write(key: _keyLanguage, value: v);
+  Future<void> setRelayUrl(String v) =>
+      _storage.write(key: _keyRelayUrl, value: v);
+  Future<void> setChannelId(String v) =>
+      _storage.write(key: _keyChannelId, value: v);
+  Future<void> setEncryptionKey(String v) =>
+      _storage.write(key: _keyEncryptionKey, value: v);
+  Future<void> setAccessToken(String v) =>
+      _storage.write(key: _keyAccessToken, value: v);
+  Future<void> setLanguageCode(String v) =>
+      _storage.write(key: _keyLanguage, value: v);
   Future<void> setSelectedAgentFolder(String v) =>
       _storage.write(key: _keySelectedAgentFolder, value: v);
   Future<void> setSelectedAgentName(String v) =>
@@ -57,20 +62,20 @@ class ConfigService {
       _storage.write(key: _keyFeatureWiki, value: v.toString());
 
   Future<void> clearSelectedAgent() => Future.wait([
-        _storage.delete(key: _keySelectedAgentFolder),
-        _storage.delete(key: _keySelectedAgentName),
-      ]);
+    _storage.delete(key: _keySelectedAgentFolder),
+    _storage.delete(key: _keySelectedAgentName),
+  ]);
 
   Future<void> savePairingData({
     required String hubUrl,
-    required String grpcUrl,
+    required String relayUrl,
     required String channelId,
     required String encryptionKey,
     required String accessToken,
   }) async {
     await Future.wait([
       setHubUrl(hubUrl),
-      setGrpcUrl(grpcUrl),
+      setRelayUrl(relayUrl),
       setChannelId(channelId),
       setEncryptionKey(encryptionKey),
       setAccessToken(accessToken),
@@ -80,7 +85,7 @@ class ConfigService {
   Future<void> clearAll() async {
     await Future.wait([
       _storage.delete(key: _keyHubUrl),
-      _storage.delete(key: _keyGrpcUrl),
+      _storage.delete(key: _keyRelayUrl),
       _storage.delete(key: _keyChannelId),
       _storage.delete(key: _keyEncryptionKey),
       _storage.delete(key: _keyAccessToken),

@@ -15,11 +15,7 @@ class WelcomeScreen extends StatelessWidget {
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF0D0D1F),
-              Color(0xFF16162E),
-              Color(0xFF0D0D1F),
-            ],
+            colors: [Color(0xFF0D0D1F), Color(0xFF16162E), Color(0xFF0D0D1F)],
           ),
         ),
         child: ListenableBuilder(
@@ -35,7 +31,10 @@ class WelcomeScreen extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.settings, color: Colors.white70),
+                          icon: const Icon(
+                            Icons.settings,
+                            color: Colors.white70,
+                          ),
                           onPressed: () => _showSettingsDialog(context),
                         ),
                         Row(
@@ -113,7 +112,9 @@ class WelcomeScreen extends StatelessWidget {
                         onPressed: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (context) => const PairingScreen()),
+                            MaterialPageRoute(
+                              builder: (context) => const PairingScreen(),
+                            ),
                           );
                         },
                         style: ElevatedButton.styleFrom(
@@ -134,6 +135,32 @@ class WelcomeScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 14),
+                  FutureBuilder<String?>(
+                    future: ConfigService().hubUrl,
+                    builder: (context, snapshot) {
+                      final hub = (snapshot.data ?? '').trim();
+                      final displayHub = hub.isEmpty
+                          ? 'https://senclaw-hub.bacnd.com'
+                          : hub;
+                      return TextButton.icon(
+                        onPressed: () => _showSettingsDialog(context),
+                        icon: const Icon(
+                          Icons.link,
+                          color: Colors.white70,
+                          size: 18,
+                        ),
+                        label: Text(
+                          'Hub URL: $displayHub',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.75),
+                            fontSize: 12,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    },
+                  ),
                   const SizedBox(height: 40),
                 ],
               ),
@@ -153,10 +180,14 @@ class WelcomeScreen extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF5BBFE8).withOpacity(0.15) : Colors.transparent,
+          color: isSelected
+              ? const Color(0xFF5BBFE8).withOpacity(0.15)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isSelected ? const Color(0xFF5BBFE8) : Colors.white.withOpacity(0.15),
+            color: isSelected
+                ? const Color(0xFF5BBFE8)
+                : Colors.white.withOpacity(0.15),
             width: 1,
           ),
         ),
@@ -175,38 +206,55 @@ class WelcomeScreen extends StatelessWidget {
   Future<void> _showSettingsDialog(BuildContext context) async {
     final config = ConfigService();
     String? currentHub = await config.hubUrl;
-    final controller = TextEditingController(text: currentHub ?? 'http://127.0.0.1:18080');
+    final controller = TextEditingController(
+      text: currentHub ?? 'https://senclaw-hub.bacnd.com',
+    );
 
     if (!context.mounted) return;
-    
+
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: const Color(0xFF16162E),
-          title: Text(t('settings_hub_title'), style: const TextStyle(color: Colors.white)),
+          title: Text(
+            t('settings_hub_title'),
+            style: const TextStyle(color: Colors.white),
+          ),
           content: TextField(
             controller: controller,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               labelText: 'Hub URL',
               labelStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
-              enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF5BBFE8))),
+              enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white24),
+              ),
+              focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF5BBFE8)),
+              ),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text(t('cancel'), style: const TextStyle(color: Colors.white54)),
+              child: Text(
+                t('cancel'),
+                style: const TextStyle(color: Colors.white54),
+              ),
             ),
             TextButton(
               onPressed: () async {
                 await config.setHubUrl(controller.text.trim());
-                await config.setGrpcUrl(''); // Force recalculation/re-verification
+                await config.setRelayUrl(
+                  '',
+                ); // Force recalculation/re-verification
                 if (context.mounted) Navigator.pop(context);
               },
-              child: Text(t('save'), style: const TextStyle(color: Color(0xFF5BBFE8))),
+              child: Text(
+                t('save'),
+                style: const TextStyle(color: Color(0xFF5BBFE8)),
+              ),
             ),
           ],
         );
