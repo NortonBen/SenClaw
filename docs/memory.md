@@ -30,7 +30,6 @@ Tài liệu chi tiết về hệ thống Memory (bộ nhớ ngữ nghĩa) và Wi
 graph TB
     subgraph "Channels"
         TG[Telegram]
-        FS[Feishu/Lark]
         QQ[QQ]
         WX[WeChat]
     end
@@ -59,7 +58,6 @@ graph TB
     subgraph "Wiki System"
         WM[WikiManager]
         GIT[Git Repo]
-        FW_MCP[Feishu Wiki MCP]
         WUI[Wiki Web UI]
         WCLI[Wiki CLI]
     end
@@ -69,7 +67,7 @@ graph TB
         DISK[(Filesystem)]
     end
 
-    TG & FS & QQ & WX --> MR
+    TG & QQ & WX --> MR
     MR --> AP
     AP --> SB
     AP <--> MM
@@ -88,7 +86,6 @@ graph TB
     UI --> WM
 
     MEM_MCP --> MM
-    FW_MCP --> FS
 
     WS --> UI
 ```
@@ -175,6 +172,16 @@ erDiagram
 | `memory_meta` | Key-value store per-folder (phát hiện model switch) |
 
 > **Ghi chú:** `memory_chunks_vec` (sqlite-vec) chưa được wired trong Rust port. Vector search fallback về manual BLOB scan với cosine distance.
+
+**Model switch detection:** Khi đổi embedding provider/model, hệ thống tự xóa toàn bộ embedding cũ:
+```
+memory_meta["__global__"]["embedding_model"] = "openai:text-embedding-3-small:1536"
+                              │
+         Nếu khác với key lưu → UPDATE memory_chunks SET embedding=NULL, model=NULL
+                                  DELETE memory_meta WHERE key='embedding_model'
+                                  DROP TABLE IF EXISTS memory_chunks_vec
+```
+Files sau đó được re-embed tự động khi watcher trigger sync.
 
 ### Luồng đồng bộ (Sync)
 
@@ -302,7 +309,7 @@ flowchart LR
         OAI[OpenAI<br/>text-embedding-3-small<br/>1536 dims]
         ORT[OpenRouter<br/>nvidia/llama-nemotron<br/>auto dims]
         OLL[Ollama<br/>nomic-embed-text<br/>auto dims]
-        LOC[Local<br/>Xenova/paraphrase<br/>384 dims — STUB]
+        LOC[Local<br/>fastembed/ONNX Runtime<br/>384-1024 dims]
     end
 
     subgraph "Cache Layer"
@@ -324,14 +331,60 @@ flowchart LR
 
 | Provider | Model mặc định | Dimensions | Batch | Retry |
 |----------|---------------|------------|-------|-------|
-| `openai` | `text-embedding-3-small` | 1536 | 8 texts | 3 lần, exponential backoff |
-| `openrouter` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Auto-detect | 1 text | 3 lần |
-| `ollama` | `nomic-embed-text` | Auto-detect | 1 text | Không |
-| `local` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 384 | STUB (bail!) | — |
+| `openai` | `text-embedding-3-small` | 1536 | 8 texts | 3 lần, exponential backoff + jitter |
+| `openrouter` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Auto-detect từ response | 1 text | 3 lần |
+| `ollama` | `nomic-embed-text` | Auto-detect từ response | 1 text | Không |
+| `local` | `paraphrase-multilingual-MiniLM-L12-v2` | 384 | Toàn bộ batch | Không |
 
-**Cache mechanism:** `CachedEmbeddingProvider` bọc mọi provider. Trước khi gọi API, kiểm tra `embedding_cache` table bằng SHA-256 hash của text. Nếu đã có, trả về cached embedding.
+**Cache mechanism:** `CachedEmbeddingProvider` bọc mọi provider. Trước khi gọi API, kiểm tra `embedding_cache` table bằng SHA-256 hash của text. Nếu đã có, trả về cached embedding. Cache key bao gồm `(provider, model, hash)` — đổi model tự động bỏ cache cũ.
 
-**Vector search hiện tại:** sqlite-vec chưa được wired → fallback về **manual BLOB scan**: deserialize từng embedding từ `memory_chunks.embedding BLOB`, tính `cosine_distance()`, sắp xếp, normalize về 0–1.
+**Vector search hiện tại:** sqlite-vec chưa được wired (extension chưa load) → fallback về **manual BLOB scan**: deserialize từng embedding từ `memory_chunks.embedding BLOB`, tính `cosine_distance()`, sắp xếp, normalize về 0–1.
+
+### Local Provider — ONNX Runtime (fastembed)
+
+Kích hoạt bằng Cargo feature:
+```bash
+cargo build --features local-embed
+SENCLAW_EMBEDDING_PROVIDER=local
+SENCLAW_LOCAL_MODEL=paraphrase-multilingual-MiniLM-L12-v2   # optional
+SENCLAW_LOCAL_MODEL_PATH=/path/to/model                      # optional — custom model
+```
+
+**Cơ chế lazy init:**
+```
+first embed() call
+      │
+OnceCell::get_or_try_init()
+      │
+spawn_blocking (giải phóng tokio thread pool)
+      │
+      ├─ SENCLAW_LOCAL_MODEL_PATH set? → init_from_path() — load từ thư mục local
+      └─ Không → init_from_hub() — download từ HuggingFace Hub lần đầu
+                  cache vào ~/.senclaw/models/
+      │
+Arc<TextEmbedding> (ONNX Runtime session)
+— lần sau reuse session, không load lại
+```
+
+Các lần gọi sau đó reuse ONNX session. Inference chạy trên `spawn_blocking` thread.
+
+**Models được hỗ trợ (HuggingFace Hub):**
+
+| Model | Dimensions | Đặc điểm |
+|-------|-----------|----------|
+| `paraphrase-multilingual-MiniLM-L12-v2` *(mặc định)* | 384 | Đa ngôn ngữ, phù hợp tiếng Việt/Trung |
+| `all-MiniLM-L6-v2` | 384 | Nhanh, English |
+| `all-MiniLM-L12-v2` | 384 | Chính xác hơn L6, English |
+| `bge-small-en-v1.5` | 384 | English, quality cao |
+| `bge-base-en-v1.5` | 768 | English, cân bằng |
+| `bge-large-en-v1.5` | 1024 | English, chính xác nhất |
+| `multilingual-e5-small` | 384 | Đa ngôn ngữ |
+| `multilingual-e5-base` | 768 | Đa ngôn ngữ |
+| `multilingual-e5-large` | 1024 | Đa ngôn ngữ, tốt nhất |
+
+**Custom model path:** thư mục phải chứa `model.onnx` (hoặc `onnx/model.onnx`) + `tokenizer.json`. Khi dùng `MODEL_PATH`, `SENCLAW_LOCAL_MODEL` vẫn dùng để hint dimensions.
+
+**Heuristic dimensions (khi metadata không có):** tên chứa "large" → 1024, "base" → 768, còn lại → 384.
 
 ### MCP Memory Server
 
@@ -353,8 +406,6 @@ MCP stdio server (`memory-server` subprocess) cung cấp 2 tools cho agent:
 ```
 src/wiki/
 └── mod.rs → manager.rs (845 dòng)
-
-src/mcp/feishu_wiki_server.rs (798 dòng) — Feishu/Lark Wiki MCP
 
 src/cli/commands/wiki.rs (151 dòng) — CLI subcommands
 
@@ -379,7 +430,6 @@ flowchart TD
     subgraph "Entry Points"
         AGENT[Agent gọi CLI]
         WEB[Web UI]
-        FEISHU[Feishu/Lark]
     end
 
     subgraph "WikiManager"
@@ -418,9 +468,6 @@ flowchart TD
     SEARCH --> |"scan .md files"| MD
     TREE --> |"scan_dir()"| MD
     LOG --> GITDIR
-
-    FEISHU -->|"MCP JSON-RPC"| FW_MCP[FeishuWikiServer]
-    FW_MCP -->|"REST API"| LARK[open.feishu.cn / open.larksuite.com]
 ```
 
 ### Git-backed Knowledge Base
@@ -477,63 +524,6 @@ Nội dung markdown...
 ```
 
 **Tìm kiếm:** Không có full-text search nội dung. Chỉ match trên **filename + H1 title + tags** (case-insensitive substring). Kết quả sắp xếp theo `updated` giảm dần, giới hạn 20 kết quả.
-
-### Feishu Wiki MCP Server
-
-Server MCP riêng biệt tích hợp với Feishu/Lark Wiki API. **Đây là external integration, không liên quan đến local git-backed wiki.**
-
-```mermaid
-sequenceDiagram
-    participant AP as AgentPool
-    participant MCP as McpFeishuWikiServer
-    participant LC as LarkClient
-    participant API as open.feishu.cn
-
-    AP->>MCP: MCP stdio JSON-RPC
-    Note over AP,MCP: Tự động attach khi channel = "feishu"
-
-    MCP->>LC: get_tenant_token()
-    LC->>API: POST /auth/v3/tenant_access_token/internal
-    API-->>LC: token (cache 2h)
-
-    alt wiki_search
-        MCP->>LC: GET /wiki/v2/search?query=...
-        LC->>API: Authorization: Bearer <token>
-        API-->>LC: Search results
-    end
-
-    alt doc_read_blocks
-        MCP->>LC: GET /docx/v1/documents/{id}/blocks
-        API-->>LC: Document blocks
-    end
-
-    alt doc_write_blocks
-        MCP->>LC: POST /docx/v1/documents/{id}/blocks/{pid}/children
-        API-->>LC: OK
-    end
-```
-
-**8 MCP Tools:**
-
-| Tool | Mô tả |
-|------|-------|
-| `wiki_list_spaces` | Liệt kê wiki spaces |
-| `wiki_get_space` | Chi tiết một space |
-| `wiki_list_nodes` | Liệt kê node con (document/folder) |
-| `wiki_get_node` | Chi tiết một node |
-| `wiki_create_node` | Tạo document hoặc folder mới |
-| `wiki_search` | Tìm kiếm trong Feishu wiki |
-| `doc_read_blocks` | Đọc nội dung document blocks |
-| `doc_write_blocks` | Ghi nội dung vào document blocks |
-
-**DocBlockInput format:**
-```json
-{
-  "blockType": "text|heading1-9|bullet|ordered|code|todo|divider",
-  "content": "Nội dung text",
-  "raw": {}
-}
-```
 
 ### Web UI Wiki Viewer
 
@@ -649,7 +639,6 @@ sequenceDiagram
 | MCP Tool `memory_search` | Agent gọi trực tiếp qua MCP — hybrid search |
 | MCP Tool `memory_get` | Agent đọc file memory cụ thể |
 | Skill `wiki` | Agent gọi `semaclaw wiki save/search/tree/stats` qua shell |
-| Feishu Channel | Tự động attach `feishu-wiki-server` MCP |
 
 ### Cấu hình Memory
 
@@ -673,9 +662,6 @@ sequenceDiagram
 | Env Var | Mặc định | Ý nghĩa |
 |---------|----------|---------|
 | `WIKI_DIR` | `~/.senclaw/wiki` | Thư mục gốc của wiki |
-| `FEISHU_APP_ID` | — | App ID cho Feishu Wiki MCP |
-| `FEISHU_APP_SECRET` | — | App Secret cho Feishu Wiki MCP |
-| `FEISHU_DOMAIN` | `open.feishu.cn` | Domain Feishu/Lark |
 
 ---
 
@@ -699,7 +685,6 @@ sequenceDiagram
 | `src/memory/daily_logger.rs` | 209 | Daily conversation logger |
 | `src/mcp/memory_server.rs` | 277 | MCP memory server (stdio) |
 | `src/wiki/manager.rs` | 845 | WikiManager — git-backed knowledge base |
-| `src/mcp/feishu_wiki_server.rs` | 798 | Feishu/Lark Wiki MCP server |
 | `src/cli/commands/wiki.rs` | 151 | Wiki CLI subcommands |
 | `src/agent/agent_pool.rs` | ~2800 | Agent lifecycle — memory + wiki integration points |
 | `src/agent/session_bridge.rs` | 52 | Message formatting (không liên quan memory trực tiếp) |

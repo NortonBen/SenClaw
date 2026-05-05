@@ -1,7 +1,7 @@
 //! Embedding provider implementations. Mirrors `src-old/memory/embedding-providers.ts`.
 //!
 //! Four providers: OpenAI (batch of 8), OpenRouter (single), Ollama (single),
-//! Local (ONNX Runtime via fastembed — enable with `--features local-embed`).
+//! Local (pure-Rust candle/BERT — enable with `--features local-embed`).
 
 use std::time::Duration;
 
@@ -321,7 +321,7 @@ fn normalize_ollama_model(model: &str) -> String {
     t.to_owned()
 }
 
-// ===== Local (ONNX Runtime via fastembed) =====
+// ===== Local (pure-Rust candle/BERT) =====
 //
 // Enabled with `--features local-embed`. Without the feature the provider
 // compiles but returns a helpful error at embed() time.
@@ -333,51 +333,26 @@ fn normalize_ollama_model(model: &str) -> String {
 //   multilingual-e5-small, multilingual-e5-base, multilingual-e5-large
 //
 // Custom local path (SENCLAW_LOCAL_MODEL_PATH):
-//   Directory with model.onnx (or onnx/model.onnx) + tokenizer.json.
+//   Directory with model.safetensors + tokenizer.json + config.json.
 //   When set, SENCLAW_LOCAL_MODEL is still used for the dimensions() hint.
 //
-// Models from HuggingFace Hub are cached in ~/.senclaw/models/ on first use.
-// Dimensions are read from fastembed model metadata (TextEmbedding::get_model_info)
-// for known models; unknown/custom models fall back to a name-based heuristic.
+// Models are downloaded from HuggingFace Hub and cached in ~/.senclaw/models/.
+// Dimensions fall back to a name-based heuristic (large→1024, base→768, else→384).
+//
+// Apple Silicon: cargo build --features local-embed-metal
 
 pub struct LocalProvider {
     model: String,
     model_path: Option<String>,
-    /// Pre-computed dimensions — avoids loading the model just for schema setup.
     dims: u32,
-    /// Lazily initialised ONNX session. The field only exists when the feature
-    /// is enabled so the crate compiles without fastembed in the dep graph.
     #[cfg(feature = "local-embed")]
-    engine: std::sync::Arc<tokio::sync::OnceCell<std::sync::Arc<fastembed::TextEmbedding>>>,
+    engine: std::sync::Arc<tokio::sync::OnceCell<std::sync::Arc<local_candle::CandleEngine>>>,
 }
 
 impl LocalProvider {
     pub fn new(model: Option<String>, model_path: Option<String>) -> Self {
         let model = model.unwrap_or_else(|| "paraphrase-multilingual-MiniLM-L12-v2".into());
-
-        // For known HF-hub models, query fastembed's metadata for the real
-        // dimension count.  Falls back to a name heuristic for custom paths or
-        // unrecognised names.
-        #[cfg(feature = "local-embed")]
-        let dims = {
-            if model_path.is_none() {
-                // Extract dim inside the closure so we don't return a reference
-                // to the locally-owned `em` (get_model_info lifetime is tied to &em).
-                local_onnx::resolve_model(&model)
-                    .ok()
-                    .and_then(|em| {
-                        fastembed::TextEmbedding::get_model_info(&em)
-                            .ok()
-                            .map(|info| info.dim as u32)
-                    })
-                    .unwrap_or_else(|| local_dims_hint(&model))
-            } else {
-                local_dims_hint(&model)
-            }
-        };
-        #[cfg(not(feature = "local-embed"))]
         let dims = local_dims_hint(&model);
-
         Self {
             dims,
             model,
@@ -388,68 +363,51 @@ impl LocalProvider {
     }
 }
 
-/// Name-based dimension heuristic used when fastembed metadata is unavailable.
 /// large → 1024, base → 768, everything else (small/MiniLM) → 384.
 fn local_dims_hint(model: &str) -> u32 {
     let m = model.to_lowercase();
-    if m.contains("large") {
-        1024
-    } else if m.contains("base") {
-        768
-    } else {
-        384
-    }
+    if m.contains("large") { 1024 } else if m.contains("base") { 768 } else { 384 }
 }
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for LocalProvider {
-    fn name(&self) -> &str {
-        "local"
-    }
-    fn model(&self) -> &str {
-        &self.model
-    }
-    fn dimensions(&self) -> u32 {
-        self.dims
-    }
-
+    fn name(&self) -> &str { "local" }
+    fn model(&self) -> &str { &self.model }
+    fn dimensions(&self) -> u32 { self.dims }
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         embed_local(self, texts).await
     }
 }
 
-// ── feature-gated embed implementation ───────────────────────────────────────
+// ── feature-gated embed ───────────────────────────────────────────────────────
 
 #[cfg(feature = "local-embed")]
 async fn embed_local(p: &LocalProvider, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-    // Initialise the ONNX session lazily on first call.
-    // spawn_blocking keeps the tokio thread pool free while the model loads.
     let engine = p
         .engine
         .get_or_try_init(|| {
             let model = p.model.clone();
             let path = p.model_path.clone();
             async move {
-                let te = tokio::task::spawn_blocking(move || {
-                    local_onnx::init_engine(&model, path.as_deref())
+                let cache_dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".senclaw")
+                    .join("models");
+                let eng = tokio::task::spawn_blocking(move || {
+                    local_candle::CandleEngine::load(&model, path.as_deref(), cache_dir)
                 })
                 .await
                 .context("spawn_blocking panicked during model init")??;
-                Ok::<_, anyhow::Error>(std::sync::Arc::new(te))
+                Ok::<_, anyhow::Error>(std::sync::Arc::new(eng))
             }
         })
         .await?;
 
     let engine = std::sync::Arc::clone(engine);
     let texts = texts.to_vec();
-    // Run inference on a blocking thread — ONNX Runtime is CPU-bound.
-    tokio::task::spawn_blocking(move || {
-        engine
-            .embed(texts, None)
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    })
-    .await
-    .context("spawn_blocking panicked during embed")?
+    tokio::task::spawn_blocking(move || engine.embed(&texts))
+        .await
+        .context("spawn_blocking panicked during embed")?
 }
 
 #[cfg(not(feature = "local-embed"))]
@@ -461,121 +419,231 @@ async fn embed_local(_p: &LocalProvider, _texts: &[String]) -> Result<Vec<Vec<f3
     );
 }
 
-// ── fastembed internals (compiled only when local-embed feature is on) ────────
+// ── candle internals (compiled only when local-embed feature is on) ───────────
 
 #[cfg(feature = "local-embed")]
-pub(super) mod local_onnx {
-    use anyhow::{bail, Context, Result};
-    use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-    use std::path::Path;
+pub(super) mod local_candle {
+    use anyhow::{Context, Result};
+    use candle_core::{DType, Device, Tensor};
+    use candle_nn::VarBuilder;
+    use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+    use hf_hub::api::sync::ApiBuilder;
+    use std::path::PathBuf;
+    use tokenizers::{
+        PaddingDirection, PaddingParams, PaddingStrategy,
+        TruncationDirection, TruncationParams, TruncationStrategy,
+    };
 
-    pub fn init_engine(model: &str, model_path: Option<&str>) -> Result<TextEmbedding> {
-        if let Some(path) = model_path {
-            init_from_path(path)
-        } else {
-            init_from_hub(model)
+    pub struct CandleEngine {
+        model: BertModel,
+        tokenizer: tokenizers::Tokenizer,
+        device: Device,
+    }
+
+    // candle Tensor is Arc-backed and Send; BertModel is composed of tensors.
+    unsafe impl Send for CandleEngine {}
+    unsafe impl Sync for CandleEngine {}
+
+    impl CandleEngine {
+        pub fn load(model_name: &str, model_path: Option<&str>, cache_dir: PathBuf) -> Result<Self> {
+            let device = best_device();
+
+            let (config_path, tokenizer_path, weights_path) = match model_path {
+                Some(p) => load_from_path(p)?,
+                None => load_from_hub(model_name, cache_dir)?,
+            };
+
+            let config: BertConfig = serde_json::from_reader(
+                std::fs::File::open(&config_path)
+                    .with_context(|| format!("open {}", config_path.display()))?,
+            )
+            .context("parse bert config.json")?;
+
+            let mut tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
+                .map_err(|e| anyhow::anyhow!("load tokenizer: {e}"))?;
+            tokenizer
+                .with_truncation(Some(TruncationParams {
+                    max_length: 512,
+                    strategy: TruncationStrategy::LongestFirst,
+                    stride: 0,
+                    direction: TruncationDirection::Right,
+                }))
+                .map_err(|e| anyhow::anyhow!("set truncation: {e}"))?;
+            tokenizer.with_padding(Some(PaddingParams {
+                strategy: PaddingStrategy::BatchLongest,
+                direction: PaddingDirection::Right,
+                pad_to_multiple_of: None,
+                pad_id: 0,
+                pad_type_id: 0,
+                pad_token: "[PAD]".to_string(),
+            }));
+
+            let vb = unsafe {
+                VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device)
+                    .with_context(|| format!("load weights: {}", weights_path.display()))?
+            };
+            let model = BertModel::load(vb, &config).context("build BertModel")?;
+
+            tracing::info!(
+                "[LocalEmbed] Ready — hidden_size={} device={device:?}",
+                config.hidden_size,
+            );
+            Ok(Self { model, tokenizer, device })
+        }
+
+        pub fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            if texts.is_empty() {
+                return Ok(vec![]);
+            }
+            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            let encodings = self
+                .tokenizer
+                .encode_batch(text_refs, true)
+                .map_err(|e| anyhow::anyhow!("encode_batch: {e}"))?;
+
+            let batch = encodings.len();
+            let seq_len = encodings[0].get_ids().len();
+
+            let mut input_ids_flat = Vec::with_capacity(batch * seq_len);
+            let mut attn_mask_flat = Vec::with_capacity(batch * seq_len);
+            let mut type_ids_flat = Vec::with_capacity(batch * seq_len);
+
+            for enc in &encodings {
+                input_ids_flat.extend(enc.get_ids().iter().map(|&x| x as i64));
+                attn_mask_flat.extend(enc.get_attention_mask().iter().map(|&x| x as i64));
+                type_ids_flat.extend(enc.get_type_ids().iter().map(|&x| x as i64));
+            }
+
+            let input_ids = Tensor::from_vec(input_ids_flat, (batch, seq_len), &self.device)?;
+            let attn_mask = Tensor::from_vec(attn_mask_flat, (batch, seq_len), &self.device)?;
+            let type_ids = Tensor::from_vec(type_ids_flat, (batch, seq_len), &self.device)?;
+
+            // [batch, seq_len, hidden_size]
+            let hidden = self
+                .model
+                .forward(&input_ids, &type_ids, Some(&attn_mask))
+                .context("bert forward")?;
+
+            // mean pool over real tokens → [batch, hidden_size]
+            let pooled = mean_pool(&hidden, &attn_mask).context("mean pool")?;
+
+            // L2 normalise for cosine similarity
+            let norm = pooled.sqr()?.sum_keepdim(1)?.sqrt()?;
+            let normalised = pooled.broadcast_div(&norm)?;
+
+            normalised.to_vec2::<f32>().context("tensor → vec")
         }
     }
 
-    // ── HuggingFace Hub (auto-download on first run) ──────────────────────
-
-    fn init_from_hub(model_name: &str) -> Result<TextEmbedding> {
-        let em = resolve_model(model_name)?;
-        let cache_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".senclaw")
-            .join("models");
-        let opts = InitOptions::new(em)
-            .with_cache_dir(cache_dir)
-            .with_show_download_progress(true);
-        tracing::info!(
-            "[LocalEmbed] Loading '{model_name}' (downloads on first run to ~/.senclaw/models/)"
-        );
-        TextEmbedding::try_new(opts).map_err(|e| anyhow::anyhow!("{e}"))
+    fn best_device() -> Device {
+        #[cfg(feature = "metal")]
+        {
+            match Device::new_metal(0) {
+                Ok(d) => {
+                    tracing::info!("[LocalEmbed] Apple Silicon Metal");
+                    return d;
+                }
+                Err(e) => tracing::warn!("[LocalEmbed] Metal unavailable ({e}), using CPU"),
+            }
+        }
+        Device::Cpu
     }
 
-    /// Map a model name string (with or without "org/" prefix) to the
-    /// fastembed `EmbeddingModel` enum variant.  Exposed as `pub(super)` so
-    /// `LocalProvider::new` can call `get_model_info` for the real dims.
-    pub fn resolve_model(name: &str) -> Result<EmbeddingModel> {
-        let tail = name.to_lowercase();
-        let tail = tail.rsplit('/').next().unwrap_or(&tail);
+    fn mean_pool(hidden: &Tensor, attn_mask: &Tensor) -> Result<Tensor> {
+        // Expand mask to [batch, seq_len, 1] then broadcast-multiply with hidden
+        let mask = attn_mask.unsqueeze(2)?.to_dtype(DType::F32)?;
+        let sum = hidden.broadcast_mul(&mask)?.sum(1)?;
+        let count = mask.sum(1)?;
+        Ok((sum / count)?)
+    }
+
+    // ── HuggingFace Hub download ──────────────────────────────────────────────
+
+    fn load_from_hub(model_name: &str, cache_dir: PathBuf) -> Result<(PathBuf, PathBuf, PathBuf)> {
+        let repo_id = resolve_repo(model_name)?;
+        tracing::info!(
+            "[LocalEmbed] Fetching '{repo_id}' → {}",
+            cache_dir.display()
+        );
+        let api = ApiBuilder::new()
+            .with_cache_dir(cache_dir)
+            .build()
+            .context("build hf-hub api")?;
+        let repo = api.model(repo_id.to_string());
+        let config = repo.get("config.json").context("fetch config.json")?;
+        let tokenizer = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
+        let weights = repo
+            .get("model.safetensors")
+            .or_else(|_| repo.get("pytorch_model.safetensors"))
+            .context("fetch model.safetensors (not found in repo)")?;
+        Ok((config, tokenizer, weights))
+    }
+
+    // ── Local directory ───────────────────────────────────────────────────────
+
+    fn load_from_path(path: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
+        let dir = std::path::Path::new(path);
+        anyhow::ensure!(dir.exists(), "SENCLAW_LOCAL_MODEL_PATH not found: '{path}'");
+
+        let weights = if dir.join("model.safetensors").exists() {
+            dir.join("model.safetensors")
+        } else {
+            anyhow::bail!(
+                "No model.safetensors found in '{path}'.\n\
+                 Convert from PyTorch: python -c \"\
+                 from transformers import AutoModel; \
+                 m = AutoModel.from_pretrained('{path}'); \
+                 m.save_pretrained('{path}', safe_serialization=True)\""
+            )
+        };
+        let tokenizer = dir.join("tokenizer.json");
+        anyhow::ensure!(tokenizer.exists(), "Missing tokenizer.json in '{path}'");
+        let config = dir.join("config.json");
+        anyhow::ensure!(config.exists(), "Missing config.json in '{path}'");
+
+        Ok((config, tokenizer, weights))
+    }
+
+    // ── model name → HuggingFace repo ID ─────────────────────────────────────
+
+    pub fn resolve_repo(name: &str) -> Result<&'static str> {
+        let lower = name.to_lowercase();
+        let tail = lower.rsplit('/').next().unwrap_or(&lower);
 
         if tail.contains("paraphrase-multilingual-minilm-l12") {
-            return Ok(EmbeddingModel::ParaphraseMLMiniLML12V2);
+            return Ok("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2");
         }
         if tail.contains("all-minilm-l6") {
-            return Ok(EmbeddingModel::AllMiniLML6V2);
+            return Ok("sentence-transformers/all-MiniLM-L6-v2");
         }
         if tail.contains("all-minilm-l12") {
-            return Ok(EmbeddingModel::AllMiniLML12V2);
+            return Ok("sentence-transformers/all-MiniLM-L12-v2");
         }
         if tail.contains("bge-small-en") {
-            return Ok(EmbeddingModel::BGESmallENV15);
+            return Ok("BAAI/bge-small-en-v1.5");
         }
         if tail.contains("bge-base-en") {
-            return Ok(EmbeddingModel::BGEBaseENV15);
+            return Ok("BAAI/bge-base-en-v1.5");
         }
         if tail.contains("bge-large-en") {
-            return Ok(EmbeddingModel::BGELargeENV15);
+            return Ok("BAAI/bge-large-en-v1.5");
         }
         if tail.contains("multilingual-e5-small") || tail == "e5-small" {
-            return Ok(EmbeddingModel::MultilingualE5Small);
+            return Ok("intfloat/multilingual-e5-small");
         }
         if tail.contains("multilingual-e5-base") || tail == "e5-base" {
-            return Ok(EmbeddingModel::MultilingualE5Base);
+            return Ok("intfloat/multilingual-e5-base");
         }
         if tail.contains("multilingual-e5-large") || tail == "e5-large" {
-            return Ok(EmbeddingModel::MultilingualE5Large);
+            return Ok("intfloat/multilingual-e5-large");
         }
-        bail!(
+        anyhow::bail!(
             "Unknown local model: '{name}'.\n\
              Supported: paraphrase-multilingual-MiniLM-L12-v2, all-MiniLM-L6-v2, \
              all-MiniLM-L12-v2, bge-small/base/large-en-v1.5, \
              multilingual-e5-small/base/large.\n\
-             To use a custom model set SENCLAW_LOCAL_MODEL_PATH to a directory \
-             with model.onnx + tokenizer.json."
+             For a custom model set SENCLAW_LOCAL_MODEL_PATH to a directory \
+             with model.safetensors + tokenizer.json + config.json."
         )
-    }
-
-    // ── Local directory (pre-downloaded / custom model) ───────────────────
-
-    fn init_from_path(path: &str) -> Result<TextEmbedding> {
-        use fastembed::{InitOptionsUserDefined, TokenizerFiles, UserDefinedEmbeddingModel};
-        use std::fs;
-
-        let dir = Path::new(path);
-        if !dir.exists() {
-            bail!("SENCLAW_LOCAL_MODEL_PATH does not exist: '{path}'");
-        }
-
-        // Support both HF hub layout (onnx/model.onnx) and flat layout.
-        let onnx_path = if dir.join("onnx/model.onnx").exists() {
-            dir.join("onnx/model.onnx")
-        } else if dir.join("model.onnx").exists() {
-            dir.join("model.onnx")
-        } else {
-            bail!("No ONNX model found in '{path}'. Expected 'model.onnx' or 'onnx/model.onnx'.");
-        };
-
-        let onnx_file =
-            fs::read(&onnx_path).with_context(|| format!("Cannot read {}", onnx_path.display()))?;
-
-        let read_opt = |name: &str| -> Vec<u8> { fs::read(dir.join(name)).unwrap_or_default() };
-
-        let tokenizer_files = TokenizerFiles {
-            tokenizer_file: fs::read(dir.join("tokenizer.json"))
-                .with_context(|| format!("Missing tokenizer.json in '{path}'"))?,
-            config_file: read_opt("config.json"),
-            special_tokens_map_file: read_opt("special_tokens_map.json"),
-            tokenizer_config_file: read_opt("tokenizer_config.json"),
-        };
-
-        let user_model = UserDefinedEmbeddingModel::new(onnx_file, tokenizer_files);
-
-        tracing::info!("[LocalEmbed] Loading model from '{path}'");
-        // Use InitOptionsUserDefined::default() — matches rig-fastembed reference impl.
-        TextEmbedding::try_new_from_user_defined(user_model, InitOptionsUserDefined::default())
-            .map_err(|e| anyhow::anyhow!("Failed to load model from '{path}': {e}"))
     }
 }

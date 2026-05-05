@@ -96,8 +96,12 @@ libc = "0.2.186"
 rmcp = { version = "1", features = ["transport-io"] }
 schemars = "1"
 
-# Local embedding via ONNX Runtime (optional — enable with --features local-embed)
-fastembed = { version = "4", optional = true }
+# Local embedding via pure-Rust candle (no C++ runtime needed)
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+hf-hub = { version = "0.3", optional = true }
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
 
 # Tokio utilities (CancellationToken for zen-core abort)
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -110,9 +114,11 @@ tokio-test = "0.4.5"
 tonic-build = "0.12"
 
 [features]
-# Enable ONNX-based local embeddings (fastembed downloads model from HuggingFace on first run).
+# Pure-Rust local embeddings via candle (BERT/sentence-transformers, HuggingFace Hub).
 # Build: cargo build --features local-embed
-local-embed = ["dep:fastembed"]
+# Build with Apple Silicon Metal: cargo build --features local-embed-metal
+local-embed = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:hf-hub", "dep:tokenizers"]
+local-embed-metal = ["local-embed", "candle-core/metal"]
 
 [profile.release]
 lto = "thin"

@@ -48,8 +48,8 @@ enum Command {
     VirtualServer,
     /// Start the admin MCP server (stdio JSON-RPC)
     AdminServer,
-    /// Start the Feishu wiki MCP server (stdio JSON-RPC)
-    FeishuWikiServer,
+    /// Start the Wiki MCP server — Feishu/Lark (stdio JSON-RPC)
+    WikiServer,
     /// Start the browser MCP server (stdio JSON-RPC)
     BrowserServer,
 }
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
                 | Command::DispatchServer
                 | Command::VirtualServer
                 | Command::AdminServer
-                | Command::FeishuWikiServer
+                | Command::WikiServer
                 | Command::BrowserServer
         )
     );
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
         Command::DispatchServer => senclaw::mcp::dispatch_server::run_stdio_server().await,
         Command::VirtualServer => senclaw::mcp::virtual_server::run_stdio_server().await,
         Command::AdminServer => senclaw::mcp::admin_server::run_stdio_server().await,
-        Command::FeishuWikiServer => senclaw::mcp::feishu_wiki_server::run_stdio_server().await,
+        Command::WikiServer => senclaw::mcp::wiki_server::run_stdio_server().await,
         Command::BrowserServer => senclaw::mcp::browser_server::run_stdio_server().await,
     }
 }

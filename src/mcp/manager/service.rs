@@ -342,27 +342,17 @@ impl McpManager {
                 ],
             },
             BuiltInServerInfo {
-                name: "senclaw-feishu-wiki".into(),
+                name: "senclaw-wiki".into(),
                 transport: "stdio".into(),
-                description: Some("Built-in Feishu/Lark Wiki integration service.".into()),
+                description: Some("Built-in local git wiki (`~/.senclaw/wiki` by default).".into()),
                 tools: vec![
-                    t("list_spaces", "List accessible Feishu/Lark wiki spaces"),
-                    t("get_space", "Get details of a specific wiki space"),
-                    t(
-                        "list_nodes",
-                        "List child nodes in a wiki space or parent node",
-                    ),
-                    t("get_node", "Get details of a specific wiki node by token"),
-                    t(
-                        "create_node",
-                        "Create a new node (doc or folder) in a wiki space",
-                    ),
-                    t("search_nodes", "Search wiki nodes by query text"),
-                    t("read_doc", "Read blocks from a Feishu/Lark document"),
-                    t(
-                        "write_doc",
-                        "Write content blocks to a Feishu/Lark document",
-                    ),
+                    t("wiki_status", "Show wiki root path and summary statistics"),
+                    t("wiki_tree", "List the wiki directory tree"),
+                    t("wiki_read", "Read a markdown page by relative path"),
+                    t("wiki_write", "Create or update a markdown page"),
+                    t("wiki_search", "Search wiki pages by title, filename, or tags"),
+                    t("wiki_stats", "Detailed stats (categories, tags, recent files)"),
+                    t("wiki_mkdir", "Create a subdirectory under the wiki"),
                 ],
             },
             BuiltInServerInfo {

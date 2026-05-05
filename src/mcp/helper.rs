@@ -161,21 +161,12 @@ pub fn virtual_mcp_config(
     cfg
 }
 
-// ===== FeishuWiki =====
+// ===== Wiki (local git, `crate::wiki`) =====
 
-pub fn feishu_wiki_mcp_config(
-    app_id: &str,
-    app_secret: &str,
-    domain: Option<&str>,
-) -> McpServerConfig {
-    let mut cfg = McpServerConfig::new("senclaw-feishu-wiki", "feishu-wiki-server");
-    cfg.env.insert("FEISHU_APP_ID".into(), app_id.to_owned());
+pub fn wiki_mcp_config(wiki_dir: &str) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-wiki", "wiki-server");
     cfg.env
-        .insert("FEISHU_APP_SECRET".into(), app_secret.to_owned());
-    cfg.env.insert(
-        "FEISHU_DOMAIN".into(),
-        domain.unwrap_or("feishu").to_owned(),
-    );
+        .insert("SENCLAW_WIKI_DIR".into(), wiki_dir.to_owned());
     cfg
 }
 

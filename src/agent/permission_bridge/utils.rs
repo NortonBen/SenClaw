@@ -44,11 +44,17 @@ pub(crate) fn format_content(content: &serde_json::Value) -> String {
     serde_json::to_string_pretty(content).unwrap_or_default()
 }
 
-/// Truncate content string by max length, showing "...(N chars omitted)" for overflow.
+/// Truncate by **byte budget** `max_len` (same as before), but only at UTF-8 character
+/// boundaries so Vietnamese / emoji never panic. Overflow line counts omitted **characters**
+/// in the suffix.
 pub(crate) fn truncate_content(content: &str, max_len: usize) -> String {
     if content.len() <= max_len {
         return content.to_string();
     }
-    let omitted = content.len() - max_len;
-    format!("{}\n...({omitted} chars omitted)", &content[..max_len])
+    let mut end = max_len.min(content.len());
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let omitted = content[end..].chars().count();
+    format!("{}\n...({omitted} chars omitted)", &content[..end])
 }

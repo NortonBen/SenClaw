@@ -7,7 +7,7 @@ pub mod client;
 pub mod config;
 pub mod dispatch_server;
 pub mod external_client;
-pub mod feishu_wiki_server;
+pub mod wiki_server;
 pub mod helper;
 pub mod manager;
 pub mod memory_server;

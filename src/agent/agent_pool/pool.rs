@@ -24,10 +24,10 @@ use crate::agent::dispatch_bridge::{
 use crate::agent::group_queue::GroupQueue;
 use crate::agent::permission_bridge::{AskQuestionPayload, PermissionBridge, PermissionPayload};
 use crate::agent::session_bridge;
-use crate::config::{Config, FeishuConfig};
+use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, dispatch_mcp_config, feishu_wiki_mcp_config, memory_mcp_config,
+    browser_mcp_config, dispatch_mcp_config, memory_mcp_config, wiki_mcp_config,
     schedule_mcp_config, send_mcp_config, workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
@@ -853,23 +853,9 @@ impl AgentPool {
                     Some(cfg.memory.openai_base_url.as_str())
                 },
             ));
-            if binding.channel == "feishu" {
-                if let Some(creds) = self.resolve_feishu_credentials(
-                    &cfg.paths.global_config_path,
-                    &FeishuConfig {
-                        app_id: "cli".to_string(),
-                        app_secret: "cli".to_string(),
-                        domain: "cli".to_string(),
-                    },
-                    binding.bot_token.as_deref(),
-                ) {
-                    mcp_servers.push(feishu_wiki_mcp_config(
-                        &creds.app_id,
-                        &creds.app_secret,
-                        creds.domain.as_deref(),
-                    ));
-                }
-            }
+            mcp_servers.push(wiki_mcp_config(
+                cfg.paths.wiki_dir.to_string_lossy().as_ref(),
+            ));
             mcp_servers.push(browser_mcp_config(cfg.ws_port));
             tracing::info!(
                 "[AgentPool] Preparing {} MCP server(s) for {}: {}",

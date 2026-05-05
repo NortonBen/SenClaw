@@ -62,6 +62,16 @@ fn test_truncate_content_no_truncation() {
 }
 
 #[test]
+fn test_truncate_content_utf8_no_panic_mid_char() {
+    // 198 ASCII + "ị" (3 UTF-8 bytes) — raw byte 200 lies inside "ị" without boundary fix
+    let s = format!("{}ị", "a".repeat(198));
+    assert_eq!(s.len(), 201);
+    let result = truncate_content(&s, 200);
+    assert!(result.starts_with(&"a".repeat(198)));
+    assert!(result.contains("chars omitted"));
+}
+
+#[test]
 fn test_truncate_content_with_overflow() {
     let s = "x".repeat(250);
     let result = truncate_content(&s, 200);
