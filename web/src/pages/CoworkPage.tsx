@@ -10,7 +10,7 @@ import {
   AppstoreOutlined, DeleteOutlined, EditOutlined, HomeOutlined,
   CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined,
   PauseCircleOutlined, ThunderboltOutlined, UserOutlined,
-  RobotOutlined, SendOutlined, ReloadOutlined, MoreOutlined,
+  RobotOutlined, ReloadOutlined, MoreOutlined,
   BugOutlined, ArrowRightOutlined, InboxOutlined,
   FileOutlined, FileTextOutlined, FolderOutlined, FolderOpenOutlined, DownloadOutlined, UploadOutlined, PaperClipOutlined,
   LaptopOutlined, CloudOutlined, BranchesOutlined, LoadingOutlined,
@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
 import { CoworkSidebar } from '../components/CoworkSidebar';
+import { CommonChatInput } from '../components/chat-common';
 import type {
   CoworkWorkspace, CoworkBoardEntry,
   CoworkTask, CoworkMessage, CoworkTemplate, CoworkMember
@@ -974,20 +975,16 @@ export function CoworkPage() {
                         )}
                       </div>
                       <div style={{ padding: '8px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                        <TextArea
-                          placeholder="Type a status update... (Enter to send, Shift+Enter for new line)"
+                        <CommonChatInput
+                          className="w-full"
+                          helperText="Enter to send · Shift+Enter for new line"
                           value={msgText}
-                          onChange={e => setMsgText(e.target.value)}
-                          autoSize={{ minRows: 1, maxRows: 6 }}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              handleSendMessage();
-                            }
-                          }}
-                          style={{ flex: 1, resize: 'none' }}
+                          onChange={setMsgText}
+                          onSubmit={handleSendMessage}
+                          placeholder="Type a status update..."
+                          actionDisabled={!msgText.trim()}
+                          actionTitle="Send"
                         />
-                        <Button icon={<SendOutlined />} onClick={handleSendMessage} disabled={!msgText.trim()}>Send</Button>
                       </div>
                     </div>
                   ),
@@ -1544,7 +1541,7 @@ export function CoworkPage() {
                                   <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
                                     <Space>
                                       <Text strong>{selectedFilePath.split('/').pop()}</Text>
-                                      {fileIsBinary && <Tag color="orange" size="small">Binary</Tag>}
+                                      {fileIsBinary && <Tag color="orange">Binary</Tag>}
                                     </Space>
                                     <Space>
                                       <Text type="secondary" style={{ fontSize: 11 }}>{selectedFilePath}</Text>

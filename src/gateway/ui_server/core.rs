@@ -61,6 +61,10 @@ use super::skills::{
     skills_install, skills_list, skills_readme, skills_readme_save, skills_remote_search,
     skills_toggle,
 };
+use super::plugins::{
+    plugins_list, plugins_remote_search, plugins_install, plugins_get,
+    plugins_uninstall, plugins_enable, plugins_disable, plugins_configure,
+};
 use super::spa::spa_fallback;
 use super::subagents::{
     subagents_create, subagents_list, subagents_readme, subagents_readme_save, subagents_toggle,
@@ -142,6 +146,14 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(skills_readme).put(skills_readme_save),
         )
         .route("/api/skills/:name/:action", post(skills_toggle))
+        // ── Plugins API ──────────────────────────────────────────────────────
+        .route("/api/plugins", get(plugins_list))
+        .route("/api/plugins/remote-search", get(plugins_remote_search))
+        .route("/api/plugins/install", post(plugins_install))
+        .route("/api/plugins/:slug", get(plugins_get).delete(plugins_uninstall))
+        .route("/api/plugins/:slug/enable", post(plugins_enable))
+        .route("/api/plugins/:slug/disable", post(plugins_disable))
+        .route("/api/plugins/:slug/configure", post(plugins_configure))
         .route("/api/subagents", get(subagents_list))
         .route("/api/subagents/create", post(subagents_create))
         .route(

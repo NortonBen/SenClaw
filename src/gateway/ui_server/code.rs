@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::collections::HashMap;
 
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path as AxumPath, Query, State},
@@ -18,6 +19,7 @@ use uuid::Uuid;
 use super::core::{AppError, UiState};
 use crate::code_engine::session::CodeSession;
 use crate::code_engine::parse_prompt;
+use crate::types::{AgentApi, GroupBinding};
 
 fn db(s: &UiState) -> Result<&crate::db::Db, AppError> {
     s.db.as_deref()
@@ -33,6 +35,9 @@ fn internal(e: impl std::fmt::Display) -> AppError {
 }
 
 static CODE_CHAT_BROADCAST: OnceLock<tokio::sync::broadcast::Sender<String>> = OnceLock::new();
+static CODE_CHAT_GROUP_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+const CODE_CHAT_DUPLICATE_WINDOW_MS: i64 = 1200;
 
 fn code_chat_sender() -> tokio::sync::broadcast::Sender<String> {
     CODE_CHAT_BROADCAST
@@ -40,6 +45,15 @@ fn code_chat_sender() -> tokio::sync::broadcast::Sender<String> {
             let (tx, _rx) = tokio::sync::broadcast::channel(256);
             tx
         })
+        .clone()
+}
+
+fn code_chat_group_lock(group_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = CODE_CHAT_GROUP_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut guard = locks.lock().unwrap();
+    guard
+        .entry(group_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
 }
 
@@ -538,6 +552,55 @@ pub(crate) async fn code_sessions_chat(
     };
 
     let now = now_ms();
+    let duplicate_recent: bool = db
+        .with_conn(|conn| {
+            let found: Option<i64> = conn
+                .query_row(
+                    "SELECT 1
+                     FROM code_chat_messages
+                     WHERE group_id = ?1
+                       AND role = 'user'
+                       AND content = ?2
+                       AND created_at >= ?3
+                     ORDER BY created_at DESC
+                     LIMIT 1",
+                    params![
+                        body.group_id.trim(),
+                        body.prompt,
+                        now - CODE_CHAT_DUPLICATE_WINDOW_MS
+                    ],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(found.is_some())
+        })
+        .map_err(internal)?;
+    if duplicate_recent {
+        tracing::warn!(
+            "[CodeChat] duplicate_prompt_ignored session_id={} group_id={} window_ms={}",
+            id,
+            body.group_id.trim(),
+            CODE_CHAT_DUPLICATE_WINDOW_MS
+        );
+        let messages = code_chat_group_messages_inner(db, body.group_id.trim()).map_err(internal)?;
+        let queued_preview: Vec<serde_json::Value> = messages
+            .iter()
+            .filter(|m| m["status"] == "queued")
+            .take(5)
+            .cloned()
+            .collect();
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "reply": "Duplicate prompt ignored",
+            "parsed": parsed,
+            "resolved_refs": resolved_refs,
+            "dag_plan": "",
+            "messages": messages,
+            "queued_preview": queued_preview,
+            "duplicate_ignored": true,
+        })));
+    }
+
     let user_msg_id = Uuid::new_v4().to_string();
     // Recovery: if a previous request crashed mid-flight, requeue stale processing rows.
     db.with_conn(|conn| {
@@ -597,12 +660,26 @@ pub(crate) async fn code_sessions_chat(
         plan.join("\n")
     };
 
+    // Ensure one queue worker per group to avoid duplicate dispatch / channel close races.
+    let group_lock = code_chat_group_lock(body.group_id.trim());
+    let _queue_guard = group_lock.lock().await;
     tracing::info!(
-        "[CodeChat] processor_start group_id={} trigger_msg_id={}",
+        "[CodeChat] processor_start group_id={} trigger_msg_id={} (locked)",
         body.group_id.trim(),
         user_msg_id
     );
-    let stats = process_group_queue(db, body.group_id.trim(), &dag_plan).map_err(internal)?;
+    let agent_api = s.cowork_agent_api.clone();
+    let stats = process_group_queue(
+        db,
+        body.group_id.trim(),
+        &dag_plan,
+        agent_api,
+        &id,
+        &session_name,
+        &session.workspace.to_string_lossy(),
+    )
+    .await
+    .map_err(internal)?;
     tracing::info!(
         "[CodeChat] processor_end group_id={} processed={} user_processed={} non_user_processed={}",
         body.group_id.trim(),
@@ -819,10 +896,14 @@ async fn handle_code_chat_ws(socket: WebSocket, group_id: Option<String>) {
     send_task.abort();
 }
 
-fn process_group_queue(
+async fn process_group_queue(
     db: &crate::db::Db,
     group_id: &str,
     dag_plan: &str,
+    agent_api: Option<Arc<dyn AgentApi>>,
+    session_id: &str,
+    session_name: &str,
+    workspace: &str,
 ) -> Result<QueueProcessStats, anyhow::Error> {
     let mut stats = QueueProcessStats::default();
     loop {
@@ -830,7 +911,7 @@ fn process_group_queue(
             conn.query_row(
                 "SELECT id, role, content, status
                  FROM code_chat_messages
-                 WHERE group_id = ?1 AND status IN ('queued','processing')
+                 WHERE group_id = ?1 AND status = 'queued'
                  ORDER BY created_at ASC LIMIT 1",
                 params![group_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
@@ -862,17 +943,75 @@ fn process_group_queue(
 
         if role == "user" {
             let parsed_q = parse_prompt(&content);
-            let agent_reply = if let Some(cmd) = parsed_q.command {
-                format!("DAG routed by /{cmd}. Dang phan tich va tao task cho team.")
+            let dispatch_reply = if let Some(api) = agent_api.as_ref() {
+                let code_jid = format!("code-chat:{group_id}");
+                let group_binding = build_code_group_binding(&code_jid, session_id, session_name);
+                let prompt_for_agent = format!(
+                    "<code_chat session_id=\"{}\" group_id=\"{}\" workspace=\"{}\">\n{}\n</code_chat>",
+                    session_id, group_id, workspace, parsed_q.normalized_prompt
+                );
+                tracing::info!(
+                    "[CodeChat] dag_dispatch_start group_id={} msg_id={} jid={}",
+                    group_id,
+                    msg_id,
+                    code_jid
+                );
+                let reply_rowid_watermark = latest_group_message_rowid(db, &code_jid).unwrap_or(0);
+                match api
+                    .process_and_wait(&code_jid, &group_binding, &prompt_for_agent)
+                    .await
+                {
+                    Ok(_) => {
+                        let final_reply = wait_for_bot_reply_after_rowid(
+                            db,
+                            &code_jid,
+                            reply_rowid_watermark,
+                        )
+                        .await
+                        .unwrap_or_else(|| {
+                            "DAG team da chay xong nhung chua co final response de tra ve. Vui long kiem tra luong task cuoi.".to_string()
+                        });
+                        tracing::info!(
+                            "[CodeChat] dag_dispatch_done group_id={} msg_id={} jid={}",
+                            group_id,
+                            msg_id,
+                            code_jid
+                        );
+                        final_reply
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[CodeChat] dag_dispatch_error group_id={} msg_id={} error={}",
+                            group_id,
+                            msg_id,
+                            e
+                        );
+                        tracing::warn!(
+                            "[CodeChat] user_facing_fallback group_id={} msg_id={} reason=dispatch_error",
+                            group_id,
+                            msg_id
+                        );
+                        "He thong dang ban xu ly yeu cau. Vui long gui lai sau it phut neu chua nhan duoc ket qua.".to_string()
+                    }
+                }
             } else {
-                "Dang phan tich yeu cau va lap task DAG cho team.".to_string()
+                tracing::warn!(
+                    "[CodeChat] dag_dispatch_skipped group_id={} msg_id={} reason=no_agent_api",
+                    group_id,
+                    msg_id
+                );
+                if let Some(cmd) = parsed_q.command {
+                    format!("DAG routed by /{cmd}. Dang phan tich va tao task cho team.")
+                } else {
+                    "Dang phan tich yeu cau va lap task DAG cho team.".to_string()
+                }
             };
             let agent_id = Uuid::new_v4().to_string();
             db.with_conn(|conn| {
                 conn.execute(
                     "INSERT INTO code_chat_messages (id, group_id, role, content, status, dag_plan, created_at, processed_at)
                      VALUES (?1, ?2, 'agent', ?3, 'done', ?4, ?5, ?6)",
-                    params![agent_id, group_id, agent_reply, dag_plan, now_ms(), now_ms()],
+                    params![agent_id, group_id, dispatch_reply, dag_plan, now_ms(), now_ms()],
                 )?;
                 conn.execute(
                     "UPDATE code_chat_messages SET status='done', processed_at=?2, dag_plan=?3 WHERE id=?1",
@@ -905,6 +1044,80 @@ fn process_group_queue(
     }
 
     Ok(stats)
+}
+
+fn build_code_group_binding(jid: &str, session_id: &str, session_name: &str) -> GroupBinding {
+    GroupBinding {
+        jid: jid.to_string(),
+        folder: format!("code/{session_id}"),
+        name: format!("Code::{session_name}"),
+        channel: "web".to_string(),
+        group_type: "code".to_string(),
+        is_admin: true,
+        requires_trigger: false,
+        allowed_tools: None,
+        allowed_paths: None,
+        allowed_work_dirs: None,
+        bot_token: None,
+        max_messages: None,
+        last_active: None,
+        added_at: Utc::now().to_rfc3339(),
+    }
+}
+
+fn latest_group_message_rowid(
+    db: &crate::db::Db,
+    chat_jid: &str,
+ ) -> Option<i64> {
+    db.with_conn(|conn| {
+        conn.query_row(
+            "SELECT COALESCE(MAX(rowid), 0)
+             FROM group_messages
+             WHERE chat_jid = ?1",
+            params![chat_jid],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(anyhow::Error::from)
+    })
+    .ok()
+}
+
+fn fetch_latest_bot_reply_after_rowid(
+    db: &crate::db::Db,
+    chat_jid: &str,
+    rowid_after: i64,
+) -> Option<String> {
+    db.with_conn(|conn| {
+        conn.query_row(
+            "SELECT content
+             FROM group_messages
+             WHERE chat_jid = ?1
+               AND is_bot_reply = 1
+               AND rowid > ?2
+             ORDER BY rowid DESC
+             LIMIT 1",
+            params![chat_jid, rowid_after],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(anyhow::Error::from)
+    })
+    .ok()
+    .flatten()
+}
+
+async fn wait_for_bot_reply_after_rowid(
+    db: &crate::db::Db,
+    chat_jid: &str,
+    rowid_after: i64,
+) -> Option<String> {
+    for _ in 0..20 {
+        if let Some(reply) = fetch_latest_bot_reply_after_rowid(db, chat_jid, rowid_after) {
+            return Some(reply);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    None
 }
 
 fn code_chat_group_messages_inner(

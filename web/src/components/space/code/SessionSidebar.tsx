@@ -37,7 +37,6 @@ export function SessionSidebar({ sessions, loading, activeId, onOpen, onArchive,
       <div style={{ padding: '12px 12px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
         <Input
           prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-          placeholder="Search sessions…"
           placeholder="Search projects…"
           variant="filled"
           size="small"

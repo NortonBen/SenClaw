@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { PermissionMessage, QuestionMessage } from '../types';
+import { CommonPermissionRequestCard } from './chat-common';
 
 // ===== PermissionCard =====
 
@@ -8,82 +9,18 @@ interface PermissionCardProps {
   onResolve: (requestId: string, optionKey: string) => void;
 }
 
-const OPTION_STYLE: Record<string, string> = {
-  agree:   'bg-green-50 border-green-200 text-green-700 hover:bg-green-100',
-  allow:   'bg-green-50 border-green-200 text-green-700 hover:bg-green-100',
-  yes:     'bg-green-50 border-green-200 text-green-700 hover:bg-green-100',
-  refuse:  'bg-red-50   border-red-200   text-red-700   hover:bg-red-100',
-  deny:    'bg-red-50   border-red-200   text-red-700   hover:bg-red-100',
-  no:      'bg-red-50   border-red-200   text-red-700   hover:bg-red-100',
-};
-const DEFAULT_OPTION_STYLE = 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100';
-
 export function PermissionCard({ message, onResolve }: PermissionCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const isResolved = !!message.resolved;
-  const PREVIEW_LEN = 300;
-  const isLong = message.content.length > PREVIEW_LEN;
-
   return (
-    <div className={`rounded-2xl border p-4 text-sm transition-opacity ${
-      isResolved ? 'opacity-60' : 'bg-white border-[#5BBFE8]/40 shadow-sm'
-    } max-w-[80%]`}>
-      {/* Header */}
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-base">🔐</span>
-        <div>
-          <p className="font-semibold text-gray-800">{message.title}</p>
-          <p className="text-[11px] text-gray-400 font-mono">{message.toolName}</p>
-        </div>
-        {isResolved && (
-          <span className="ml-auto text-[11px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-            Resolved
-          </span>
-        )}
-      </div>
-
-      {/* Content */}
-      {message.content && (
-        <div className="mb-3 bg-gray-50 rounded-xl p-3 text-xs font-mono text-gray-700 leading-relaxed overflow-hidden">
-          <pre className="whitespace-pre-wrap break-words">
-            {isLong && !expanded
-              ? message.content.slice(0, PREVIEW_LEN) + '…'
-              : message.content}
-          </pre>
-          {isLong && (
-            <button
-              onClick={() => setExpanded(e => !e)}
-              className="mt-1 text-[#5BBFE8] hover:underline text-[11px]"
-            >
-              {expanded ? 'Collapse' : `Expand all (${message.content.length} chars)`}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Resolved state */}
-      {isResolved ? (
-        <div className="flex items-center gap-2 text-gray-500">
-          <span>✅</span>
-          <span className="text-sm">Selected: <strong>{message.resolved!.label}</strong></span>
-        </div>
-      ) : (
-        /* Options */
-        <div className="flex flex-wrap gap-2">
-          {message.options.map(opt => {
-            const style = OPTION_STYLE[opt.key.toLowerCase()] ?? DEFAULT_OPTION_STYLE;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => onResolve(message.requestId, opt.key)}
-                className={`px-4 py-1.5 rounded-xl border text-sm font-medium transition-colors ${style}`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
+    <div style={{ maxWidth: '80%' }}>
+      <CommonPermissionRequestCard
+        title={message.title}
+        toolName={message.toolName}
+        content={message.content}
+        requestId={message.requestId}
+        options={message.options}
+        resolved={message.resolved}
+        onResolve={onResolve}
+      />
     </div>
   );
 }

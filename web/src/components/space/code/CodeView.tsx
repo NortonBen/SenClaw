@@ -12,6 +12,9 @@ import { GitLog } from './GitLog';
 import { FolderPicker } from './FolderPicker';
 import { AgentCommandInput } from './AgentCommandInput';
 import type { CodeSession, FileNode, GitCommit, CodeChatGroup, CodeChatMessage } from '../../../hooks/useCode';
+import type { PermissionMessage } from '../../../types';
+import { useAppContext } from '../../../contexts/AppContext';
+import { CommonChatInput, CommonPermissionRequestCard } from '../../chat-common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -62,11 +65,15 @@ interface Props {
 
 interface LocalChatMessage {
   id: string;
-  role: 'user' | 'agent';
+  role: 'user' | 'agent' | 'permission';
   text: string;
   createdAt: number;
   status?: 'queued' | 'processing' | 'done' | 'failed';
   dagPlan?: string | null;
+  requestId?: string;
+  toolName?: string;
+  options?: Array<{ key: string; label: string }>;
+  resolved?: { key: string; label: string };
 }
 
 export function CodeView({
@@ -85,6 +92,7 @@ export function CodeView({
   createTrigger,
 }: Props) {
   const { token } = theme.useToken();
+  const { ws } = useAppContext();
 
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -102,7 +110,10 @@ export function CodeView({
   const [chatByGroup, setChatByGroup] = useState<Record<string, LocalChatMessage[]>>({});
   const [queuePreview, setQueuePreview] = useState<CodeChatMessage[]>([]);
   const [agentTyping, setAgentTyping] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
   const chatScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const sendLockRef = React.useRef(false);
+  const lastSendRef = React.useRef<{ groupId: string; text: string; at: number } | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [previewContent, setPreviewContent] = useState<string>('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -231,7 +242,37 @@ export function CodeView({
       .finally(() => setPreviewLoading(false));
   }, [activeSession?.id, selectedFile, onGetFileContent]);
 
-  const sessionMessages = activeGroupId ? (chatByGroup[activeGroupId] ?? []) : [];
+  const codeAgentJid = activeGroupId ? `code-chat:${activeGroupId}` : null;
+
+  React.useEffect(() => {
+    if (!codeAgentJid) return;
+    ws.subscribe(codeAgentJid);
+  }, [codeAgentJid, ws]);
+
+  const permissionMessages = React.useMemo<LocalChatMessage[]>(() => {
+    if (!codeAgentJid) return [];
+    const messages = ws.messages[codeAgentJid] ?? [];
+    return messages
+      .filter((m): m is PermissionMessage => m.role === 'permission')
+      .map((m) => ({
+        id: `perm-${m.requestId}`,
+        role: 'permission',
+        text: m.content,
+        createdAt: new Date(m.timestamp).getTime(),
+        requestId: m.requestId,
+        toolName: m.toolName,
+        options: m.options,
+        resolved: m.resolved,
+      }));
+  }, [codeAgentJid, ws.messages]);
+
+  const sessionMessages = React.useMemo(() => {
+    const base = activeGroupId ? (chatByGroup[activeGroupId] ?? []) : [];
+    const map = new Map<string, LocalChatMessage>();
+    for (const m of base) map.set(m.id, m);
+    for (const m of permissionMessages) map.set(m.id, m);
+    return Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
+  }, [activeGroupId, chatByGroup, permissionMessages]);
 
   React.useEffect(() => {
     const el = chatScrollRef.current;
@@ -309,74 +350,96 @@ export function CodeView({
     }
     const text = chatInput.trim();
     if (!text) return;
+    if (sendLockRef.current) return;
 
-    const userMsg: LocalChatMessage = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text,
-      createdAt: Date.now(),
-    };
-    setChatByGroup(prev => ({
-      ...prev,
-      [groupId]: [...(prev[groupId] ?? []), { ...userMsg, status: 'queued' }],
-    }));
-    setChatInput('');
-    setAgentTyping(true);
-    const result = await onSendChat(activeSession.id, groupId, text);
-    const parsedHints = result?.parsed
-      ? [
-          result.parsed.command ? `command: /${result.parsed.command}` : null,
-          result.parsed.refs && result.parsed.refs.length ? `refs: ${result.parsed.refs.join(', ')}` : null,
-          result.parsed.skills && result.parsed.skills.length ? `skills: ${result.parsed.skills.join(', ')}` : null,
-          result.parsed.plain_text ? `plain: ${result.parsed.plain_text}` : null,
-          result.resolved_refs && result.resolved_refs.length ? `resolved: ${result.resolved_refs.join(', ')}` : null,
-        ].filter(Boolean).join('\n\n')
-      : '';
-    if (!result) {
-      antMessage.error('Chat backend khong phan hoi');
-      const failMsg: LocalChatMessage = {
-        id: `a-${Date.now()}`,
-        role: 'agent',
-        text: `Khong goi duoc backend chat. Vui long kiem tra API /api/code/sessions/${activeSession.id}/chat`,
-        createdAt: Date.now(),
-        status: 'failed',
-      };
-      setChatByGroup(prev => ({
-        ...prev,
-        [groupId]: [...(prev[groupId] ?? []), failMsg],
-      }));
-      setAgentTyping(false);
+    const now = Date.now();
+    const lastSend = lastSendRef.current;
+    if (
+      lastSend &&
+      lastSend.groupId === groupId &&
+      lastSend.text === text &&
+      now - lastSend.at < 900
+    ) {
       return;
     }
-    if (result.messages?.length) {
-      setChatByGroup(prev => ({
-        ...prev,
-        [groupId]: result.messages!.map(m => ({
-          id: m.id,
-          role: m.role,
-          text: m.content,
-          createdAt: m.created_at,
-          status: m.status,
-          dagPlan: m.dag_plan ?? null,
-        })),
-      }));
-      setQueuePreview((result.queued_preview ?? []).slice(0, 5));
-      setAgentTyping(result.messages.some(m => m.status === 'processing'));
-    } else {
-      const agentMsg: LocalChatMessage = {
-        id: `a-${Date.now()}`,
-        role: 'agent',
-        text: `${result.reply}${parsedHints ? `\n\n${parsedHints}` : ''}`,
+
+    sendLockRef.current = true;
+    setChatSending(true);
+    lastSendRef.current = { groupId, text, at: now };
+    await new Promise(resolve => window.setTimeout(resolve, 120));
+
+    try {
+      const userMsg: LocalChatMessage = {
+        id: `u-${Date.now()}`,
+        role: 'user',
+        text,
         createdAt: Date.now(),
-        status: 'done',
-        dagPlan: result.dag_plan ?? null,
       };
       setChatByGroup(prev => ({
         ...prev,
-        [groupId]: [...(prev[groupId] ?? []), agentMsg],
+        [groupId]: [...(prev[groupId] ?? []), { ...userMsg, status: 'queued' }],
       }));
+      setChatInput('');
+      setAgentTyping(true);
+      const result = await onSendChat(activeSession.id, groupId, text);
+      const parsedHints = result?.parsed
+        ? [
+            result.parsed.command ? `command: /${result.parsed.command}` : null,
+            result.parsed.refs && result.parsed.refs.length ? `refs: ${result.parsed.refs.join(', ')}` : null,
+            result.parsed.skills && result.parsed.skills.length ? `skills: ${result.parsed.skills.join(', ')}` : null,
+            result.parsed.plain_text ? `plain: ${result.parsed.plain_text}` : null,
+            result.resolved_refs && result.resolved_refs.length ? `resolved: ${result.resolved_refs.join(', ')}` : null,
+          ].filter(Boolean).join('\n\n')
+        : '';
+      if (!result) {
+        antMessage.error('Chat backend khong phan hoi');
+        const failMsg: LocalChatMessage = {
+          id: `a-${Date.now()}`,
+          role: 'agent',
+          text: `Khong goi duoc backend chat. Vui long kiem tra API /api/code/sessions/${activeSession.id}/chat`,
+          createdAt: Date.now(),
+          status: 'failed',
+        };
+        setChatByGroup(prev => ({
+          ...prev,
+          [groupId]: [...(prev[groupId] ?? []), failMsg],
+        }));
+        setAgentTyping(false);
+        return;
+      }
+      if (result.messages?.length) {
+        setChatByGroup(prev => ({
+          ...prev,
+          [groupId]: result.messages!.map(m => ({
+            id: m.id,
+            role: m.role,
+            text: m.content,
+            createdAt: m.created_at,
+            status: m.status,
+            dagPlan: m.dag_plan ?? null,
+          })),
+        }));
+        setQueuePreview((result.queued_preview ?? []).slice(0, 5));
+        setAgentTyping(result.messages.some(m => m.status === 'processing'));
+      } else {
+        const agentMsg: LocalChatMessage = {
+          id: `a-${Date.now()}`,
+          role: 'agent',
+          text: `${result.reply}${parsedHints ? `\n\n${parsedHints}` : ''}`,
+          createdAt: Date.now(),
+          status: 'done',
+          dagPlan: result.dag_plan ?? null,
+        };
+        setChatByGroup(prev => ({
+          ...prev,
+          [groupId]: [...(prev[groupId] ?? []), agentMsg],
+        }));
+      }
+      setAgentTyping(false);
+    } finally {
+      sendLockRef.current = false;
+      setChatSending(false);
     }
-    setAgentTyping(false);
   };
 
   const stopOrRemoveCurrentTask = async () => {
@@ -575,6 +638,16 @@ export function CodeView({
                 {sessionMessages.map(msg => (
                   <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                     <div style={{ maxWidth: '78%' }}>
+                      {msg.role === 'permission' && msg.requestId ? (
+                        <CommonPermissionRequestCard
+                          toolName={msg.toolName ?? 'tool'}
+                          content={msg.text}
+                          requestId={msg.requestId}
+                          options={msg.options ?? []}
+                          resolved={msg.resolved}
+                          onResolve={(requestId, optionKey) => ws.resolvePermission(requestId, optionKey)}
+                        />
+                      ) : (
                       <div
                         style={{
                           padding: '10px 12px',
@@ -611,6 +684,7 @@ export function CodeView({
                           msg.text
                         )}
                       </div>
+                      )}
                       <Text
                         type="secondary"
                         style={{
@@ -687,15 +761,17 @@ export function CodeView({
                 </div>
 
                 <div style={{ padding: 12, borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer }}>
-                  <AgentCommandInput
-                    value={chatInput}
-                    onChange={setChatInput}
-                    onSubmit={sendChat}
-                    disabled={!activeSession}
-                    sending={agentTyping}
-                    commands={AGENT_COMMANDS}
-                    mentionItems={mentionItems}
-                  />
+                  <CommonChatInput helperText="Enter để gửi · Shift+Enter xuống dòng · / @ # gợi ý">
+                    <AgentCommandInput
+                      value={chatInput}
+                      onChange={setChatInput}
+                      onSubmit={sendChat}
+                      disabled={!activeSession}
+                      sending={agentTyping || chatSending}
+                      commands={AGENT_COMMANDS}
+                      mentionItems={mentionItems}
+                    />
+                  </CommonChatInput>
                 </div>
               </div>
 

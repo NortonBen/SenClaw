@@ -1,5 +1,6 @@
 import React from 'react';
-import { Button, Input, Space, Typography, theme } from 'antd';
+import { Input, Typography, theme } from 'antd';
+import { getChatActionButtonStyle, getChatTextareaStyle } from '../../chat-common';
 
 const { Text } = Typography;
 
@@ -156,7 +157,7 @@ export function AgentCommandInput({
           </div>
         </div>
       )}
-      <Space.Compact style={{ width: '100%' }}>
+      <div style={{ width: '100%', display: 'flex', gap: 12, alignItems: 'flex-end' }}>
         <Input.TextArea
           value={value}
           onChange={e => onChange(e.target.value)}
@@ -193,17 +194,26 @@ export function AgentCommandInput({
               onSubmit();
             }
           }}
-          style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+          style={{
+            ...getChatTextareaStyle(token),
+            borderRadius: 16,
+            resize: 'none',
+            minHeight: 44,
+          }}
         />
-        <Button
-          type="primary"
+        <button
           onClick={onSubmit}
-          disabled={!value.trim() || disabled || sending}
-          style={{ height: 'auto', borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+          disabled={!value.trim() || !!disabled || !!sending}
+          className="w-10 h-10 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
+          style={getChatActionButtonStyle(token, !value.trim() || !!disabled || !!sending)}
+          aria-label="Send"
+          title="Send"
         >
-          Gui
-        </Button>
-      </Space.Compact>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+            <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

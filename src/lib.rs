@@ -27,6 +27,7 @@ pub mod memory;
 pub mod proto;
 pub mod scheduler;
 pub mod setup;
+pub mod plugins;
 pub mod skills;
 pub mod subagents;
 pub mod tools;

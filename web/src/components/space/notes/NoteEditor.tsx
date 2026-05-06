@@ -238,15 +238,15 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
   const toolbar: { icon: React.ReactNode; title: string; action: FormatAction }[] = [
     { icon: <BoldOutlined />, title: 'Bold (⌘B)', action: { before: '**', after: '**' } },
     { icon: <ItalicOutlined />, title: 'Italic (⌘I)', action: { before: '_', after: '_' } },
-    { icon: <span className="text-xs font-bold leading-none">H1</span>, title: 'Heading 1', action: { linePrefix: '# ' } },
-    { icon: <span className="text-xs font-bold leading-none">H2</span>, title: 'Heading 2', action: { linePrefix: '## ' } },
-    { icon: <span className="text-xs font-bold leading-none">H3</span>, title: 'Heading 3', action: { linePrefix: '### ' } },
-    { icon: <UnorderedListOutlined />, title: 'Bullet list', action: { linePrefix: '- ' } },
-    { icon: <OrderedListOutlined />, title: 'Numbered list', action: { linePrefix: '1. ' } },
+    { icon: <span className="text-xs font-bold leading-none">H1</span>, title: 'Heading 1', action: { before: '', linePrefix: '# ' } },
+    { icon: <span className="text-xs font-bold leading-none">H2</span>, title: 'Heading 2', action: { before: '', linePrefix: '## ' } },
+    { icon: <span className="text-xs font-bold leading-none">H3</span>, title: 'Heading 3', action: { before: '', linePrefix: '### ' } },
+    { icon: <UnorderedListOutlined />, title: 'Bullet list', action: { before: '', linePrefix: '- ' } },
+    { icon: <OrderedListOutlined />, title: 'Numbered list', action: { before: '', linePrefix: '1. ' } },
     { icon: <CodeOutlined />, title: 'Inline code', action: { before: '`', after: '`' } },
     { icon: <span className="text-xs font-mono leading-none">```</span>, title: 'Code block', action: { before: '```\n', after: '\n```', block: true } },
     { icon: <LinkOutlined />, title: 'Link', action: { before: '[', after: '](url)' } },
-    { icon: <span className="text-xs font-bold leading-none">❝</span>, title: 'Blockquote', action: { linePrefix: '> ' } },
+    { icon: <span className="text-xs font-bold leading-none">❝</span>, title: 'Blockquote', action: { before: '', linePrefix: '> ' } },
   ];
 
   return (

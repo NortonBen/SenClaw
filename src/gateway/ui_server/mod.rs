@@ -16,6 +16,7 @@ mod llm_config;
 mod mcp;
 mod quicknotes;
 mod space;
+mod plugins;
 mod skills;
 mod spa;
 mod subagents;

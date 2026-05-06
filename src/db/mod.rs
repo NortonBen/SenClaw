@@ -86,6 +86,7 @@ impl Db {
         schema::apply_memory_tables(conn, config)?;
         schema::apply_space_tables(conn)?;
         schema::apply_code_tables(conn)?;
+        schema::apply_marketplace_tables(conn)?;
         crate::code_graph::schema::apply_code_graph_schema(conn)?;
         Ok(())
     }

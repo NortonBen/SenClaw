@@ -62,6 +62,7 @@ pub struct PathsConfig {
     pub global_config_path: PathBuf,
     pub dispatch_state_path: PathBuf,
     pub managed_skills_dir: PathBuf,
+    pub managed_plugins_dir: PathBuf,
     pub wiki_dir: PathBuf,
     pub hooks_path: PathBuf,
     pub virtual_agents_dir: PathBuf,
@@ -218,6 +219,10 @@ impl Config {
                 managed_skills_dir: env_path(
                     "MANAGED_SKILLS_DIR",
                     senclaw_home.join("managed").join("skills"),
+                ),
+                managed_plugins_dir: env_path(
+                    "MANAGED_PLUGINS_DIR",
+                    senclaw_home.join("managed").join("plugins"),
                 ),
                 wiki_dir: env_path("WIKI_DIR", senclaw_data.join("wiki")),
                 hooks_path: env_path("SENCLAW_HOOKS_PATH", senclaw_home.join("hooks.json")),

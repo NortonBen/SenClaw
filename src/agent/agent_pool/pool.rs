@@ -752,7 +752,11 @@ impl AgentPool {
 
         // Sync allowedWorkDirs from config.json (config.json overrides DB).
         // Mirrors TS AgentPool.ts:479-482.
-        let allowed_work_dirs = {
+        let allowed_work_dirs = if binding.group_type == "code" {
+            // Code chat sessions are explicitly bound to project workspace selected
+            // in code_sessions.workspace; never override from global config.
+            binding.allowed_work_dirs.clone()
+        } else {
             let cfg_lock = self.config.lock().unwrap();
             match cfg_lock.as_ref() {
                 Some(cfg) => {
@@ -793,16 +797,42 @@ impl AgentPool {
 
         // Init workspace state file (mirrors TS 569-572).
         let home = self.senclaw_home.lock().unwrap().clone();
-        let workspace_dir = home
-            .parent()
-            .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
-            .unwrap_or_else(|| {
-                PathBuf::from("senclaw")
-                    .join("workspace")
-                    .join(&binding.folder)
-            });
+        let workspace_dir = if binding.group_type == "code" {
+            allowed_work_dirs
+                .as_ref()
+                .and_then(|dirs| dirs.first())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    home.parent()
+                        .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
+                        .unwrap_or_else(|| {
+                            PathBuf::from("senclaw")
+                                .join("workspace")
+                                .join(&binding.folder)
+                        })
+                })
+        } else {
+            home.parent()
+                .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
+                .unwrap_or_else(|| {
+                    PathBuf::from("senclaw")
+                        .join("workspace")
+                        .join(&binding.folder)
+                })
+        };
         let state_file = home.join(format!("workspace-state-{}.json", binding.folder));
         Self::init_workspace_state(&state_file, &workspace_dir);
+        if binding.group_type == "code" {
+            // Code chat sessions must always stick to session workspace, even if
+            // an old workspace-state file already exists from a previous run.
+            let body = WorkspaceStateFile {
+                current_dir: workspace_dir.to_string_lossy().to_string(),
+                updated_at: local_iso_string_now(),
+            };
+            if let Ok(json) = serde_json::to_string_pretty(&body) {
+                let _ = std::fs::write(&state_file, json);
+            }
+        }
 
         // Inject MCP servers (mirrors TS 546-624) through CoreApi abstraction.
         // Each registration is best-effort: on failure we keep agent creation alive.
@@ -981,6 +1011,22 @@ impl AgentPool {
         retries_left: u32,
     ) -> Result<()> {
         self.get_or_create(group).await?;
+        if group.group_type == "code" {
+            if let Some(code_ws) = group
+                .allowed_work_dirs
+                .as_ref()
+                .and_then(|dirs| dirs.first())
+                .cloned()
+            {
+                self.core_api.set_working_dir(jid, &code_ws);
+                let code_mcp = code_server_mcp_config(&code_ws, &group.folder);
+                if let Err(e) = self.core_api.add_or_update_mcp_server(jid, &code_mcp) {
+                    tracing::warn!(
+                        "[AgentPool] Failed to refresh code MCP workspace for {jid}: {e}"
+                    );
+                }
+            }
+        }
 
         // Pre-retrieval memory injection — mirrors TS AgentPool.ts:703-715.
         let full_prompt = {
