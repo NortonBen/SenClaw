@@ -377,7 +377,7 @@ pub async fn query(
 // Content extraction helpers
 // ============================================================================
 
-fn extract_content(msg: &Message) -> (String, String, Vec<ContentBlock>) {
+pub(crate) fn extract_content(msg: &Message) -> (String, String, Vec<ContentBlock>) {
     let mut text = String::new();
     let mut reasoning = String::new();
     let mut tool_uses = Vec::new();

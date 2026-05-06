@@ -548,6 +548,7 @@ impl ZenCore for ZenEngine {
         let http_client = self.http_client.clone();
         let permission_manager = self.permission_manager.clone();
         let response_registry = self.response_registry.clone();
+        let state_for_spawn = self.state.clone();
 
         // Build system prompt
         let system_prompt = if opts.system_prompt.is_empty() {
@@ -635,6 +636,11 @@ impl ZenCore for ZenEngine {
             };
 
             let result = conversation::query(messages, &config, &cancel).await;
+
+            if let Ok(msgs) = &result {
+                let mut st = state_for_spawn.lock().unwrap();
+                st.set_message_history(MAIN_AGENT_ID, msgs.clone());
+            }
 
             let stop_reason = match &result {
                 Ok(_) => {
@@ -922,6 +928,21 @@ impl ZenCore for ZenEngine {
 // ============================================================================
 
 impl ZenEngine {
+    /// Last non-empty main-agent assistant text from persisted transcript (after `query` runs).
+    pub fn last_main_assistant_visible_text(&self) -> String {
+        let state = self.state.lock().unwrap();
+        for msg in state.message_history(MAIN_AGENT_ID).iter().rev() {
+            if msg.msg_type != "assistant" {
+                continue;
+            }
+            let (text, _, _) = conversation::extract_content(msg);
+            if !text.trim().is_empty() {
+                return text;
+            }
+        }
+        String::new()
+    }
+
     pub fn initialize_plugins(&self) {
         let opts = self.options.read().unwrap();
         debug!(

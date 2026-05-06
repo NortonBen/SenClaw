@@ -621,12 +621,18 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             match result {
                 Ok(Ok(event)) => match event {
                     EngineEvent::MessageComplete(data) => {
-                        if data.agent_id == crate::agent::agent_pool::MAIN_AGENT_ID {
+                        if data.agent_id == crate::agent::agent_pool::MAIN_AGENT_ID
+                            && !data.content.trim().is_empty()
+                        {
                             last_message = Some(data.content.clone());
                         }
                     }
                     EngineEvent::StateUpdate(data) => {
                         if data.state == SessionState::Idle {
+                            let from_history = engine.last_main_assistant_visible_text();
+                            if !from_history.trim().is_empty() {
+                                return Ok(from_history);
+                            }
                             return Ok(last_message.unwrap_or_default());
                         }
                     }
@@ -696,7 +702,11 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                     bail!("Virtual agent event bus closed");
                 }
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped))) => {
+                    tracing::warn!(
+                        "[VirtualAgent:{instance_id}] event bus lagged (skipped {skipped}); will use transcript on idle if needed"
+                    );
+                }
                 Err(_elapsed) => {
                     engine.abort_current();
                     bail!("Virtual agent timed out after {}s", timeout.as_secs());
