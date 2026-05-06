@@ -395,6 +395,63 @@ impl McpManager {
                 ],
             },
             BuiltInServerInfo {
+                name: "senclaw-code-graph".into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "Built-in code knowledge graph — callers, callees, impact, search, skeleton."
+                        .into(),
+                ),
+                tools: vec![
+                    t(
+                        "graph_reindex",
+                        "Index codebase into the knowledge graph (incremental by default)",
+                    ),
+                    t("graph_find_callers", "Find all symbols that call the given symbol"),
+                    t("graph_find_callees", "Find symbols called by the given symbol"),
+                    t(
+                        "graph_impact",
+                        "Blast radius: symbols/files affected by changing a symbol",
+                    ),
+                    t(
+                        "graph_symbol_context",
+                        "Full context: signature, callers, callees, file skeleton",
+                    ),
+                    t(
+                        "graph_trace_flow",
+                        "Trace call tree from an entry point (DFS over CALLS)",
+                    ),
+                    t(
+                        "graph_search",
+                        "Full-text search symbols by name or signature",
+                    ),
+                    t(
+                        "graph_skeleton",
+                        "File or project skeleton (signatures only, token-efficient)",
+                    ),
+                    t(
+                        "graph_file_deps",
+                        "File import graph: imports and imported-by",
+                    ),
+                ],
+            },
+            BuiltInServerInfo {
+                name: "senclaw-code".into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "Built-in code editing server — read, write, edit, bash, search, skeleton for a sandboxed workspace.".into(),
+                ),
+                tools: vec![
+                    t("read_file",    "Read a file (with optional line range)"),
+                    t("write_file",   "Create or overwrite a file, returns unified diff"),
+                    t("edit_file",    "Exact-string replacement in a file, returns unified diff"),
+                    t("bash",         "Run a shell command inside the workspace sandbox"),
+                    t("search_code",  "AST pattern search (ast-grep) with grep fallback"),
+                    t("glob",         "Find files matching a glob pattern"),
+                    t("get_skeleton", "Token-efficient skeleton: signatures only, no bodies"),
+                    t("list_files",   "List workspace directory as an indented tree"),
+                ],
+            },
+            BuiltInServerInfo {
                 name: "senclaw-browser".into(),
                 transport: "stdio".into(),
                 description: Some(

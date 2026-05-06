@@ -13,6 +13,8 @@ use base64::Engine;
 
 pub mod agent;
 pub mod browser;
+pub mod code_engine;
+pub mod code_graph;
 pub mod channels;
 pub mod clawhub;
 pub mod cli;

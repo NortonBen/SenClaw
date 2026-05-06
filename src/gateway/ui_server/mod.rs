@@ -7,6 +7,7 @@
 //! LLM config endpoints (`/api/llm-config/*`) are stubbed — they require the
 //! `sema-code-core` model manager which hasn't been ported yet.
 
+mod code;
 mod config_handler;
 pub mod core;
 mod cowork;

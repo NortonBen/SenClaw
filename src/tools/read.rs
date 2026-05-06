@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolResultMessage};
 
 const MAX_LINE_LENGTH: usize = 2000;
+const MAX_READ_BYTES: u64 = 512 * 1024; // 512 KB
 
 pub struct ReadTool;
 
@@ -83,6 +84,25 @@ impl Tool for ReadTool {
             .max(1);
         let limit = input.get("limit").and_then(|v| v.as_u64());
 
+        let metadata = std::fs::metadata(path).context("Failed to stat file")?;
+        if metadata.len() > MAX_READ_BYTES {
+            return Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({
+                    "content": "",
+                    "lines": 0,
+                    "totalLines": 0,
+                    "tooLarge": true,
+                    "sizeKb": metadata.len() / 1024,
+                }),
+                result_for_assistant: format!(
+                    "[File too large: {} KB — max {} KB. Use offset+limit to read specific sections, \
+                     or use grep/search to find relevant parts first.]",
+                    metadata.len() / 1024,
+                    MAX_READ_BYTES / 1024,
+                ),
+            }]);
+        }
+
         let content = std::fs::read_to_string(path).context("Failed to read file")?;
 
         let lines: Vec<&str> = content.lines().collect();
@@ -107,12 +127,15 @@ impl Tool for ReadTool {
         let selected: Vec<&str> = lines[start..end].to_vec();
         let output = selected
             .iter()
-            .map(|l| {
-                if l.len() > MAX_LINE_LENGTH {
+            .enumerate()
+            .map(|(i, l)| {
+                let line_no = start + i + 1;
+                let body = if l.len() > MAX_LINE_LENGTH {
                     format!("{}... [line truncated]", &l[..MAX_LINE_LENGTH])
                 } else {
                     l.to_string()
-                }
+                };
+                format!("{line_no:>4}\t{body}")
             })
             .collect::<Vec<_>>()
             .join("\n");

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use similar::{ChangeTag, TextDiff};
 use serde_json::Value;
 
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};
@@ -72,6 +73,7 @@ impl Tool for WriteTool {
             std::fs::create_dir_all(parent).context("Failed to create parent directory")?;
         }
 
+        let old_content = std::fs::read_to_string(&p).unwrap_or_default();
         std::fs::write(&p, content).context("Failed to write file")?;
 
         let fname = p
@@ -79,14 +81,16 @@ impl Tool for WriteTool {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string());
         let size = content.len();
-        let summary = format!("Wrote {fname} ({size} bytes)");
+        let diff = make_unified_diff(&old_content, content, path);
+        let summary = format!("Wrote {fname} ({size} bytes)\n{diff}");
 
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!({
                 "path": path,
                 "size": size,
+                "diff": diff,
             }),
-            result_for_assistant: summary.clone(),
+            result_for_assistant: summary,
         }])
     }
 
@@ -127,4 +131,26 @@ impl Tool for WriteTool {
             }),
         })
     }
+}
+
+fn make_unified_diff(old: &str, new: &str, file_path: &str) -> String {
+    let diff = TextDiff::from_lines(old, new);
+    let mut out = format!("--- a/{file_path}\n+++ b/{file_path}\n");
+    for group in diff.grouped_ops(3) {
+        for op in &group {
+            for change in diff.iter_changes(op) {
+                let prefix = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal  => " ",
+                };
+                out.push_str(prefix);
+                out.push_str(change.value());
+                if !change.value().ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
 }

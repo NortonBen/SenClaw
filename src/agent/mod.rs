@@ -9,3 +9,4 @@ pub mod persona_registry;
 pub mod send_bridge;
 pub mod session_bridge;
 pub mod virtual_worker_pool;
+pub mod code_session;

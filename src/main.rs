@@ -54,6 +54,10 @@ enum Command {
     BrowserServer,
     /// Start the Space MCP server — notes, calendar, email, sync (stdio JSON-RPC)
     SpaceServer,
+    /// Start the code knowledge graph MCP server (stdio JSON-RPC)
+    CodeGraphServer,
+    /// Start the code editing MCP server (stdio JSON-RPC)
+    CodeServer,
 }
 
 #[tokio::main]
@@ -77,6 +81,8 @@ async fn main() -> Result<()> {
                 | Command::WikiServer
                 | Command::BrowserServer
                 | Command::SpaceServer
+        | Command::CodeGraphServer
+        | Command::CodeServer
         )
     );
 
@@ -113,5 +119,7 @@ async fn main() -> Result<()> {
         Command::WikiServer => senclaw::mcp::wiki_server::run_stdio_server().await,
         Command::BrowserServer => senclaw::mcp::browser_server::run_stdio_server().await,
         Command::SpaceServer => senclaw::mcp::space_server::run_stdio_server().await,
+        Command::CodeGraphServer => senclaw::mcp::code_graph_server::run_code_graph_server().await,
+        Command::CodeServer => senclaw::mcp::code_server::run_code_server().await,
     }
 }

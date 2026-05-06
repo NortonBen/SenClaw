@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use similar::{ChangeTag, TextDiff};
 use serde_json::Value;
 
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};
@@ -155,18 +156,22 @@ impl Tool for EditTool {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string());
+
+        let diff = make_unified_diff(&content, &new_content, path);
         let summary = format!(
-            "Edited {fname} ({} replacement{})",
+            "Edited {fname} ({} replacement{})\n{}",
             occurrences,
-            if occurrences > 1 { "s" } else { "" }
+            if occurrences > 1 { "s" } else { "" },
+            diff,
         );
 
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!({
                 "path": path,
                 "replacements": occurrences,
+                "diff": diff,
             }),
-            result_for_assistant: summary.clone(),
+            result_for_assistant: summary,
         }])
     }
 
@@ -209,4 +214,26 @@ impl Tool for EditTool {
             }),
         })
     }
+}
+
+fn make_unified_diff(old: &str, new: &str, file_path: &str) -> String {
+    let diff = TextDiff::from_lines(old, new);
+    let mut out = format!("--- a/{file_path}\n+++ b/{file_path}\n");
+    for group in diff.grouped_ops(3) {
+        for op in &group {
+            for change in diff.iter_changes(op) {
+                let prefix = match change.tag() {
+                    ChangeTag::Delete => "-",
+                    ChangeTag::Insert => "+",
+                    ChangeTag::Equal  => " ",
+                };
+                out.push_str(prefix);
+                out.push_str(change.value());
+                if !change.value().ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
 }

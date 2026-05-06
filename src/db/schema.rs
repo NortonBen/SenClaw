@@ -375,6 +375,111 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Apply Code Engine session tables.
+pub(crate) fn apply_code_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS code_sessions (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL DEFAULT '',
+            workspace   TEXT NOT NULL,
+            language    TEXT,
+            status      TEXT NOT NULL DEFAULT 'active',
+            git_enabled INTEGER NOT NULL DEFAULT 1,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_code_sessions_status
+            ON code_sessions(status, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS code_session_files (
+            id          INTEGER PRIMARY KEY,
+            session_id  TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+            file_path   TEXT NOT NULL,
+            edited_at   INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_code_session_files_session
+            ON code_session_files(session_id, edited_at DESC);
+
+        CREATE TABLE IF NOT EXISTS code_chat_groups (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+            name        TEXT NOT NULL,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_code_chat_groups_project
+            ON code_chat_groups(project_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS code_chat_messages (
+            id            TEXT PRIMARY KEY,
+            group_id       TEXT NOT NULL REFERENCES code_chat_groups(id) ON DELETE CASCADE,
+            role           TEXT NOT NULL, -- user | agent
+            content        TEXT NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'done', -- queued | processing | done | failed
+            queue_position INTEGER,
+            dag_plan       TEXT,
+            created_at     INTEGER NOT NULL,
+            processed_at   INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_code_chat_messages_group
+            ON code_chat_messages(group_id, created_at ASC);
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Marketplace tables — installed_skills, installed_plugins, plugin_runtime.
+pub(crate) fn apply_marketplace_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS installed_skills (
+            slug            TEXT PRIMARY KEY,
+            display_name    TEXT,
+            summary         TEXT,
+            version         TEXT NOT NULL DEFAULT '',
+            registry        TEXT NOT NULL DEFAULT 'https://lightmake.site',
+            source          TEXT NOT NULL DEFAULT 'clawhub',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            installed_at    INTEGER NOT NULL DEFAULT 0,
+            updated_at      INTEGER NOT NULL DEFAULT 0,
+            manifest_json   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_installed_skills_enabled
+            ON installed_skills(enabled, source);
+
+        CREATE TABLE IF NOT EXISTS installed_plugins (
+            slug            TEXT PRIMARY KEY,
+            display_name    TEXT,
+            summary         TEXT,
+            version         TEXT NOT NULL DEFAULT '',
+            plugin_type     TEXT NOT NULL DEFAULT 'mcp_server',
+            registry        TEXT NOT NULL DEFAULT 'https://lightmake.site',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            installed_at    INTEGER NOT NULL DEFAULT 0,
+            updated_at      INTEGER NOT NULL DEFAULT 0,
+            config_json     TEXT NOT NULL DEFAULT '{}',
+            manifest_json   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_installed_plugins_type
+            ON installed_plugins(plugin_type, enabled);
+
+        CREATE TABLE IF NOT EXISTS plugin_runtime (
+            slug        TEXT PRIMARY KEY REFERENCES installed_plugins(slug) ON DELETE CASCADE,
+            status      TEXT NOT NULL DEFAULT 'stopped',
+            pid         INTEGER,
+            port        INTEGER,
+            started_at  INTEGER,
+            error_msg   TEXT,
+            last_ping   INTEGER
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
 /// Apply memory schema if embedding is enabled.
 pub(crate) fn apply_memory_tables(conn: &mut Connection, config: &Config) -> Result<()> {
     let provider = config.memory.embedding_provider;

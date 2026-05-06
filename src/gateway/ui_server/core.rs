@@ -37,6 +37,14 @@ use super::mcp::{
     mcp_servers_enabled, mcp_servers_get, mcp_servers_list, mcp_servers_save, mcp_servers_test,
     mcp_servers_tools,
 };
+use super::code::{
+    code_chat_group_messages, code_chat_groups_create, code_chat_groups_list,
+    code_chat_group_stop_current,
+    code_chat_ws,
+    code_sessions_archive, code_sessions_chat, code_sessions_create, code_sessions_file_content, code_sessions_files,
+    code_sessions_get, code_sessions_git_log, code_sessions_list, code_sessions_rollback,
+    fs_ls,
+};
 use super::quicknotes::quicknotes_save;
 use super::space::{
     space_apps_delete, space_apps_list, space_apps_register,
@@ -281,6 +289,20 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/space/sync/apple-calendar", post(space_sync_apple_calendar))
         .route("/api/space/sync/apple-notes", post(space_sync_apple_notes))
         .route("/api/space/sync/gmail", post(space_sync_gmail))
+        // ── Filesystem browser ───────────────────────────────────────────────
+        .route("/api/fs/ls", get(fs_ls))
+        // ── Code Engine API ──────────────────────────────────────────────────
+        .route("/api/code/sessions", get(code_sessions_list).post(code_sessions_create))
+        .route("/api/code/sessions/:id", get(code_sessions_get).delete(code_sessions_archive))
+        .route("/api/code/sessions/:id/files", get(code_sessions_files))
+        .route("/api/code/sessions/:id/file-content", get(code_sessions_file_content))
+        .route("/api/code/sessions/:id/chat", post(code_sessions_chat))
+        .route("/api/code/projects/:id/groups", get(code_chat_groups_list).post(code_chat_groups_create))
+        .route("/api/code/groups/:id/messages", get(code_chat_group_messages))
+        .route("/api/code/groups/:id/stop-current", post(code_chat_group_stop_current))
+        .route("/api/code/ws", get(code_chat_ws))
+        .route("/api/code/sessions/:id/git-log", get(code_sessions_git_log))
+        .route("/api/code/sessions/:id/rollback", post(code_sessions_rollback))
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback

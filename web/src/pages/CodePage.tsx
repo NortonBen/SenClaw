@@ -1,98 +1,82 @@
-import React from 'react';
-import { Result, Button, Typography, Space, theme, Breadcrumb, Layout, Flex } from 'antd';
-import { CodeOutlined, BugOutlined, HomeOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
-import { useAppContext } from '../contexts/AppContext';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Layout } from 'antd';
 import { AppLayout } from '../components/AppLayout';
-import { AgentSidebar } from '../components/AgentSidebar';
+import { SessionSidebar } from '../components/space/code/SessionSidebar';
+import { CodeView } from '../components/space/code/CodeView';
+import { useCode, type CodeSession } from '../hooks/useCode';
 
-const { Title, Text } = Typography;
 const { Content } = Layout;
 
 export function CodePage() {
-  const { ws } = useAppContext();
-  const { token } = theme.useToken();
-  const navigate = useNavigate();
+  const code = useCode();
+  const {
+    sessions,
+    loading,
+    error,
+    loadSessions,
+    createSession,
+    archiveSession,
+    getFiles,
+    getFileContent,
+    getGitLog,
+    rollback,
+    sendChat,
+    listChatGroups,
+    createChatGroup,
+    listGroupMessages,
+    stopCurrentChatTask,
+  } = code;
+  const [activeSession, setActiveSession] = useState<CodeSession | null>(null);
+  const [createModalTrigger, setCreateModalTrigger] = useState(0);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  const handleCreate = useCallback(async (params: { name: string; workspace: string; language?: string; init_git?: boolean }) => {
+    const session = await createSession(params);
+    if (session) {
+      setActiveSession(session);
+    }
+  }, [createSession]);
+
+  const handleArchive = useCallback(async (id: string) => {
+    const ok = await archiveSession(id);
+    if (ok && activeSession?.id === id) {
+      setActiveSession(null);
+    }
+  }, [activeSession, archiveSession]);
 
   return (
-    <AppLayout sidebar={<AgentSidebar ws={ws} selectedJid={null} onSelect={() => navigate('/chats')} />}>
-    <Layout style={{ background: 'transparent', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Main Header */}
-      <header style={{ 
-        padding: '0 24px', 
-        height: 56, 
-        display: 'flex', 
-        alignItems: 'center', 
-        borderBottom: `1px solid ${token.colorBorder}`,
-        background: token.colorBgElevated,
-        backdropFilter: 'blur(10px)',
-        flexShrink: 0
-      }}>
-        <Breadcrumb
-          items={[
-            { 
-              title: <Space onClick={() => navigate('/chats')} style={{ cursor: 'pointer' }}><HomeOutlined /><span>Home</span></Space>,
-              className: 'opacity-80'
-            },
-            { 
-              title: <Text type="secondary" style={{ fontSize: '13px' }}>Code Hub</Text> 
-            }
-          ]}
-        />
-      </header>
-
-      {/* Main content */}
-      <Content style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-        <Flex align="center" justify="center" style={{ flex: 1, padding: '24px' }}>
-          <div style={{ 
-            maxWidth: '600px',
-            width: '100%',
-            background: token.colorBgContainer,
-            borderRadius: token.borderRadiusLG,
-            padding: '48px',
-            border: `1px solid ${token.colorBorderSecondary}`,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
-          }}>
-            <Result
-              icon={<CodeOutlined style={{ fontSize: '72px', color: token.colorPrimary }} />}
-              title={
-                <Title level={2} style={{ margin: 0 }}>Code Hub</Title>
-              }
-              subTitle={
-                <Space direction="vertical" align="center" size="small">
-                  <Text type="secondary" style={{ fontSize: '16px' }}>
-                    Advanced AI coding tools and repository integration are coming soon.
-                  </Text>
-                  <div style={{ 
-                    marginTop: 16, 
-                    padding: '8px 16px', 
-                    background: token.colorPrimaryBg, 
-                    borderRadius: '20px',
-                    border: `1px solid ${token.colorPrimaryBorder}`
-                  }}>
-                    <Space>
-                      <BugOutlined style={{ color: token.colorPrimary }} />
-                      <Text strong style={{ color: token.colorPrimary }}>Currently under development</Text>
-                    </Space>
-                  </div>
-                </Space>
-              }
-              extra={[
-                <Button 
-                  key="home" 
-                  type="primary" 
-                  size="large" 
-                  onClick={() => navigate('/chats')}
-                  style={{ borderRadius: '8px', minWidth: '120px' }}
-                >
-                  Go Back to Chats
-                </Button>
-              ]}
-            />
-          </div>
-        </Flex>
-      </Content>
-    </Layout>
+    <AppLayout sidebar={
+      <SessionSidebar
+        sessions={sessions}
+        loading={loading}
+        activeId={activeSession?.id ?? null}
+        onOpen={setActiveSession}
+        onArchive={handleArchive}
+        onNew={() => setCreateModalTrigger(v => v + 1)}
+      />
+    }>
+      <Layout style={{ background: 'transparent', height: '100%' }}>
+        <Content style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <CodeView
+            activeSession={activeSession}
+            onCreate={handleCreate}
+            onGetFiles={async id => getFiles(id).then(r => (r ? { tree: r.tree } : null))}
+            onGetFileContent={getFileContent}
+            onGetGitLog={getGitLog}
+            onRollback={rollback}
+            onSendChat={sendChat}
+            onListChatGroups={listChatGroups}
+            onCreateChatGroup={createChatGroup}
+            onListGroupMessages={listGroupMessages}
+            onStopCurrentTask={stopCurrentChatTask}
+            error={error}
+            createTrigger={createModalTrigger}
+          />
+        </Content>
+      </Layout>
     </AppLayout>
   );
 }

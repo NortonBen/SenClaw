@@ -27,8 +27,10 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, dispatch_mcp_config, memory_mcp_config, schedule_mcp_config,
-    send_mcp_config, space_mcp_config, wiki_mcp_config, workspace_mcp_config, McpServerConfig,
+    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config,
+    memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config, wiki_mcp_config,
+    workspace_mcp_config,
+    McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -860,6 +862,15 @@ impl AgentPool {
                 &db_path_s,
                 &binding.folder,
                 &binding.jid,
+            ));
+            mcp_servers.push(code_graph_mcp_config(
+                &db_path_s,
+                &binding.folder,
+                &workspace_s,
+            ));
+            mcp_servers.push(code_server_mcp_config(
+                &workspace_s,
+                &binding.folder,
             ));
             mcp_servers.push(browser_mcp_config(cfg.ws_port));
             tracing::info!(
