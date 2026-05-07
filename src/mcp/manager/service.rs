@@ -330,6 +330,10 @@ impl McpManager {
                         "dispatch_task",
                         "Dispatch a task within a parent and wait for its result",
                     ),
+                    t(
+                        "dispatch_all_tasks",
+                        "Run all tasks under a parent in dependency order; combined results",
+                    ),
                 ],
             },
             BuiltInServerInfo {

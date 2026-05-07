@@ -1,6 +1,6 @@
 //! Dispatch MCP server. Port target: src-old/mcp/dispatch-server.ts
 //!
-//! Tools: list_agents, create_parent, dispatch_task.
+//! Tools: list_agents, create_parent, dispatch_task, dispatch_all_tasks.
 //! Manages DAG task orchestration via a shared state file (`dispatch-state.json`)
 //! with file-based locking — identical semantics to the TS DispatchBridge.
 
@@ -233,6 +233,43 @@ impl DispatchServer {
         None
     }
 
+    /// Topological order of task labels (deps before dependents). DAG must be acyclic.
+    pub(crate) fn topo_task_order(tasks: &[DispatchTask]) -> Result<Vec<String>, String> {
+        let labels: HashSet<&str> = tasks.iter().map(|t| t.label.as_str()).collect();
+        for t in tasks {
+            for d in &t.depends_on {
+                if !labels.contains(d.as_str()) {
+                    return Err(format!(
+                        "Task \"{}\" depends on unknown label \"{d}\"",
+                        t.label
+                    ));
+                }
+            }
+        }
+        let mut remaining: HashSet<String> = tasks.iter().map(|t| t.label.clone()).collect();
+        let mut order = Vec::new();
+        while !remaining.is_empty() {
+            let mut pick: Option<String> = None;
+            for t in tasks {
+                if !remaining.contains(&t.label) {
+                    continue;
+                }
+                if t.depends_on.iter().all(|d| !remaining.contains(d)) {
+                    pick = Some(t.label.clone());
+                    break;
+                }
+            }
+            let Some(label) = pick else {
+                return Err(
+                    "Dependency cycle or unsatisfiable dependsOn — fix the DAG".to_string(),
+                );
+            };
+            remaining.remove(&label);
+            order.push(label);
+        }
+        Ok(order)
+    }
+
     // ===== list_agents =====
 
     pub fn list_agents(&self) -> ToolResult {
@@ -447,9 +484,10 @@ impl DispatchServer {
 
         ToolResult::ok(format!(
             "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
-             Use dispatch_task(\"{parent_id}\", \"<taskLabel>\") for each task you need results \
-             for — respect dependency order (dependsOn). DispatchBridge schedules ready tasks and \
-             switches workspaces automatically."
+             Use dispatch_all_tasks(\"{parent_id}\") to wait for **all** tasks in dependency order \
+             in one call. Or use dispatch_task(\"{parent_id}\", \"<taskLabel>\") per task if you \
+             only need specific results. DispatchBridge schedules ready tasks and switches \
+             workspaces automatically."
         ))
     }
 
@@ -547,6 +585,51 @@ impl DispatchServer {
             }
         }
     }
+
+    /// Wait for every task under `parent_id` in dependency order (same wait semantics as
+    /// [`dispatch_task`] per label). Returns one combined report or stops at the first failure.
+    pub async fn dispatch_all_tasks(
+        &self,
+        parent_id: &str,
+        timeout_seconds: Option<u64>,
+    ) -> ToolResult {
+        let parent_tasks = {
+            let state = self.read_state();
+            let Some(p) = state.parents.iter().find(|p| p.id == parent_id) else {
+                return ToolResult::err(format!("Parent not found: {parent_id}"));
+            };
+            if p.tasks.is_empty() {
+                return ToolResult::err(format!("Parent {parent_id} has no tasks"));
+            }
+            p.tasks.clone()
+        };
+
+        let order = match Self::topo_task_order(&parent_tasks) {
+            Ok(o) => o,
+            Err(e) => return ToolResult::err(e),
+        };
+
+        let mut sections: Vec<String> = vec![format!(
+            "Parent `{parent_id}` — running {} task(s) in order: [{}]",
+            order.len(),
+            order.join(", ")
+        )];
+
+        for label in &order {
+            let r = self.dispatch_task(parent_id, label, timeout_seconds).await;
+            if r.is_error {
+                let trail = sections.join("\n\n");
+                return ToolResult::err(format!(
+                    "{trail}\n\n---\nStopped on task `{label}`:\n{}",
+                    r.content
+                ));
+            }
+            sections.push(format!("### `{label}`\n{}", r.content));
+        }
+
+        sections.push("**All dispatch tasks completed.**".into());
+        ToolResult::ok(sections.join("\n\n"))
+    }
 }
 
 // ===== Helper types =====
@@ -592,6 +675,15 @@ struct DispatchTaskParams {
     timeout_seconds: Option<u64>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct DispatchAllTasksParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
+    #[serde(default)]
+    #[serde(rename = "timeoutSeconds")]
+    timeout_seconds: Option<u64>,
+}
+
 #[derive(Clone)]
 struct McpDispatchServer {
     state_path: std::path::PathBuf,
@@ -618,7 +710,7 @@ impl McpDispatchServer {
     }
 
     #[rmcp::tool(
-        description = "Create a parent dispatch with multiple tasks. Returns parent ID and task labels for dispatch_task calls."
+        description = "Create a parent dispatch with multiple tasks. Returns parent ID; use dispatch_all_tasks (or dispatch_task per label) to collect results."
     )]
     fn create_parent(
         &self,
@@ -640,6 +732,21 @@ impl McpDispatchServer {
     ) -> String {
         self.inner()
             .dispatch_task(&p.parent_id, &p.task_label, p.timeout_seconds)
+            .await
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Run every task under a parent in dependency order and return combined results. Stops on first error. Prefer this over calling dispatch_task repeatedly."
+    )]
+    async fn dispatch_all_tasks(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            DispatchAllTasksParams,
+        >,
+    ) -> String {
+        self.inner()
+            .dispatch_all_tasks(&p.parent_id, p.timeout_seconds)
             .await
             .content
     }
@@ -675,6 +782,44 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::dispatch_bridge::DispatchTaskStatus;
+
+    fn dummy_task(label: &str, depends_on: &[&str]) -> DispatchTask {
+        DispatchTask {
+            id: format!("id-{label}"),
+            label: label.into(),
+            agent_id: "agent".into(),
+            agent_jid: "web:test".into(),
+            depends_on: depends_on.iter().map(|s| (*s).to_string()).collect(),
+            prompt: String::new(),
+            status: DispatchTaskStatus::Registered,
+            result: None,
+            created_at: String::new(),
+            started_at: None,
+            timeout_seconds: 60,
+            timeout_at: None,
+            completed_at: None,
+            is_virtual: false,
+            persona_name: None,
+        }
+    }
+
+    #[test]
+    fn topo_task_order_linear_chain() {
+        let tasks = vec![
+            dummy_task("research", &[]),
+            dummy_task("implement", &["research"]),
+            dummy_task("review", &["implement"]),
+        ];
+        let order = DispatchServer::topo_task_order(&tasks).unwrap();
+        assert_eq!(order, vec!["research", "implement", "review"]);
+    }
+
+    #[test]
+    fn topo_task_order_unknown_dep_errors() {
+        let tasks = vec![dummy_task("a", &["missing"])];
+        assert!(DispatchServer::topo_task_order(&tasks).is_err());
+    }
 
     #[test]
     fn detect_cycle_acyclic() {
