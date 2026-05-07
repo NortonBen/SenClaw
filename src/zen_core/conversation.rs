@@ -87,6 +87,8 @@ pub struct QueryConfig {
     pub hook_client: Option<Client>,
     pub hook_profile: Option<ModelProfile>,
     pub session_id: String,
+    /// Enable prompt caching (Anthropic only — cache_control on system + last tool).
+    pub enable_cache: bool,
 }
 
 /// Run the conversation query loop. Returns the final message history.

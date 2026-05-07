@@ -267,6 +267,7 @@ impl Tool for TaskTool {
             hook_client: None,
             hook_profile: None,
             session_id: String::new(),
+            enable_cache: false,
         };
 
         let result = conversation::query(messages, &query_config, &abort).await;

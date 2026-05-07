@@ -521,7 +521,7 @@ impl Default for ZenCoreOptions {
             thinking: true,
             system_prompt: String::new(),
             custom_rules: String::new(),
-            enable_llm_cache: false,
+            enable_llm_cache: true,
             agent_mode: AgentMode::Agent,
         }
     }

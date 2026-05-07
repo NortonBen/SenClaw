@@ -550,12 +550,11 @@ impl ZenCore for ZenEngine {
         let response_registry = self.response_registry.clone();
         let state_for_spawn = self.state.clone();
 
-        // Build system prompt
-        let system_prompt = if opts.system_prompt.is_empty() {
-            "You are a helpful AI assistant.".to_string()
-        } else {
-            opts.system_prompt.clone()
-        };
+        // Build system prompt (stable base + dynamic system context appended)
+        let system_prompt = Self::assemble_system_prompt(
+            &opts.system_prompt,
+            &opts.working_dir,
+        );
 
         // Resolve profile from active UI config first, env fallback second.
         let profile = Self::resolve_model_profile();
@@ -601,10 +600,22 @@ impl ZenCore for ZenEngine {
             mgr.save_user_input_to_history(&working_dir_for_hist, &prompt);
         });
 
-        // Build the user message (after hooks may have modified prompt)
-        let user_msg = create_user_message(vec![ContentBlock::Text {
-            text: prompt.clone(),
-        }]);
+        // Build the user message (after hooks may have modified prompt).
+        // On the very first turn inject volatile context (CLAUDE.md, date) as a
+        // hidden <system-reminder> block so it doesn't destabilise the system prompt
+        // for prompt caching.
+        let user_msg = {
+            let mut blocks = Vec::<ContentBlock>::new();
+            if messages.is_empty() {
+                if let Some(ctx) = Self::collect_first_turn_context(&opts.working_dir) {
+                    blocks.push(ContentBlock::Text { text: ctx });
+                }
+            }
+            blocks.push(ContentBlock::Text {
+                text: prompt.clone(),
+            });
+            create_user_message(blocks)
+        };
         let mut messages = messages;
         messages.push(user_msg);
 
@@ -633,6 +644,7 @@ impl ZenCore for ZenEngine {
                 hook_client: Some(http_client.clone()),
                 hook_profile: Some(profile.clone()),
                 session_id: session_id_spawn.clone(),
+                enable_cache: false,
             };
 
             let result = conversation::query(messages, &config, &cancel).await;
@@ -946,6 +958,101 @@ impl ZenEngine {
             }
         }
         String::new()
+    }
+
+    /// Assemble the final system prompt.
+    ///
+    /// Structure:
+    /// 1. Base prompt (caller-supplied or default) — kept stable so LLM caches it.
+    /// 2. Core behavioural directives — static text, also stable.
+    /// 3. System context (cwd, OS, shell, git status) — dynamic but small; appended
+    ///    last so any prefix cache hit on (1)+(2) is preserved when context changes.
+    fn assemble_system_prompt(base: &str, working_dir: &str) -> String {
+        const CORE_DIRECTIVES: &str = "\
+Go straight to the point. Keep your text output brief and direct. \
+Do not use a colon before tool calls. \
+When working with tool results, write down any important information you might need later, \
+as original tool results may be cleared during context compaction.";
+
+        let base = if base.trim().is_empty() {
+            "You are a helpful AI assistant."
+        } else {
+            base
+        };
+
+        let sys_ctx = Self::collect_system_context(working_dir);
+
+        format!("{base}\n\n{CORE_DIRECTIVES}\n\n# System\n{sys_ctx}")
+    }
+
+    /// Collect runtime system context: working dir, OS, shell, git status.
+    fn collect_system_context(working_dir: &str) -> String {
+        let os = std::env::consts::OS;
+        let shell = std::env::var("SHELL")
+            .ok()
+            .and_then(|s| {
+                std::path::Path::new(&s)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let git_status = std::process::Command::new("git")
+            .args(["-C", working_dir, "status", "--short", "--branch"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let mut lines = vec![
+            format!("- Working directory: {working_dir}"),
+            format!("- OS: {os}"),
+            format!("- Shell: {shell}"),
+        ];
+        if let Some(gs) = git_status {
+            lines.push(format!("- Git status:\n{gs}"));
+        }
+        lines.join("\n")
+    }
+
+    /// Read CLAUDE.md (walks up from `working_dir`) and current date.
+    /// Returns a `<system-reminder>` block to inject into the first user turn,
+    /// or `None` if nothing useful was found.
+    fn collect_first_turn_context(working_dir: &str) -> Option<String> {
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut parts: Vec<String> = vec![format!("Today's date is {date}.")];
+
+        // Walk up the directory tree looking for CLAUDE.md
+        let mut dir = std::path::Path::new(working_dir).to_path_buf();
+        let claude_md = loop {
+            let candidate = dir.join("CLAUDE.md");
+            if candidate.exists() {
+                break std::fs::read_to_string(&candidate).ok();
+            }
+            if !dir.pop() {
+                break None;
+            }
+        };
+        if let Some(content) = claude_md {
+            if !content.trim().is_empty() {
+                parts.push(format!(
+                    "Project instructions (CLAUDE.md):\n{}",
+                    content.trim()
+                ));
+            }
+        }
+
+        if parts.len() == 1 && parts[0].contains("date") {
+            // Only date — not worth injecting a wrapper
+            return Some(format!("<system-reminder>\n{}\n</system-reminder>\n\n", parts[0]));
+        }
+
+        Some(format!(
+            "<system-reminder>\n{}\n</system-reminder>\n\n",
+            parts.join("\n\n")
+        ))
     }
 
     pub fn initialize_plugins(&self) {
