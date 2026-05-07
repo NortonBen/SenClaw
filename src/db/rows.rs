@@ -215,6 +215,10 @@ pub(crate) fn row_to_cowork_task(row: &Row<'_>) -> Result<CoworkTask> {
         updated_at: row.get("updated_at")?,
         due_at: row.get("due_at")?,
         completed_at: row.get("completed_at")?,
+        input_summary: row.get("input_summary").ok().flatten(),
+        result_output: row.get("result_output").ok().flatten(),
+        references: row.get("refs").ok().flatten(),
+        artifacts: row.get("artifacts").ok().flatten(),
     })
 }
 

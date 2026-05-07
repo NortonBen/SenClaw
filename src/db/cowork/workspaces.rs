@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, OptionalExtension};
 
-use crate::types::CoworkWorkspace;
+use crate::types::{CoworkWorkspace, WorkspaceResource};
 
 use super::super::rows::row_to_cowork_workspace;
 
@@ -111,6 +111,50 @@ impl super::super::Db {
             )?;
             tx.execute("DELETE FROM cowork_workspaces WHERE id=?1", params![id])?;
             tx.commit()?;
+            Ok(())
+        })
+    }
+
+    // ============================================================
+    // Cowork — Workspace Resources
+    // ============================================================
+
+    pub fn upsert_workspace_resource(&self, r: &WorkspaceResource) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "INSERT INTO cowork_workspace_resources (workspace_id, kind, path)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(workspace_id, kind) DO UPDATE SET path=excluded.path",
+                params![r.workspace_id, r.kind, r.path],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn list_workspace_resources(&self, workspace_id: &str) -> Result<Vec<WorkspaceResource>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT workspace_id, kind, path FROM cowork_workspace_resources WHERE workspace_id=?1",
+            )?;
+            let rows = stmt
+                .query_map(params![workspace_id], |r| {
+                    Ok(WorkspaceResource {
+                        workspace_id: r.get(0)?,
+                        kind: r.get(1)?,
+                        path: r.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    pub fn delete_workspace_resource(&self, workspace_id: &str, kind: &str) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM cowork_workspace_resources WHERE workspace_id=?1 AND kind=?2",
+                params![workspace_id, kind],
+            )?;
             Ok(())
         })
     }

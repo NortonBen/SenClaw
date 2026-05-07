@@ -3,7 +3,7 @@ import {
   Typography, Button, Card, Space, Tag, Modal, Form, Input, Select,
   Breadcrumb, Layout, Flex, Tabs, Badge, Avatar, Tooltip, Popconfirm,
   Empty, Dropdown, List, Divider, message, Spin, Segmented, Upload, Statistic,
-  Row, Col, Progress, Steps, Timeline, Collapse
+  Row, Col, Progress, Steps, Timeline, Collapse, AutoComplete
 } from 'antd';
 import {
   PlusOutlined, TeamOutlined, ProjectOutlined, MessageOutlined,
@@ -22,6 +22,10 @@ import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
 import { CoworkSidebar } from '../components/CoworkSidebar';
 import { CommonChatInput } from '../components/chat-common';
+import { ResourcePanel } from '../components/cowork/ResourcePanel';
+import { TaskResultCard } from '../components/cowork/TaskResultCard';
+import { WorkspaceChatPanel } from '../components/cowork/WorkspaceChatPanel';
+import { AgentCard } from '../components/cowork/AgentCard';
 import type {
   CoworkWorkspace, CoworkBoardEntry,
   CoworkTask, CoworkMessage, CoworkTemplate, CoworkMember
@@ -48,6 +52,51 @@ const PRIORITY_COLORS: Record<string, string> = {
 const BOARD_SECTIONS = ['brief', 'guidelines', 'progress', 'reference', 'decisions'];
 
 const KANBAN_COLUMNS: CoworkTask['status'][] = ['backlog', 'todo', 'in_progress', 'done', 'blocked'];
+
+/** Form rows for Handoff tab — persisted as JSON array in `handoffRules`. */
+interface HandoffRuleFormRow {
+  when: string;
+  to: string;
+  type: string;
+  messageTemplate?: string;
+}
+
+const HANDOFF_WHEN_PRESETS = [
+  { value: 'task_complete', label: 'Task complete' },
+  { value: 'task_blocked', label: 'Task blocked' },
+];
+
+const HANDOFF_TYPE_OPTIONS = [
+  { value: 'handoff', label: 'Handoff' },
+  { value: 'review_request', label: 'Review request' },
+  { value: 'result', label: 'Result' },
+  { value: 'status', label: 'Status' },
+  { value: 'alert', label: 'Alert' },
+];
+
+function normalizeHandoffRuleFromJson(r: Record<string, unknown>): HandoffRuleFormRow {
+  return {
+    when: typeof r.when === 'string' ? r.when : '',
+    to: typeof r.to === 'string' ? r.to : '',
+    type: typeof r.type === 'string' ? r.type : 'handoff',
+    messageTemplate: typeof r.messageTemplate === 'string' ? r.messageTemplate : '',
+  };
+}
+
+function serializeHandoffRulesList(list: HandoffRuleFormRow[]): string {
+  const cleaned = list
+    .map((r) => ({
+      when: String(r.when || '').trim(),
+      to: String(r.to || '').trim(),
+      type: String(r.type || '').trim(),
+      messageTemplate: (() => {
+        const t = r.messageTemplate != null ? String(r.messageTemplate).trim() : '';
+        return t.length > 0 ? t : null;
+      })(),
+    }))
+    .filter((r) => r.when && r.to && r.type);
+  return JSON.stringify(cleaned);
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -79,6 +128,8 @@ function renderMarkdown(md: string): string {
 export function CoworkPage() {
   const { ws } = useAppContext();
   const navigate = useNavigate();
+  const { lastTaskResult, coworkResourceChanged } = ws;
+  const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
 
   // State
   const [workspaces, setWorkspaces] = useState<CoworkWorkspace[]>([]);
@@ -218,6 +269,16 @@ export function CoworkPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws.coworkChanged]);
+
+  // Highlight task when a result arrives via WS
+  useEffect(() => {
+    if (!lastTaskResult || !selectedWs || lastTaskResult.workspaceId !== selectedWs.id) return;
+    setHighlightTaskId(lastTaskResult.taskId);
+    loadTasks(selectedWs.id);
+    const t = setTimeout(() => setHighlightTaskId(null), 4000);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastTaskResult]);
 
   // Compute workspace file entries at current navigation depth
   const wsEntries = useMemo(() => {
@@ -431,8 +492,22 @@ export function CoworkPage() {
       }
       // Triggers: JSON string as-is
       if (values.triggers) payload.triggers = values.triggers;
-      // Handoff rules: JSON string as-is
-      if (values.handoffRules) payload.handoffRules = values.handoffRules;
+      // Handoff rules: structured list → JSON array string (chỉ gửi khi thay đổi so với DB, tránh ghi [] lên record chưa từng có handoff)
+      if (Array.isArray(values.handoffRulesList)) {
+        const serialized = serializeHandoffRulesList(values.handoffRulesList);
+        const hadStored = editingMember.handoffRules && editingMember.handoffRules.trim() !== '';
+        if (hadStored) {
+          let prevSerialized = '[]';
+          try {
+            let p: unknown = JSON.parse(editingMember.handoffRules!);
+            if (!Array.isArray(p)) p = [p];
+            prevSerialized = serializeHandoffRulesList((p as Record<string, unknown>[]).map(normalizeHandoffRuleFromJson));
+          } catch { /* giữ '[]' */ }
+          if (serialized !== prevSerialized) payload.handoffRules = serialized;
+        } else if (serialized !== '[]') {
+          payload.handoffRules = serialized;
+        }
+      }
 
       // Output: structured → JSON object string
       const outputParts: string[] = [];
@@ -873,13 +948,21 @@ export function CoworkPage() {
                                 <Text type="secondary" style={{ fontSize: 12 }}>{tasksByStatus(col).length}</Text>
                               </Flex>
                               {tasksByStatus(col).map(task => (
+                                task.status === 'done' ? (
+                                  <div key={task.id} style={{ marginBottom: 8 }}>
+                                    <TaskResultCard task={task} highlight={task.id === highlightTaskId} />
+                                  </div>
+                                ) : (
                                 <Card
                                   key={task.id}
                                   size="small"
-                                  style={{ marginBottom: 8, borderRadius: 8, cursor: 'pointer' }}
+                                  style={{
+                                    marginBottom: 8, borderRadius: 8, cursor: 'pointer',
+                                    border: task.id === highlightTaskId ? '2px solid #faad14' : undefined,
+                                    transition: 'border-color 0.3s',
+                                  }}
                                   onClick={() => {
                                     setEditingTask(task);
-                                    // Parse attachments JSON string to array for Select
                                     let attachments: string[] = [];
                                     if (task.attachments) {
                                       try { attachments = JSON.parse(task.attachments); } catch { /* ignore */ }
@@ -906,6 +989,7 @@ export function CoworkPage() {
                                     </Dropdown>
                                   </Flex>
                                 </Card>
+                                )
                               ))}
                             </div>
                           ))}
@@ -946,46 +1030,6 @@ export function CoworkPage() {
                           })}
                         </>
                       )}
-                    </div>
-                  ),
-                },
-                {
-                  key: 'messages',
-                  label: <Space><MessageOutlined />Messages</Space>,
-                  children: (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)' }}>
-                      <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-                        {loading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                          messages.length === 0 ? <Empty description="No messages yet" /> : (
-                            messages.map(msg => (
-                              <div key={msg.id} style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: msg.fromMember === 'user' ? '#e6f7ff' : '#f6ffed', border: '1px solid #f0f0f0' }}>
-                                <Flex justify="space-between" align="center">
-                                  <Space size={4}>
-                                    <Text strong style={{ fontSize: 12 }}>{msg.fromMember}</Text>
-                                    {msg.toMember && <><ArrowRightOutlined style={{ fontSize: 10 }} /><Text style={{ fontSize: 12 }}>{msg.toMember}</Text></>}
-                                    <Tag style={{ fontSize: 10, lineHeight: '16px' }}>{msg.messageType}</Tag>
-                                  </Space>
-                                  <Text type="secondary" style={{ fontSize: 11 }}>{new Date(msg.createdAt).toLocaleTimeString()}</Text>
-                                </Flex>
-                                <Text style={{ fontSize: 13, marginTop: 4, display: 'block' }}>{msg.content}</Text>
-                                {msg.taskId && <Text type="secondary" style={{ fontSize: 11 }}>Task: {msg.taskId}</Text>}
-                              </div>
-                            ))
-                          )
-                        )}
-                      </div>
-                      <div style={{ padding: '8px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                        <CommonChatInput
-                          className="w-full"
-                          helperText="Enter to send · Shift+Enter for new line"
-                          value={msgText}
-                          onChange={setMsgText}
-                          onSubmit={handleSendMessage}
-                          placeholder="Type a status update..."
-                          actionDisabled={!msgText.trim()}
-                          actionTitle="Send"
-                        />
-                      </div>
                     </div>
                   ),
                 },
@@ -1110,6 +1154,27 @@ export function CoworkPage() {
                   ),
                 },
                 {
+                  key: 'workspace-chat',
+                  label: <Space><MessageOutlined />Chat</Space>,
+                  children: (
+                    <div style={{ height: 'calc(100vh - 180px)' }}>
+                      <WorkspaceChatPanel
+                        workspaceId={selectedWs.id}
+                        tasks={tasks}
+                        lastTaskResult={lastTaskResult}
+                        onSend={(content) => {
+                          if (!selectedWs) return;
+                          fetch(`/api/cowork/workspaces/${selectedWs.id}/messages`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ fromMember: 'user', content, messageType: 'status' }),
+                          }).then(() => loadTasks(selectedWs.id));
+                        }}
+                      />
+                    </div>
+                  ),
+                },
+                {
                   key: 'agents',
                   label: <Space><RobotOutlined />Agents ({members.length})</Space>,
                   children: (
@@ -1132,73 +1197,48 @@ export function CoworkPage() {
                             dataSource={members}
                             renderItem={(m: CoworkMember) => (
                               <List.Item>
-                                <Card
-                                  size="small"
-                                  title={
-                                    <Space>
-                                      <Avatar
-                                        icon={m.role === 'lead' ? <CrownOutlined /> : <RobotOutlined />}
-                                        size={28}
-                                        style={{ backgroundColor: m.role === 'lead' ? '#faad14' : m.role === 'reviewer' ? '#722ed1' : '#1890ff' }}
-                                      />
-                                      <span>{m.memberId}</span>
-                                      {m.subdir && <Tag style={{ fontSize: 10, fontFamily: 'monospace' }}>{m.subdir}/</Tag>}
-                                      <Tag
-                                        color={m.role === 'lead' ? 'gold' : m.role === 'reviewer' ? 'purple' : 'blue'}
-                                        icon={m.role === 'lead' ? <CrownOutlined /> : undefined}
-                                        style={{ fontSize: 10 }}
-                                      >
-                                        {m.role}
-                                      </Tag>
-                                    </Space>
-                                  }
-                                  extra={
-                                    <Space size={0}>
-                                      <Button
-                                        type="text"
-                                        size="small"
-                                        icon={<EditOutlined style={{ fontSize: 11 }} />}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setEditingMember(m);
-                                          const vals: any = { role: m.role, subdir: m.subdir || '' };
-                                          if (m.persona) vals.persona = m.persona;
-                                          // Parse array fields → newline-separated
-                                          if (m.responsibilities) {
-                                            try { vals.responsibilities = (JSON.parse(m.responsibilities) as string[]).join('\n'); } catch { vals.responsibilities = m.responsibilities; }
+                                <AgentCard
+                                  member={m}
+                                  onRemove={handleRemoveMember}
+                                  onEdit={(member) => {
+                                          setEditingMember(member);
+                                          const vals: any = { role: member.role, subdir: member.subdir || '' };
+                                          if (member.persona) vals.persona = member.persona;
+                                          if (member.responsibilities) {
+                                            try { vals.responsibilities = (JSON.parse(member.responsibilities) as string[]).join('\n'); } catch { vals.responsibilities = member.responsibilities; }
                                           }
-                                          if (m.acceptanceCriteria) {
-                                            try { vals.acceptanceCriteria = (JSON.parse(m.acceptanceCriteria) as string[]).join('\n'); } catch { vals.acceptanceCriteria = m.acceptanceCriteria; }
+                                          if (member.acceptanceCriteria) {
+                                            try { vals.acceptanceCriteria = (JSON.parse(member.acceptanceCriteria) as string[]).join('\n'); } catch { vals.acceptanceCriteria = member.acceptanceCriteria; }
                                           }
-                                          // Triggers & handoff → pretty-print JSON for editing
-                                          if (m.triggers) {
-                                            try { vals.triggers = JSON.stringify(JSON.parse(m.triggers), null, 2); } catch { vals.triggers = m.triggers; }
+                                          if (member.triggers) {
+                                            try { vals.triggers = JSON.stringify(JSON.parse(member.triggers), null, 2); } catch { vals.triggers = member.triggers; }
                                           }
-                                          if (m.handoffRules) {
-                                            try { vals.handoffRules = JSON.stringify(JSON.parse(m.handoffRules), null, 2); } catch { vals.handoffRules = m.handoffRules; }
-                                          }
-                                          // Output → structured fields
-                                          if (m.outputFormat) {
+                                          if (member.handoffRules) {
                                             try {
-                                              const o = JSON.parse(m.outputFormat);
+                                              let parsed: unknown = JSON.parse(member.handoffRules);
+                                              if (!Array.isArray(parsed)) parsed = [parsed];
+                                              vals.handoffRulesList = (parsed as Record<string, unknown>[]).map(normalizeHandoffRuleFromJson);
+                                            } catch { vals.handoffRulesList = []; }
+                                          } else { vals.handoffRulesList = []; }
+                                          if (member.outputFormat) {
+                                            try {
+                                              const o = JSON.parse(member.outputFormat);
                                               if (o.format) vals.outputFormat = o.format;
                                               if (o.requiredSections) vals.outputRequiredSections = (o.requiredSections as string[]).join('\n');
                                               if (o.attachDiff !== undefined) vals.outputAttachDiff = o.attachDiff ? 'true' : 'false';
-                                            } catch { vals.outputFormat = m.outputFormat; }
+                                            } catch { vals.outputFormat = member.outputFormat; }
                                           }
-                                          // SLA → structured fields
-                                          if (m.sla) {
+                                          if (member.sla) {
                                             try {
-                                              const s = JSON.parse(m.sla);
+                                              const s = JSON.parse(member.sla);
                                               if (s.maxDurationPerTaskMinutes) vals.slaMaxDuration = s.maxDurationPerTaskMinutes;
                                               if (s.maxTokenPerTask) vals.slaMaxTokens = s.maxTokenPerTask;
                                               if (s.escalateAfterBlockedMinutes) vals.slaEscalateAfter = s.escalateAfterBlockedMinutes;
                                             } catch { /* ignore */ }
                                           }
-                                          // Limits → structured fields
-                                          if (m.limits) {
+                                          if (member.limits) {
                                             try {
-                                              const l = JSON.parse(m.limits);
+                                              const l = JSON.parse(member.limits);
                                               if (l.maxFileSizeWriteKb) vals.limitsMaxFileSize = l.maxFileSizeWriteKb;
                                               if (l.allowedBashCommands) vals.limitsAllowedBash = (l.allowedBashCommands as string[]).join('\n');
                                               if (l.deniedTools) vals.limitsDeniedTools = (l.deniedTools as string[]).join('\n');
@@ -1207,135 +1247,7 @@ export function CoworkPage() {
                                           memberForm.setFieldsValue(vals);
                                           setMemberModalOpen(true);
                                         }}
-                                      />
-                                      <Popconfirm
-                                        title="Remove this agent from workspace?"
-                                        onConfirm={(e) => { e?.stopPropagation(); handleRemoveMember(m.memberId); }}
-                                        onCancel={e => e?.stopPropagation()}
-                                      >
-                                        <Button type="text" size="small" danger icon={<DeleteOutlined style={{ fontSize: 11 }} />} onClick={e => e.stopPropagation()} />
-                                      </Popconfirm>
-                                    </Space>
-                                  }
-                                  style={{ borderRadius: 10, height: '100%' }}
-                                >
-                                  {m.persona && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Persona</Text>
-                                      <br />
-                                      <Text style={{ fontSize: 12, fontStyle: 'italic' }}>{m.persona}</Text>
-                                    </div>
-                                  )}
-                                  {m.responsibilities && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Responsibilities</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => { try { return JSON.parse(m.responsibilities); } catch { return [m.responsibilities]; } })().map((r: string, i: number) => (
-                                          <Tag key={i} style={{ fontSize: 11, marginBottom: 2 }}>{r}</Tag>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {m.triggers && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Triggers</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => { try { return JSON.parse(m.triggers); } catch { return []; } })().map((t: any, i: number) => (
-                                          <Tag key={i} style={{ fontSize: 11, marginBottom: 2 }} color="purple">{t.type}{t.condition ? `: ${t.condition}` : ''}{t.from ? ` from ${t.from}` : ''}</Tag>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {m.handoffRules && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Handoff Rules</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => { try { return JSON.parse(m.handoffRules); } catch { return []; } })().map((h: any, i: number) => (
-                                          <div key={i} style={{ fontSize: 11, marginBottom: 2 }}>
-                                            <Tag color="orange">{h.when}</Tag>
-                                            <ArrowRightOutlined style={{ fontSize: 10, margin: '0 2px' }} />
-                                            <Text style={{ fontSize: 11 }}>{h.to} ({h.type})</Text>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {m.acceptanceCriteria && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Acceptance Criteria</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => { try { return JSON.parse(m.acceptanceCriteria); } catch { return [m.acceptanceCriteria]; } })().map((c: string, i: number) => (
-                                          <div key={i} style={{ fontSize: 11, marginBottom: 1 }}>
-                                            <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 4, fontSize: 10 }} />{c}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {m.outputFormat && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Output</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => {
-                                          try {
-                                            const o = JSON.parse(m.outputFormat);
-                                            return (
-                                              <Space size={4} wrap>
-                                                {o.format && <Tag color="geekblue" style={{ fontSize: 10 }}>{o.format}</Tag>}
-                                                {o.attachDiff && <Tag color="green" style={{ fontSize: 10 }}>+diff</Tag>}
-                                                {o.requiredSections && (o.requiredSections as string[]).map((s: string, i: number) => (
-                                                  <Tag key={i} style={{ fontSize: 10 }}>{s}</Tag>
-                                                ))}
-                                              </Space>
-                                            );
-                                          } catch { return <Text style={{ fontSize: 11 }}>{m.outputFormat}</Text>; }
-                                        })()}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {m.sla && (
-                                    <div style={{ marginBottom: 8 }}>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>SLA</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => {
-                                          try {
-                                            const s = JSON.parse(m.sla);
-                                            return (
-                                              <Space size={4} wrap>
-                                                {s.maxDurationPerTaskMinutes && <Tag color="orange" style={{ fontSize: 10 }}>{s.maxDurationPerTaskMinutes}min</Tag>}
-                                                {s.maxTokenPerTask && <Tag color="orange" style={{ fontSize: 10 }}>{s.maxTokenPerTask} tokens</Tag>}
-                                                {s.escalateAfterBlockedMinutes && <Tag color="red" style={{ fontSize: 10 }}>escalate {s.escalateAfterBlockedMinutes}min</Tag>}
-                                              </Space>
-                                            );
-                                          } catch { return <Text style={{ fontSize: 11 }}>{m.sla}</Text>; }
-                                        })()}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {m.limits && (
-                                    <div>
-                                      <Text type="secondary" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Limits</Text>
-                                      <div style={{ marginTop: 2 }}>
-                                        {(() => {
-                                          try {
-                                            const l = JSON.parse(m.limits);
-                                            return (
-                                              <Space size={4} wrap>
-                                                {l.maxFileSizeWriteKb && <Tag color="gold" style={{ fontSize: 10 }}>max {l.maxFileSizeWriteKb}KB write</Tag>}
-                                                {l.allowedBashCommands && (l.allowedBashCommands as string[]).map((c: string, i: number) => (
-                                                  <Tag key={`a${i}`} color="green" style={{ fontSize: 10 }}>{c}</Tag>
-                                                ))}
-                                                {l.deniedTools && (l.deniedTools as string[]).map((t: string, i: number) => (
-                                                  <Tag key={`d${i}`} color="red" style={{ fontSize: 10 }}>no {t}</Tag>
-                                                ))}
-                                              </Space>
-                                            );
-                                          } catch { return <Text style={{ fontSize: 11 }}>{m.limits}</Text>; }
-                                        })()}
-                                      </div>
-                                    </div>
-                                  )}
-                                </Card>
+                                />
                               </List.Item>
                             )}
                           />
@@ -1805,13 +1717,102 @@ export function CoworkPage() {
                     label: 'Handoff',
                     children: (
                       <>
-                        <Form.Item name="handoffRules" label="Handoff Rules" help='JSON array. Types: review_request, result, status, alert'>
-                          <TextArea
-                            rows={5}
-                            placeholder={`[\n  {\n    "when": "task_complete",\n    "to": "review-agent",\n    "type": "review_request",\n    "messageTemplate": null\n  }\n]`}
-                            style={{ fontFamily: 'Menlo, Monaco, monospace', fontSize: 12 }}
-                          />
-                        </Form.Item>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
+                          Đặt luật chuyển tiếp: khi điều kiện khớp, agent sẽ gửi tin tới agent đích với kiểu message tương ứng. Có thể thêm nhiều rule; giá trị &quot;When&quot; / agent đích cũng có thể gõ tay nếu không nằm trong gợi ý.
+                        </Text>
+                        <Form.List name="handoffRulesList">
+                          {(fields, { add, remove }) => (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                              {fields.map(({ key, name }) => (
+                                <Card
+                                  key={key}
+                                  size="small"
+                                  styles={{ body: { padding: 12 } }}
+                                  style={{ borderRadius: 10 }}
+                                  extra={(
+                                    <Button
+                                      type="text"
+                                      danger
+                                      size="small"
+                                      icon={<DeleteOutlined />}
+                                      onClick={() => remove(name)}
+                                      aria-label="Xóa rule"
+                                    />
+                                  )}
+                                >
+                                  <Row gutter={[12, 8]}>
+                                    <Col xs={24} md={8}>
+                                      <Form.Item
+                                        label="When"
+                                        name={[name, 'when']}
+                                        rules={[{ required: true, message: 'Không được để trống' }]}
+                                        style={{ marginBottom: 0 }}
+                                      >
+                                        <AutoComplete
+                                          placeholder="vd. task_complete"
+                                          options={HANDOFF_WHEN_PRESETS.map((p) => ({ value: p.value, label: `${p.label} (${p.value})` }))}
+                                          filterOption={(input, opt) =>
+                                            String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase()) ||
+                                            String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                                          }
+                                        />
+                                      </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}>
+                                      <Form.Item
+                                        label="Tới agent"
+                                        name={[name, 'to']}
+                                        rules={[{ required: true, message: 'Chọn hoặc nhập agent đích' }]}
+                                        style={{ marginBottom: 0 }}
+                                      >
+                                        <AutoComplete
+                                          placeholder="vd. code-agent"
+                                          options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
+                                          filterOption={(input, opt) =>
+                                            String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                                          }
+                                        />
+                                      </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={8}>
+                                      <Form.Item
+                                        label="Kiểu (type)"
+                                        name={[name, 'type']}
+                                        rules={[{ required: true, message: 'Chọn kiểu' }]}
+                                        style={{ marginBottom: 0 }}
+                                      >
+                                        <Select options={HANDOFF_TYPE_OPTIONS} placeholder="Kiểu" />
+                                      </Form.Item>
+                                    </Col>
+                                    <Col span={24}>
+                                      <Form.Item
+                                        label="Message template"
+                                        name={[name, 'messageTemplate']}
+                                        help="Tuỳ chọn. Để trống sẽ lưu là null trong JSON."
+                                        style={{ marginBottom: 0 }}
+                                      >
+                                        <TextArea rows={2} placeholder="Nội dung tin kèm handoff (nếu có)…" />
+                                      </Form.Item>
+                                    </Col>
+                                  </Row>
+                                </Card>
+                              ))}
+                              <Button
+                                type="dashed"
+                                onClick={() => add({
+                                  when: 'task_complete',
+                                  to: members.find((mm) => !editingMember || mm.memberId !== editingMember.memberId)?.memberId ?? '',
+                                  type: 'handoff',
+                                  messageTemplate: '',
+                                })}
+                                block
+                                icon={<PlusOutlined />}
+                              >
+                                Thêm handoff rule
+                              </Button>
+                            </div>
+                          )}
+                        </Form.List>
                       </>
                     ),
                   },

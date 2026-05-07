@@ -20,4 +20,13 @@ impl AgentApi for AgentPool {
     async fn destroy(&self, jid: &str) {
         self.destroy_inner(jid).await;
     }
+
+    fn get_last_reply_text(&self, jid: &str) -> Option<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .last_dispatch_replies
+            .get(jid)
+            .cloned()
+    }
 }

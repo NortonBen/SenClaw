@@ -138,6 +138,12 @@ pub trait AgentApi: Send + Sync {
 
     /// Destroy/cleanup agent state for a JID (after JID migration).
     async fn destroy(&self, jid: &str);
+
+    /// Return the last assistant reply text produced during `process_and_wait`
+    /// for `jid`. Used to persist task results. Default returns `None`.
+    fn get_last_reply_text(&self, _jid: &str) -> Option<String> {
+        None
+    }
 }
 
 /// No-op stub — used before AgentPool is ported or when agent execution is unavailable.
@@ -333,6 +339,16 @@ pub struct CoworkWorkspace {
     pub updated_at: String,
 }
 
+/// One typed resource directory attached to a workspace.
+/// kind: "raw" | "wiki" | "reference" | "workdir"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceResource {
+    pub workspace_id: String,
+    pub kind: String,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoworkMember {
@@ -386,6 +402,14 @@ pub struct CoworkTask {
     pub updated_at: String,
     pub due_at: Option<String>,
     pub completed_at: Option<String>,
+    /// Brief summary of what the task was asked to do.
+    pub input_summary: Option<String>,
+    /// Final output/result text produced when the task completed.
+    pub result_output: Option<String>,
+    /// JSON array of resource references (wiki/raw/reference paths) used.
+    pub references: Option<String>,
+    /// JSON array of file paths written during execution.
+    pub artifacts: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -203,6 +203,7 @@ pub trait CoreApi: Send + Sync {
     fn get_tool_infos(&self, _jid: &str) -> Vec<AgentToolInfo> {
         Vec::new()
     }
+
 }
 
 /// Per-agent collection of registered event handlers, stored in [`ZenCoreApi`].

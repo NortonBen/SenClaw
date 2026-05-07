@@ -506,13 +506,12 @@ impl AgentPool {
             .insert(jid.to_string(), task_id.to_string());
     }
 
-    /// Fallback notify after `process_and_wait` finishes a dispatch round.
-    /// Skipped if the idle handler already consumed the reply, or if the next
-    /// task has overwritten our taskId.
+    /// Completes the active dispatch task after PAW observes success (`ProcessEvent::Idle`).
+    /// Skipped if `expected_task_id` no longer matches `dispatch_task_map` (superseded).
     pub fn notify_dispatch_if_pending(&self, jid: &str, expected_task_id: Option<&str>) {
-        let (content, task_id, current_eq) = {
+        let (content_opt, task_id, current_eq) = {
             let s = self.state.lock().unwrap();
-            let content = s.last_dispatch_replies.get(jid).cloned();
+            let content_opt = s.last_dispatch_replies.get(jid).cloned();
             let current_task_id = s.dispatch_task_map.get(jid).cloned();
             if let (Some(exp), Some(cur)) = (expected_task_id, current_task_id.as_ref()) {
                 if cur != exp {
@@ -526,21 +525,32 @@ impl AgentPool {
                 (final_task_id.as_ref(), current_task_id.as_ref()),
                 (Some(a), Some(b)) if a == b
             );
-            (content, final_task_id, cur_eq)
+            (content_opt, final_task_id, cur_eq)
         };
-        let Some(content) = content else { return };
         let bridge = self.dispatch_bridge.lock().unwrap().clone();
+        let mut clear_reply = false;
         match (task_id.as_deref(), bridge.as_ref()) {
             (Some(tid), Some(b)) => {
-                b.notify_task_done(tid, &content);
+                let text = content_opt.clone().unwrap_or_default();
+                b.notify_task_done(tid, &text);
                 if current_eq {
                     self.state.lock().unwrap().dispatch_task_map.remove(jid);
                 }
+                self.clear_dispatch_executing(jid);
+                clear_reply = true;
             }
-            (None, Some(b)) => b.notify_reply(jid, &content),
+            (None, Some(b)) => {
+                if let Some(content) = content_opt.clone() {
+                    b.notify_reply(jid, &content);
+                    self.clear_dispatch_executing(jid);
+                    clear_reply = true;
+                }
+            }
             _ => {}
         }
-        self.state.lock().unwrap().last_dispatch_replies.remove(jid);
+        if clear_reply {
+            self.state.lock().unwrap().last_dispatch_replies.remove(jid);
+        }
     }
 
     // ===== Cached todos =====
@@ -862,7 +872,10 @@ impl AgentPool {
                 binding.bot_token.as_deref(),
                 &db_path_s,
             ));
-            if binding.is_admin {
+            if binding.is_admin
+                || binding.group_type == "cowork"
+                || binding.group_type == "code"
+            {
                 mcp_servers.push(dispatch_mcp_config(
                     &dispatch_state_s,
                     &binding.folder,
@@ -1279,6 +1292,19 @@ impl AgentPool {
                     "[AgentPool] PAW success jid={jid_owned} dispatch_task={}",
                     dispatch_task_id.as_deref().unwrap_or("-")
                 );
+                if self
+                    .state
+                    .lock()
+                    .unwrap()
+                    .dispatch_executing
+                    .contains(&jid_owned)
+                {
+                    // Complete dispatch only after PAW observes a clean idle transition.
+                    // (The state:idle handler must not call notify_task_done: engine emits
+                    // SessionError then Idle in order, and the idle callback ran before PAW
+                    // could consume SessionError — incorrectly marking tasks done on LLM failure.)
+                    self.notify_dispatch_if_pending(&jid_owned, dispatch_task_id.as_deref());
+                }
                 Ok(())
             }
             LoopResult::Aborted(reason) => {
@@ -1297,6 +1323,10 @@ impl AgentPool {
                     "API response format error",
                     "Premature close",
                     "missing finish_reason",
+                    "no_available_session",
+                    "No idle session profile",
+                    "503 Service Unavailable",
+                    "503",
                 ];
                 let is_transient = transient.iter().any(|p| msg.contains(p));
                 let is_network = data.code == "NETWORK_ERROR" || msg.contains("NETWORK_ERROR");
@@ -1931,45 +1961,11 @@ impl AgentPool {
                         sink.notify_agent_state(&jid, &data.state);
                     }
                     if data.state == "idle" {
-                        // Dispatch task-done coordination (persistent).
-                        let is_dispatch =
-                            { pool.state.lock().unwrap().dispatch_executing.contains(&jid) };
-                        if is_dispatch {
-                            let reply_text = {
-                                let lr = last_reply.lock().unwrap();
-                                if !lr.is_empty() {
-                                    lr.clone()
-                                } else {
-                                    pool.state
-                                        .lock()
-                                        .unwrap()
-                                        .last_dispatch_replies
-                                        .get(&jid)
-                                        .cloned()
-                                        .unwrap_or_default()
-                                }
-                            };
-                            let (task_id, bridge) = {
-                                let s = pool.state.lock().unwrap();
-                                let tid = s.dispatch_task_map.get(&jid).cloned();
-                                let bridge = pool.dispatch_bridge.lock().unwrap().clone();
-                                (tid, bridge)
-                            };
-                            if let (Some(tid), Some(bridge)) = (task_id.as_ref(), bridge.as_ref()) {
-                                bridge.notify_task_done(tid, &reply_text);
-                                let mut s = pool.state.lock().unwrap();
-                                if s.dispatch_task_map.get(&jid) == Some(tid) {
-                                    s.dispatch_task_map.remove(&jid);
-                                }
-                            } else if let Some(bridge) = bridge.as_ref() {
-                                bridge.notify_reply(&jid, &reply_text);
-                            }
+                        // Dispatch completion is handled in `process_and_wait_inner` after PAW
+                        // observes `ProcessEvent::Idle`, so LLM/session errors do not race ahead
+                        // and mark dispatch tasks done with an empty reply.
+                        if pool.state.lock().unwrap().dispatch_executing.contains(&jid) {
                             *last_reply.lock().unwrap() = String::new();
-                            pool.state
-                                .lock()
-                                .unwrap()
-                                .last_dispatch_replies
-                                .remove(&jid);
                         }
                         // Forward to active process_and_wait event loop.
                         if let Some(tx) = pool

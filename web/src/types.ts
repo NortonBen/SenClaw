@@ -241,6 +241,25 @@ export interface CoworkWorkspace {
   updatedAt: string;
 }
 
+export type ResourceKind = 'raw' | 'wiki' | 'reference' | 'workdir';
+
+export interface WorkspaceResource {
+  workspaceId: string;
+  kind: ResourceKind;
+  path: string;
+}
+
+export interface TaskResultEvent {
+  taskId: string;
+  workspaceId: string;
+  title: string;
+  inputSummary: string | null;
+  resultOutput: string | null;
+  references: string | null;
+  artifacts: string | null;
+  completedAt: string | null;
+}
+
 export interface CoworkMember {
   workspaceId: string;
   memberId: string;
@@ -288,6 +307,10 @@ export interface CoworkTask {
   updatedAt: string;
   dueAt: string | null;
   completedAt: string | null;
+  inputSummary: string | null;
+  resultOutput: string | null;
+  references: string | null;
+  artifacts: string | null;
 }
 
 export interface CoworkTaskComment {

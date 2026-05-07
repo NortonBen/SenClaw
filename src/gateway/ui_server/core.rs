@@ -25,7 +25,8 @@ use super::cowork::{
     cowork_task_comments_add, cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete,
     cowork_tasks_get, cowork_tasks_list, cowork_tasks_update, cowork_templates_get,
     cowork_templates_list, cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get,
-    cowork_ws_list, cowork_ws_update,
+    cowork_ws_list, cowork_ws_update, cowork_ws_resources_list, cowork_ws_resource_upsert,
+    cowork_ws_resource_delete,
 };
 use super::embedding_config::{embedding_config_get, embedding_config_save};
 use super::llm_config::{
@@ -264,6 +265,14 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(cowork_files_download),
         )
         .route("/api/cowork/workspaces/:id/browse", get(cowork_ws_browse))
+        .route(
+            "/api/cowork/workspaces/:id/resources",
+            get(cowork_ws_resources_list).post(cowork_ws_resource_upsert),
+        )
+        .route(
+            "/api/cowork/workspaces/:id/resources/:kind",
+            axum::routing::delete(cowork_ws_resource_delete),
+        )
         // ── Space API ─────────────────────────────────────────────────────────
         // Notes
         .route("/api/space/notes", get(space_notes_list).post(space_notes_create))

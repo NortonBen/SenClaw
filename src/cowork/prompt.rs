@@ -256,6 +256,10 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".into(),
             due_at: None,
             completed_at: None,
+            input_summary: None,
+            result_output: None,
+            references: None,
+            artifacts: None,
         }
     }
 
@@ -438,6 +442,10 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".into(),
             due_at: None,
             completed_at: Some("2026-01-01T01:00:00Z".into()),
+            input_summary: None,
+            result_output: None,
+            references: None,
+            artifacts: None,
         }];
         let p = build_cowork_task_prompt(
             &sample_task(),

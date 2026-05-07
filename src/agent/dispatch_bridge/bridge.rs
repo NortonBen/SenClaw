@@ -37,9 +37,11 @@ pub type RevertWorkspaceCallback = Arc<dyn Fn(&str) + Send + Sync>;
 pub type AbortAgentCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Callback invoked when a dispatch task changes status. Arguments:
-/// `(task_id, new_status, task_label, parent_goal)` — used by CoworkManager
-/// to keep CoworkTask status in sync with DispatchTask lifecycle.
-pub type TaskLifecycleCallback = Arc<dyn Fn(&str, &str, &str, &str) + Send + Sync>;
+/// `(task_id, new_status, task_label, parent_goal, result_text)` — used by
+/// CoworkManager to keep CoworkTask status in sync with DispatchTask lifecycle.
+/// `result_text` is `Some` only when `new_status == "done"`.
+pub type TaskLifecycleCallback =
+    Arc<dyn Fn(&str, &str, &str, &str, Option<String>) + Send + Sync>;
 
 /// Polling cadence for the scheduler tick (timeouts + ready-task launch).
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
@@ -168,9 +170,16 @@ impl DispatchBridge {
         *self.on_task_lifecycle.lock().unwrap() = Some(cb);
     }
 
-    fn fire_task_lifecycle(&self, task_id: &str, status: &str, label: &str, parent_goal: &str) {
+    fn fire_task_lifecycle(
+        &self,
+        task_id: &str,
+        status: &str,
+        label: &str,
+        parent_goal: &str,
+        result: Option<String>,
+    ) {
         if let Some(cb) = self.on_task_lifecycle.lock().unwrap().as_ref() {
-            cb(task_id, status, label, parent_goal);
+            cb(task_id, status, label, parent_goal, result);
         }
     }
 
@@ -515,7 +524,7 @@ impl DispatchBridge {
                 }
             }
         });
-        self.fire_task_lifecycle(task_id, "done", &task_label, &parent_goal);
+        self.fire_task_lifecycle(task_id, "done", &task_label, &parent_goal, Some(text.to_string()));
         tracing::info!(
             "[DispatchBridge] Task {task_id} done{}",
             if let Some(j) = &jid {
@@ -568,7 +577,7 @@ impl DispatchBridge {
                 }
             }
         });
-        self.fire_task_lifecycle(task_id, "error", &task_label, &parent_goal);
+        self.fire_task_lifecycle(task_id, "error", &task_label, &parent_goal, None);
         tracing::warn!(
             "[DispatchBridge] Task {task_id} error{}: {error_message}",
             if let Some(j) = &jid {
@@ -857,7 +866,7 @@ impl DispatchBridge {
                 }
             }
         });
-        self.fire_task_lifecycle(&task_id, "processing", &task_label, &parent_goal);
+        self.fire_task_lifecycle(&task_id, "processing", &task_label, &parent_goal, None);
 
         let target = if task.is_virtual {
             format!("persona:{}", task.persona_name.as_deref().unwrap_or(""))
@@ -979,7 +988,7 @@ impl DispatchBridge {
                 }
             }
         });
-        self.fire_task_lifecycle(task_id, "timeout", &task_label, &parent_goal);
+        self.fire_task_lifecycle(task_id, "timeout", &task_label, &parent_goal, None);
         self.remove_active_task(task_id);
         tracing::warn!("[DispatchBridge] Task {task_id} timed out");
         if !jid.is_empty() {

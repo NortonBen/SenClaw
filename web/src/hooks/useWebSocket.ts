@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -57,6 +57,10 @@ export interface WsHook {
   subscribeAll: () => void;
   /** Incremented on every cowork:changed event so the CoworkPage can auto-refresh. */
   coworkChanged: number;
+  /** Latest task result event from cowork:task:result — use for live result display. */
+  lastTaskResult: TaskResultEvent | null;
+  /** Incremented on cowork:resource:changed so resource panels auto-refresh. */
+  coworkResourceChanged: number;
   // Entity model
   channels: ChannelInfo[];
   agents: AgentInfo[];
@@ -90,6 +94,8 @@ export function useWebSocket(): WsHook {
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
   const [agentUsage, setAgentUsage]           = useState<Record<string, UsageData>>({});
   const [coworkChanged, setCoworkChanged]     = useState(0);
+  const [lastTaskResult, setLastTaskResult]   = useState<TaskResultEvent | null>(null);
+  const [coworkResourceChanged, setCoworkResourceChanged] = useState(0);
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [agents, setAgents]     = useState<AgentInfo[]>([]);
   const [bindings, setBindings] = useState<BindingWithRelationsInfo[]>([]);
@@ -584,6 +590,13 @@ export function useWebSocket(): WsHook {
           case 'cowork:changed':
             setCoworkChanged(prev => prev + 1);
             break;
+          case 'cowork:task:result':
+            setLastTaskResult(msg as unknown as TaskResultEvent);
+            setCoworkChanged(prev => prev + 1);
+            break;
+          case 'cowork:resource:changed':
+            setCoworkResourceChanged(prev => prev + 1);
+            break;
           case 'permission:rules':
             setToolRules(() => {
               const rules = (msg.rules as ToolAutoAcceptRule[]) ?? [];
@@ -679,14 +692,14 @@ export function useWebSocket(): WsHook {
   void findRequestJid;
 
   return useMemo(() => ({
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
     toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
   }), [
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,

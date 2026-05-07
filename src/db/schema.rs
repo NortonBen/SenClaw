@@ -173,22 +173,33 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_cowork_board_ws
           ON cowork_board_entries(workspace_id, section);
 
+        CREATE TABLE IF NOT EXISTS cowork_workspace_resources (
+          workspace_id  TEXT NOT NULL,
+          kind          TEXT NOT NULL CHECK(kind IN ('raw','wiki','reference','workdir')),
+          path          TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, kind)
+        );
+
         CREATE TABLE IF NOT EXISTS cowork_tasks (
-          id           TEXT PRIMARY KEY,
-          workspace_id TEXT NOT NULL,
-          title        TEXT NOT NULL,
-          description  TEXT,
-          status       TEXT NOT NULL DEFAULT 'todo',
-          assignee     TEXT,
-          reviewer     TEXT,
-          priority     TEXT NOT NULL DEFAULT 'medium',
-          depends_on   TEXT,
-          attachments  TEXT,
-          created_by   TEXT NOT NULL,
-          created_at   TEXT NOT NULL,
-          updated_at   TEXT NOT NULL,
-          due_at       TEXT,
-          completed_at TEXT
+          id             TEXT PRIMARY KEY,
+          workspace_id   TEXT NOT NULL,
+          title          TEXT NOT NULL,
+          description    TEXT,
+          status         TEXT NOT NULL DEFAULT 'todo',
+          assignee       TEXT,
+          reviewer       TEXT,
+          priority       TEXT NOT NULL DEFAULT 'medium',
+          depends_on     TEXT,
+          attachments    TEXT,
+          created_by     TEXT NOT NULL,
+          created_at     TEXT NOT NULL,
+          updated_at     TEXT NOT NULL,
+          due_at         TEXT,
+          completed_at   TEXT,
+          input_summary  TEXT,
+          result_output  TEXT,
+          refs           TEXT,
+          artifacts      TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_cowork_task_ws
           ON cowork_tasks(workspace_id, status);
@@ -273,6 +284,33 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+
+    // cowork_workspace_resources table (new resource model)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cowork_workspace_resources (
+          workspace_id  TEXT NOT NULL,
+          kind          TEXT NOT NULL CHECK(kind IN ('raw','wiki','reference','workdir')),
+          path          TEXT NOT NULL,
+          PRIMARY KEY (workspace_id, kind)
+        );",
+    )?;
+
+    // cowork_tasks — add result/io fields
+    let task_cols = column_names(conn, "cowork_tasks")?;
+    for (col, def) in &[
+        ("input_summary", "TEXT"),
+        ("result_output", "TEXT"),
+        ("refs", "TEXT"),
+        ("artifacts", "TEXT"),
+    ] {
+        if !task_cols.iter().any(|c| c == col) {
+            conn.execute(
+                &format!("ALTER TABLE cowork_tasks ADD COLUMN {col} {def}"),
+                [],
+            )?;
+        }
+    }
+
     Ok(())
 }
 

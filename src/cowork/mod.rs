@@ -20,8 +20,33 @@ use crate::types::{
     CoworkWorkspace, GroupBinding, TemplateBoard, TemplateBoardSection, TemplateMember,
 };
 
+/// Payload emitted when a CoworkTask transitions to "done".
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskResultEvent {
+    pub task_id: String,
+    pub workspace_id: String,
+    pub title: String,
+    pub input_summary: Option<String>,
+    pub result_output: Option<String>,
+    pub references: Option<String>,
+    pub artifacts: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[inline]
+fn cowork_handoff_result_has(haystack: &str, needle: &str) -> bool {
+    let h = haystack.to_lowercase();
+    let n = needle.to_lowercase();
+    h.contains(&n)
+}
+
 pub struct CoworkManager {
     on_changed: Mutex<Option<Box<dyn Fn() + Send + 'static>>>,
+    /// Fired when a task reaches "done" — carries the full result payload.
+    on_task_result: Mutex<Option<Box<dyn Fn(TaskResultEvent) + Send + 'static>>>,
+    /// Fired when workspace resources change (upsert/delete).
+    on_resource_changed: Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>,
     /// Optional dispatch bridge for DAG-based task orchestration.
     dispatch_bridge: Mutex<Option<Arc<DispatchBridge>>>,
     /// Maps DispatchTask IDs → (CoworkTask ID, workspace ID) for status sync.
@@ -32,6 +57,8 @@ impl CoworkManager {
     pub fn new() -> Self {
         Self {
             on_changed: Mutex::new(None),
+            on_task_result: Mutex::new(None),
+            on_resource_changed: Mutex::new(None),
             dispatch_bridge: Mutex::new(None),
             dispatch_task_map: Mutex::new(HashMap::new()),
         }
@@ -39,6 +66,18 @@ impl CoworkManager {
 
     pub fn set_on_changed(&self, cb: Box<dyn Fn() + Send + 'static>) {
         if let Ok(mut guard) = self.on_changed.lock() {
+            *guard = Some(cb);
+        }
+    }
+
+    pub fn set_on_task_result(&self, cb: Box<dyn Fn(TaskResultEvent) + Send + 'static>) {
+        if let Ok(mut guard) = self.on_task_result.lock() {
+            *guard = Some(cb);
+        }
+    }
+
+    pub fn set_on_resource_changed(&self, cb: Box<dyn Fn(String) + Send + 'static>) {
+        if let Ok(mut guard) = self.on_resource_changed.lock() {
             *guard = Some(cb);
         }
     }
@@ -64,6 +103,23 @@ impl CoworkManager {
         }
     }
 
+    fn fire_task_result(&self, evt: TaskResultEvent) {
+        if let Ok(guard) = self.on_task_result.lock() {
+            if let Some(ref cb) = *guard {
+                cb(evt);
+            }
+        }
+    }
+
+    pub fn fire_resource_changed(&self, workspace_id: String) {
+        if let Ok(guard) = self.on_resource_changed.lock() {
+            if let Some(ref cb) = *guard {
+                cb(workspace_id);
+            }
+        }
+        self.fire_changed();
+    }
+
     // ============================================================
     // Dispatch lifecycle — keep CoworkTask ↔ DispatchTask in sync
     // ============================================================
@@ -72,18 +128,22 @@ impl CoworkManager {
     /// CoworkTask status and fires cowork:changed.
     pub fn on_dispatch_task_lifecycle(
         &self,
-        db: &Db,
+        db: &Arc<Db>,
         dispatch_task_id: &str,
         new_status: &str,
-        _task_label: &str,
+        task_label: &str,
         _parent_goal: &str,
+        dispatch_result: Option<&str>,
+        agent_api: Option<Arc<dyn AgentApi>>,
+        self_arc: Arc<CoworkManager>,
     ) {
-        let map = self.dispatch_task_map.lock().unwrap();
-        let Some((cowork_task_id, _workspace_id)) = map.get(dispatch_task_id) else {
-            return;
+        let (cowork_task_id, workspace_id) = {
+            let map = self.dispatch_task_map.lock().unwrap();
+            let Some((tid, wid)) = map.get(dispatch_task_id) else {
+                return;
+            };
+            (tid.clone(), wid.clone())
         };
-        let cowork_task_id = cowork_task_id.clone();
-        drop(map);
 
         let cowork_status = match new_status {
             "processing" => "in_progress",
@@ -92,18 +152,37 @@ impl CoworkManager {
             _ => return,
         };
         let now = chrono::Utc::now().to_rfc3339();
-        if let Err(e) = db.update_cowork_task(
-            &cowork_task_id,
-            None,
-            None,
-            Some(cowork_status),
-            None,
-            None,
-            None,
-            None,
-            None,
-            &now,
-        ) {
+
+        // Treat empty result string same as None.
+        let result_opt = dispatch_result.filter(|s| !s.trim().is_empty());
+
+        let db_err = if cowork_status == "done" {
+            db.update_cowork_task_result(
+                &cowork_task_id,
+                Some(task_label),
+                result_opt,
+                None,
+                None,
+                &now,
+            )
+            .err()
+        } else {
+            db.update_cowork_task(
+                &cowork_task_id,
+                None,
+                None,
+                Some(cowork_status),
+                None,
+                None,
+                None,
+                None,
+                None,
+                &now,
+            )
+            .err()
+        };
+
+        if let Some(e) = db_err {
             tracing::warn!(
                 "[Cowork] Failed to update task {cowork_task_id} → {cowork_status}: {e}"
             );
@@ -111,9 +190,171 @@ impl CoworkManager {
             tracing::info!(
                 "[Cowork] Task {cowork_task_id} → {cowork_status} (dispatch: {dispatch_task_id})"
             );
+            if cowork_status == "done" {
+                self.fire_task_result(TaskResultEvent {
+                    task_id: cowork_task_id.clone(),
+                    workspace_id: workspace_id.clone(),
+                    title: task_label.to_string(),
+                    input_summary: Some(task_label.to_string()),
+                    result_output: result_opt.map(|s| s.to_string()),
+                    references: None,
+                    artifacts: None,
+                    completed_at: Some(now.clone()),
+                });
+
+                // Process handoff rules for the completed task's assignee.
+                if let Some(api) = agent_api {
+                    self.process_handoff_rules(
+                        db,
+                        &workspace_id,
+                        &cowork_task_id,
+                        result_opt.unwrap_or(task_label),
+                        &now,
+                        api,
+                        self_arc,
+                    );
+                }
+            }
         }
 
         self.fire_changed();
+    }
+
+    /// After a task completes, check the assignee's handoff_rules and create +
+    /// dispatch follow-up tasks for the specified target members.
+    ///
+    /// Rule shape (JSON per item): `when` (e.g. `task_complete`), `to`, `type`,
+    /// optional `only_if_result_contains` / `unless_result_contains` — substring
+    /// gates on the completed task result (case-insensitive).
+    fn process_handoff_rules(
+        &self,
+        db: &Arc<Db>,
+        workspace_id: &str,
+        completed_task_id: &str,
+        result_content: &str,
+        now: &str,
+        agent_api: Arc<dyn AgentApi>,
+        self_arc: Arc<CoworkManager>,
+    ) {
+        let completed_task = match db.get_cowork_task(completed_task_id) {
+            Ok(Some(t)) => t,
+            _ => return,
+        };
+        let assignee_id = match completed_task.assignee.as_deref() {
+            Some(a) => a.to_string(),
+            None => return,
+        };
+        let members = match db.list_cowork_members(workspace_id) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let assignee = match members.iter().find(|m| m.member_id == assignee_id) {
+            Some(m) => m,
+            None => return,
+        };
+        let handoff_rules_json = match assignee.handoff_rules.as_deref() {
+            Some(r) => r.to_string(),
+            None => return,
+        };
+        let rules: Vec<serde_json::Value> = match serde_json::from_str(&handoff_rules_json) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        let mut followup_tasks = Vec::new();
+        for rule in &rules {
+            let when = rule["when"].as_str().unwrap_or("");
+            if when != "task_complete" {
+                continue;
+            }
+            let to = match rule["to"].as_str() {
+                Some(t) => t,
+                None => continue,
+            };
+            // Optional gates (case-insensitive substring match on task result):
+            // - `unless_result_contains`: skip rule if this text appears (e.g. workstream done).
+            // - `only_if_result_contains`: run rule only if this text appears (e.g. explicit handoff).
+            if let Some(u) = rule["unless_result_contains"].as_str() {
+                if !u.is_empty() && cowork_handoff_result_has(result_content, u) {
+                    tracing::info!(
+                        "[Cowork] Handoff rule → {to} skipped (unless_result_contains matched)"
+                    );
+                    continue;
+                }
+            }
+            if let Some(o) = rule["only_if_result_contains"].as_str() {
+                if !o.is_empty() && !cowork_handoff_result_has(result_content, o) {
+                    tracing::info!(
+                        "[Cowork] Handoff rule → {to} skipped (only_if_result_contains not in result)"
+                    );
+                    continue;
+                }
+            }
+            let handoff_type = rule["type"].as_str().unwrap_or("handoff");
+            // Find target member
+            if !members.iter().any(|m| m.member_id == to) {
+                tracing::warn!("[Cowork] Handoff target '{to}' not found in workspace {workspace_id}");
+                continue;
+            }
+            let task_title = format!(
+                "[handoff from {}] {}",
+                assignee_id,
+                if completed_task.title.len() > 60 { &completed_task.title[..60] } else { &completed_task.title }
+            );
+            let description = format!(
+                "Handoff from {assignee_id}.\n\nOriginal task: {}\n\nResult:\n{result_content}",
+                completed_task.title
+            );
+            match self.create_task(
+                db,
+                workspace_id,
+                &task_title,
+                Some(&description),
+                Some(to),
+                None,
+                Some("high"),
+                None,
+                &assignee_id,
+                None,
+                now,
+            ) {
+                Ok(task) => {
+                    tracing::info!(
+                        "[Cowork] Handoff rule: created task '{}' → {to} (type={handoff_type})",
+                        task.title
+                    );
+                    // Post a handoff message
+                    let _ = db.insert_cowork_message(&CoworkMessage {
+                        id: format!("cwmsg-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")),
+                        workspace_id: workspace_id.to_string(),
+                        from_member: assignee_id.clone(),
+                        to_member: Some(to.to_string()),
+                        message_type: handoff_type.to_string(),
+                        content: format!("{assignee_id} → {to}: {}", completed_task.title),
+                        attachments: None,
+                        task_id: Some(task.id.clone()),
+                        is_read: false,
+                        created_at: now.to_string(),
+                    });
+                    followup_tasks.push(task);
+                }
+                Err(e) => {
+                    tracing::error!("[Cowork] Failed to create handoff task: {e}");
+                }
+            }
+        }
+
+        if !followup_tasks.is_empty() {
+            let _ = self.dispatch_cowork_tasks_batch(
+                db,
+                workspace_id,
+                &members,
+                &followup_tasks,
+                &completed_task.title,
+                Some((agent_api, Arc::clone(db))),
+                self_arc,
+            );
+        }
     }
 
     // ============================================================
@@ -246,6 +487,9 @@ impl CoworkManager {
             );
             let result = agent_api.process_and_wait(&jid, &group, &prompt).await;
 
+            // Capture last reply text before any cleanup.
+            let reply_text = agent_api.get_last_reply_text(&jid);
+
             // Update status based on result
             let now2 = chrono::Utc::now().to_rfc3339();
             let new_status = if result.is_ok() { "done" } else { "blocked" };
@@ -253,18 +497,43 @@ impl CoworkManager {
                 "[Cowork] Task {task_id} → {new_status} (process_and_wait: {:?})",
                 result.is_ok()
             );
-            let _ = db_clone.update_cowork_task(
-                &task_id,
-                None,
-                None,
-                Some(new_status),
-                None,
-                None,
-                None,
-                None,
-                None,
-                &now2,
-            );
+
+            if new_status == "done" {
+                // Persist result output — input_summary from task description/prompt,
+                // result_output from the agent's last reply.
+                let _ = db_clone.update_cowork_task_result(
+                    &task_id,
+                    Some(prompt.as_str()),
+                    reply_text.as_deref(),
+                    None,
+                    None,
+                    &now2,
+                );
+                // Broadcast task result event so UI can display without polling.
+                manager.fire_task_result(TaskResultEvent {
+                    task_id: task_id.clone(),
+                    workspace_id: workspace_id_owned.clone(),
+                    title: task_title.clone(),
+                    input_summary: Some(prompt.clone()),
+                    result_output: reply_text.clone(),
+                    references: None,
+                    artifacts: None,
+                    completed_at: Some(now2.clone()),
+                });
+            } else {
+                let _ = db_clone.update_cowork_task(
+                    &task_id,
+                    None,
+                    None,
+                    Some(new_status),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &now2,
+                );
+            }
 
             // Insert a completion message
             let done_msg_id = format!(
@@ -734,18 +1003,45 @@ impl CoworkManager {
         fs::create_dir_all(root_dir.join("agents")).ok();
         fs::create_dir_all(root_dir.join("recordings")).ok();
 
+        // Resource directories: raw, wiki, reference, workdir
+        let raw_dir = root_dir.join("raw");
+        let wiki_dir = root_dir.join("wiki");
+        let reference_dir = root_dir.join("reference");
+        let workdir = working_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root_dir.join("workdir"));
+        fs::create_dir_all(&raw_dir).ok();
+        fs::create_dir_all(&wiki_dir).ok();
+        fs::create_dir_all(&reference_dir).ok();
+        fs::create_dir_all(&workdir).ok();
+
         let ws = CoworkWorkspace {
             id: id.clone(),
             name: name.to_string(),
             description: description.map(|s| s.to_string()),
             status: "active".to_string(),
             root_dir: root_dir.to_string_lossy().into_owned(),
-            working_dir: working_dir.map(|s| s.to_string()),
+            working_dir: Some(workdir.to_string_lossy().into_owned()),
             created_at: now.to_string(),
             updated_at: now.to_string(),
         };
 
         db.insert_cowork_workspace(&ws)?;
+
+        // Persist the 4 typed resource paths
+        for (kind, path) in &[
+            ("raw", raw_dir.as_path()),
+            ("wiki", wiki_dir.as_path()),
+            ("reference", reference_dir.as_path()),
+            ("workdir", workdir.as_path()),
+        ] {
+            db.upsert_workspace_resource(&crate::types::WorkspaceResource {
+                workspace_id: id.clone(),
+                kind: kind.to_string(),
+                path: path.to_string_lossy().into_owned(),
+            })
+            .ok();
+        }
 
         self.fire_changed();
         Ok(ws)
@@ -804,6 +1100,32 @@ impl CoworkManager {
         }
 
         self.fire_changed();
+        Ok(())
+    }
+
+    // ============================================================
+    // Resources
+    // ============================================================
+
+    pub fn upsert_resource(
+        &self,
+        db: &Db,
+        workspace_id: &str,
+        kind: &str,
+        path: &str,
+    ) -> Result<()> {
+        db.upsert_workspace_resource(&crate::types::WorkspaceResource {
+            workspace_id: workspace_id.to_string(),
+            kind: kind.to_string(),
+            path: path.to_string(),
+        })?;
+        self.fire_resource_changed(workspace_id.to_string());
+        Ok(())
+    }
+
+    pub fn delete_resource(&self, db: &Db, workspace_id: &str, kind: &str) -> Result<()> {
+        db.delete_workspace_resource(workspace_id, kind)?;
+        self.fire_resource_changed(workspace_id.to_string());
         Ok(())
     }
 
@@ -1036,6 +1358,10 @@ impl CoworkManager {
             updated_at: now.to_string(),
             due_at: None,
             completed_at: None,
+            input_summary: None,
+            result_output: None,
+            references: None,
+            artifacts: None,
         };
         db.insert_cowork_task(&task)?;
         self.fire_changed();
@@ -1184,7 +1510,7 @@ impl CoworkManager {
         let builtins: Vec<CoworkTemplate> = vec![
             CoworkTemplate {
                 name: "Software Development".into(),
-                description: "Technical lead, implementation, and QA — linear handoffs with task dependencies (no separate review role)".into(),
+                description: "Only the lead plans and coordinates (Board plan_checklist, task order, handoff tokens). Code and test agents execute assigned work — no replanning or checklist ownership.".into(),
                 icon: Some("CodeOutlined".into()),
                 members: vec![
                     TemplateMember {
@@ -1192,12 +1518,17 @@ impl CoworkManager {
                         role: "lead".into(),
                         subdir: Some("lead".into()),
                         persona: Some(
-                            "Technical lead / PM. Read user goals and Board, produce a short plan, then create or delegate concrete tasks with clear assignees and depends_on order (implement → test). Record decisions on the Board.".into(),
+                            "You are the **only** role that plans and coordinates this workspace. Workers do not own the plan — they execute tasks you assign. Read user goals and Board, maintain plan_checklist, produce a short plan, delegate concrete tasks with assignees and depends_on (implement → test), record decisions on the Board. \
+Plan gate (switch-style): (1) First execution on a goal: output Plan and create/update Board section plan_checklist with `- [ ]`; omit HANDOFF_TO_CODE_AGENT so implementation is not auto-dispatched. \
+(2) Later: re-read plan_checklist; if all `- [x]` and nothing remains, put WORKSTREAM_COMPLETE in your task result. \
+(3) To start implementation, put HANDOFF_TO_CODE_AGENT in your task result."
+                                .into(),
                         ),
                         responsibilities: Some(vec![
-                            "Keep Board brief, progress, and decisions accurate".into(),
-                            "Break work into ordered tasks: assign implementation to code-agent, verification to test-agent; set depends_on so tests run only after implementation tasks complete".into(),
-                            "Unblock the team when dependencies or scope change".into(),
+                            "Sole owner of plan_checklist and coordination: edit checklist and Board progress; workers must not change plan order or add parallel PM-style plans".into(),
+                            "Break work into ordered tasks for code-agent and test-agent; set depends_on so tests run only after implementation completes".into(),
+                            "Unblock the team when dependencies or scope change; workers escalate replanning requests through their task results for you to adjust the plan".into(),
+                            "When finishing a lead task: HANDOFF_TO_CODE_AGENT, WORKSTREAM_COMPLETE, or neither (plan-only), as documented in output rules".into(),
                         ]),
                         triggers: Some(vec![
                             serde_json::from_str(
@@ -1209,17 +1540,18 @@ impl CoworkManager {
                         ]),
                         handoff: Some(vec![
                             serde_json::from_str(
-                                r#"{"when":"task_complete","to":"code-agent","type":"handoff"}"#,
+                                r#"{"when":"task_complete","to":"code-agent","type":"handoff","only_if_result_contains":"HANDOFF_TO_CODE_AGENT","unless_result_contains":"WORKSTREAM_COMPLETE"}"#,
                             )
                             .unwrap(),
                         ]),
                         acceptance_criteria: Some(vec![
                             "Every active task has a clear owner and acceptance criteria".into(),
                             "Board progress section updated when milestones move".into(),
+                            "plan_checklist reflects current scope; closure uses WORKSTREAM_COMPLETE or HANDOFF_TO_CODE_AGENT as appropriate".into(),
                         ]),
                         output: Some(
                             serde_json::from_str(
-                                r#"{"format":"markdown","requiredSections":["Plan","Assignments","Risks","Board Updates"]}"#,
+                                r#"{"format":"markdown","requiredSections":["Plan","Plan Checklist","Assignments","Risks","Board Updates"],"description":"Mirror Plan Checklist with the Board section plan_checklist. Use the literal tokens HANDOFF_TO_CODE_AGENT to queue code-agent, or WORKSTREAM_COMPLETE when all checklist items are done and the workstream should stop without further implementation handoff."}"#,
                             )
                             .unwrap(),
                         ),
@@ -1238,11 +1570,11 @@ impl CoworkManager {
                         agent_folder: "code-agent".into(),
                         role: "worker".into(),
                         subdir: Some("impl".into()),
-                        persona: Some("Senior engineer. Implement features, own code quality: self-review (diff, clippy/tests), document risks in the task outcome. No separate reviewer role — you are responsible for production-readiness before handoff to QA.".into()),
+                        persona: Some("Senior engineer — **not** a coordinator. Follow the task and lead's plan only; do not edit plan_checklist, reorder the workstream, or assign work to others. Implement features, own code quality (diff, clippy/tests), document risks in the task outcome. Production-ready before handoff to QA.".into()),
                         responsibilities: Some(vec![
-                            "Implement assigned tasks; keep changes scoped and tested".into(),
+                            "Execute only what lead assigned; if scope is unclear or conflicts with plan, ask in your task outcome for lead to update plan_checklist — do not act as PM".into(),
                             "Run project checks (e.g. cargo test / clippy) and fix issues before marking done".into(),
-                            "Update Board progress; attach or summarize relevant paths under shared/ when useful".into(),
+                            "Summarize files and shared/ paths in your result; lead updates Board progress from your outcome".into(),
                         ]),
                         triggers: Some(vec![
                             serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
@@ -1266,11 +1598,11 @@ impl CoworkManager {
                         agent_folder: "test-agent".into(),
                         role: "worker".into(),
                         subdir: Some("tests".into()),
-                        persona: Some("QA engineer. After implementation tasks complete (or via handoff from code-agent), expand integration coverage, run the suite, and report failures with reproduction steps.".into()),
+                        persona: Some("QA engineer — **not** a coordinator. Follow assigned tasks and lead's plan only; do not edit plan_checklist or replan. After implementation (or handoff from code-agent), extend coverage, run the suite, report failures with repro steps.".into()),
                         responsibilities: Some(vec![
-                            "Add or extend tests that lock in acceptance criteria".into(),
-                            "Run full test suite when triggered by assignment or handoff from code-agent".into(),
-                            "Report coverage, flakiness, and regressions on the Board if needed".into(),
+                            "Execute verification per task; escalate plan or scope gaps to lead in your result — do not change coordination on the Board".into(),
+                            "Add or extend tests per acceptance criteria; run full suite when assigned or handed off from code-agent".into(),
+                            "Report coverage, flakiness, and regressions in your result; lead may copy summaries to Board if needed".into(),
                         ]),
                         triggers: Some(vec![
                             serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
@@ -1291,6 +1623,7 @@ impl CoworkManager {
                 board: Some(TemplateBoard {
                     sections: vec![
                         TemplateBoardSection { section_type: "brief".into(), title: "Project Brief".into(), template: Some("Describe the project and its goals...".into()) },
+                        TemplateBoardSection { section_type: "plan_checklist".into(), title: "Plan checklist".into(), template: Some("**(Lead only — do not edit as code-agent / test-agent)** — ordered steps for this workstream.\n\n- Lead: first visit add `- [ ]` from Plan; later mark `- [x]`.\n- Workers: read-only here; put updates in task results for lead to fold in.\n- When all checked: lead ends with `WORKSTREAM_COMPLETE`.\n\n- [ ] ...".into()) },
                         TemplateBoardSection { section_type: "guidelines".into(), title: "Development Guidelines".into(), template: Some("- Language/framework: ...\n- Coding conventions: ...\n- Testing requirements: ...".into()) },
                         TemplateBoardSection { section_type: "decisions".into(), title: "Architecture Decisions".into(), template: Some("(lead records notable decisions after each milestone)".into()) },
                     ],

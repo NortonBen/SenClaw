@@ -1178,6 +1178,43 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             }));
         }
 
+        // Wire task result event — broadcast cowork:task:result with full payload.
+        {
+            let gw_for_result = Arc::clone(&gw);
+            cowork_mgr.set_on_task_result(Box::new(move |evt| {
+                let gw = Arc::clone(&gw_for_result);
+                let payload = serde_json::json!({
+                    "type": "cowork:task:result",
+                    "taskId": evt.task_id,
+                    "workspaceId": evt.workspace_id,
+                    "title": evt.title,
+                    "inputSummary": evt.input_summary,
+                    "resultOutput": evt.result_output,
+                    "references": evt.references,
+                    "artifacts": evt.artifacts,
+                    "completedAt": evt.completed_at,
+                });
+                tokio::spawn(async move {
+                    gw.broadcast_to_all(&payload).await;
+                });
+            }));
+        }
+
+        // Wire resource-changed event — broadcast cowork:resource:changed.
+        {
+            let gw_for_res = Arc::clone(&gw);
+            cowork_mgr.set_on_resource_changed(Box::new(move |workspace_id| {
+                let gw = Arc::clone(&gw_for_res);
+                let payload = serde_json::json!({
+                    "type": "cowork:resource:changed",
+                    "workspaceId": workspace_id,
+                });
+                tokio::spawn(async move {
+                    gw.broadcast_to_all(&payload).await;
+                });
+            }));
+        }
+
         // Wire DispatchBridge → CoworkManager. Routes cowork tasks through the
         // DAG dispatch system instead of direct process_and_wait. A lifecycle
         // callback keeps CoworkTask status in sync with DispatchTask transitions.
@@ -1185,9 +1222,19 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         {
             let mgr = Arc::clone(&cowork_mgr);
             let db = Arc::clone(&db);
+            let api = Arc::clone(&agent_pool) as Arc<dyn types::AgentApi>;
             dispatch_bridge.set_task_lifecycle_callback(Arc::new(
-                move |task_id: &str, status: &str, label: &str, goal: &str| {
-                    mgr.on_dispatch_task_lifecycle(&db, task_id, status, label, goal);
+                move |task_id: &str, status: &str, label: &str, goal: &str, result: Option<String>| {
+                    mgr.on_dispatch_task_lifecycle(
+                        &db,
+                        task_id,
+                        status,
+                        label,
+                        goal,
+                        result.as_deref(),
+                        Some(Arc::clone(&api)),
+                        Arc::clone(&mgr),
+                    );
                 },
             ));
         }

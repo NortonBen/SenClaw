@@ -13,9 +13,9 @@ impl super::super::Db {
     pub fn insert_cowork_task(&self, t: &CoworkTask) -> Result<()> {
         self.with_conn(|c| {
             c.execute(
-                "INSERT INTO cowork_tasks (id,workspace_id,title,description,status,assignee,reviewer,priority,depends_on,attachments,created_by,created_at,updated_at,due_at,completed_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
-                params![t.id, t.workspace_id, t.title, t.description, t.status, t.assignee, t.reviewer, t.priority, t.depends_on, t.attachments, t.created_by, t.created_at, t.updated_at, t.due_at, t.completed_at],
+                "INSERT INTO cowork_tasks (id,workspace_id,title,description,status,assignee,reviewer,priority,depends_on,attachments,created_by,created_at,updated_at,due_at,completed_at,input_summary,result_output,refs,artifacts)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+                params![t.id, t.workspace_id, t.title, t.description, t.status, t.assignee, t.reviewer, t.priority, t.depends_on, t.attachments, t.created_by, t.created_at, t.updated_at, t.due_at, t.completed_at, t.input_summary, t.result_output, t.references, t.artifacts],
             )?;
             Ok(())
         })
@@ -120,6 +120,28 @@ impl super::super::Db {
                 )?;
             }
             tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Persist the result/io fields after a task agent completes.
+    pub fn update_cowork_task_result(
+        &self,
+        id: &str,
+        input_summary: Option<&str>,
+        result_output: Option<&str>,
+        references: Option<&str>,
+        artifacts: Option<&str>,
+        now: &str,
+    ) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE cowork_tasks
+                 SET input_summary=?1, result_output=?2, refs=?3, artifacts=?4,
+                     status='done', completed_at=?5, updated_at=?5
+                 WHERE id=?6",
+                params![input_summary, result_output, references, artifacts, now, id],
+            )?;
             Ok(())
         })
     }

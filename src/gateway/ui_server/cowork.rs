@@ -831,6 +831,7 @@ pub(crate) struct MessagesQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct SendMessageBody {
     from_member: String,
     content: String,
@@ -1111,4 +1112,50 @@ pub(crate) async fn cowork_files_download(
         .header(header::CONTENT_LENGTH, content.len().to_string())
         .body(Body::from(content))
         .unwrap())
+}
+
+// ── Workspace Resources ──────────────────────────────────────────────────────
+
+pub async fn cowork_ws_resources_list(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = s.db.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
+    let resources = db.list_workspace_resources(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "resources": resources })))
+}
+
+#[derive(Deserialize)]
+pub struct UpsertResourceBody {
+    kind: String,
+    path: String,
+}
+
+pub async fn cowork_ws_resource_upsert(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<UpsertResourceBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = s.db.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
+    let mgr = cowork_mgr(&s)?;
+    let valid_kinds = ["raw", "wiki", "reference", "workdir"];
+    if !valid_kinds.contains(&body.kind.as_str()) {
+        return Err(AppError(StatusCode::BAD_REQUEST, format!("invalid kind '{}', must be one of: raw, wiki, reference, workdir", body.kind)));
+    }
+    fs::create_dir_all(&body.path).ok();
+    mgr.upsert_resource(db, &id, &body.kind, &body.path)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "workspaceId": id, "kind": body.kind, "path": body.path })))
+}
+
+pub async fn cowork_ws_resource_delete(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, kind)): AxumPath<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = s.db.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
+    let mgr = cowork_mgr(&s)?;
+    mgr.delete_resource(db, &id, &kind)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
