@@ -510,14 +510,27 @@ impl DispatchServer {
             goal.len()
         );
 
-        ToolResult::ok(format!(
-            "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
-             IMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\n\
-             • **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{{\"parentId\":\"{parent_id}\"}}` (optional timeoutSeconds).\n\
-             • **One-shot next time:** use **mcp__dispatch__create_parent_and_run** to create this parent and wait for every task in one call.\n\
-             • Or call **mcp__dispatch__task** per task label if you only need some outputs.\n\
-             Do **not** invent task results from the goal alone."
-        ))
+        let body = if is_queued {
+            format!(
+                "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
+                 ⚠️ **QUEUED workflow** — another dispatch is still active. **Do not** call \
+                 `mcp__dispatch__all_tasks` or `mcp__dispatch__task` for this parent on this turn; \
+                 that would block until subtasks finish, but queued parents only start after you finish — deadlock.\n\n\
+                 **What to do:** end this turn now. When this workflow becomes ACTIVE, use **mcp__dispatch__all_tasks** \
+                 with `{{\"parentId\":\"{parent_id}\"}}` (or **create_parent_and_run** next time for one-shot create+wait).\n\
+                 Do **not** invent task results from the goal alone."
+            )
+        } else {
+            format!(
+                "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
+                 IMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\n\
+                 • **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{{\"parentId\":\"{parent_id}\"}}` (optional timeoutSeconds).\n\
+                 • **One-shot next time:** use **mcp__dispatch__create_parent_and_run** to create this parent and wait for every task in one call.\n\
+                 • Or call **mcp__dispatch__task** per task label if you only need some outputs.\n\
+                 Do **not** invent task results from the goal alone."
+            )
+        };
+        ToolResult::ok(body)
     }
 
     pub(crate) fn parse_parent_id_from_create_output(content: &str) -> Option<String> {
@@ -562,19 +575,45 @@ impl DispatchServer {
 
     // ===== dispatch_task =====
 
+    /// Waiting on a **queued** parent deadlocks when the same admin agent holds an active
+    /// dispatch turn (e.g. Cowork lead): subtasks never start until the current turn ends,
+    /// but this tool blocks the turn until subtasks complete.
+    fn reject_wait_if_parent_queued(&self, parent_id: &str) -> Option<ToolResult> {
+        let state = self.read_state();
+        let p = state.parents.iter().find(|p| p.id == parent_id)?;
+        if p.status != "queued" {
+            return None;
+        }
+        Some(ToolResult::err(format!(
+            "Parent `{parent_id}` is QUEUED — another dispatch is still active for admin `{}`.\n\n\
+             **Deadlock:** subtasks under a queued parent are not scheduled until that active workflow finishes, \
+             but `dispatch_task` / `dispatch_all_tasks` blocks this turn until those subtasks complete.\n\n\
+             **What to do:** End this turn after `create_parent` only (no `all_tasks`). \
+             Or finish/Cancel the other workflow first. \
+             Or use `create_parent_and_run` only when no other dispatch is active for this admin.\n\
+             (Cowork/DAG will pick up the queued parent automatically when the pipeline is free.)",
+            self.admin_folder
+        )))
+    }
+
     pub async fn dispatch_task(
         &self,
         parent_id: &str,
         task_label: &str,
         timeout_seconds: Option<u64>,
     ) -> ToolResult {
+        if let Some(e) = self.reject_wait_if_parent_queued(parent_id) {
+            return e;
+        }
+
         let start_task = {
             let state = self.read_state();
-            state
-                .parents
+            let Some(p) = state.parents.iter().find(|p| p.id == parent_id) else {
+                return ToolResult::err(format!("Parent not found: {parent_id}"));
+            };
+            p.tasks
                 .iter()
-                .find(|p| p.id == parent_id)
-                .and_then(|p| p.tasks.iter().find(|t| t.label == task_label))
+                .find(|t| t.label == task_label)
                 .cloned()
         };
 
@@ -662,6 +701,10 @@ impl DispatchServer {
         parent_id: &str,
         timeout_seconds: Option<u64>,
     ) -> ToolResult {
+        if let Some(e) = self.reject_wait_if_parent_queued(parent_id) {
+            return e;
+        }
+
         let parent_tasks = {
             let state = self.read_state();
             let Some(p) = state.parents.iter().find(|p| p.id == parent_id) else {
