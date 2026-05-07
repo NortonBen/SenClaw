@@ -91,6 +91,10 @@ pub trait CoreApi: Send + Sync {
     /// Tear down the core for a JID.
     fn destroy_agent(&self, jid: &str) {}
 
+    /// Restrict the tool whitelist for an existing core (empty = all tools).
+    /// Called by AgentPool after computing use_tools from binding.allowed_tools.
+    fn set_use_tools(&self, _jid: &str, _tools: Vec<String>) {}
+
     /// Hot-update skip-permission flags for an existing core.
     fn update_skip_permissions(&self, jid: &str, skip: bool) {}
 

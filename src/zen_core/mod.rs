@@ -626,6 +626,7 @@ pub trait ZenCore: Send + Sync {
     fn clear_working_dir(&self);
     fn update_skip_permissions(&self, skip: bool);
     fn update_thinking(&self, enabled: bool);
+    fn set_use_tools(&self, tools: Vec<String>);
     fn reload_skills(&self, disabled: &[String]);
     fn has_session_tool_results(&self) -> bool;
 

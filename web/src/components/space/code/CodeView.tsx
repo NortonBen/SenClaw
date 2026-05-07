@@ -10,11 +10,10 @@ import {
 import { FileTree } from './FileTree';
 import { GitLog } from './GitLog';
 import { FolderPicker } from './FolderPicker';
-import { AgentCommandInput } from './AgentCommandInput';
 import type { CodeSession, FileNode, GitCommit, CodeChatGroup, CodeChatMessage } from '../../../hooks/useCode';
 import type { PermissionMessage } from '../../../types';
 import { useAppContext } from '../../../contexts/AppContext';
-import { CommonChatInput, CommonPermissionRequestCard } from '../../chat-common';
+import { AgentCommandInput, CommonChatInput, CommonPermissionRequestCard } from '../../chat-common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 

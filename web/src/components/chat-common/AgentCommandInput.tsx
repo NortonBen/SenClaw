@@ -1,6 +1,7 @@
 import React from 'react';
 import { Input, Typography, theme } from 'antd';
-import { getChatActionButtonStyle, getChatTextareaStyle } from '../../chat-common';
+import { getChatActionButtonStyle, getChatTextareaStyle } from './chatInputStyles';
+import { shouldIgnoreEnterSubmit, useGuardedChatSubmit } from './useGuardedChatSubmit';
 
 const { Text } = Typography;
 
@@ -16,7 +17,7 @@ interface TriggerState {
   query: string;
 }
 
-interface Props {
+export interface AgentCommandInputProps {
   value: string;
   disabled?: boolean;
   sending?: boolean;
@@ -24,6 +25,12 @@ interface Props {
   mentionItems: AgentCommandItem[];
   onChange: (value: string) => void;
   onSubmit: () => void;
+  /** Khi có: override điều kiện disabled nút (vd. pause/resume không cần text). */
+  actionButtonDisabled?: boolean;
+  actionTitle?: string;
+  actionAriaLabel?: string;
+  renderActionIcon?: React.ReactNode;
+  placeholder?: string;
 }
 
 export function AgentCommandInput({
@@ -34,10 +41,16 @@ export function AgentCommandInput({
   mentionItems,
   onChange,
   onSubmit,
-}: Props) {
+  actionButtonDisabled,
+  actionTitle = 'Send',
+  actionAriaLabel = 'Send',
+  renderActionIcon,
+  placeholder = 'Nhap yeu cau... (/ command, @ file/folder, # skill)',
+}: AgentCommandInputProps) {
   const { token } = theme.useToken();
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [skills, setSkills] = React.useState<AgentCommandItem[]>([]);
+  const guardedSubmit = useGuardedChatSubmit(onSubmit);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -45,7 +58,7 @@ export function AgentCommandInput({
       .then(r => (r.ok ? r.json() : { skills: [] }))
       .then(data => {
         if (cancelled) return;
-        const items: AgentCommandItem[] = (data.skills ?? []).map((s: any) => ({
+        const items: AgentCommandItem[] = (data.skills ?? []).map((s: { name?: string; description?: string }) => ({
           key: String(s.name ?? ''),
           desc: typeof s.description === 'string' ? s.description : undefined,
         }));
@@ -60,7 +73,7 @@ export function AgentCommandInput({
   }, []);
 
   const triggerState = React.useMemo<TriggerState | null>(() => {
-    const m = value.match(/(?:^|\s)([\/@#])([^\s]*)$/);
+    const m = value.match(/(?:^|\s)([/@#])([^\s]*)$/);
     if (!m) return null;
     return { trigger: m[1] as TriggerKind, query: (m[2] ?? '').toLowerCase() };
   }, [value]);
@@ -84,12 +97,15 @@ export function AgentCommandInput({
 
   const applySuggestion = (item: AgentCommandItem) => {
     if (!triggerState) return;
-    const replaced = value.replace(/([\/@#])[^\s]*$/, `${triggerState.trigger}${item.key} `);
+    const replaced = value.replace(/([/@#])[^\s]*$/, `${triggerState.trigger}${item.key} `);
     onChange(replaced);
     setActiveIndex(0);
   };
 
   const titleByTrigger = triggerState?.trigger === '/' ? 'Command' : triggerState?.trigger === '@' ? 'File/Folder' : 'Skill';
+
+  const defaultButtonDisabled = !value.trim() || !!disabled || !!sending;
+  const buttonDisabled = actionButtonDisabled !== undefined ? actionButtonDisabled : defaultButtonDisabled;
 
   return (
     <div style={{ position: 'relative' }}>
@@ -161,7 +177,7 @@ export function AgentCommandInput({
         <Input.TextArea
           value={value}
           onChange={e => onChange(e.target.value)}
-          placeholder="Nhap yeu cau... (/ command, @ file/folder, # skill)"
+          placeholder={placeholder}
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={disabled}
           onKeyDown={(e) => {
@@ -185,13 +201,15 @@ export function AgentCommandInput({
               }
               if (e.key === 'Escape') {
                 e.preventDefault();
-                onChange(value.replace(/([\/@#])[^\s]*$/, ''));
+                onChange(value.replace(/([/@#])[^\s]*$/, ''));
                 return;
               }
             }
             if (e.key === 'Enter' && !e.shiftKey) {
+              if (shouldIgnoreEnterSubmit(e)) return;
               e.preventDefault();
-              onSubmit();
+              if (buttonDisabled) return;
+              guardedSubmit();
             }
           }}
           style={{
@@ -202,16 +220,22 @@ export function AgentCommandInput({
           }}
         />
         <button
-          onClick={onSubmit}
-          disabled={!value.trim() || !!disabled || !!sending}
+          type="button"
+          onClick={() => {
+            if (buttonDisabled) return;
+            guardedSubmit();
+          }}
+          disabled={buttonDisabled}
           className="w-10 h-10 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
-          style={getChatActionButtonStyle(token, !value.trim() || !!disabled || !!sending)}
-          aria-label="Send"
-          title="Send"
+          style={getChatActionButtonStyle(token, buttonDisabled)}
+          aria-label={actionAriaLabel}
+          title={actionTitle}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-            <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
-          </svg>
+          {renderActionIcon ?? (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+              <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+            </svg>
+          )}
         </button>
       </div>
     </div>

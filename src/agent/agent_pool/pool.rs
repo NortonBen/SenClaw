@@ -929,6 +929,22 @@ impl AgentPool {
             .init_agent(&binding.folder)
             .await;
 
+        // Compute use_tools whitelist — mirrors TS AgentPool.ts:514-523.
+        // Task is always excluded (sub-agent spawning not allowed in pool agents).
+        // Empty allowed_tools = all tools available (TS: null → ALL_POOLED_TOOLS).
+        const EXCLUDED_TOOLS: &[&str] = &["Task"];
+        let use_tools: Vec<String> = match &binding.allowed_tools {
+            Some(list) => list
+                .iter()
+                .filter(|t| !EXCLUDED_TOOLS.contains(&t.as_str()))
+                .cloned()
+                .collect(),
+            None => Vec::new(), // empty = no filter (all tools)
+        };
+        if !use_tools.is_empty() {
+            self.core_api.set_use_tools(&binding.jid, use_tools);
+        }
+
         // createSession mirrors TS 641-653. If runtime core is not wired, default no-op.
         self.core_api.create_session(&binding.jid)?;
 

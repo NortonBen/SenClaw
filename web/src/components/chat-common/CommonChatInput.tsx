@@ -1,6 +1,7 @@
 import React from 'react';
 import { theme } from 'antd';
 import { getChatActionButtonStyle, getChatTextareaStyle } from './chatInputStyles';
+import { shouldIgnoreEnterSubmit, useGuardedChatSubmit } from './useGuardedChatSubmit';
 
 export interface CommonChatInputProps {
   className?: string;
@@ -42,14 +43,16 @@ export function CommonChatInput({
 }: CommonChatInputProps) {
   const { token } = theme.useToken();
   const placeholderClass = `common-chat-ph-${React.useId().replace(/[^a-zA-Z0-9_-]/g, '') || 'x'}`;
+  const guardedSubmit = useGuardedChatSubmit(onSubmit);
 
   const submit = () => {
-    if (actionDisabled || !onSubmit) return;
-    onSubmit();
+    if (actionDisabled) return;
+    guardedSubmit();
   };
 
   const keyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (shouldIgnoreEnterSubmit(e)) return;
       e.preventDefault();
       submit();
     }

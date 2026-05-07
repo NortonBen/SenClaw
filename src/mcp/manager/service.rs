@@ -327,6 +327,10 @@ impl McpManager {
                         "Create a parent dispatch with multiple tasks",
                     ),
                     t(
+                        "create_parent_and_run",
+                        "Create parent and wait for all tasks; returns combined results",
+                    ),
+                    t(
                         "dispatch_task",
                         "Dispatch a task within a parent and wait for its result",
                     ),

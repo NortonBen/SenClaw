@@ -1,6 +1,6 @@
 //! Dispatch MCP server. Port target: src-old/mcp/dispatch-server.ts
 //!
-//! Tools: list_agents, create_parent, dispatch_task, dispatch_all_tasks.
+//! Tools: list_agents, create_parent, create_parent_and_run, dispatch_task, dispatch_all_tasks.
 //! Manages DAG task orchestration via a shared state file (`dispatch-state.json`)
 //! with file-based locking — identical semantics to the TS DispatchBridge.
 
@@ -168,11 +168,20 @@ impl DispatchServer {
     }
 
     fn resolve_agent(&self, state: &DispatchState, agent_name: &str) -> Option<ResolvedAgent> {
-        // persona:{name} format
-        if let Some(persona_name) = agent_name.strip_prefix("persona:") {
+        let trimmed = agent_name.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Explicit virtual: persona:{name}
+        if let Some(persona_name) = trimmed.strip_prefix("persona:") {
+            let persona_name = persona_name.trim();
+            if persona_name.is_empty() {
+                return None;
+            }
             if self.persona_resolver.as_ref()?.get(persona_name).is_some() {
                 return Some(ResolvedAgent {
-                    id: agent_name.to_owned(),
+                    id: format!("persona:{persona_name}"),
                     jid: String::new(),
                     is_virtual: true,
                     persona_name: Some(persona_name.to_owned()),
@@ -181,17 +190,36 @@ impl DispatchServer {
             return None;
         }
 
-        let lower = agent_name.to_lowercase();
-        state
-            .agents
-            .iter()
-            .find(|a| a.name.to_lowercase() == lower || a.id.to_lowercase() == lower)
-            .map(|a| ResolvedAgent {
+        // Persistent agent from daemon-synced dispatch state
+        let lower = trimmed.to_lowercase();
+        if let Some(a) = state.agents.iter().find(|a| {
+            a.name.to_lowercase() == lower || a.id.to_lowercase() == lower
+        }) {
+            return Some(ResolvedAgent {
                 id: a.id.clone(),
                 jid: a.jid.clone(),
                 is_virtual: false,
                 persona_name: None,
-            })
+            });
+        }
+
+        // Bare name matches a virtual persona (LLMs often omit the persona: prefix)
+        if let Some(resolver) = &self.persona_resolver {
+            if let Some(p) = resolver
+                .list()
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(trimmed))
+            {
+                return Some(ResolvedAgent {
+                    id: format!("persona:{}", p.name),
+                    jid: String::new(),
+                    is_virtual: true,
+                    persona_name: Some(p.name.clone()),
+                });
+            }
+        }
+
+        None
     }
 
     // ===== DAG cycle detection (DFS) =====
@@ -484,11 +512,52 @@ impl DispatchServer {
 
         ToolResult::ok(format!(
             "Parent task created: {parent_id}\n{status_note}\nTasks:\n{task_lines}\n\n\
-             Use dispatch_all_tasks(\"{parent_id}\") to wait for **all** tasks in dependency order \
-             in one call. Or use dispatch_task(\"{parent_id}\", \"<taskLabel>\") per task if you \
-             only need specific results. DispatchBridge schedules ready tasks and switches \
-             workspaces automatically."
+             IMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\n\
+             • **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{{\"parentId\":\"{parent_id}\"}}` (optional timeoutSeconds).\n\
+             • **One-shot next time:** use **mcp__dispatch__create_parent_and_run** to create this parent and wait for every task in one call.\n\
+             • Or call **mcp__dispatch__task** per task label if you only need some outputs.\n\
+             Do **not** invent task results from the goal alone."
         ))
+    }
+
+    pub(crate) fn parse_parent_id_from_create_output(content: &str) -> Option<String> {
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("Parent task created:") {
+                let id = rest.trim();
+                if !id.is_empty() {
+                    return Some(id.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// [`create_parent`](Self::create_parent) then [`dispatch_all_tasks`](Self::dispatch_all_tasks) — one MCP round-trip.
+    pub async fn create_parent_and_run(
+        &self,
+        goal: &str,
+        tasks: Vec<DispatchTaskInput>,
+        timeout_seconds: Option<u64>,
+    ) -> ToolResult {
+        let created = self.create_parent(goal, tasks, timeout_seconds);
+        if created.is_error {
+            return created;
+        }
+        let Some(pid) = Self::parse_parent_id_from_create_output(&created.content) else {
+            return ToolResult::err(format!(
+                "Internal error: could not parse parent id from create_parent output:\n{}",
+                created.content
+            ));
+        };
+        let mut out = created.content;
+        out.push_str("\n\n---\nWaiting for all tasks (mcp__dispatch__all_tasks)…\n\n");
+        let run = self.dispatch_all_tasks(&pid, timeout_seconds).await;
+        if run.is_error {
+            return ToolResult::err(format!("{out}\n{}", run.content));
+        }
+        out.push_str(&run.content);
+        ToolResult::ok(out)
     }
 
     // ===== dispatch_task =====
@@ -710,7 +779,7 @@ impl McpDispatchServer {
     }
 
     #[rmcp::tool(
-        description = "Create a parent dispatch with multiple tasks. Returns parent ID; use dispatch_all_tasks (or dispatch_task per label) to collect results."
+        description = "Create a parent dispatch with multiple tasks. Subtasks start in the daemon; you MUST then call mcp__dispatch__all_tasks (or use create_parent_and_run) — never invent task results."
     )]
     fn create_parent(
         &self,
@@ -720,6 +789,21 @@ impl McpDispatchServer {
     ) -> String {
         self.inner()
             .create_parent(&p.goal, p.tasks, p.timeout_seconds)
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Create a dispatch parent and block until every subtask finishes (dependency order). Same args as create_parent. Prefer this when the user wants the full pipeline without a second tool call."
+    )]
+    async fn create_parent_and_run(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CreateParentParams,
+        >,
+    ) -> String {
+        self.inner()
+            .create_parent_and_run(&p.goal, p.tasks, p.timeout_seconds)
+            .await
             .content
     }
 
@@ -819,6 +903,15 @@ mod tests {
     fn topo_task_order_unknown_dep_errors() {
         let tasks = vec![dummy_task("a", &["missing"])];
         assert!(DispatchServer::topo_task_order(&tasks).is_err());
+    }
+
+    #[test]
+    fn parse_parent_id_from_create_output_works() {
+        let s = "Parent task created: p-test-0001\nStatus: ACTIVE\n";
+        assert_eq!(
+            DispatchServer::parse_parent_id_from_create_output(s).as_deref(),
+            Some("p-test-0001")
+        );
     }
 
     #[test]

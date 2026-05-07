@@ -217,6 +217,11 @@ impl CoreApi for ZenCoreApi {
         self.handlers.lock().unwrap().remove(jid);
     }
 
+    fn set_use_tools(&self, jid: &str, tools: Vec<String>) {
+        let engine = self.ensure_engine(jid);
+        engine.set_use_tools(tools);
+    }
+
     fn update_skip_permissions(&self, jid: &str, skip: bool) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.update_skip_permissions(skip);

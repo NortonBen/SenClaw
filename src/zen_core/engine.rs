@@ -765,6 +765,11 @@ impl ZenCore for ZenEngine {
         self.options.write().unwrap().thinking = enabled;
     }
 
+    fn set_use_tools(&self, tools: Vec<String>) {
+        info!("[{}] set_use_tools: {:?}", self.instance_id, tools);
+        self.options.write().unwrap().use_tools = tools;
+    }
+
     fn reload_skills(&self, disabled: &[String]) {
         info!(
             "[{}] reload_skills ({} disabled)",
