@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css'; 
 import 'highlight.js/styles/github.css'; 
-import type { ChatMessage } from '../types';
+import type { ChatMessage, ImageAttachment } from '../types';
 import { PermissionCard, QuestionCard } from './PermissionCard';
 import { useAppContext } from '../contexts/AppContext';
 
@@ -64,7 +64,24 @@ function MarkdownContent({ content, isDarkMode }: { content: string, isDarkMode:
   );
 }
 
-function AgentBubble({ text, timestamp, isDarkMode }: { text: string; timestamp: string, isDarkMode: boolean }) {
+function ImageAttachments({ attachments }: { attachments: ImageAttachment[] }) {
+  if (!attachments || attachments.length === 0) return null;
+  
+  return (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {attachments.map((img, i) => (
+        <img
+          key={i}
+          src={img.dataUrl}
+          alt=""
+          className="max-w-[200px] max-h-[200px] object-cover rounded-lg border"
+        />
+      ))}
+    </div>
+  );
+}
+
+function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: string; timestamp: string; isDarkMode: boolean; attachments?: ImageAttachment[] }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const { token } = theme.useToken();
@@ -104,6 +121,7 @@ function AgentBubble({ text, timestamp, isDarkMode }: { text: string; timestamp:
         }}
       >
         <MarkdownContent content={text} isDarkMode={isDarkMode} />
+        <ImageAttachments attachments={attachments || []} />
       </div>
       <div className="flex items-center mt-1 gap-1">
         <Text type="secondary" className="text-[11px] ml-1 flex-1">{formatTime(timestamp)}</Text>
@@ -164,7 +182,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
     );
   }
 
-  const { role, text, timestamp, senderName } = message;
+  const { role, text, timestamp, senderName, attachments } = message;
 
   if (role === 'user') {
     return (
@@ -179,6 +197,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
             }}
           >
             <MarkdownContent content={text} isDarkMode={true} />
+            <ImageAttachments attachments={attachments || []} />
           </div>
           <Text type="secondary" className="text-[10px] font-medium mt-1 text-right pr-1 block">
             {formatTime(timestamp)}
@@ -204,7 +223,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
         {isAgent ? 'AI' : (senderName?.charAt(0).toUpperCase() ?? '?')}
       </div>
       {isAgent ? (
-        <AgentBubble text={text} timestamp={timestamp} isDarkMode={isDarkMode} />
+        <AgentBubble text={text} timestamp={timestamp} isDarkMode={isDarkMode} attachments={attachments} />
       ) : (
         <div className="max-w-[85%]">
           {senderName && (
@@ -221,6 +240,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
             }}
           >
             <MarkdownContent content={text} isDarkMode={isDarkMode} />
+            <ImageAttachments attachments={attachments || []} />
           </div>
           <Text type="secondary" className="text-[10px] font-medium mt-1 ml-1 block">
             {formatTime(timestamp)}

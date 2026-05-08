@@ -153,6 +153,8 @@ mod tests {
             timeout: None,
             blocking: None,
             is_async: None,
+            include_history: None,
+            history_limit: None,
         }
     }
 

@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(result2, Some("engine2".to_string()));
 
         // Outside context, should be None
-        assert_eq!(get_engine_store(), None);
+        assert!(get_engine_store().is_none());
     }
 
     #[tokio::test]
@@ -230,7 +230,7 @@ mod tests {
             hook_manager: Arc::new(HookManager::empty()),
         };
 
-        let result = run_with_engine(store, || async {
+        let result = run_with_engine(store.clone(), || async {
             // Inside outer context
             let outer = get_engine_store().unwrap().instance_id.clone();
 

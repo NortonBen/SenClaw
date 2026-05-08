@@ -107,6 +107,9 @@ pub struct LlmConfig {
     pub max_tokens: u32,
     #[serde(rename = "contextLength")]
     pub context_length: u32,
+    /// Explicitly declare whether vision input is supported; undefined = auto-infer from modelName
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

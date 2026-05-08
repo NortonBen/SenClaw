@@ -157,8 +157,8 @@ impl super::Db {
                 r#"
                 INSERT OR IGNORE INTO group_messages
                   (message_id, chat_jid, sender_jid, sender_name, content,
-                   timestamp, is_from_me, is_bot_reply, reply_to_id, media_type)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+                   timestamp, is_from_me, is_bot_reply, reply_to_id, media_type, attachments)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
                 "#,
                 params![
                     msg.message_id,
@@ -171,6 +171,7 @@ impl super::Db {
                     msg.is_bot_reply as i64,
                     msg.reply_to_id,
                     msg.media_type,
+                    msg.attachments,
                 ],
             )?;
 

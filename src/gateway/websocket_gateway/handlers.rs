@@ -679,10 +679,32 @@ pub(crate) async fn handle_message_send(
     }
     let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
     let text = msg["text"].as_str().unwrap_or("").trim().to_string();
-    if group_jid.is_empty() || text.is_empty() {
+    
+    // Extract attachments if present
+    let attachments: Vec<super::wire::ImageAttachment> = msg["attachments"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    let data_url = v["dataUrl"].as_str().unwrap_or("");
+                    let mime_type = v["mimeType"].as_str().unwrap_or("");
+                    if data_url.is_empty() || mime_type.is_empty() {
+                        None
+                    } else {
+                        Some(super::wire::ImageAttachment {
+                            data_url: data_url.to_string(),
+                            mime_type: mime_type.to_string(),
+                        })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    if group_jid.is_empty() || (text.is_empty() && attachments.is_empty()) {
         send_json(
             sender,
-            &serde_json::json!({"type": "error", "message": "groupJid and text required"}),
+            &serde_json::json!({"type": "error", "message": "groupJid and text or attachments required"}),
         );
         return;
     }
@@ -736,6 +758,12 @@ pub(crate) async fn handle_message_send(
     };
 
     // Persist user message to conversation history so it appears in history:load.
+    let attachments_json = if attachments.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&attachments).unwrap_or_default())
+    };
+    
     let stored = crate::types::StoredMessage {
         message_id: format!("web:{}", Uuid::new_v4()),
         chat_jid: group_jid.clone(),
@@ -747,13 +775,23 @@ pub(crate) async fn handle_message_send(
         is_bot_reply: false,
         reply_to_id: None,
         media_type: None,
+        attachments: attachments_json,
     };
     let limit = state.config.agent.max_messages_per_group;
     if let Err(e) = state.db.insert_group_message(&stored, limit) {
         tracing::warn!("[WebSocketGateway] Failed to persist web message for {group_jid}: {e}");
     }
 
-    state.api.enqueue_and_process(&group_jid, &group, &text);
+    // Convert attachments to the format expected by the agent system
+    let agent_attachments: Vec<crate::agent::input_builder::ImageAttachment> = attachments
+        .into_iter()
+        .map(|a| crate::agent::input_builder::ImageAttachment {
+            url: a.data_url,
+            mime_type: Some(a.mime_type),
+        })
+        .collect();
+
+    state.api.enqueue_and_process(&group_jid, &group, &text, &agent_attachments);
 }
 
 pub(crate) async fn handle_permission_response(

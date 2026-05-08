@@ -31,7 +31,7 @@ use super::cowork::{
 use super::embedding_config::{embedding_config_get, embedding_config_save};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
-    llm_config_set_active, llm_config_test,
+    llm_config_set_active, llm_config_test, llm_config_update,
 };
 use super::mcp::{
     hooks_get, hooks_put, mcp_servers_connect, mcp_servers_delete, mcp_servers_disconnect,
@@ -193,7 +193,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/llm-config/active", post(llm_config_set_active))
         .route("/api/llm-config/test", post(llm_config_test))
         .route("/api/llm-config/models", post(llm_config_fetch_models))
-        .route("/api/llm-config/:id", delete(llm_config_delete))
+        .route("/api/llm-config/:id", delete(llm_config_delete).patch(llm_config_update))
         // Embedding provider config
         .route(
             "/api/embedding-config",

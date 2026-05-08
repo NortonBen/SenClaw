@@ -1,6 +1,12 @@
 // ===== GroupInfo (wire format, camelCase) =====
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ImageAttachment {
+    pub(crate) data_url: String,
+    pub(crate) mime_type: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct GroupInfo {

@@ -31,6 +31,8 @@ export interface AgentCommandInputProps {
   actionAriaLabel?: string;
   renderActionIcon?: React.ReactNode;
   placeholder?: string;
+  onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
+  onFileSelect?: (files: File[]) => void;
 }
 
 export function AgentCommandInput({
@@ -46,11 +48,27 @@ export function AgentCommandInput({
   actionAriaLabel = 'Send',
   renderActionIcon,
   placeholder = 'Nhap yeu cau... (/ command, @ file/folder, # skill)',
+  onPaste,
+  onFileSelect,
 }: AgentCommandInputProps) {
   const { token } = theme.useToken();
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [skills, setSkills] = React.useState<AgentCommandItem[]>([]);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const guardedSubmit = useGuardedChatSubmit(onSubmit);
+
+  const handleFileButtonClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0 && onFileSelect) {
+      onFileSelect(Array.from(files));
+    }
+    // Reset input so same file can be selected again
+    e.target.value = '';
+  };
 
   React.useEffect(() => {
     let cancelled = false;
@@ -177,6 +195,7 @@ export function AgentCommandInput({
         <Input.TextArea
           value={value}
           onChange={e => onChange(e.target.value)}
+          onPaste={onPaste}
           placeholder={placeholder}
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={disabled}
@@ -214,11 +233,77 @@ export function AgentCommandInput({
           }}
           style={{
             ...getChatTextareaStyle(token),
-            borderRadius: 16,
+            borderRadius: 12,
             resize: 'none',
             minHeight: 44,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            transition: 'all 0.2s ease-in-out',
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = token.colorPrimary;
+            e.currentTarget.style.boxShadow = `0 0 0 3px ${token.colorPrimaryBg}`;
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = token.colorBorderSecondary;
+            e.currentTarget.style.boxShadow = 'none';
           }}
         />
+        {onFileSelect && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+              accept="image/*"
+              multiple
+            />
+            <button
+              type="button"
+              onClick={handleFileButtonClick}
+              disabled={disabled}
+              className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{
+                background: disabled ? token.colorFillTertiary : token.colorBgContainer,
+                color: disabled ? token.colorTextTertiary : token.colorTextSecondary,
+                border: `1px solid ${disabled ? token.colorBorder : token.colorBorderSecondary}`,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s ease-in-out',
+              }}
+              onMouseEnter={(e) => {
+                if (!disabled) {
+                  e.currentTarget.style.background = token.colorFillSecondary;
+                  e.currentTarget.style.borderColor = token.colorPrimary;
+                  e.currentTarget.style.color = token.colorPrimary;
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!disabled) {
+                  e.currentTarget.style.background = token.colorBgContainer;
+                  e.currentTarget.style.borderColor = token.colorBorderSecondary;
+                  e.currentTarget.style.color = token.colorTextSecondary;
+                }
+              }}
+              aria-label="Attach file"
+              title="Attach image file"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+                className="w-5 h-5"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1120.5 7.372V8.25M17 19.5v-2.25m-5.625-5.625h3.75"
+                />
+              </svg>
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={() => {
@@ -226,8 +311,29 @@ export function AgentCommandInput({
             guardedSubmit();
           }}
           disabled={buttonDisabled}
-          className="w-10 h-10 rounded-full flex items-center justify-center transition-colors flex-shrink-0"
-          style={getChatActionButtonStyle(token, buttonDisabled)}
+          className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+          style={{
+            background: buttonDisabled ? token.colorFillTertiary : token.colorPrimary,
+            color: buttonDisabled ? token.colorTextTertiary : '#ffffff',
+            cursor: buttonDisabled ? 'not-allowed' : 'pointer',
+            border: buttonDisabled ? `1px solid ${token.colorBorder}` : 'none',
+            transition: 'all 0.2s ease-in-out',
+            boxShadow: buttonDisabled ? 'none' : '0 2px 8px rgba(0, 0, 0, 0.15)',
+          }}
+          onMouseEnter={(e) => {
+            if (!buttonDisabled) {
+              e.currentTarget.style.background = token.colorPrimaryHover;
+              e.currentTarget.style.transform = 'scale(1.05)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!buttonDisabled) {
+              e.currentTarget.style.background = token.colorPrimary;
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)';
+            }
+          }}
           aria-label={actionAriaLabel}
           title={actionTitle}
         >

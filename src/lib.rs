@@ -102,11 +102,12 @@ impl agent::permission_bridge::PermissionBridgeApi for RealPermissionApi {
 
 #[async_trait]
 impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
-    fn enqueue_and_process(&self, group_jid: &str, group: &crate::types::GroupBinding, text: &str) {
+    fn enqueue_and_process(&self, group_jid: &str, group: &crate::types::GroupBinding, text: &str, attachments: &[crate::agent::input_builder::ImageAttachment]) {
         let agent_pool = Arc::clone(&self.agent_pool);
         let jid = group_jid.to_string();
         let g = group.clone();
         let t = text.to_string();
+        let att = attachments.to_vec();
         let gq = Arc::clone(&self.group_queue);
         let jid_key = jid.clone();
         tokio::spawn(async move {
@@ -114,7 +115,7 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
                 &jid_key,
                 Box::pin(async move {
                     let _ =
-                        types::AgentApi::process_and_wait(agent_pool.as_ref(), &jid, &g, &t).await;
+                        types::AgentApi::process_and_wait_with_images(agent_pool.as_ref(), &jid, &g, &t, &att).await;
                 }),
             )
             .await;

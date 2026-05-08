@@ -22,6 +22,7 @@ use crate::agent::dispatch_bridge::{
     build_dispatch_resume_hint, AdminActivityCallback, DispatchBridgeApi,
 };
 use crate::agent::group_queue::GroupQueue;
+use crate::agent::input_builder::ImageAttachment;
 use crate::agent::permission_bridge::{AskQuestionPayload, PermissionBridge, PermissionPayload};
 use crate::agent::session_bridge;
 use crate::config::Config;
@@ -629,6 +630,7 @@ impl AgentPool {
                 is_bot_reply: true,
                 reply_to_id: None,
                 media_type: None,
+                attachments: None,
             };
             let limit = self
                 .config
@@ -1061,6 +1063,18 @@ impl AgentPool {
         prompt: &str,
         retries_left: u32,
     ) -> Result<()> {
+        self.process_and_wait_inner_with_images(jid, group, prompt, &[], retries_left).await
+    }
+
+    /// Process-and-wait with image attachments support.
+    pub(crate) async fn process_and_wait_inner_with_images(
+        &self,
+        jid: &str,
+        group: &GroupBinding,
+        prompt: &str,
+        attachments: &[ImageAttachment],
+        retries_left: u32,
+    ) -> Result<()> {
         self.get_or_create(group).await?;
         if group.group_type == "code" {
             if let Some(code_ws) = group
@@ -1171,15 +1185,65 @@ impl AgentPool {
         // ---- typing indicator ON ----
         self.send_typing(jid, true, group.bot_token.as_deref());
 
-        // ---- call process_user_input (non-blocking) ----
+        // ---- process user input with InputBuilder (image handling) ----
         // Mirrors TS AgentPool.ts:826: core.processUserInput(fullPrompt).
-        // Stub CoreApi no-ops; real sema-core starts processing and emits events.
+        // InputBuilder detects and processes image URLs/attachments.
         tracing::info!(
             "[AgentPool] process_user_input start jid={} prompt_len={}",
             jid,
             full_prompt.len()
         );
-        self.core_api.process_user_input(jid, &full_prompt)?;
+
+        // Use InputBuilder to process the prompt for images
+        let build_result = if attachments.is_empty() {
+            crate::agent::input_builder::build_agent_input(&full_prompt, None)
+        } else {
+            let ws_attachments: Vec<crate::agent::input_builder::WebSocketImageAttachment> = attachments
+                .iter()
+                .map(|a| crate::agent::input_builder::WebSocketImageAttachment {
+                    data_url: a.url.clone(),
+                    mime_type: a.mime_type.clone().unwrap_or_else(|| {
+                        // Try to detect MIME type from data URL if not provided
+                        if a.url.starts_with("data:image/") {
+                            a.url.split(';').next().unwrap_or("image/png").to_string()
+                        } else {
+                            "image/png".to_string()
+                        }
+                    }),
+                })
+                .collect();
+            crate::agent::input_builder::build_agent_input_with_attachments(&full_prompt, &ws_attachments)
+        };
+
+        // For now, convert back to string for CoreApi (future: extend CoreApi to support Input enum)
+        let processed_prompt = match build_result.input {
+            crate::agent::input_builder::Input::Text(text) => text,
+            crate::agent::input_builder::Input::Blocks(blocks) => {
+                // Convert blocks back to text for now (image support will be added later)
+                let text_parts: Vec<String> = blocks
+                    .iter()
+                    .filter_map(|block| block.text.clone())
+                    .collect();
+                text_parts.join("\n")
+            }
+        };
+
+        // Log image processing results
+        if !build_result.image_srcs.is_empty() {
+            tracing::info!(
+                "[AgentPool] Detected {} image sources: {:?}",
+                build_result.image_srcs.len(),
+                build_result.image_srcs
+            );
+        }
+        if !build_result.failures.is_empty() {
+            tracing::warn!(
+                "[AgentPool] Image load failures: {:?}",
+                build_result.failures
+            );
+        }
+
+        self.core_api.process_user_input(jid, &processed_prompt)?;
 
         let bot_token = group.bot_token.clone();
         let jid_owned = jid.to_string();

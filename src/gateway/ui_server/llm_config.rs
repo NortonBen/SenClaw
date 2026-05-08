@@ -33,6 +33,9 @@ pub(crate) struct NewLlmConfigBody {
     max_tokens: u32,
     #[serde(rename = "contextLength")]
     context_length: u32,
+    /// Explicitly declare whether vision input is supported; undefined = auto-infer from modelName
+    #[serde(default)]
+    vision: Option<bool>,
 }
 
 /// Body for setting active model.
@@ -55,6 +58,14 @@ pub(crate) struct LlmProviderBody {
     #[serde(rename = "apiKey")]
     api_key: String,
     adapt: String,
+}
+
+/// Body for updating LLM config fields (partial update).
+#[derive(Deserialize)]
+pub(crate) struct UpdateLlmConfigBody {
+    /// Explicitly declare whether vision input is supported; null = reset to auto-infer
+    #[serde(default)]
+    vision: Option<bool>,
 }
 
 /// GET /api/llm-config — list all configs
@@ -91,6 +102,7 @@ pub(crate) async fn llm_config_create(
         adapt: body.adapt,
         max_tokens: body.max_tokens,
         context_length: body.context_length,
+        vision: body.vision,
     };
     save_llm_config(&s.config.paths.global_config_path, &cfg)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -115,6 +127,39 @@ pub(crate) async fn llm_config_delete(
     }
     let _ = remove_llm_config(&s.config.paths.global_config_path, &id);
     StatusCode::NO_CONTENT
+}
+
+/// PATCH /api/llm-config/{id} — update config fields
+pub(crate) async fn llm_config_update(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<UpdateLlmConfigBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid ID".to_string()));
+    }
+
+    // Load existing configs
+    let stored = load_llm_configs(&s.config.paths.global_config_path);
+    
+    // Find the config to update
+    let mut cfg = stored
+        .configs
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Config not found".to_string()))?;
+
+    // Update vision field if provided
+    if body.vision.is_some() {
+        cfg.vision = body.vision;
+    }
+
+    // Save the updated config
+    save_llm_config(&s.config.paths.global_config_path, &cfg)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::to_value(cfg).unwrap_or_default()))
 }
 
 /// POST /api/llm-config/active — set active main or quick model

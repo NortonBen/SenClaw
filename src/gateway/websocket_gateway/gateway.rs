@@ -15,7 +15,7 @@ use crate::types::GroupBinding;
 #[async_trait]
 pub trait WsGatewayApi: Send + Sync {
     /// Enqueue a message to the group queue for agent processing.
-    fn enqueue_and_process(&self, _group_jid: &str, _group: &GroupBinding, _text: &str) {}
+    fn enqueue_and_process(&self, _group_jid: &str, _group: &GroupBinding, _text: &str, _attachments: &[crate::agent::input_builder::ImageAttachment]) {}
     /// Resolve a pending permission request.
     fn resolve_permission(&self, _request_id: &str, _option_key: &str) {}
     /// Add/replace a tool auto-accept rule.

@@ -46,6 +46,8 @@ interface LLMConfig {
   adapt: 'openai' | 'anthropic';
   maxTokens: number;
   contextLength: number;
+  /** Explicitly declare whether vision input is supported; undefined = auto-infer from modelName */
+  vision?: boolean;
 }
 
 interface ProviderDef {
@@ -131,6 +133,49 @@ function lookupModelLimits(modelName: string): { maxTokens: number; contextLengt
   return null;
 }
 
+// ===== Vision Support =====
+
+// Vision patterns matching sema-core util/vision.ts inference rules
+const VISION_PATTERNS: RegExp[] = [
+  /^gpt-4o/i,
+  /^gpt-4(\.\d+)?-vision/i,
+  /^gpt-5/i,
+  /^o1/i,
+  /^o3/i,
+  /^chatgpt-4o/i,
+  /^claude-3/i,
+  /^claude-(opus|sonnet|haiku)-[34]/i,
+  /^anthropic\/claude-3/i,
+  /qwen.*-vl/i,
+  /qwen2(\.\d+)?-vl/i,
+  /qvq/i,
+  /moonshot-v1-.*-vision/i,
+  /kimi.*vision/i,
+  /kimi-latest/i,
+  /glm-4v/i,
+  /glm-4\.\d+v/i,
+  /deepseek-vl/i,
+  /gemini.*pro/i,
+  /gemini.*flash/i,
+  /gemini-1\.5/i,
+  /gemini-2/i,
+  /llama-3\.2.*vision/i,
+  /-vl-/i,
+  /-vision/i,
+  /-vlm/i,
+];
+
+function inferVision(modelName: string): boolean {
+  if (!modelName) return false;
+  return VISION_PATTERNS.some(re => re.test(modelName));
+}
+
+/** Effective vision state: explicit override takes priority, otherwise infer from modelName */
+function effectiveVision(c: { vision?: boolean; modelName: string }): boolean {
+  if (typeof c.vision === 'boolean') return c.vision;
+  return inferVision(c.modelName);
+}
+
 export const LLMSettings: React.FC = () => {
   const [configs, setConfigs] = useState<LLMConfig[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -149,6 +194,8 @@ export const LLMSettings: React.FC = () => {
   const [testStatus, setTestStatus] = useState<{ msg: string; type: 'success' | 'error' | 'info' | '' }>({ msg: '', type: '' });
   const [saving, setSaving] = useState(false);
   const [connOk, setConnOk] = useState(false);
+  // Vision toggle: null = follow inference; true/false = explicit user override
+  const [visionOverride, setVisionOverride] = useState<boolean | null>(null);
 
   const fetchConfigs = async () => {
     setLoading(true);
@@ -190,6 +237,7 @@ export const LLMSettings: React.FC = () => {
     setIsManualModel(false);
     setConnOk(false);
     setTestStatus({ msg: '', type: '' });
+    setVisionOverride(null);
   };
 
   const handleFetchModels = async () => {
@@ -269,7 +317,7 @@ export const LLMSettings: React.FC = () => {
       const r = await fetch('/api/llm-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...values, label }),
+        body: JSON.stringify({ ...values, label, vision: visionOverride }),
       });
       if (!r.ok) throw new Error('Save failed');
       message.success('Model added successfully');
@@ -322,6 +370,26 @@ export const LLMSettings: React.FC = () => {
       fetchConfigs();
     } catch (e) {
       message.error('Failed to remove model');
+    }
+  };
+
+  const handleToggleVision = async (record: LLMConfig) => {
+    const next = !effectiveVision(record);
+    const inferred = inferVision(record.modelName);
+    // Reset to null if matches inferred value, otherwise set explicit override
+    const visionPatch: { vision: boolean | null } = { vision: next === inferred ? null : next };
+    
+    try {
+      const r = await fetch(`/api/llm-config/${encodeURIComponent(record.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(visionPatch),
+      });
+      if (!r.ok) throw new Error('Update failed');
+      message.success('Vision setting updated');
+      fetchConfigs();
+    } catch (e) {
+      message.error('Failed to update vision setting');
     }
   };
 
@@ -390,6 +458,50 @@ export const LLMSettings: React.FC = () => {
       ),
     },
     {
+      title: 'Vision',
+      key: 'vision',
+      render: (_: any, record: LLMConfig) => {
+        const visionOn = effectiveVision(record);
+        const inferred = inferVision(record.modelName);
+        const visionExplicit = typeof record.vision === 'boolean';
+        const visionLabel = visionExplicit
+          ? (visionOn ? 'Force ON' : 'Force OFF')
+          : `Auto (${inferred ? 'Yes' : 'No'})`;
+        return (
+          <Space size="small">
+            <Switch
+              size="small"
+              checked={visionOn}
+              onChange={() => handleToggleVision(record)}
+            />
+            <Text style={{ fontSize: 10, color: '#8c8c8c' }}>{visionLabel}</Text>
+            {visionExplicit && (
+              <Button
+                size="small"
+                type="link"
+                style={{ fontSize: 10, padding: 0, height: 'auto', marginLeft: 4 }}
+                onClick={async () => {
+                  try {
+                    await fetch(`/api/llm-config/${encodeURIComponent(record.id)}`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ vision: null }),
+                    });
+                    message.success('Vision reset to auto-infer');
+                    fetchConfigs();
+                  } catch {
+                    message.error('Failed to reset vision setting');
+                  }
+                }}
+              >
+                Reset
+              </Button>
+            )}
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Actions',
       key: 'actions',
       render: (_: any, record: LLMConfig) => {
@@ -452,6 +564,7 @@ export const LLMSettings: React.FC = () => {
             setIsModalOpen(true);
             form.resetFields();
             handleProviderChange('anthropic');
+            setVisionOverride(null);
           }}
           style={{ borderRadius: 8, height: 40 }}
         >
@@ -592,6 +705,31 @@ export const LLMSettings: React.FC = () => {
               <Option value="openai">OpenAI Compatible</Option>
               <Option value="anthropic">Anthropic Compatible</Option>
             </Select>
+          </Form.Item>
+
+          <Form.Item label="Vision Support">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ flex: 1, paddingRight: 16 }}>
+                <Text style={{ fontSize: 11, color: '#8c8c8c' }}>
+                  Enable image input (Vision)
+                </Text>
+                <Text style={{ fontSize: 10, color: '#bfbfbf', marginTop: 2 }}>
+                  {visionOverride === null
+                    ? `Auto-infer: ${inferVision(form.getFieldValue('modelName') || '') ? 'Supported' : 'Not supported'}`
+                    : visionOverride
+                      ? 'Force enabled: Images will be sent as-is'
+                      : 'Force disabled: Images will be downgraded to placeholders'}
+                </Text>
+              </div>
+              <Switch
+                checked={visionOverride ?? inferVision(form.getFieldValue('modelName') || '')}
+                onChange={(checked: boolean) => {
+                  // When toggled, set explicit override; clear back to null if matches inferred value
+                  const inferred = inferVision(form.getFieldValue('modelName') || '');
+                  setVisionOverride(checked === inferred ? null : checked);
+                }}
+              />
+            </div>
           </Form.Item>
 
           {testStatus.msg && (

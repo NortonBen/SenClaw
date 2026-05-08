@@ -34,6 +34,7 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           is_bot_reply INTEGER NOT NULL DEFAULT 0,
           reply_to_id  TEXT,
           media_type   TEXT,
+          attachments  TEXT,
           PRIMARY KEY (message_id, chat_jid)
         );
         CREATE INDEX IF NOT EXISTS idx_msg_timestamp
@@ -86,6 +87,7 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           is_bot_reply INTEGER NOT NULL DEFAULT 0,
           reply_to_id  TEXT,
           media_type   TEXT,
+          attachments  TEXT,
           PRIMARY KEY (message_id, chat_jid)
         );
         CREATE INDEX IF NOT EXISTS idx_group_msg_ts
@@ -515,6 +517,13 @@ pub(crate) fn apply_marketplace_tables(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
+    
+    // Migration: Add attachments column if it doesn't exist
+    conn.execute("ALTER TABLE channel_messages ADD COLUMN attachments TEXT", [])
+        .ok(); // Ignore error if column already exists
+    conn.execute("ALTER TABLE group_messages ADD COLUMN attachments TEXT", [])
+        .ok(); // Ignore error if column already exists
+    
     Ok(())
 }
 

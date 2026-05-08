@@ -136,6 +136,12 @@ pub trait AgentApi: Send + Sync {
     /// Process a prompt through the agent. Blocks until the agent finishes.
     async fn process_and_wait(&self, jid: &str, group: &GroupBinding, prompt: &str) -> Result<()>;
 
+    /// Process a prompt with image attachments through the agent. Blocks until the agent finishes.
+    async fn process_and_wait_with_images(&self, jid: &str, group: &GroupBinding, prompt: &str, attachments: &[crate::agent::input_builder::ImageAttachment]) -> Result<()> {
+        // Default implementation: ignore attachments and call the basic version
+        self.process_and_wait(jid, group, prompt).await
+    }
+
     /// Destroy/cleanup agent state for a JID (after JID migration).
     async fn destroy(&self, jid: &str);
 
@@ -177,6 +183,8 @@ pub struct StoredMessage {
     pub is_bot_reply: bool,
     pub reply_to_id: Option<String>,
     pub media_type: Option<String>,
+    /// JSON-serialized array of image attachments (data_url, mime_type)
+    pub attachments: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

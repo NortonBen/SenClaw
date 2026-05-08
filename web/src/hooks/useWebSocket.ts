@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -37,7 +37,7 @@ export interface WsHook {
   agentCompacting: Record<string, boolean>;
   subscribed: Set<string>;
   subscribe: (jid: string) => void;
-  sendMessage: (jid: string, text: string) => void;
+  sendMessage: (jid: string, text: string, attachments?: ImageAttachment[]) => void;
   /** Pause agent (sends agent:control pause) */
   pauseAgent: (jid: string) => void;
   /** Resume agent, optional follow-up text (sends agent:control resume) */
@@ -134,14 +134,15 @@ export function useWebSocket(): WsHook {
     setSubscribed(prev => new Set([...prev, jid]));
   }, [rawSend]);
 
-  const sendMessage = useCallback((jid: string, text: string) => {
+  const sendMessage = useCallback((jid: string, text: string, attachments: ImageAttachment[] = []) => {
     addMessage(jid, {
       id:        `local-${Date.now()}`,
       role:      'user',
       text,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: new Date().toISOString(),
     });
-    rawSend({ type: 'message', groupJid: jid, text });
+    rawSend({ type: 'message', groupJid: jid, text, attachments: attachments.length > 0 ? attachments : undefined });
   }, [addMessage, rawSend]);
 
   // Find which jid owns a requestId — scan all message lists

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { theme } from 'antd';
-import type { GroupInfo, ChatMessage, AgentState, UsageData } from '../types';
+import type { GroupInfo, ChatMessage, AgentState, UsageData, ImageAttachment } from '../types';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 import { Progress, Space, Typography } from 'antd';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
@@ -14,7 +14,7 @@ interface Props {
   usage?: UsageData;
   /** While compacting, pause is disabled; shows "Compacting…" */
   isCompacting: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: ImageAttachment[]) => void;
   onPause: () => void;
   onResume: (query?: string) => void;
   onStop: () => void;
@@ -27,10 +27,12 @@ const PAGE_SIZE = 5;
 export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
   const { token } = theme.useToken();
   const [input, setInput]           = useState('');
+  const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const bottomRef                   = useRef<HTMLDivElement>(null);
   const scrollRef                   = useRef<HTMLDivElement>(null);
+  const textareaRef                 = useRef<HTMLTextAreaElement>(null);
   const prevMessagesLenRef          = useRef(messages.length);
   const prevGroupJidRef             = useRef(group.jid);
   const preserveScrollRef           = useRef<{ prevHeight: number; prevTop: number } | null>(null);
@@ -107,6 +109,69 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageItems = Array.from(e.clipboardData.items).filter(item => item.type.startsWith('image/'));
+    if (imageItems.length === 0) return;
+    
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      const srcMime = item.type;
+      
+      // createImageBitmap with imageOrientation:'from-image' applies EXIF rotation before drawing
+      createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
+        .then(bitmap => {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          // Keep PNG for screenshots; use JPEG for photos to reduce payload size
+          const outMime = srcMime === 'image/png' ? 'image/png' : 'image/jpeg';
+          const dataUrl = canvas.toDataURL(outMime, outMime === 'image/jpeg' ? 0.92 : undefined);
+          setPendingImages(prev => [...prev, { dataUrl, mimeType: outMime }]);
+        })
+        .catch(() => {
+          // Fallback: no EXIF normalization, but at least something shows up
+          const reader = new FileReader();
+          reader.onload = () => {
+            setPendingImages(prev => [...prev, { dataUrl: reader.result as string, mimeType: srcMime }]);
+          };
+          reader.readAsDataURL(file);
+        });
+    }
+  };
+
+  const handleFileSelect = (files: File[]) => {
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue; // Only handle images for now
+      
+      const srcMime = file.type;
+      
+      // createImageBitmap with imageOrientation:'from-image' applies EXIF rotation before drawing
+      createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
+        .then(bitmap => {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          // Keep PNG for screenshots; use JPEG for photos to reduce payload size
+          const outMime = srcMime === 'image/png' ? 'image/png' : 'image/jpeg';
+          const dataUrl = canvas.toDataURL(outMime, outMime === 'image/jpeg' ? 0.92 : undefined);
+          setPendingImages(prev => [...prev, { dataUrl, mimeType: outMime }]);
+        })
+        .catch(() => {
+          // Fallback: no EXIF normalization, but at least something shows up
+          const reader = new FileReader();
+          reader.onload = () => {
+            setPendingImages(prev => [...prev, { dataUrl: reader.result as string, mimeType: srcMime }]);
+          };
+          reader.readAsDataURL(file);
+        });
+    }
+  };
+
   // ── Send / pause / resume single handler ──
   const handleActionButton = () => {
     if (isProcessing) {
@@ -123,14 +188,15 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
     }
     // idle: normal send
     const text = input.trim();
-    if (!text) return;
-    onSend(text);
+    if (!text && pendingImages.length === 0) return;
+    onSend(text, pendingImages);
     setInput('');
+    setPendingImages([]);
   };
 
   // ── Action button disabled rules ──
   const actionButtonDisabled =
-    (agentState === 'idle' && !input.trim()) ||   // idle: need text to send
+    (agentState === 'idle' && !input.trim() && pendingImages.length === 0) ||   // idle: need text or images to send
     (isProcessing && isCompacting);               // compacting: pause disabled
 
   const actionButtonTitle =
@@ -282,6 +348,28 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
       </div>
 
       {/* Input area — AgentCommandInput gợi ý / @ #; chống submit đôi trong CommonChatInput + hook */}
+      {/* Pending image previews */}
+      {pendingImages.length > 0 && (
+        <div className="px-6 py-2 flex flex-wrap gap-2 backdrop-blur-xl flex-shrink-0" style={{ background: `${token.colorBgContainer}cc`, borderColor: token.colorBorderSecondary }}>
+          {pendingImages.map((img, i) => (
+            <div key={i} className="relative group flex-shrink-0">
+              <img
+                src={img.dataUrl}
+                alt=""
+                className="w-16 h-16 object-cover rounded-xl border shadow-sm"
+                style={{ borderColor: token.colorBorderSecondary }}
+              />
+              <button
+                onClick={() => setPendingImages(prev => prev.filter((_, j) => j !== i))}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-700 hover:bg-gray-900 text-white text-xs leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label="Remove image"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <CommonChatInput
         className="px-6 py-4 backdrop-blur-xl flex-shrink-0"
         helperText={isPaused
@@ -299,6 +387,8 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           actionButtonDisabled={actionButtonDisabled}
           actionTitle={actionButtonTitle}
           actionAriaLabel={actionButtonTitle}
+          onPaste={handlePaste}
+          onFileSelect={handleFileSelect}
           renderActionIcon={
             isProcessing ? (
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
@@ -310,7 +400,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
               </svg>
             ) : undefined
           }
-          placeholder={isPaused ? 'Add instructions or leave empty to continue…' : 'Message…'}
+          placeholder={isPaused ? 'Add instructions or leave empty to continue…' : 'Message… (paste image with Ctrl+V / ⌘V)'}
         />
       </CommonChatInput>
 

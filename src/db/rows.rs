@@ -122,6 +122,7 @@ pub(crate) fn row_to_message(row: &Row<'_>) -> Result<StoredMessage> {
         is_bot_reply: row.get::<_, i64>("is_bot_reply")? != 0,
         reply_to_id: row.get("reply_to_id")?,
         media_type: row.get("media_type")?,
+        attachments: row.get("attachments")?,
     })
 }
 

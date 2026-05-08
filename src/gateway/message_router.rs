@@ -369,6 +369,7 @@ impl MessageRouter {
             is_bot_reply: false,
             reply_to_id: None,
             media_type: None,
+            attachments: None,
         };
         let limit = self.config.agent.max_messages_per_group;
         // Raw platform message log
