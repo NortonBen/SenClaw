@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -81,6 +81,10 @@ export interface WsHook {
   removeToolRule: (id: string) => void;
   toggleToolRule: (id: string) => void;
   setDangerouslyAcceptAll: (enabled: boolean) => void;
+  // Event notifications
+  notifications: EventNotification[];
+  markNotificationRead: (id: string) => void;
+  clearAllNotifications: () => void;
 }
 
 export function useWebSocket(): WsHook {
@@ -101,6 +105,7 @@ export function useWebSocket(): WsHook {
   const [bindings, setBindings] = useState<BindingWithRelationsInfo[]>([]);
   const [toolRules, setToolRules]             = useState<ToolAutoAcceptRule[]>(loadRules);
   const [dangerouslyAcceptAll, setAcceptAllState] = useState<boolean>(loadAcceptAll);
+  const [notifications, setNotifications]     = useState<EventNotification[]>([]);
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -325,6 +330,14 @@ export function useWebSocket(): WsHook {
     setAcceptAllState(enabled);
     rawSend({ type: 'permission:accept-all', enabled });
   }, [rawSend]);
+
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  }, []);
+
+  const clearAllNotifications = useCallback(() => {
+    setNotifications([]);
+  }, []);
 
   useEffect(() => {
     let destroyed = false;
@@ -598,6 +611,17 @@ export function useWebSocket(): WsHook {
           case 'cowork:resource:changed':
             setCoworkResourceChanged(prev => prev + 1);
             break;
+          case 'space:event:reminder':
+            setNotifications(prev => [...prev, {
+              id: `notif-${Date.now()}-${Math.random()}`,
+              eventId: msg.eventId as string,
+              title: msg.title as string,
+              startAt: msg.startAt as number,
+              kind: (msg.kind as 'reminder' | 'renotify') ?? 'reminder',
+              receivedAt: Date.now(),
+              read: false,
+            }]);
+            break;
           case 'permission:rules':
             setToolRules(() => {
               const rules = (msg.rules as ToolAutoAcceptRule[]) ?? [];
@@ -699,6 +723,7 @@ export function useWebSocket(): WsHook {
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
     toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
+    notifications, markNotificationRead, clearAllNotifications,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -706,5 +731,6 @@ export function useWebSocket(): WsHook {
     unregisterChannel, unregisterAgent, unregisterBinding,
     updateChannel, updateAgent, updateBinding,
     toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
+    notifications, markNotificationRead, clearAllNotifications,
   ]);
 }

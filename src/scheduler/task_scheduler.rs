@@ -49,7 +49,12 @@ impl TaskScheduler {
     /// handle (or call `abort()`) to stop.
     pub fn start(self) -> JoinHandle<()> {
         let interval = self.interval;
-        tracing::info!(interval_sec = interval.as_secs(), "[TaskScheduler] Started");
+        let tz_name = chrono::Local::now().format("%Z %z").to_string();
+        tracing::info!(
+            interval_sec = interval.as_secs(),
+            local_tz = %tz_name,
+            "[TaskScheduler] Started (cron expressions evaluated in local timezone)"
+        );
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -125,7 +130,10 @@ pub fn compute_next_run(task: &ScheduledTask) -> Option<String> {
         ScheduleType::Cron => {
             let normalized = normalize_cron_expr(&task.schedule_value);
             let schedule = Schedule::from_str(&normalized).ok()?;
-            schedule.upcoming(Utc).next().map(|dt| dt.to_rfc3339())
+            // Use the host's local timezone so cron expressions like "0 9 * * *"
+            // fire at 09:00 local time, not 09:00 UTC.
+            let local_next = schedule.upcoming(chrono::Local).next()?;
+            Some(local_next.with_timezone(&Utc).to_rfc3339())
         }
     }
 }

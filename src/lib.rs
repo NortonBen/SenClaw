@@ -1437,6 +1437,35 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         gw
     };
 
+    // 5c. EventNotifier — polls space_events for reminders and status transitions.
+    //     Wired after ws_gateway so it can push events to connected clients.
+    {
+        // Arc<WebSocketGateway> implements EventNotifySink; wrap in a second Arc
+        // to get the Arc<dyn EventNotifySink> the EventNotifier expects.
+        struct WsEventSinkWrapper(Arc<gateway::websocket_gateway::WebSocketGateway>);
+        impl scheduler::EventNotifySink for WsEventSinkWrapper {
+            fn notify_event_reminder(&self, event_id: &str, title: &str, start_at_ms: i64, kind: &str) {
+                let gw = Arc::clone(&self.0);
+                let id = event_id.to_string();
+                let t = title.to_string();
+                let k = kind.to_string();
+                tokio::spawn(async move {
+                    gw.push_event_reminder(&id, &t, start_at_ms, &k).await;
+                });
+            }
+        }
+        let event_sink: Arc<dyn scheduler::EventNotifySink> =
+            Arc::new(WsEventSinkWrapper(Arc::clone(&ws_gateway)));
+        let _event_notifier = scheduler::EventNotifier::new(
+            Arc::clone(&db),
+            event_sink,
+            60, // poll every 60 seconds
+        )
+        .start();
+        let tz_name = chrono::Local::now().format("%Z %z").to_string();
+        tracing::info!("[SenClaw] EventNotifier started (60s poll, local TZ: {tz_name})");
+    }
+
     // 7b. WikiManager
     let wiki_mgr = Arc::new(wiki::manager::WikiManager::new(cfg.paths.wiki_dir.clone()));
     if let Err(e) = wiki_mgr.ensure_init().await {

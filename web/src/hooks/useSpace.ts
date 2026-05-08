@@ -23,6 +23,9 @@ export interface SpaceEvent {
   location: string | null;
   color: string | null;
   reminder_min: number | null;
+  renotify_min: number | null;
+  /** 'upcoming' | 'ongoing' | 'done' | 'cancelled' */
+  status: string;
   source: string;
 }
 

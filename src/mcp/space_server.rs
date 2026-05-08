@@ -77,6 +77,9 @@ struct EventCreateParams {
     /// Minutes before event to send reminder (None = no reminder)
     #[serde(default)]
     reminder_min: Option<i64>,
+    /// Repeat reminder every N minutes while event is ongoing (None = no re-notification)
+    #[serde(default)]
+    renotify_min: Option<i64>,
     #[serde(default)]
     color: Option<String>,
 }
@@ -112,6 +115,12 @@ struct EventUpdateParams {
     /// Minutes before event to send reminder
     #[serde(default)]
     reminder_min: Option<i64>,
+    /// Repeat reminder every N minutes while event is ongoing
+    #[serde(default)]
+    renotify_min: Option<i64>,
+    /// Force-reset the reminder so it fires again (e.g. after changing reminder_min)
+    #[serde(default)]
+    reset_reminder: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -309,6 +318,7 @@ impl McpSpaceServer {
                 p.location,
                 p.all_day.unwrap_or(false),
                 p.reminder_min,
+                p.renotify_min,
                 p.color,
                 &self.group_folder,
                 &self.chat_jid,
@@ -350,6 +360,8 @@ impl McpSpaceServer {
                 p.all_day,
                 p.color,
                 p.reminder_min,
+                p.renotify_min,
+                p.reset_reminder.unwrap_or(false),
             )
             .content
     }
@@ -831,6 +843,7 @@ impl SpaceServer {
         location: Option<String>,
         all_day: bool,
         reminder_min: Option<i64>,
+        renotify_min: Option<i64>,
         color: Option<String>,
         group_folder: &str,
         chat_jid: &str,
@@ -840,9 +853,9 @@ impl SpaceServer {
 
         let result = self.db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO space_events (id, title, description, start_at, end_at, all_day, location, color, reminder_min, source, created_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'manual',?10,?10)",
-                params![id, title, description, start_at, end_at, all_day as i32, location, color, reminder_min, now],
+                "INSERT INTO space_events (id, title, description, start_at, end_at, all_day, location, color, reminder_min, renotify_min, source, created_at, updated_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'manual',?11,?11)",
+                params![id, title, description, start_at, end_at, all_day as i32, location, color, reminder_min, renotify_min, now],
             )?;
             Ok(())
         });
@@ -886,7 +899,8 @@ impl SpaceServer {
     pub fn event_list(&self, from: i64, to: i64) -> ToolResult {
         let result = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, title, description, start_at, end_at, all_day, location, color, reminder_min, source
+                "SELECT id, title, description, start_at, end_at, all_day, location, color,
+                        reminder_min, source, status, renotify_min
                  FROM space_events
                  WHERE deleted_at IS NULL AND start_at >= ?1 AND start_at <= ?2
                  ORDER BY start_at ASC",
@@ -904,6 +918,8 @@ impl SpaceServer {
                         "color": row.get::<_,Option<String>>(7)?,
                         "reminder_min": row.get::<_,Option<i64>>(8)?,
                         "source": row.get::<_,String>(9)?,
+                        "status": row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
+                        "renotify_min": row.get::<_,Option<i64>>(11)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
@@ -927,8 +943,11 @@ impl SpaceServer {
         all_day: Option<bool>,
         color: Option<String>,
         reminder_min: Option<i64>,
+        renotify_min: Option<i64>,
+        reset_reminder: bool,
     ) -> ToolResult {
         let result = self.db.with_conn(|conn| {
+            let now_ms = chrono::Utc::now().timestamp_millis();
             if let Some(v) = &title {
                 conn.execute("UPDATE space_events SET title=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
             }
@@ -953,6 +972,20 @@ impl SpaceServer {
             if let Some(v) = reminder_min {
                 conn.execute("UPDATE space_events SET reminder_min=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
             }
+            if let Some(v) = renotify_min {
+                conn.execute("UPDATE space_events SET renotify_min=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+            }
+            if reset_reminder {
+                // Clear sent flags so EventNotifier fires the reminder again.
+                conn.execute(
+                    "UPDATE space_events SET reminder_sent_at=NULL, renotify_sent_at=NULL WHERE id=?1 AND deleted_at IS NULL",
+                    params![event_id],
+                )?;
+            }
+            conn.execute(
+                "UPDATE space_events SET updated_at=?1 WHERE id=?2 AND deleted_at IS NULL",
+                params![now_ms, event_id],
+            )?;
             Ok(())
         });
         match result {
@@ -994,7 +1027,8 @@ impl SpaceServer {
         let kw = query.as_deref().unwrap_or("").trim().to_lowercase();
         let result = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, title, description, start_at, end_at, all_day, location, color, reminder_min, source
+                "SELECT id, title, description, start_at, end_at, all_day, location, color,
+                        reminder_min, source, status, renotify_min
                  FROM space_events
                  WHERE deleted_at IS NULL
                    AND start_at >= ?1 AND start_at <= ?2
@@ -1014,6 +1048,8 @@ impl SpaceServer {
                         "color":        row.get::<_,Option<String>>(7)?,
                         "reminder_min": row.get::<_,Option<i64>>(8)?,
                         "source":       row.get::<_,String>(9)?,
+                        "status":       row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
+                        "renotify_min": row.get::<_,Option<i64>>(11)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())

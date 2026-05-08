@@ -313,6 +313,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // space_events — add notification tracking columns
+    let event_cols = column_names(conn, "space_events").unwrap_or_default();
+    for (col, def) in &[
+        ("status", "TEXT NOT NULL DEFAULT 'upcoming'"),
+        ("reminder_sent_at", "INTEGER"),
+        ("renotify_min", "INTEGER"),
+        ("renotify_sent_at", "INTEGER"),
+    ] {
+        if !event_cols.iter().any(|c| c == col) {
+            let _ = conn.execute(
+                &format!("ALTER TABLE space_events ADD COLUMN {col} {def}"),
+                [],
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -354,21 +370,25 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
         );
 
         CREATE TABLE IF NOT EXISTS space_events (
-            id          TEXT PRIMARY KEY,
-            title       TEXT NOT NULL,
-            description TEXT,
-            start_at    INTEGER NOT NULL,
-            end_at      INTEGER NOT NULL,
-            all_day     INTEGER DEFAULT 0,
-            location    TEXT,
-            color       TEXT,
-            recurrence  TEXT,
-            reminder_min INTEGER,
-            task_id     TEXT,
-            source      TEXT DEFAULT 'manual',
-            created_at  INTEGER NOT NULL,
-            updated_at  INTEGER NOT NULL,
-            deleted_at  INTEGER
+            id              TEXT PRIMARY KEY,
+            title           TEXT NOT NULL,
+            description     TEXT,
+            start_at        INTEGER NOT NULL,
+            end_at          INTEGER NOT NULL,
+            all_day         INTEGER DEFAULT 0,
+            location        TEXT,
+            color           TEXT,
+            recurrence      TEXT,
+            reminder_min    INTEGER,
+            task_id         TEXT,
+            source          TEXT DEFAULT 'manual',
+            status          TEXT NOT NULL DEFAULT 'upcoming',
+            reminder_sent_at INTEGER,
+            renotify_min    INTEGER,
+            renotify_sent_at INTEGER,
+            created_at      INTEGER NOT NULL,
+            updated_at      INTEGER NOT NULL,
+            deleted_at      INTEGER
         );
 
         CREATE INDEX IF NOT EXISTS idx_space_events_start ON space_events(start_at);

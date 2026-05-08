@@ -21,6 +21,9 @@ export function AppLayout({ sidebar, children, status }: Props) {
         sidebarContent={sidebar}
         isDarkMode={isDarkMode}
         toggleTheme={toggleTheme}
+        notifications={ws.notifications}
+        onMarkRead={ws.markNotificationRead}
+        onClearAll={ws.clearAllNotifications}
       />
       <Layout className="bg-transparent relative">
         {children}

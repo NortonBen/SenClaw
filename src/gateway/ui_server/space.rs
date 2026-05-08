@@ -307,7 +307,7 @@ pub(crate) async fn space_events_list(
         .with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, title, description, start_at, end_at, all_day,
-                        location, color, reminder_min, source
+                        location, color, reminder_min, source, status, renotify_min
                  FROM space_events
                  WHERE deleted_at IS NULL AND start_at >= ?1 AND start_at <= ?2
                  ORDER BY start_at ASC",
@@ -325,6 +325,8 @@ pub(crate) async fn space_events_list(
                         "color":        row.get::<_,Option<String>>(7)?,
                         "reminder_min": row.get::<_,Option<i64>>(8)?,
                         "source":       row.get::<_,String>(9)?,
+                        "status":       row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
+                        "renotify_min": row.get::<_,Option<i64>>(11)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
@@ -346,6 +348,7 @@ pub(crate) struct EventCreateBody {
     #[serde(default)]
     all_day: bool,
     reminder_min: Option<i64>,
+    renotify_min: Option<i64>,
     color: Option<String>,
     /// Group + jid required to schedule a reminder task
     group_folder: Option<String>,
@@ -370,6 +373,7 @@ pub(crate) async fn space_events_create(
         b.location,
         b.all_day,
         b.reminder_min,
+        b.renotify_min,
         b.color,
         b.group_folder.as_deref().unwrap_or("default"),
         b.chat_jid.as_deref().unwrap_or(""),
@@ -393,8 +397,11 @@ pub(crate) struct EventUpdateBody {
     location: Option<String>,
     color: Option<String>,
     reminder_min: Option<i64>,
+    renotify_min: Option<i64>,
     #[serde(default)]
     all_day: Option<bool>,
+    #[serde(default)]
+    reset_reminder: Option<bool>,
 }
 
 pub(crate) async fn space_events_update(
@@ -404,6 +411,7 @@ pub(crate) async fn space_events_update(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db(&s)?;
     db.with_conn(|conn| {
+        let now_ms = chrono::Utc::now().timestamp_millis();
         if let Some(v) = &b.title {
             conn.execute("UPDATE space_events SET title=?1 WHERE id=?2", params![v, id])?;
         }
@@ -425,9 +433,19 @@ pub(crate) async fn space_events_update(
         if b.reminder_min.is_some() {
             conn.execute("UPDATE space_events SET reminder_min=?1 WHERE id=?2", params![b.reminder_min, id])?;
         }
+        if b.renotify_min.is_some() {
+            conn.execute("UPDATE space_events SET renotify_min=?1 WHERE id=?2", params![b.renotify_min, id])?;
+        }
         if let Some(v) = b.all_day {
             conn.execute("UPDATE space_events SET all_day=?1 WHERE id=?2", params![v as i32, id])?;
         }
+        if b.reset_reminder.unwrap_or(false) {
+            conn.execute(
+                "UPDATE space_events SET reminder_sent_at=NULL, renotify_sent_at=NULL WHERE id=?1",
+                params![id],
+            )?;
+        }
+        conn.execute("UPDATE space_events SET updated_at=?1 WHERE id=?2", params![now_ms, id])?;
         Ok(())
     })
     .map_err(internal)?;

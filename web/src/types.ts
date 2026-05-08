@@ -451,3 +451,14 @@ export interface TemplateBoardSection {
   title: string;
   template?: string;
 }
+
+export interface EventNotification {
+  id: string;
+  eventId: string;
+  title: string;
+  startAt: number;
+  /** "reminder" = pre-event alert, "renotify" = ongoing re-alert */
+  kind: 'reminder' | 'renotify';
+  receivedAt: number;
+  read: boolean;
+}

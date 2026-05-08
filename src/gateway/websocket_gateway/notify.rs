@@ -1,8 +1,11 @@
 //! Event injection methods (called externally by daemon wiring).
 
+use std::sync::Arc;
+
 use super::gateway::WebSocketGateway;
 use super::wire::to_group_info;
 use crate::types::GroupBinding;
+
 
 impl WebSocketGateway {
     // ===== Event injection (called externally) =====
@@ -259,6 +262,23 @@ impl WebSocketGateway {
             "tools": tools,
         });
         self.broadcast_to_admins(&msg).await;
+    }
+
+    /// Push a calendar event reminder to all connected UI clients.
+    ///
+    /// `kind` is `"reminder"` (pre-event) or `"renotify"` (ongoing re-alert).
+    pub async fn push_event_reminder(&self, event_id: &str, title: &str, start_at_ms: i64, kind: &str) {
+        let payload = serde_json::json!({
+            "type": "space:event:reminder",
+            "eventId": event_id,
+            "title": title,
+            "startAt": start_at_ms,
+            "kind": kind,
+        });
+        tracing::info!(
+            "[WsGateway] emit space:event:reminder event_id={event_id} kind={kind}"
+        );
+        self.broadcast_to_all(&payload).await;
     }
 
     pub async fn notify_group_migrated(&self, old_jid: &str, new_binding: &GroupBinding) {

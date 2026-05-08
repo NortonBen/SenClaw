@@ -1,28 +1,33 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   Button, Modal, Form, Input, DatePicker, InputNumber, Switch,
   Typography, Spin, Popconfirm, Tooltip, theme, Segmented, Drawer,
-  Divider, Tag, Space,
+  Divider, Tag, Badge,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, BellOutlined, LeftOutlined, RightOutlined,
   EnvironmentOutlined, ClockCircleOutlined, EditOutlined, CloseOutlined,
+  ReloadOutlined, CalendarOutlined, CheckCircleOutlined, SyncOutlined,
+  MinusCircleOutlined,
 } from '@ant-design/icons';
 import type { SpaceEvent, UseSpaceHook } from '../../../hooks/useSpace';
 import dayjs, { Dayjs } from 'dayjs';
-import 'dayjs/locale/vi';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 
 dayjs.extend(isSameOrBefore);
 dayjs.extend(isSameOrAfter);
-dayjs.locale('vi');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HOUR_H = 56;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const DAY_NAMES = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_NAMES_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
 const SOURCE_COLOR: Record<string, string> = {
   manual: '#5BBFE8',
@@ -34,12 +39,19 @@ const SOURCE_COLOR: Record<string, string> = {
 };
 
 const SOURCE_LABEL: Record<string, string> = {
-  manual: 'Thủ công',
+  manual: 'Manual',
   google: 'Google Calendar',
   apple: 'Apple Calendar',
   agent: 'Agent',
   cowork: 'Cowork',
   ical: 'iCal',
+};
+
+const STATUS_CONFIG: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
+  upcoming: { color: '#1677ff', label: 'Upcoming', icon: <CalendarOutlined /> },
+  ongoing:  { color: '#52c41a', label: 'Ongoing',  icon: <SyncOutlined spin /> },
+  done:     { color: '#8c8c8c', label: 'Done',     icon: <CheckCircleOutlined /> },
+  cancelled:{ color: '#ff4d4f', label: 'Cancelled',icon: <MinusCircleOutlined /> },
 };
 
 type ViewMode = 'week' | 'month' | 'day';
@@ -51,20 +63,51 @@ const { Text, Title } = Typography;
 // ─── Utils ────────────────────────────────────────────────────────────────────
 
 function evColor(ev: SpaceEvent) {
+  if (ev.status === 'done' || ev.status === 'cancelled') return '#8c8c8c';
   return ev.color ?? SOURCE_COLOR[ev.source] ?? '#5BBFE8';
 }
 
 function fmt(ms: number) {
-  return dayjs(ms).format('HH:mm');
+  const d = dayjs(ms);
+  return `${String(d.hour()).padStart(2,'0')}:${String(d.minute()).padStart(2,'0')}`;
 }
 
-function fmtFull(ms: number) {
-  return dayjs(ms).format('dddd, D MMMM YYYY · HH:mm');
+function fmtDate(ms: number) {
+  const d = dayjs(ms);
+  return `${DAY_NAMES_FULL[d.day()]}, ${MONTH_NAMES[d.month()]} ${d.date()}, ${d.year()}`;
 }
 
 function msToMinutes(ms: number) {
   const d = dayjs(ms);
   return d.hour() * 60 + d.minute();
+}
+
+function durationLabel(startMs: number, endMs: number) {
+  const mins = Math.round((endMs - startMs) / 60000);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
+}
+
+// ─── Status Badge ─────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: string }) {
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.upcoming;
+  return (
+    <Tag
+      icon={cfg.icon}
+      style={{
+        color: cfg.color,
+        borderColor: cfg.color + '60',
+        background: cfg.color + '15',
+        fontSize: 11,
+        lineHeight: '18px',
+      }}
+    >
+      {cfg.label}
+    </Tag>
+  );
 }
 
 // ─── Event Detail Drawer ─────────────────────────────────────────────────────
@@ -92,22 +135,25 @@ function EventDetailDrawer({ event, onClose, onEdit, onDelete, token }: DetailDr
       {/* Color bar header */}
       <div
         className="flex items-start justify-between px-5 py-4"
-        style={{ background: color + '18', borderBottom: `3px solid ${color}` }}
+        style={{ background: color + '15', borderBottom: `3px solid ${color}` }}
       >
         <div className="flex-1 min-w-0 pr-3">
-          <Title level={5} className="!mb-1 !leading-snug" style={{ color: token.colorText }}>
+          <Title level={5} className="!mb-2 !leading-snug" style={{ color: token.colorText }}>
             {event.title}
           </Title>
-          <Tag
-            style={{
-              background: color + '25',
-              borderColor: color + '60',
-              color,
-              fontSize: 11,
-            }}
-          >
-            {SOURCE_LABEL[event.source] ?? event.source}
-          </Tag>
+          <div className="flex flex-wrap gap-1.5">
+            <StatusBadge status={event.status ?? 'upcoming'} />
+            <Tag
+              style={{
+                background: color + '20',
+                borderColor: color + '50',
+                color,
+                fontSize: 11,
+              }}
+            >
+              {SOURCE_LABEL[event.source] ?? event.source}
+            </Tag>
+          </div>
         </div>
         <Button
           type="text"
@@ -125,15 +171,15 @@ function EventDetailDrawer({ event, onClose, onEdit, onDelete, token }: DetailDr
           <ClockCircleOutlined style={{ color: token.colorTextSecondary, marginTop: 3 }} />
           <div>
             {event.all_day ? (
-              <Text>{dayjs(event.start_at).format('dddd, D MMMM YYYY')} · Cả ngày</Text>
+              <Text>{fmtDate(event.start_at)} · All day</Text>
             ) : (
               <>
-                <Text className="block">{dayjs(event.start_at).format('dddd, D MMMM YYYY')}</Text>
+                <Text className="block">{fmtDate(event.start_at)}</Text>
                 <Text type="secondary" className="text-sm">
                   {fmt(event.start_at)} – {fmt(event.end_at)}
                   {' '}
                   <span style={{ color: token.colorTextQuaternary }}>
-                    ({Math.round((event.end_at - event.start_at) / 60000)} phút)
+                    ({durationLabel(event.start_at, event.end_at)})
                   </span>
                 </Text>
               </>
@@ -153,7 +199,19 @@ function EventDetailDrawer({ event, onClose, onEdit, onDelete, token }: DetailDr
         {event.reminder_min != null && (
           <div className="flex items-center gap-3">
             <BellOutlined style={{ color: token.colorWarning }} />
-            <Text>Nhắc trước <strong>{event.reminder_min}</strong> phút</Text>
+            <Text>
+              Reminder <strong>{event.reminder_min}</strong> min before
+            </Text>
+          </div>
+        )}
+
+        {/* Re-notification */}
+        {event.renotify_min != null && (
+          <div className="flex items-center gap-3">
+            <ReloadOutlined style={{ color: token.colorPrimary }} />
+            <Text>
+              Re-notify every <strong>{event.renotify_min}</strong> min while ongoing
+            </Text>
           </div>
         )}
 
@@ -178,18 +236,18 @@ function EventDetailDrawer({ event, onClose, onEdit, onDelete, token }: DetailDr
           onClick={() => { onClose(); onEdit(event); }}
           style={{ flex: 1 }}
         >
-          Chỉnh sửa
+          Edit
         </Button>
         <Popconfirm
-          title="Xóa sự kiện này?"
-          description="Hành động không thể hoàn tác."
+          title="Delete this event?"
+          description="This action cannot be undone."
           onConfirm={() => { onDelete(event.id); onClose(); }}
-          okText="Xóa"
-          cancelText="Hủy"
+          okText="Delete"
+          cancelText="Cancel"
           okButtonProps={{ danger: true }}
         >
           <Button danger icon={<DeleteOutlined />} style={{ flex: 1 }}>
-            Xóa
+            Delete
           </Button>
         </Popconfirm>
       </div>
@@ -208,13 +266,11 @@ export function CalendarView({ hook }: Props) {
   const [view, setView] = useState<ViewMode>('week');
   const [cursor, setCursor] = useState<Dayjs>(dayjs());
 
-  // Create / edit modal
   const [showModal, setShowModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<SpaceEvent | null>(null);
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
 
-  // Detail drawer
   const [detailEvent, setDetailEvent] = useState<SpaceEvent | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -250,8 +306,7 @@ export function CalendarView({ hook }: Props) {
 
   useEffect(() => {
     if ((view === 'week' || view === 'day') && scrollRef.current) {
-      const now = dayjs();
-      const top = Math.max(0, (now.hour() - 1) * HOUR_H);
+      const top = Math.max(0, (dayjs().hour() - 1) * HOUR_H);
       scrollRef.current.scrollTop = top;
     }
   }, [view]);
@@ -300,6 +355,7 @@ export function CalendarView({ hook }: Props) {
       location: ev.location ?? undefined,
       description: ev.description ?? undefined,
       reminder_min: ev.reminder_min ?? undefined,
+      renotify_min: ev.renotify_min ?? undefined,
     });
     setShowModal(true);
   };
@@ -318,6 +374,7 @@ export function CalendarView({ hook }: Props) {
         location: vals.location ?? null,
         color: editingEvent?.color ?? null,
         reminder_min: vals.reminder_min ?? null,
+        renotify_min: vals.renotify_min ?? null,
       };
 
       if (editingEvent) {
@@ -337,12 +394,25 @@ export function CalendarView({ hook }: Props) {
 
   // ── Header label ───────────────────────────────────────────────────────────
 
-  const headerLabel =
-    view === 'day' ? cursor.format('dddd, D MMMM YYYY')
-      : view === 'week' ? `${rangeStart.format('D MMM')} – ${rangeEnd.format('D MMM YYYY')}`
-        : cursor.format('MMMM YYYY');
+  const headerLabel = useMemo(() => {
+    if (view === 'day') {
+      return `${DAY_NAMES_FULL[cursor.day()]}, ${MONTH_NAMES[cursor.month()]} ${cursor.date()}, ${cursor.year()}`;
+    }
+    if (view === 'week') {
+      const s = rangeStart;
+      const e = rangeEnd;
+      if (s.month() === e.month()) {
+        return `${MONTH_NAMES[s.month()]} ${s.date()} – ${e.date()}, ${e.year()}`;
+      }
+      return `${MONTH_NAMES[s.month()]} ${s.date()} – ${MONTH_NAMES[e.month()]} ${e.date()}, ${e.year()}`;
+    }
+    return `${MONTH_NAMES[cursor.month()]} ${cursor.year()}`;
+  }, [view, cursor.valueOf(), rangeStart.valueOf(), rangeEnd.valueOf()]);
 
   const today = dayjs().format('YYYY-MM-DD');
+
+  // ── Ongoing event count for toolbar badge ──────────────────────────────────
+  const ongoingCount = hook.events.filter(e => e.status === 'ongoing').length;
 
   return (
     <div className="flex flex-col h-full select-none">
@@ -354,8 +424,8 @@ export function CalendarView({ hook }: Props) {
       >
         <div className="flex items-center gap-1">
           <Button size="small" type="text" shape="circle" icon={<LeftOutlined />} onClick={() => nav(-1)} />
-          <Button size="small" type="default" onClick={() => setCursor(dayjs())} style={{ minWidth: 64, fontSize: 12 }}>
-            Hôm nay
+          <Button size="small" type="default" onClick={() => setCursor(dayjs())} style={{ minWidth: 56, fontSize: 12 }}>
+            Today
           </Button>
           <Button size="small" type="text" shape="circle" icon={<RightOutlined />} onClick={() => nav(1)} />
         </div>
@@ -364,19 +434,27 @@ export function CalendarView({ hook }: Props) {
           {headerLabel}
         </span>
 
+        {ongoingCount > 0 && (
+          <Tooltip title={`${ongoingCount} event${ongoingCount > 1 ? 's' : ''} in progress`}>
+            <Badge count={ongoingCount} size="small">
+              <SyncOutlined style={{ color: '#52c41a', fontSize: 16 }} spin />
+            </Badge>
+          </Tooltip>
+        )}
+
         <Segmented
           size="small"
           value={view}
           onChange={v => setView(v as ViewMode)}
           options={[
-            { label: 'Ngày', value: 'day' },
-            { label: 'Tuần', value: 'week' },
-            { label: 'Tháng', value: 'month' },
+            { label: 'Day',   value: 'day' },
+            { label: 'Week',  value: 'week' },
+            { label: 'Month', value: 'month' },
           ]}
         />
 
         <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => openCreate()}>
-          Thêm sự kiện
+          New Event
         </Button>
       </div>
 
@@ -426,66 +504,91 @@ export function CalendarView({ hook }: Props) {
       <Modal
         title={
           <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full inline-block" style={{ background: token.colorPrimary }} />
-            {editingEvent ? 'Chỉnh sửa sự kiện' : 'Tạo sự kiện mới'}
+            <CalendarOutlined style={{ color: token.colorPrimary }} />
+            {editingEvent ? 'Edit Event' : 'New Event'}
           </div>
         }
         open={showModal}
         onCancel={() => { setShowModal(false); form.resetFields(); setEditingEvent(null); }}
         onOk={handleSave}
-        okText={editingEvent ? 'Lưu thay đổi' : 'Tạo sự kiện'}
-        cancelText="Hủy"
+        okText={editingEvent ? 'Save Changes' : 'Create Event'}
+        cancelText="Cancel"
         confirmLoading={saving}
         width={480}
       >
         <Form form={form} layout="vertical" className="mt-3">
-          <Form.Item name="title" rules={[{ required: true, message: 'Nhập tiêu đề sự kiện' }]}>
+          <Form.Item name="title" rules={[{ required: true, message: 'Please enter a title' }]}>
             <Input
               size="large"
-              placeholder="Tiêu đề sự kiện..."
-              bordered={false}
+              placeholder="Event title…"
+              variant="borderless"
               className="text-lg font-medium px-0"
               style={{ borderBottom: `2px solid ${token.colorPrimary}`, borderRadius: 0 }}
             />
           </Form.Item>
 
-          <Form.Item name="range" rules={[{ required: true, message: 'Chọn thời gian' }]}>
+          <Form.Item name="range" label="Date & Time" rules={[{ required: true, message: 'Please select a time range' }]}>
             <RangePicker
               showTime={{ format: 'HH:mm' }}
-              format="ddd DD/MM · HH:mm"
+              format="ddd MM/DD · HH:mm"
               style={{ width: '100%' }}
-              placeholder={['Bắt đầu', 'Kết thúc']}
+              placeholder={['Start', 'End']}
             />
           </Form.Item>
 
           <Form.Item name="all_day" valuePropName="checked">
             <div className="flex items-center gap-2">
               <Switch size="small" />
-              <Text className="text-sm">Sự kiện cả ngày</Text>
+              <Text className="text-sm">All-day event</Text>
             </div>
           </Form.Item>
 
-          <Form.Item name="location">
+          <Form.Item name="location" label="Location">
             <Input
               prefix={<EnvironmentOutlined style={{ color: token.colorTextSecondary }} />}
-              placeholder="Địa điểm (tuỳ chọn)"
+              placeholder="Location (optional)"
             />
           </Form.Item>
 
-          <Form.Item name="description">
-            <TextArea rows={2} placeholder="Mô tả (tuỳ chọn)" />
+          <Form.Item name="description" label="Description">
+            <TextArea rows={2} placeholder="Add a description (optional)" />
           </Form.Item>
 
-          <Form.Item name="reminder_min" label={
-            <span className="flex items-center gap-1"><BellOutlined /> Nhắc nhở trước</span>
-          }>
-            <InputNumber
-              min={1} max={1440}
-              placeholder="Không nhắc nhở"
-              addonAfter="phút"
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
+          <div className="grid grid-cols-2 gap-3">
+            <Form.Item
+              name="reminder_min"
+              label={
+                <span className="flex items-center gap-1.5">
+                  <BellOutlined style={{ color: token.colorWarning }} />
+                  Reminder before
+                </span>
+              }
+            >
+              <InputNumber
+                min={1} max={1440}
+                placeholder="None"
+                addonAfter="min"
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="renotify_min"
+              label={
+                <span className="flex items-center gap-1.5">
+                  <ReloadOutlined style={{ color: token.colorPrimary }} />
+                  Re-notify every
+                </span>
+              }
+            >
+              <InputNumber
+                min={1} max={1440}
+                placeholder="None"
+                addonAfter="min"
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+          </div>
         </Form>
       </Modal>
     </div>
@@ -505,7 +608,7 @@ interface TimelineProps {
   onSelectEvent: (ev: SpaceEvent) => void;
 }
 
-function WeekTimeline({ days, today, eventsByDay, hook, token, scrollRef, onAddDay, onSelectEvent }: TimelineProps) {
+function WeekTimeline({ days, today, eventsByDay, token, scrollRef, onAddDay, onSelectEvent }: TimelineProps) {
   const nowMin = dayjs().hour() * 60 + dayjs().minute();
 
   return (
@@ -522,7 +625,7 @@ function WeekTimeline({ days, today, eventsByDay, hook, token, scrollRef, onAddD
           return (
             <div
               key={key}
-              className="flex-1 flex flex-col items-center py-2 border-l cursor-pointer group"
+              className="flex-1 flex flex-col items-center py-2 border-l cursor-pointer"
               style={{ borderColor: token.colorBorderSecondary }}
               onClick={() => onAddDay(d)}
             >
@@ -533,7 +636,7 @@ function WeekTimeline({ days, today, eventsByDay, hook, token, scrollRef, onAddD
                 {DAY_NAMES[d.day()]}
               </span>
               <span
-                className="text-xl font-bold mt-0.5 w-9 h-9 flex items-center justify-center rounded-full transition-colors"
+                className="text-xl font-bold mt-0.5 w-9 h-9 flex items-center justify-center rounded-full"
                 style={{
                   background: isToday ? token.colorPrimary : 'transparent',
                   color: isToday ? '#fff' : token.colorText,
@@ -546,7 +649,7 @@ function WeekTimeline({ days, today, eventsByDay, hook, token, scrollRef, onAddD
         })}
       </div>
 
-      <AllDayStrip days={days} eventsByDay={eventsByDay} hook={hook} token={token} onSelectEvent={onSelectEvent} />
+      <AllDayStrip days={days} eventsByDay={eventsByDay} token={token} onSelectEvent={onSelectEvent} />
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto relative">
         <div className="flex" style={{ minHeight: HOUR_H * 24 }}>
@@ -588,7 +691,7 @@ function WeekTimeline({ days, today, eventsByDay, hook, token, scrollRef, onAddD
                 )}
 
                 {dayEvs.map(ev => (
-                  <TimelineEvent key={ev.id} event={ev} hook={hook} token={token} onSelect={onSelectEvent} />
+                  <TimelineEvent key={ev.id} event={ev} token={token} onSelect={onSelectEvent} />
                 ))}
 
                 {isToday && (
@@ -612,15 +715,15 @@ function WeekTimeline({ days, today, eventsByDay, hook, token, scrollRef, onAddD
 // ─── All-day strip ────────────────────────────────────────────────────────────
 
 function AllDayStrip({
-  days, eventsByDay, hook, token, onSelectEvent,
-}: Pick<TimelineProps, 'days' | 'eventsByDay' | 'hook' | 'token' | 'onSelectEvent'>) {
+  days, eventsByDay, token, onSelectEvent,
+}: { days: Dayjs[]; eventsByDay: Record<string, SpaceEvent[]>; token: ReturnType<typeof theme.useToken>['token']; onSelectEvent: (ev: SpaceEvent) => void }) {
   const hasAny = days.some(d => (eventsByDay[d.format('YYYY-MM-DD')] ?? []).some(e => e.all_day));
   if (!hasAny) return null;
 
   return (
     <div className="flex border-b flex-shrink-0" style={{ borderColor: token.colorBorderSecondary, minHeight: 28 }}>
       <div className="w-14 flex-shrink-0 flex items-center justify-end pr-2">
-        <span className="text-xs" style={{ color: token.colorTextQuaternary }}>Cả ngày</span>
+        <span className="text-xs" style={{ color: token.colorTextQuaternary }}>All day</span>
       </div>
       {days.map(d => {
         const key = d.format('YYYY-MM-DD');
@@ -646,37 +749,38 @@ function AllDayStrip({
 
 // ─── Timeline event block ─────────────────────────────────────────────────────
 
-interface TEProps {
-  event: SpaceEvent;
-  hook: UseSpaceHook;
-  token: ReturnType<typeof theme.useToken>['token'];
-  onSelect: (ev: SpaceEvent) => void;
-}
-
-function TimelineEvent({ event, hook, token, onSelect }: TEProps) {
+function TimelineEvent({
+  event, token, onSelect,
+}: { event: SpaceEvent; token: ReturnType<typeof theme.useToken>['token']; onSelect: (ev: SpaceEvent) => void }) {
   const startMin = msToMinutes(event.start_at);
   const endMin = msToMinutes(event.end_at);
   const durationMin = Math.max(endMin - startMin, 30);
   const top = (startMin / 60) * HOUR_H;
   const height = (durationMin / 60) * HOUR_H;
   const color = evColor(event);
+  const isOngoing = event.status === 'ongoing';
+  const isDone = event.status === 'done' || event.status === 'cancelled';
 
   return (
     <div
-      className="absolute left-1 right-1 rounded-md overflow-hidden cursor-pointer group transition-all hover:shadow-md"
+      className="absolute left-1 right-1 rounded-md overflow-hidden cursor-pointer transition-all hover:shadow-md"
       style={{
         top,
         height: Math.max(height, 22),
-        background: color + '20',
-        border: `1px solid ${color}50`,
+        background: color + (isDone ? '15' : '20'),
+        border: `1px solid ${color}${isDone ? '40' : '50'}`,
         borderLeft: `3px solid ${color}`,
+        opacity: isDone ? 0.65 : 1,
         zIndex: 1,
       }}
       onClick={() => onSelect(event)}
     >
       <div className="px-1.5 py-0.5">
-        <div className="text-xs font-semibold truncate" style={{ color }}>
-          {event.title}
+        <div className="flex items-center gap-1">
+          {isOngoing && <SyncOutlined spin style={{ fontSize: 9, color, flexShrink: 0 }} />}
+          <div className="text-xs font-semibold truncate" style={{ color }}>
+            {event.title}
+          </div>
         </div>
         {height >= 44 && (
           <div className="text-xs truncate" style={{ color: token.colorTextSecondary }}>
@@ -689,6 +793,7 @@ function TimelineEvent({ event, hook, token, onSelect }: TEProps) {
           </div>
         )}
       </div>
+      {/* Bell icon if reminder set */}
       {event.reminder_min != null && (
         <BellOutlined
           className="absolute bottom-1 right-1 opacity-60"
@@ -712,7 +817,7 @@ interface MonthGridProps {
   onSelectEvent: (ev: SpaceEvent) => void;
 }
 
-function MonthGrid({ cursor, weeks, today, eventsByDay, hook, token, onAddDay, onSelectEvent }: MonthGridProps) {
+function MonthGrid({ cursor, weeks, today, eventsByDay, token, onAddDay, onSelectEvent }: MonthGridProps) {
   const currentMonth = cursor.month();
 
   return (
@@ -746,7 +851,7 @@ function MonthGrid({ cursor, weeks, today, eventsByDay, hook, token, onAddDay, o
               return (
                 <div
                   key={key}
-                  className="border-l p-1 cursor-pointer group relative"
+                  className="border-l p-1 cursor-pointer relative"
                   style={{
                     borderColor: token.colorBorderSecondary,
                     background: isToday ? token.colorPrimary + '08' : !isCurrentMonth ? token.colorFillQuaternary : undefined,
@@ -771,7 +876,7 @@ function MonthGrid({ cursor, weeks, today, eventsByDay, hook, token, onAddDay, o
                     ))}
                     {more > 0 && (
                       <div className="text-xs px-1" style={{ color: token.colorTextSecondary }}>
-                        +{more} sự kiện
+                        +{more} more
                       </div>
                     )}
                   </div>
@@ -791,26 +896,40 @@ function MonthEventChip({
   event, token, onSelect,
 }: { event: SpaceEvent; token: ReturnType<typeof theme.useToken>['token']; onSelect: (ev: SpaceEvent) => void }) {
   const color = evColor(event);
+  const isOngoing = event.status === 'ongoing';
+  const isDone = event.status === 'done' || event.status === 'cancelled';
+
   return (
-    <div
-      className="flex items-center gap-1 rounded px-1 py-0.5 cursor-pointer truncate hover:opacity-80 transition-opacity"
-      style={{
-        background: event.all_day ? color + '25' : 'transparent',
-        borderLeft: `2.5px solid ${color}`,
-      }}
-      onClick={e => { e.stopPropagation(); onSelect(event); }}
-    >
-      {!event.all_day && (
-        <span className="text-xs flex-shrink-0 font-medium" style={{ color }}>
-          {fmt(event.start_at)}
+    <Tooltip title={`${event.title}${event.status && event.status !== 'upcoming' ? ` · ${STATUS_CONFIG[event.status]?.label ?? event.status}` : ''}`} mouseEnterDelay={0.6}>
+      <div
+        className="flex items-center gap-1 rounded px-1 py-0.5 cursor-pointer truncate hover:opacity-80 transition-opacity"
+        style={{
+          background: event.all_day ? color + '25' : 'transparent',
+          borderLeft: `2.5px solid ${color}`,
+          opacity: isDone ? 0.6 : 1,
+        }}
+        onClick={e => { e.stopPropagation(); onSelect(event); }}
+      >
+        {isOngoing && <SyncOutlined spin style={{ fontSize: 8, color, flexShrink: 0 }} />}
+        {!event.all_day && (
+          <span className="text-xs flex-shrink-0 font-medium" style={{ color }}>
+            {fmt(event.start_at)}
+          </span>
+        )}
+        <span
+          className="text-xs truncate"
+          style={{
+            color: isDone ? token.colorTextSecondary : token.colorText,
+            fontWeight: event.all_day ? 600 : 400,
+            textDecoration: event.status === 'cancelled' ? 'line-through' : undefined,
+          }}
+        >
+          {event.title}
         </span>
-      )}
-      <span className="text-xs truncate" style={{ color: token.colorText, fontWeight: event.all_day ? 600 : 400 }}>
-        {event.title}
-      </span>
-      {event.reminder_min != null && (
-        <BellOutlined style={{ fontSize: 9, color: token.colorWarning, flexShrink: 0 }} />
-      )}
-    </div>
+        {event.reminder_min != null && (
+          <BellOutlined style={{ fontSize: 9, color: token.colorWarning, flexShrink: 0 }} />
+        )}
+      </div>
+    </Tooltip>
   );
 }
