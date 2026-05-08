@@ -876,10 +876,32 @@ impl AgentPool {
                 || binding.group_type == "cowork"
                 || binding.group_type == "code"
             {
+                let cowork_dispatch_json: Option<String> =
+                    if binding.group_type == "cowork" {
+                        crate::cowork::workspace_id_from_cowork_jid(&binding.jid)
+                            .and_then(|ws_id| {
+                                self.db.lock().unwrap().as_ref().and_then(|db| {
+                                    match crate::cowork::dispatch_cowork_agents_json_for_mcp(db, ws_id)
+                                    {
+                                        Ok(j) => Some(j),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "[AgentPool] Cowork dispatch agent list for {}: {e}",
+                                                binding.jid
+                                            );
+                                            None
+                                        }
+                                    }
+                                })
+                            })
+                    } else {
+                        None
+                    };
                 mcp_servers.push(dispatch_mcp_config(
                     &dispatch_state_s,
                     &binding.folder,
                     Some(&virtual_agents_dir_s),
+                    cowork_dispatch_json.as_deref(),
                 ));
             }
             mcp_servers.push(memory_mcp_config(

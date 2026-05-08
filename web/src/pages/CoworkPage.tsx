@@ -211,7 +211,12 @@ export function CoworkPage() {
   const loadMessages = useCallback(async (wsId: string) => {
     try {
       const data = await api(`/api/cowork/workspaces/${wsId}/messages?limit=100`);
-      setMessages((data.messages || []).reverse());
+      const raw: CoworkMessage[] = data.messages || [];
+      setMessages(
+        [...raw].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        ),
+      );
     } catch { /* ignore */ }
   }, [api]);
 

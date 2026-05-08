@@ -13,6 +13,7 @@ pub mod core;
 mod cowork;
 mod embedding_config;
 mod llm_config;
+mod marketplace;
 mod mcp;
 mod quicknotes;
 mod space;

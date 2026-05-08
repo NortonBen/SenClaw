@@ -30,14 +30,24 @@ impl super::super::Db {
         self.with_conn(|c| {
             if let Some(s) = since {
                 let mut stmt = c.prepare("SELECT * FROM cowork_messages WHERE workspace_id=?1 AND created_at>?2 ORDER BY created_at ASC LIMIT ?3")?;
-                let rows: Vec<_> = stmt.query_map(params![workspace_id, s, limit as i64], |r| Ok(row_to_cowork_message(r)))?
+                let rows: Vec<_> = stmt
+                    .query_map(params![workspace_id, s, limit as i64], |r| {
+                        Ok(row_to_cowork_message(r))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                rows.into_iter().collect()
+                rows.into_iter().collect::<Result<Vec<_>, _>>()
             } else {
+                // Newest-first query so LIMIT returns the latest window; reverse to chronological
+                // for chat UI (older at top, newest near input).
                 let mut stmt = c.prepare("SELECT * FROM cowork_messages WHERE workspace_id=?1 ORDER BY created_at DESC LIMIT ?2")?;
-                let rows: Vec<_> = stmt.query_map(params![workspace_id, limit as i64], |r| Ok(row_to_cowork_message(r)))?
+                let rows: Vec<_> = stmt
+                    .query_map(params![workspace_id, limit as i64], |r| {
+                        Ok(row_to_cowork_message(r))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                rows.into_iter().collect()
+                let mut rows: Vec<CoworkMessage> = rows.into_iter().collect::<Result<_, _>>()?;
+                rows.reverse();
+                Ok(rows)
             }
         })
     }

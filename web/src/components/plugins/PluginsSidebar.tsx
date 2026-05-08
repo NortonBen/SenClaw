@@ -20,7 +20,7 @@ const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code' | 'marketplace';
 
 interface SkillSummary {
   name: string;
@@ -420,6 +420,14 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               isSelected={activeNav === 'code'}
               onClick={() => onSelect('code')}
               badge={devBadge}
+            />
+
+            {/* ─── Marketplace ─── */}
+            <StaticNavItem
+              icon={<CloudServerOutlined />}
+              label="Marketplace"
+              isSelected={activeNav === 'marketplace'}
+              onClick={() => onSelect('marketplace')}
             />
 
           </>

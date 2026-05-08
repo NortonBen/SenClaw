@@ -8,6 +8,7 @@ import { Content } from 'antd/es/layout/layout';
 import { ApiOutlined } from '@ant-design/icons';
 import CoworkPanel from './CoworkPanel';
 import CodePanel from './CodePanel';
+import MarketplacePanel from './MarketplacePanel';
 
 const { Text } = Typography;
 
@@ -22,6 +23,7 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   mcp: 'MCP Servers',
   cowork: 'Cowork',
   code: 'Code Executor',
+  marketplace: 'Marketplace',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -38,6 +40,7 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'mcp' && <MCPSettings />}
         {activeNav === 'cowork' && <CoworkPanel />}
         {activeNav === 'code' && <CodePanel />}
+        {activeNav === 'marketplace' && <MarketplacePanel />}
       </Content>
     </Layout>
   );

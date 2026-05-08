@@ -139,6 +139,7 @@ pub fn dispatch_mcp_config(
     state_path: &str,
     admin_folder: &str,
     agents_config_dir: Option<&str>,
+    cowork_agents_json: Option<&str>,
 ) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-dispatch", "dispatch-server");
     cfg.env
@@ -148,6 +149,10 @@ pub fn dispatch_mcp_config(
     if let Some(d) = agents_config_dir {
         cfg.env
             .insert("SENCLAW_AGENTS_CONFIG_DIR".into(), d.to_owned());
+    }
+    if let Some(j) = cowork_agents_json {
+        cfg.env
+            .insert("SENCLAW_DISPATCH_COWORK_AGENTS_JSON".into(), j.to_owned());
     }
     cfg
 }

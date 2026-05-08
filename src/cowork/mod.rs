@@ -41,6 +41,36 @@ fn cowork_handoff_result_has(haystack: &str, needle: &str) -> bool {
     h.contains(&n)
 }
 
+/// Parse `cowork:{workspace_id}:{member_id}` → `workspace_id`.
+pub fn workspace_id_from_cowork_jid(jid: &str) -> Option<&str> {
+    let mut parts = jid.splitn(3, ':');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("cowork"), Some(ws), Some(_member)) if !ws.is_empty() => Some(ws),
+        _ => None,
+    }
+}
+
+/// Serialize workspace members for `SENCLAW_DISPATCH_COWORK_AGENTS_JSON` so the dispatch MCP
+/// subprocess lists / resolves subtask assignees **only** from Cowork (not the global agent board or `persona:` files).
+pub fn dispatch_cowork_agents_json_for_mcp(db: &Db, workspace_id: &str) -> Result<String> {
+    let members = db.list_cowork_members(workspace_id)?;
+    let rows: Vec<serde_json::Value> = members
+        .iter()
+        .map(|m| {
+            let jid = m
+                .jid
+                .clone()
+                .unwrap_or_else(|| format!("cowork:{workspace_id}:{}", m.member_id));
+            serde_json::json!({
+                "memberId": m.member_id,
+                "role": m.role,
+                "jid": jid,
+            })
+        })
+        .collect();
+    Ok(serde_json::Value::Array(rows).to_string())
+}
+
 pub struct CoworkManager {
     on_changed: Mutex<Option<Box<dyn Fn() + Send + 'static>>>,
     /// Fired when a task reaches "done" — carries the full result payload.

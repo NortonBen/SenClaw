@@ -95,6 +95,9 @@ regex = "1"
 glob = "0.3"
 libc = "0.2.186"
 
+# Git operations for marketplace
+git2 = "0.19"
+
 # Code Knowledge Graph — AST parsing via tree-sitter
 tree-sitter          = "0.25"
 tree-sitter-language = "0.1"

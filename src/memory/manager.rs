@@ -362,9 +362,11 @@ impl MemoryManager {
             .as_ref()
             .map(|p| p.model().to_string());
 
-        let _ = self.db.with_conn(|conn| {
+        let _ = self.db.with_conn_mut(|conn| {
+            let tx = conn.transaction()?;
+            
             // Upsert file record
-            conn.execute(
+            tx.execute(
                 "INSERT INTO memory_files (path, folder, source, hash, mtime, size)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(path, folder) DO UPDATE SET
@@ -383,7 +385,7 @@ impl MemoryManager {
                     })
                 });
 
-                conn.execute(
+                tx.execute(
                     "INSERT INTO memory_chunks (id, folder, path, source, start_line, end_line, hash, text, embedding, model)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     rusqlite::params![id, folder, abs_path, source, chunk.start_line, chunk.end_line, chunk_hash, chunk.text, emb_blob, model],
@@ -391,20 +393,21 @@ impl MemoryManager {
 
                 // FTS
                 let tokenized = tokenize_optimized(&chunk.text, false).join(" ");
-                conn.execute(
+                tx.execute(
                     "INSERT INTO memory_chunks_fts (chunk_id, text) VALUES (?1, ?2)",
                     rusqlite::params![id, tokenized],
                 )?;
 
                 // sqlite-vec
                 if let Some(ref blob) = emb_blob {
-                    let _ = conn.execute(
+                    let _ = tx.execute(
                         "INSERT INTO memory_chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
                         rusqlite::params![id, blob],
                     );
                 }
             }
 
+            tx.commit()?;
             Ok(())
         });
     }

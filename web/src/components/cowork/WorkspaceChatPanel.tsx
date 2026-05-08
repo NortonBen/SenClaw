@@ -168,7 +168,11 @@ export function WorkspaceChatPanel({
       const res = await fetch(`/api/cowork/workspaces/${workspaceId}/messages?limit=100`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(data.messages ?? []);
+        const raw: CoworkMessage[] = data.messages ?? [];
+        const sorted = [...raw].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+        setMessages(sorted);
         setOptimistic(null); // server confirmed → drop optimistic
       }
     } finally {
@@ -206,10 +210,11 @@ export function WorkspaceChatPanel({
   // Build a map: taskId → task for inline rendering
   const taskMap = Object.fromEntries(tasks.map(t => [t.id, t]));
 
-  const allMessages: (CoworkMessage & { isOptimistic?: boolean })[] = [
-    ...messages,
-    ...(optimistic ? [{ ...optimistic, isOptimistic: true }] : []),
-  ];
+  const allMessages: (CoworkMessage & { isOptimistic?: boolean })[] = (
+    [...messages, ...(optimistic ? [{ ...optimistic, isOptimistic: true }] : [])] as (CoworkMessage & {
+      isOptimistic?: boolean;
+    })[]
+  ).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

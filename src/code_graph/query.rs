@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::db::Db;
 
-use super::types::{CallerInfo, CodeEdge, CodeNode, EdgeKind, ImpactNode, NodeKind};
+use super::types::{CallerInfo, CodeNode, ImpactNode, NodeKind};
 
 pub struct GraphQuery {
     db: Arc<Db>,

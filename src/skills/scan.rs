@@ -1,6 +1,6 @@
 //! Skills directory scanner. Mirrors `src-old/skills/scan.ts`.
 //!
-//! Scans all skill sources (bundled, global-compat, global-sema, clawhub-managed)
+//! Scans all skill sources (bundled, global-compat, global-sema, clawhub-managed, marketplace)
 //! and returns deduplicated skill entries sorted by name.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub version: Option<String>,
-    /// Source label: bundled / global-compat / global-sema / clawhub-managed
+    /// Source label: bundled / global-compat / global-sema / clawhub-managed / marketplace
     pub source: String,
     /// Absolute path to the skill directory
     pub dir: PathBuf,
@@ -27,7 +27,14 @@ pub struct SourceDef {
     pub source: String,
 }
 
-/// Build the set of source directories to scan.
+/// Marketplace source definition
+pub struct MarketplaceSourceDef {
+    pub dir: PathBuf,
+    pub source_id: String,
+    pub source_name: String,
+}
+
+/// Build the set of source directories to scan (excluding marketplace).
 pub fn get_source_defs(config: &Config) -> Vec<SourceDef> {
     let mut defs: Vec<SourceDef> = Vec::new();
 
@@ -53,6 +60,24 @@ pub fn get_source_defs(config: &Config) -> Vec<SourceDef> {
         dir: config.paths.managed_skills_dir.clone(),
         source: "clawhub-managed".to_string(),
     });
+
+    defs
+}
+
+/// Build the set of source directories to scan including marketplace sources.
+pub fn get_source_defs_with_marketplace(
+    config: &Config,
+    marketplace_sources: Vec<MarketplaceSourceDef>,
+) -> Vec<SourceDef> {
+    let mut defs = get_source_defs(config);
+
+    // Add marketplace sources
+    for ms in marketplace_sources {
+        defs.push(SourceDef {
+            dir: ms.dir,
+            source: format!("marketplace:{}", ms.source_name),
+        });
+    }
 
     defs
 }
@@ -150,6 +175,24 @@ pub fn scan_source(def: &SourceDef) -> Vec<SkillEntry> {
 /// and return sorted results.
 pub fn load_all_local_skills(config: &Config) -> Vec<SkillEntry> {
     let sources = get_source_defs(config);
+    let mut map: HashMap<String, SkillEntry> = HashMap::new();
+    for def in &sources {
+        for entry in scan_source(def) {
+            map.insert(entry.name.clone(), entry);
+        }
+    }
+    let mut entries: Vec<SkillEntry> = map.into_values().collect();
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries
+}
+
+/// Scan all sources including marketplace, deduplicate by name (later sources override earlier ones),
+/// and return sorted results.
+pub fn load_all_skills_with_marketplace(
+    config: &Config,
+    marketplace_sources: Vec<MarketplaceSourceDef>,
+) -> Vec<SkillEntry> {
+    let sources = get_source_defs_with_marketplace(config, marketplace_sources);
     let mut map: HashMap<String, SkillEntry> = HashMap::new();
     for def in &sources {
         for entry in scan_source(def) {

@@ -33,6 +33,15 @@ pub trait PersonaResolver: Send + Sync {
     fn get(&self, name: &str) -> Option<PersonaInfo>;
 }
 
+/// One Cowork workspace member injected via `SENCLAW_DISPATCH_COWORK_AGENTS_JSON`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoworkDispatchAgentRow {
+    pub member_id: String,
+    pub role: String,
+    pub jid: String,
+}
+
 /// Default persona resolver that scans .md files from a directory.
 pub struct FsPersonaResolver {
     personas: Vec<PersonaInfo>,
@@ -108,6 +117,9 @@ pub struct DispatchServer {
     state_path: PathBuf,
     admin_folder: String,
     persona_resolver: Option<Box<dyn PersonaResolver>>,
+    /// When set (Cowork sessions), [`Self::list_agents`] and [`Self::resolve_agent`] use **only**
+    /// these members — not `dispatch-state.json` agents[] or filesystem personas.
+    cowork_agents: Option<Vec<CoworkDispatchAgentRow>>,
 }
 
 impl DispatchServer {
@@ -115,11 +127,13 @@ impl DispatchServer {
         state_path: &Path,
         admin_folder: &str,
         persona_resolver: Option<Box<dyn PersonaResolver>>,
+        cowork_agents: Option<Vec<CoworkDispatchAgentRow>>,
     ) -> Self {
         Self {
             state_path: state_path.to_path_buf(),
             admin_folder: admin_folder.to_owned(),
             persona_resolver,
+            cowork_agents,
         }
     }
 
@@ -171,6 +185,18 @@ impl DispatchServer {
         let trimmed = agent_name.trim();
         if trimmed.is_empty() {
             return None;
+        }
+
+        if let Some(ref cm) = self.cowork_agents {
+            return cm
+                .iter()
+                .find(|c| c.member_id.eq_ignore_ascii_case(trimmed))
+                .map(|c| ResolvedAgent {
+                    id: c.member_id.clone(),
+                    jid: c.jid.clone(),
+                    is_virtual: false,
+                    persona_name: None,
+                });
         }
 
         // Explicit virtual: persona:{name}
@@ -301,6 +327,32 @@ impl DispatchServer {
     // ===== list_agents =====
 
     pub fn list_agents(&self) -> ToolResult {
+        if let Some(ref cm) = self.cowork_agents {
+            if cm.is_empty() {
+                return ToolResult::ok(
+                    "No Cowork workspace members — add agents in the Cowork UI.\n\
+                     (Dispatch subtask `agentName` must be a workspace `memberId`.)"
+                        .into(),
+                );
+            }
+            let mut lines: Vec<String> = vec![
+                "**Cowork workspace agents** — use each **memberId** as `agentName` in `create_parent` (no global board agents, no `persona:`):"
+                    .into(),
+            ];
+            for c in cm {
+                lines.push(format!(
+                    "- **{}** (role: {}, jid: {})",
+                    c.member_id, c.role, c.jid
+                ));
+            }
+            lines.push(String::new());
+            lines.push(
+                "`mcp__dispatch__list_agents` in this session reflects **this workspace only**."
+                    .into(),
+            );
+            return ToolResult::ok(lines.join("\n"));
+        }
+
         let state = self.read_state();
         let mut lines: Vec<String> = Vec::new();
 
@@ -801,6 +853,7 @@ struct McpDispatchServer {
     state_path: std::path::PathBuf,
     admin_folder: String,
     agents_config_dir: Option<String>,
+    cowork_agents_json: Option<String>,
 }
 
 impl McpDispatchServer {
@@ -810,13 +863,35 @@ impl McpDispatchServer {
                 Box::new(FsPersonaResolver::from_dir(std::path::Path::new(dir)))
                     as Box<dyn PersonaResolver>
             });
-        DispatchServer::new(&self.state_path, &self.admin_folder, persona_resolver)
+        let cowork_agents = self.cowork_agents_json.as_ref().and_then(|raw| {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return None;
+            }
+            match serde_json::from_str::<Vec<CoworkDispatchAgentRow>>(raw) {
+                Ok(rows) => Some(rows),
+                Err(e) => {
+                    tracing::warn!(
+                        "[McpDispatchServer] invalid SENCLAW_DISPATCH_COWORK_AGENTS_JSON: {e}"
+                    );
+                    None
+                }
+            }
+        });
+        DispatchServer::new(
+            &self.state_path,
+            &self.admin_folder,
+            persona_resolver,
+            cowork_agents,
+        )
     }
 }
 
 #[rmcp::tool_router(server_handler)]
 impl McpDispatchServer {
-    #[rmcp::tool(description = "List all registered agents and personas")]
+    #[rmcp::tool(
+        description = "List agents valid for dispatch subtasks. In Cowork sessions this is the workspace member list only; otherwise registered agents and virtual personas."
+    )]
     fn list_agents(&self) -> String {
         self.inner().list_agents().content
     }
@@ -894,11 +969,13 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
     let admin_folder =
         std::env::var("SENCLAW_ADMIN_FOLDER").context("SENCLAW_ADMIN_FOLDER not set")?;
     let agents_config_dir = std::env::var("SENCLAW_AGENTS_CONFIG_DIR").ok();
+    let cowork_agents_json = std::env::var("SENCLAW_DISPATCH_COWORK_AGENTS_JSON").ok();
 
     let server = McpDispatchServer {
         state_path: std::path::PathBuf::from(state_path),
         admin_folder,
         agents_config_dir,
+        cowork_agents_json,
     };
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
@@ -981,6 +1058,49 @@ mod tests {
     fn detect_cycle_self_loop() {
         let tasks = vec![("t1".into(), vec!["t1".into()])];
         assert!(DispatchServer::detect_cycle(&tasks).is_some());
+    }
+
+    #[test]
+    fn resolve_agent_cowork_only_skips_board_and_personas() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("dispatch-state.json");
+        let body = serde_json::to_string(&DispatchState::default()).unwrap();
+        std::fs::write(&path, body).unwrap();
+        let persona_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(persona_dir.path().join("coder.md"), "# Coder\nWrites code").unwrap();
+        let resolver: Box<dyn PersonaResolver> =
+            Box::new(FsPersonaResolver::from_dir(persona_dir.path()));
+        let rows = vec![CoworkDispatchAgentRow {
+            member_id: "code-agent".into(),
+            role: "code".into(),
+            jid: "cowork:ws-todo:code-agent".into(),
+        }];
+        let server = DispatchServer::new(&path, "lead-agent", Some(resolver), Some(rows));
+
+        let mut state = DispatchState::default();
+        state.agents.push(DispatchAgent {
+            name: "Other Bot".into(),
+            id: "other".into(),
+            jid: "web:other".into(),
+            channel: String::new(),
+        });
+
+        let r = server.resolve_agent(&state, "code-agent").expect("cowork member");
+        assert_eq!(r.jid, "cowork:ws-todo:code-agent");
+        assert!(!r.is_virtual);
+
+        assert!(
+            server.resolve_agent(&state, "other").is_none(),
+            "board agent must not resolve in Cowork mode"
+        );
+        assert!(
+            server.resolve_agent(&state, "persona:coder").is_none(),
+            "persona must not resolve in Cowork mode"
+        );
+        assert!(
+            server.resolve_agent(&state, "coder").is_none(),
+            "bare persona name must not resolve in Cowork mode"
+        );
     }
 
     #[test]

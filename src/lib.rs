@@ -22,6 +22,7 @@ pub mod config;
 pub mod cowork;
 pub mod db;
 pub mod gateway;
+pub mod marketplace;
 pub mod mcp;
 pub mod memory;
 pub mod proto;
@@ -591,6 +592,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let _memory_mgr = memory::manager::init(Arc::clone(&db), &cfg);
     tracing::info!("[SenClaw] MemoryManager initialized");
 
+    // ===== 1c. Ensure main agent directory =====
+    // Ensure main agent skeleton exists (missing dirs + SOUL.md/MEMORY.md templates),
+    // avoiding the case where user accidentally deletes it and no group has isAdmin permissions.
+    // Matches TypeScript: ensureAgentDirs('main') before GroupManager creation.
+    gateway::group_manager::ensure_agent_dirs(&cfg, &cfg.telegram.agent_folder, &cfg.telegram.agent_folder);
+    tracing::info!("[SenClaw] Main agent directory ensured");
+
     // ===== 2. GroupManager & Other Managers =====
     // Load group bindings from DB; reconcile with config.json
     let gm = Arc::new(gateway::group_manager::GroupManager::new());
@@ -916,6 +924,14 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }),
         None,
     )));
+    
+    // ===== DailyLogger for conversation history =====
+    let daily_logger = Arc::new(memory::daily_logger::DailyLogger::new(
+        cfg.paths.agents_dir.clone(),
+    ));
+    agent_pool.set_daily_logger(daily_logger);
+    tracing::info!("[SenClaw] DailyLogger initialized");
+    
     tracing::info!(
         "[SenClaw] AgentPool (zen-core engine) + GroupQueue (max_concurrent={}) ready",
         cfg.agent.max_concurrent
@@ -1473,6 +1489,27 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             })),
             cowork_agent_api: Some(agent_pool.clone() as Arc<dyn types::AgentApi>),
             mcp_manager: Some(Arc::clone(&mcp_manager)),
+            marketplace_manager: Some(Arc::new(std::sync::Mutex::new(
+                marketplace::manager::MarketplaceManager::new()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("[SenClaw] Failed to initialize marketplace manager: {e}");
+                        marketplace::manager::MarketplaceManager::with_paths(
+                            cfg.paths.marketplace_config_path.clone(),
+                            cfg.paths.marketplace_state_path.clone(),
+                            cfg.paths.marketplace_clones_dir.clone(),
+                        ).unwrap_or_else(|e2| {
+                            tracing::error!("[SenClaw] Failed to create marketplace manager with custom paths: {e2}");
+                            // Create a dummy manager that will fail gracefully
+                            marketplace::manager::MarketplaceManager::with_paths(
+                                std::path::PathBuf::from("/tmp/senclaw-marketplace-config.json"),
+                                std::path::PathBuf::from("/tmp/senclaw-marketplace-state.json"),
+                                std::path::PathBuf::from("/tmp/senclaw-marketplace"),
+                            ).unwrap_or_else(|_| {
+                                panic!("Failed to create even a dummy marketplace manager")
+                            })
+                        })
+                    })
+            ))),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });

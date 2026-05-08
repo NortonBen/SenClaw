@@ -66,6 +66,12 @@ use super::plugins::{
     plugins_list, plugins_remote_search, plugins_install, plugins_get,
     plugins_uninstall, plugins_enable, plugins_disable, plugins_configure,
 };
+use super::marketplace::{
+    marketplace_sources_list, marketplace_sources_add, marketplace_sources_delete,
+    marketplace_sources_sync, marketplace_sources_reorder, marketplace_source_get,
+    marketplace_source_enable_all, marketplace_source_disable_all, marketplace_plugin_toggle,
+    marketplace_mcp_use_tools, marketplace_mcp_status,
+};
 use super::spa::spa_fallback;
 use super::subagents::{
     subagents_create, subagents_list, subagents_readme, subagents_readme_save, subagents_toggle,
@@ -108,6 +114,7 @@ pub struct UiState {
     pub agent_api: Option<Arc<dyn UiApi>>,
     pub cowork_agent_api: Option<Arc<dyn crate::types::AgentApi>>,
     pub mcp_manager: Option<Arc<McpManager>>,
+    pub marketplace_manager: Option<Arc<Mutex<crate::marketplace::manager::MarketplaceManager>>>,
     pub ws_port: u16,
     pub ws_token: String,
 }
@@ -155,6 +162,16 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/plugins/:slug/enable", post(plugins_enable))
         .route("/api/plugins/:slug/disable", post(plugins_disable))
         .route("/api/plugins/:slug/configure", post(plugins_configure))
+        // ── Marketplace API ──────────────────────────────────────────────────────
+        .route("/api/marketplace/sources", get(marketplace_sources_list).post(marketplace_sources_add))
+        .route("/api/marketplace/sources/reorder", post(marketplace_sources_reorder))
+        .route("/api/marketplace/sources/:id", get(marketplace_source_get).delete(marketplace_sources_delete))
+        .route("/api/marketplace/sources/:id/sync", post(marketplace_sources_sync))
+        .route("/api/marketplace/sources/:id/enable-all", post(marketplace_source_enable_all))
+        .route("/api/marketplace/sources/:id/disable-all", post(marketplace_source_disable_all))
+        .route("/api/marketplace/sources/:id/plugins/:name/toggle", post(marketplace_plugin_toggle))
+        .route("/api/marketplace/sources/:id/plugins/:name/mcp/:server/use-tools", post(marketplace_mcp_use_tools))
+        .route("/api/marketplace/mcp-status", get(marketplace_mcp_status))
         .route("/api/subagents", get(subagents_list))
         .route("/api/subagents/create", post(subagents_create))
         .route(

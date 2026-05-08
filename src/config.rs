@@ -5,7 +5,6 @@
 //! vars (`TELEGRAM_BOT_TOKEN`, `FEISHU_APP_ID`, …) are unchanged.
 //! Default paths live under `~/.senclaw/` and `~/senclaw/`.
 
-use base64::Engine;
 use std::env;
 use std::path::PathBuf;
 
@@ -69,6 +68,12 @@ pub struct PathsConfig {
     /// Optional bundled-skills dir; empty when unset (TS treats blank as disabled).
     pub bundled_skills_dir: Option<PathBuf>,
     pub workspace_templates_dir: PathBuf,
+    /// Marketplace configuration path
+    pub marketplace_config_path: PathBuf,
+    /// Marketplace state path
+    pub marketplace_state_path: PathBuf,
+    /// Marketplace git clones directory
+    pub marketplace_clones_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,6 +262,18 @@ impl Config {
                 workspace_templates_dir: env_path(
                     "SENCLAW_WORKSPACE_TEMPLATES_DIR",
                     senclaw_data.join("workspace-templates"),
+                ),
+                marketplace_config_path: env_path(
+                    "SENCLAW_MARKETPLACE_CONFIG_PATH",
+                    senclaw_home.join("marketplace.json"),
+                ),
+                marketplace_state_path: env_path(
+                    "SENCLAW_MARKETPLACE_STATE_PATH",
+                    senclaw_home.join("marketplace-state.json"),
+                ),
+                marketplace_clones_dir: env_path(
+                    "SENCLAW_MARKETPLACE_CLONES_DIR",
+                    senclaw_home.join("marketplace"),
                 ),
             },
             memory: MemoryConfig {
