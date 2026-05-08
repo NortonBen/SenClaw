@@ -161,6 +161,7 @@ fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<
         match msg.message.role.as_str() {
             "user" => {
                 let mut text_acc = String::new();
+                let mut content_parts: Vec<Value> = Vec::new();
                 for b in &msg.message.content {
                     match b {
                         ContentBlock::Text { text } => {
@@ -169,17 +170,42 @@ fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<
                             }
                             text_acc.push_str(text);
                         }
+                        ContentBlock::Image { source } => {
+                            // Flush text accumulator first if not empty
+                            if !text_acc.is_empty() {
+                                content_parts.push(serde_json::json!({
+                                    "type": "text",
+                                    "text": text_acc,
+                                }));
+                                text_acc.clear();
+                            }
+                            // Add image content
+                            content_parts.push(serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{};base64,{}", source.media_type, source.data),
+                                }
+                            }));
+                        }
                         ContentBlock::ToolResult {
                             tool_use_id,
                             content,
                             ..
                         } => {
-                            if !text_acc.is_empty() {
+                            // Flush any accumulated content first
+                            if !text_acc.is_empty() || !content_parts.is_empty() {
+                                if !text_acc.is_empty() {
+                                    content_parts.push(serde_json::json!({
+                                        "type": "text",
+                                        "text": text_acc,
+                                    }));
+                                    text_acc.clear();
+                                }
                                 api_msgs.push(serde_json::json!({
                                     "role": "user",
-                                    "content": text_acc,
+                                    "content": content_parts,
                                 }));
-                                text_acc.clear();
+                                content_parts.clear();
                             }
                             api_msgs.push(serde_json::json!({
                                 "role": "tool",
@@ -193,11 +219,33 @@ fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<
                         }
                     }
                 }
-                if !text_acc.is_empty() {
-                    api_msgs.push(serde_json::json!({
-                        "role": "user",
-                        "content": text_acc,
-                    }));
+                // Flush any remaining content
+                if !text_acc.is_empty() || !content_parts.is_empty() {
+                    if !text_acc.is_empty() {
+                        content_parts.push(serde_json::json!({
+                            "type": "text",
+                            "text": text_acc,
+                        }));
+                    }
+                    if content_parts.len() == 1 {
+                        // Single text part - use simple string format
+                        if let Some(Value::String(text)) = content_parts.first() {
+                            api_msgs.push(serde_json::json!({
+                                "role": "user",
+                                "content": text,
+                            }));
+                        } else {
+                            api_msgs.push(serde_json::json!({
+                                "role": "user",
+                                "content": content_parts,
+                            }));
+                        }
+                    } else {
+                        api_msgs.push(serde_json::json!({
+                            "role": "user",
+                            "content": content_parts,
+                        }));
+                    }
                 }
             }
             "assistant" => {
@@ -225,6 +273,10 @@ fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<
                             }));
                         }
                         ContentBlock::ToolResult { .. } => {}
+                        ContentBlock::Image { .. } => {
+                            // Images in assistant messages are not standard, but handle gracefully
+                            tracing::warn!("OpenAI adapter: unexpected Image block in assistant message");
+                        }
                     }
                 }
 
@@ -487,6 +539,16 @@ fn anthropic_content_blocks(blocks: &[ContentBlock]) -> Value {
                 parts.push(serde_json::json!({
                     "type": "thinking",
                     "thinking": thinking,
+                }));
+            }
+            ContentBlock::Image { source } => {
+                parts.push(serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": source.source_type,
+                        "media_type": source.media_type,
+                        "data": source.data,
+                    }
                 }));
             }
         }

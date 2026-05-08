@@ -351,6 +351,7 @@ fn model_profile_from_input(input: ModelAddInput) -> ModelProfile {
         max_tokens: input.max_tokens,
         context_length: input.context_length,
         adapt: input.adapt,
+        vision: None,
     }
 }
 

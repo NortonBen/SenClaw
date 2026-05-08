@@ -79,6 +79,7 @@ pub async fn execute_prompt_hook(
     client: &Client,
     profile: &ModelProfile,
     cancel: Option<&CancellationToken>,
+    messages: Option<&[crate::zen_core::Message]>,
 ) -> Result<HookOutput> {
     let prompt_text = match &hook.prompt {
         Some(p) if !p.trim().is_empty() => p.clone(),
@@ -93,9 +94,25 @@ pub async fn execute_prompt_hook(
 
     let timeout_secs = hook.timeout.unwrap_or(30);
 
+    let include_history = hook.include_history.unwrap_or(false);
+    let history_limit = hook.history_limit.unwrap_or(10);
+
+    let mut user_content = format!("Event context:\n```json\n{input_json}\n```");
+
+    // Add message history if requested
+    if include_history {
+        if let Some(msgs) = messages {
+            let recent_messages = msgs.iter().rev().take(history_limit).collect::<Vec<_>>();
+            user_content.push_str("\n\nRecent message history:\n");
+            for msg in recent_messages.into_iter().rev() {
+                user_content.push_str(&format!("{}\n", serde_json::to_string(msg).unwrap_or_default()));
+            }
+        }
+    }
+
     let system_prompt = format!("{DECISION_SYSTEM_PROMPT}\nYour task: {prompt_text}");
     let user_msg = create_user_message(vec![ContentBlock::Text {
-        text: format!("Event context:\n```json\n{input_json}\n```"),
+        text: user_content,
     }]);
 
     let inner_cancel = CancellationToken::new();

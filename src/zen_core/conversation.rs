@@ -23,7 +23,7 @@ use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::hooks::HookManager;
+use super::hooks::{ErrorInput, HookEvent, HookInput, HookInputBase, HookManager, PreCompactInput};
 use super::*;
 use crate::zen_core::events::ResponseRegistry;
 use crate::zen_core::query_llm;
@@ -144,15 +144,86 @@ pub async fn query(
                             details: None,
                         },
                     }));
+
+                // Fire Error hook
+                if let Some(ref hm) = config.hook_manager {
+                    if hm.has_hooks_for_event(&HookEvent::Error) {
+                        let base = HookInputBase {
+                            hook_event_name: HookEvent::Error,
+                            session_id: config.session_id.clone(),
+                            agent_id: config.agent_id.clone(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            cwd: config.working_dir.clone(),
+                        };
+                        let hook_input = HookInput::Error(ErrorInput {
+                            base,
+                            error_message: msg.clone(),
+                            error_type: Some("LLM_TIMEOUT".to_string()),
+                        });
+                        let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+                        let hm_clone = hm.clone();
+                        tokio::spawn(async move {
+                            let _ = super::hooks::execute_hooks(
+                                &hm_clone,
+                                &HookEvent::Error,
+                                &hook_input,
+                                &super::hooks::ExecuteHooksOptions {
+                                    env: std::collections::HashMap::new(),
+                                    cancel: None,
+                                    client: client.as_ref(),
+                                    profile: profile.as_ref(),
+                                    messages: None,
+                                },
+                            )
+                            .await;
+                        });
+                    }
+                }
                 return Err(anyhow::anyhow!(msg));
             }
             Ok(Ok(msg)) => msg,
             Ok(Err(e)) => {
                 let classified = query_llm::LlmError::classify(&e);
                 if classified.should_emit() {
+                    let error_data = classified.to_session_error();
                     config
                         .event_bus
-                        .emit(EngineEvent::SessionError(classified.to_session_error()));
+                        .emit(EngineEvent::SessionError(error_data.clone()));
+
+                    // Fire Error hook
+                    if let Some(ref hm) = config.hook_manager {
+                        if hm.has_hooks_for_event(&HookEvent::Error) {
+                            let base = HookInputBase {
+                                hook_event_name: HookEvent::Error,
+                                session_id: config.session_id.clone(),
+                                agent_id: config.agent_id.clone(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                cwd: config.working_dir.clone(),
+                            };
+                            let hook_input = HookInput::Error(ErrorInput {
+                                base,
+                                error_message: error_data.error.message.clone(),
+                                error_type: Some(error_data.error.code.clone()),
+                            });
+                            let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+                            let hm_clone = hm.clone();
+                            tokio::spawn(async move {
+                                let _ = super::hooks::execute_hooks(
+                                    &hm_clone,
+                                    &HookEvent::Error,
+                                    &hook_input,
+                                    &super::hooks::ExecuteHooksOptions {
+                                        env: std::collections::HashMap::new(),
+                                        cancel: None,
+                                        client: client.as_ref(),
+                                        profile: profile.as_ref(),
+                                        messages: None,
+                                    },
+                                )
+                                .await;
+                            });
+                        }
+                    }
                 }
                 if classified.is_context_length && !compacted {
                     warn!(
@@ -165,6 +236,46 @@ pub async fn query(
                         .emit(EngineEvent::CompactStart(CompactStartData {
                             message_count: messages.len(),
                         }));
+
+                    // Fire PreCompact hook
+                    if let Some(ref hm) = config.hook_manager {
+                        if hm.has_hooks_for_event(&HookEvent::PreCompact) {
+                            let base = HookInputBase {
+                                hook_event_name: HookEvent::PreCompact,
+                                session_id: config.session_id.clone(),
+                                agent_id: config.agent_id.clone(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                cwd: config.working_dir.clone(),
+                            };
+                            let context_history: Vec<serde_json::Value> = messages
+                                .iter()
+                                .filter_map(|m| serde_json::to_value(m).ok())
+                                .collect();
+                            let hook_input = HookInput::PreCompact(PreCompactInput {
+                                base,
+                                message_count: messages.len(),
+                                context_history,
+                            });
+                            let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+                            let hm_clone = hm.clone();
+                            tokio::spawn(async move {
+                                let _ = super::hooks::execute_hooks(
+                                    &hm_clone,
+                                    &HookEvent::PreCompact,
+                                    &hook_input,
+                                    &super::hooks::ExecuteHooksOptions {
+                                        env: std::collections::HashMap::new(),
+                                        cancel: None,
+                                        client: client.as_ref(),
+                                        profile: profile.as_ref(),
+                                        messages: None,
+                                    },
+                                )
+                                .await;
+                            });
+                        }
+                    }
+
                     let did_compact = compact_messages(&mut messages);
                     config
                         .event_bus
@@ -179,6 +290,45 @@ pub async fn query(
                             compact_rate: 0.0,
                             summary: None,
                         }));
+
+                    // Fire PostCompact hook (non-blockable)
+                    if let Some(ref hm) = config.hook_manager {
+                        if hm.has_hooks_for_event(&HookEvent::PostCompact) {
+                            let base = HookInputBase {
+                                hook_event_name: HookEvent::PostCompact,
+                                session_id: config.session_id.clone(),
+                                agent_id: config.agent_id.clone(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                cwd: config.working_dir.clone(),
+                            };
+                            let context_history: Vec<serde_json::Value> = messages
+                                .iter()
+                                .filter_map(|m| serde_json::to_value(m).ok())
+                                .collect();
+                            let hook_input = HookInput::PreCompact(PreCompactInput {
+                                base,
+                                message_count: messages.len(),
+                                context_history,
+                            });
+                            let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+                            let hm_clone = hm.clone();
+                            tokio::spawn(async move {
+                                let _ = super::hooks::execute_hooks(
+                                    &hm_clone,
+                                    &HookEvent::PostCompact,
+                                    &hook_input,
+                                    &super::hooks::ExecuteHooksOptions {
+                                        env: std::collections::HashMap::new(),
+                                        cancel: None,
+                                        client: client.as_ref(),
+                                        profile: profile.as_ref(),
+                                        messages: None,
+                                    },
+                                )
+                                .await;
+                            });
+                        }
+                    }
                     if did_compact {
                         info!(
                             agent_id = %config.agent_id,

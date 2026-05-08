@@ -385,6 +385,7 @@ impl ZenEngine {
                 } else {
                     Some(selected.adapt)
                 },
+                vision: None,
             };
         }
 
@@ -421,7 +422,50 @@ impl ZenEngine {
             max_tokens: 4096,
             context_length: 128000,
             adapt: Some("openai".into()),
+            vision: None,
         }
+    }
+
+    // ============================================================
+    // Context management for multi-tenant support
+    // ============================================================
+
+    /// Create an EngineStore from this engine's current state.
+    ///
+    /// This can be used with `run_with_engine()` to execute operations
+    /// within this engine's context, enabling automatic access to
+    /// the engine's resources without explicit passing.
+    pub fn create_engine_store(&self, profile: ModelProfile) -> super::EngineStore {
+        super::EngineStore {
+            instance_id: self.instance_id.clone(),
+            working_dir: self.options.read().unwrap().working_dir.clone(),
+            agent_data_dir: self.options.read().unwrap().agent_data_dir.clone(),
+            core_config: super::CoreConfig {
+                model_profile: profile,
+                thinking: self.options.read().unwrap().thinking,
+                stream: self.options.read().unwrap().stream,
+                agent_mode: self.options.read().unwrap().agent_mode.as_str().to_string(),
+                use_tools: self.options.read().unwrap().use_tools.clone(),
+            },
+            event_bus: self.event_bus.clone(),
+            state_manager: Arc::clone(&self.state),
+            mcp_manager: self.mcp_manager.clone(),
+            hook_manager: self.hook_manager.clone(),
+        }
+    }
+
+    /// Run an operation within this engine's context.
+    ///
+    /// This is a convenience method that combines `create_engine_store()`
+    /// with `run_with_engine()`.
+    pub async fn run_in_context<F, Fut, T>(&self, profile: ModelProfile, f: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = T> + Send,
+        T: Send + 'static,
+    {
+        let store = self.create_engine_store(profile);
+        super::run_with_engine(store, f).await
     }
 }
 

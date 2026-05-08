@@ -45,6 +45,12 @@ function validateHooksJson(text: string): string | null {
         if (hook.type === 'prompt' && !hook.prompt) {
           return `Event "${event}"[${i}].hooks[${j}]: type "prompt" requires a "prompt" field`;
         }
+        if (hook.include_history !== undefined && typeof hook.include_history !== 'boolean') {
+          return `Event "${event}"[${i}].hooks[${j}]: include_history must be a boolean`;
+        }
+        if (hook.history_limit !== undefined && typeof hook.history_limit !== 'number') {
+          return `Event "${event}"[${i}].hooks[${j}]: history_limit must be a number`;
+        }
       }
     }
   }
@@ -59,8 +65,10 @@ const ACTIVE_EVENTS = [
   'PermissionRequest',
   'Stop',
   'SessionStart',
+  'SessionEnd',
   'PreCompact',
   'PostCompact',
+  'Error',
 ];
 
 const FIELDS: [string, string, boolean][] = [
@@ -72,6 +80,8 @@ const FIELDS: [string, string, boolean][] = [
   ['timeout', 'Max runtime in seconds (default 10)', false],
   ['blocking', 'Block agent if hook fails (default true)', false],
   ['async', 'Fire-and-forget, no waiting (default false)', false],
+  ['include_history', 'Include message history in hook input (default false)', false],
+  ['history_limit', 'Max recent messages to include (default 10)', false],
 ];
 
 const MINI_EXAMPLE = `{
@@ -81,6 +91,15 @@ const MINI_EXAMPLE = `{
       "hooks": [{
         "type": "command",
         "command": "echo done"
+      }]
+    }],
+    "PreToolUse": [{
+      "matcher": "*",
+      "hooks": [{
+        "type": "prompt",
+        "prompt": "Review this tool call for security issues",
+        "include_history": true,
+        "history_limit": 5
       }]
     }]
   }

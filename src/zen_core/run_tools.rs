@@ -14,7 +14,7 @@ use tracing::{debug, warn};
 
 use super::hooks::{
     self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput, HookInputBase, HookManager,
-    PostToolUseInput, PreToolUseInput,
+    PermissionRequestInput, PostToolUseInput, PreToolUseInput,
 };
 use super::*;
 
@@ -307,6 +307,41 @@ async fn run_single_tool(
                     tool_name,
                     tool_id
                 );
+
+                // Fire PermissionRequest hook
+                if let Some(ref hm) = ctx.hook_manager {
+                    if hm.has_hooks_for_event(&HookEvent::PermissionRequest) {
+                        let base = HookInputBase {
+                            hook_event_name: HookEvent::PermissionRequest,
+                            session_id: ctx.session_id.clone(),
+                            agent_id: ctx.agent_id.to_string(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            cwd: ctx.working_dir.to_string(),
+                        };
+                        let hook_input = HookInput::PermissionRequest(PermissionRequestInput {
+                            base,
+                            tool_name: tool_name.clone(),
+                            tool_input: input.clone(),
+                        });
+                        let (client, profile) = (ctx.hook_client.clone(), ctx.hook_profile.clone());
+                        let hm_clone = hm.clone();
+                        tokio::spawn(async move {
+                            let _ = zen_hooks::execute_hooks(
+                                &hm_clone,
+                                &HookEvent::PermissionRequest,
+                                &hook_input,
+                                &ExecuteHooksOptions {
+                                    env: std::collections::HashMap::new(),
+                                    cancel: None,
+                                    client: client.as_ref(),
+                                    profile: profile.as_ref(),
+                                    messages: None,
+                                },
+                            )
+                            .await;
+                        });
+                    }
+                }
             }
             Ok(false) => {
                 // Permission denied

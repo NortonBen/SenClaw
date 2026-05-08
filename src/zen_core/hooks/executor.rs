@@ -24,6 +24,8 @@ pub struct ExecuteHooksOptions<'a> {
     /// HTTP client + profile for prompt hooks.
     pub client: Option<&'a Client>,
     pub profile: Option<&'a ModelProfile>,
+    /// Message history for hooks with include_history enabled.
+    pub messages: Option<&'a [crate::zen_core::Message]>,
 }
 
 impl Default for ExecuteHooksOptions<'_> {
@@ -33,6 +35,7 @@ impl Default for ExecuteHooksOptions<'_> {
             cancel: None,
             client: None,
             profile: None,
+            messages: None,
         }
     }
 }
@@ -76,6 +79,7 @@ pub async fn execute_hooks(
         let env = opts.env.clone();
         let client_clone = opts.client.cloned();
         let profile_clone = opts.profile.cloned();
+        let messages_clone = opts.messages.map(|m| m.to_vec());
         tokio::spawn(async move {
             let result = run_one_hook(
                 &hook,
@@ -84,6 +88,7 @@ pub async fn execute_hooks(
                 None,
                 client_clone.as_ref(),
                 profile_clone.as_ref(),
+                messages_clone.as_deref(),
             )
             .await;
             info!("[hooks] Async hook completed: {result:?}");
@@ -101,6 +106,7 @@ pub async fn execute_hooks(
                 opts.cancel,
                 opts.client,
                 opts.profile,
+                opts.messages,
             )
         })
         .collect();
@@ -138,15 +144,16 @@ async fn run_one_hook(
     cancel: Option<&CancellationToken>,
     client: Option<&Client>,
     profile: Option<&ModelProfile>,
+    messages: Option<&[crate::zen_core::Message]>,
 ) -> anyhow::Result<HookOutput> {
     use super::types::HookType;
     match hook.hook_type {
-        HookType::Command => execute_command_hook(hook, input_json, env, cancel).await,
+        HookType::Command => execute_command_hook(hook, input_json, env, cancel, messages).await,
         HookType::Prompt => {
             let client = client.ok_or_else(|| anyhow::anyhow!("No HTTP client for prompt hook"))?;
             let profile =
                 profile.ok_or_else(|| anyhow::anyhow!("No model profile for prompt hook"))?;
-            execute_prompt_hook(hook, input_json, client, profile, cancel).await
+            execute_prompt_hook(hook, input_json, client, profile, cancel, messages).await
         }
     }
 }

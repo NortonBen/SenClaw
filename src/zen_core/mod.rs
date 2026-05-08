@@ -19,6 +19,7 @@
 //! ```
 
 pub mod config_manager;
+pub mod context;
 pub mod conversation;
 pub mod engine;
 pub mod events;
@@ -28,6 +29,7 @@ pub mod permissions;
 pub mod query_llm;
 pub mod run_tools;
 pub mod state;
+pub mod vision;
 
 use std::collections::HashMap;
 
@@ -36,6 +38,10 @@ use serde::{Deserialize, Serialize};
 
 // Re-export key types
 pub use config_manager::{with_conf_manager, ConfigManager, ProjectConfig, ProjectConfigPatch};
+pub use context::{
+    get_agent_data_dir, get_engine_store, get_event_bus, get_hook_manager, get_mcp_manager,
+    get_model_profile, get_state_manager, get_working_dir, run_with_engine, CoreConfig, EngineStore,
+};
 pub use engine::ZenEngine;
 pub use events::{EngineEvent, EventBus, ResponseRegistry};
 pub use model_manager::{with_model_manager, ModelManager, ModelUpdateData, TaskConfig};
@@ -90,6 +96,19 @@ pub enum ContentBlock {
     },
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
+    #[serde(rename = "image")]
+    Image {
+        source: ImageSource,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    #[serde(rename = "media_type")]
+    pub media_type: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -562,6 +581,9 @@ pub struct ModelProfile {
     pub context_length: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapt: Option<String>,
+    /// Vision capability - explicit override. If None, inferred from model name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

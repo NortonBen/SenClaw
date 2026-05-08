@@ -3873,6 +3873,7 @@ dependencies = [
  "hex",
  "jieba-rs",
  "libc",
+ "once_cell",
  "prost",
  "qrcode",
  "rand 0.8.6",

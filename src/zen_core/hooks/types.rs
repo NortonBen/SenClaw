@@ -80,6 +80,12 @@ pub struct HookDefinition {
     /// Prompt hooks are always sync.
     #[serde(rename = "async")]
     pub is_async: Option<bool>,
+    /// Include message history in hook input (for prompt hooks).
+    /// Defaults to `false`.
+    pub include_history: Option<bool>,
+    /// Maximum number of recent messages to include in history.
+    /// Defaults to 10 when include_history is true.
+    pub history_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +108,12 @@ impl HookDefinition {
         }
         if self.is_async.is_none() {
             self.is_async = Some(false);
+        }
+        if self.include_history.is_none() {
+            self.include_history = Some(false);
+        }
+        if self.history_limit.is_none() {
+            self.history_limit = Some(10);
         }
         self
     }

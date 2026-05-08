@@ -27,6 +27,7 @@ pub async fn execute_command_hook(
     input_json: &str,
     env: &HashMap<String, String>,
     cancel: Option<&CancellationToken>,
+    messages: Option<&[crate::zen_core::Message]>,
 ) -> Result<HookOutput> {
     let command = match &hook.command {
         Some(c) if !c.trim().is_empty() => c.clone(),
@@ -41,6 +42,26 @@ pub async fn execute_command_hook(
 
     let timeout_secs = hook.timeout.unwrap_or(10);
     let timeout_dur = Duration::from_secs(timeout_secs);
+
+    // Include history in the input JSON if requested
+    let input_with_history = if hook.include_history.unwrap_or(false) {
+        let history_limit = hook.history_limit.unwrap_or(10);
+        if let Some(msgs) = messages {
+            let recent_messages = msgs.iter().rev().take(history_limit).collect::<Vec<_>>();
+            let mut input_value: serde_json::Value = serde_json::from_str(input_json).unwrap_or(serde_json::json!({}));
+            let history_array: Vec<serde_json::Value> = recent_messages
+                .into_iter()
+                .rev()
+                .filter_map(|msg| serde_json::to_value(msg).ok())
+                .collect();
+            input_value["history"] = serde_json::Value::Array(history_array);
+            serde_json::to_string(&input_value)?
+        } else {
+            input_json.to_string()
+        }
+    } else {
+        input_json.to_string()
+    };
 
     #[cfg(windows)]
     let mut child = Command::new("cmd")
@@ -63,7 +84,7 @@ pub async fn execute_command_hook(
     // Write input to stdin
     if let Some(stdin) = child.stdin.take() {
         let mut stdin = stdin;
-        stdin.write_all(input_json.as_bytes()).await?;
+        stdin.write_all(input_with_history.as_bytes()).await?;
         // Drop closes stdin
     }
 
