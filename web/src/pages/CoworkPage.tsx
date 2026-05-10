@@ -98,6 +98,76 @@ function serializeHandoffRulesList(list: HandoffRuleFormRow[]): string {
   return JSON.stringify(cleaned);
 }
 
+/** Form rows for Triggers tab — persisted as JSON array in `triggers`. */
+interface TriggerFormRow {
+  type: string;
+  condition?: string;
+  from?: string;
+  messageType?: string;
+  status?: string;
+  assignee?: string;
+  to?: string;
+  cron?: string;
+  section?: string;
+  only_if_result_contains?: string;
+  unless_result_contains?: string;
+}
+
+const TRIGGER_TYPE_PRESETS = [
+  { value: 'task_assigned', label: 'Task assigned' },
+  { value: 'message_received', label: 'Message received' },
+  { value: 'task_status_changed', label: 'Task status changed' },
+  { value: 'board_updated', label: 'Board updated' },
+  { value: 'schedule', label: 'Schedule (cron)' },
+];
+
+const TRIGGER_STATUS_OPTIONS = [
+  { value: 'done', label: 'Done' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'blocked', label: 'Blocked' },
+];
+
+function normalizeTriggerFromJson(r: Record<string, unknown>): TriggerFormRow {
+  return {
+    type: typeof r.type === 'string' ? r.type : '',
+    condition: typeof r.condition === 'string' ? r.condition : '',
+    from: typeof r.from === 'string' ? r.from : '',
+    messageType: typeof r.messageType === 'string' ? r.messageType : '',
+    status: typeof r.status === 'string' ? r.status : '',
+    assignee: typeof r.assignee === 'string' ? r.assignee : '',
+    to: typeof r.to === 'string' ? r.to : '',
+    cron: typeof r.cron === 'string' ? r.cron : '',
+    section: typeof r.section === 'string' ? r.section : '',
+    only_if_result_contains: typeof r.only_if_result_contains === 'string' ? r.only_if_result_contains : '',
+    unless_result_contains: typeof r.unless_result_contains === 'string' ? r.unless_result_contains : '',
+  };
+}
+
+function serializeTriggersList(list: TriggerFormRow[]): string {
+  const cleaned = list
+    .map((r) => {
+      const obj: Record<string, unknown> = {
+        type: String(r.type || '').trim(),
+      };
+      
+      // Add fields based on trigger type
+      if (r.condition) obj.condition = String(r.condition).trim();
+      if (r.from) obj.from = String(r.from).trim();
+      if (r.messageType) obj.messageType = String(r.messageType).trim();
+      if (r.status) obj.status = String(r.status).trim();
+      if (r.assignee) obj.assignee = String(r.assignee).trim();
+      if (r.to) obj.to = String(r.to).trim();
+      if (r.cron) obj.cron = String(r.cron).trim();
+      if (r.section) obj.section = String(r.section).trim();
+      if (r.only_if_result_contains) obj.only_if_result_contains = String(r.only_if_result_contains).trim();
+      if (r.unless_result_contains) obj.unless_result_contains = String(r.unless_result_contains).trim();
+      
+      return obj;
+    })
+    .filter((r) => r.type);
+  return JSON.stringify(cleaned);
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -465,10 +535,37 @@ export function CoworkPage() {
   const handleAddMember = async (values: any) => {
     if (!selectedWs) return;
     try {
+      const payload: any = {};
+      if (values.memberId) payload.memberId = values.memberId;
+      if (values.role) payload.role = values.role;
+      if (values.subdir) payload.subdir = values.subdir;
+      if (values.persona) payload.persona = values.persona;
+
+      // Responsibilities: newline-separated → JSON array string
+      if (values.responsibilities) {
+        const lines = values.responsibilities.split('\n').map((l: string) => l.trim()).filter(Boolean);
+        payload.responsibilities = JSON.stringify(lines);
+      }
+      // Acceptance criteria: newline-separated → JSON array string
+      if (values.acceptanceCriteria) {
+        const lines = values.acceptanceCriteria.split('\n').map((l: string) => l.trim()).filter(Boolean);
+        payload.acceptanceCriteria = JSON.stringify(lines);
+      }
+      // Triggers: structured list → JSON array string
+      if (Array.isArray(values.triggersList)) {
+        const serialized = serializeTriggersList(values.triggersList);
+        if (serialized !== '[]') payload.triggers = serialized;
+      }
+      // Handoff rules: structured list → JSON array string
+      if (Array.isArray(values.handoffRulesList)) {
+        const serialized = serializeHandoffRulesList(values.handoffRulesList);
+        if (serialized !== '[]') payload.handoffRules = serialized;
+      }
+
       await api(`/api/cowork/workspaces/${selectedWs.id}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+        body: JSON.stringify(payload),
       });
       setMemberModalOpen(false);
       memberForm.resetFields();
@@ -495,8 +592,22 @@ export function CoworkPage() {
         const lines = values.acceptanceCriteria.split('\n').map((l: string) => l.trim()).filter(Boolean);
         payload.acceptanceCriteria = JSON.stringify(lines);
       }
-      // Triggers: JSON string as-is
-      if (values.triggers) payload.triggers = values.triggers;
+      // Triggers: structured list → JSON array string (chỉ gửi khi thay đổi so với DB, tránh ghi [] lên record chưa từng có triggers)
+      if (Array.isArray(values.triggersList)) {
+        const serialized = serializeTriggersList(values.triggersList);
+        const hadStored = editingMember.triggers && editingMember.triggers.trim() !== '';
+        if (hadStored) {
+          let prevSerialized = '[]';
+          try {
+            let p: unknown = JSON.parse(editingMember.triggers!);
+            if (!Array.isArray(p)) p = [p];
+            prevSerialized = serializeTriggersList((p as Record<string, unknown>[]).map(normalizeTriggerFromJson));
+          } catch { /* giữ '[]' */ }
+          if (serialized !== prevSerialized) payload.triggers = serialized;
+        } else if (serialized !== '[]') {
+          payload.triggers = serialized;
+        }
+      }
       // Handoff rules: structured list → JSON array string (chỉ gửi khi thay đổi so với DB, tránh ghi [] lên record chưa từng có handoff)
       if (Array.isArray(values.handoffRulesList)) {
         const serialized = serializeHandoffRulesList(values.handoffRulesList);
@@ -1216,8 +1327,12 @@ export function CoworkPage() {
                                             try { vals.acceptanceCriteria = (JSON.parse(member.acceptanceCriteria) as string[]).join('\n'); } catch { vals.acceptanceCriteria = member.acceptanceCriteria; }
                                           }
                                           if (member.triggers) {
-                                            try { vals.triggers = JSON.stringify(JSON.parse(member.triggers), null, 2); } catch { vals.triggers = member.triggers; }
-                                          }
+                                            try {
+                                              let parsed: unknown = JSON.parse(member.triggers);
+                                              if (!Array.isArray(parsed)) parsed = [parsed];
+                                              vals.triggersList = (parsed as Record<string, unknown>[]).map(normalizeTriggerFromJson);
+                                            } catch { vals.triggersList = []; }
+                                          } else { vals.triggersList = []; }
                                           if (member.handoffRules) {
                                             try {
                                               let parsed: unknown = JSON.parse(member.handoffRules);
@@ -1707,13 +1822,210 @@ export function CoworkPage() {
                     label: 'Triggers',
                     children: (
                       <>
-                        <Form.Item name="triggers" label="Triggers" help='JSON array of trigger objects. Types: task_assigned, message_received, task_status_changed, on_mention, cron'>
-                          <TextArea
-                            rows={6}
-                            placeholder={`[\n  {\n    "type": "task_assigned",\n    "condition": "assignee == me",\n    "from": null,\n    "messageType": null,\n    "status": null,\n    "assignee": null,\n    "cron": null\n  }\n]`}
-                            style={{ fontFamily: 'Menlo, Monaco, monospace', fontSize: 12 }}
-                          />
-                        </Form.Item>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
+                          Define when this agent automatically starts working. Add multiple triggers for different conditions. Fields vary by trigger type.
+                        </Text>
+                        <Form.List name="triggersList">
+                          {(fields, { add, remove }) => (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                              {fields.map(({ key, name }) => (
+                                <Card
+                                  key={key}
+                                  size="small"
+                                  styles={{ body: { padding: 12 } }}
+                                  style={{ borderRadius: 10 }}
+                                  extra={(
+                                    <Button
+                                      type="text"
+                                      danger
+                                      size="small"
+                                      icon={<DeleteOutlined />}
+                                      onClick={() => remove(name)}
+                                      aria-label="Delete trigger"
+                                    />
+                                  )}
+                                >
+                                  <Row gutter={[12, 8]}>
+                                    <Col xs={24} md={8}>
+                                      <Form.Item
+                                        label="Type"
+                                        name={[name, 'type']}
+                                        rules={[{ required: true, message: 'Required' }]}
+                                        style={{ marginBottom: 0 }}
+                                      >
+                                        <Select
+                                          placeholder="Select trigger type"
+                                          options={TRIGGER_TYPE_PRESETS}
+                                        />
+                                      </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={16}>
+                                      <Form.Item
+                                        noStyle
+                                        shouldUpdate={(prevValues, currentValues) => 
+                                          prevValues.triggersList?.[name]?.type !== currentValues.triggersList?.[name]?.type
+                                        }
+                                      >
+                                        {({ getFieldValue }) => {
+                                          const triggerType = getFieldValue(['triggersList', name, 'type']);
+                                          
+                                          // task_assigned: condition field
+                                          if (triggerType === 'task_assigned') {
+                                            return (
+                                              <Form.Item
+                                                label="Condition"
+                                                name={[name, 'condition']}
+                                                style={{ marginBottom: 0 }}
+                                              >
+                                                <Input placeholder='e.g. "assignee == me"' />
+                                              </Form.Item>
+                                            );
+                                          }
+                                          
+                                          // message_received: from, messageType fields
+                                          if (triggerType === 'message_received') {
+                                            return (
+                                              <>
+                                                <Form.Item
+                                                  label="From"
+                                                  name={[name, 'from']}
+                                                  style={{ marginBottom: 8 }}
+                                                >
+                                                  <AutoComplete
+                                                    placeholder="e.g. review-agent"
+                                                    options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
+                                                    filterOption={(input, opt) =>
+                                                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                                                    }
+                                                  />
+                                                </Form.Item>
+                                                <Form.Item
+                                                  label="Message type"
+                                                  name={[name, 'messageType']}
+                                                  style={{ marginBottom: 0 }}
+                                                >
+                                                  <Input placeholder="e.g. handoff" />
+                                                </Form.Item>
+                                              </>
+                                            );
+                                          }
+                                          
+                                          // task_status_changed: status, to, assignee, result conditions
+                                          if (triggerType === 'task_status_changed') {
+                                            return (
+                                              <>
+                                                <Form.Item
+                                                  label="Status"
+                                                  name={[name, 'status']}
+                                                  rules={[{ required: true, message: 'Required' }]}
+                                                  style={{ marginBottom: 8 }}
+                                                >
+                                                  <Select
+                                                    placeholder="Select status"
+                                                    options={TRIGGER_STATUS_OPTIONS}
+                                                  />
+                                                </Form.Item>
+                                                <Form.Item
+                                                  label="To"
+                                                  name={[name, 'to']}
+                                                  rules={[{ required: true, message: 'Required' }]}
+                                                  style={{ marginBottom: 8 }}
+                                                >
+                                                  <AutoComplete
+                                                    placeholder="e.g. review-agent"
+                                                    options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
+                                                    filterOption={(input, opt) =>
+                                                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                                                    }
+                                                  />
+                                                </Form.Item>
+                                                <Form.Item
+                                                  label="Assignee filter"
+                                                  name={[name, 'assignee']}
+                                                  help="Optional: only trigger when task assigned to this member"
+                                                  style={{ marginBottom: 8 }}
+                                                >
+                                                  <AutoComplete
+                                                    placeholder="e.g. code-agent"
+                                                    options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
+                                                    filterOption={(input, opt) =>
+                                                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                                                    }
+                                                  />
+                                                </Form.Item>
+                                                <Form.Item
+                                                  label="Only if result contains"
+                                                  name={[name, 'only_if_result_contains']}
+                                                  help="Optional: only trigger if result contains this text"
+                                                  style={{ marginBottom: 8 }}
+                                                >
+                                                  <Input placeholder="e.g. fix" />
+                                                </Form.Item>
+                                                <Form.Item
+                                                  label="Unless result contains"
+                                                  name={[name, 'unless_result_contains']}
+                                                  help="Optional: skip trigger if result contains this text"
+                                                  style={{ marginBottom: 0 }}
+                                                >
+                                                  <Input placeholder="e.g. complete" />
+                                                </Form.Item>
+                                              </>
+                                            );
+                                          }
+                                          
+                                          // board_updated: section field
+                                          if (triggerType === 'board_updated') {
+                                            return (
+                                              <Form.Item
+                                                label="Section"
+                                                name={[name, 'section']}
+                                                rules={[{ required: true, message: 'Required' }]}
+                                                style={{ marginBottom: 0 }}
+                                              >
+                                                <Select
+                                                  placeholder="Select section"
+                                                  options={BOARD_SECTIONS.map((s) => ({ value: s, label: s }))}
+                                                />
+                                              </Form.Item>
+                                            );
+                                          }
+                                          
+                                          // schedule: cron field
+                                          if (triggerType === 'schedule') {
+                                            return (
+                                              <Form.Item
+                                                label="Cron expression"
+                                                name={[name, 'cron']}
+                                                rules={[{ required: true, message: 'Required' }]}
+                                                help="e.g. 0 9 * * * for daily at 9 AM"
+                                                style={{ marginBottom: 0 }}
+                                              >
+                                                <Input placeholder="0 9 * * *" />
+                                              </Form.Item>
+                                            );
+                                          }
+                                          
+                                          return null;
+                                        }}
+                                      </Form.Item>
+                                    </Col>
+                                  </Row>
+                                </Card>
+                              ))}
+                              <Button
+                                type="dashed"
+                                onClick={() => add({
+                                  type: 'task_assigned',
+                                  condition: '',
+                                })}
+                                block
+                                icon={<PlusOutlined />}
+                              >
+                                Add trigger
+                              </Button>
+                            </div>
+                          )}
+                        </Form.List>
                       </>
                     ),
                   },

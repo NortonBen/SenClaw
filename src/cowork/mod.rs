@@ -32,6 +32,18 @@ pub struct TaskResultEvent {
     pub references: Option<String>,
     pub artifacts: Option<String>,
     pub completed_at: Option<String>,
+    pub output_validation: Option<OutputValidation>,
+}
+
+/// Validation result for task output against member's output format requirements.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputValidation {
+    pub format_valid: bool,
+    pub expected_format: Option<String>,
+    pub required_sections_present: Vec<String>,
+    pub required_sections_missing: Vec<String>,
+    pub overall_compliant: bool,
 }
 
 #[inline]
@@ -39,6 +51,71 @@ fn cowork_handoff_result_has(haystack: &str, needle: &str) -> bool {
     let h = haystack.to_lowercase();
     let n = needle.to_lowercase();
     h.contains(&n)
+}
+
+/// Validate task output against member's output format requirements.
+fn validate_output_format(
+    output: &str,
+    output_format_json: Option<&str>,
+) -> Option<OutputValidation> {
+    let output_format = output_format_json?;
+    let fmt: serde_json::Value = serde_json::from_str(output_format).ok()?;
+
+    let expected_format = fmt.get("format").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let required_sections: Vec<String> = fmt
+        .get("requiredSections")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Validate format
+    let format_valid = if let Some(ref expected) = expected_format {
+        match expected.as_str() {
+            "json" => {
+                // Check if output is valid JSON
+                serde_json::from_str::<serde_json::Value>(output).is_ok()
+            }
+            "markdown" | "plain" => true, // Text is always valid for markdown/plain
+            _ => true, // Unknown format, assume valid
+        }
+    } else {
+        true // No format specified, assume valid
+    };
+
+    // Check required sections
+    let output_lower = output.to_lowercase();
+    let required_sections_present: Vec<String> = required_sections
+        .iter()
+        .filter(|section| {
+            let section_lower = section.to_lowercase();
+            // Check if section header exists (e.g., "## Summary" or "Summary")
+            output_lower.contains(&section_lower)
+                || output_lower.contains(&format!("## {}", section_lower))
+                || output_lower.contains(&format!("### {}", section_lower))
+        })
+        .cloned()
+        .collect();
+
+    let required_sections_missing: Vec<String> = required_sections
+        .iter()
+        .filter(|section| !required_sections_present.contains(section))
+        .cloned()
+        .collect();
+
+    let overall_compliant = format_valid && required_sections_missing.is_empty();
+
+    Some(OutputValidation {
+        format_valid,
+        expected_format,
+        required_sections_present,
+        required_sections_missing,
+        overall_compliant,
+    })
 }
 
 /// Parse `cowork:{workspace_id}:{member_id}` → `workspace_id`.
@@ -221,6 +298,31 @@ impl CoworkManager {
                 "[Cowork] Task {cowork_task_id} → {cowork_status} (dispatch: {dispatch_task_id})"
             );
             if cowork_status == "done" {
+                // Validate output against member's output format requirements
+                let output_validation = if let (Some(result), Ok(task_opt)) = (
+                    result_opt,
+                    db.get_cowork_task(&cowork_task_id),
+                ) {
+                    if let Some(task) = task_opt {
+                        if let (Some(assignee), Ok(members)) = (
+                            &task.assignee,
+                            db.list_cowork_members(&workspace_id),
+                        ) {
+                            if let Some(member) = members.iter().find(|m| m.member_id == *assignee) {
+                                validate_output_format(result, member.output_format.as_deref())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 self.fire_task_result(TaskResultEvent {
                     task_id: cowork_task_id.clone(),
                     workspace_id: workspace_id.clone(),
@@ -230,10 +332,13 @@ impl CoworkManager {
                     references: None,
                     artifacts: None,
                     completed_at: Some(now.clone()),
+                    output_validation,
                 });
 
                 // Process handoff rules for the completed task's assignee.
-                if let Some(api) = agent_api {
+                let agent_api_clone = agent_api.clone();
+                if let Some(api) = agent_api_clone {
+                    let self_arc_clone = Arc::clone(&self_arc);
                     self.process_handoff_rules(
                         db,
                         &workspace_id,
@@ -241,10 +346,25 @@ impl CoworkManager {
                         result_opt.unwrap_or(task_label),
                         &now,
                         api,
-                        self_arc,
+                        self_arc_clone,
                     );
                 }
             }
+
+            // Process task status triggers for all status changes
+            let result_str = result_opt.map(|s| s.as_ref());
+            let agent_api_for_triggers = agent_api.clone();
+            let self_arc_for_triggers = Arc::clone(&self_arc);
+            self.process_task_status_triggers(
+                db,
+                &workspace_id,
+                &cowork_task_id,
+                cowork_status,
+                result_str,
+                &now,
+                agent_api_for_triggers,
+                self_arc_for_triggers,
+            );
         }
 
         self.fire_changed();
@@ -547,6 +667,20 @@ impl CoworkManager {
                     &now2,
                 );
                 // Broadcast task result event so UI can display without polling.
+                // Validate output against member's output format requirements
+                let output_validation = if let (Some(result), Ok(members)) = (
+                    reply_text.as_deref(),
+                    db_clone.list_cowork_members(&workspace_id_owned),
+                ) {
+                    if let Some(member) = members.iter().find(|m| m.member_id == member_id) {
+                        validate_output_format(result, member.output_format.as_deref())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 manager.fire_task_result(TaskResultEvent {
                     task_id: task_id.clone(),
                     workspace_id: workspace_id_owned.clone(),
@@ -556,6 +690,7 @@ impl CoworkManager {
                     references: None,
                     artifacts: None,
                     completed_at: Some(now2.clone()),
+                    output_validation,
                 });
             } else {
                 let _ = db_clone.update_cowork_task(
@@ -602,6 +737,18 @@ impl CoworkManager {
                 is_read: false,
                 created_at: now2.clone(),
             });
+
+            // Process task status triggers for both done and blocked status
+            manager.process_task_status_triggers(
+                &db_clone,
+                &workspace_id_owned,
+                &task_id,
+                new_status,
+                reply_text.as_deref(),
+                &now2,
+                Some(Arc::clone(&agent_api_followup)),
+                Arc::clone(&manager),
+            );
 
             if new_status == "done" {
                 if let Ok(members) = db_clone.list_cowork_members(&workspace_id_owned) {
@@ -713,6 +860,264 @@ impl CoworkManager {
             }
         }
         Ok(())
+    }
+
+    /// Match member triggers against a task status change and append new tasks to `out`.
+    fn collect_task_status_triggers(
+        &self,
+        db: &Db,
+        workspace_id: &str,
+        members: &[CoworkMember],
+        task: &CoworkTask,
+        new_status: &str,
+        task_result: Option<&str>,
+        already_created: &[CoworkTask],
+        now: &str,
+        out: &mut Vec<CoworkTask>,
+    ) -> Result<()> {
+        tracing::info!(
+            "[Cowork] collect_task_status_triggers: checking {} members for task_status_changed triggers, new_status={}",
+            members.len(),
+            new_status
+        );
+
+        for member in members {
+            tracing::debug!(
+                "[Cowork] Checking member {} for triggers (has_triggers={})",
+                member.member_id,
+                member.triggers.is_some()
+            );
+
+            if let Some(ref triggers_json) = member.triggers {
+                if let Ok(triggers) = serde_json::from_str::<Vec<serde_json::Value>>(triggers_json)
+                {
+                    tracing::debug!(
+                        "[Cowork] Member {} has {} trigger(s)",
+                        member.member_id,
+                        triggers.len()
+                    );
+
+                    for trigger in &triggers {
+                        let trigger_type = trigger["type"].as_str().unwrap_or("");
+                        tracing::debug!(
+                            "[Cowork] Evaluating trigger: type={}, status={:?}, to={:?}",
+                            trigger_type,
+                            trigger["status"].as_str(),
+                            trigger["to"].as_str()
+                        );
+
+                        if trigger_type != "task_status_changed" {
+                            continue;
+                        }
+
+                        let status_filter = trigger["status"].as_str();
+                        let status_ok = status_filter.map_or(false, |s| s == new_status);
+                        if !status_ok {
+                            tracing::debug!(
+                                "[Cowork] Trigger skipped: status filter {:?} doesn't match new_status {}",
+                                status_filter,
+                                new_status
+                            );
+                            continue;
+                        }
+
+                        let assignee_filter = trigger["assignee"].as_str();
+                        let assignee_ok = assignee_filter.map_or(true, |a| {
+                            task.assignee.as_deref().map_or(false, |ta| ta == a)
+                        });
+                        if !assignee_ok {
+                            tracing::debug!(
+                                "[Cowork] Trigger skipped: assignee filter {:?} doesn't match task assignee {:?}",
+                                assignee_filter,
+                                task.assignee
+                            );
+                            continue;
+                        }
+
+                        let to = match trigger["to"].as_str() {
+                            Some(t) => t,
+                            None => {
+                                tracing::warn!("[Cowork] Trigger skipped: missing 'to' field");
+                                continue;
+                            }
+                        };
+
+                        if !members.iter().any(|m| m.member_id == to) {
+                            tracing::warn!(
+                                "[Cowork] Task status trigger target '{to}' not found in workspace {workspace_id}"
+                            );
+                            continue;
+                        }
+
+                        if let Some(result) = task_result {
+                            if let Some(u) = trigger["unless_result_contains"].as_str() {
+                                if !u.is_empty() && cowork_handoff_result_has(result, u) {
+                                    tracing::info!(
+                                        "[Cowork] Task status trigger → {to} skipped (unless_result_contains matched)"
+                                    );
+                                    continue;
+                                }
+                            }
+                            if let Some(o) = trigger["only_if_result_contains"].as_str() {
+                                if !o.is_empty() && !cowork_handoff_result_has(result, o) {
+                                    tracing::info!(
+                                        "[Cowork] Task status trigger → {to} skipped (only_if_result_contains not in result)"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+
+                        let pool: Vec<&CoworkTask> =
+                            already_created.iter().chain(out.iter()).collect();
+                        let duplicate_assignee = pool
+                            .iter()
+                            .any(|t| t.assignee.as_deref() == Some(to));
+
+                        if duplicate_assignee {
+                            tracing::info!(
+                                "[Cowork] Task status trigger → {to} skipped (duplicate assignee)"
+                            );
+                            continue;
+                        }
+
+                        let task_title = format!(
+                            "[status: {} from {}] {}",
+                            new_status,
+                            task.assignee.as_deref().unwrap_or("unknown"),
+                            if task.title.len() > 60 {
+                                &task.title[..60]
+                            } else {
+                                &task.title
+                            }
+                        );
+
+                        let description = format!(
+                            "Triggered by task status change.\n\nOriginal task: {}\nNew status: {}\nAssignee: {}\n\nResult:\n{}",
+                            task.title,
+                            new_status,
+                            task.assignee.as_deref().unwrap_or("unknown"),
+                            task_result.unwrap_or("(no result)")
+                        );
+
+                        let task = self.create_task(
+                            db,
+                            workspace_id,
+                            &task_title,
+                            Some(&description),
+                            Some(to),
+                            None,
+                            Some("medium"),
+                            None,
+                            task.assignee.as_deref().unwrap_or("system"),
+                            None,
+                            now,
+                        )?;
+
+                        tracing::info!(
+                            "[Cowork] Task status trigger: created task '{}' → {to}",
+                            task.title
+                        );
+
+                        out.push(task);
+                    }
+                } else {
+                    tracing::warn!(
+                        "[Cowork] Failed to parse triggers JSON for member {}",
+                        member.member_id
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Process task status change triggers and dispatch created tasks.
+    /// Called after a CoworkTask status changes to check for matching triggers
+    /// and create follow-up tasks via DAG dispatch.
+    fn process_task_status_triggers(
+        &self,
+        db: &Arc<Db>,
+        workspace_id: &str,
+        task_id: &str,
+        new_status: &str,
+        task_result: Option<&str>,
+        now: &str,
+        agent_api: Option<Arc<dyn AgentApi>>,
+        self_arc: Arc<CoworkManager>,
+    ) {
+        tracing::info!(
+            "[Cowork] process_task_status_triggers: workspace_id={}, task_id={}, new_status={}, has_agent_api={}",
+            workspace_id,
+            task_id,
+            new_status,
+            agent_api.is_some()
+        );
+
+        let task = match db.get_cowork_task(task_id) {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                tracing::warn!("[Cowork] Task {task_id} not found for status trigger processing");
+                return;
+            }
+            Err(e) => {
+                tracing::error!("[Cowork] Failed to fetch task {task_id}: {e}");
+                return;
+            }
+        };
+
+        let members = match db.list_cowork_members(workspace_id) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("[Cowork] Failed to list members for {workspace_id}: {e}");
+                return;
+            }
+        };
+
+        tracing::info!(
+            "[Cowork] Found {} members in workspace {}, checking for task_status_changed triggers",
+            members.len(),
+            workspace_id
+        );
+
+        let mut followup_tasks = Vec::new();
+        if let Err(e) = self.collect_task_status_triggers(
+            db,
+            workspace_id,
+            &members,
+            &task,
+            new_status,
+            task_result,
+            &[],
+            now,
+            &mut followup_tasks,
+        ) {
+            tracing::error!("[Cowork] Failed to collect task status triggers: {e}");
+            return;
+        }
+
+        if followup_tasks.is_empty() {
+            tracing::info!(
+                "[Cowork] No task status triggers matched for status {}",
+                new_status
+            );
+            return;
+        }
+
+        tracing::info!(
+            "[Cowork] Task status change created {} follow-up task(s)",
+            followup_tasks.len()
+        );
+
+        let _ = self.dispatch_cowork_tasks_batch(
+            db,
+            workspace_id,
+            &members,
+            &followup_tasks,
+            &format!("Task status: {}", new_status),
+            agent_api.map(|api| (api, Arc::clone(db))),
+            self_arc,
+        );
     }
 
     /// DAG or direct dispatch for a set of cowork tasks (already persisted).
@@ -1449,6 +1854,84 @@ impl CoworkManager {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_task_with_triggers(
+        &self,
+        db: &Arc<Db>,
+        id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        status: Option<&str>,
+        assignee: Option<&str>,
+        reviewer: Option<&str>,
+        priority: Option<&str>,
+        depends_on: Option<&str>,
+        attachments: Option<&str>,
+        now: &str,
+        agent_api: Option<Arc<dyn AgentApi>>,
+        self_arc: Arc<CoworkManager>,
+    ) -> Result<()> {
+        let old_task = db.get_cowork_task(id)?.ok_or_else(|| anyhow::anyhow!("Task not found"))?;
+        let old_status = old_task.status.clone();
+
+        tracing::info!(
+            "[Cowork] update_task_with_triggers: task_id={}, old_status={}, new_status={:?}, agent_api_available={}",
+            id,
+            old_status,
+            status,
+            agent_api.is_some()
+        );
+
+        db.update_cowork_task(
+            id,
+            title,
+            description,
+            status,
+            assignee,
+            reviewer,
+            priority,
+            depends_on,
+            attachments,
+            now,
+        )?;
+
+        // Process task status triggers if status changed and agent_api is available
+        if let Some(new_status) = status {
+            if new_status != old_status {
+                tracing::info!(
+                    "[Cowork] Status changed: {} -> {}, checking triggers (agent_api={})",
+                    old_status,
+                    new_status,
+                    agent_api.is_some()
+                );
+                if let Some(api) = agent_api {
+                    let task_result = if new_status == "done" {
+                        old_task.result_output.as_deref()
+                    } else {
+                        None
+                    };
+                    self.process_task_status_triggers(
+                        db,
+                        &old_task.workspace_id,
+                        id,
+                        new_status,
+                        task_result,
+                        now,
+                        Some(api),
+                        Arc::clone(&self_arc),
+                    );
+                } else {
+                    tracing::warn!(
+                        "[Cowork] Status changed but no agent_api available for trigger processing"
+                    );
+                }
+            }
+        }
+
+        self.fire_changed();
+        Ok(())
+    }
+
     pub fn delete_task(&self, db: &Db, id: &str) -> Result<()> {
         db.delete_cowork_task(id)?;
         self.fire_changed();
@@ -1574,6 +2057,8 @@ Plan gate (switch-style): (1) First execution on a goal: output Plan and create/
                             .unwrap(),
                             serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
                                 .unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"code-agent","to":"test-agent"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"test-agent","to":"lead-agent"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
                             serde_json::from_str(
@@ -1615,6 +2100,7 @@ Plan gate (switch-style): (1) First execution on a goal: output Plan and create/
                         ]),
                         triggers: Some(vec![
                             serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"test-agent","to":"code-agent"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
                             serde_json::from_str(
@@ -1644,6 +2130,7 @@ Plan gate (switch-style): (1) First execution on a goal: output Plan and create/
                         triggers: Some(vec![
                             serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
                             serde_json::from_str(r#"{"type":"message_received","from":"code-agent","messageType":"result"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"in_progress","assignee":"code-agent","to":"test-agent"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
                             serde_json::from_str(r#"{"when":"task_complete","to":"lead-agent","type":"status"}"#).unwrap(),
@@ -1690,6 +2177,9 @@ Plan gate (switch-style): (1) First execution on a goal: output Plan and create/
                             .unwrap(),
                             serde_json::from_str(r#"{"type":"message_received","from":"user"}"#)
                                 .unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"researcher","to":"synthesizer"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"synthesizer","to":"critic"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","assignee":"critic","to":"research-lead"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
                             serde_json::from_str(
@@ -1730,6 +2220,7 @@ Plan gate (switch-style): (1) First execution on a goal: output Plan and create/
                         ]),
                         triggers: Some(vec![
                             serde_json::from_str(r#"{"type":"task_assigned","condition":"assignee == me"}"#).unwrap(),
+                            serde_json::from_str(r#"{"type":"task_status_changed","status":"done","to":"synthesizer"}"#).unwrap(),
                         ]),
                         handoff: Some(vec![
                             serde_json::from_str(r#"{"when":"task_complete","to":"synthesizer","type":"handoff"}"#).unwrap(),

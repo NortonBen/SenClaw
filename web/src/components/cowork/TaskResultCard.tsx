@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import {
-  Card, Tag, Typography, Collapse, Space, Button, Tooltip, Badge,
+  Card, Tag, Typography, Collapse, Space, Button, Tooltip, Badge, List, Alert,
 } from 'antd';
 import {
   CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined,
-  CodeOutlined, FileTextOutlined, CopyOutlined,
+  CodeOutlined, FileTextOutlined, CopyOutlined, CheckOutlined, CloseOutlined,
 } from '@ant-design/icons';
-import type { CoworkTask } from '../../types';
+import type { CoworkTask, OutputValidation } from '../../types';
 
 const { Text, Paragraph } = Typography;
 
@@ -28,9 +28,10 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
 interface TaskResultCardProps {
   task: CoworkTask;
   highlight?: boolean;
+  outputValidation?: OutputValidation | null;
 }
 
-export function TaskResultCard({ task, highlight }: TaskResultCardProps) {
+export function TaskResultCard({ task, highlight, outputValidation }: TaskResultCardProps) {
   const [copied, setCopied] = useState(false);
 
   const artifacts: string[] = (() => {
@@ -137,6 +138,61 @@ export function TaskResultCard({ task, highlight }: TaskResultCardProps) {
             </li>
           ))}
         </ul>
+      ),
+    });
+  }
+
+  // Output validation analysis
+  if (outputValidation) {
+    const { formatValid, expectedFormat, requiredSectionsPresent, requiredSectionsMissing, overallCompliant } = outputValidation;
+    collapseItems.push({
+      key: 'validation',
+      label: (
+        <Space>
+          {overallCompliant ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CloseOutlined style={{ color: '#ff4d4f' }} />}
+          <Text strong>Output Validation</Text>
+          <Badge count={overallCompliant ? 'Compliant' : 'Non-compliant'} color={overallCompliant ? 'green' : 'red'} />
+        </Space>
+      ),
+      children: (
+        <div style={{ fontSize: 12 }}>
+          {expectedFormat && (
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary">Format: </Text>
+              <Tag color={formatValid ? 'green' : 'red'} style={{ marginLeft: 4 }}>
+                {expectedFormat} {formatValid ? '✓' : '✗'}
+              </Tag>
+            </div>
+          )}
+          {requiredSectionsPresent.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary">Required sections present: </Text>
+              <div style={{ marginTop: 4 }}>
+                {requiredSectionsPresent.map(section => (
+                  <Tag key={section} color="green" style={{ margin: '2px' }}>{section} ✓</Tag>
+                ))}
+              </div>
+            </div>
+          )}
+          {requiredSectionsMissing.length > 0 && (
+            <div>
+              <Text type="secondary">Required sections missing: </Text>
+              <div style={{ marginTop: 4 }}>
+                {requiredSectionsMissing.map(section => (
+                  <Tag key={section} color="red" style={{ margin: '2px' }}>{section} ✗</Tag>
+                ))}
+              </div>
+            </div>
+          )}
+          {!overallCompliant && (
+            <Alert
+              message="Output does not meet all requirements"
+              type="warning"
+              showIcon
+              style={{ marginTop: 12, fontSize: 11 }}
+            />
+          )}
+        </div>
       ),
     });
   }

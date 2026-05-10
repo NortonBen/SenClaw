@@ -264,6 +264,15 @@ export interface TaskResultEvent {
   references: string | null;
   artifacts: string | null;
   completedAt: string | null;
+  outputValidation: OutputValidation | null;
+}
+
+export interface OutputValidation {
+  formatValid: boolean;
+  expectedFormat: string | null;
+  requiredSectionsPresent: string[];
+  requiredSectionsMissing: string[];
+  overallCompliant: boolean;
 }
 
 export interface CoworkMember {

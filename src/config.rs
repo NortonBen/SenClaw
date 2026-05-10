@@ -121,6 +121,10 @@ pub struct McpConfig {
     pub watchdog_interval_secs: u64,
     /// Enable watchdog monitoring (default: true)
     pub watchdog_enabled: bool,
+    /// Binary name or path for Litho (`deepwiki-rs`). Override with `SENCLAW_LITHO_BINARY`.
+    pub litho_binary: String,
+    /// Optional `--model-efficient` for Litho (`SENCLAW_LITHO_MODEL_EFFICIENT`).
+    pub litho_model_efficient: String,
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +330,8 @@ impl Config {
                 request_timeout_secs: env_int("SENCLAW_MCP_REQUEST_TIMEOUT_SECS", 300),
                 watchdog_interval_secs: env_int("SENCLAW_MCP_WATCHDOG_INTERVAL_SECS", 60),
                 watchdog_enabled: env_bool("SENCLAW_MCP_WATCHDOG_ENABLED", true),
+                litho_binary: env_or("SENCLAW_LITHO_BINARY", "deepwiki-rs"),
+                litho_model_efficient: env_or("SENCLAW_LITHO_MODEL_EFFICIENT", ""),
             },
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
         }

@@ -477,19 +477,42 @@ pub(crate) async fn handle_cowork_task_update(
         return;
     }
     let now = chrono::Utc::now().to_rfc3339();
-    match state.cowork_manager.update_task(
-        &state.db,
-        task_id,
-        msg["title"].as_str(),
-        msg["description"].as_str(),
-        msg["status"].as_str(),
-        msg["assignee"].as_str(),
-        msg["reviewer"].as_str(),
-        msg["priority"].as_str(),
-        msg["dependsOn"].as_str(),
-        msg["attachments"].as_str(),
-        &now,
-    ) {
+    let agent_api = state.agent_api.clone();
+    let mgr_arc = Arc::clone(&state.cowork_manager);
+
+    let result = if let Some(api) = agent_api {
+        state.cowork_manager.update_task_with_triggers(
+            &Arc::clone(&state.db),
+            task_id,
+            msg["title"].as_str(),
+            msg["description"].as_str(),
+            msg["status"].as_str(),
+            msg["assignee"].as_str(),
+            msg["reviewer"].as_str(),
+            msg["priority"].as_str(),
+            msg["dependsOn"].as_str(),
+            msg["attachments"].as_str(),
+            &now,
+            Some(api),
+            mgr_arc,
+        )
+    } else {
+        state.cowork_manager.update_task(
+            &state.db,
+            task_id,
+            msg["title"].as_str(),
+            msg["description"].as_str(),
+            msg["status"].as_str(),
+            msg["assignee"].as_str(),
+            msg["reviewer"].as_str(),
+            msg["priority"].as_str(),
+            msg["dependsOn"].as_str(),
+            msg["attachments"].as_str(),
+            &now,
+        )
+    };
+
+    match result {
         Ok(()) => {
             if let Ok(Some(task)) = state.cowork_manager.get_task(&state.db, task_id) {
                 send_json(

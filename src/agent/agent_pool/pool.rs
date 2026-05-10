@@ -29,8 +29,8 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
     browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config,
-    memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config, wiki_mcp_config,
-    workspace_mcp_config,
+    litho_mcp_config, memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config,
+    wiki_mcp_config, workspace_mcp_config,
     McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
@@ -968,6 +968,24 @@ impl AgentPool {
             mcp_servers.push(code_server_mcp_config(
                 &workspace_s,
                 &binding.folder,
+            ));
+            mcp_servers.push(litho_mcp_config(
+                cfg.mcp.litho_binary.as_str(),
+                if cfg.memory.openai_base_url.is_empty() {
+                    None
+                } else {
+                    Some(cfg.memory.openai_base_url.as_str())
+                },
+                if cfg.memory.openai_api_key.is_empty() {
+                    None
+                } else {
+                    Some(cfg.memory.openai_api_key.as_str())
+                },
+                if cfg.mcp.litho_model_efficient.is_empty() {
+                    None
+                } else {
+                    Some(cfg.mcp.litho_model_efficient.as_str())
+                },
             ));
             mcp_servers.push(browser_mcp_config(cfg.ws_port));
 

@@ -460,6 +460,28 @@ impl McpManager {
                 ],
             },
             BuiltInServerInfo {
+                name: "senclaw-litho".into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "Built-in Litho (deepwiki-rs) wrapper — generate C4 architecture docs via CLI."
+                        .into(),
+                ),
+                tools: vec![
+                    t(
+                        "litho_generate",
+                        "Run deepwiki-rs to generate architecture markdown from a codebase",
+                    ),
+                    t(
+                        "litho_sync_knowledge",
+                        "Sync external knowledge into Litho cache (sync-knowledge)",
+                    ),
+                    t(
+                        "litho_read_doc",
+                        "Read a generated file from a Litho output directory",
+                    ),
+                ],
+            },
+            BuiltInServerInfo {
                 name: "senclaw-browser".into(),
                 transport: "stdio".into(),
                 description: Some(

@@ -55,9 +55,10 @@ interface BubbleProps {
   linkedTasks: CoworkTask[];
   highlightTaskId: string | null;
   isOptimistic?: boolean;
+  taskValidations: Record<string, import('../../types').OutputValidation>;
 }
 
-function Bubble({ msg, linkedTasks, highlightTaskId, isOptimistic }: BubbleProps) {
+function Bubble({ msg, linkedTasks, highlightTaskId, isOptimistic, taskValidations }: BubbleProps) {
   const isUser = msg.fromMember === 'user';
   const color  = MSG_TYPE_COLOR[msg.messageType] ?? '#8c8c8c';
 
@@ -138,7 +139,11 @@ function Bubble({ msg, linkedTasks, highlightTaskId, isOptimistic }: BubbleProps
           <div style={{ marginTop: 8 }}>
             {linkedTasks.map(task => (
               <div key={task.id} style={{ marginBottom: 6 }}>
-                <TaskResultCard task={task} highlight={task.id === highlightTaskId} />
+                <TaskResultCard 
+                  task={task} 
+                  highlight={task.id === highlightTaskId}
+                  outputValidation={taskValidations[task.id]}
+                />
               </div>
             ))}
           </div>
@@ -160,6 +165,7 @@ export function WorkspaceChatPanel({
   const [loading, setLoading]         = useState(false);
   const [input, setInput]             = useState('');
   const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
+  const [taskValidations, setTaskValidations] = useState<Record<string, import('../../types').OutputValidation>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadMessages = useCallback(async () => {
@@ -189,6 +195,13 @@ export function WorkspaceChatPanel({
   useEffect(() => {
     if (!lastTaskResult || lastTaskResult.workspaceId !== workspaceId) return;
     setHighlightTaskId(lastTaskResult.taskId);
+    // Store validation data if present
+    if (lastTaskResult.outputValidation) {
+      setTaskValidations(prev => ({
+        ...prev,
+        [lastTaskResult.taskId]: lastTaskResult.outputValidation!,
+      }));
+    }
     loadMessages();
     const t = setTimeout(() => setHighlightTaskId(null), 4000);
     return () => clearTimeout(t);
@@ -253,6 +266,7 @@ export function WorkspaceChatPanel({
                 linkedTasks={linked}
                 highlightTaskId={highlightTaskId}
                 isOptimistic={msg.isOptimistic}
+                taskValidations={taskValidations}
               />
             );
           })

@@ -118,13 +118,25 @@ triggers:
     from: review-agent
     message_type: handoff                 # review-agent gửi handoff về fix
   - type: task_status_changed
-    status: review                        # task chuyển sang review → reviewer tự bắt đầu
-    assignee: me
+    status: done                          # done | in_progress | blocked
+    assignee: code-agent                 # optional: chỉ trigger khi task được gán cho member này
+    to: review-agent                     # member nhận task mới
+    only_if_result_contains: "fix"       # optional: chỉ trigger nếu result chứa text này
+    unless_result_contains: "complete"    # optional: không trigger nếu result chứa text này
   - type: board_updated
     section: guidelines                   # guidelines thay đổi → đọc lại và adjust
   - type: schedule
     cron: "0 9 * * *"                     # mỗi sáng: check backlog, tự lấy task
 ```
+
+**Chi tiết trigger `task_status_changed`:**
+- `status`: Bắt buộc. Trạng thái task để kích hoạt trigger (`done`, `in_progress`, hoặc `blocked`)
+- `to`: Bắt buộc. ID của member sẽ nhận task mới được tạo
+- `assignee`: Tùy chọn. Chỉ kích hoạt khi task được gán cho member này (mặc định: bất kỳ member nào)
+- `only_if_result_contains`: Tùy chọn. Chỉ kích hoạt nếu kết quả task chứa chuỗi này (case-insensitive)
+- `unless_result_contains`: Tùy chọn. Không kích hoạt nếu kết quả task chứa chuỗi này (case-insensitive)
+
+Trigger này tạo task mới thông qua DAG dispatch khi task chuyển trạng thái, cho phép workflow tự động dựa trên tiến độ task.
 
 Triggers cho phép workflow chạy tự động mà không cần user gán từng task thủ công.
 

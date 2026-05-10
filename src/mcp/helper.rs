@@ -219,3 +219,33 @@ pub fn browser_mcp_config(ws_port: u16) -> McpServerConfig {
         .insert("SENCLAW_WS_PORT".into(), ws_port.to_string());
     cfg
 }
+
+// ===== Litho (deepwiki-rs CLI) =====
+
+/// Litho documentation generator — wraps the external `deepwiki-rs` binary.
+pub fn litho_mcp_config(
+    litho_binary: &str,
+    llm_api_base_url: Option<&str>,
+    llm_api_key: Option<&str>,
+    model_efficient: Option<&str>,
+) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-litho", "litho-server");
+    cfg.env
+        .insert("SENCLAW_LITHO_BINARY".into(), litho_binary.to_owned());
+    if let Some(u) = llm_api_base_url {
+        if !u.is_empty() {
+            cfg.env.insert("SENCLAW_LITHO_LLMAPI_BASE_URL".into(), u.to_owned());
+        }
+    }
+    if let Some(k) = llm_api_key {
+        if !k.is_empty() {
+            cfg.env.insert("SENCLAW_LITHO_LLMAPI_KEY".into(), k.to_owned());
+        }
+    }
+    if let Some(m) = model_efficient {
+        if !m.is_empty() {
+            cfg.env.insert("SENCLAW_LITHO_MODEL_EFFICIENT".into(), m.to_owned());
+        }
+    }
+    cfg
+}

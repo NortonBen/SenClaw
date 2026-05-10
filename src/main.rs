@@ -58,6 +58,8 @@ enum Command {
     CodeGraphServer,
     /// Start the code editing MCP server (stdio JSON-RPC)
     CodeServer,
+    /// Start the Litho (deepwiki-rs) MCP server (stdio JSON-RPC)
+    LithoServer,
 }
 
 #[tokio::main]
@@ -83,6 +85,7 @@ async fn main() -> Result<()> {
                 | Command::SpaceServer
         | Command::CodeGraphServer
         | Command::CodeServer
+        | Command::LithoServer
         )
     );
 
@@ -121,5 +124,6 @@ async fn main() -> Result<()> {
         Command::SpaceServer => senclaw::mcp::space_server::run_stdio_server().await,
         Command::CodeGraphServer => senclaw::mcp::code_graph_server::run_code_graph_server().await,
         Command::CodeServer => senclaw::mcp::code_server::run_code_server().await,
+        Command::LithoServer => senclaw::mcp::litho_server::run_stdio_server().await,
     }
 }

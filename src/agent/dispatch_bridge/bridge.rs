@@ -195,6 +195,7 @@ impl DispatchBridge {
         tasks: Vec<DispatchTask>,
     ) -> std::io::Result<(String, Vec<String>)> {
         let admin_folder_display = admin_folder.clone(); // clone before move into closure
+        let shared_workspace_display = shared_workspace.as_deref().unwrap_or("<none>").to_string();
         let mut parent_id = String::new();
         let mut task_ids: Vec<String> = Vec::new();
         let now = chrono::Utc::now().to_rfc3339();
@@ -224,13 +225,13 @@ impl DispatchBridge {
         })?;
         // After adding a queued parent, try to activate it immediately if the
         // admin has no other active parent.
+        tracing::info!(
+            "[DispatchBridge] Enqueued parent {parent_id} with {} task(s) → admin: {admin_folder_display}, workspace: {shared_workspace_display}",
+            task_ids.len()
+        );
         if !parent_id.is_empty() {
             self.activate_next_queued(&admin_folder_display);
         }
-        tracing::info!(
-            "[DispatchBridge] Enqueued parent {parent_id} with {} task(s) → admin: {admin_folder_display}",
-            task_ids.len()
-        );
         Ok((parent_id, task_ids))
     }
 
@@ -655,6 +656,15 @@ impl DispatchBridge {
         if let Some(id) = activated_id {
             tracing::info!(
                 "[DispatchBridge] Activated next queued parent {id} for admin: {admin_folder}"
+            );
+        } else {
+            let workspace_display = if workspace.is_empty() {
+                "<empty>".to_string()
+            } else {
+                workspace
+            };
+            tracing::debug!(
+                "[DispatchBridge] No queued parent to activate for admin: {admin_folder} (workspace: {workspace_display})"
             );
         }
     }

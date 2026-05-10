@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{Json, Response},
 };
 use axum_extra::extract::Multipart;
 use serde::Deserialize;
@@ -753,23 +753,49 @@ pub(crate) async fn cowork_tasks_update(
     AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
     Json(body): Json<UpdateTaskBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
+    let mgr = s.cowork_manager.as_ref().ok_or_else(|| {
+        AppError(StatusCode::SERVICE_UNAVAILABLE, "Cowork not initialized".into())
+    })?;
+    let db = s.db.as_ref().ok_or_else(|| {
+        AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into())
+    })?;
     let now = now_iso();
-    mgr.update_task(
-        db,
-        &task_id,
-        body.title.as_deref(),
-        body.description.as_deref(),
-        body.status.as_deref(),
-        body.assignee.as_deref(),
-        body.reviewer.as_deref(),
-        body.priority.as_deref(),
-        body.depends_on.as_deref(),
-        body.attachments.as_deref(),
-        &now,
-    )
-    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let agent_api = s.cowork_agent_api.clone();
+
+    if let Some(api) = agent_api {
+        mgr.update_task_with_triggers(
+            db,
+            &task_id,
+            body.title.as_deref(),
+            body.description.as_deref(),
+            body.status.as_deref(),
+            body.assignee.as_deref(),
+            body.reviewer.as_deref(),
+            body.priority.as_deref(),
+            body.depends_on.as_deref(),
+            body.attachments.as_deref(),
+            &now,
+            Some(api),
+            Arc::clone(mgr),
+        )
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    } else {
+        mgr.update_task(
+            db,
+            &task_id,
+            body.title.as_deref(),
+            body.description.as_deref(),
+            body.status.as_deref(),
+            body.assignee.as_deref(),
+            body.reviewer.as_deref(),
+            body.priority.as_deref(),
+            body.depends_on.as_deref(),
+            body.attachments.as_deref(),
+            &now,
+        )
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
     let task = mgr
         .get_task(db, &task_id)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

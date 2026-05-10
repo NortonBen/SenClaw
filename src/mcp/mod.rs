@@ -18,6 +18,7 @@ pub mod wiki_server;
 pub mod workspace_server;
 pub mod code_graph_server;
 pub mod code_server;
+pub mod litho_server;
 
 pub use client::{McpToolInfo, SharedMcpRegistry};
 pub use config::{
