@@ -18,3 +18,9 @@ hub-down:
 
 hub-run:
 	$(HUB_BACKEND_COMPOSE) run --rm --service-ports hub-backend
+
+run-backend:
+	cargo run 
+
+run-web:
+	cd web && npm run dev

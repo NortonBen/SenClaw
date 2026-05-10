@@ -91,6 +91,7 @@ pub trait VirtualCoreApi: Send + Sync {
         extra_mcp_servers: &[McpServerConfig],
         virtual_jid: &str,
         permission_fn: Option<VirtualPermissionFn>,
+        custom_memory_dir: Option<&str>,
     ) -> Result<String> {
         Err(anyhow::anyhow!("VirtualCoreApi not wired"))
     }
@@ -205,6 +206,7 @@ impl VirtualWorkerPool {
         workspace_dir: &str,
         task_id: Option<&str>,
         timeout_override: Option<Duration>,
+        custom_memory_dir: Option<&str>,
     ) -> Result<VirtualRunResult> {
         // Concurrency gate
         let persona_name = &persona.name;
@@ -262,6 +264,7 @@ impl VirtualWorkerPool {
                 cancel,
                 timeout_override,
                 &cleanup_guard,
+                custom_memory_dir,
             )
             .await;
 
@@ -350,6 +353,7 @@ impl VirtualWorkerPool {
         cancel: Arc<AtomicBool>,
         timeout_override: Option<Duration>,
         cleanup_guard: &CleanupGuard<'_>,
+        custom_memory_dir: Option<&str>,
     ) -> Result<String> {
         // Prepare temp agent data dir
         tokio::fs::create_dir_all(temp_dir).await?;
@@ -424,6 +428,8 @@ impl VirtualWorkerPool {
                     ) as TodosNotifyFn
                 });
 
+        let custom_memory_dir_captured = custom_memory_dir.map(|s| s.to_string());
+        
         let result = tokio::task::spawn_blocking(move || {
             let sys_prompt_opt = if sys_prompt.is_empty() {
                 None
@@ -445,6 +451,7 @@ impl VirtualWorkerPool {
                 &extra_mcp_servers,
                 &virtual_jid_for_perm,
                 perm_fn,
+                custom_memory_dir_captured.as_deref(),
             )
         })
         .await;
@@ -551,7 +558,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         working_dir: &str,
         tools: &[String],
         system_prompt: Option<&str>,
-        _skills_extra_dirs: &[String],
+        skills_extra_dirs: &[String],
         skip_perms: bool,
         prompt: &str,
         timeout: Duration,
@@ -560,6 +567,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         extra_mcp_servers: &[McpServerConfig],
         virtual_jid: &str,
         permission_fn: Option<VirtualPermissionFn>,
+        custom_memory_dir: Option<&str>,
     ) -> Result<String> {
         use crate::zen_core::{EngineEvent, SessionState, ZenCore, ZenCoreOptions};
 
@@ -576,6 +584,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             system_prompt: system_prompt
                 .unwrap_or("You are a helpful AI assistant.")
                 .to_string(),
+            custom_memory_dir: custom_memory_dir.map(|s| s.to_string()),
             ..Default::default()
         };
 

@@ -500,6 +500,8 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub request_timeout_secs: Option<u64>,
 }
 
 /// Runtime options used while creating a zen-core instance.
@@ -521,6 +523,8 @@ pub struct ZenCoreOptions {
     pub custom_rules: String,
     pub enable_llm_cache: bool,
     pub agent_mode: AgentMode,
+    /// Custom memory directory for this instance (e.g., for cowork workspaces)
+    pub custom_memory_dir: Option<String>,
 }
 
 impl Default for ZenCoreOptions {
@@ -542,6 +546,7 @@ impl Default for ZenCoreOptions {
             custom_rules: String::new(),
             enable_llm_cache: true,
             agent_mode: AgentMode::Agent,
+            custom_memory_dir: None,
         }
     }
 }

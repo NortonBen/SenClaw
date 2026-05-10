@@ -114,6 +114,16 @@ pub struct UiServerConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct McpConfig {
+    /// Timeout in seconds for MCP tool calls (default: 300 = 5 minutes)
+    pub request_timeout_secs: u64,
+    /// Watchdog check interval in seconds (default: 60 = 1 minute)
+    pub watchdog_interval_secs: u64,
+    /// Enable watchdog monitoring (default: true)
+    pub watchdog_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct MemoryConfig {
     pub embedding_provider: EmbeddingProvider,
     pub openai_api_key: String,
@@ -152,6 +162,7 @@ pub struct Config {
     pub paths: PathsConfig,
     pub memory: MemoryConfig,
     pub ui_server: UiServerConfig,
+    pub mcp: McpConfig,
     pub ws_port: u16,
 }
 
@@ -310,6 +321,11 @@ impl Config {
                     Ok(v) if !v.trim().is_empty() => Some(v),
                     _ => None,
                 },
+            },
+            mcp: McpConfig {
+                request_timeout_secs: env_int("SENCLAW_MCP_REQUEST_TIMEOUT_SECS", 300),
+                watchdog_interval_secs: env_int("SENCLAW_MCP_WATCHDOG_INTERVAL_SECS", 60),
+                watchdog_enabled: env_bool("SENCLAW_MCP_WATCHDOG_ENABLED", true),
             },
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
         }

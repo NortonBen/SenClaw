@@ -275,6 +275,7 @@ impl CoreApi for ZenCoreApi {
             command: cfg.command.clone(),
             args: cfg.args.clone(),
             env: cfg.env.clone(),
+            request_timeout_secs: None,
         };
         engine.add_or_update_mcp_server(&zc_cfg, "project")?;
         Ok(())

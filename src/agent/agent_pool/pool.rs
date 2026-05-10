@@ -60,8 +60,11 @@ pub struct AgentPool {
     /// DB handle — used by resume_agent to rebuild prompts from history.
     db: Mutex<Option<Arc<Db>>>,
 
-    /// Runtime config mirror used by get_or_create for MCP server wiring.
+    /// Runtime config mirror used for get_or_create MCP server wiring.
     config: Mutex<Option<Arc<Config>>>,
+
+    /// Marketplace manager for loading MCP servers from plugins.
+    marketplace_manager: Mutex<Option<Arc<crate::marketplace::manager::MarketplaceManager>>>,
 
     /// Weak self pointer so `&self` paths can upgrade to `Arc<Self>`
     /// when wiring long-lived callback closures (e.g. bind_events).
@@ -87,6 +90,7 @@ impl AgentPool {
             senclaw_home: Mutex::new(default_home),
             db: Mutex::new(None),
             config: Mutex::new(None),
+            marketplace_manager: Mutex::new(None),
             self_weak: Mutex::new(Weak::new()),
         });
         *pool.self_weak.lock().unwrap() = Arc::downgrade(&pool);
@@ -185,6 +189,11 @@ impl AgentPool {
     pub fn set_config(&self, cfg: Arc<Config>) {
         *self.config.lock().unwrap() = Some(Arc::clone(&cfg));
         self.core_api.set_runtime_config(cfg);
+    }
+
+    /// Marketplace manager for loading MCP servers from plugins.
+    pub fn set_marketplace_manager(&self, manager: Arc<crate::marketplace::manager::MarketplaceManager>) {
+        *self.marketplace_manager.lock().unwrap() = Some(manager);
     }
 
     /// Inject the dispatch bridge and forward its admin-activity callback into
@@ -846,6 +855,25 @@ impl AgentPool {
             }
         }
 
+        // Resolve custom memory directory for cowork agents
+        let custom_memory_dir = if binding.group_type == "cowork" {
+            crate::cowork::workspace_id_from_cowork_jid(&binding.jid)
+                .and_then(|workspace_id| {
+                    self.db
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|db| db.get_cowork_workspace(workspace_id).ok())
+                })
+                .and_then(|workspace_opt| workspace_opt)
+                .map(|workspace| {
+                    let workspace_root = PathBuf::from(&workspace.root_dir);
+                    workspace_root.join("memory").to_string_lossy().to_string()
+                })
+        } else {
+            None
+        };
+
         // Inject MCP servers (mirrors TS 546-624) through CoreApi abstraction.
         // Each registration is best-effort: on failure we keep agent creation alive.
         if let Some(cfg) = self.config.lock().unwrap().clone() {
@@ -906,6 +934,7 @@ impl AgentPool {
                     cowork_dispatch_json.as_deref(),
                 ));
             }
+
             mcp_servers.push(memory_mcp_config(
                 &db_path_s,
                 &binding.folder,
@@ -921,6 +950,7 @@ impl AgentPool {
                 } else {
                     Some(cfg.memory.openai_base_url.as_str())
                 },
+                custom_memory_dir.as_deref(),
             ));
             mcp_servers.push(wiki_mcp_config(
                 cfg.paths.wiki_dir.to_string_lossy().as_ref(),
@@ -940,6 +970,60 @@ impl AgentPool {
                 &binding.folder,
             ));
             mcp_servers.push(browser_mcp_config(cfg.ws_port));
+
+            // Load marketplace MCP servers from enabled plugins — mirrors TS AgentPool.ts:753-755
+            if let Some(mm) = self.marketplace_manager.lock().unwrap().as_ref() {
+                let marketplace_mcps = mm.get_enabled_mcp_servers();
+                if !marketplace_mcps.is_empty() {
+                    tracing::info!(
+                        "[AgentPool] Loading {} marketplace MCP server(s) for {}",
+                        marketplace_mcps.len(),
+                        binding.jid
+                    );
+                    for mcp_server in marketplace_mcps {
+                        // Convert MarketplacePluginMCPServer to McpServerConfig
+                        // This is a simplified conversion - in production you'd need to build
+                        // the full config with command, args, env, etc.
+                        // For now, we skip marketplace MCP loading as it requires more infrastructure
+                        tracing::debug!(
+                            "[AgentPool] Marketplace MCP server {} (transport: {}) - not yet implemented",
+                            mcp_server.name,
+                            mcp_server.transport
+                        );
+                    }
+                }
+            }
+
+            // Load user MCP servers from ~/.senclaw/mcp.json — mirrors TS AgentPool.ts:758-771
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let user_mcp_path = home.join(".senclaw").join("mcp.json");
+            if user_mcp_path.exists() {
+                if let Ok(raw) = std::fs::read_to_string(&user_mcp_path) {
+                    if let Ok(user_mcp_data) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        if let Some(servers) = user_mcp_data.get("mcpServers").and_then(|v| v.as_object()) {
+                            tracing::info!(
+                                "[AgentPool] Loading {} user MCP server(s) from {}",
+                                servers.len(),
+                                user_mcp_path.display()
+                            );
+                            for (name, cfg) in servers {
+                                // Check if server is enabled
+                                let enabled = cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                                if !enabled {
+                                    continue;
+                                }
+                                // User MCP servers require ExternalMcpServerConfig conversion
+                                // This is a placeholder - full implementation would convert to McpServerConfig
+                                tracing::debug!(
+                                    "[AgentPool] User MCP server {} - not yet implemented",
+                                    name
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             tracing::info!(
                 "[AgentPool] Preparing {} MCP server(s) for {}: {}",
                 mcp_servers.len(),
@@ -962,6 +1046,13 @@ impl AgentPool {
         }
 
         // Init memory index for this agent folder — mirrors TS 628-639.
+        // Register custom memory directory for cowork agents
+        if let Some(ref custom_dir) = custom_memory_dir {
+            crate::memory::manager::get_instance().register_custom_memory_dir(
+                &binding.folder,
+                PathBuf::from(custom_dir),
+            );
+        }
         crate::memory::manager::get_instance()
             .init_agent(&binding.folder)
             .await;

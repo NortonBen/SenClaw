@@ -45,6 +45,7 @@ struct McpMemoryServer {
     db_path: String,
     folder: String,
     agents_dir: PathBuf,
+    custom_memory_dir: Option<PathBuf>,
 }
 
 impl McpMemoryServer {
@@ -55,6 +56,13 @@ impl McpMemoryServer {
         let db = Db::open(&db_cfg).context("open memory DB")?;
         let provider = create_embedding_provider(&cfg, Arc::new(Db::open(&db_cfg)?));
         Ok((db, provider))
+    }
+
+    fn get_memory_dir(&self) -> &Path {
+        self.custom_memory_dir
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or_else(|| &self.agents_dir)
     }
 }
 
@@ -71,7 +79,13 @@ impl McpMemoryServer {
             Ok(v) => v,
             Err(e) => return format!("Error: {e}"),
         };
-        let srv = MemoryServer::new(db, &self.folder, &self.agents_dir, provider);
+        let srv = MemoryServer::new(
+            db,
+            &self.folder,
+            &self.agents_dir,
+            provider,
+            self.custom_memory_dir.clone(),
+        );
         srv.memory_search(&p.query, p.max_results, p.source.as_deref())
             .await
             .content
@@ -88,7 +102,13 @@ impl McpMemoryServer {
             Ok((db, _)) => db,
             Err(e) => return format!("Error: {e}"),
         };
-        let srv = MemoryServer::new(db, &self.folder, &self.agents_dir, None);
+        let srv = MemoryServer::new(
+            db,
+            &self.folder,
+            &self.agents_dir,
+            None,
+            self.custom_memory_dir.clone(),
+        );
         srv.memory_get(&p.rel_path, p.start_line, p.end_line)
             .content
     }
@@ -107,11 +127,13 @@ pub async fn run_stdio_server() -> Result<()> {
     let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
     let folder = std::env::var("SENCLAW_FOLDER").context("SENCLAW_FOLDER not set")?;
     let agents_dir = std::env::var("SENCLAW_AGENTS_DIR").context("SENCLAW_AGENTS_DIR not set")?;
+    let custom_memory_dir = std::env::var("SENCLAW_CUSTOM_MEMORY_DIR").ok();
 
     let server = McpMemoryServer {
         db_path,
         folder,
         agents_dir: PathBuf::from(agents_dir),
+        custom_memory_dir: custom_memory_dir.map(PathBuf::from),
     };
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
@@ -124,6 +146,7 @@ pub struct MemoryServer {
     folder: String,
     agents_dir: PathBuf,
     embedding_provider: Option<Box<dyn EmbeddingProvider>>,
+    custom_memory_dir: Option<PathBuf>,
 }
 
 impl MemoryServer {
@@ -132,13 +155,22 @@ impl MemoryServer {
         folder: &str,
         agents_dir: &Path,
         embedding_provider: Option<Box<dyn EmbeddingProvider>>,
+        custom_memory_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             db,
             folder: folder.to_owned(),
             agents_dir: agents_dir.to_path_buf(),
             embedding_provider,
+            custom_memory_dir,
         }
+    }
+
+    fn get_memory_dir(&self) -> &Path {
+        self.custom_memory_dir
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or_else(|| &self.agents_dir)
     }
 
     // ===== memory_search =====
@@ -222,7 +254,8 @@ impl MemoryServer {
         start_line: Option<u32>,
         end_line: Option<u32>,
     ) -> ToolResult {
-        let abs_path = match resolve_memory_path(&self.agents_dir, &self.folder, rel_path) {
+        let memory_dir = self.get_memory_dir();
+        let abs_path = match resolve_memory_path(memory_dir, &self.folder, rel_path) {
             Some(p) => p,
             None => {
                 return ToolResult::err(format!(

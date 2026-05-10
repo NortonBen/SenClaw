@@ -87,6 +87,7 @@ pub fn memory_mcp_config(
     embedding_provider: Option<&str>,
     openai_api_key: Option<&str>,
     openai_base_url: Option<&str>,
+    custom_memory_dir: Option<&str>,
 ) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-memory", "memory-server");
     cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
@@ -104,6 +105,10 @@ pub fn memory_mcp_config(
     if let Some(u) = openai_base_url {
         cfg.env
             .insert("SENCLAW_OPENAI_BASE_URL".into(), u.to_owned());
+    }
+    if let Some(d) = custom_memory_dir {
+        cfg.env
+            .insert("SENCLAW_CUSTOM_MEMORY_DIR".into(), d.to_owned());
     }
     cfg
 }

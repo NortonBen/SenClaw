@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::Client;
@@ -126,6 +127,23 @@ impl ZenEngine {
             all_tools,
             profile,
         )));
+
+        // Register custom memory directory with MemoryManager if provided
+        if let Some(ref custom_memory_dir) = engine.options.read().unwrap().custom_memory_dir {
+            if let Some(memory_mgr) = crate::memory::manager::try_get_instance() {
+                let agent_data_dir = engine.options.read().unwrap().agent_data_dir.clone();
+                let instance_id_for_log = engine.options.read().unwrap().instance_id.clone();
+                memory_mgr.register_custom_memory_dir(
+                    &agent_data_dir,
+                    std::path::PathBuf::from(custom_memory_dir),
+                );
+                tracing::info!(
+                    "[ZenEngine] Registered custom memory dir for instance '{}': {}",
+                    instance_id_for_log,
+                    custom_memory_dir
+                );
+            }
+        }
 
         engine
     }
@@ -874,13 +892,15 @@ impl ZenCore for ZenEngine {
         let command = cfg.command.clone();
         let args = cfg.args.clone();
         let env = cfg.env.clone();
+        let request_timeout_secs = cfg.request_timeout_secs;
         // Shared buffer for the spawned task to write tool objects into.
         let tools_buffer: Arc<Mutex<Vec<Arc<dyn Tool>>>> = Arc::new(Mutex::new(Vec::new()));
         let tools_buffer_clone = Arc::clone(&tools_buffer);
         let _ = builtin_tools_lock;
 
         let handle = tokio::spawn(async move {
-            match registry.spawn(&name, &command, &args, &env).await {
+            let timeout = Duration::from_secs(request_timeout_secs.unwrap_or(300));
+            match registry.spawn(&name, &command, &args, &env, timeout).await {
                 Ok(tool_infos) => {
                     let count = tool_infos.len();
                     let server_name = name.clone();

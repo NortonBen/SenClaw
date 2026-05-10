@@ -14,6 +14,7 @@ use super::types::{
 };
 use crate::agent::persona_registry::PersonaRegistry;
 use crate::agent::virtual_worker_pool::VirtualWorkerPool;
+use crate::memory::manager;
 use crate::types::GroupBinding;
 
 // ===== Real DispatchBridge =====
@@ -930,11 +931,27 @@ impl DispatchBridge {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default()
             } else {
-                workspace
+                workspace.clone()
             };
+            
+            // Resolve custom memory directory for cowork workspaces
+            let custom_memory_dir = if !workspace.is_empty() && workspace.contains("/cowork/") {
+                Some(format!("{}/memory", workspace))
+            } else {
+                None
+            };
+            
+            // Register custom memory directory with MemoryManager for virtual agents
+            if let Some(ref mem_dir) = custom_memory_dir {
+                manager::get_instance().register_custom_memory_dir(
+                    &persona.name,
+                    PathBuf::from(mem_dir),
+                );
+            }
+            
             tokio::spawn(async move {
                 let outcome = pool
-                    .run(&persona, &augmented, &cwd, Some(&task_id), timeout)
+                    .run(&persona, &augmented, &cwd, Some(&task_id), timeout, custom_memory_dir.as_deref())
                     .await;
                 let Some(arc) = weak.and_then(|w| w.upgrade()) else {
                     return;

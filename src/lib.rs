@@ -909,6 +909,26 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     ));
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
+
+    // Initialize marketplace manager for loading MCP servers from plugins
+    let marketplace_manager = Arc::new(
+        marketplace::manager::MarketplaceManager::new().unwrap_or_else(|_| {
+            marketplace::manager::MarketplaceManager::with_paths(
+                cfg.paths.marketplace_config_path.clone(),
+                cfg.paths.marketplace_state_path.clone(),
+                cfg.paths.marketplace_clones_dir.clone(),
+            ).unwrap_or_else(|_| {
+                marketplace::manager::MarketplaceManager::with_paths(
+                    std::path::PathBuf::from("/tmp/senclaw-marketplace-config.json"),
+                    std::path::PathBuf::from("/tmp/senclaw-marketplace-state.json"),
+                    std::path::PathBuf::from("/tmp/senclaw-marketplace"),
+                ).unwrap_or_else(|_| panic!("Failed to create marketplace manager"))
+            })
+        })
+    );
+    agent_pool.set_marketplace_manager(Arc::clone(&marketplace_manager));
+    tracing::info!("[SenClaw] MarketplaceManager initialized and wired to AgentPool");
+
     let dispatch_bridge = Arc::new(agent::dispatch_bridge::DispatchBridge::new(
         cfg.paths.dispatch_state_path.clone(),
     ));
@@ -925,14 +945,14 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }),
         None,
     )));
-    
+
     // ===== DailyLogger for conversation history =====
     let daily_logger = Arc::new(memory::daily_logger::DailyLogger::new(
         cfg.paths.agents_dir.clone(),
     ));
     agent_pool.set_daily_logger(daily_logger);
     tracing::info!("[SenClaw] DailyLogger initialized");
-    
+
     tracing::info!(
         "[SenClaw] AgentPool (zen-core engine) + GroupQueue (max_concurrent={}) ready",
         cfg.agent.max_concurrent
@@ -1121,6 +1141,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             command: helper_cfg.command,
             args: helper_cfg.args,
             env: helper_cfg.env,
+            request_timeout_secs: None,
         }
     }]);
     tracing::info!("[SenClaw] VirtualWorkerPool ready (browser-mcp injected)");

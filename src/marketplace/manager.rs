@@ -573,6 +573,45 @@ impl MarketplaceManager {
         }
         Ok(servers)
     }
+
+    /// Get all enabled MCP servers from all enabled plugins across all sources.
+    /// Mirrors TS MarketplaceManager.getMCPServerDefs().
+    pub fn get_enabled_mcp_servers(&self) -> Vec<MarketplacePluginMCPServer> {
+        let mut all_servers = Vec::new();
+
+        for source in &self.config.sources {
+            if !source.enabled {
+                continue;
+            }
+
+            let st = self.get_source_state(&source.id);
+            if let Ok(plugins) = self.find_plugins(&source.local_path) {
+                for plugin in plugins {
+                    let meta = match self.read_plugin_json(&plugin.plugin_json_path) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    let name = self.plugin_name(&meta, &plugin.dir);
+
+                    // Only include if plugin is enabled
+                    if !st.plugins.get(&name).copied().unwrap_or(false) {
+                        continue;
+                    }
+
+                    // Get MCP servers for this plugin
+                    if let Ok(servers) = self.discover_mcp_servers(&plugin.dir) {
+                        for mut server in servers {
+                            // Prefix with plugin name to avoid conflicts
+                            server.name = format!("mkt__{}__{}", name, server.name);
+                            all_servers.push(server);
+                        }
+                    }
+                }
+            }
+        }
+
+        all_servers
+    }
 }
 
 #[cfg(test)]

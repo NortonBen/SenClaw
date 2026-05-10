@@ -410,7 +410,7 @@ impl CoworkManager {
             .clone()
             .unwrap_or_else(|| format!("cowork:{}:{}", workspace_id, member.member_id));
         let folder = member.member_id.clone();
-        let allowed_dirs = member.subdir.clone().map(|d| vec![d]);
+        let _allowed_dirs = member.subdir.clone().map(|d| vec![d]);
 
         tracing::info!(
             "[Cowork] Dispatching task {} to agent {} (jid={})",
@@ -453,6 +453,13 @@ impl CoworkManager {
             &dependent_results,
         );
 
+        // Use workspace working_dir if set, otherwise root_dir for code/folder operations
+        let workspace_dir = workspace
+            .working_dir
+            .as_ref()
+            .filter(|d| !d.is_empty())
+            .unwrap_or(&workspace.root_dir);
+
         let group = GroupBinding {
             jid: jid.clone(),
             folder: folder.clone(),
@@ -463,7 +470,7 @@ impl CoworkManager {
             requires_trigger: false,
             allowed_tools: None,
             allowed_paths: None,
-            allowed_work_dirs: allowed_dirs,
+            allowed_work_dirs: Some(vec![workspace_dir.clone()]),
             bot_token: None,
             max_messages: None,
             last_active: None,

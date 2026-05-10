@@ -75,6 +75,8 @@ pub struct MemoryManager {
     dirty: Mutex<HashMap<String, Option<HashSet<String>>>>,
     /// folder → CancellationToken for the polling watcher task
     watcher_tokens: Mutex<HashMap<String, CancellationToken>>,
+    /// folder → custom memory directory (for cowork workspaces)
+    custom_memory_dirs: Mutex<HashMap<String, PathBuf>>,
 }
 
 impl MemoryManager {
@@ -87,10 +89,18 @@ impl MemoryManager {
             chunker_options: ChunkerOptions::default(),
             dirty: Mutex::new(HashMap::new()),
             watcher_tokens: Mutex::new(HashMap::new()),
+            custom_memory_dirs: Mutex::new(HashMap::new()),
         }
     }
 
     // ===== Public interface =====
+
+    /// Register a custom memory directory for a folder (e.g., for cowork workspaces).
+    pub fn register_custom_memory_dir(&self, folder: &str, custom_dir: PathBuf) {
+        let mut dirs = self.custom_memory_dirs.lock().unwrap();
+        dirs.insert(folder.to_string(), custom_dir);
+        tracing::info!("[MemoryManager] Registered custom memory dir for {folder}");
+    }
 
     /// Full scan + start polling watcher for an agent folder.
     pub async fn init_agent(self: &Arc<Self>, folder: &str) {
@@ -99,6 +109,16 @@ impl MemoryManager {
         tracing::info!("[MemoryManager] init_agent({folder}): sync done, starting watcher");
         self.start_watching(folder);
         tracing::info!("[MemoryManager] init_agent({folder}): done");
+    }
+
+    /// Get the memory directory for a folder (custom if registered, otherwise default).
+    fn get_memory_dir_for_folder(&self, folder: &str) -> PathBuf {
+        let dirs = self.custom_memory_dirs.lock().unwrap();
+        if let Some(custom_dir) = dirs.get(folder) {
+            custom_dir.clone()
+        } else {
+            self.agents_dir.join(folder)
+        }
     }
 
     /// Search memory for a folder.
@@ -206,6 +226,7 @@ impl MemoryManager {
             token.cancel();
         }
         self.dirty.lock().unwrap().remove(folder);
+        self.custom_memory_dirs.lock().unwrap().remove(folder);
         tracing::info!("[MemoryManager] destroy_agent({folder}): watcher cancelled");
     }
 
@@ -217,13 +238,13 @@ impl MemoryManager {
     // ===== Sync logic =====
 
     async fn sync_folder(&self, folder: &str) {
-        let agent_dir = self.agents_dir.join(folder);
-        let memory_dir = agent_dir.join("memory");
+        let memory_base_dir = self.get_memory_dir_for_folder(folder);
+        let memory_dir = memory_base_dir.join("memory");
 
         let mut disk_files: HashMap<String, (String, &str)> = HashMap::new();
 
         // MEMORY.md
-        let memory_md = agent_dir.join("MEMORY.md");
+        let memory_md = memory_base_dir.join("MEMORY.md");
         if memory_md.exists() {
             disk_files.insert(
                 memory_md.to_string_lossy().to_string(),
@@ -585,10 +606,10 @@ impl MemoryManager {
     // ===== Path resolution =====
 
     fn resolve_memory_path(&self, folder: &str, relative_path: &str) -> Option<PathBuf> {
-        let agent_dir = self.agents_dir.join(folder);
+        let memory_base_dir = self.get_memory_dir_for_folder(folder);
 
         // Canonicalise the base dir so symlinks / `..` components can't escape it.
-        let base = agent_dir.canonicalize().ok()?;
+        let base = memory_base_dir.canonicalize().ok()?;
 
         let is_safe = |p: &Path| -> bool {
             p.canonicalize()
@@ -597,13 +618,13 @@ impl MemoryManager {
         };
 
         // Try direct join
-        let candidate = agent_dir.join(relative_path);
+        let candidate = memory_base_dir.join(relative_path);
         if is_safe(&candidate) {
             return Some(candidate);
         }
 
         // Try memory/ subdirectory
-        let candidate = agent_dir.join("memory").join(relative_path);
+        let candidate = memory_base_dir.join("memory").join(relative_path);
         if is_safe(&candidate) {
             return Some(candidate);
         }
