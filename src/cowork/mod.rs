@@ -127,6 +127,50 @@ pub fn workspace_id_from_cowork_jid(jid: &str) -> Option<&str> {
     }
 }
 
+/// Walk upward from `path` to find a Cowork workspace root (`.../cowork/ws-*` or any segment `ws-*`).
+pub fn find_cowork_workspace_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut cur = Some(path);
+    while let Some(p) = cur {
+        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+            if name.starts_with("ws-") {
+                return Some(p.to_path_buf());
+            }
+        }
+        cur = p.parent();
+    }
+    None
+}
+
+/// Resolve `{workspace}/memory` and the shared SQLite folder key for paths inside a Cowork workspace.
+/// Follows symlinks via [`std::fs::canonicalize`].
+pub fn cowork_shared_memory_from_path(path: &std::path::Path) -> Option<(String, String)> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let root = find_cowork_workspace_root(&canonical)?;
+    let id = root.file_name()?.to_str()?;
+    if !id.starts_with("ws-") {
+        return None;
+    }
+    let key = format!("cowork-ws-{id}");
+    let mem = root.join("memory").to_string_lossy().into_owned();
+    Some((mem, key))
+}
+
+/// Folder key for FTS/SQLite memory when agents share `workspace/memory`.
+/// Use only when the workspace row exists and [`custom_memory_dir`] is configured for this binding.
+pub fn cowork_memory_index_folder(
+    jid: &str,
+    group_type: &str,
+    fallback_folder: &str,
+    shared_workspace_memory: bool,
+) -> String {
+    if group_type != "cowork" || !shared_workspace_memory {
+        return fallback_folder.to_string();
+    }
+    workspace_id_from_cowork_jid(jid)
+        .map(|ws| format!("cowork-ws-{ws}"))
+        .unwrap_or_else(|| fallback_folder.to_string())
+}
+
 /// Serialize workspace members for `SENCLAW_DISPATCH_COWORK_AGENTS_JSON` so the dispatch MCP
 /// subprocess lists / resolves subtask assignees **only** from Cowork (not the global agent board or `persona:` files).
 pub fn dispatch_cowork_agents_json_for_mcp(db: &Db, workspace_id: &str) -> Result<String> {

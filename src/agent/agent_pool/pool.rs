@@ -874,6 +874,14 @@ impl AgentPool {
             None
         };
 
+        let shared_workspace_memory = custom_memory_dir.is_some();
+        let memory_index_folder = crate::cowork::cowork_memory_index_folder(
+            &binding.jid,
+            &binding.group_type,
+            &binding.folder,
+            shared_workspace_memory,
+        );
+
         // Inject MCP servers (mirrors TS 546-624) through CoreApi abstraction.
         // Each registration is best-effort: on failure we keep agent creation alive.
         if let Some(cfg) = self.config.lock().unwrap().clone() {
@@ -937,7 +945,7 @@ impl AgentPool {
 
             mcp_servers.push(memory_mcp_config(
                 &db_path_s,
-                &binding.folder,
+                &memory_index_folder,
                 &agents_dir_s,
                 Some(cfg.memory.embedding_provider.as_str()),
                 if cfg.memory.openai_api_key.is_empty() {
@@ -1067,12 +1075,12 @@ impl AgentPool {
         // Register custom memory directory for cowork agents
         if let Some(ref custom_dir) = custom_memory_dir {
             crate::memory::manager::get_instance().register_custom_memory_dir(
-                &binding.folder,
+                &memory_index_folder,
                 PathBuf::from(custom_dir),
             );
         }
         crate::memory::manager::get_instance()
-            .init_agent(&binding.folder)
+            .init_agent(&memory_index_folder)
             .await;
 
         // Compute use_tools whitelist — mirrors TS AgentPool.ts:514-523.
@@ -1221,7 +1229,28 @@ impl AgentPool {
                     min_score,
                     source: None,
                 };
-                match mem_mgr.search(&group.folder, prompt, Some(opts)).await {
+                let shared_workspace_memory = if group.group_type == "cowork" {
+                    crate::cowork::workspace_id_from_cowork_jid(jid)
+                        .and_then(|ws_id| {
+                            self.db.lock().unwrap().as_ref().and_then(|db| {
+                                db.get_cowork_workspace(ws_id).ok()
+                            })
+                        })
+                        .flatten()
+                        .is_some()
+                } else {
+                    false
+                };
+                let memory_search_folder = crate::cowork::cowork_memory_index_folder(
+                    jid,
+                    &group.group_type,
+                    &group.folder,
+                    shared_workspace_memory,
+                );
+                match mem_mgr
+                    .search(&memory_search_folder, prompt, Some(opts))
+                    .await
+                {
                     Ok(results) => {
                         let filtered: Vec<_> = results
                             .into_iter()

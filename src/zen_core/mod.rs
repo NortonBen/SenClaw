@@ -525,6 +525,9 @@ pub struct ZenCoreOptions {
     pub agent_mode: AgentMode,
     /// Custom memory directory for this instance (e.g., for cowork workspaces)
     pub custom_memory_dir: Option<String>,
+    /// When set with [`Self::custom_memory_dir`], registers that path under this SQLite folder key
+    /// (e.g. shared `cowork-ws-{id}`) instead of [`Self::agent_data_dir`].
+    pub memory_folder_override: Option<String>,
 }
 
 impl Default for ZenCoreOptions {
@@ -547,6 +550,7 @@ impl Default for ZenCoreOptions {
             enable_llm_cache: true,
             agent_mode: AgentMode::Agent,
             custom_memory_dir: None,
+            memory_folder_override: None,
         }
     }
 }

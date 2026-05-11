@@ -131,14 +131,18 @@ impl ZenEngine {
         // Register custom memory directory with MemoryManager if provided
         if let Some(ref custom_memory_dir) = engine.options.read().unwrap().custom_memory_dir {
             if let Some(memory_mgr) = crate::memory::manager::try_get_instance() {
-                let agent_data_dir = engine.options.read().unwrap().agent_data_dir.clone();
-                let instance_id_for_log = engine.options.read().unwrap().instance_id.clone();
+                let opts = engine.options.read().unwrap();
+                let folder_key = opts
+                    .memory_folder_override
+                    .as_deref()
+                    .unwrap_or(opts.agent_data_dir.as_str());
+                let instance_id_for_log = opts.instance_id.clone();
                 memory_mgr.register_custom_memory_dir(
-                    &agent_data_dir,
+                    folder_key,
                     std::path::PathBuf::from(custom_memory_dir),
                 );
                 tracing::info!(
-                    "[ZenEngine] Registered custom memory dir for instance '{}': {}",
+                    "[ZenEngine] Registered custom memory dir for instance '{}' (folder={folder_key}): {}",
                     instance_id_for_log,
                     custom_memory_dir
                 );
