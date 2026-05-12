@@ -1,14 +1,14 @@
 //! Native MLX inference engine.
 //!
-//! Apple Silicon only. Built on `mlx-rs` + `mlx-lm` crates. Mirrors the design
-//! in `docs/mlx-rs-turboquant-native-runtime.md`.
+//! Apple Silicon only. Uses **`mlx-rs`** plus Qwen3 weights/templates vendored in-tree (see [`super::mlx_lm`]).
 //!
-//! NOTE: the upstream `mlx-lm` Rust crate (v0.25) currently ships loaders for
-//! a subset of architectures (Qwen3 verified, Gemma 4 pending). Architectures
-//! that lack a Rust loader return an error from [`MlxNativeEngine::start`].
+//! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
+//! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
-//! KV-cache quantization via `turboquant-rs` is opt-in behind the
-//! `local-mlx-turboquant` feature and the `kv_cache_bits` field.
+//! KV cache uses **`ConcatKeyValueCache` (FP16)** — MLX packed KV (`MlxQuantizedConcatKeyValueCache`)
+//! is disabled by default: concatenating per-step `quantize` tensors broke attention quality
+//! (degenerate `\n` generations). `kv_cache_bits` in settings still participates in engine
+//! identity for future turboquant / revised KV-quant wiring.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -24,8 +24,8 @@ use super::runtime::{
 /// template. Populated by `load()` and dropped by `unload()`, so RAM can be
 /// freed on demand without restarting the daemon.
 struct Loaded {
-    model: mlx_lm::models::qwen3::Model,
-    tokenizer: mlx_lm_utils::tokenizer::Tokenizer,
+    model: super::mlx_lm::models::qwen3::Model,
+    tokenizer: super::mlx_lm_utils::tokenizer::Tokenizer,
     chat_template: String,
     n_layers: usize,
 }
@@ -35,8 +35,7 @@ struct Loaded {
 pub struct MlxNativeEngine {
     model_dir: PathBuf,
     model_id: String,
-    /// `None` → `ConcatKeyValueCache` (FP16). `Some(bits)` → turboquant KV-cache.
-    /// Only honored when built with `local-mlx-turboquant`.
+    /// Reserved for future KV-quant / turboquant wiring; inference KV is FP16 unless we re-enable MLX packed KV.
     kv_cache_bits: Option<u8>,
     /// Arc-wrapped so we can clone the handle into the blocking worker that
     /// runs generation. MLX state is non-Send through naked references, but
@@ -82,6 +81,11 @@ impl MlxNativeEngine {
 
     pub fn model_id(&self) -> &str {
         &self.model_id
+    }
+
+    /// Settings fingerprint for registry reload (see `local_models/settings.json` `kv_cache_bits`).
+    pub fn kv_cache_bits(&self) -> Option<u8> {
+        self.kv_cache_bits
     }
 
     fn set_status(&self, s: RuntimeStatus) {
@@ -178,7 +182,7 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
 }
 
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
-    use mlx_lm_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer};
+    use super::mlx_lm_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer};
 
     detect_architecture(model_id, model_dir)?;
     let tokenizer_file = model_dir.join("tokenizer.json");
@@ -208,11 +212,11 @@ fn generate_with_cache(
     model_dir: &Path,
     model_id: &str,
     messages: &[ChatMessage],
-    kv_cache_bits: Option<u8>,
+    _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use mlx_lm::cache::ConcatKeyValueCache;
-    use mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
+    use super::mlx_lm::cache::ConcatKeyValueCache;
+    use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
     use mlx_rs::Array;
@@ -280,11 +284,34 @@ fn generate_with_cache(
     let encodings = tokenizer
         .apply_chat_template_and_encode(template, args)
         .map_err(|e| anyhow::anyhow!("chat template apply failed: {e:?}"))?;
-    let prompt: Vec<u32> = encodings
+    let mut prompt: Vec<u32> = encodings
         .iter()
         .flat_map(|e| e.get_ids())
         .copied()
         .collect();
+
+    let settings_dir = model_dir.parent().unwrap_or(model_dir);
+    let gen_opt =
+        crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
+    let max_prompt_tokens = gen_opt
+        .max_prompt_tokens
+        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
+        .clamp(512, 262_144) as usize;
+    let max_new_tokens = gen_opt
+        .max_new_tokens
+        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_NEW_TOKENS)
+        .clamp(1, 8192) as usize;
+
+    if prompt.len() > max_prompt_tokens {
+        let drop = prompt.len() - max_prompt_tokens;
+        tracing::warn!(
+            "[local-mlx-native] truncating prompt {} → {} tokens (RAM/KV cap; edit ~/.senclaw/local_models/settings.json max_prompt_tokens)",
+            prompt.len(),
+            max_prompt_tokens
+        );
+        prompt.drain(..drop);
+    }
+
     // Log the first/last few prompt tokens — lets us confirm the chat
     // template produced `<|im_start|>` / `<|im_end|>` (Qwen3 = 151644 / 151645)
     // rather than splitting them into many BPE pieces.
@@ -317,10 +344,10 @@ fn generate_with_cache(
     // is mis-shaped, causing greedy decode to lock after ~2 tokens.
     //
     // The fix is to keep the running token reshaped explicitly to [1, 1].
-    use mlx_lm::models::qwen3::{sample, ModelInput};
+    use super::mlx_lm::models::qwen3::{sample, ModelInput};
     use mlx_rs::module::Module;
 
-    let max_tokens: usize = 2048;
+    let max_tokens: usize = max_new_tokens;
     let mut buffer: Vec<Array> = Vec::new();
     let mut hit_stop = false;
     let mut generated_count = 0usize;
@@ -409,10 +436,6 @@ fn generate_with_cache(
         }
     }
 
-    // turboquant-rs KV-cache integration: pending (requires custom attention
-    // loop, mlx-lm exposes ConcatKeyValueCache as the only public KV-cache).
-    let _ = kv_cache_bits;
-
     Ok(())
 }
 
@@ -425,8 +448,8 @@ enum Arch {
 /// `quantization` block (mlx-community 4-bit / 8-bit variants). Without this
 /// step, plain `Linear` slots can't accept the packed-int safetensor weights
 /// and inference crashes with an `rms_norm` shape mismatch.
-fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<mlx_lm::models::qwen3::Model> {
-    use mlx_lm::models::qwen3::{get_qwen3_model_args, Model, WeightMap};
+fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwen3::Model> {
+    use super::mlx_lm::models::qwen3::{get_qwen3_model_args, Model, WeightMap};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
@@ -645,8 +668,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
         }
     }
     anyhow::bail!(
-        "no native mlx-lm loader for `{}` in mlx-lm v0.25.3 — only Qwen3 is supported. \
-         Track upstream: https://github.com/oxideai/mlx-rs/tree/main/mlx-lm/src/models",
+        "no native Qwen3 loader for `{}` — only Qwen3 MLX checkpoints are supported in this build.",
         model_id
     )
 }

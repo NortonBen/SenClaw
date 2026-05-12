@@ -102,7 +102,10 @@ fn loaded_ids() -> Vec<String> {
 fn is_loaded(id: &str) -> bool {
     #[cfg(feature = "local-mlx")]
     {
-        LOADED_ENGINES.lock().unwrap().contains_key(id)
+        LOADED_ENGINES
+            .lock()
+            .unwrap()
+            .contains_key(&canonical_local_model_id(id))
     }
     #[cfg(not(feature = "local-mlx"))]
     {
@@ -114,7 +117,14 @@ fn is_loaded(id: &str) -> bool {
 /// `None` when the model isn't currently loaded.
 #[cfg(feature = "local-mlx")]
 pub fn get_loaded_engine(id: &str) -> Option<Arc<MlxNativeEngine>> {
-    LOADED_ENGINES.lock().unwrap().get(id).cloned()
+    let cid = canonical_local_model_id(id);
+    LOADED_ENGINES.lock().unwrap().get(&cid).cloned()
+}
+
+/// Normalize HuggingFace-style model id for registry keys (trim whitespace).
+#[must_use]
+pub fn canonical_local_model_id(id: &str) -> String {
+    id.trim().to_string()
 }
 
 /// Get the cached engine for `id` or insert a fresh one. Used by ZenCore on
@@ -122,18 +132,34 @@ pub fn get_loaded_engine(id: &str) -> Option<Arc<MlxNativeEngine>> {
 /// reused for every subsequent chat — without this, each chat instantiates a
 /// new engine and the previous one's unified-memory allocations linger,
 /// causing RAM to grow ~3 GB per turn for a 4B-4bit model.
+///
+/// If [`MlxNativeEngine::kv_cache_bits`] no longer matches `kv_cache_bits`
+/// (user changed turboquant settings), the old engine is [`MlxNativeEngine::unload`]d
+/// and replaced so KV-cache mode stays consistent.
 #[cfg(feature = "local-mlx")]
 pub fn get_or_create_loaded_engine(
     id: &str,
     model_dir: &std::path::Path,
     kv_cache_bits: Option<u8>,
 ) -> Arc<MlxNativeEngine> {
+    let cid = canonical_local_model_id(id);
     let mut map = LOADED_ENGINES.lock().unwrap();
-    if let Some(existing) = map.get(id) {
-        return existing.clone();
+    if let Some(existing) = map.get(&cid) {
+        if existing.kv_cache_bits() == kv_cache_bits {
+            return existing.clone();
+        }
+        tracing::info!(
+            "[local-models] replacing engine `{}`: kv_cache_bits {:?} → {:?}",
+            cid,
+            existing.kv_cache_bits(),
+            kv_cache_bits
+        );
+        if let Some(old) = map.remove(&cid) {
+            old.unload();
+        }
     }
-    let engine = Arc::new(MlxNativeEngine::new(model_dir, id, kv_cache_bits));
-    map.insert(id.to_string(), engine.clone());
+    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, kv_cache_bits));
+    map.insert(cid, engine.clone());
     engine
 }
 
@@ -277,11 +303,27 @@ pub(crate) async fn local_models_runtime(
 // Settings (KV-cache quantization) — persisted as JSON next to the models dir.
 // ---------------------------------------------------------------------------
 
+/// When `settings.json` omits `max_prompt_tokens`, native MLX uses this (see
+/// `max_new_tokens` below). With **FP16 KV**, long prompts dominate RAM; defaults
+/// target **~8–12 GiB** process footprint for a 4B 4-bit load (not ~20 GiB spikes).
+/// Raise in `settings.json` if you have headroom (e.g. `2048` / `512`).
+pub const DEFAULT_MLX_MAX_PROMPT_TOKENS: u32 = 1024;
+
+/// Default cap on **generated** tokens per request when omitted from settings.
+pub const DEFAULT_MLX_MAX_NEW_TOKENS: u32 = 256;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalModelSettings {
-    /// `None` = use FP16 ConcatKeyValueCache. `Some(bits)` = turboquant 2/3/4-bit.
+    /// Future / registry: KV turboquant or revised MLX packed-KV bit width (`2`–`4`). Runtime KV is **FP16 concat** until that path is re-enabled.
     #[serde(default)]
     pub kv_cache_bits: Option<u8>,
+    /// Upper bound on prompt length after chat-template encoding. Older conversation is dropped
+    /// from the **start** (suffix preserved). `None` → [`DEFAULT_MLX_MAX_PROMPT_TOKENS`].
+    #[serde(default)]
+    pub max_prompt_tokens: Option<u32>,
+    /// Cap on generated tokens per request. `None` → [`DEFAULT_MLX_MAX_NEW_TOKENS`].
+    #[serde(default)]
+    pub max_new_tokens: Option<u32>,
 }
 
 fn settings_path(state: &UiState) -> PathBuf {
@@ -320,6 +362,22 @@ pub(crate) async fn local_models_settings_put(
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
                 format!("kv_cache_bits must be 2, 3, or 4 (got {bits})"),
+            ));
+        }
+    }
+    if let Some(n) = settings.max_prompt_tokens {
+        if !(512..=262_144).contains(&n) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("max_prompt_tokens must be between 512 and 262144 (got {n})"),
+            ));
+        }
+    }
+    if let Some(n) = settings.max_new_tokens {
+        if !(1..=8192).contains(&n) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("max_new_tokens must be between 1 and 8192 (got {n})"),
             ));
         }
     }
@@ -520,56 +578,57 @@ pub(crate) async fn local_models_load(
     State(state): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let dir = model_dir(&state, &id);
+    let cid = canonical_local_model_id(&id);
+    let dir = model_dir(&state, &cid);
     if !is_installed(&dir) {
         return Err(AppError(
             StatusCode::BAD_REQUEST,
-            format!("model `{id}` is not installed"),
+            format!("model `{cid}` is not installed"),
         ));
     }
 
     #[cfg(feature = "local-mlx")]
     {
         let kv_bits = load_settings_blocking(&state.config.paths.local_models_dir).kv_cache_bits;
-        let engine = Arc::new(MlxNativeEngine::new(&dir, &id, kv_bits));
+        // Reuse the same registry entry as ZenCore (`get_or_create_loaded_engine`) so
+        // clicking "Load" does not allocate a second copy of weights.
+        let engine = get_or_create_loaded_engine(&cid, &dir, kv_bits);
         engine
             .ensure_installed()
             .await
             .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
-        // Actually pull weights + tokenizer into RAM now so the Load button
-        // does what its label says (vs lazy-loading on first chat).
         let warm = engine.clone();
         tokio::task::spawn_blocking(move || warm.warm_up())
             .await
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        LOADED_ENGINES.lock().unwrap().insert(id.clone(), engine);
     }
     #[cfg(not(feature = "local-mlx"))]
     {
-        LOADED_ENGINES_STUB.lock().unwrap().insert(id.clone());
+        LOADED_ENGINES_STUB.lock().unwrap().insert(cid.clone());
     }
 
-    Ok(Json(json!({ "ok": true, "id": id, "loaded": true })))
+    Ok(Json(json!({ "ok": true, "id": cid, "loaded": true })))
 }
 
 pub(crate) async fn local_models_unload(
     State(_state): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    let cid = canonical_local_model_id(&id);
     #[cfg(feature = "local-mlx")]
     {
         // Two-step unload: explicitly drop cached Model+Tokenizer so MLX
         // frees the unified-memory allocation, THEN release the Arc.
-        if let Some(engine) = LOADED_ENGINES.lock().unwrap().remove(&id) {
+        if let Some(engine) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
             engine.unload();
         }
     }
     #[cfg(not(feature = "local-mlx"))]
     {
-        LOADED_ENGINES_STUB.lock().unwrap().remove(&id);
+        LOADED_ENGINES_STUB.lock().unwrap().remove(&cid);
     }
-    Ok(Json(json!({ "ok": true, "id": id, "loaded": false })))
+    Ok(Json(json!({ "ok": true, "id": cid, "loaded": false })))
 }
 
 pub(crate) async fn local_models_loaded_list(
@@ -616,7 +675,7 @@ pub(crate) async fn local_models_use_as_llm(
         api_key: String::new(),
         model_name: id.clone(),
         adapt: "local-mlx-native".to_string(),
-        max_tokens: 2048,
+        max_tokens: DEFAULT_MLX_MAX_NEW_TOKENS,
         context_length,
         vision: Some(false),
     };

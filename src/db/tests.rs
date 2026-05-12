@@ -93,6 +93,7 @@ fn message_fifo_trims() {
             is_bot_reply: false,
             reply_to_id: None,
             media_type: None,
+            attachments: None,
         };
         db.insert_message(&msg, 3).unwrap();
     }
@@ -117,6 +118,7 @@ fn message_since_filter() {
             is_bot_reply: false,
             reply_to_id: None,
             media_type: None,
+            attachments: None,
         };
         db.insert_message(&msg, 100).unwrap();
     }
@@ -141,6 +143,7 @@ fn message_pagination() {
             is_bot_reply: false,
             reply_to_id: None,
             media_type: None,
+            attachments: None,
         };
         db.insert_message(&msg, 100).unwrap();
     }
@@ -246,6 +249,7 @@ fn delete_messages_and_timestamp() {
             is_bot_reply: false,
             reply_to_id: None,
             media_type: None,
+            attachments: None,
         };
         db.insert_message(&msg, 100).unwrap();
     }
@@ -278,6 +282,7 @@ fn count_messages_by_jid() {
         is_bot_reply: false,
         reply_to_id: None,
         media_type: None,
+        attachments: None,
     };
     db.insert_message(&msg, 100).unwrap();
     assert_eq!(db.count_messages("tg:group:1").unwrap(), 1);

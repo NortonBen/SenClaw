@@ -28,6 +28,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// Routes to OpenAI or Anthropic adapter based on `profile.adapt` or
 /// auto-detection from the provider field.
+///
+/// For `provider = local-mlx`, the in-process path always wins so a stale
+/// `adapt: "openai"` left over from merged/copied LLM configs cannot force an HTTP request.
 pub async fn query_llm(
     client: &Client,
     messages: &[Message],
@@ -38,10 +41,7 @@ pub async fn query_llm(
     thinking: bool,
     stream: bool,
 ) -> Result<Message> {
-    let adapt = profile
-        .adapt
-        .as_deref()
-        .unwrap_or_else(|| resolve_adapter(&profile.provider));
+    let adapt = effective_adapter(profile);
     info!(
         "[llm] request start provider={} model={} adapter={} stream={} messages={} tools={}",
         profile.provider,
@@ -118,6 +118,19 @@ fn resolve_adapter(provider: &str) -> &str {
     } else {
         "openai"
     }
+}
+
+/// Prefer routing implied by `provider` for local MLX; otherwise use explicit `adapt`, then inference from provider.
+fn effective_adapter(profile: &ModelProfile) -> &str {
+    let p = profile.provider.to_lowercase();
+    if p == "local-mlx" || p == "local-mlx-native" {
+        return "local-mlx-native";
+    }
+    profile
+        .adapt
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| resolve_adapter(&profile.provider))
 }
 
 // ============================================================================
@@ -200,7 +213,9 @@ async fn query_local_mlx_native(
 
         // Resolve model directory: <local_models_dir>/<model_name with '/' → '__'>
         let cfg = Config::from_env();
-        let safe = profile.model_name.replace('/', "__");
+        let model_key =
+            crate::gateway::ui_server::local_models::canonical_local_model_id(&profile.model_name);
+        let safe = model_key.replace('/', "__");
         let model_dir = cfg.paths.local_models_dir.join(safe);
 
         // Pick up KV-cache settings (turboquant bit width) when the user opted in.
@@ -208,11 +223,9 @@ async fn query_local_mlx_native(
             &cfg.paths.local_models_dir,
         )
         .kv_cache_bits;
-        // Reuse a warm-loaded engine when one exists; otherwise create one
-        // AND insert it into the global registry so subsequent calls reuse it
-        // instead of leaking ~3 GB of unified memory per chat.
+        // Single global registry: one [`MlxNativeEngine`] per canonical model id + KV settings.
         let engine = crate::gateway::ui_server::local_models::get_or_create_loaded_engine(
-            &profile.model_name,
+            &model_key,
             &model_dir,
             kv_bits,
         );

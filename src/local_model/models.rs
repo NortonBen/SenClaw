@@ -8,7 +8,7 @@ pub struct KnownModel {
     pub label: &'static str,
     pub approx_size_gb: f32,
     pub context_length: u32,
-    /// Whether `mlx-lm` Rust crate has a loader for this architecture today.
+    /// Whether the in-tree Qwen3 MLX loader supports this checkpoint today.
     /// Used by the UI to mark "pending upstream" entries.
     pub native_supported: bool,
 }

@@ -1,8 +1,8 @@
 //! Local LLM inference runtimes.
 //!
-//! Native MLX inference on Apple Silicon via `mlx-rs` + `mlx-lm` is gated
-//! behind the `local-mlx` feature so default builds remain cross-platform.
-//! See `docs/mlx-rs-turboquant-native-runtime.md` for the technical plan.
+//! Native MLX inference on Apple Silicon via **`mlx-rs`** (fork [oxiglade/mlx-rs](https://github.com/oxiglade/mlx-rs))
+//! plus Qwen3/chat-template code vendored in `mlx_lm` / `mlx_lm_utils` is gated behind the `local-mlx`
+//! feature so default builds remain cross-platform.
 
 pub mod models;
 pub mod runtime;
@@ -12,6 +12,10 @@ pub use runtime::{
     ChatMessage, LocalModelRuntime, Role, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
 };
 
+#[cfg(feature = "local-mlx")]
+pub mod mlx_lm;
+#[cfg(feature = "local-mlx")]
+pub mod mlx_lm_utils;
 #[cfg(feature = "local-mlx")]
 pub mod mlx_native;
 
