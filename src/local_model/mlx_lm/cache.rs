@@ -27,6 +27,25 @@ pub trait KeyValueCache {
 
     fn update_and_fetch(&mut self, keys: Array, values: Array)
         -> Result<KvFetchResult, Exception>;
+
+    /// Approximate attention via **turboquant-rs** CPU path (`local-mlx-turboquant` only).
+    /// Default: not supported — [`ConcatKeyValueCache`] uses MLX SDPA instead.
+    fn turboquant_attention(
+        &mut self,
+        _queries: Array,
+        _scale: f32,
+        _mask: Option<&Array>,
+        _batch: i32,
+        _q_len: i32,
+        _kv_past_len: i32,
+        _n_heads: i32,
+        _n_kv_heads: i32,
+        _head_dim: i32,
+    ) -> Result<Array, Exception> {
+        Err(Exception::custom(
+            "turboquant_attention: cache is not a TurboQuant KV backend",
+        ))
+    }
 }
 
 impl<T> KeyValueCache for &'_ mut T
@@ -60,6 +79,32 @@ where
     ) -> Result<KvFetchResult, Exception> {
         T::update_and_fetch(self, keys, values)
     }
+
+    fn turboquant_attention(
+        &mut self,
+        queries: Array,
+        scale: f32,
+        mask: Option<&Array>,
+        batch: i32,
+        q_len: i32,
+        kv_past_len: i32,
+        n_heads: i32,
+        n_kv_heads: i32,
+        head_dim: i32,
+    ) -> Result<Array, Exception> {
+        T::turboquant_attention(
+            self,
+            queries,
+            scale,
+            mask,
+            batch,
+            q_len,
+            kv_past_len,
+            n_heads,
+            n_kv_heads,
+            head_dim,
+        )
+    }
 }
 
 /// Packed KV tensors for MLX `quantized_scaled_dot_product_attention` (see `mlx_lm::utils`).
@@ -85,6 +130,8 @@ pub enum KvFetchResult {
         keys: QuantizedKeys,
         values: QuantizedValues,
     },
+    /// KV stored via turboquant-rs; run [`KeyValueCache::turboquant_attention`] instead of MLX SDPA.
+    TurboQuant,
 }
 
 #[derive(Debug, Clone, Default)]

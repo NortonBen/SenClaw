@@ -3,5 +3,9 @@
 
 pub mod cache;
 pub mod error;
+pub mod kv_layer;
 pub mod models;
 pub mod utils;
+
+#[cfg(feature = "local-mlx-turboquant")]
+pub mod turboquant_kv;

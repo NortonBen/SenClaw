@@ -167,6 +167,8 @@ where
             .reshape(&[B, L, self.n_kv_heads, -1])?
             .transpose_axes(&[0, 2, 1, 3])?;
 
+        let kv_past_len = cache.as_ref().map(|c| c.offset()).unwrap_or(0);
+
         let fetch = if let Some(cache) = cache.as_mut() {
             let q_input = nn::RopeInputBuilder::new(&queries)
                 .offset(cache.offset())
@@ -184,7 +186,28 @@ where
             KvFetchResult::Fp16(keys, values)
         };
 
+        let head_dim = *queries
+            .shape()
+            .get(3)
+            .ok_or_else(|| Exception::custom("queries: expected rank-4"))?;
+
         let output = match fetch {
+            KvFetchResult::TurboQuant => {
+                let c = cache
+                    .as_mut()
+                    .ok_or_else(|| Exception::custom("TurboQuant KV requires cache slot"))?;
+                c.turboquant_attention(
+                    queries,
+                    self.scale,
+                    mask,
+                    B,
+                    L,
+                    kv_past_len,
+                    self.n_heads,
+                    self.n_kv_heads,
+                    head_dim,
+                )?
+            }
             KvFetchResult::Fp16(keys, values) => {
                 scaled_dot_product_attention(queries, keys, values, cache, self.scale, mask)?
             }

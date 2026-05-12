@@ -304,24 +304,38 @@ pub(crate) async fn local_models_runtime(
 // ---------------------------------------------------------------------------
 
 /// When `settings.json` omits `max_prompt_tokens`, native MLX uses this (see
-/// `max_new_tokens` below). With **FP16 KV**, long prompts dominate RAM; defaults
-/// target **~8–12 GiB** process footprint for a 4B 4-bit load (not ~20 GiB spikes).
-/// Raise in `settings.json` if you have headroom (e.g. `2048` / `512`).
-pub const DEFAULT_MLX_MAX_PROMPT_TOKENS: u32 = 1024;
+/// `max_new_tokens` below). Higher values use more unified memory for KV + prefill;
+/// tune down in `settings.json` on memory-constrained machines.
+pub const DEFAULT_MLX_MAX_PROMPT_TOKENS: u32 = 32_768;
 
 /// Default cap on **generated** tokens per request when omitted from settings.
-pub const DEFAULT_MLX_MAX_NEW_TOKENS: u32 = 256;
+/// Hard-capped at **8192** in API / `mlx_native` decode loop.
+pub const DEFAULT_MLX_MAX_NEW_TOKENS: u32 = 4096;
+
+/// When TurboQuant KV is active, `mlx_native` caps **decode** at this (below API 8192)
+/// to cut RAM / CPU on the slow CPU attention path; raise via `max_new_tokens` in JSON only up to this cap.
+pub const TURBOQUANT_MAX_NEW_TOKENS_CAP: u32 = 2048;
+
+/// Hard ceiling on **prompt + decode** token positions when TurboQuant KV is active
+/// (`kv_cache_bits` set, build with `local-mlx-turboquant`). Native MLX clamps
+/// `max_prompt_tokens` so `max_prompt_tokens + max_new_tokens ≤` this value.
+pub const TURBOQUANT_MAX_CONTEXT_TOKENS: u32 = 32_768;
+
+/// When `kv_cache_bits` is `2` (invalid for turboquant-rs QJL path), native MLX maps to this **TQ3** total bit budget (`3`).
+pub const DEFAULT_TURBOQUANT_KV_TOTAL_BITS: u8 = 3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LocalModelSettings {
-    /// Future / registry: KV turboquant or revised MLX packed-KV bit width (`2`–`4`). Runtime KV is **FP16 concat** until that path is re-enabled.
+    /// TurboQuant KV total bit budget: **`3` = TQ3** (default remap), **`4` = TQ4**. **`2`** is accepted in JSON for compatibility but maps to [`DEFAULT_TURBOQUANT_KV_TOTAL_BITS`] (TQ3) at runtime.
     #[serde(default)]
     pub kv_cache_bits: Option<u8>,
     /// Upper bound on prompt length after chat-template encoding. Older conversation is dropped
     /// from the **start** (suffix preserved). `None` → [`DEFAULT_MLX_MAX_PROMPT_TOKENS`].
+    /// With TurboQuant KV, effective prompt cap is further limited so prompt + decode ≤ [`TURBOQUANT_MAX_CONTEXT_TOKENS`].
     #[serde(default)]
     pub max_prompt_tokens: Option<u32>,
     /// Cap on generated tokens per request. `None` → [`DEFAULT_MLX_MAX_NEW_TOKENS`].
+    /// With TurboQuant KV (native MLX), runtime further caps at [`TURBOQUANT_MAX_NEW_TOKENS_CAP`].
     #[serde(default)]
     pub max_new_tokens: Option<u32>,
 }
@@ -361,7 +375,7 @@ pub(crate) async fn local_models_settings_put(
         if !matches!(bits, 2 | 3 | 4) {
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
-                format!("kv_cache_bits must be 2, 3, or 4 (got {bits})"),
+                format!("kv_cache_bits must be 2, 3, or 4 (got {bits}); 2 is remapped to TQ3 at runtime when using turboquant"),
             ));
         }
     }

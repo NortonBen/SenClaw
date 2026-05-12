@@ -5,10 +5,13 @@
 //! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
 //! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
-//! KV cache uses **`ConcatKeyValueCache` (FP16)** — MLX packed KV (`MlxQuantizedConcatKeyValueCache`)
-//! is disabled by default: concatenating per-step `quantize` tensors broke attention quality
-//! (degenerate `\n` generations). `kv_cache_bits` in settings still participates in engine
-//! identity for future turboquant / revised KV-quant wiring.
+//! KV cache:
+//! - **Default:** [`super::mlx_lm::cache::ConcatKeyValueCache`] (FP16 on device).
+//! - **With `--features local-mlx-turboquant` + `kv_cache_bits` in settings / engine:** CPU-side
+//!   [`turboquant::QuantizedKVCache`] (see `mlx_lm::turboquant_kv`) to shrink KV RAM at the cost of
+//!   approximate attention (sequential CPU scoring per head). **`3`** = **TQ3** (default when remapping `2`); **`4`** = TQ4.
+//!   Prompt + decode is capped at [`crate::gateway::ui_server::local_models::TURBOQUANT_MAX_CONTEXT_TOKENS`] (**32k**).
+//! MLX packed KV (`MlxQuantizedConcatKeyValueCache`) stays disabled — concat quantized tensors broke quality.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -35,7 +38,7 @@ struct Loaded {
 pub struct MlxNativeEngine {
     model_dir: PathBuf,
     model_id: String,
-    /// Reserved for future KV-quant / turboquant wiring; inference KV is FP16 unless we re-enable MLX packed KV.
+    /// When `Some(2|3|4)` and built with `local-mlx-turboquant`, enables TurboQuant KV (`3`=TQ3, `4`=TQ4; `2`→TQ3); else FP16 concat.
     kv_cache_bits: Option<u8>,
     /// Arc-wrapped so we can clone the handle into the blocking worker that
     /// runs generation. MLX state is non-Send through naked references, but
@@ -212,10 +215,17 @@ fn generate_with_cache(
     model_dir: &Path,
     model_id: &str,
     messages: &[ChatMessage],
-    _kv_cache_bits: Option<u8>,
+    engine_kv_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
     use super::mlx_lm::cache::ConcatKeyValueCache;
+    use super::mlx_lm::kv_layer::Qwen3LayerKv;
+    #[cfg(feature = "local-mlx-turboquant")]
+    use super::mlx_lm::turboquant_kv::TurboQuantKeyValueCache;
+    #[cfg(feature = "local-mlx-turboquant")]
+    use std::sync::{Arc, Mutex};
+    #[cfg(feature = "local-mlx-turboquant")]
+    use turboquant::{packed::TurboQuantConfig, QuantizedKVCache};
     use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
@@ -293,14 +303,70 @@ fn generate_with_cache(
     let settings_dir = model_dir.parent().unwrap_or(model_dir);
     let gen_opt =
         crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
-    let max_prompt_tokens = gen_opt
-        .max_prompt_tokens
-        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
-        .clamp(512, 262_144) as usize;
-    let max_new_tokens = gen_opt
+    let kv_bits_merged = gen_opt.kv_cache_bits.or(engine_kv_bits);
+
+    let raw_max_new = gen_opt
         .max_new_tokens
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_NEW_TOKENS)
         .clamp(1, 8192) as usize;
+
+    let max_new_tokens = {
+        #[cfg(feature = "local-mlx-turboquant")]
+        {
+            if kv_bits_merged.is_some() {
+                use crate::gateway::ui_server::local_models::TURBOQUANT_MAX_NEW_TOKENS_CAP;
+                let cap = TURBOQUANT_MAX_NEW_TOKENS_CAP as usize;
+                let v = raw_max_new.min(cap);
+                if raw_max_new > cap {
+                    tracing::info!(
+                        "[local-mlx-native] TurboQuant: capping max_new_tokens {} → {} (faster reply, lower RAM; max {} in settings for this path)",
+                        raw_max_new,
+                        v,
+                        TURBOQUANT_MAX_NEW_TOKENS_CAP
+                    );
+                }
+                v
+            } else {
+                raw_max_new
+            }
+        }
+        #[cfg(not(feature = "local-mlx-turboquant"))]
+        {
+            raw_max_new
+        }
+    };
+
+    let max_prompt_tokens = {
+        let base = gen_opt
+            .max_prompt_tokens
+            .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
+            .clamp(512, 262_144) as usize;
+        #[cfg(feature = "local-mlx-turboquant")]
+        {
+            let mut max_pt = base;
+            if kv_bits_merged.is_some() {
+                use crate::gateway::ui_server::local_models::TURBOQUANT_MAX_CONTEXT_TOKENS;
+                let cap = TURBOQUANT_MAX_CONTEXT_TOKENS as usize;
+                let max_prompt_for_budget = cap.saturating_sub(max_new_tokens).max(512);
+                if max_pt > max_prompt_for_budget {
+                    tracing::info!(
+                        "[local-mlx-native] TurboQuant {}k context: clamping max_prompt_tokens {} → {} (max_new_tokens={}; prompt+decode ≤ {} tokens)",
+                        TURBOQUANT_MAX_CONTEXT_TOKENS / 1024,
+                        max_pt,
+                        max_prompt_for_budget,
+                        max_new_tokens,
+                        cap
+                    );
+                    max_pt = max_prompt_for_budget;
+                }
+            }
+            max_pt
+        }
+        #[cfg(not(feature = "local-mlx-turboquant"))]
+        {
+            base
+        }
+    };
 
     if prompt.len() > max_prompt_tokens {
         let drop = prompt.len() - max_prompt_tokens;
@@ -321,15 +387,81 @@ fn generate_with_cache(
         &prompt[..prompt.len().min(8)],
         &prompt[prompt.len().saturating_sub(8)..]
     );
+    #[cfg(feature = "local-mlx-turboquant")]
+    let tq_mem = kv_bits_merged.is_some();
+    #[cfg(not(feature = "local-mlx-turboquant"))]
+    let tq_mem = false;
+    log_local_mlx_memory_estimates(&model.args, prompt.len(), max_new_tokens, None, tq_mem);
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
     // Pre-populate cache with `Some(...)` per layer. Otherwise Qwen3Model
     // auto-fills the vec with `None` slots, and Attention's `if let Some(cache)`
     // takes the no-cache branch for every step — KV state never accumulates,
     // and decode after the first token degenerates into a fixed-point loop.
-    let mut cache: Vec<Option<ConcatKeyValueCache>> = (0..n_layers)
-        .map(|_| Some(ConcatKeyValueCache::new()))
-        .collect();
+    #[cfg(feature = "local-mlx-turboquant")]
+    let mut cache: Vec<Option<Qwen3LayerKv>> = if let Some(bits) = kv_bits_merged {
+        let raw = bits.clamp(2, 4);
+        // turboquant-rs `QuantizedKVCache` / `quantize_with_qjl` only accepts **total** bit
+        // budget **3** (TQ3) or **4** (TQ4). `2` is invalid → map to [`DEFAULT_TURBOQUANT_KV_TOTAL_BITS`] (TQ3).
+        let tq_total_bits = if raw == 2 {
+            tracing::warn!(
+                "[local-mlx-native] kv_cache_bits=2 — turboquant-rs requires TQ3 (3) or TQ4 (4); using TQ3 ({})",
+                crate::gateway::ui_server::local_models::DEFAULT_TURBOQUANT_KV_TOTAL_BITS
+            );
+            crate::gateway::ui_server::local_models::DEFAULT_TURBOQUANT_KV_TOTAL_BITS
+        } else {
+            raw
+        };
+        tracing::info!(
+            "[local-mlx-native] KV cache: TurboQuant TQ{tq_total_bits} (turboquant-rs; requested={}; {}k context window)",
+            raw,
+            crate::gateway::ui_server::local_models::TURBOQUANT_MAX_CONTEXT_TOKENS / 1024
+        );
+        if prompt.len() > 256 {
+            tracing::warn!(
+                "[local-mlx-native] TurboQuant attention is **CPU**, roughly O(prompt_len² × layers × heads) per forward — \
+                 prompt_len={} can stall **minutes**. Lower `max_prompt_tokens` in ~/.senclaw/local_models/settings.json for snappier replies, \
+                 or omit `kv_cache_bits` for fast FP16 KV on GPU.",
+                prompt.len()
+            );
+        }
+        let ma = &model.args;
+        let config = TurboQuantConfig::new(tq_total_bits, ma.head_dim as usize)
+            .map_err(|e| anyhow::anyhow!("TurboQuantConfig: {e:?}"))?
+            .with_seed(42u64);
+        let n_virt = (ma.num_hidden_layers as usize) * (ma.num_key_value_heads as usize);
+        let inner = Arc::new(Mutex::new(QuantizedKVCache::new(
+            config,
+            n_virt,
+            0xC0FFEE_u64,
+        )));
+        (0..n_layers)
+            .map(|li| {
+                Some(Qwen3LayerKv::TurboQuant(TurboQuantKeyValueCache::new(
+                    Arc::clone(&inner),
+                    li,
+                    ma.num_key_value_heads,
+                )))
+            })
+            .collect()
+    } else {
+        (0..n_layers)
+            .map(|_| Some(Qwen3LayerKv::Concat(ConcatKeyValueCache::new())))
+            .collect()
+    };
+
+    #[cfg(not(feature = "local-mlx-turboquant"))]
+    let mut cache: Vec<Option<Qwen3LayerKv>> = {
+        if kv_bits_merged.is_some() {
+            tracing::warn!(
+                "[local-mlx-native] kv_cache_bits={:?} ignored — rebuild with `--features local-mlx-turboquant`",
+                kv_bits_merged
+            );
+        }
+        (0..n_layers)
+            .map(|_| Some(ConcatKeyValueCache::new()))
+            .collect()
+    };
 
     // Qwen3 stop tokens.
     const QWEN3_IM_END: u32 = 151645;
@@ -418,11 +550,25 @@ fn generate_with_cache(
                 .decode(&slice, true)
                 .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
             if !text.is_empty() && tx.blocking_send(text).is_err() {
+                log_local_mlx_memory_estimates(
+                    &model.args,
+                    prompt.len(),
+                    max_new_tokens,
+                    Some(generated_count),
+                    tq_mem,
+                );
                 return Ok(());
             }
         }
     }
     if hit_stop {
+        log_local_mlx_memory_estimates(
+            &model.args,
+            prompt.len(),
+            max_new_tokens,
+            Some(generated_count),
+            tq_mem,
+        );
         return Ok(());
     }
     if !buffer.is_empty() {
@@ -436,7 +582,101 @@ fn generate_with_cache(
         }
     }
 
+    log_local_mlx_memory_estimates(
+        &model.args,
+        prompt.len(),
+        max_new_tokens,
+        Some(generated_count),
+        tq_mem,
+    );
     Ok(())
+}
+
+/// Heuristic unified-memory breakdown for Apple Silicon (GiB). Not RSS: MLX keeps pools,
+/// prefill can allocate large **S×S** scratch per attention layer; FP16 **KV** grows ~linearly with seq.
+fn log_local_mlx_memory_estimates(
+    ma: &super::mlx_lm::models::qwen3::ModelArgs,
+    prompt_tokens: usize,
+    max_new_tokens: usize,
+    generated_tokens: Option<usize>,
+    turboquant_kv: bool,
+) {
+    fn gib_u128(bytes: u128) -> f64 {
+        bytes as f64 / (1024.0_f64.powi(3))
+    }
+
+    let n_l = ma.num_hidden_layers as u128;
+    let n_kv = ma.num_key_value_heads as u128;
+    let n_h = ma.num_attention_heads as u128;
+    let hd = ma.head_dim as u128;
+    let s_pref = prompt_tokens as u128;
+    let seq_peak = prompt_tokens.saturating_add(max_new_tokens) as u128;
+
+    // Stored KV: per layer, FP16 K and V → 2 × (n_kv × seq × head_dim) elems × 2 bytes
+    let kv_peak_bytes = n_l * 2u128 * n_kv * seq_peak * hd * 2u128;
+
+    // Naive attention scores [..., heads, S, S] in f32 — kernels often avoid full materialization.
+    let attn_layer_bytes = n_h * s_pref * s_pref * 4u128;
+    let attn_all_layers_naive = attn_layer_bytes.saturating_mul(n_l);
+
+    tracing::info!(
+        "[local-mlx-native][mem] model hidden={} layers={} attn_heads={} kv_heads={} head_dim={} vocab={}",
+        ma.hidden_size,
+        ma.num_hidden_layers,
+        ma.num_attention_heads,
+        ma.num_key_value_heads,
+        ma.head_dim,
+        ma.vocab_size
+    );
+    tracing::info!(
+        "[local-mlx-native][mem] run budget max_new_tokens={} | seq_peak≈{} (= prompt + max decode)",
+        max_new_tokens,
+        seq_peak
+    );
+    if turboquant_kv {
+        // TQ3 ≈4× smaller than FP16 KV for the same seq (see turboquant-rs compression tests); heuristic only.
+        const TQ3_KV_VS_FP16: u128 = 4;
+        let kv_tq_heuristic = kv_peak_bytes / TQ3_KV_VS_FP16;
+        tracing::info!(
+            "[local-mlx-native][mem] KV TurboQuant TQ3 (heuristic ≈ FP16/{TQ3_KV_VS_FP16}): ≈{:.3} GiB peak — **not** FP16 concat; FP16 line below is SDPA-only reference",
+            gib_u128(kv_tq_heuristic)
+        );
+    }
+    tracing::info!(
+        "[local-mlx-native][mem] KV FP16 reference (if this were concat SDPA path): ≈{:.3} GiB",
+        gib_u128(kv_peak_bytes)
+    );
+    tracing::info!(
+        "[local-mlx-native][mem] prefill attention S×S f32 (naive matmul upper bound): ≈{:.3} GiB/layer at prompt_tokens={}, ×{} layers ≈{:.2} GiB if fully materialized — often **far less** with flash/sdpa; long prompts spike Activity Monitor anyway",
+        gib_u128(attn_layer_bytes),
+        prompt_tokens,
+        ma.num_hidden_layers,
+        gib_u128(attn_all_layers_naive)
+    );
+    tracing::info!(
+        "[local-mlx-native][mem] activations: prefill workspace ~S² per layer + transient tensors; lower max_prompt_tokens / TurboQuant cap on max_new to shrink CPU time and peak alloc"
+    );
+
+    if let Some(gen) = generated_tokens {
+        let final_seq = (prompt_tokens + gen) as u128;
+        let kv_final = n_l * 2u128 * n_kv * final_seq * hd * 2u128;
+        if turboquant_kv {
+            tracing::info!(
+                "[local-mlx-native][mem] done: new_tokens={} final_seq≈{} | KV TQ3 heuristic ≈{:.3} GiB | FP16 ref ≈{:.3} GiB",
+                gen,
+                prompt_tokens + gen,
+                gib_u128(kv_final / 4),
+                gib_u128(kv_final)
+            );
+        } else {
+            tracing::info!(
+                "[local-mlx-native][mem] done: new_tokens={} final_seq≈{} | KV FP16 ≈{:.3} GiB",
+                gen,
+                prompt_tokens + gen,
+                gib_u128(kv_final)
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -510,6 +750,17 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
         }
         shard_files.push(single);
     }
+
+    let disk_bytes: u64 = shard_files
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    tracing::info!(
+        "[local-mlx-native][mem] safetensors on disk ≈ {:.3} GiB ({} file(s)); loaded VRAM/UM tends to track this for 4-bit + overhead",
+        disk_bytes as f64 / (1024.0_f64.powi(3)),
+        shard_files.len()
+    );
 
     // Custom safetensors load with .weight → .inner.weight remap for
     // QuantizedLinear / QuantizedEmbedding slots. Without this, the packed
