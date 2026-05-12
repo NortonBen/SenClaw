@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::agent::dispatch_bridge::{DispatchBridge, DispatchTask, DispatchTaskStatus};
+use crate::agent::dispatch_bridge::{traits::DispatchBridgeApi, DispatchBridge, DispatchTask, DispatchTaskStatus};
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::{
@@ -367,6 +367,25 @@ impl CoworkManager {
                     None
                 };
 
+                // Get file changes and verification result from dispatch task
+                let artifacts_json = if let Some(ref bridge) = *self.dispatch_bridge.lock().unwrap() {
+                    if let Some(dispatch_task) = bridge.get_parents().iter()
+                        .flat_map(|p| p.tasks.iter())
+                        .find(|t| t.id == dispatch_task_id)
+                    {
+                        // Serialize file changes as JSON
+                        if !dispatch_task.file_changes.is_empty() {
+                            Some(serde_json::to_string(&dispatch_task.file_changes).unwrap_or_default())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 self.fire_task_result(TaskResultEvent {
                     task_id: cowork_task_id.clone(),
                     workspace_id: workspace_id.clone(),
@@ -374,7 +393,7 @@ impl CoworkManager {
                     input_summary: Some(task_label.to_string()),
                     result_output: result_opt.map(|s| s.to_string()),
                     references: None,
-                    artifacts: None,
+                    artifacts: artifacts_json,
                     completed_at: Some(now.clone()),
                     output_validation,
                 });
@@ -1278,6 +1297,9 @@ impl CoworkManager {
                         completed_at: None,
                         is_virtual: false,
                         persona_name: None,
+                        checklist: vec![],
+                        file_changes: vec![],
+                        verification_result: None,
                     }
                 })
                 .collect();

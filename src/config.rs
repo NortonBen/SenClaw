@@ -74,6 +74,8 @@ pub struct PathsConfig {
     pub marketplace_state_path: PathBuf,
     /// Marketplace git clones directory
     pub marketplace_clones_dir: PathBuf,
+    /// Local model storage (MLX weights, tokenizers, configs).
+    pub local_models_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,6 +291,10 @@ impl Config {
                 marketplace_clones_dir: env_path(
                     "SENCLAW_MARKETPLACE_CLONES_DIR",
                     senclaw_home.join("marketplace"),
+                ),
+                local_models_dir: env_path(
+                    "SENCLAW_LOCAL_MODELS_DIR",
+                    senclaw_home.join("local-models"),
                 ),
             },
             memory: MemoryConfig {

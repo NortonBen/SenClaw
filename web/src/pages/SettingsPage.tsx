@@ -9,6 +9,7 @@ import {
   TeamOutlined,
   FilterOutlined,
   DatabaseOutlined,
+  CloudDownloadOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -20,6 +21,7 @@ import { GroupSettings } from '../components/settings/GroupSettings';
 import { LLMSettings } from '../components/settings/LLMSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
 import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
+import { LocalModelsSettings } from '../components/settings/LocalModelsSettings';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -31,7 +33,8 @@ type SettingsSection =
   | 'groups'
   | 'agents'
   | 'llm'
-  | 'embedding';
+  | 'embedding'
+  | 'local-models';
 
 export const SettingsPage: React.FC = () => {
   const { ws } = useAppContext();
@@ -53,6 +56,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'agents', icon: <UserOutlined />, label: 'Agents' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
+      { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
     ],
     []
   );
@@ -100,6 +104,8 @@ export const SettingsPage: React.FC = () => {
         return <LLMSettings />;
       case 'embedding':
         return <EmbeddingSettings />;
+      case 'local-models':
+        return <LocalModelsSettings />;
       default:
         return null;
     }

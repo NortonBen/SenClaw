@@ -58,6 +58,9 @@ fn resume_hint_renders_active_parents_only() {
                 completed_at: None,
                 is_virtual: false,
                 persona_name: None,
+                checklist: vec![],
+                file_changes: vec![],
+                verification_result: None,
             }],
         },
         DispatchParent {
@@ -117,6 +120,9 @@ fn make_task(id: &str, label: &str, jid: &str) -> DispatchTask {
         completed_at: None,
         is_virtual: false,
         persona_name: None,
+        checklist: vec![],
+        file_changes: vec![],
+        verification_result: None,
     }
 }
 

@@ -35,6 +35,48 @@ impl DispatchTaskStatus {
     }
 }
 
+/// Checklist item for task verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecklistItem {
+    pub id: String,
+    pub description: String,
+    pub status: String, // "pending" | "completed" | "failed"
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub verification_note: Option<String>,
+}
+
+/// File change tracking for task verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChange {
+    pub path: String,
+    pub change_type: String, // "created" | "modified" | "deleted"
+    #[serde(default)]
+    pub lines_added: Option<i64>,
+    #[serde(default)]
+    pub lines_removed: Option<i64>,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Verification result for a task or parent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerificationResult {
+    pub verified: bool,
+    #[serde(default)]
+    pub missing_items: Vec<String>,
+    #[serde(default)]
+    pub failed_items: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// One subtask inside a dispatch parent group.
 /// Wire format mirrors TS `DispatchTask` so the Web Agent Console can render
 /// agent names (incl. virtual/persona tasks) without a translation layer.
@@ -64,6 +106,15 @@ pub struct DispatchTask {
     /// Persona name when `is_virtual` is true.
     #[serde(default)]
     pub persona_name: Option<String>,
+    /// Checklist items for task verification.
+    #[serde(default)]
+    pub checklist: Vec<ChecklistItem>,
+    /// File changes tracked during task execution.
+    #[serde(default)]
+    pub file_changes: Vec<FileChange>,
+    /// Verification result from checklist verification.
+    #[serde(default)]
+    pub verification_result: Option<VerificationResult>,
 }
 
 /// Parent dispatch (one `dispatch_task` MCP call → N subtasks).

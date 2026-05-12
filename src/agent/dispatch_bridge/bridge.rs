@@ -10,8 +10,9 @@ use super::dag::{build_augmented_prompt, is_ready};
 use super::locks::{acquire_lock, lock_path_for};
 use super::types::{
     AdminActivityCallback, DispatchAgent, DispatchParent, DispatchState, DispatchTask,
-    DispatchTaskStatus,
+    DispatchTaskStatus, FileChange,
 };
+use super::verification::{verify_parent_checklist, verify_task_checklist};
 use crate::agent::persona_registry::PersonaRegistry;
 use crate::agent::virtual_worker_pool::VirtualWorkerPool;
 use crate::types::GroupBinding;
@@ -504,6 +505,8 @@ impl DispatchBridge {
         let mut completed_admin: Option<String> = None;
         let mut task_label = String::new();
         let mut parent_goal = String::new();
+        let mut task_clone: Option<DispatchTask> = None;
+        let mut parent_clone: Option<DispatchParent> = None;
         let _ = self.modify_state(|state| {
             for parent in &mut state.parents {
                 if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
@@ -513,14 +516,58 @@ impl DispatchBridge {
                     task_admin = Some(parent.admin_folder.clone());
                     task_label = task.label.clone();
                     parent_goal = parent.goal.clone();
-                    task.status = DispatchTaskStatus::Done;
-                    task.result = Some(text.to_string());
-                    task.completed_at = Some(now.clone());
+                    
+                    // Run per-task verification BEFORE marking as done
+                    let verification = verify_task_checklist(task);
+                    
+                    // Only mark as done if verification passes, otherwise mark as error
+                    if verification.verified {
+                        task.status = DispatchTaskStatus::Done;
+                        task.completed_at = Some(now.clone());
+                        task.result = Some(text.to_string());
+                        tracing::info!(
+                            "[DispatchBridge] Task {} verification passed, marking as done",
+                            task_id
+                        );
+                    } else {
+                        task.status = DispatchTaskStatus::Error;
+                        task.completed_at = Some(now.clone());
+                        // Add verification note to result
+                        let verification_note = verification.note.as_deref().unwrap_or("Verification failed");
+                        let enhanced_result = format!(
+                            "{}\n\n❌ VERIFICATION FAILED:\n{}\n\nMissing items: {}\nFailed items: {}",
+                            text,
+                            verification_note,
+                            verification.missing_items.join(", "),
+                            verification.failed_items.join(", ")
+                        );
+                        task.result = Some(enhanced_result);
+                        tracing::warn!(
+                            "[DispatchBridge] Task {} verification failed, marking as error: {}",
+                            task_id,
+                            verification_note
+                        );
+                    }
+                    
+                    task.verification_result = Some(verification);
+                    
+                    task_clone = Some(task.clone());
+                    
                     if parent.tasks.iter().all(|t| t.status.is_terminal()) {
                         parent.status = "done".into();
                         parent.completed_at = Some(now.clone());
                         completed_admin = Some(parent.admin_folder.clone());
+                        
+                        // Run parent-level verification
+                        let parent_verification = verify_parent_checklist(parent);
+                        // Store verification result in a comment or log (for now)
+                        tracing::info!(
+                            "[DispatchBridge] Parent verification: verified={}, note={}",
+                            parent_verification.verified,
+                            parent_verification.note.as_deref().unwrap_or("no note")
+                        );
                     }
+                    parent_clone = Some(parent.clone());
                     return;
                 }
             }
@@ -599,6 +646,49 @@ impl DispatchBridge {
                 self.fire_revert_workspace(j);
             }
         }
+    }
+
+    /// Set file changes for a task. Called by AgentPool when tracking file modifications.
+    pub fn set_task_file_changes(&self, task_id: &str, file_changes: Vec<FileChange>) {
+        let count = file_changes.len();
+        let _ = self.modify_state(|state| {
+            for parent in &mut state.parents {
+                if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.file_changes = file_changes;
+                    tracing::info!(
+                        "[DispatchBridge] Set {} file changes for task {}",
+                        count,
+                        task_id
+                    );
+                    return;
+                }
+            }
+        });
+    }
+
+    /// Add a single file change to a task. Useful for incremental tracking.
+    pub fn add_file_change(&self, task_id: &str, path: &str, change_type: &str) {
+        let change = FileChange {
+            path: path.to_string(),
+            change_type: change_type.to_string(),
+            lines_added: None,
+            lines_removed: None,
+            summary: None,
+        };
+        let _ = self.modify_state(|state| {
+            for parent in &mut state.parents {
+                if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.file_changes.push(change);
+                    tracing::info!(
+                        "[DispatchBridge] Added file change to task {}: {} ({})",
+                        task_id,
+                        path,
+                        change_type
+                    );
+                    return;
+                }
+            }
+        });
     }
 
     /// Find the earliest `processing` task owned by `jid` (oldest `started_at`)

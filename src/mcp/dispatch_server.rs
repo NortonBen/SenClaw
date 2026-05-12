@@ -399,7 +399,7 @@ impl DispatchServer {
         let timeout = timeout_seconds.unwrap_or(900);
 
         // Fill and validate labels
-        let mut normalized: Vec<(String, String, String, Vec<String>)> = Vec::new();
+        let mut normalized: Vec<(String, String, String, Vec<String>, Vec<ChecklistItemInput>)> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
         let mut label_set = HashSet::new();
 
@@ -419,11 +419,12 @@ impl DispatchServer {
                 t.agent_name.clone(),
                 t.prompt.clone(),
                 t.depends_on.clone(),
+                t.checklist.clone(),
             ));
         }
 
         // Validate dependsOn references
-        for (label, _, _, deps) in &normalized {
+        for (label, _, _, deps, _) in &normalized {
             for dep in deps {
                 if !label_set.contains(dep) {
                     errors.push(format!(
@@ -447,7 +448,7 @@ impl DispatchServer {
         // DAG cycle detection
         let dag_input: Vec<(String, Vec<String>)> = normalized
             .iter()
-            .map(|(l, _, _, d)| (l.clone(), d.clone()))
+            .map(|(l, _, _, d, _)| (l.clone(), d.clone()))
             .collect();
         if let Some(cycle) = Self::detect_cycle(&dag_input) {
             return ToolResult::err(format!(
@@ -459,12 +460,15 @@ impl DispatchServer {
         let mut is_queued = false;
 
         self.modify_state(|s| {
+            use crate::agent::dispatch_bridge::types::ChecklistItem;
+            use crate::agent::dispatch_bridge::generate_checklist_from_prompt;
+            
             // Resolve agents
-            let mut resolved: Vec<(ResolvedAgent, String, String, Vec<String>)> = Vec::new();
-            for (label, agent_name, prompt, deps) in &normalized {
+            let mut resolved: Vec<(ResolvedAgent, String, String, Vec<String>, Vec<ChecklistItemInput>)> = Vec::new();
+            for (label, agent_name, prompt, deps, checklist) in &normalized {
                 match self.resolve_agent(s, agent_name) {
                     Some(agent) => {
-                        resolved.push((agent, label.clone(), prompt.clone(), deps.clone()));
+                        resolved.push((agent, label.clone(), prompt.clone(), deps.clone(), checklist.clone()));
                     }
                     None => {
                         errors.push(format!(
@@ -504,22 +508,40 @@ impl DispatchServer {
                 completed_at: None,
                 tasks: resolved
                     .iter()
-                    .map(|(agent, label, prompt, deps)| DispatchTask {
-                        id: Self::next_id(s, 'd'),
-                        label: label.clone(),
-                        agent_id: agent.id.clone(),
-                        agent_jid: agent.jid.clone(),
-                        depends_on: deps.clone(),
-                        status: DispatchTaskStatus::Registered,
-                        prompt: prompt.clone(),
-                        result: None,
-                        timeout_seconds: timeout,
-                        timeout_at: None,
-                        created_at: now.clone(),
-                        started_at: None,
-                        completed_at: None,
-                        is_virtual: agent.is_virtual,
-                        persona_name: agent.persona_name.clone(),
+                    .map(|(agent, label, prompt, deps, checklist_inputs)| {
+                        // Convert checklist inputs to ChecklistItem, or auto-generate from prompt
+                        let checklist: Vec<ChecklistItem> = if checklist_inputs.is_empty() {
+                            generate_checklist_from_prompt(prompt)
+                        } else {
+                            checklist_inputs.iter().map(|ci| ChecklistItem {
+                                id: ci.id.clone(),
+                                description: ci.description.clone(),
+                                status: "pending".to_string(),
+                                depends_on: ci.depends_on.clone(),
+                                verification_note: None,
+                            }).collect()
+                        };
+                        
+                        DispatchTask {
+                            id: Self::next_id(s, 'd'),
+                            label: label.clone(),
+                            agent_id: agent.id.clone(),
+                            agent_jid: agent.jid.clone(),
+                            depends_on: deps.clone(),
+                            status: DispatchTaskStatus::Registered,
+                            prompt: prompt.clone(),
+                            result: None,
+                            timeout_seconds: timeout,
+                            timeout_at: None,
+                            created_at: now.clone(),
+                            started_at: None,
+                            completed_at: None,
+                            is_virtual: agent.is_virtual,
+                            persona_name: agent.persona_name.clone(),
+                            checklist,
+                            file_changes: Vec::new(),
+                            verification_result: None,
+                        }
                     })
                     .collect(),
             };
@@ -539,13 +561,18 @@ impl DispatchServer {
 
         let task_lines = normalized
             .iter()
-            .map(|(label, agent_name, _, deps)| {
+            .map(|(label, agent_name, _, deps, checklist)| {
                 let deps_str = if deps.is_empty() {
                     ", no deps".into()
                 } else {
                     format!(", depends on: [{}]", deps.join(", "))
                 };
-                format!("  - \"{label}\" (agent: {agent_name}{deps_str})")
+                let checklist_str = if checklist.is_empty() {
+                    "".into()
+                } else {
+                    format!(", {} checklist items", checklist.len())
+                };
+                format!("  - \"{label}\" (agent: {agent_name}{deps_str}{checklist_str})")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -794,6 +821,228 @@ impl DispatchServer {
         sections.push("**All dispatch tasks completed.**".into());
         ToolResult::ok(sections.join("\n\n"))
     }
+
+    // ===== Checklist management methods =====
+
+    pub fn add_checklist_items(
+        &self,
+        parent_id: &str,
+        task_label: &str,
+        items: &[ChecklistItemInput],
+    ) -> ToolResult {
+        use crate::agent::dispatch_bridge::types::ChecklistItem;
+        
+        let mut found = false;
+        let mut error = String::new();
+        
+        self.modify_state(|state| {
+            for parent in &mut state.parents {
+                if parent.id != parent_id {
+                    continue;
+                }
+                for task in &mut parent.tasks {
+                    if task.label != task_label {
+                        continue;
+                    }
+                    found = true;
+                    for item in items {
+                        task.checklist.push(ChecklistItem {
+                            id: item.id.clone(),
+                            description: item.description.clone(),
+                            status: "pending".to_string(),
+                            depends_on: item.depends_on.clone(),
+                            verification_note: None,
+                        });
+                    }
+                    return;
+                }
+            }
+        });
+        
+        if !found {
+            return ToolResult::err(format!(
+                "Task not found: parent_id={}, task_label={}",
+                parent_id, task_label
+            ));
+        }
+        
+        ToolResult::ok(format!(
+            "Added {} checklist item(s) to task '{}' in parent '{}'",
+            items.len(),
+            task_label,
+            parent_id
+        ))
+    }
+
+    pub fn verify_task_checklist(&self, parent_id: &str, task_label: &str) -> ToolResult {
+        use crate::agent::dispatch_bridge::verify_task_checklist;
+        
+        let state = self.read_state();
+        let task = state
+            .parents
+            .iter()
+            .find(|p| p.id == parent_id)
+            .and_then(|p| p.tasks.iter().find(|t| t.label == task_label));
+        
+        let task = match task {
+            Some(t) => t,
+            None => {
+                return ToolResult::err(format!(
+                    "Task not found: parent_id={}, task_label={}",
+                    parent_id, task_label
+                ))
+            }
+        };
+        
+        let verification = verify_task_checklist(task);
+        
+        let mut report = format!(
+            "### Verification Report for Task '{}'\n\n",
+            task_label
+        );
+        report.push_str(&format!("**Verified:** {}\n\n", verification.verified));
+        
+        if let Some(note) = &verification.note {
+            report.push_str(&format!("**Note:** {}\n\n", note));
+        }
+        
+        if !verification.missing_items.is_empty() {
+            report.push_str("**Missing Items:**\n");
+            for item in &verification.missing_items {
+                report.push_str(&format!("- {}\n", item));
+            }
+            report.push('\n');
+        }
+        
+        if !verification.failed_items.is_empty() {
+            report.push_str("**Failed Items:**\n");
+            for item in &verification.failed_items {
+                report.push_str(&format!("- {}\n", item));
+            }
+            report.push('\n');
+        }
+        
+        if !verification.warnings.is_empty() {
+            report.push_str("**Warnings:**\n");
+            for warning in &verification.warnings {
+                report.push_str(&format!("- {}\n", warning));
+            }
+            report.push('\n');
+        }
+        
+        if verification.verified {
+            report.push_str("✅ All checklist items verified successfully.");
+        } else {
+            report.push_str("❌ Verification failed - see missing/failed items above.");
+        }
+        
+        ToolResult::ok(report)
+    }
+
+    pub fn get_file_changes(&self, parent_id: &str, task_label: &str) -> ToolResult {
+        let state = self.read_state();
+        let task = state
+            .parents
+            .iter()
+            .find(|p| p.id == parent_id)
+            .and_then(|p| p.tasks.iter().find(|t| t.label == task_label));
+        
+        let task = match task {
+            Some(t) => t,
+            None => {
+                return ToolResult::err(format!(
+                    "Task not found: parent_id={}, task_label={}",
+                    parent_id, task_label
+                ))
+            }
+        };
+        
+        if task.file_changes.is_empty() {
+            return ToolResult::ok(format!(
+                "No file changes tracked for task '{}'.\n\nNote: File tracking requires FileTracker integration.",
+                task_label
+            ));
+        }
+        
+        let mut report = format!("### File Changes for Task '{}'\n\n", task_label);
+        report.push_str(&format!("Total changes: {}\n\n", task.file_changes.len()));
+        
+        for change in &task.file_changes {
+            report.push_str(&format!(
+                "- **{}**: {} ({})\n",
+                change.path, change.change_type,
+                change.summary.as_deref().unwrap_or("no summary")
+            ));
+            if let Some(lines_added) = change.lines_added {
+                report.push_str(&format!("  - Lines added: {}\n", lines_added));
+            }
+            if let Some(lines_removed) = change.lines_removed {
+                report.push_str(&format!("  - Lines removed: {}\n", lines_removed));
+            }
+        }
+        
+        ToolResult::ok(report)
+    }
+
+    pub fn update_checklist_status(
+        &self,
+        parent_id: &str,
+        task_label: &str,
+        item_id: &str,
+        status: &str,
+    ) -> ToolResult {
+        let valid_statuses = ["pending", "completed", "failed"];
+        if !valid_statuses.contains(&status) {
+            return ToolResult::err(format!(
+                "Invalid status '{}'. Valid statuses: {}",
+                status,
+                valid_statuses.join(", ")
+            ));
+        }
+        
+        let mut found = false;
+        let mut item_found = false;
+        
+        self.modify_state(|state| {
+            for parent in &mut state.parents {
+                if parent.id != parent_id {
+                    continue;
+                }
+                for task in &mut parent.tasks {
+                    if task.label != task_label {
+                        continue;
+                    }
+                    found = true;
+                    for item in &mut task.checklist {
+                        if item.id == item_id {
+                            item_found = true;
+                            item.status = status.to_string();
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        
+        if !found {
+            return ToolResult::err(format!(
+                "Task not found: parent_id={}, task_label={}",
+                parent_id, task_label
+            ));
+        }
+        
+        if !item_found {
+            return ToolResult::err(format!(
+                "Checklist item not found: item_id={}",
+                item_id
+            ));
+        }
+        
+        ToolResult::ok(format!(
+            "Updated checklist item '{}' status to '{}' in task '{}'",
+            item_id, status, task_label
+        ))
+    }
 }
 
 // ===== Helper types =====
@@ -814,6 +1063,16 @@ pub struct DispatchTaskInput {
     pub prompt: String,
     #[serde(default)]
     #[serde(rename = "dependsOn")]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub checklist: Vec<ChecklistItemInput>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct ChecklistItemInput {
+    pub id: String,
+    pub description: String,
+    #[serde(default)]
     pub depends_on: Vec<String>,
 }
 
@@ -846,6 +1105,42 @@ struct DispatchAllTasksParams {
     #[serde(default)]
     #[serde(rename = "timeoutSeconds")]
     timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct AddChecklistItemsParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
+    #[serde(rename = "taskLabel")]
+    task_label: String,
+    pub items: Vec<ChecklistItemInput>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct VerifyTaskChecklistParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
+    #[serde(rename = "taskLabel")]
+    task_label: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct GetFileChangesParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
+    #[serde(rename = "taskLabel")]
+    task_label: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct UpdateChecklistStatusParams {
+    #[serde(rename = "parentId")]
+    parent_id: String,
+    #[serde(rename = "taskLabel")]
+    task_label: String,
+    #[serde(rename = "itemId")]
+    item_id: String,
+    pub status: String, // "pending" | "completed" | "failed"
 }
 
 #[derive(Clone)]
@@ -952,6 +1247,62 @@ impl McpDispatchServer {
             .await
             .content
     }
+
+    #[rmcp::tool(
+        description = "Add checklist items to a dispatch task. Items will be verified when the task completes."
+    )]
+    fn add_checklist_items(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AddChecklistItemsParams,
+        >,
+    ) -> String {
+        self.inner()
+            .add_checklist_items(&p.parent_id, &p.task_label, &p.items)
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Verify a task's checklist against its result and file changes. Returns verification report."
+    )]
+    fn verify_task_checklist(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            VerifyTaskChecklistParams,
+        >,
+    ) -> String {
+        self.inner()
+            .verify_task_checklist(&p.parent_id, &p.task_label)
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Get file changes tracked for a task. Shows what files were created/modified/deleted."
+    )]
+    fn get_file_changes(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            GetFileChangesParams,
+        >,
+    ) -> String {
+        self.inner()
+            .get_file_changes(&p.parent_id, &p.task_label)
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Update checklist item status (pending/completed/failed). Use this when manual verification is needed."
+    )]
+    fn update_checklist_status(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            UpdateChecklistStatusParams,
+        >,
+    ) -> String {
+        self.inner()
+            .update_checklist_status(&p.parent_id, &p.task_label, &p.item_id, &p.status)
+            .content
+    }
 }
 
 /// Start the dispatch MCP server over stdio.
@@ -1005,6 +1356,9 @@ mod tests {
             completed_at: None,
             is_virtual: false,
             persona_name: None,
+            checklist: vec![],
+            file_changes: vec![],
+            verification_result: None,
         }
     }
 

@@ -80,4 +80,12 @@ impl DispatchBridgeApi for DispatchBridge {
             "Cancelled: admin agent stopped",
         )
     }
+
+    fn set_task_file_changes(&self, task_id: &str, file_changes: Vec<super::types::FileChange>) {
+        self.set_task_file_changes(task_id, file_changes);
+    }
+
+    fn add_file_change(&self, task_id: &str, path: &str, change_type: &str) {
+        self.add_file_change(task_id, path, change_type);
+    }
 }

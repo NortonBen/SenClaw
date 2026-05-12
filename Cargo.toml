@@ -138,6 +138,17 @@ tokenizers = { version = "0.21", optional = true, default-features = false, feat
 # Tokio utilities (CancellationToken for zen-core abort)
 tokio-util = { version = "0.7", features = ["rt"] }
 
+# Native MLX inference on Apple Silicon (feature-gated; macOS-only build).
+# Enable via: cargo build --features local-mlx
+# `mlx-lm` / `mlx-lm-utils` are unpublished workspace crates in oxideai/mlx-rs;
+# we pull them via git, pinned to a tag matching mlx-rs 0.25.3.
+# All three crates must come from the same git workspace, otherwise cargo
+# pulls in a second copy of `mlx-rs` and the `Array` types fail to unify.
+mlx-rs        = { git = "https://github.com/oxideai/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"], optional = true }
+mlx-lm        = { git = "https://github.com/oxideai/mlx-rs", tag = "v0.25.3", optional = true }
+mlx-lm-utils  = { git = "https://github.com/oxideai/mlx-rs", tag = "v0.25.3", optional = true }
+turboquant-rs = { version = "0.4.1", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4.5"
@@ -151,6 +162,11 @@ tonic-build = "0.12"
 # Build with Apple Silicon Metal: cargo build --features local-embed-metal
 local-embed = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
 local-embed-metal = ["local-embed", "candle-core/metal"]
+
+# Native LLM inference via mlx-rs on Apple Silicon. Includes ConcatKeyValueCache path.
+local-mlx = ["dep:mlx-rs", "dep:mlx-lm", "dep:mlx-lm-utils"]
+# Opt-in KV-cache quantization (3-4 bit) via turboquant-rs. Long-context only.
+local-mlx-turboquant = ["local-mlx", "dep:turboquant-rs"]
 
 [profile.release]
 lto = "thin"

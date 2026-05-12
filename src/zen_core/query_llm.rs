@@ -66,6 +66,9 @@ pub async fn query_llm(
             )
             .await
         }
+        "local-mlx-native" => {
+            query_local_mlx_native(messages, system_prompt, tools, cancel, profile).await
+        }
         _ => {
             query_openai(
                 client,
@@ -110,8 +113,136 @@ fn resolve_adapter(provider: &str) -> &str {
     let lower = provider.to_lowercase();
     if lower.contains("anthropic") || lower.contains("claude") {
         "anthropic"
+    } else if lower == "local-mlx" || lower == "local-mlx-native" {
+        "local-mlx-native"
     } else {
         "openai"
+    }
+}
+
+// ============================================================================
+// Local MLX native adapter (in-process, Apple Silicon)
+// ============================================================================
+
+/// Run inference through the local mlx-rs engine. Text-only; tools/images
+/// are not supported in this path yet (returns an error if tools are passed).
+///
+/// Requires the `local-mlx` cargo feature. Without it, this arm returns an
+/// informative error so users see what to do instead of getting a wrong route.
+#[allow(unused_variables)]
+async fn query_local_mlx_native(
+    messages: &[Message],
+    system_prompt: &str,
+    tools: &[Arc<dyn Tool>],
+    cancel: &CancellationToken,
+    profile: &ModelProfile,
+) -> Result<Message> {
+    #[cfg(not(feature = "local-mlx"))]
+    {
+        bail!(
+            "local-mlx-native adapter requires the `local-mlx` cargo feature; \
+             rebuild with `cargo build --features local-mlx` (Apple Silicon + Metal toolchain)"
+        );
+    }
+
+    #[cfg(feature = "local-mlx")]
+    {
+        use crate::local_model::{
+            ChatMessage as LocalChatMessage, LocalModelRuntime, Role as LocalRole,
+        };
+        use crate::config::Config;
+
+        if !tools.is_empty() {
+            tracing::warn!(
+                "[local-mlx-native] ignoring {} tools — adapter is text-only for now",
+                tools.len()
+            );
+        }
+
+        let mut local_msgs: Vec<LocalChatMessage> = Vec::with_capacity(messages.len() + 1);
+        if !system_prompt.is_empty() {
+            local_msgs.push(LocalChatMessage {
+                role: LocalRole::System,
+                content: system_prompt.to_string(),
+            });
+        }
+        for m in messages {
+            let role = match m.message.role.as_str() {
+                "assistant" => LocalRole::Assistant,
+                "system" => LocalRole::System,
+                _ => LocalRole::User,
+            };
+            // Flatten content blocks: concatenate text blocks; reject tool blocks.
+            let mut content = String::new();
+            for block in &m.message.content {
+                match block {
+                    ContentBlock::Text { text } => content.push_str(text),
+                    ContentBlock::Thinking { .. } => {} // skip
+                    ContentBlock::ToolUse { name, .. } => {
+                        // Render past tool use as a human-readable note so the model
+                        // sees context but doesn't need to parse JSON tool-calls.
+                        content.push_str(&format!("\n[called tool: {name}]"));
+                    }
+                    ContentBlock::ToolResult { content: text, .. } => {
+                        content.push_str("\n[tool result: ");
+                        content.push_str(text);
+                        content.push(']');
+                    }
+                    ContentBlock::Image { .. } => {
+                        tracing::warn!("[local-mlx-native] dropping image block (unsupported)");
+                    }
+                }
+            }
+            if !content.is_empty() {
+                local_msgs.push(LocalChatMessage { role, content });
+            }
+        }
+
+        // Resolve model directory: <local_models_dir>/<model_name with '/' → '__'>
+        let cfg = Config::from_env();
+        let safe = profile.model_name.replace('/', "__");
+        let model_dir = cfg.paths.local_models_dir.join(safe);
+
+        // Pick up KV-cache settings (turboquant bit width) when the user opted in.
+        let kv_bits = crate::gateway::ui_server::local_models::load_settings_blocking(
+            &cfg.paths.local_models_dir,
+        )
+        .kv_cache_bits;
+        // Reuse a warm-loaded engine when one exists; otherwise create one
+        // AND insert it into the global registry so subsequent calls reuse it
+        // instead of leaking ~3 GB of unified memory per chat.
+        let engine = crate::gateway::ui_server::local_models::get_or_create_loaded_engine(
+            &profile.model_name,
+            &model_dir,
+            kv_bits,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+
+        let engine_clone = engine.clone();
+        let msgs_clone = local_msgs.clone();
+        let gen_handle = tokio::spawn(async move {
+            engine_clone.generate_stream(&msgs_clone, tx).await
+        });
+
+        let mut text_buf = String::new();
+        loop {
+            tokio::select! {
+                chunk = rx.recv() => match chunk {
+                    Some(c) => text_buf.push_str(&c),
+                    None => break, // sender dropped → generation done
+                },
+                _ = cancel.cancelled() => {
+                    gen_handle.abort();
+                    bail!("local-mlx-native: cancelled");
+                }
+            }
+        }
+        gen_handle
+            .await
+            .context("local-mlx-native: generation task panicked")??;
+        debug!("[local-mlx-native] generated {} chars", text_buf.len());
+
+        build_assistant_message(&text_buf, "", &[])
     }
 }
 

@@ -15,10 +15,13 @@
 pub mod bridge;
 pub mod bridge_api;
 pub mod dag;
+pub mod file_tracker;
 pub mod locks;
+pub mod report;
 pub mod resume;
 pub mod traits;
 pub mod types;
+pub mod verification;
 
 #[cfg(test)]
 mod tests;
@@ -29,12 +32,15 @@ pub use bridge::{
     WsNotifyCallback,
 };
 pub use dag::is_ready;
+pub use file_tracker::FileTracker;
+pub use report::{generate_actionable_next_steps, generate_parent_verification_report, generate_task_verification_report};
 pub use resume::build_dispatch_resume_hint;
 pub use traits::{DispatchBridgeApi, NoopDispatchBridge};
 pub use types::{
-    AdminActivityCallback, DispatchAgent, DispatchParent, DispatchState, DispatchTask,
-    DispatchTaskStatus,
+    AdminActivityCallback, ChecklistItem, DispatchAgent, DispatchParent, DispatchState,
+    DispatchTask, DispatchTaskStatus, FileChange, VerificationResult,
 };
+pub use verification::{generate_checklist_from_prompt, verify_parent_checklist, verify_task_checklist};
 
 // pub(crate) items re-exported for intra-crate use.
 pub(crate) use locks::{modify_state_file, read_state_file};

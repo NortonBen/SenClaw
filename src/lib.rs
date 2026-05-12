@@ -22,6 +22,7 @@ pub mod config;
 pub mod cowork;
 pub mod db;
 pub mod gateway;
+pub mod local_model;
 pub mod marketplace;
 pub mod mcp;
 pub mod memory;

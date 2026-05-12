@@ -29,6 +29,12 @@ use super::cowork::{
     cowork_ws_resource_delete,
 };
 use super::embedding_config::{embedding_config_get, embedding_config_save};
+use super::local_models::{
+    local_models_cancel, local_models_delete, local_models_download, local_models_list,
+    local_models_load, local_models_loaded_list, local_models_runtime,
+    local_models_settings_get, local_models_settings_put, local_models_status,
+    local_models_unload, local_models_use_as_llm,
+};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test, llm_config_update,
@@ -194,6 +200,24 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/llm-config/test", post(llm_config_test))
         .route("/api/llm-config/models", post(llm_config_fetch_models))
         .route("/api/llm-config/:id", delete(llm_config_delete).patch(llm_config_update))
+        // Local model management (MLX/HF download)
+        .route("/api/local-models", get(local_models_list))
+        .route("/api/local-models/runtime", get(local_models_runtime))
+        .route(
+            "/api/local-models/settings",
+            get(local_models_settings_get).put(local_models_settings_put),
+        )
+        .route(
+            "/api/local-models/:id/download",
+            post(local_models_download),
+        )
+        .route("/api/local-models/:id/status", get(local_models_status))
+        .route("/api/local-models/:id/cancel", post(local_models_cancel))
+        .route("/api/local-models/:id", delete(local_models_delete))
+        .route("/api/local-models/:id/load", post(local_models_load))
+        .route("/api/local-models/:id/unload", post(local_models_unload))
+        .route("/api/local-models/loaded", get(local_models_loaded_list))
+        .route("/api/local-models/:id/use-as-llm", post(local_models_use_as_llm))
         // Embedding provider config
         .route(
             "/api/embedding-config",
