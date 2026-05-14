@@ -208,6 +208,71 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     })
 }
 
+/// Current process RSS (MiB) via macOS mach task_info. Returns 0 on failure or non-macOS.
+fn rss_mib() -> f64 {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        #[repr(C)]
+        struct MachTaskBasicInfo {
+            virtual_size: u64,
+            resident_size: u64,
+            resident_size_max: u64,
+            user_time: libc::time_value_t,
+            system_time: libc::time_value_t,
+            policy: i32,
+            suspend_count: i32,
+        }
+        const MACH_TASK_BASIC_INFO: libc::c_int = 20;
+        const MACH_TASK_BASIC_INFO_COUNT: u32 = 12;
+
+        let mut info: MachTaskBasicInfo = std::mem::zeroed();
+        let mut count: u32 = MACH_TASK_BASIC_INFO_COUNT;
+        let kr = libc::task_info(
+            libc::mach_task_self(),
+            MACH_TASK_BASIC_INFO as _,
+            &mut info as *mut _ as _,
+            &mut count,
+        );
+        if kr == 0 {
+            info.resident_size as f64 / (1024.0 * 1024.0)
+        } else {
+            0.0
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0.0
+    }
+}
+
+/// MLX Metal allocator stats (active, cache, peak) in MiB.
+///
+/// - **active**: bytes currently referenced by live MLX arrays (what "costs" RAM right now)
+/// - **cache**: buffers freed by MLX but held in its pool (immediately reusable, counts against
+///   Activity Monitor "Memory" but not actually leaking)
+/// - **peak**: high-water mark since process start (or last `mlx_reset_peak_memory`)
+///
+/// These map directly to what Activity Monitor shows as the process's GPU/Metal memory.
+#[cfg(feature = "local-mlx")]
+fn mlx_mem_mib() -> (f64, f64, f64) {
+    unsafe {
+        let mut active: usize = 0;
+        let mut cache: usize = 0;
+        let mut peak: usize = 0;
+        mlx_sys::mlx_get_active_memory(&mut active);
+        mlx_sys::mlx_get_cache_memory(&mut cache);
+        mlx_sys::mlx_get_peak_memory(&mut peak);
+        const M: f64 = 1024.0 * 1024.0;
+        (active as f64 / M, cache as f64 / M, peak as f64 / M)
+    }
+}
+
+#[cfg(not(feature = "local-mlx"))]
+#[allow(dead_code)]
+fn mlx_mem_mib() -> (f64, f64, f64) {
+    (0.0, 0.0, 0.0)
+}
+
 /// Synchronous generation entry. Runs on a blocking worker, holding the
 /// engine's `loaded` mutex for the duration of one inference call.
 fn generate_with_cache(
@@ -485,20 +550,40 @@ fn generate_with_cache(
     let mut generated_count = 0usize;
     let temperature: f32 = 0.0;
 
+    let rss_start = rss_mib();
+    let (mlx_a0, mlx_c0, _) = mlx_mem_mib();
+    tracing::info!(
+        "[local-mlx-native][mem] generate start — rss={:.0} MiB | mlx active={:.0} cache={:.0} MiB (prompt={} tokens, max_new={})",
+        rss_start, mlx_a0, mlx_c0, prompt.len(), max_new_tokens
+    );
+
     // Prefill — feed full prompt, take logits at last position.
-    let prefill_input = ModelInput {
-        inputs: &prompt_tokens,
-        mask: None,
-        cache: &mut cache,
+    let mut next_token = {
+        let prefill_input = ModelInput {
+            inputs: &prompt_tokens,
+            mask: None,
+            cache: &mut cache,
+        };
+        let logits = model
+            .forward(prefill_input)
+            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
+        // Only the last-position slice is needed for sampling. Sample first,
+        // then drop logits ([1, prompt_len, vocab]) and last_logits immediately
+        // rather than holding ~450 MB through the entire decode loop.
+        let t = sample(&logits.index((.., -1, ..)), temperature)
+            .map_err(|e| anyhow::anyhow!("prefill sample failed: {e:?}"))?;
+        // logits and last_logits dropped here — frees [1, prompt_len, vocab]
+        t
     };
-    let logits = model
-        .forward(prefill_input)
-        .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
-    let last_logits = logits.index((.., -1, ..));
-    let mut next_token = sample(&last_logits, temperature)
-        .map_err(|e| anyhow::anyhow!("prefill sample failed: {e:?}"))?;
-    // next_token shape: [1]. Force eval so we can `.item::<u32>()` cleanly later.
+    // Force eval so we can `.item::<u32>()` cleanly later.
     eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill eval failed: {e:?}"))?;
+    {
+        let (ma, mc, mp) = mlx_mem_mib();
+        tracing::info!(
+            "[local-mlx-native][mem] after prefill — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB",
+            rss_mib(), rss_mib() - rss_start, ma, mc, mp
+        );
+    }
     buffer.push(next_token.clone());
     generated_count += 1;
 
@@ -507,24 +592,42 @@ fn generate_with_cache(
         let inputs = next_token
             .reshape(&[1, 1])
             .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
-        let decode_input = ModelInput {
-            inputs: &inputs,
-            mask: None,
-            cache: &mut cache,
+        // Sample inside a block so decode logits ([1, 1, vocab]) are dropped
+        // before the token is added to the buffer, not retained until the next
+        // eval-and-drain boundary 20 steps later.
+        let y = {
+            let decode_input = ModelInput {
+                inputs: &inputs,
+                mask: None,
+                cache: &mut cache,
+            };
+            let logits = model
+                .forward(decode_input)
+                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
+            // logits shape [1, 1, V] — slice last position to get [1, V] for sampling.
+            sample(&logits.index((.., -1, ..)), temperature)
+                .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?
+            // logits dropped here
         };
-        let logits = model
-            .forward(decode_input)
-            .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
-        // logits shape [1, 1, V] — slice last position to get [1, V] for sampling.
-        let last_logits = logits.index((.., -1, ..));
-        let y = sample(&last_logits, temperature)
-            .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?;
         next_token = y;
+        // Eval the scalar token immediately to break the lazy graph chain:
+        // without this, 20 decode steps accumulate a linked lazy graph before
+        // the buffer eval fires, causing each step's intermediate tensors
+        // (~attention scores, MLP activations) to stack up in the MLX cache pool.
+        eval(std::iter::once(&next_token))
+            .map_err(|e| anyhow::anyhow!("step eval failed: {e:?}"))?;
         buffer.push(next_token.clone());
         generated_count += 1;
 
         if buffer.len() % 20 == 0 {
             eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+            {
+                let (ma, mc, _) = mlx_mem_mib();
+                tracing::info!(
+                    "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
+                    generated_count, rss_mib(), rss_mib() - rss_start, ma, mc
+                );
+            }
             let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
             if generated_count <= 20 {
                 let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
@@ -562,6 +665,16 @@ fn generate_with_cache(
         }
     }
     if hit_stop {
+        {
+            let (ma, mc, mp) = mlx_mem_mib();
+            tracing::info!(
+                "[local-mlx-native][mem] generate done (stop) — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
+                rss_mib(), rss_mib() - rss_start, ma, mc, mp, generated_count
+            );
+        }
+        // Release the MLX buffer pool so Activity Monitor drops between turns.
+        unsafe { mlx_sys::mlx_clear_cache(); }
+        tracing::info!("[local-mlx-native][mem] cache cleared, mlx active={:.0} cache={:.0} MiB", {let (a,_,_)=mlx_mem_mib();a}, {let(_,c,_)=mlx_mem_mib();c});
         log_local_mlx_memory_estimates(
             &model.args,
             prompt.len(),
@@ -582,6 +695,15 @@ fn generate_with_cache(
         }
     }
 
+    {
+        let (ma, mc, mp) = mlx_mem_mib();
+        tracing::info!(
+            "[local-mlx-native][mem] generate done — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
+            rss_mib(), rss_mib() - rss_start, ma, mc, mp, generated_count
+        );
+    }
+    unsafe { mlx_sys::mlx_clear_cache(); }
+    tracing::info!("[local-mlx-native][mem] cache cleared, mlx active={:.0} cache={:.0} MiB", {let (a,_,_)=mlx_mem_mib();a}, {let(_,c,_)=mlx_mem_mib();c});
     log_local_mlx_memory_estimates(
         &model.args,
         prompt.len(),
@@ -798,16 +920,19 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
                 "model.embed_tokens.weight" => {
                     embed_weight = Some(value);
                     total_loaded += 1;
+                    unfilled_slots.remove(key);
                     continue;
                 }
                 "model.embed_tokens.scales" => {
                     embed_scales = Some(value);
                     total_loaded += 1;
+                    unfilled_slots.remove(key);
                     continue;
                 }
                 "model.embed_tokens.biases" => {
                     embed_biases = Some(value);
                     total_loaded += 1;
+                    unfilled_slots.remove(key);
                     continue;
                 }
                 _ => {}

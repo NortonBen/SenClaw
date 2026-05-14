@@ -4,6 +4,22 @@
 //! plus Qwen3/chat-template code vendored in `mlx_lm` / `mlx_lm_utils` is gated behind the `local-mlx`
 //! feature so default builds remain cross-platform.
 
+// Higgs-models vendored code (gated behind local-mlx feature)
+#[cfg(feature = "local-mlx")]
+pub mod higgs_error;
+#[cfg(feature = "local-mlx")]
+pub mod higgs_registry;
+#[cfg(feature = "local-mlx")]
+pub mod higgs_sampling;
+#[cfg(feature = "local-mlx")]
+pub mod higgs_cache;
+#[cfg(feature = "local-mlx")]
+pub mod higgs_utils;
+#[cfg(feature = "local-mlx")]
+pub mod higgs_transformer;
+#[cfg(feature = "local-mlx")]
+pub mod higgs_turboquant;
+
 pub mod models;
 pub mod runtime;
 

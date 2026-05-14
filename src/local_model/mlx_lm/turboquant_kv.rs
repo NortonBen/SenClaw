@@ -70,7 +70,7 @@ impl TurboQuantKeyValueCache {
         let kv = kv_h as usize;
         (0..sl)
             .map(|p| {
-                let base = (((kv * sl) + p) * hd);
+                let base = ((kv * sl) + p) * hd;
                 &flat[base..base + hd]
             })
             .collect()

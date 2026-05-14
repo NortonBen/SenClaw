@@ -161,23 +161,24 @@ impl KeyValueCache for ConcatKeyValueCache {
         keys: Array,
         values: Array,
     ) -> Result<KvFetchResult, Exception> {
-        match (self.keys.take(), self.values.take()) {
-            (Some(k), Some(v)) => {
-                self.keys = Some(concatenate_axis(&[k, keys], -2)?);
-                self.values = Some(concatenate_axis(&[v, values], -2)?);
-            }
-            _ => {
-                self.keys = Some(keys);
-                self.values = Some(values);
-            }
-        }
-        let shape = self.keys.as_ref().expect("Keys cannot be None").shape();
+        let (new_k, new_v) = match (self.keys.take(), self.values.take()) {
+            (Some(k), Some(v)) => (
+                concatenate_axis(&[k, keys], -2)?,
+                concatenate_axis(&[v, values], -2)?,
+            ),
+            _ => (keys, values),
+        };
+        // Materialize eagerly to prevent MLX lazy graph from accumulating a
+        // concat chain (one new node per decode step × 56 KV slots) that grows
+        // O(seq²) in memory. Without this eval, RAM rises steadily throughout
+        // the entire generation.
+        mlx_rs::transforms::eval([&new_k, &new_v])?;
+        let shape = new_k.shape();
         self.offset = shape[shape.len() - 2];
+        self.keys = Some(new_k.clone());
+        self.values = Some(new_v.clone());
 
-        Ok(KvFetchResult::Fp16(
-            self.keys.clone().expect("Keys cannot be None"),
-            self.values.clone().expect("Values cannot be None"),
-        ))
+        Ok(KvFetchResult::Fp16(new_k, new_v))
     }
 }
 

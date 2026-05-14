@@ -4052,6 +4052,7 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "mlx-rs",
+ "mlx-sys",
  "once_cell",
  "prost",
  "qrcode",
