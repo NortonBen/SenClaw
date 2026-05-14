@@ -6,12 +6,12 @@
 //! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
 //! KV cache:
-//! - **Default:** [`super::mlx_lm::cache::ConcatKeyValueCache`] (FP16 on device).
-//! - **With `--features local-mlx-turboquant` + `kv_cache_bits` in settings / engine:** CPU-side
-//!   [`turboquant::QuantizedKVCache`] (see `mlx_lm::turboquant_kv`) to shrink KV RAM at the cost of
-//!   approximate attention (sequential CPU scoring per head). **`3`** = **TQ3** (default when remapping `2`); **`4`** = TQ4.
-//!   Prompt + decode is capped at [`crate::gateway::ui_server::local_models::TURBOQUANT_MAX_CONTEXT_TOKENS`] (**32k**).
-//! MLX packed KV (`MlxQuantizedConcatKeyValueCache`) stays disabled — concat quantized tensors broke quality.
+//! - **Default:** [`higgs_cache::SteppingKeyValueCache`] dense mode — pre-allocated 256-slot stepping
+//!   buffer, `mlx_slice_update` writes, FP16 on GPU. Avoids per-token concat chain.
+//! - **`kv_cache_bits = 3 | 4` in `settings.json`:** Higgs GPU TurboQuant via
+//!   [`higgs_cache::SteppingKeyValueCache`] + Metal kernels. Prefill stays dense (fast SDPA);
+//!   first decode bulk-quantizes to packed codes on GPU. **3** = TQ3 (key=2bit, value=3bit);
+//!   **4** = TQ4 (key=3bit, value=4bit). No feature flag required — always available with `local-mlx`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -38,7 +38,7 @@ struct Loaded {
 pub struct MlxNativeEngine {
     model_dir: PathBuf,
     model_id: String,
-    /// When `Some(2|3|4)` and built with `local-mlx-turboquant`, enables TurboQuant KV (`3`=TQ3, `4`=TQ4; `2`→TQ3); else FP16 concat.
+    /// When `Some(3|4)`, enables Higgs GPU TurboQuant KV (`3`=TQ3, `4`=TQ4). Defaults to dense FP16 stepping cache.
     kv_cache_bits: Option<u8>,
     /// Arc-wrapped so we can clone the handle into the blocking worker that
     /// runs generation. MLX state is non-Send through naked references, but
@@ -283,14 +283,7 @@ fn generate_with_cache(
     engine_kv_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::cache::ConcatKeyValueCache;
     use super::mlx_lm::kv_layer::Qwen3LayerKv;
-    #[cfg(feature = "local-mlx-turboquant")]
-    use super::mlx_lm::turboquant_kv::TurboQuantKeyValueCache;
-    #[cfg(feature = "local-mlx-turboquant")]
-    use std::sync::{Arc, Mutex};
-    #[cfg(feature = "local-mlx-turboquant")]
-    use turboquant::{packed::TurboQuantConfig, QuantizedKVCache};
     use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
@@ -375,63 +368,12 @@ fn generate_with_cache(
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_NEW_TOKENS)
         .clamp(1, 8192) as usize;
 
-    let max_new_tokens = {
-        #[cfg(feature = "local-mlx-turboquant")]
-        {
-            if kv_bits_merged.is_some() {
-                use crate::gateway::ui_server::local_models::TURBOQUANT_MAX_NEW_TOKENS_CAP;
-                let cap = TURBOQUANT_MAX_NEW_TOKENS_CAP as usize;
-                let v = raw_max_new.min(cap);
-                if raw_max_new > cap {
-                    tracing::info!(
-                        "[local-mlx-native] TurboQuant: capping max_new_tokens {} → {} (faster reply, lower RAM; max {} in settings for this path)",
-                        raw_max_new,
-                        v,
-                        TURBOQUANT_MAX_NEW_TOKENS_CAP
-                    );
-                }
-                v
-            } else {
-                raw_max_new
-            }
-        }
-        #[cfg(not(feature = "local-mlx-turboquant"))]
-        {
-            raw_max_new
-        }
-    };
+    let max_new_tokens = raw_max_new;
 
-    let max_prompt_tokens = {
-        let base = gen_opt
-            .max_prompt_tokens
-            .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
-            .clamp(512, 262_144) as usize;
-        #[cfg(feature = "local-mlx-turboquant")]
-        {
-            let mut max_pt = base;
-            if kv_bits_merged.is_some() {
-                use crate::gateway::ui_server::local_models::TURBOQUANT_MAX_CONTEXT_TOKENS;
-                let cap = TURBOQUANT_MAX_CONTEXT_TOKENS as usize;
-                let max_prompt_for_budget = cap.saturating_sub(max_new_tokens).max(512);
-                if max_pt > max_prompt_for_budget {
-                    tracing::info!(
-                        "[local-mlx-native] TurboQuant {}k context: clamping max_prompt_tokens {} → {} (max_new_tokens={}; prompt+decode ≤ {} tokens)",
-                        TURBOQUANT_MAX_CONTEXT_TOKENS / 1024,
-                        max_pt,
-                        max_prompt_for_budget,
-                        max_new_tokens,
-                        cap
-                    );
-                    max_pt = max_prompt_for_budget;
-                }
-            }
-            max_pt
-        }
-        #[cfg(not(feature = "local-mlx-turboquant"))]
-        {
-            base
-        }
-    };
+    let max_prompt_tokens = gen_opt
+        .max_prompt_tokens
+        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
+        .clamp(512, 262_144) as usize;
 
     if prompt.len() > max_prompt_tokens {
         let drop = prompt.len() - max_prompt_tokens;
@@ -452,10 +394,7 @@ fn generate_with_cache(
         &prompt[..prompt.len().min(8)],
         &prompt[prompt.len().saturating_sub(8)..]
     );
-    #[cfg(feature = "local-mlx-turboquant")]
     let tq_mem = kv_bits_merged.is_some();
-    #[cfg(not(feature = "local-mlx-turboquant"))]
-    let tq_mem = false;
     log_local_mlx_memory_estimates(&model.args, prompt.len(), max_new_tokens, None, tq_mem);
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
@@ -463,68 +402,40 @@ fn generate_with_cache(
     // auto-fills the vec with `None` slots, and Attention's `if let Some(cache)`
     // takes the no-cache branch for every step — KV state never accumulates,
     // and decode after the first token degenerates into a fixed-point loop.
-    #[cfg(feature = "local-mlx-turboquant")]
-    let mut cache: Vec<Option<Qwen3LayerKv>> = if let Some(bits) = kv_bits_merged {
-        let raw = bits.clamp(2, 4);
-        // turboquant-rs `QuantizedKVCache` / `quantize_with_qjl` only accepts **total** bit
-        // budget **3** (TQ3) or **4** (TQ4). `2` is invalid → map to [`DEFAULT_TURBOQUANT_KV_TOTAL_BITS`] (TQ3).
-        let tq_total_bits = if raw == 2 {
-            tracing::warn!(
-                "[local-mlx-native] kv_cache_bits=2 — turboquant-rs requires TQ3 (3) or TQ4 (4); using TQ3 ({})",
-                crate::gateway::ui_server::local_models::DEFAULT_TURBOQUANT_KV_TOTAL_BITS
-            );
-            crate::gateway::ui_server::local_models::DEFAULT_TURBOQUANT_KV_TOTAL_BITS
-        } else {
-            raw
+    let mut cache: Vec<Option<Qwen3LayerKv>> = if let Some(raw) = kv_bits_merged {
+        // Higgs GPU TurboQuant path — no feature flag needed, always available with local-mlx.
+        // Valid: 3 = TQ3 (key=2bit, value=3bit), 4 = TQ4 (key=3bit, value=4bit).
+        let tq_bits = match raw {
+            4 => 4u8,
+            _ => {
+                if raw != 3 {
+                    tracing::warn!(
+                        "[local-mlx-native] kv_cache_bits={raw} — Higgs TurboQuant accepts 3 or 4; using TQ3"
+                    );
+                }
+                3u8
+            }
         };
-        tracing::info!(
-            "[local-mlx-native] KV cache: TurboQuant TQ{tq_total_bits} (turboquant-rs; requested={}; {}k context window)",
-            raw,
-            crate::gateway::ui_server::local_models::TURBOQUANT_MAX_CONTEXT_TOKENS / 1024
-        );
-        if prompt.len() > 256 {
-            tracing::warn!(
-                "[local-mlx-native] TurboQuant attention is **CPU**, roughly O(prompt_len² × layers × heads) per forward — \
-                 prompt_len={} can stall **minutes**. Lower `max_prompt_tokens` in ~/.senclaw/local_models/settings.json for snappier replies, \
-                 or omit `kv_cache_bits` for fast FP16 KV on GPU.",
-                prompt.len()
-            );
-        }
         let ma = &model.args;
-        let config = TurboQuantConfig::new(tq_total_bits, ma.head_dim as usize)
-            .map_err(|e| anyhow::anyhow!("TurboQuantConfig: {e:?}"))?
-            .with_seed(42u64);
-        let n_virt = (ma.num_hidden_layers as usize) * (ma.num_key_value_heads as usize);
-        let inner = Arc::new(Mutex::new(QuantizedKVCache::new(
-            config,
-            n_virt,
-            0xC0FFEE_u64,
-        )));
+        tracing::info!(
+            "[local-mlx-native] KV cache: Higgs TurboQuant TQ{tq_bits} (GPU Metal; key={}bit value={}bit; activate at {} tokens)",
+            tq_bits - 1, tq_bits,
+            std::env::var("HIGGS_TURBOQUANT_MIN_TOKENS")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(2048),
+        );
         (0..n_layers)
-            .map(|li| {
-                Some(Qwen3LayerKv::TurboQuant(TurboQuantKeyValueCache::new(
-                    Arc::clone(&inner),
-                    li,
-                    ma.num_key_value_heads,
-                )))
+            .map(|_| {
+                Some(
+                    Qwen3LayerKv::turbo(tq_bits, ma.num_key_value_heads, ma.head_dim)
+                        .expect("Higgs TQ cache init"),
+                )
             })
             .collect()
     } else {
         (0..n_layers)
-            .map(|_| Some(Qwen3LayerKv::Concat(ConcatKeyValueCache::new())))
-            .collect()
-    };
-
-    #[cfg(not(feature = "local-mlx-turboquant"))]
-    let mut cache: Vec<Option<Qwen3LayerKv>> = {
-        if kv_bits_merged.is_some() {
-            tracing::warn!(
-                "[local-mlx-native] kv_cache_bits={:?} ignored — rebuild with `--features local-mlx-turboquant`",
-                kv_bits_merged
-            );
-        }
-        (0..n_layers)
-            .map(|_| Some(ConcatKeyValueCache::new()))
+            .map(|_| Some(Qwen3LayerKv::dense()))
             .collect()
     };
 

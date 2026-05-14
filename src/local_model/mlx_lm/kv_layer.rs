@@ -1,100 +1,138 @@
-//! Per-layer KV cache type for Qwen3 native inference.
+//! Per-layer KV cache adapter for Qwen3 native inference.
 //!
-//! Without `local-mlx-turboquant`, this is a type alias for [`super::cache::ConcatKeyValueCache`].
-//! With `local-mlx-turboquant`, [`Qwen3LayerKv`] can be either FP16 concat or turboquant-rs storage.
+//! [`Qwen3LayerKv`] wraps [`higgs_cache::SteppingKeyValueCache`] and bridges
+//! it to the [`mlx_lm::cache::KeyValueCache`] trait used by the Qwen3 attention module.
+//!
+//! Dense path (no TurboQuant configured):
+//!   - pre-allocated 256-slot stepping buffer, `mlx_slice_update` writes (no per-token concat)
+//!   - returns `KvFetchResult::Fp16` → native MLX SDPA on GPU
+//!
+//! Higgs TurboQuant path (`kv_cache_bits = 3 | 4` in settings.json):
+//!   - prefill uses dense fp16 + GPU SDPA (first multi-token call)
+//!   - first decode token bulk-quantizes prefill KV on GPU, then stores packed codes
+//!   - decode returns `KvFetchResult::TurboQuant` → `turboquant_attention` runs
+//!     GPU Metal kernels (`decode_scores` + softmax + `decode_values`)
+//!   - activation threshold via `HIGGS_TURBOQUANT_MIN_TOKENS` env var (default 2048)
 
-#[cfg(not(feature = "local-mlx-turboquant"))]
-pub use super::cache::ConcatKeyValueCache as Qwen3LayerKv;
+use mlx_rs::{Array, error::Exception};
 
-#[cfg(feature = "local-mlx-turboquant")]
-pub enum Qwen3LayerKv {
-    Concat(super::cache::ConcatKeyValueCache),
-    TurboQuant(super::turboquant_kv::TurboQuantKeyValueCache),
+use crate::local_model::higgs_cache::{
+    KeyValueCache as HiggsKvCache, KvCacheView, SteppingKeyValueCache, TurboQuantKvView,
+};
+use crate::local_model::higgs_turboquant::{KvCacheConfig, KvCacheMode};
+use super::cache::{KeyValueCache, KvFetchResult};
+
+/// Per-layer KV cache for Qwen3.  Bridges [`SteppingKeyValueCache`] to the
+/// [`mlx_lm::cache::KeyValueCache`] interface expected by `qwen3::Attention`.
+pub struct Qwen3LayerKv {
+    inner: SteppingKeyValueCache,
+    /// Stored TQ view from the last `update_and_fetch` call; used by `turboquant_attention`.
+    last_tq_view: Option<TurboQuantKvView>,
 }
 
-#[cfg(feature = "local-mlx-turboquant")]
-impl super::cache::KeyValueCache for Qwen3LayerKv {
-    fn is_quantized(&self) -> bool {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.is_quantized(),
-            Qwen3LayerKv::TurboQuant(t) => t.is_quantized(),
+impl Qwen3LayerKv {
+    /// Dense FP16 stepping cache (no TurboQuant).
+    pub fn dense() -> Self {
+        Self {
+            inner: SteppingKeyValueCache::new(),
+            last_tq_view: None,
         }
     }
 
-    fn group_size(&self) -> Option<i32> {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.group_size(),
-            Qwen3LayerKv::TurboQuant(t) => t.group_size(),
-        }
+    /// Higgs GPU TurboQuant cache.
+    ///
+    /// `bits` must be 3 (key=2bit, value=3bit) or 4 (key=3bit, value=4bit).
+    pub fn turbo(bits: u8, n_kv_heads: i32, head_dim: i32) -> Result<Self, Exception> {
+        let config = KvCacheConfig {
+            mode: KvCacheMode::Turboquant,
+            bits,
+            norm_correction: true,
+            seed: 0,
+            ..KvCacheConfig::default()
+        };
+        Ok(Self {
+            inner: SteppingKeyValueCache::new_turbo(config, n_kv_heads, head_dim)?,
+            last_tq_view: None,
+        })
+    }
+}
+
+impl KeyValueCache for Qwen3LayerKv {
+    fn is_quantized(&self) -> bool {
+        self.inner.is_quantized()
     }
 
     fn bits(&self) -> Option<i32> {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.bits(),
-            Qwen3LayerKv::TurboQuant(t) => t.bits(),
-        }
+        self.inner.bits()
     }
 
     fn offset(&self) -> i32 {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.offset(),
-            Qwen3LayerKv::TurboQuant(t) => t.offset(),
-        }
+        self.inner.offset()
     }
 
     fn max_size(&self) -> Option<i32> {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.max_size(),
-            Qwen3LayerKv::TurboQuant(t) => t.max_size(),
-        }
+        self.inner.max_size()
     }
 
     fn update_and_fetch(
         &mut self,
-        keys: mlx_rs::Array,
-        values: mlx_rs::Array,
-    ) -> Result<super::cache::KvFetchResult, mlx_rs::error::Exception> {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.update_and_fetch(keys, values),
-            Qwen3LayerKv::TurboQuant(t) => t.update_and_fetch(keys, values),
+        keys: Array,
+        values: Array,
+    ) -> Result<KvFetchResult, Exception> {
+        match self.inner.update_and_view(keys, values)? {
+            KvCacheView::Dense { keys: k, values: v } => {
+                self.last_tq_view = None;
+                Ok(KvFetchResult::Fp16(k, v))
+            }
+            KvCacheView::TurboQuant(tq) => {
+                self.last_tq_view = Some(tq);
+                Ok(KvFetchResult::TurboQuant)
+            }
         }
     }
 
+    /// GPU-accelerated TurboQuant decode attention (Higgs Metal kernels).
+    ///
+    /// Only valid when the cache has switched to TQ storage (i.e. after
+    /// `update_and_fetch` returned `KvFetchResult::TurboQuant`).
+    /// Only supports `q_len = 1` (single decode token per step).
     fn turboquant_attention(
         &mut self,
-        queries: mlx_rs::Array,
+        queries: Array,
         scale: f32,
-        mask: Option<&mlx_rs::Array>,
-        batch: i32,
+        _mask: Option<&Array>,
+        _batch: i32,
         q_len: i32,
-        kv_past_len: i32,
+        _kv_past_len: i32,
         n_heads: i32,
-        n_kv_heads: i32,
-        head_dim: i32,
-    ) -> Result<mlx_rs::Array, mlx_rs::error::Exception> {
-        match self {
-            Qwen3LayerKv::Concat(c) => c.turboquant_attention(
-                queries,
-                scale,
-                mask,
-                batch,
-                q_len,
-                kv_past_len,
-                n_heads,
-                n_kv_heads,
-                head_dim,
-            ),
-            Qwen3LayerKv::TurboQuant(t) => t.turboquant_attention(
-                queries,
-                scale,
-                mask,
-                batch,
-                q_len,
-                kv_past_len,
-                n_heads,
-                n_kv_heads,
-                head_dim,
-            ),
+        _n_kv_heads: i32,
+        _head_dim: i32,
+    ) -> Result<Array, Exception> {
+        let view = self.last_tq_view.as_ref().ok_or_else(|| {
+            Exception::custom(
+                "Higgs TQ: turboquant_attention called but no TQ view is stored; \
+                 update_and_fetch must be called first and must return TurboQuant",
+            )
+        })?;
+
+        if q_len != 1 {
+            return Err(Exception::custom(format!(
+                "Higgs TQ: turboquant_attention supports q_len=1 only (got {q_len}); \
+                 prefill uses the dense SDPA path"
+            )));
         }
+
+        // queries shape: [1, n_heads, 1, head_dim] (RoPE already applied by Attention)
+        // GPU Metal kernel computes dot-products against packed key codes.
+        let scores = view.decode_scores(&queries, n_heads)?;
+        // scores shape: [n_heads, seq_len]
+
+        let scaled = scores.multiply(Array::from_f32(scale))?;
+        // No causal mask needed: all tokens in the TQ view precede (or are) the current
+        // query position — the cache never stores future positions.
+        let weights = mlx_rs::ops::softmax_axis(&scaled, -1, None)?;
+
+        // GPU Metal kernel: weighted sum of dequantized value codes → [1, n_heads, 1, head_dim]
+        view.decode_values(&weights, n_heads)
     }
 }

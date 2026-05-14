@@ -605,6 +605,9 @@ impl SteppingKeyValueCache {
 
         let updated_k = slice_update_axis2(k, keys, prev, new_tokens)?;
         let updated_v = slice_update_axis2(v, values, prev, new_tokens)?;
+        // Materialize eagerly — prevents the slice_update ops from accumulating a growing
+        // lazy chain (one new node per decode step) that grows O(seq) in depth.
+        mlx_rs::transforms::eval([&updated_k, &updated_v])?;
         self.keys = Some(updated_k);
         self.values = Some(updated_v);
 
