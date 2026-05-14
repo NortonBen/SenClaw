@@ -137,11 +137,10 @@ fn effective_adapter(profile: &ModelProfile) -> &str {
 // Local MLX native adapter (in-process, Apple Silicon)
 // ============================================================================
 
-/// Run inference through the local mlx-rs engine. Text-only; tools/images
-/// are not supported in this path yet (returns an error if tools are passed).
-///
-/// Requires the `local-mlx` cargo feature. Without it, this arm returns an
-/// informative error so users see what to do instead of getting a wrong route.
+/// Run inference through the local mlx-rs engine. Uses the same OpenAI-shaped
+/// `messages` / `tools` as `query_openai` for chat-template rendering; parses
+/// Qwen-style `<tool_call>…</tool_call>` segments from the generated text into
+/// `ContentBlock::ToolUse` when present.
 #[allow(unused_variables)]
 async fn query_local_mlx_native(
     messages: &[Message],
@@ -160,56 +159,11 @@ async fn query_local_mlx_native(
 
     #[cfg(feature = "local-mlx")]
     {
-        use crate::local_model::{
-            ChatMessage as LocalChatMessage, LocalModelRuntime, Role as LocalRole,
-        };
+        use crate::local_model::{LocalModelRuntime, MlxNativeEngine};
         use crate::config::Config;
 
-        if !tools.is_empty() {
-            tracing::warn!(
-                "[local-mlx-native] ignoring {} tools — adapter is text-only for now",
-                tools.len()
-            );
-        }
-
-        let mut local_msgs: Vec<LocalChatMessage> = Vec::with_capacity(messages.len() + 1);
-        if !system_prompt.is_empty() {
-            local_msgs.push(LocalChatMessage {
-                role: LocalRole::System,
-                content: system_prompt.to_string(),
-            });
-        }
-        for m in messages {
-            let role = match m.message.role.as_str() {
-                "assistant" => LocalRole::Assistant,
-                "system" => LocalRole::System,
-                _ => LocalRole::User,
-            };
-            // Flatten content blocks: concatenate text blocks; reject tool blocks.
-            let mut content = String::new();
-            for block in &m.message.content {
-                match block {
-                    ContentBlock::Text { text } => content.push_str(text),
-                    ContentBlock::Thinking { .. } => {} // skip
-                    ContentBlock::ToolUse { name, .. } => {
-                        // Render past tool use as a human-readable note so the model
-                        // sees context but doesn't need to parse JSON tool-calls.
-                        content.push_str(&format!("\n[called tool: {name}]"));
-                    }
-                    ContentBlock::ToolResult { content: text, .. } => {
-                        content.push_str("\n[tool result: ");
-                        content.push_str(text);
-                        content.push(']');
-                    }
-                    ContentBlock::Image { .. } => {
-                        tracing::warn!("[local-mlx-native] dropping image block (unsupported)");
-                    }
-                }
-            }
-            if !content.is_empty() {
-                local_msgs.push(LocalChatMessage { role, content });
-            }
-        }
+        let api_msgs = openai_messages_for_api(messages, system_prompt)?;
+        let tool_objs = build_openai_tools(tools);
 
         // Resolve model directory: <local_models_dir>/<model_name with '/' → '__'>
         let cfg = Config::from_env();
@@ -232,9 +186,12 @@ async fn query_local_mlx_native(
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
 
         let engine_clone = engine.clone();
-        let msgs_clone = local_msgs.clone();
+        let msgs_clone = api_msgs.clone();
+        let tools_clone = tool_objs.clone();
         let gen_handle = tokio::spawn(async move {
-            engine_clone.generate_stream(&msgs_clone, tx).await
+            engine_clone
+                .generate_stream(msgs_clone, tools_clone, tx)
+                .await
         });
 
         let mut text_buf = String::new();
@@ -255,7 +212,8 @@ async fn query_local_mlx_native(
             .context("local-mlx-native: generation task panicked")??;
         debug!("[local-mlx-native] generated {} chars", text_buf.len());
 
-        build_assistant_message(&text_buf, "", &[])
+        let (clean_text, tool_calls_from_text) = split_qwen_tool_calls_from_model_text(&text_buf);
+        build_assistant_message(&clean_text, "", &tool_calls_from_text)
     }
 }
 
@@ -263,7 +221,7 @@ async fn query_local_mlx_native(
 // OpenAI adapter
 // ============================================================================
 
-fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
+pub(crate) fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
     tools
         .iter()
         .map(|t| {
@@ -280,6 +238,65 @@ fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
         .collect()
 }
 
+/// Strip Qwen / HF-style `<tool_call>…</tool_call>` segments and turn them into OpenAI-style
+/// `tool_calls` objects for [`build_assistant_message`].
+#[cfg(feature = "local-mlx")]
+fn split_qwen_tool_calls_from_model_text(s: &str) -> (String, Vec<Value>) {
+    const OPEN: &str = "<tool_call>";
+    const CLOSE: &str = "</tool_call>";
+
+    let mut rest = s;
+    let mut out = String::with_capacity(s.len());
+    let mut tool_calls: Vec<Value> = Vec::new();
+    let mut idx: u32 = 0;
+
+    while let Some(start) = rest.find(OPEN) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + OPEN.len()..];
+        let Some(end_rel) = after.find(CLOSE) else {
+            out.push_str(&rest[start..]);
+            return (out, tool_calls);
+        };
+        let json_str = after[..end_rel].trim();
+        rest = &after[end_rel + CLOSE.len()..];
+
+        let Ok(v) = serde_json::from_str::<Value>(json_str) else {
+            continue;
+        };
+
+        let items: Vec<Value> = match v {
+            Value::Array(a) => a,
+            one => vec![one],
+        };
+
+        for item in items {
+            let Some(name) = item.get("name").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let args = item
+                .get("arguments")
+                .cloned()
+                .unwrap_or(Value::Object(Default::default()));
+            let args_str = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+            let id = format!("local_tool_{idx}");
+            idx += 1;
+            tool_calls.push(serde_json::json!({
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": args_str,
+                }
+            }));
+        }
+    }
+    out.push_str(rest);
+    (out, tool_calls)
+}
+
 /// Convert internal [`Message`] history to OpenAI Chat Completions `messages` JSON.
 ///
 /// OpenAI-compatible APIs (DeepSeek, OpenRouter, etc.) expect:
@@ -291,7 +308,7 @@ fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
 ///
 /// Thinking / reasoning: [`ContentBlock::Thinking`] is serialized as `reasoning_content` on
 /// `assistant` messages (required by DeepSeek and similar when thinking mode is on).
-fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<Vec<Value>> {
+pub(crate) fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<Vec<Value>> {
     let mut api_msgs: Vec<Value> = Vec::new();
 
     if !system_prompt.is_empty() {
@@ -1190,6 +1207,17 @@ mod tests {
         assert_eq!(extract_http_status("API error (429)"), Some(429));
         assert_eq!(extract_http_status("error (500) internal"), Some(500));
         assert_eq!(extract_http_status("no status here"), None);
+    }
+
+    #[test]
+    #[cfg(feature = "local-mlx")]
+    fn split_qwen_tool_calls_strips_tags_and_builds_openai_shapes() {
+        let raw = "OK.\n<tool_call>\n{\"name\": \"weather\", \"arguments\": {\"city\": \"HN\"}}\n</tool_call>\n";
+        let (text, tc) = split_qwen_tool_calls_from_model_text(raw);
+        assert_eq!(text.trim(), "OK.");
+        assert_eq!(tc.len(), 1);
+        assert_eq!(tc[0]["function"]["name"], "weather");
+        assert!(tc[0]["function"]["arguments"].as_str().unwrap().contains("HN"));
     }
 
     #[test]

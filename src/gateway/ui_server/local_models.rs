@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 use crate::gateway::group_manager::{
     load_llm_configs, save_llm_config, set_active_llm_config, LlmConfig,
 };
-use crate::local_model::{KNOWN_MODELS, KnownModel};
+use crate::local_model::{read_model_context_length_from_dir, KnownModel, KNOWN_MODELS};
 #[cfg(feature = "local-mlx")]
 use crate::local_model::{LocalModelRuntime, MlxNativeEngine};
 
@@ -226,13 +226,19 @@ pub(crate) async fn local_models_list(
         .iter()
         .map(|m| {
             let dir = model_dir(&state, m.id);
+            let installed = is_installed(&dir);
+            let context_length = if installed {
+                read_model_context_length_from_dir(&dir).unwrap_or(m.context_length)
+            } else {
+                m.context_length
+            };
             ModelEntry {
                 id: m.id.to_string(),
                 label: m.label.to_string(),
                 approx_size_gb: m.approx_size_gb,
-                context_length: m.context_length,
+                context_length,
                 native_supported: m.native_supported,
-                installed: is_installed(&dir),
+                installed,
                 on_disk_path: dir.to_string_lossy().to_string(),
                 download: download_snapshot.get(m.id).cloned(),
                 custom: false,
@@ -269,15 +275,21 @@ pub(crate) async fn local_models_list(
     for id in discovered {
         let dir = model_dir(&state, &id);
         let loaded = is_loaded(&id);
+        let installed = is_installed(&dir);
+        let context_length = if installed {
+            read_model_context_length_from_dir(&dir).unwrap_or(DEFAULT_MLX_MAX_PROMPT_TOKENS)
+        } else {
+            0
+        };
         entries.push(ModelEntry {
             label: format!("{} (custom)", id),
             native_supported: id.to_lowercase().contains("qwen3"),
-            installed: is_installed(&dir),
+            installed,
             on_disk_path: dir.to_string_lossy().to_string(),
             download: download_snapshot.get(&id).cloned(),
             id: id.clone(),
             approx_size_gb: 0.0,
-            context_length: 0,
+            context_length,
             custom: true,
             loaded,
         });
@@ -306,11 +318,11 @@ pub(crate) async fn local_models_runtime(
 /// When `settings.json` omits `max_prompt_tokens`, native MLX uses this (see
 /// `max_new_tokens` below). Higher values use more unified memory for KV + prefill;
 /// tune down in `settings.json` on memory-constrained machines.
-pub const DEFAULT_MLX_MAX_PROMPT_TOKENS: u32 = 32_768;
+pub const DEFAULT_MLX_MAX_PROMPT_TOKENS: u32 = 128_000;
 
 /// Default cap on **generated** tokens per request when omitted from settings.
 /// Hard-capped at **8192** in API / `mlx_native` decode loop.
-pub const DEFAULT_MLX_MAX_NEW_TOKENS: u32 = 4096;
+pub const DEFAULT_MLX_MAX_NEW_TOKENS: u32 = 8192;
 
 /// When TurboQuant KV is active, `mlx_native` caps **decode** at this (below API 8192)
 /// to cut RAM / CPU on the slow CPU attention path; raise via `max_new_tokens` in JSON only up to this cap.
@@ -319,7 +331,7 @@ pub const TURBOQUANT_MAX_NEW_TOKENS_CAP: u32 = 2048;
 /// Hard ceiling on **prompt + decode** token positions when TurboQuant KV is active
 /// (`kv_cache_bits` set, build with `local-mlx-turboquant`). Native MLX clamps
 /// `max_prompt_tokens` so `max_prompt_tokens + max_new_tokens ≤` this value.
-pub const TURBOQUANT_MAX_CONTEXT_TOKENS: u32 = 32_768;
+pub const TURBOQUANT_MAX_CONTEXT_TOKENS: u32 = 128_000 + 8192;
 
 /// When `kv_cache_bits` is `2` (invalid for turboquant-rs QJL path), native MLX maps to this **TQ3** total bit budget (`3`).
 pub const DEFAULT_TURBOQUANT_KV_TOTAL_BITS: u8 = 3;
@@ -671,7 +683,9 @@ pub(crate) async fn local_models_use_as_llm(
     let label = known
         .map(|m| format!("Local {}", m.label))
         .unwrap_or_else(|| format!("Local {id}"));
-    let context_length = known.map(|m| m.context_length).unwrap_or(32_768);
+    let context_length = read_model_context_length_from_dir(&dir)
+        .or_else(|| known.map(|m| m.context_length))
+        .unwrap_or(DEFAULT_MLX_MAX_PROMPT_TOKENS);
 
     let cfg_id = format!(
         "llm_{}_{}",

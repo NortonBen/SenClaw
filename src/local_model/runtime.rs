@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,9 +68,13 @@ pub trait LocalModelRuntime: Send + Sync {
     }
 
     /// Stream generation directly into `tx`. Default impl is unsupported.
+    ///
+    /// `messages` and `tools` follow the OpenAI Chat Completions JSON shape
+    /// (same as HuggingFace `apply_chat_template` / many Jinja chat templates).
     async fn generate_stream(
         &self,
-        _messages: &[ChatMessage],
+        _messages: Vec<Value>,
+        _tools: Vec<Value>,
         _tx: tokio::sync::mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
         anyhow::bail!("runtime does not support native streaming")

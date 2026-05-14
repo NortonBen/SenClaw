@@ -75,6 +75,7 @@ use std::{
 
 use minijinja::{context, Environment, Template};
 use serde::Serialize;
+use serde_json::Value;
 use tokenizers::Encoding;
 
 use super::error::Error;
@@ -140,6 +141,34 @@ impl Tokenizer {
         let rendered_chats = apply_chat_template(env, model_template, args)?;
         inner
             .encode_batch(rendered_chats, false)
+            .map_err(Into::into)
+    }
+
+    /// Apply the model Jinja chat template when `messages` are already OpenAI / HF-shaped
+    /// JSON values (roles `system` / `user` / `assistant` / `tool`, optional `tool_calls`, …)
+    /// and `tools` is the OpenAI-style `tools` array from the Completions API.
+    pub fn apply_chat_template_json_and_encode(
+        &mut self,
+        model_template: String,
+        model_id: &str,
+        chat_template_id: Option<&str>,
+        messages: &[Value],
+        tools: &[Value],
+        documents: Option<&[Document]>,
+        add_generation_prompt: Option<bool>,
+    ) -> Result<Vec<Encoding>, Error> {
+        let rendered = apply_chat_template_openai_shape(
+            &mut self.env,
+            model_template,
+            model_id,
+            chat_template_id,
+            messages,
+            tools,
+            documents,
+            add_generation_prompt,
+        )?;
+        self.inner
+            .encode_batch(vec![rendered], false)
             .map_err(Into::into)
     }
 }
@@ -526,5 +555,43 @@ where
     }
 
     Ok(rendered)
+}
+
+/// Render one conversation where `messages` / `tools` are JSON object lists (OpenAI chat-completions shape).
+///
+/// HuggingFace chat templates expect the same kwargs as Transformers: `messages`, optional `documents`,
+/// optional `tools`, and `add_generation_prompt`.
+pub fn apply_chat_template_openai_shape(
+    env: &mut Environment<'static>,
+    model_template: String,
+    model_id: &str,
+    chat_template_id: Option<&str>,
+    messages: &[Value],
+    tools: &[Value],
+    documents: Option<&[Document]>,
+    add_generation_prompt: Option<bool>,
+) -> Result<String, Error> {
+    let add_generation_prompt = add_generation_prompt.unwrap_or(false);
+
+    let template = match chat_template_id {
+        Some(chat_template_id) => env.get_template(chat_template_id)?,
+        None => match env.get_template(model_id) {
+            Ok(template) => template,
+            Err(_) => {
+                env.add_template_owned(model_id.to_owned(), model_template)?;
+                env.get_template(model_id)
+                    .expect("Newly added template must be present")
+            }
+        },
+    };
+
+    template
+        .render(context! {
+            messages => messages,
+            documents => documents,
+            tools => tools,
+            add_generation_prompt => add_generation_prompt,
+        })
+        .map_err(Into::into)
 }
 

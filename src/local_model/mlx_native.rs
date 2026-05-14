@@ -1,9 +1,9 @@
 //! Native MLX inference engine.
 //!
-//! Apple Silicon only. Uses **`mlx-rs`** plus Qwen3 weights/templates vendored in-tree (see [`super::mlx_lm`]).
+//! Apple Silicon only. Uses **`mlx-rs`** plus model weights/templates vendored in-tree (see [`super::mlx_lm`]).
 //!
-//! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
-//! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
+//! Supported architectures:
+//! - **Qwen3** (`model_type = "qwen3"`) — standard GQA transformer.
 //!
 //! KV cache:
 //! - **Default:** [`higgs_cache::SteppingKeyValueCache`] dense mode — pre-allocated 256-slot stepping
@@ -17,20 +17,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::runtime::{
-    ChatMessage, LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
+    LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
 };
 
-/// Heavyweight cached state: Qwen3 weights + tokenizer + rendered chat
-/// template. Populated by `load()` and dropped by `unload()`, so RAM can be
-/// freed on demand without restarting the daemon.
+/// Heavyweight cached state. Populated by `load()` and dropped by `unload()`.
 struct Loaded {
     model: super::mlx_lm::models::qwen3::Model,
     tokenizer: super::mlx_lm_utils::tokenizer::Tokenizer,
     chat_template: String,
     n_layers: usize,
+    /// From `tokenizer_config.json` / `config.json` when weights were loaded (`model_max_length`, etc.).
+    model_context_length: Option<u32>,
 }
 
 /// In-process MLX inference engine. Caches the loaded model so subsequent
@@ -91,6 +92,12 @@ impl MlxNativeEngine {
         self.kv_cache_bits
     }
 
+    /// Context length read from tokenizer/model config at load time (`None` if missing or unload).
+    pub fn model_context_length(&self) -> Option<u32> {
+        let guard = self.loaded.lock().ok()?;
+        guard.as_ref().and_then(|s| s.model_context_length)
+    }
+
     fn set_status(&self, s: RuntimeStatus) {
         if let Ok(mut g) = self.status.lock() {
             *g = s;
@@ -148,7 +155,8 @@ impl LocalModelRuntime for MlxNativeEngine {
 
     async fn generate_stream(
         &self,
-        messages: &[ChatMessage],
+        messages: Vec<Value>,
+        tools: Vec<Value>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
         // Clone Arc handles for the blocking worker. The engine itself isn't
@@ -156,11 +164,10 @@ impl LocalModelRuntime for MlxNativeEngine {
         let loaded = Arc::clone(&self.loaded);
         let model_dir = self.model_dir.clone();
         let model_id = self.model_id.clone();
-        let messages = messages.to_vec();
         let kv_bits = self.kv_cache_bits;
 
         let join = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            generate_with_cache(&loaded, &model_dir, &model_id, &messages, kv_bits, tx)
+            generate_with_cache(&loaded, &model_dir, &model_id, &messages, &tools, kv_bits, tx)
         });
 
         join.await??;
@@ -186,25 +193,47 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
 
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     use super::mlx_lm_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer};
+    use crate::local_model::read_model_context_length_from_dir;
+
+    let model_context_length = read_model_context_length_from_dir(model_dir);
 
     detect_architecture(model_id, model_dir)?;
     let tokenizer_file = model_dir.join("tokenizer.json");
     let tokenizer_config = model_dir.join("tokenizer_config.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
+
+    // Try `tokenizer_config.json` first; fall back to standalone `chat_template.jinja`
+    // (used by e.g. mlx-community OptiQ models which split the template into a separate file).
     let chat_template = load_model_chat_template_from_file(&tokenizer_config)?
-        .ok_or_else(|| anyhow::anyhow!("chat template missing in tokenizer_config.json"))?;
-    let model = load_qwen3_any(model_dir)
+        .or_else(|| {
+            let jinja = model_dir.join("chat_template.jinja");
+            std::fs::read_to_string(&jinja).ok().map(|s| {
+                tracing::info!("[local-mlx-native] loaded chat template from chat_template.jinja");
+                s
+            })
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "chat template missing — expected `chat_template` key in tokenizer_config.json \
+                 or a `chat_template.jinja` file in the model directory"
+            )
+        })?;
+
+    let m = load_qwen3_any(model_dir)
         .map_err(|e| anyhow::anyhow!("load_qwen3 failed: {e:?}"))?;
-    let n_layers = model.args.num_hidden_layers as usize;
+    let n_layers = m.args.num_hidden_layers as usize;
+    let model = m;
+
     tracing::info!(
-        "[local-mlx-native] cached state ready for {model_id} ({n_layers} layers)"
+        "[local-mlx-native] cached state ready for {model_id} ({n_layers} layers, model_context_length={model_context_length:?})"
     );
     Ok(Loaded {
         model,
         tokenizer,
         chat_template,
         n_layers,
+        model_context_length,
     })
 }
 
@@ -273,18 +302,36 @@ fn mlx_mem_mib() -> (f64, f64, f64) {
     (0.0, 0.0, 0.0)
 }
 
+/// Common model dimensions needed for memory estimates.
+struct MemArgs {
+    hidden_size: i32,
+    num_hidden_layers: i32,
+    num_attention_heads: i32,
+    num_key_value_heads: i32,
+    head_dim: i32,
+    vocab_size: i32,
+}
+
+impl From<&super::mlx_lm::models::qwen3::ModelArgs> for MemArgs {
+    fn from(a: &super::mlx_lm::models::qwen3::ModelArgs) -> Self {
+        Self { hidden_size: a.hidden_size, num_hidden_layers: a.num_hidden_layers,
+               num_attention_heads: a.num_attention_heads, num_key_value_heads: a.num_key_value_heads,
+               head_dim: a.head_dim, vocab_size: a.vocab_size }
+    }
+}
+
 /// Synchronous generation entry. Runs on a blocking worker, holding the
 /// engine's `loaded` mutex for the duration of one inference call.
 fn generate_with_cache(
     loaded: &Arc<Mutex<Option<Loaded>>>,
     model_dir: &Path,
     model_id: &str,
-    messages: &[ChatMessage],
+    messages: &[Value],
+    tools: &[Value],
     engine_kv_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
     use super::mlx_lm::kv_layer::Qwen3LayerKv;
-    use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
     use mlx_rs::Array;
@@ -302,55 +349,16 @@ fn generate_with_cache(
     let template = state.chat_template.clone();
     let n_layers = state.n_layers;
 
-    // mlx-lm-utils Role has only User/Assistant. Fold System content into
-    // the first user turn so the chat template still renders correctly.
-    let mut convs: Vec<Conversation<TokRole, String>> = Vec::with_capacity(messages.len());
-    let mut pending_system = String::new();
-    for m in messages {
-        match m.role {
-            super::runtime::Role::System => {
-                if !pending_system.is_empty() {
-                    pending_system.push_str("\n\n");
-                }
-                pending_system.push_str(&m.content);
-            }
-            super::runtime::Role::User => {
-                let content = if pending_system.is_empty() {
-                    m.content.clone()
-                } else {
-                    let merged = format!("{}\n\n{}", pending_system, m.content);
-                    pending_system.clear();
-                    merged
-                };
-                convs.push(Conversation {
-                    role: TokRole::User,
-                    content,
-                });
-            }
-            super::runtime::Role::Assistant => convs.push(Conversation {
-                role: TokRole::Assistant,
-                content: m.content.clone(),
-            }),
-        }
-    }
-    if !pending_system.is_empty() {
-        // System-only — emit as a single user turn so the model has something to answer.
-        convs.push(Conversation {
-            role: TokRole::User,
-            content: pending_system,
-        });
-    }
-
-    let args = ApplyChatTemplateArgs {
-        conversations: vec![convs.into()],
-        documents: None,
-        model_id,
-        chat_template_id: None,
-        add_generation_prompt: Some(true),
-        continue_final_message: None,
-    };
     let encodings = tokenizer
-        .apply_chat_template_and_encode(template, args)
+        .apply_chat_template_json_and_encode(
+            template,
+            model_id,
+            None,
+            messages,
+            tools,
+            None,
+            Some(true),
+        )
         .map_err(|e| anyhow::anyhow!("chat template apply failed: {e:?}"))?;
     let mut prompt: Vec<u32> = encodings
         .iter()
@@ -395,70 +403,18 @@ fn generate_with_cache(
         &prompt[prompt.len().saturating_sub(8)..]
     );
     let tq_mem = kv_bits_merged.is_some();
-    log_local_mlx_memory_estimates(&model.args, prompt.len(), max_new_tokens, None, tq_mem);
+
+    let mem_args = MemArgs::from(&model.args);
+    log_local_mlx_memory_estimates(&mem_args, prompt.len(), max_new_tokens, None, tq_mem);
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
-    // Pre-populate cache with `Some(...)` per layer. Otherwise Qwen3Model
-    // auto-fills the vec with `None` slots, and Attention's `if let Some(cache)`
-    // takes the no-cache branch for every step — KV state never accumulates,
-    // and decode after the first token degenerates into a fixed-point loop.
-    let mut cache: Vec<Option<Qwen3LayerKv>> = if let Some(raw) = kv_bits_merged {
-        // Higgs GPU TurboQuant path — no feature flag needed, always available with local-mlx.
-        // Valid: 3 = TQ3 (key=2bit, value=3bit), 4 = TQ4 (key=3bit, value=4bit).
-        let tq_bits = match raw {
-            4 => 4u8,
-            _ => {
-                if raw != 3 {
-                    tracing::warn!(
-                        "[local-mlx-native] kv_cache_bits={raw} — Higgs TurboQuant accepts 3 or 4; using TQ3"
-                    );
-                }
-                3u8
-            }
-        };
-        let ma = &model.args;
-        tracing::info!(
-            "[local-mlx-native] KV cache: Higgs TurboQuant TQ{tq_bits} (GPU Metal; key={}bit value={}bit; activate at {} tokens)",
-            tq_bits - 1, tq_bits,
-            std::env::var("HIGGS_TURBOQUANT_MIN_TOKENS")
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(2048),
-        );
-        (0..n_layers)
-            .map(|_| {
-                Some(
-                    Qwen3LayerKv::turbo(tq_bits, ma.num_key_value_heads, ma.head_dim)
-                        .expect("Higgs TQ cache init"),
-                )
-            })
-            .collect()
-    } else {
-        (0..n_layers)
-            .map(|_| Some(Qwen3LayerKv::dense()))
-            .collect()
-    };
-
-    // Qwen3 stop tokens.
+    // Shared stop tokens (Qwen tokenizer used by both Qwen3 and Qwen3.5).
     const QWEN3_IM_END: u32 = 151645;
     const QWEN3_ENDOFTEXT: u32 = 151643;
     let is_stop = |t: u32| t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT;
 
-    // ── Custom decode loop ────────────────────────────────────────────
-    // Bypass `mlx_lm::models::qwen3::Generate` because its Decode→Decode
-    // transition stores `y` at shape [1,1] (from argmax on [1,1,V]) and then
-    // re-applies `y.index((.., NewAxis))` which produces [1,1,1] — the
-    // embedding lookup gets a 3D tensor and every subsequent forward pass
-    // is mis-shaped, causing greedy decode to lock after ~2 tokens.
-    //
-    // The fix is to keep the running token reshaped explicitly to [1, 1].
-    use super::mlx_lm::models::qwen3::{sample, ModelInput};
-    use mlx_rs::module::Module;
-
+    use super::mlx_lm::models::qwen3::sample;
     let max_tokens: usize = max_new_tokens;
-    let mut buffer: Vec<Array> = Vec::new();
-    let mut hit_stop = false;
-    let mut generated_count = 0usize;
     let temperature: f32 = 0.0;
 
     let rss_start = rss_mib();
@@ -468,167 +424,154 @@ fn generate_with_cache(
         rss_start, mlx_a0, mlx_c0, prompt.len(), max_new_tokens
     );
 
-    // Prefill — feed full prompt, take logits at last position.
-    let mut next_token = {
-        let prefill_input = ModelInput {
-            inputs: &prompt_tokens,
-            mask: None,
-            cache: &mut cache,
-        };
-        let logits = model
-            .forward(prefill_input)
-            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
-        // Only the last-position slice is needed for sampling. Sample first,
-        // then drop logits ([1, prompt_len, vocab]) and last_logits immediately
-        // rather than holding ~450 MB through the entire decode loop.
-        let t = sample(&logits.index((.., -1, ..)), temperature)
-            .map_err(|e| anyhow::anyhow!("prefill sample failed: {e:?}"))?;
-        // logits and last_logits dropped here — frees [1, prompt_len, vocab]
-        t
-    };
-    // Force eval so we can `.item::<u32>()` cleanly later.
-    eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill eval failed: {e:?}"))?;
-    {
-        let (ma, mc, mp) = mlx_mem_mib();
-        tracing::info!(
-            "[local-mlx-native][mem] after prefill — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB",
-            rss_mib(), rss_mib() - rss_start, ma, mc, mp
-        );
-    }
-    buffer.push(next_token.clone());
-    generated_count += 1;
+    // ── Model-specific generation paths ──────────────────────────────────
+    // Each branch builds the right cache type and runs the decode loop.
+    // The loop body is identical; only the forward() call signature differs.
+    macro_rules! decode_loop {
+        ($model_forward:expr, $cache:expr) => {{
+            let mut buffer: Vec<Array> = Vec::new();
+            let mut hit_stop = false;
+            let mut generated_count = 0usize;
 
-    for _step in 1..max_tokens {
-        // Reshape next_token from [1] → [1, 1] explicitly.
-        let inputs = next_token
-            .reshape(&[1, 1])
-            .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
-        // Sample inside a block so decode logits ([1, 1, vocab]) are dropped
-        // before the token is added to the buffer, not retained until the next
-        // eval-and-drain boundary 20 steps later.
-        let y = {
-            let decode_input = ModelInput {
-                inputs: &inputs,
-                mask: None,
-                cache: &mut cache,
+            // Prefill
+            let mut next_token = {
+                let logits = $model_forward(&prompt_tokens, $cache)
+                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
+                sample(&logits.index((.., -1i32, ..)), temperature)
+                    .map_err(|e| anyhow::anyhow!("prefill sample failed: {e:?}"))?
             };
-            let logits = model
-                .forward(decode_input)
-                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
-            // logits shape [1, 1, V] — slice last position to get [1, V] for sampling.
-            sample(&logits.index((.., -1, ..)), temperature)
-                .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?
-            // logits dropped here
-        };
-        next_token = y;
-        // Eval the scalar token immediately to break the lazy graph chain:
-        // without this, 20 decode steps accumulate a linked lazy graph before
-        // the buffer eval fires, causing each step's intermediate tensors
-        // (~attention scores, MLP activations) to stack up in the MLX cache pool.
-        eval(std::iter::once(&next_token))
-            .map_err(|e| anyhow::anyhow!("step eval failed: {e:?}"))?;
-        buffer.push(next_token.clone());
-        generated_count += 1;
-
-        if buffer.len() % 20 == 0 {
-            eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+            eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill eval failed: {e:?}"))?;
             {
-                let (ma, mc, _) = mlx_mem_mib();
+                let (ma, mc, mp) = mlx_mem_mib();
                 tracing::info!(
-                    "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
-                    generated_count, rss_mib(), rss_mib() - rss_start, ma, mc
+                    "[local-mlx-native][mem] after prefill — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB",
+                    rss_mib(), rss_mib() - rss_start, ma, mc, mp
                 );
             }
-            let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
-            if generated_count <= 20 {
-                let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
-                tracing::info!(
-                    "[local-mlx-native] first {} token ids: {:?} → {:?}",
-                    slice.len(),
-                    slice,
-                    decoded_preview
-                );
-            }
-            if let Some(&stop) = slice.iter().find(|&&t| is_stop(t)) {
-                let cut: Vec<u32> = slice.iter().copied().take_while(|&t| t != stop).collect();
-                let text = tokenizer
-                    .decode(&cut, true)
-                    .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
-                if !text.is_empty() {
-                    let _ = tx.blocking_send(text);
+            buffer.push(next_token.clone());
+            generated_count += 1;
+
+            for _step in 1..max_tokens {
+                let inputs = next_token.reshape(&[1i32, 1i32])
+                    .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
+                let y = {
+                    let logits = $model_forward(&inputs, $cache)
+                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
+                    sample(&logits.index((.., -1i32, ..)), temperature)
+                        .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?
+                };
+                next_token = y;
+                eval(std::iter::once(&next_token))
+                    .map_err(|e| anyhow::anyhow!("step eval failed: {e:?}"))?;
+                buffer.push(next_token.clone());
+                generated_count += 1;
+
+                if buffer.len() % 20 == 0 {
+                    eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+                    {
+                        let (ma, mc, _) = mlx_mem_mib();
+                        tracing::info!(
+                            "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
+                            generated_count, rss_mib(), rss_mib() - rss_start, ma, mc
+                        );
+                    }
+                    let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
+                    if generated_count <= 20 {
+                        let decoded_preview = state.tokenizer.decode(&slice, false).unwrap_or_default();
+                        tracing::info!("[local-mlx-native] first {} token ids: {:?} → {:?}", slice.len(), slice, decoded_preview);
+                    }
+                    if let Some(&stop) = slice.iter().find(|&&t| is_stop(t)) {
+                        let cut: Vec<u32> = slice.iter().copied().take_while(|&t| t != stop).collect();
+                        let text = state.tokenizer.decode(&cut, true)
+                            .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
+                        if !text.is_empty() { let _ = tx.blocking_send(text); }
+                        hit_stop = true;
+                        break;
+                    }
+                    let text = state.tokenizer.decode(&slice, true)
+                        .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
+                    if !text.is_empty() && tx.blocking_send(text).is_err() {
+                        log_local_mlx_memory_estimates(&mem_args, prompt.len(), max_new_tokens, Some(generated_count), tq_mem);
+                        return Ok(());
+                    }
                 }
-                hit_stop = true;
-                break;
             }
-            let text = tokenizer
-                .decode(&slice, true)
-                .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
-            if !text.is_empty() && tx.blocking_send(text).is_err() {
-                log_local_mlx_memory_estimates(
-                    &model.args,
-                    prompt.len(),
-                    max_new_tokens,
-                    Some(generated_count),
-                    tq_mem,
+
+            // Flush remaining buffer
+            let done_stop = hit_stop;
+            if !buffer.is_empty() {
+                eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
+                let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
+                let (slice_use, _) = if done_stop {
+                    // Already sent text up to stop; remaining tokens after stop are discarded.
+                    // (This path is unreachable: we break before hitting here when hit_stop=true,
+                    // but keep it for clarity.)
+                    (slice.as_slice(), false)
+                } else {
+                    (slice.as_slice(), true)
+                };
+                if !done_stop {
+                    let text = state.tokenizer.decode(slice_use, true)
+                        .map_err(|e| anyhow::anyhow!("final decode failed: {e:?}"))?;
+                    if !text.is_empty() { let _ = tx.blocking_send(text); }
+                }
+            }
+
+            {
+                let (ma, mc, mp) = mlx_mem_mib();
+                let tag = if done_stop { "done (stop)" } else { "done" };
+                tracing::info!(
+                    "[local-mlx-native][mem] generate {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
+                    tag, rss_mib(), rss_mib() - rss_start, ma, mc, mp, generated_count
                 );
-                return Ok(());
             }
-        }
-    }
-    if hit_stop {
-        {
-            let (ma, mc, mp) = mlx_mem_mib();
-            tracing::info!(
-                "[local-mlx-native][mem] generate done (stop) — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
-                rss_mib(), rss_mib() - rss_start, ma, mc, mp, generated_count
-            );
-        }
-        // Release the MLX buffer pool so Activity Monitor drops between turns.
-        unsafe { mlx_sys::mlx_clear_cache(); }
-        tracing::info!("[local-mlx-native][mem] cache cleared, mlx active={:.0} cache={:.0} MiB", {let (a,_,_)=mlx_mem_mib();a}, {let(_,c,_)=mlx_mem_mib();c});
-        log_local_mlx_memory_estimates(
-            &model.args,
-            prompt.len(),
-            max_new_tokens,
-            Some(generated_count),
-            tq_mem,
-        );
-        return Ok(());
-    }
-    if !buffer.is_empty() {
-        eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
-        let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
-        let text = tokenizer
-            .decode(&slice, true)
-            .map_err(|e| anyhow::anyhow!("final decode failed: {e:?}"))?;
-        if !text.is_empty() {
-            let _ = tx.blocking_send(text);
-        }
+            unsafe { mlx_sys::mlx_clear_cache(); }
+            tracing::info!("[local-mlx-native][mem] cache cleared, mlx active={:.0} cache={:.0} MiB",
+                {let (a,_,_)=mlx_mem_mib();a}, {let(_,c,_)=mlx_mem_mib();c});
+            log_local_mlx_memory_estimates(&mem_args, prompt.len(), max_new_tokens, Some(generated_count), tq_mem);
+        }};
     }
 
     {
-        let (ma, mc, mp) = mlx_mem_mib();
-        tracing::info!(
-            "[local-mlx-native][mem] generate done — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
-            rss_mib(), rss_mib() - rss_start, ma, mc, mp, generated_count
+        use super::mlx_lm::models::qwen3::ModelInput;
+        use mlx_rs::module::Module;
+
+        let tq_bits = kv_bits_merged.map(|raw| if raw == 4 { 4u8 } else {
+            if raw != 3 { tracing::warn!("[local-mlx-native] kv_cache_bits={raw}: using TQ3"); }
+            3u8
+        });
+        if let Some(b) = tq_bits {
+            let ma = &model.args;
+            tracing::info!(
+                "[local-mlx-native] KV cache: Higgs TurboQuant TQ{b} (key={}bit value={}bit; threshold={}tok)",
+                b - 1, b,
+                std::env::var("HIGGS_TURBOQUANT_MIN_TOKENS").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(2048),
+            );
+            let _ = (ma, n_layers); // suppress unused warnings
+        }
+        let mut cache: Vec<Option<Qwen3LayerKv>> = match tq_bits {
+            Some(b) => {
+                let ma = &model.args;
+                (0..n_layers).map(|_| Some(Qwen3LayerKv::turbo(b, ma.num_key_value_heads, ma.head_dim).expect("TQ cache init"))).collect()
+            }
+            None => (0..n_layers).map(|_| Some(Qwen3LayerKv::dense())).collect(),
+        };
+
+        decode_loop!(
+            |inputs: &Array, c: &mut Vec<Option<Qwen3LayerKv>>| {
+                model.forward(ModelInput { inputs, mask: None, cache: c })
+            },
+            &mut cache
         );
     }
-    unsafe { mlx_sys::mlx_clear_cache(); }
-    tracing::info!("[local-mlx-native][mem] cache cleared, mlx active={:.0} cache={:.0} MiB", {let (a,_,_)=mlx_mem_mib();a}, {let(_,c,_)=mlx_mem_mib();c});
-    log_local_mlx_memory_estimates(
-        &model.args,
-        prompt.len(),
-        max_new_tokens,
-        Some(generated_count),
-        tq_mem,
-    );
+
     Ok(())
 }
 
 /// Heuristic unified-memory breakdown for Apple Silicon (GiB). Not RSS: MLX keeps pools,
 /// prefill can allocate large **S×S** scratch per attention layer; FP16 **KV** grows ~linearly with seq.
 fn log_local_mlx_memory_estimates(
-    ma: &super::mlx_lm::models::qwen3::ModelArgs,
+    ma: &MemArgs,
     prompt_tokens: usize,
     max_new_tokens: usize,
     generated_tokens: Option<usize>,
@@ -710,11 +653,6 @@ fn log_local_mlx_memory_estimates(
             );
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Arch {
-    Qwen3,
 }
 
 /// Load a Qwen3 `Model`, applying `nn::quantize` when `config.json` declares a
@@ -939,24 +877,40 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
     Ok(model)
 }
 
-fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch> {
-    let lower = model_id.to_lowercase();
-    if lower.contains("qwen3") {
-        return Ok(Arch::Qwen3);
-    }
+fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<()> {
+    // Read model_type from config.json as the authoritative check.
     let cfg_path = model_dir.join("config.json");
-    if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(mt) = v.get("model_type").and_then(|x| x.as_str()) {
-                if mt.contains("qwen3") {
-                    return Ok(Arch::Qwen3);
-                }
-            }
+    let model_type = if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| v.get("model_type").and_then(|x| x.as_str()).map(str::to_owned))
+    } else {
+        None
+    };
+
+    match model_type.as_deref() {
+        Some("qwen3") => return Ok(()),
+        Some(mt) if mt.starts_with("qwen3_") || mt.starts_with("qwen3.") => {
+            anyhow::bail!(
+                "model `{}` has architecture `{mt}` which is not yet supported — \
+                 only standard `qwen3` models are currently loadable. \
+                 Try a Qwen3 (not Qwen3.5) MLX checkpoint instead.",
+                model_id
+            );
         }
+        _ => {}
     }
+
+    // Fall back: check model_id string for "qwen3" (without "qwen3_" / "qwen3." variant).
+    let lower = model_id.to_lowercase();
+    if lower.contains("qwen3") && !lower.contains("qwen3.5") && !lower.contains("qwen3_5") {
+        return Ok(());
+    }
+
     anyhow::bail!(
-        "no native Qwen3 loader for `{}` — only Qwen3 MLX checkpoints are supported in this build.",
-        model_id
+        "no native loader for `{}` (model_type={}) — only Qwen3 MLX checkpoints are supported in this build.",
+        model_id,
+        model_type.as_deref().unwrap_or("unknown")
     )
 }
 
