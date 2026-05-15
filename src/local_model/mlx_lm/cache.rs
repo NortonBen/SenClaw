@@ -1,10 +1,76 @@
 use mlx_rs::{
     error::Exception,
-    ops::{concatenate_axis, quantize, reshape},
+    ops::{concatenate_axis, dequantize, quantize, reshape},
     ops::indexing::IndexOp,
     transforms::eval,
     Array,
 };
+
+/// Default MLX `quantize` group size (must divide `head_dim`; Qwen3 uses 128).
+pub const DEFAULT_MLX_KV_GROUP_SIZE: i32 = 64;
+
+/// Unified per-layer KV cache: FP16 concat or MLX packed-quant (Metal).
+#[derive(Debug, Clone)]
+pub enum KvCache {
+    Fp16(ConcatKeyValueCache),
+    Quantized(MlxQuantizedConcatKeyValueCache),
+}
+
+impl KvCache {
+    pub fn fp16_with_max(max_seq_len: i32) -> Self {
+        Self::Fp16(ConcatKeyValueCache::with_max(max_seq_len))
+    }
+
+    pub fn quantized_with_max(group_size: i32, bits: i32, max_seq_len: i32) -> Self {
+        Self::Quantized(MlxQuantizedConcatKeyValueCache::with_max(
+            group_size, bits, max_seq_len,
+        ))
+    }
+}
+
+impl KeyValueCache for KvCache {
+    fn is_quantized(&self) -> bool {
+        match self {
+            Self::Fp16(c) => c.is_quantized(),
+            Self::Quantized(c) => c.is_quantized(),
+        }
+    }
+
+    fn group_size(&self) -> Option<i32> {
+        match self {
+            Self::Fp16(c) => c.group_size(),
+            Self::Quantized(c) => c.group_size(),
+        }
+    }
+
+    fn bits(&self) -> Option<i32> {
+        match self {
+            Self::Fp16(c) => c.bits(),
+            Self::Quantized(c) => c.bits(),
+        }
+    }
+
+    fn offset(&self) -> i32 {
+        match self {
+            Self::Fp16(c) => c.offset(),
+            Self::Quantized(c) => c.offset(),
+        }
+    }
+
+    fn max_size(&self) -> Option<i32> {
+        match self {
+            Self::Fp16(c) => c.max_size(),
+            Self::Quantized(c) => c.max_size(),
+        }
+    }
+
+    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<KvFetchResult, Exception> {
+        match self {
+            Self::Fp16(c) => c.update_and_fetch(keys, values),
+            Self::Quantized(c) => c.update_and_fetch(keys, values),
+        }
+    }
+}
 
 /// Materialize lazy MLX arrays so prior concat/slice nodes can be freed.
 fn materialize_pair(k: Array, v: Array) -> Result<(Array, Array), Exception> {
@@ -13,14 +79,38 @@ fn materialize_pair(k: Array, v: Array) -> Result<(Array, Array), Exception> {
 }
 
 /// Evaluate all layer caches — call after each forward to cap peak RAM (MLX lazy graphs).
-pub fn eval_all_caches(caches: &mut [Option<ConcatKeyValueCache>]) -> Result<(), Exception> {
+pub fn eval_all_caches(caches: &mut [Option<KvCache>]) -> Result<(), Exception> {
     let mut batch = Vec::new();
     for cache in caches.iter_mut().flatten() {
-        if let Some(k) = cache.keys.as_ref() {
-            batch.push(k.clone());
-        }
-        if let Some(v) = cache.values.as_ref() {
-            batch.push(v.clone());
+        match cache {
+            KvCache::Fp16(c) => {
+                if let Some(k) = c.keys.as_ref() {
+                    batch.push(k.clone());
+                }
+                if let Some(v) = c.values.as_ref() {
+                    batch.push(v.clone());
+                }
+            }
+            KvCache::Quantized(c) => {
+                if let Some(k) = c.keys_packed.as_ref() {
+                    batch.push(k.clone());
+                }
+                if let Some(s) = c.keys_scales.as_ref() {
+                    batch.push(s.clone());
+                }
+                if let Some(b) = c.keys_biases.as_ref() {
+                    batch.push(b.clone());
+                }
+                if let Some(v) = c.values_packed.as_ref() {
+                    batch.push(v.clone());
+                }
+                if let Some(s) = c.values_scales.as_ref() {
+                    batch.push(s.clone());
+                }
+                if let Some(b) = c.values_biases.as_ref() {
+                    batch.push(b.clone());
+                }
+            }
         }
     }
     if !batch.is_empty() {
@@ -216,26 +306,28 @@ impl KeyValueCache for ConcatKeyValueCache {
     }
 }
 
-/// KV cache using MLX `quantize` + [`quantized_scaled_dot_product_attention`] (packed int weights).
+/// KV cache using MLX `quantize` + [`quantized_scaled_dot_product_attention`] on Metal.
 ///
-/// **Experimental / currently unused in `mlx_native`**: concatenating quantized tensors along the
-/// sequence axis produced broken attention (model emitted newline-token loops). Prefer
-/// [`ConcatKeyValueCache`] until this layout is validated against upstream MLX LM.
+/// Stores only packed K/V. Each step: dequantize prior cache → concat FP16 with new
+/// tokens → optional sliding trim → re-quantize the full sequence. Per-step quantize-then-concat
+/// of packed tensors was incorrect (broken attention / newline loops).
 #[derive(Debug, Clone)]
 pub struct MlxQuantizedConcatKeyValueCache {
     group_size: i32,
     bits: i32,
-    keys_packed: Option<Array>,
-    keys_scales: Option<Array>,
-    keys_biases: Option<Array>,
-    values_packed: Option<Array>,
-    values_scales: Option<Array>,
-    values_biases: Option<Array>,
+    pub(crate) keys_packed: Option<Array>,
+    pub(crate) keys_scales: Option<Array>,
+    pub(crate) keys_biases: Option<Array>,
+    pub(crate) values_packed: Option<Array>,
+    pub(crate) values_scales: Option<Array>,
+    pub(crate) values_biases: Option<Array>,
+    /// Absolute RoPE offset (tokens processed); not reset on sliding-window eviction.
     offset: i32,
+    max_seq_len: Option<i32>,
 }
 
 impl MlxQuantizedConcatKeyValueCache {
-    pub fn new(group_size: i32, bits: i32) -> Self {
+    pub fn with_max(group_size: i32, bits: i32, max_seq_len: i32) -> Self {
         Self {
             group_size,
             bits,
@@ -246,7 +338,18 @@ impl MlxQuantizedConcatKeyValueCache {
             values_scales: None,
             values_biases: None,
             offset: 0,
+            max_seq_len: Some(max_seq_len.max(1)),
         }
+    }
+
+    pub fn seq_len(&self) -> i32 {
+        self.keys_packed
+            .as_ref()
+            .map(|k| {
+                let sh = k.shape();
+                sh[sh.len() - 2]
+            })
+            .unwrap_or(0)
     }
 
     /// Pad row dimension to a multiple of 32 (MLX `quantize` constraint on 2D inputs).
@@ -265,7 +368,7 @@ impl MlxQuantizedConcatKeyValueCache {
         x: &Array,
         group_size: i32,
         bits: i32,
-    ) -> Result<(Array, Array, Array, i32), Exception> {
+    ) -> Result<(Array, Array, Array), Exception> {
         let sh = x.shape();
         let b = sh[0];
         let h = sh[1];
@@ -283,22 +386,37 @@ impl MlxQuantizedConcatKeyValueCache {
         let sg = s.shape()[1];
         let s4 = reshape(&s, &[b, h, l, sg])?;
         let b4 = reshape(&bia, &[b, h, l, sg])?;
-        Ok((q4, s4, b4, l))
+        Ok((q4, s4, b4))
     }
 
-    fn concat_triple(
-        prev: Option<(Array, Array, Array)>,
-        new: (Array, Array, Array),
-        axis: i32,
+    fn dequantize_layer(
+        packed: &Array,
+        scales: &Array,
+        biases: &Array,
+        b: i32,
+        h: i32,
+        l: i32,
+        d: i32,
+        group_size: i32,
+        bits: i32,
+    ) -> Result<Array, Exception> {
+        let flat = b * h * l;
+        let pc = packed.shape()[packed.shape().len() - 1];
+        let sg = scales.shape()[scales.shape().len() - 1];
+        let flat_packed = reshape(packed, &[flat, pc])?;
+        let flat_scales = reshape(scales, &[flat, sg])?;
+        let flat_biases = reshape(biases, &[flat, sg])?;
+        let dq = dequantize(&flat_packed, &flat_scales, &flat_biases, group_size, bits)?;
+        reshape(&dq, &[b, h, l, d])
+    }
+
+    fn materialize_triple(
+        packed: &Array,
+        scales: &Array,
+        biases: &Array,
     ) -> Result<(Array, Array, Array), Exception> {
-        match prev {
-            None => Ok(new),
-            Some((a, b, c)) => Ok((
-                concatenate_axis(&[a, new.0], axis)?,
-                concatenate_axis(&[b, new.1], axis)?,
-                concatenate_axis(&[c, new.2], axis)?,
-            )),
-        }
+        eval(&[packed.clone(), scales.clone(), biases.clone()])?;
+        Ok((packed.clone(), scales.clone(), biases.clone()))
     }
 }
 
@@ -320,7 +438,7 @@ impl KeyValueCache for MlxQuantizedConcatKeyValueCache {
     }
 
     fn max_size(&self) -> Option<i32> {
-        None
+        self.max_seq_len
     }
 
     fn update_and_fetch(
@@ -328,49 +446,65 @@ impl KeyValueCache for MlxQuantizedConcatKeyValueCache {
         keys: Array,
         values: Array,
     ) -> Result<KvFetchResult, Exception> {
-        let d = *keys.shape().last().expect("keys rank");
+        let sh = keys.shape();
+        let d = *sh.last().expect("keys rank");
         if d % self.group_size != 0 {
             return Err(Exception::custom(format!(
                 "head_dim {d} is not divisible by KV group_size {}",
                 self.group_size
             )));
         }
+        let step_len = sh[sh.len() - 2];
+        let b = sh[0];
+        let h = sh[1];
 
-        let (kp, ks, kb, l_step) = Self::quantize_layer(&keys, self.group_size, self.bits)?;
-        let (vp, vs, vb, l_v) = Self::quantize_layer(&values, self.group_size, self.bits)?;
-        debug_assert_eq!(l_step, l_v);
-
-        let prev_keys = match (
+        let (mut k_fp16, mut v_fp16) = match (
             self.keys_packed.take(),
             self.keys_scales.take(),
             self.keys_biases.take(),
-        ) {
-            (Some(a), Some(b), Some(c)) => Some((a, b, c)),
-            (None, None, None) => None,
-            _ => {
-                return Err(Exception::custom(
-                    "MlxQuantizedConcatKeyValueCache: partial keys triple",
-                ));
-            }
-        };
-        let prev_vals = match (
             self.values_packed.take(),
             self.values_scales.take(),
             self.values_biases.take(),
         ) {
-            (Some(a), Some(b), Some(c)) => Some((a, b, c)),
-            (None, None, None) => None,
+            (
+                Some(kp),
+                Some(ks),
+                Some(kb),
+                Some(vp),
+                Some(vs),
+                Some(vb),
+            ) => {
+                let l_prev = kp.shape()[2];
+                let k_prev = Self::dequantize_layer(
+                    &kp, &ks, &kb, b, h, l_prev, d, self.group_size, self.bits,
+                )?;
+                let v_prev = Self::dequantize_layer(
+                    &vp, &vs, &vb, b, h, l_prev, d, self.group_size, self.bits,
+                )?;
+                (
+                    concatenate_axis(&[k_prev, keys], -2)?,
+                    concatenate_axis(&[v_prev, values], -2)?,
+                )
+            }
+            (None, None, None, None, None, None) => (keys, values),
             _ => {
                 return Err(Exception::custom(
-                    "MlxQuantizedConcatKeyValueCache: partial values triple",
+                    "MlxQuantizedConcatKeyValueCache: partial packed triple",
                 ));
             }
         };
 
-        let (kp, ks, kb) = Self::concat_triple(prev_keys, (kp, ks, kb), 2)?;
-        let (vp, vs, vb) = Self::concat_triple(prev_vals, (vp, vs, vb), 2)?;
+        if let Some(max) = self.max_seq_len {
+            (k_fp16, v_fp16) = ConcatKeyValueCache::trim_to_max(k_fp16, v_fp16, max)?;
+        }
 
-        self.offset = kp.shape()[2];
+        self.offset += step_len;
+
+        let (kp, ks, kb) = Self::quantize_layer(&k_fp16, self.group_size, self.bits)?;
+        let (vp, vs, vb) = Self::quantize_layer(&v_fp16, self.group_size, self.bits)?;
+        let (kp, ks, kb) = Self::materialize_triple(&kp, &ks, &kb)?;
+        let (vp, vs, vb) = Self::materialize_triple(&vp, &vs, &vb)?;
+
         self.keys_packed = Some(kp.clone());
         self.keys_scales = Some(ks.clone());
         self.keys_biases = Some(kb.clone());
@@ -447,5 +581,44 @@ mod tests {
         assert_eq!(oldest, 2.0, "oldest retained slot should be step 2");
         assert_eq!(newest, 3.0, "newest slot should be step 3");
         assert_eq!(cache.offset(), 4);
+    }
+
+    #[test]
+    fn quantized_roundtrip_low_error() {
+        let b = 1;
+        let h = 2;
+        let l = 4;
+        let d = 128;
+        let x = Array::arange::<_, f32>(0.0, (b * h * l * d) as f32, None).unwrap();
+        let x = x.reshape(&[b, h, l, d]).unwrap();
+        let gs = DEFAULT_MLX_KV_GROUP_SIZE;
+        let bits = 4;
+        let (q, s, bi) = MlxQuantizedConcatKeyValueCache::quantize_layer(&x, gs, bits).unwrap();
+        let back =
+            MlxQuantizedConcatKeyValueCache::dequantize_layer(&q, &s, &bi, b, h, l, d, gs, bits)
+                .unwrap();
+        eval(&[back.clone()]).unwrap();
+        let max_diff = ((&x - &back).abs().unwrap().max(None).unwrap()).item::<f32>();
+        assert!(
+            max_diff <= 0.05,
+            "quantize/dequantize max abs error {max_diff} too large"
+        );
+    }
+
+    #[test]
+    fn quantized_incremental_steps() {
+        let gs = DEFAULT_MLX_KV_GROUP_SIZE;
+        let bits = 4;
+        let max = 8;
+        let d = 128;
+        let mut cache = MlxQuantizedConcatKeyValueCache::with_max(gs, bits, max);
+        for step in 1..=5_i32 {
+            let fill = step as f32 * 0.01;
+            let t = Array::full(fill, &[1, 1, 1, d]).unwrap();
+            let _ = cache.update_and_fetch(t.clone(), t).unwrap();
+            assert_eq!(cache.seq_len(), step.min(max));
+            assert_eq!(cache.offset(), step);
+        }
+        assert!(cache.keys_packed.is_some());
     }
 }

@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn strip_think_tags() {
-        let s = concat!(THINK_OPEN, "\nstep\n", THINK_CLOSE, "\n\nAnswer.");
+        let s = format!("{THINK_OPEN}\nstep\n{THINK_CLOSE}\n\nAnswer.");
         assert_eq!(strip_thinking_blocks(&s), "Answer.");
     }
 

@@ -88,6 +88,8 @@ const fmtBytes = (n: number): string => {
 
 interface InferenceSettings {
   kv_cache_bits: number | null;
+  /** MLX Metal packed KV (4/8 bit); distinct from turboquant-rs */
+  mlx_kv_cache_bits: number | null;
   tq_activate_at: number | null;
   enable_thinking: boolean | null;
   max_prompt_tokens: number | null;
@@ -98,6 +100,7 @@ interface InferenceSettings {
 
 const DEFAULT_SETTINGS: InferenceSettings = {
   kv_cache_bits: null,
+  mlx_kv_cache_bits: null,
   tq_activate_at: null,
   enable_thinking: false,
   max_prompt_tokens: null,
@@ -684,6 +687,32 @@ export const LocalModelsSettings: React.FC = () => {
                     { value: 4, label: 'TQ4 — 4-bit total (recommended)' },
                     { value: 3, label: 'TQ3 — 3-bit total' },
                     { value: 0, label: 'Off — FP16 (no quantization)' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+
+            {/* MLX packed KV (Metal) */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="MLX native only: quantize KV cache on GPU (mlx.core.quantize). Saves RAM vs FP16. Requires rebuild with local-mlx. Reload model after change.">
+                    MLX packed KV (Metal)
+                  </Tooltip>
+                }
+              >
+                <Select
+                  value={settings.mlx_kv_cache_bits ?? 'off'}
+                  onChange={(v) =>
+                    setSettings((s) => ({
+                      ...s,
+                      mlx_kv_cache_bits: v === 'off' ? null : (v as number),
+                    }))
+                  }
+                  options={[
+                    { value: 'off', label: 'Off — FP16' },
+                    { value: 4, label: '4-bit packed' },
+                    { value: 8, label: '8-bit packed' },
                   ]}
                 />
               </Form.Item>

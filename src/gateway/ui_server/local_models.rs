@@ -103,11 +103,16 @@ static MLX_ENGINES: Lazy<Mutex<HashMap<String, Arc<MlxNativeEngine>>>> =
 #[cfg(feature = "local-mlx")]
 pub fn get_or_create_mlx_engine(id: &str, model_dir: &std::path::Path) -> Arc<MlxNativeEngine> {
     let cid = canonical_local_model_id(id);
+    let settings_dir = model_dir.parent().unwrap_or(model_dir);
+    let mlx_kv_bits = load_settings_blocking(settings_dir).mlx_kv_cache_bits;
     let mut map = MLX_ENGINES.lock().unwrap();
     if let Some(existing) = map.get(&cid) {
-        return existing.clone();
+        if existing.kv_cache_bits() == mlx_kv_bits {
+            return existing.clone();
+        }
+        map.remove(&cid);
     }
-    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, None));
+    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, mlx_kv_bits));
     map.insert(cid, engine.clone());
     engine
 }
@@ -429,6 +434,11 @@ pub struct LocalModelSettings {
     /// Range: 128 – 262 144.
     #[serde(default)]
     pub max_kv_tokens: Option<u32>,
+    /// MLX native packed KV on Metal (`mlx.core.quantize` + `quantized_matmul`).
+    /// `None` or `0` → FP16 [`ConcatKeyValueCache`]. `4` or `8` → packed KV (saves RAM).
+    /// Distinct from [`Self::kv_cache_bits`] (future turboquant-rs CPU path).
+    #[serde(default)]
+    pub mlx_kv_cache_bits: Option<u8>,
     /// Preferred inference backend for this machine.
     ///
     /// `"mlx"` → in-process mlx-rs (Apple Silicon, ~60–100 tok/s on M4 Pro).
@@ -478,6 +488,14 @@ pub(crate) async fn local_models_settings_put(
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
                 format!("kv_cache_bits must be 2, 3, or 4 (got {bits}); 2 is remapped to TQ3 at runtime when using turboquant"),
+            ));
+        }
+    }
+    if let Some(bits) = settings.mlx_kv_cache_bits {
+        if !matches!(bits, 0 | 4 | 8) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("mlx_kv_cache_bits must be 0, 4, or 8 (got {bits})"),
             ));
         }
     }

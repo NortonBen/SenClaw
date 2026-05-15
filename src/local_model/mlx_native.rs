@@ -5,11 +5,10 @@
 //! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
 //! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
-//! KV cache uses **`ConcatKeyValueCache` (FP16)** with a sliding window via `max_kv_tokens`
-//! in `settings.json` (same default as Candle). MLX packed KV (`MlxQuantizedConcatKeyValueCache`)
-//! is disabled by default: concatenating per-step `quantize` tensors broke attention quality
-//! (degenerate `\n` generations). `kv_cache_bits` in settings still participates in engine
-//! identity for future turboquant / revised KV-quant wiring.
+//! KV cache: **`ConcatKeyValueCache` (FP16)** by default, or **`MlxQuantizedConcatKeyValueCache`**
+//! when `mlx_kv_cache_bits` is `4` or `8` in `~/.senclaw/local_models/settings.json`.
+//! Packed KV re-quantizes the full FP16 sequence each step (dequantize → concat → quantize)
+//! so Metal `quantized_scaled_dot_product_attention` stays correct.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,7 +35,7 @@ struct Loaded {
 pub struct MlxNativeEngine {
     model_dir: PathBuf,
     model_id: String,
-    /// Reserved for future KV-quant / turboquant wiring; inference KV is FP16 unless we re-enable MLX packed KV.
+    /// `settings.json` `mlx_kv_cache_bits` (`4` / `8` → packed KV on Metal; `None` → FP16).
     kv_cache_bits: Option<u8>,
     /// Arc-wrapped so we can clone the handle into the blocking worker that
     /// runs generation. MLX state is non-Send through naked references, but
@@ -241,7 +240,7 @@ fn generate_with_cache(
     _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::cache::{eval_all_caches, ConcatKeyValueCache};
+    use super::mlx_lm::cache::{eval_all_caches, DEFAULT_MLX_KV_GROUP_SIZE, KvCache};
     use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
@@ -384,9 +383,27 @@ fn generate_with_cache(
     );
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
+    let mlx_kv_bits = _kv_cache_bits
+        .or(gen_opt.mlx_kv_cache_bits)
+        .filter(|b| matches!(b, 4 | 8))
+        .map(|b| b as i32);
+    if let Some(bits) = mlx_kv_bits {
+        tracing::info!(
+            "[local-mlx-native] MLX packed KV: {bits}-bit, group_size={}, max_kv_window {}",
+            DEFAULT_MLX_KV_GROUP_SIZE,
+            max_kv_tokens
+        );
+    }
+
     // Pre-populate cache with `Some(...)` per layer (sliding window caps peak KV RAM).
-    let mut cache: Vec<Option<ConcatKeyValueCache>> = (0..n_layers)
-        .map(|_| Some(ConcatKeyValueCache::with_max(max_kv_tokens)))
+    let mut cache: Vec<Option<KvCache>> = (0..n_layers)
+        .map(|_| {
+            Some(if let Some(bits) = mlx_kv_bits {
+                KvCache::quantized_with_max(DEFAULT_MLX_KV_GROUP_SIZE, bits, max_kv_tokens)
+            } else {
+                KvCache::fp16_with_max(max_kv_tokens)
+            })
+        })
         .collect();
 
     // Qwen3 stop tokens.
