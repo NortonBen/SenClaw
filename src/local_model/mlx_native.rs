@@ -407,6 +407,10 @@ fn generate_with_cache(
     let template = state.chat_template.clone();
     let n_layers = state.n_layers;
 
+    let settings_dir = model_dir.parent().unwrap_or(model_dir);
+    let gen_opt =
+        crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
+
     let encodings = state.tokenizer
         .apply_chat_template_json_and_encode(
             template,
@@ -416,6 +420,7 @@ fn generate_with_cache(
             tools,
             None,
             Some(true),
+            gen_opt.enable_thinking,
         )
         .map_err(|e| anyhow::anyhow!("chat template apply failed: {e:?}"))?;
     let mut prompt: Vec<u32> = encodings
@@ -423,10 +428,6 @@ fn generate_with_cache(
         .flat_map(|e| e.get_ids())
         .copied()
         .collect();
-
-    let settings_dir = model_dir.parent().unwrap_or(model_dir);
-    let gen_opt =
-        crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
     // Auto-enable TurboQuant KV when the weights are 4-bit and the user hasn't
     // set an explicit override. Reading config.json here is cheap (OS page cache).
     let auto_tq = if gen_opt.kv_cache_bits.is_none() && engine_kv_bits.is_none() {
@@ -440,6 +441,11 @@ fn generate_with_cache(
     if auto_tq.is_some() {
         tracing::info!("[local-mlx-native] 4-bit weights detected → auto-enabling TurboQuant TQ4 KV cache");
     }
+
+    const DEFAULT_TQ_ACTIVATE_AT: i32 = 2048;
+    let tq_activate_at = gen_opt.tq_activate_at
+        .map(|v| v as i32)
+        .unwrap_or(DEFAULT_TQ_ACTIVATE_AT);
 
     let raw_max_new = gen_opt
         .max_new_tokens
@@ -545,6 +551,12 @@ fn generate_with_cache(
 
                 if buffer.len() % 20 == 0 {
                     eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+                    // Release decode-step intermediates every 100 tokens to cap Metal pool growth.
+                    // Each TQ attention step produces ~several MiB of temporary Q·K/softmax/V
+                    // tensors that stay in the pool; clearing periodically keeps total RSS stable.
+                    if generated_count % 100 == 0 {
+                        unsafe { mlx_sys::mlx_clear_cache(); }
+                    }
                     {
                         let (ma, mc, _) = mlx_mem_mib();
                         tracing::info!(
@@ -623,13 +635,10 @@ fn generate_with_cache(
     });
     if let Some(b) = tq_bits {
         tracing::info!(
-            "[local-mlx-native] KV cache: TurboQuant TQ{b} (key={}bit value={}bit; threshold={}tok)",
+            "[local-mlx-native] KV cache: TurboQuant TQ{b} (key={}bit value={}bit; activate_at={}tok)",
             b - 1,
             b,
-            std::env::var("HIGGS_TURBOQUANT_MIN_TOKENS")
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(2048),
+            tq_activate_at,
         );
     }
 
@@ -646,7 +655,7 @@ fn generate_with_cache(
                 Some(b) => (0..n_layers)
                     .map(|_| {
                         Some(
-                            Qwen3LayerKv::turbo(b, model.args.num_key_value_heads, model.args.head_dim)
+                            Qwen3LayerKv::turbo(b, model.args.num_key_value_heads, model.args.head_dim, tq_activate_at)
                                 .expect("TQ cache init"),
                         )
                     })
@@ -715,7 +724,7 @@ fn generate_with_cache(
             let is_stop = |t: u32| t == QWEN35_EOS || t == QWEN35_IM_END;
 
             let mut cache: Vec<Option<Qwen3_5LayerCache>> =
-                build_layer_caches(&model.args, tq_bits)
+                build_layer_caches(&model.args, tq_bits, tq_activate_at)
                     .map_err(|e| anyhow::anyhow!("Qwen3.5 cache init failed: {e:?}"))?;
 
             decode_loop!(

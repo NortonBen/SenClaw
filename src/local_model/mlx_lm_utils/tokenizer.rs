@@ -171,6 +171,7 @@ impl Tokenizer {
         tools: &[Value],
         documents: Option<&[Document]>,
         add_generation_prompt: Option<bool>,
+        enable_thinking: Option<bool>,
     ) -> Result<Vec<Encoding>, Error> {
         let rendered = apply_chat_template_openai_shape(
             &mut self.env,
@@ -181,6 +182,7 @@ impl Tokenizer {
             tools,
             documents,
             add_generation_prompt,
+            enable_thinking,
         )?;
         self.inner
             .encode_batch(vec![rendered], false)
@@ -657,6 +659,7 @@ pub fn apply_chat_template_openai_shape(
     tools: &[Value],
     documents: Option<&[Document]>,
     add_generation_prompt: Option<bool>,
+    enable_thinking: Option<bool>,
 ) -> Result<String, Error> {
     let add_generation_prompt = add_generation_prompt.unwrap_or(false);
 
@@ -674,14 +677,25 @@ pub fn apply_chat_template_openai_shape(
 
     let messages = normalize_openai_messages_for_hf_jinja(messages);
 
-    template
-        .render(context! {
-            messages => messages,
-            documents => documents,
-            tools => tools,
-            add_generation_prompt => add_generation_prompt,
-        })
-        .map_err(Into::into)
+    match enable_thinking {
+        Some(thinking) => template
+            .render(context! {
+                messages => messages,
+                documents => documents,
+                tools => tools,
+                add_generation_prompt => add_generation_prompt,
+                enable_thinking => thinking,
+            })
+            .map_err(Into::into),
+        None => template
+            .render(context! {
+                messages => messages,
+                documents => documents,
+                tools => tools,
+                add_generation_prompt => add_generation_prompt,
+            })
+            .map_err(Into::into),
+    }
 }
 
 #[cfg(test)]

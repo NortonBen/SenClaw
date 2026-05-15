@@ -11,8 +11,14 @@ import {
   Alert,
   Tooltip,
   Input,
+  InputNumber,
   Card,
   Divider,
+  Switch,
+  Select,
+  Form,
+  Row,
+  Col,
 } from 'antd';
 import {
   CloudDownloadOutlined,
@@ -25,6 +31,8 @@ import {
   PoweroffOutlined,
   PlayCircleOutlined,
   ApiOutlined,
+  SaveOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
@@ -77,6 +85,22 @@ const fmtBytes = (n: number): string => {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 };
 
+interface InferenceSettings {
+  kv_cache_bits: number | null;
+  tq_activate_at: number | null;
+  enable_thinking: boolean | null;
+  max_prompt_tokens: number | null;
+  max_new_tokens: number | null;
+}
+
+const DEFAULT_SETTINGS: InferenceSettings = {
+  kv_cache_bits: null,
+  tq_activate_at: null,
+  enable_thinking: false,
+  max_prompt_tokens: null,
+  max_new_tokens: null,
+};
+
 export const LocalModelsSettings: React.FC = () => {
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
@@ -84,12 +108,15 @@ export const LocalModelsSettings: React.FC = () => {
   const [installing, setInstalling] = useState(false);
   const [loading, setLoading] = useState(true);
   const pollRef = useRef<number | null>(null);
+  const [settings, setSettings] = useState<InferenceSettings>(DEFAULT_SETTINGS);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [listRes, rtRes] = await Promise.all([
+      const [listRes, rtRes, settingsRes] = await Promise.all([
         fetch('/api/local-models'),
         fetch('/api/local-models/runtime'),
+        fetch('/api/local-models/settings'),
       ]);
       if (!listRes.ok) throw new Error(`list failed (${listRes.status})`);
       if (!rtRes.ok) throw new Error(`runtime failed (${rtRes.status})`);
@@ -97,12 +124,37 @@ export const LocalModelsSettings: React.FC = () => {
       const rt = await rtRes.json();
       setModels(list.models || []);
       setRuntime(rt);
+      if (settingsRes.ok) {
+        const s = await settingsRes.json();
+        setSettings({ ...DEFAULT_SETTINGS, ...s });
+      }
     } catch (e: any) {
       message.error(`Failed to load local models: ${e.message}`);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const saveSettings = useCallback(async () => {
+    setSettingsSaving(true);
+    try {
+      const res = await fetch('/api/local-models/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        message.error(`Failed to save: ${txt}`);
+        return;
+      }
+      message.success('Inference settings saved');
+    } catch (e: any) {
+      message.error(`Save error: ${e.message}`);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [settings]);
 
   const handleInstallFromHf = useCallback(async () => {
     const raw = hfInput.trim();
@@ -509,6 +561,149 @@ export const LocalModelsSettings: React.FC = () => {
           Accepts <code>org/repo</code> or any full HuggingFace URL. Custom
           installs appear in the table below tagged as <Tag>custom</Tag>.
         </Paragraph>
+      </Card>
+
+      {/* ── Inference settings ───────────────────────────────────────── */}
+      <Card
+        size="small"
+        title={
+          <Space>
+            <ThunderboltOutlined />
+            Inference Settings
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+        extra={
+          <Button
+            type="primary"
+            size="small"
+            icon={<SaveOutlined />}
+            loading={settingsSaving}
+            onClick={saveSettings}
+          >
+            Save
+          </Button>
+        }
+      >
+        <Form layout="vertical" size="small">
+          <Row gutter={24}>
+            {/* KV cache TurboQuant */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="Quantize KV cache entries to reduce memory during long generation. TQ4 = 4-bit total (3-bit key, 4-bit value). TQ3 = 3-bit total. Auto enables TQ4 when the model weights are 4-bit.">
+                    KV TurboQuant bits
+                  </Tooltip>
+                }
+              >
+                <Select
+                  value={settings.kv_cache_bits ?? 'auto'}
+                  onChange={(v) =>
+                    setSettings((s) => ({
+                      ...s,
+                      kv_cache_bits: v === 'auto' ? null : (v as number),
+                    }))
+                  }
+                  options={[
+                    { value: 'auto', label: 'Auto (4-bit for 4-bit models)' },
+                    { value: 4, label: 'TQ4 — 4-bit total (recommended)' },
+                    { value: 3, label: 'TQ3 — 3-bit total' },
+                    { value: 0, label: 'Off — FP16 (no quantization)' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+
+            {/* TQ activate-at */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="Minimum context length (tokens already in cache) before TurboQuant activates. Set to 0 to quantize immediately. Default: 2048.">
+                    TQ activate after (tokens)
+                  </Tooltip>
+                }
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  max={65536}
+                  step={256}
+                  value={settings.tq_activate_at ?? 2048}
+                  placeholder="2048"
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, tq_activate_at: v ?? null }))
+                  }
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Thinking mode */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="Enable chain-of-thought thinking for Qwen3 models. Off = model answers directly without a <think> block (faster, uses fewer tokens). Enable for complex reasoning tasks.">
+                    Thinking mode (Qwen3)
+                  </Tooltip>
+                }
+              >
+                <Switch
+                  checked={settings.enable_thinking === true}
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, enable_thinking: v }))
+                  }
+                  checkedChildren="On"
+                  unCheckedChildren="Off"
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Max prompt tokens */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="Maximum prompt length after chat-template encoding. Older conversation is dropped from the start. Default: 8192.">
+                    Max prompt tokens
+                  </Tooltip>
+                }
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={256}
+                  max={131072}
+                  step={1024}
+                  value={settings.max_prompt_tokens ?? undefined}
+                  placeholder="8192 (default)"
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, max_prompt_tokens: v ?? null }))
+                  }
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Max new tokens */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="Maximum number of tokens to generate per request. Default: 2048.">
+                    Max new tokens
+                  </Tooltip>
+                }
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={64}
+                  max={8192}
+                  step={256}
+                  value={settings.max_new_tokens ?? undefined}
+                  placeholder="2048 (default)"
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, max_new_tokens: v ?? null }))
+                  }
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
       </Card>
 
       <Table

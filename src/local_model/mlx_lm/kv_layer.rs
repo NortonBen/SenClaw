@@ -28,6 +28,8 @@ pub struct Qwen3LayerKv {
     inner: SteppingKeyValueCache,
     /// Stored TQ view from the last `update_and_fetch` call; used by `turboquant_attention`.
     last_tq_view: Option<TurboQuantKvView>,
+    /// Context length at which TurboQuant storage activates. `0` = activate immediately.
+    tq_activate_at: i32,
 }
 
 impl Qwen3LayerKv {
@@ -36,13 +38,15 @@ impl Qwen3LayerKv {
         Self {
             inner: SteppingKeyValueCache::new(),
             last_tq_view: None,
+            tq_activate_at: 0,
         }
     }
 
     /// Higgs GPU TurboQuant cache.
     ///
     /// `bits` must be 3 (key=2bit, value=3bit) or 4 (key=3bit, value=4bit).
-    pub fn turbo(bits: u8, n_kv_heads: i32, head_dim: i32) -> Result<Self, Exception> {
+    /// `activate_at`: quantize once ctx ≥ this many tokens; `0` = immediately.
+    pub fn turbo(bits: u8, n_kv_heads: i32, head_dim: i32, activate_at: i32) -> Result<Self, Exception> {
         let config = KvCacheConfig {
             mode: KvCacheMode::Turboquant,
             bits,
@@ -53,6 +57,7 @@ impl Qwen3LayerKv {
         Ok(Self {
             inner: SteppingKeyValueCache::new_turbo(config, n_kv_heads, head_dim)?,
             last_tq_view: None,
+            tq_activate_at: activate_at,
         })
     }
 }
@@ -79,7 +84,7 @@ impl KeyValueCache for Qwen3LayerKv {
         keys: Array,
         values: Array,
     ) -> Result<KvFetchResult, Exception> {
-        match self.inner.update_and_view(keys, values)? {
+        match self.inner.update_and_view_with_activation_threshold(&keys, &values, self.tq_activate_at)? {
             KvCacheView::Dense { keys: k, values: v } => {
                 self.last_tq_view = None;
                 Ok(KvFetchResult::Fp16(k, v))

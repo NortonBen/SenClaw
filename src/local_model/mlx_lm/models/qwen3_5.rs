@@ -695,7 +695,7 @@ impl Model {
 
 /// Build per-layer caches for Qwen3.5 generation.
 /// Self-attn layers get Qwen3LayerKv (dense or TQ), linear-attn layers get LinearAttnState.
-pub fn build_layer_caches(args: &ModelArgs, kv_bits: Option<u8>) -> Result<Vec<Option<Qwen3_5LayerCache>>, Exception> {
+pub fn build_layer_caches(args: &ModelArgs, kv_bits: Option<u8>, tq_activate_at: i32) -> Result<Vec<Option<Qwen3_5LayerCache>>, Exception> {
     let nv = args.linear_num_value_heads;
     let vd = args.linear_value_head_dim;
     let kd = args.linear_key_head_dim;
@@ -708,7 +708,7 @@ pub fn build_layer_caches(args: &ModelArgs, kv_bits: Option<u8>) -> Result<Vec<O
                 let kv = match kv_bits {
                     Some(bits) => {
                         let b = if bits == 4 { 4u8 } else { 3u8 };
-                        Qwen3LayerKv::turbo(b, args.num_key_value_heads, args.head_dim)?
+                        Qwen3LayerKv::turbo(b, args.num_key_value_heads, args.head_dim, tq_activate_at)?
                     }
                     None => Qwen3LayerKv::dense(),
                 };

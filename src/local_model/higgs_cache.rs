@@ -634,7 +634,7 @@ impl SteppingKeyValueCache {
         })
     }
 
-    fn update_and_view_with_activation_threshold(
+    pub(crate) fn update_and_view_with_activation_threshold(
         &mut self,
         keys: &Array,
         values: &Array,

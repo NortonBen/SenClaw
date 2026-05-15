@@ -350,6 +350,19 @@ pub struct LocalModelSettings {
     /// With TurboQuant KV (native MLX), runtime further caps at [`TURBOQUANT_MAX_NEW_TOKENS_CAP`].
     #[serde(default)]
     pub max_new_tokens: Option<u32>,
+    /// Pass `enable_thinking` to the chat template. `None` = let the template decide (model
+    /// default). `false` = disable thinking (Qwen3 pre-fills `<think>\n\n</think>` to skip
+    /// the reasoning block). Defaults to `false` to avoid unbounded thinking overhead.
+    #[serde(default = "default_enable_thinking")]
+    pub enable_thinking: Option<bool>,
+    /// Context length (tokens already in KV cache) at which TurboQuant quantization activates.
+    /// `0` = quantize immediately (from first decode step). `None` → default 2048.
+    #[serde(default)]
+    pub tq_activate_at: Option<u32>,
+}
+
+fn default_enable_thinking() -> Option<bool> {
+    Some(false)
 }
 
 fn settings_path(state: &UiState) -> PathBuf {
