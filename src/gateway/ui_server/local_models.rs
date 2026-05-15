@@ -32,8 +32,10 @@ use crate::gateway::group_manager::{
     load_llm_configs, save_llm_config, set_active_llm_config, LlmConfig,
 };
 use crate::local_model::{read_model_context_length_from_dir, KnownModel, KNOWN_MODELS};
+#[cfg(feature = "local-candle")]
+use crate::local_model::{CandleEngine, LocalModelRuntime};
 #[cfg(feature = "local-mlx")]
-use crate::local_model::{LocalModelRuntime, MlxNativeEngine};
+use crate::local_model::MlxNativeEngine;
 
 use super::core::{AppError, UiState};
 
@@ -74,49 +76,93 @@ static DOWNLOADS: Lazy<Mutex<HashMap<String, DownloadHandle>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 // ---------------------------------------------------------------------------
-// Loaded-engine registry — keeps `MlxNativeEngine` instances alive between
-// requests so weights/tokenizer state can be reused. Without `local-mlx` we
-// still expose the lifecycle (load/unload + a `loaded` flag) so the UI stays
-// consistent, but no real engine is constructed.
+// Loaded-engine registry — keeps `CandleEngine` instances alive between
+// requests so weights stay in memory and are reused across chats.
+// Without `local-candle` we still expose the lifecycle (load/unload + a
+// `loaded` flag) so the UI stays consistent.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "local-mlx")]
-static LOADED_ENGINES: Lazy<Mutex<HashMap<String, Arc<MlxNativeEngine>>>> =
+#[cfg(feature = "local-candle")]
+static LOADED_ENGINES: Lazy<Mutex<HashMap<String, Arc<CandleEngine>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-#[cfg(not(feature = "local-mlx"))]
+#[cfg(not(feature = "local-candle"))]
 static LOADED_ENGINES_STUB: Lazy<Mutex<std::collections::HashSet<String>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 
+// ---------------------------------------------------------------------------
+// MLX native engine registry — keeps MlxNativeEngine instances alive between
+// requests so weights stay in memory and are reused across chats.
+// Gated behind `local-mlx` feature (requires Apple Silicon + mlx-rs).
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "local-mlx")]
+static MLX_ENGINES: Lazy<Mutex<HashMap<String, Arc<MlxNativeEngine>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(feature = "local-mlx")]
+pub fn get_or_create_mlx_engine(id: &str, model_dir: &std::path::Path) -> Arc<MlxNativeEngine> {
+    let cid = canonical_local_model_id(id);
+    let mut map = MLX_ENGINES.lock().unwrap();
+    if let Some(existing) = map.get(&cid) {
+        return existing.clone();
+    }
+    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, None));
+    map.insert(cid, engine.clone());
+    engine
+}
+
+#[cfg(feature = "local-mlx")]
+pub fn get_mlx_engine(id: &str) -> Option<Arc<MlxNativeEngine>> {
+    let cid = canonical_local_model_id(id);
+    MLX_ENGINES.lock().unwrap().get(&cid).cloned()
+}
+
 fn loaded_ids() -> Vec<String> {
+    let mut ids: Vec<String>;
+    #[cfg(feature = "local-candle")]
+    {
+        ids = LOADED_ENGINES.lock().unwrap().keys().cloned().collect();
+    }
+    #[cfg(not(feature = "local-candle"))]
+    {
+        ids = LOADED_ENGINES_STUB.lock().unwrap().iter().cloned().collect();
+    }
+    // Also include running MLX native engines.
     #[cfg(feature = "local-mlx")]
     {
-        LOADED_ENGINES.lock().unwrap().keys().cloned().collect()
+        let mlx_ids: Vec<String> = MLX_ENGINES
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| e.is_loaded())
+            .map(|(k, _)| k.clone())
+            .collect();
+        ids.extend(mlx_ids);
     }
-    #[cfg(not(feature = "local-mlx"))]
-    {
-        LOADED_ENGINES_STUB.lock().unwrap().iter().cloned().collect()
-    }
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 fn is_loaded(id: &str) -> bool {
-    #[cfg(feature = "local-mlx")]
+    #[cfg(feature = "local-candle")]
     {
         LOADED_ENGINES
             .lock()
             .unwrap()
             .contains_key(&canonical_local_model_id(id))
     }
-    #[cfg(not(feature = "local-mlx"))]
+    #[cfg(not(feature = "local-candle"))]
     {
         LOADED_ENGINES_STUB.lock().unwrap().contains(id)
     }
 }
 
-/// Public accessor for `query_llm.rs` to reuse a loaded engine. Returns
-/// `None` when the model isn't currently loaded.
-#[cfg(feature = "local-mlx")]
-pub fn get_loaded_engine(id: &str) -> Option<Arc<MlxNativeEngine>> {
+/// Public accessor for `query_llm.rs` to reuse a loaded engine.
+/// Returns `None` when the model isn't currently loaded.
+#[cfg(feature = "local-candle")]
+pub fn get_loaded_engine(id: &str) -> Option<Arc<CandleEngine>> {
     let cid = canonical_local_model_id(id);
     LOADED_ENGINES.lock().unwrap().get(&cid).cloned()
 }
@@ -127,38 +173,19 @@ pub fn canonical_local_model_id(id: &str) -> String {
     id.trim().to_string()
 }
 
-/// Get the cached engine for `id` or insert a fresh one. Used by ZenCore on
-/// first inference so the heavy MLX state is created once per (model_id) and
-/// reused for every subsequent chat — without this, each chat instantiates a
-/// new engine and the previous one's unified-memory allocations linger,
-/// causing RAM to grow ~3 GB per turn for a 4B-4bit model.
-///
-/// If [`MlxNativeEngine::kv_cache_bits`] no longer matches `kv_cache_bits`
-/// (user changed turboquant settings), the old engine is [`MlxNativeEngine::unload`]d
-/// and replaced so KV-cache mode stays consistent.
-#[cfg(feature = "local-mlx")]
+/// Return the cached engine for `id`, or create and cache a new one.
+/// Weights are loaded lazily on the first `generate_stream` call.
+#[cfg(feature = "local-candle")]
 pub fn get_or_create_loaded_engine(
     id: &str,
     model_dir: &std::path::Path,
-    kv_cache_bits: Option<u8>,
-) -> Arc<MlxNativeEngine> {
+) -> Arc<CandleEngine> {
     let cid = canonical_local_model_id(id);
     let mut map = LOADED_ENGINES.lock().unwrap();
     if let Some(existing) = map.get(&cid) {
-        if existing.kv_cache_bits() == kv_cache_bits {
-            return existing.clone();
-        }
-        tracing::info!(
-            "[local-models] replacing engine `{}`: kv_cache_bits {:?} → {:?}",
-            cid,
-            existing.kv_cache_bits(),
-            kv_cache_bits
-        );
-        if let Some(old) = map.remove(&cid) {
-            old.unload();
-        }
+        return existing.clone();
     }
-    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, kv_cache_bits));
+    let engine = Arc::new(CandleEngine::new(model_dir, &cid));
     map.insert(cid, engine.clone());
     engine
 }
@@ -197,6 +224,8 @@ struct ModelEntry {
     custom: bool,
     /// True when an engine is kept warm in memory for this model.
     loaded: bool,
+    /// True when the model supports image/vision inputs.
+    vision: bool,
 }
 
 /// Reverse `safe_dirname`: `org__repo` → `org/repo`. Only treats the first
@@ -243,6 +272,7 @@ pub(crate) async fn local_models_list(
                 download: download_snapshot.get(m.id).cloned(),
                 custom: false,
                 loaded: is_loaded(m.id),
+                vision: m.vision,
             }
         })
         .collect();
@@ -292,6 +322,7 @@ pub(crate) async fn local_models_list(
             context_length,
             custom: true,
             loaded,
+            vision: crate::local_model::models::infer_vision_from_id(&id),
         });
     }
 
@@ -301,11 +332,11 @@ pub(crate) async fn local_models_list(
 pub(crate) async fn local_models_runtime(
     State(state): State<Arc<UiState>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let mlx_feature = cfg!(feature = "local-mlx");
-    let turboquant_feature = cfg!(feature = "local-mlx-turboquant");
+    let candle_feature = cfg!(feature = "local-candle");
+    let metal_feature = cfg!(feature = "local-candle-metal");
     Ok(Json(json!({
-        "feature_local_mlx": mlx_feature,
-        "feature_turboquant": turboquant_feature,
+        "feature_local_candle": candle_feature,
+        "feature_metal": metal_feature,
         "local_models_dir": state.config.paths.local_models_dir.to_string_lossy(),
         "platform": std::env::consts::OS,
     })))
@@ -323,6 +354,35 @@ pub const DEFAULT_MLX_MAX_PROMPT_TOKENS: u32 = 128_000;
 /// Default cap on **generated** tokens per request when omitted from settings.
 /// Hard-capped at **8192** in API / `mlx_native` decode loop.
 pub const DEFAULT_MLX_MAX_NEW_TOKENS: u32 = 8192;
+
+/// Default prompt length cap for the **Candle** CPU/Metal backend.
+///
+/// Much lower than the MLX default because:
+/// - Tools are **never** forwarded to local Candle models (they can't use them).
+/// - After tool stripping a typical system-prompt + chat history is ~200–500 tokens.
+/// - CPU prefill is O(seq_len) per layer; keeping ≤ 512 tokens ensures prefill
+///   completes in < 60 s even in unoptimized debug builds.
+///
+/// Raise via `max_prompt_tokens` in `settings.json` for longer conversations
+/// (or build with `--release` where this is 10–15× faster).
+pub const DEFAULT_CANDLE_MAX_PROMPT_TOKENS: u32 = 512;
+
+/// Default **generation** token cap for the Candle CPU/Metal backend.
+///
+/// CPU decode throughput on a small model (0.6B–4B) is typically 3–15 tok/s, so
+/// 512 tokens completes within ~30–170 s even on slow hardware.  Raise via
+/// `max_new_tokens` in `settings.json` for longer outputs (beware latency).
+pub const DEFAULT_CANDLE_MAX_NEW_TOKENS: u32 = 512;
+
+/// Default KV-cache window (tokens).  The Candle engine never accumulates more
+/// than this many key/value entries per layer, bounding peak RAM regardless of
+/// conversation length.
+///
+/// Memory cost at this default (Qwen3-8B BF16, 32 layers, 8 KV heads, head 128):
+///   `2 × 32 × 8 × 128 × 4096 × 2 bytes ≈ 512 MB`
+///
+/// Configurable per-deployment via `max_kv_tokens` in `settings.json`.
+pub const DEFAULT_KV_WINDOW_TOKENS: u32 = 4096;
 
 /// When TurboQuant KV is active, `mlx_native` caps **decode** at this (below API 8192)
 /// to cut RAM / CPU on the slow CPU attention path; raise via `max_new_tokens` in JSON only up to this cap.
@@ -359,6 +419,23 @@ pub struct LocalModelSettings {
     /// `0` = quantize immediately (from first decode step). `None` → default 2048.
     #[serde(default)]
     pub tq_activate_at: Option<u32>,
+    /// Maximum number of KV-cache tokens kept in memory per layer (Candle and MLX).
+    ///
+    /// When the rolling window is full, the **oldest** tokens are evicted so memory
+    /// stays bounded.  RoPE positions remain absolute — quality is preserved for
+    /// the retained context window.
+    ///
+    /// `None` → [`DEFAULT_KV_WINDOW_TOKENS`] (4096).
+    /// Range: 128 – 262 144.
+    #[serde(default)]
+    pub max_kv_tokens: Option<u32>,
+    /// Preferred inference backend for this machine.
+    ///
+    /// `"mlx"` → in-process mlx-rs (Apple Silicon, ~60–100 tok/s on M4 Pro).
+    /// `"candle"` → Candle CPU+Accelerate (~12 tok/s) or Metal (~7 tok/s).
+    /// `None` → auto-detect: `"mlx"` when the `local-mlx` feature is compiled in, else `"candle"`.
+    #[serde(default)]
+    pub preferred_backend: Option<String>,
 }
 
 fn default_enable_thinking() -> Option<bool> {
@@ -417,6 +494,22 @@ pub(crate) async fn local_models_settings_put(
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
                 format!("max_new_tokens must be between 1 and 8192 (got {n})"),
+            ));
+        }
+    }
+    if let Some(n) = settings.max_kv_tokens {
+        if !(128..=262_144).contains(&n) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("max_kv_tokens must be between 128 and 262144 (got {n})"),
+            ));
+        }
+    }
+    if let Some(ref b) = settings.preferred_backend {
+        if !matches!(b.as_str(), "mlx" | "candle") {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("preferred_backend must be \"mlx\" or \"candle\" (got \"{b}\")"),
             ));
         }
     }
@@ -626,12 +719,11 @@ pub(crate) async fn local_models_load(
         ));
     }
 
-    #[cfg(feature = "local-mlx")]
+    #[cfg(feature = "local-candle")]
     {
-        let kv_bits = load_settings_blocking(&state.config.paths.local_models_dir).kv_cache_bits;
-        // Reuse the same registry entry as ZenCore (`get_or_create_loaded_engine`) so
-        // clicking "Load" does not allocate a second copy of weights.
-        let engine = get_or_create_loaded_engine(&cid, &dir, kv_bits);
+        // Reuse the same registry entry as ZenCore so clicking "Load"
+        // does not allocate a second copy of weights in memory.
+        let engine = get_or_create_loaded_engine(&cid, &dir);
         engine
             .ensure_installed()
             .await
@@ -642,7 +734,7 @@ pub(crate) async fn local_models_load(
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
-    #[cfg(not(feature = "local-mlx"))]
+    #[cfg(not(feature = "local-candle"))]
     {
         LOADED_ENGINES_STUB.lock().unwrap().insert(cid.clone());
     }
@@ -655,19 +747,68 @@ pub(crate) async fn local_models_unload(
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let cid = canonical_local_model_id(&id);
-    #[cfg(feature = "local-mlx")]
+    #[cfg(feature = "local-candle")]
     {
-        // Two-step unload: explicitly drop cached Model+Tokenizer so MLX
-        // frees the unified-memory allocation, THEN release the Arc.
         if let Some(engine) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
             engine.unload();
         }
     }
-    #[cfg(not(feature = "local-mlx"))]
+    #[cfg(not(feature = "local-candle"))]
     {
         LOADED_ENGINES_STUB.lock().unwrap().remove(&cid);
     }
+    // Also unload any MLX native engine for this model.
+    #[cfg(feature = "local-mlx")]
+    {
+        if let Some(engine) = MLX_ENGINES.lock().unwrap().remove(&cid) {
+            engine.unload();
+        }
+    }
     Ok(Json(json!({ "ok": true, "id": cid, "loaded": false })))
+}
+
+/// Load a model using the MLX native backend (in-process mlx-rs inference).
+pub(crate) async fn local_models_load_mlx(
+    State(state): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    #[cfg(not(feature = "local-mlx"))]
+    {
+        let _ = (state, id);
+        return Err(AppError(
+            StatusCode::NOT_IMPLEMENTED,
+            "local-mlx feature not enabled — rebuild with `cargo build --features local-mlx`".to_string(),
+        ));
+    }
+
+    #[cfg(feature = "local-mlx")]
+    {
+        let cid = canonical_local_model_id(&id);
+        let dir = model_dir(&state, &cid);
+        if !is_installed(&dir) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("model `{cid}` is not installed"),
+            ));
+        }
+        let engine = get_or_create_mlx_engine(&cid, &dir);
+        // warm_up() is synchronous (blocks while loading weights); run on blocking thread.
+        tokio::task::spawn_blocking(move || engine.warm_up())
+            .await
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("task panic: {e}")))?
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        Ok(Json(json!({
+            "ok": true,
+            "id": cid,
+            "loaded": true,
+            "backend": "local-mlx",
+        })))
+    }
+
+    // Unreachable when local-mlx is enabled, but satisfies the return type when it's not.
+    #[cfg(not(feature = "local-mlx"))]
+    #[allow(unreachable_code)]
+    Ok(Json(json!({ "ok": false })))
 }
 
 pub(crate) async fn local_models_loaded_list(
@@ -678,11 +819,21 @@ pub(crate) async fn local_models_loaded_list(
 
 // ---------------------------------------------------------------------------
 // "Use in LLM" — create an LLM-config entry pointing at the installed model.
+// Optionally accepts `?backend=mlx` to create an mlx-lm sidecar config
+// instead of the default Candle in-process config.
 // ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+pub(crate) struct UseAsLlmQuery {
+    /// `"mlx"` → mlx-lm sidecar (OpenAI adapter, ~60–100 tok/s on M4 Pro)
+    /// `"candle"` or omitted → Candle in-process (~12 tok/s on M4 Pro with Accelerate)
+    pub backend: Option<String>,
+}
 
 pub(crate) async fn local_models_use_as_llm(
     State(state): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
+    axum::extract::Query(query): axum::extract::Query<UseAsLlmQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let dir = model_dir(&state, &id);
     if !is_installed(&dir) {
@@ -692,10 +843,34 @@ pub(crate) async fn local_models_use_as_llm(
         ));
     }
 
+    // Resolve backend: explicit query param > settings.preferred_backend > auto-detect.
+    let backend_choice = query.backend.clone().or_else(|| {
+        let s = load_settings_blocking(&state.config.paths.local_models_dir);
+        s.preferred_backend.clone()
+    });
+
+    #[cfg(feature = "local-mlx")]
+    let mlx_available = true;
+    #[cfg(not(feature = "local-mlx"))]
+    let mlx_available = false;
+
+    let use_mlx = match backend_choice.as_deref() {
+        Some("mlx") => true,
+        Some("candle") => false,
+        // No preference: default to MLX when the feature is compiled in.
+        _ => mlx_available,
+    };
+
     let known: Option<&KnownModel> = KNOWN_MODELS.iter().find(|m| m.id == id);
-    let label = known
-        .map(|m| format!("Local {}", m.label))
-        .unwrap_or_else(|| format!("Local {id}"));
+    let label = if use_mlx {
+        known
+            .map(|m| format!("Local {} (MLX)", m.label))
+            .unwrap_or_else(|| format!("Local {id} (MLX)"))
+    } else {
+        known
+            .map(|m| format!("Local {}", m.label))
+            .unwrap_or_else(|| format!("Local {id}"))
+    };
     let context_length = read_model_context_length_from_dir(&dir)
         .or_else(|| known.map(|m| m.context_length))
         .unwrap_or(DEFAULT_MLX_MAX_PROMPT_TOKENS);
@@ -708,17 +883,36 @@ pub(crate) async fn local_models_use_as_llm(
             .as_millis(),
         rand::Rng::gen_range(&mut rand::thread_rng(), 1000u32..9999u32)
     );
-    let cfg = LlmConfig {
-        id: cfg_id.clone(),
-        label,
-        provider: "local-mlx".to_string(),
-        base_url: String::new(),
-        api_key: String::new(),
-        model_name: id.clone(),
-        adapt: "local-mlx-native".to_string(),
-        max_tokens: DEFAULT_MLX_MAX_NEW_TOKENS,
-        context_length,
-        vision: Some(false),
+
+    let cfg = if use_mlx {
+        // MLX config: the mlx_lm.server will be auto-started on first use.
+        // base_url is determined at runtime by the MlxEngine; leave it blank
+        // here and let query_llm.rs look up the running engine's port.
+        LlmConfig {
+            id: cfg_id.clone(),
+            label,
+            provider: "local-mlx".to_string(),
+            base_url: String::new(), // filled in dynamically by the adapter
+            api_key: String::new(),
+            model_name: id.clone(),
+            adapt: "local-mlx".to_string(),
+            max_tokens: DEFAULT_MLX_MAX_NEW_TOKENS,
+            context_length,
+            vision: Some(false),
+        }
+    } else {
+        LlmConfig {
+            id: cfg_id.clone(),
+            label,
+            provider: "local-candle".to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model_name: id.clone(),
+            adapt: "local-candle-native".to_string(),
+            max_tokens: DEFAULT_CANDLE_MAX_NEW_TOKENS,
+            context_length,
+            vision: Some(false),
+        }
     };
     save_llm_config(&state.config.paths.global_config_path, &cfg)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

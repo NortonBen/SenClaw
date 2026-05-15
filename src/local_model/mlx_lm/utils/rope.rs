@@ -35,10 +35,6 @@ impl FloatOrString {
 }
 
 /// Get a numeric float value from a scaling config by key.
-///
-/// Note: str variants in the config are not always floats — values like "default" or "linear"
-/// are also valid for non-numeric fields. This function should only be called for keys that
-/// are expected to hold numeric values.
 fn get_numeric_from_config(
     config: &HashMap<String, FloatOrString>,
     key: &str,
@@ -57,10 +53,6 @@ fn get_numeric_from_config(
 }
 
 /// Llama3-style RoPE with frequency scaling.
-///
-/// Applies piecewise frequency scaling based on wavelength cutoffs derived from
-/// `low_freq_factor`, `high_freq_factor`, `factor`, and `original_max_position_embeddings`.
-// TODO: support derive ModuleParameters for structs with non-param Array fields
 #[derive(Debug, Clone, ModuleParameters)]
 pub struct Llama3Rope {
     pub dimensions: i32,
@@ -82,9 +74,6 @@ impl Llama3Rope {
     ) -> Result<Self, Exception> {
         let half_dims = dims / 2;
 
-        // Compute freqs using MLX ops, matching Python:
-        //   freqs = base ** (mx.arange(0, dims, 2) / dims)
-        // which equals base^(2i/dims) for i in 0..half_dims
         let indices = arange::<_, f32>(None, half_dims, None)?;
         let exponents = indices.multiply(Array::from_f32(2.0 / dims as f32))?;
         let freqs = Array::from_f32(base).power(&exponents)?;
@@ -93,21 +82,12 @@ impl Llama3Rope {
         let low_freq_wavelen = old_context_len / low_freq_factor;
         let high_freq_wavelen = old_context_len / high_freq_factor;
 
-        // wavelens = 2 * pi * freqs
-        // Apply piecewise scaling matching Python exactly:
-        //   freqs = where(wavelens > low_freq_wavelen, freqs * factor, freqs)
-        //   is_medium = (wavelens > high_freq_wavelen) & (wavelens < low_freq_wavelen)
-        //   smooth_factors = (old_context_len / wavelens - low_freq_factor) / (high - low)
-        //   smooth_freqs = freqs / ((1 - smooth_factors) / factor + smooth_factors)
-        //   freqs = where(is_medium, smooth_freqs, freqs)
         let two_pi = Array::from_f32(2.0 * std::f32::consts::PI);
         let wavelens = freqs.multiply(&two_pi)?;
 
-        // First pass: scale low frequencies (long wavelengths) by factor
         let is_low = wavelens.gt(Array::from_f32(low_freq_wavelen))?;
         let freqs = which(&is_low, &freqs.multiply(Array::from_f32(factor))?, &freqs)?;
 
-        // Second pass: smooth interpolation for medium frequencies
         let is_medium = wavelens
             .gt(Array::from_f32(high_freq_wavelen))?
             .logical_and(&wavelens.lt(Array::from_f32(low_freq_wavelen))?)?;
@@ -118,7 +98,6 @@ impl Llama3Rope {
             .subtract(Array::from_f32(low_freq_factor))?
             .divide(Array::from_f32(high_freq_factor - low_freq_factor))?;
 
-        // smooth_freqs = freqs / ((1 - smooth_factors) / factor + smooth_factors)
         let one_minus_smooth = Array::from_f32(1.0).subtract(&smooth_factors)?;
         let denom = one_minus_smooth
             .divide(Array::from_f32(factor))?
@@ -170,7 +149,6 @@ pub enum RopeVariant {
     Llama3(Llama3Rope),
 }
 
-// TODO: support derive ModuleParameters for enum
 impl mlx_rs::module::ModuleParameters for RopeVariant {
     fn num_parameters(&self) -> usize {
         match self {

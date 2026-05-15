@@ -138,16 +138,16 @@ tokenizers = { version = "0.22", optional = true, default-features = false, feat
 # Tokio utilities (CancellationToken for zen-core abort)
 tokio-util = { version = "0.7", features = ["rt"] }
 
+minijinja = { version = "2", optional = true, features = ["serde"] }
+minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
+
 # Native MLX inference on Apple Silicon (feature-gated; macOS-only build).
 # Enable via: cargo build --features local-mlx
 # ML stack: **mlx-rs** only from [oxiglade/mlx-rs](https://github.com/oxiglade/mlx-rs)
+# (aligned with upstream oxideai tag v0.25.3). Qwen3 + chat-template helpers live
 # vendored under `src/local_model/mlx_lm*` — see oxiglade examples/mistral (mlx-rs-only)
 # vs examples/lm (mlx-lm).
 mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"], optional = true }
-mlx-sys = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", optional = true }
-minijinja = { version = "2", optional = true, features = ["serde"] }
-minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
-turboquant-rs = { version = "0.4.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -161,18 +161,35 @@ tonic-build = "0.12"
 # Build: cargo build --features local-embed
 # Build with Apple Silicon Metal: cargo build --features local-embed-metal
 local-embed = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
-local-embed-metal = ["local-embed", "candle-core/metal"]
+local-embed-metal = ["local-embed", "candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
-# Native LLM inference via mlx-rs on Apple Silicon. Includes ConcatKeyValueCache path.
-local-mlx = [
-    "dep:mlx-rs",
-    "dep:mlx-sys",
+# Native LLM inference via candle (cross-platform: CPU + optional Metal on Apple Silicon).
+# Build: cargo build --features local-candle
+# Build with Apple Silicon Metal: cargo build --features local-candle-metal
+local-candle = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
     "dep:tokenizers",
     "dep:minijinja",
     "dep:minijinja-contrib",
 ]
-# Opt-in KV-cache quantization (3-4 bit) via turboquant-rs. Long-context only.
-local-mlx-turboquant = ["local-mlx", "dep:turboquant-rs"]
+local-candle-metal = ["local-candle", "candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+# Apple Accelerate BLAS path: forces CPU device + F32 dtype so cblas_sgemm is used.
+# On M4 Pro, Accelerate SGEMV (M=1 decode) reaches ~70% of CPU memory bandwidth
+# (~48 GB/s effective), yielding ~45 tok/s vs ~7 tok/s with Metal's BM=32 GEMM
+# that wastes 97% of GPU threads when seq_len=1.
+# Build: cargo build --release --features local-candle-accelerate
+local-candle-accelerate = ["local-candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+
+# Native LLM inference via mlx-rs on Apple Silicon. Includes ConcatKeyValueCache path.
+# Build: cargo build --features local-mlx
+local-mlx = [
+    "dep:mlx-rs",
+    "dep:tokenizers",
+    "dep:minijinja",
+    "dep:minijinja-contrib",
+]
 
 [profile.release]
 lto = "thin"

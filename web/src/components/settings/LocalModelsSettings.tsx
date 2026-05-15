@@ -19,6 +19,7 @@ import {
   Form,
   Row,
   Col,
+  Radio,
 } from 'antd';
 import {
   CloudDownloadOutlined,
@@ -91,6 +92,8 @@ interface InferenceSettings {
   enable_thinking: boolean | null;
   max_prompt_tokens: number | null;
   max_new_tokens: number | null;
+  /** "mlx" | "candle" | null (auto) */
+  preferred_backend: string | null;
 }
 
 const DEFAULT_SETTINGS: InferenceSettings = {
@@ -99,6 +102,7 @@ const DEFAULT_SETTINGS: InferenceSettings = {
   enable_thinking: false,
   max_prompt_tokens: null,
   max_new_tokens: null,
+  preferred_backend: null,
 };
 
 export const LocalModelsSettings: React.FC = () => {
@@ -244,15 +248,18 @@ export const LocalModelsSettings: React.FC = () => {
   };
 
   const handleLoad = async (id: string) => {
-    const res = await fetch(`/api/local-models/${encodeURIComponent(id)}/load`, {
-      method: 'POST',
-    });
+    // Use preferred_backend from settings: mlx → /load-mlx, else → /load (Candle)
+    const useMlx = settings.preferred_backend === 'mlx';
+    const endpoint = useMlx
+      ? `/api/local-models/${encodeURIComponent(id)}/load-mlx`
+      : `/api/local-models/${encodeURIComponent(id)}/load`;
+    const res = await fetch(endpoint, { method: 'POST' });
     if (!res.ok) {
       const txt = await res.text();
       message.error(`Load failed: ${txt}`);
       return;
     }
-    message.success(`Loaded ${id}`);
+    message.success(`Loaded ${id} (${useMlx ? 'MLX native' : 'Candle'})`);
     refresh();
   };
 
@@ -269,8 +276,12 @@ export const LocalModelsSettings: React.FC = () => {
   };
 
   const handleUseAsLlm = async (id: string) => {
+    // Pass ?backend= so the server uses the right profile type.
+    const backendParam = settings.preferred_backend
+      ? `?backend=${settings.preferred_backend}`
+      : '';
     const res = await fetch(
-      `/api/local-models/${encodeURIComponent(id)}/use-as-llm`,
+      `/api/local-models/${encodeURIComponent(id)}/use-as-llm${backendParam}`,
       { method: 'POST' }
     );
     if (!res.ok) {
@@ -437,13 +448,21 @@ export const LocalModelsSettings: React.FC = () => {
               </Button>
             )}
             {m.installed && !m.loaded && (
-              <Tooltip title="Keep this model warm in memory for fast inference">
+              <Tooltip
+                title={
+                  settings.preferred_backend === 'mlx'
+                    ? 'Load with MLX native (mlx-rs, ~60–100 tok/s)'
+                    : settings.preferred_backend === 'candle'
+                    ? 'Load with Candle (CPU+Accelerate, ~12 tok/s)'
+                    : 'Load model into memory (backend: auto)'
+                }
+              >
                 <Button
                   size="small"
                   icon={<PlayCircleOutlined />}
                   onClick={() => handleLoad(m.id)}
                 >
-                  Load
+                  Load{settings.preferred_backend === 'mlx' ? ' (MLX)' : settings.preferred_backend === 'candle' ? ' (Candle)' : ''}
                 </Button>
               </Tooltip>
             )}
@@ -460,7 +479,15 @@ export const LocalModelsSettings: React.FC = () => {
             )}
             {m.installed && (
               <>
-                <Tooltip title="Create an LLM profile pointing at this local model">
+                <Tooltip
+                  title={
+                    settings.preferred_backend === 'mlx'
+                      ? 'Create an LLM profile using MLX native backend (mlx-rs)'
+                      : settings.preferred_backend === 'candle'
+                      ? 'Create an LLM profile using Candle backend'
+                      : 'Create an LLM profile (backend: auto-detect)'
+                  }
+                >
                   <Button
                     size="small"
                     icon={<ApiOutlined />}
@@ -586,6 +613,54 @@ export const LocalModelsSettings: React.FC = () => {
         }
       >
         <Form layout="vertical" size="small">
+          {/* ── Backend selector ──────────────────────────────────── */}
+          <Form.Item
+            label={
+              <Tooltip title="Which inference engine to use for Load and Use in LLM. MLX native uses mlx-rs (Apple Silicon only, ~60–100 tok/s). Candle runs on CPU with Apple Accelerate BLAS (~12 tok/s) or Metal (~7 tok/s).">
+                Inference backend
+              </Tooltip>
+            }
+            style={{ marginBottom: 16 }}
+          >
+            <Radio.Group
+              value={settings.preferred_backend ?? 'auto'}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSettings((s) => ({
+                  ...s,
+                  preferred_backend: v === 'auto' ? null : v,
+                }));
+              }}
+              optionType="button"
+              buttonStyle="solid"
+            >
+              <Radio.Button value="auto">
+                <Tooltip title="Auto: MLX native when compiled with --features local-mlx, else Candle">
+                  Auto
+                </Tooltip>
+              </Radio.Button>
+              <Radio.Button value="mlx">
+                <Space size={4}>
+                  <ThunderboltOutlined style={{ color: '#faad14' }} />
+                  MLX native
+                  <Tag color="green" style={{ marginLeft: 2, fontSize: 11, padding: '0 4px' }}>
+                    ~60–100 tok/s
+                  </Tag>
+                </Space>
+              </Radio.Button>
+              <Radio.Button value="candle">
+                <Space size={4}>
+                  Candle
+                  <Tag color="default" style={{ marginLeft: 2, fontSize: 11, padding: '0 4px' }}>
+                    ~12 tok/s
+                  </Tag>
+                </Space>
+              </Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+
+          <Divider style={{ margin: '8px 0 16px' }} />
+
           <Row gutter={24}>
             {/* KV cache TurboQuant */}
             <Col xs={24} sm={12} md={8}>

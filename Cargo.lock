@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "accelerate-src"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "415ed64958754dbe991900f3940677e6a7eefb4d7367afd70d642677b0c7d19d"
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -453,10 +459,12 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ccf5ee3532e66868516d9b315f73aec9f34ea1a37ae98514534d458915dbf1"
 dependencies = [
+ "accelerate-src",
  "byteorder",
  "candle-metal-kernels",
  "gemm 0.17.1",
  "half",
+ "libc",
  "memmap2",
  "metal 0.27.0",
  "num-traits",
@@ -490,8 +498,11 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1160c3b63f47d40d91110a3e1e1e566ae38edddbbf492a60b40ffc3bc1ff38"
 dependencies = [
+ "accelerate-src",
  "candle-core",
+ "candle-metal-kernels",
  "half",
+ "metal 0.27.0",
  "num-traits",
  "rayon",
  "safetensors",
@@ -505,6 +516,7 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94a0900d49f8605e0e7e6693a1f560e6271279de98e5fa369e7abf3aac245020"
 dependencies = [
+ "accelerate-src",
  "byteorder",
  "candle-core",
  "candle-nn",
@@ -4052,7 +4064,6 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "mlx-rs",
- "mlx-sys",
  "once_cell",
  "prost",
  "qrcode",
@@ -4103,7 +4114,6 @@ dependencies = [
  "tree-sitter-scala",
  "tree-sitter-typescript",
  "tree-sitter-verilog",
- "turboquant-rs",
  "urlencoding",
  "uuid",
  "zip 2.4.2",
@@ -5259,17 +5269,6 @@ dependencies = [
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
-]
-
-[[package]]
-name = "turboquant-rs"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c57eff3747ac5d557d184a719bb34e0c6b4e72eef4a0ad86116eb89413e8a2f3"
-dependencies = [
- "half",
- "parking_lot",
- "thiserror 2.0.18",
 ]
 
 [[package]]

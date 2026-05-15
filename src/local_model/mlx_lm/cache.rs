@@ -2,8 +2,32 @@ use mlx_rs::{
     error::Exception,
     ops::{concatenate_axis, quantize, reshape},
     ops::indexing::IndexOp,
+    transforms::eval,
     Array,
 };
+
+/// Materialize lazy MLX arrays so prior concat/slice nodes can be freed.
+fn materialize_pair(k: Array, v: Array) -> Result<(Array, Array), Exception> {
+    eval(&[k.clone(), v.clone()])?;
+    Ok((k, v))
+}
+
+/// Evaluate all layer caches — call after each forward to cap peak RAM (MLX lazy graphs).
+pub fn eval_all_caches(caches: &mut [Option<ConcatKeyValueCache>]) -> Result<(), Exception> {
+    let mut batch = Vec::new();
+    for cache in caches.iter_mut().flatten() {
+        if let Some(k) = cache.keys.as_ref() {
+            batch.push(k.clone());
+        }
+        if let Some(v) = cache.values.as_ref() {
+            batch.push(v.clone());
+        }
+    }
+    if !batch.is_empty() {
+        eval(&batch)?;
+    }
+    Ok(())
+}
 
 // TODO: somehow move quantized methods to a separate trait?
 pub trait KeyValueCache {
@@ -27,25 +51,6 @@ pub trait KeyValueCache {
 
     fn update_and_fetch(&mut self, keys: Array, values: Array)
         -> Result<KvFetchResult, Exception>;
-
-    /// Approximate attention via **turboquant-rs** CPU path (`local-mlx-turboquant` only).
-    /// Default: not supported — [`ConcatKeyValueCache`] uses MLX SDPA instead.
-    fn turboquant_attention(
-        &mut self,
-        _queries: Array,
-        _scale: f32,
-        _mask: Option<&Array>,
-        _batch: i32,
-        _q_len: i32,
-        _kv_past_len: i32,
-        _n_heads: i32,
-        _n_kv_heads: i32,
-        _head_dim: i32,
-    ) -> Result<Array, Exception> {
-        Err(Exception::custom(
-            "turboquant_attention: cache is not a TurboQuant KV backend",
-        ))
-    }
 }
 
 impl<T> KeyValueCache for &'_ mut T
@@ -79,32 +84,6 @@ where
     ) -> Result<KvFetchResult, Exception> {
         T::update_and_fetch(self, keys, values)
     }
-
-    fn turboquant_attention(
-        &mut self,
-        queries: Array,
-        scale: f32,
-        mask: Option<&Array>,
-        batch: i32,
-        q_len: i32,
-        kv_past_len: i32,
-        n_heads: i32,
-        n_kv_heads: i32,
-        head_dim: i32,
-    ) -> Result<Array, Exception> {
-        T::turboquant_attention(
-            self,
-            queries,
-            scale,
-            mask,
-            batch,
-            q_len,
-            kv_past_len,
-            n_heads,
-            n_kv_heads,
-            head_dim,
-        )
-    }
 }
 
 /// Packed KV tensors for MLX `quantized_scaled_dot_product_attention` (see `mlx_lm::utils`).
@@ -130,20 +109,73 @@ pub enum KvFetchResult {
         keys: QuantizedKeys,
         values: QuantizedValues,
     },
-    /// KV stored via turboquant-rs; run [`KeyValueCache::turboquant_attention`] instead of MLX SDPA.
-    TurboQuant,
 }
 
-#[derive(Debug, Clone, Default)]
+/// Per-layer FP16 KV cache with optional sliding-window cap.
+///
+/// Shape: `[batch, n_kv_heads, seq_len, head_dim]`.  `offset` is the **absolute**
+/// RoPE position (total tokens processed); it is not reset when old entries are
+/// evicted.  `max_seq_len`, when set, bounds stored `seq_len` by dropping the
+/// oldest tokens from the front.
+#[derive(Debug, Clone)]
 pub struct ConcatKeyValueCache {
     keys: Option<Array>,
     values: Option<Array>,
+    /// Cumulative tokens seen (RoPE); not truncated by the sliding window.
     offset: i32,
+    max_seq_len: Option<i32>,
+}
+
+impl Default for ConcatKeyValueCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConcatKeyValueCache {
+    /// Unbounded cache (KV RAM grows with context length).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            keys: None,
+            values: None,
+            offset: 0,
+            max_seq_len: None,
+        }
+    }
+
+    /// Sliding-window cache: at most `max_seq_len` key/value positions retained.
+    pub fn with_max(max_seq_len: i32) -> Self {
+        Self {
+            keys: None,
+            values: None,
+            offset: 0,
+            max_seq_len: Some(max_seq_len.max(1)),
+        }
+    }
+
+    /// Tokens currently stored (after eviction), not the absolute RoPE offset.
+    pub fn seq_len(&self) -> i32 {
+        self.keys
+            .as_ref()
+            .map(|k| {
+                let sh = k.shape();
+                sh[sh.len() - 2]
+            })
+            .unwrap_or(0)
+    }
+
+    /// Drop oldest positions so `seq_len <= max_seq_len` on axis -2.
+    fn trim_to_max(k: Array, v: Array, max_seq_len: i32) -> Result<(Array, Array), Exception> {
+        let sh = k.shape();
+        let seq_len = sh[sh.len() - 2];
+        if seq_len <= max_seq_len {
+            return Ok((k, v));
+        }
+        let start = seq_len - max_seq_len;
+        Ok((
+            k.index((.., .., start.., ..)),
+            v.index((.., .., start.., ..)),
+        ))
     }
 }
 
@@ -153,7 +185,7 @@ impl KeyValueCache for ConcatKeyValueCache {
     }
 
     fn max_size(&self) -> Option<i32> {
-        None
+        self.max_seq_len
     }
 
     fn update_and_fetch(
@@ -161,24 +193,26 @@ impl KeyValueCache for ConcatKeyValueCache {
         keys: Array,
         values: Array,
     ) -> Result<KvFetchResult, Exception> {
-        let (new_k, new_v) = match (self.keys.take(), self.values.take()) {
-            (Some(k), Some(v)) => (
-                concatenate_axis(&[k, keys], -2)?,
-                concatenate_axis(&[v, values], -2)?,
+        let step_len = keys.shape()[keys.shape().len() - 2];
+
+        let (mut k, mut v) = match (self.keys.take(), self.values.take()) {
+            (Some(prev_k), Some(prev_v)) => (
+                concatenate_axis(&[prev_k, keys], -2)?,
+                concatenate_axis(&[prev_v, values], -2)?,
             ),
             _ => (keys, values),
         };
-        // Materialize eagerly to prevent MLX lazy graph from accumulating a
-        // concat chain (one new node per decode step × 56 KV slots) that grows
-        // O(seq²) in memory. Without this eval, RAM rises steadily throughout
-        // the entire generation.
-        mlx_rs::transforms::eval([&new_k, &new_v])?;
-        let shape = new_k.shape();
-        self.offset = shape[shape.len() - 2];
-        self.keys = Some(new_k.clone());
-        self.values = Some(new_v.clone());
 
-        Ok(KvFetchResult::Fp16(new_k, new_v))
+        if let Some(max) = self.max_seq_len {
+            (k, v) = Self::trim_to_max(k, v, max)?;
+        }
+
+        self.offset += step_len;
+        let (k, v) = materialize_pair(k, v)?;
+        self.keys = Some(k.clone());
+        self.values = Some(v.clone());
+
+        Ok(KvFetchResult::Fp16(k, v))
     }
 }
 
@@ -361,3 +395,57 @@ impl KeyValueCache for MlxQuantizedConcatKeyValueCache {
 
 /// TODO: A generic KV Cache
 pub struct DefaultKeyValueCache {}
+
+#[cfg(all(test, feature = "local-mlx"))]
+mod tests {
+    use super::*;
+    use mlx_rs::Array;
+
+    /// Shape `[1, 1, seq, 1]` — minimal 4D KV layout.
+    fn make_kv(seq_len: i32, fill: f32) -> (Array, Array) {
+        let t = Array::full(fill, &[1, 1, seq_len, 1]).unwrap();
+        (t.clone(), t)
+    }
+
+    #[test]
+    fn unbounded_grows() {
+        let mut cache = ConcatKeyValueCache::new();
+        for step in 1..=5 {
+            let (k, v) = make_kv(1, step as f32);
+            let _ = cache.update_and_fetch(k, v).unwrap();
+            assert_eq!(cache.seq_len(), step);
+            assert_eq!(cache.offset(), step);
+        }
+    }
+
+    #[test]
+    fn window_caps_stored_len() {
+        let mut cache = ConcatKeyValueCache::with_max(3);
+        for step in 1..=3 {
+            let (k, v) = make_kv(1, step as f32);
+            let _ = cache.update_and_fetch(k, v).unwrap();
+            assert_eq!(cache.seq_len(), step);
+        }
+        for step in 4..=8 {
+            let (k, v) = make_kv(1, step as f32);
+            let _ = cache.update_and_fetch(k, v).unwrap();
+            assert_eq!(cache.seq_len(), 3, "stored KV must not exceed window");
+            assert_eq!(cache.offset(), step);
+        }
+    }
+
+    #[test]
+    fn window_evicts_oldest() {
+        let mut cache = ConcatKeyValueCache::with_max(2);
+        for step in 0..4 {
+            let (k, v) = make_kv(1, step as f32);
+            let _ = cache.update_and_fetch(k, v).unwrap();
+        }
+        let keys = cache.keys.as_ref().unwrap();
+        let oldest = keys.index((.., .., 0, ..)).item::<f32>();
+        let newest = keys.index((.., .., 1, ..)).item::<f32>();
+        assert_eq!(oldest, 2.0, "oldest retained slot should be step 2");
+        assert_eq!(newest, 3.0, "newest slot should be step 3");
+        assert_eq!(cache.offset(), 4);
+    }
+}

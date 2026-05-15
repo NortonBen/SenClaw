@@ -1,51 +1,34 @@
 //! Native MLX inference engine.
 //!
-//! Apple Silicon only. Uses **`mlx-rs`** plus model weights/templates vendored in-tree (see [`super::mlx_lm`]).
+//! Apple Silicon only. Uses **`mlx-rs`** plus Qwen3 weights/templates vendored in-tree (see [`super::mlx_lm`]).
 //!
-//! Supported architectures:
-//! - **Qwen3** (`model_type = "qwen3"`) — standard GQA transformer.
+//! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
+//! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
-//! KV cache:
-//! - **Default:** [`higgs_cache::SteppingKeyValueCache`] dense mode — pre-allocated 256-slot stepping
-//!   buffer, `mlx_slice_update` writes, FP16 on GPU. Avoids per-token concat chain.
-//! - **`kv_cache_bits = 3 | 4` in `settings.json`:** Higgs GPU TurboQuant via
-//!   [`higgs_cache::SteppingKeyValueCache`] + Metal kernels. Prefill stays dense (fast SDPA);
-//!   first decode bulk-quantizes to packed codes on GPU. **3** = TQ3 (key=2bit, value=3bit);
-//!   **4** = TQ4 (key=3bit, value=4bit). No feature flag required — always available with `local-mlx`.
+//! KV cache uses **`ConcatKeyValueCache` (FP16)** with a sliding window via `max_kv_tokens`
+//! in `settings.json` (same default as Candle). MLX packed KV (`MlxQuantizedConcatKeyValueCache`)
+//! is disabled by default: concatenating per-step `quantize` tensors broke attention quality
+//! (degenerate `\n` generations). `kv_cache_bits` in settings still participates in engine
+//! identity for future turboquant / revised KV-quant wiring.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::runtime::{
-    LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
+    ChatMessage, LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
 };
 
-/// Which model architecture is loaded.
-enum LoadedModel {
-    Qwen3(super::mlx_lm::models::qwen3::Model),
-    Gemma4(super::mlx_lm::models::gemma4::Gemma4CausalLM),
-    Qwen3_5(super::mlx_lm::models::qwen3_5::Model),
-}
-
-/// Detected architecture for dispatch in `load_state`.
-enum Arch {
-    Qwen3,
-    Gemma4,
-    Qwen3_5,
-}
-
-/// Heavyweight cached state. Populated by `load()` and dropped by `unload()`.
+/// Heavyweight cached state: Qwen3 weights + tokenizer + rendered chat
+/// template. Populated by `load()` and dropped by `unload()`, so RAM can be
+/// freed on demand without restarting the daemon.
 struct Loaded {
-    model: LoadedModel,
+    model: super::mlx_lm::models::qwen3::Model,
     tokenizer: super::mlx_lm_utils::tokenizer::Tokenizer,
     chat_template: String,
     n_layers: usize,
-    /// From `tokenizer_config.json` / `config.json` when weights were loaded (`model_max_length`, etc.).
-    model_context_length: Option<u32>,
 }
 
 /// In-process MLX inference engine. Caches the loaded model so subsequent
@@ -53,7 +36,7 @@ struct Loaded {
 pub struct MlxNativeEngine {
     model_dir: PathBuf,
     model_id: String,
-    /// When `Some(3|4)`, enables Higgs GPU TurboQuant KV (`3`=TQ3, `4`=TQ4). Defaults to dense FP16 stepping cache.
+    /// Reserved for future KV-quant / turboquant wiring; inference KV is FP16 unless we re-enable MLX packed KV.
     kv_cache_bits: Option<u8>,
     /// Arc-wrapped so we can clone the handle into the blocking worker that
     /// runs generation. MLX state is non-Send through naked references, but
@@ -104,12 +87,6 @@ impl MlxNativeEngine {
     /// Settings fingerprint for registry reload (see `local_models/settings.json` `kv_cache_bits`).
     pub fn kv_cache_bits(&self) -> Option<u8> {
         self.kv_cache_bits
-    }
-
-    /// Context length read from tokenizer/model config at load time (`None` if missing or unload).
-    pub fn model_context_length(&self) -> Option<u32> {
-        let guard = self.loaded.lock().ok()?;
-        guard.as_ref().and_then(|s| s.model_context_length)
     }
 
     fn set_status(&self, s: RuntimeStatus) {
@@ -169,19 +146,44 @@ impl LocalModelRuntime for MlxNativeEngine {
 
     async fn generate_stream(
         &self,
-        messages: Vec<Value>,
-        tools: Vec<Value>,
+        messages: Vec<serde_json::Value>,
+        _tools: Vec<serde_json::Value>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
-        // Clone Arc handles for the blocking worker. The engine itself isn't
-        // moved — only references to its cached state.
+        // Convert OpenAI-format Value messages → ChatMessage.
+        let chat_msgs: Vec<ChatMessage> = messages
+            .iter()
+            .filter_map(|v| {
+                let role_str = v.get("role")?.as_str()?;
+                let content = v.get("content")?.as_str().unwrap_or("").to_owned();
+                let role = match role_str {
+                    "system" => super::runtime::Role::System,
+                    "assistant" => super::runtime::Role::Assistant,
+                    _ => super::runtime::Role::User,
+                };
+                Some(ChatMessage { role, content })
+            })
+            .collect();
+
+        self.stream_to_channel(&chat_msgs, tx).await
+    }
+}
+
+impl MlxNativeEngine {
+    /// Public native-stream entry point used by `query_llm.rs`.
+    pub async fn stream_to_channel(
+        &self,
+        messages: &[ChatMessage],
+        tx: mpsc::Sender<String>,
+    ) -> anyhow::Result<()> {
         let loaded = Arc::clone(&self.loaded);
         let model_dir = self.model_dir.clone();
         let model_id = self.model_id.clone();
+        let messages = messages.to_vec();
         let kv_bits = self.kv_cache_bits;
 
         let join = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            generate_with_cache(&loaded, &model_dir, &model_id, &messages, &tools, kv_bits, tx)
+            generate_with_cache(&loaded, &model_dir, &model_id, &messages, kv_bits, tx)
         });
 
         join.await??;
@@ -207,177 +209,26 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
 
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     use super::mlx_lm_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer};
-    use crate::local_model::read_model_context_length_from_dir;
-
-    let model_context_length = read_model_context_length_from_dir(model_dir);
 
     detect_architecture(model_id, model_dir)?;
     let tokenizer_file = model_dir.join("tokenizer.json");
     let tokenizer_config = model_dir.join("tokenizer_config.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
-
-    // Try `tokenizer_config.json` first; fall back to standalone `chat_template.jinja`
-    // (used by e.g. mlx-community OptiQ models which split the template into a separate file).
     let chat_template = load_model_chat_template_from_file(&tokenizer_config)?
-        .or_else(|| {
-            let jinja = model_dir.join("chat_template.jinja");
-            std::fs::read_to_string(&jinja).ok().map(|s| {
-                tracing::info!("[local-mlx-native] loaded chat template from chat_template.jinja");
-                s
-            })
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "chat template missing — expected `chat_template` key in tokenizer_config.json \
-                 or a `chat_template.jinja` file in the model directory"
-            )
-        })?;
-
-    let arch = detect_architecture(model_id, model_dir)?;
-    let (model, n_layers) = match arch {
-        Arch::Qwen3 => {
-            let m = load_qwen3_any(model_dir)
-                .map_err(|e| anyhow::anyhow!("load_qwen3 failed: {e:?}"))?;
-            let n = m.args.num_hidden_layers as usize;
-            (LoadedModel::Qwen3(m), n)
-        }
-        Arch::Gemma4 => {
-            let m = load_gemma4_any(model_dir)?;
-            let n = m.args.num_hidden_layers as usize;
-            (LoadedModel::Gemma4(m), n)
-        }
-        Arch::Qwen3_5 => {
-            let m = load_qwen35_any(model_dir)?;
-            let n = m.args.num_hidden_layers as usize;
-            (LoadedModel::Qwen3_5(m), n)
-        }
-    };
-
+        .ok_or_else(|| anyhow::anyhow!("chat template missing in tokenizer_config.json"))?;
+    let model = load_qwen3_any(model_dir)
+        .map_err(|e| anyhow::anyhow!("load_qwen3 failed: {e:?}"))?;
+    let n_layers = model.args.num_hidden_layers as usize;
     tracing::info!(
-        "[local-mlx-native] cached state ready for {model_id} ({n_layers} layers, model_context_length={model_context_length:?})"
+        "[local-mlx-native] cached state ready for {model_id} ({n_layers} layers)"
     );
     Ok(Loaded {
         model,
         tokenizer,
         chat_template,
         n_layers,
-        model_context_length,
     })
-}
-
-/// Current process RSS (MiB) via macOS mach task_info. Returns 0 on failure or non-macOS.
-fn rss_mib() -> f64 {
-    #[cfg(target_os = "macos")]
-    unsafe {
-        #[repr(C)]
-        struct MachTaskBasicInfo {
-            virtual_size: u64,
-            resident_size: u64,
-            resident_size_max: u64,
-            user_time: libc::time_value_t,
-            system_time: libc::time_value_t,
-            policy: i32,
-            suspend_count: i32,
-        }
-        const MACH_TASK_BASIC_INFO: libc::c_int = 20;
-        const MACH_TASK_BASIC_INFO_COUNT: u32 = 12;
-
-        let mut info: MachTaskBasicInfo = std::mem::zeroed();
-        let mut count: u32 = MACH_TASK_BASIC_INFO_COUNT;
-        let kr = libc::task_info(
-            libc::mach_task_self(),
-            MACH_TASK_BASIC_INFO as _,
-            &mut info as *mut _ as _,
-            &mut count,
-        );
-        if kr == 0 {
-            info.resident_size as f64 / (1024.0 * 1024.0)
-        } else {
-            0.0
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        0.0
-    }
-}
-
-/// MLX Metal allocator stats (active, cache, peak) in MiB.
-///
-/// - **active**: bytes currently referenced by live MLX arrays (what "costs" RAM right now)
-/// - **cache**: buffers freed by MLX but held in its pool (immediately reusable, counts against
-///   Activity Monitor "Memory" but not actually leaking)
-/// - **peak**: high-water mark since process start (or last `mlx_reset_peak_memory`)
-///
-/// These map directly to what Activity Monitor shows as the process's GPU/Metal memory.
-#[cfg(feature = "local-mlx")]
-fn mlx_mem_mib() -> (f64, f64, f64) {
-    unsafe {
-        let mut active: usize = 0;
-        let mut cache: usize = 0;
-        let mut peak: usize = 0;
-        mlx_sys::mlx_get_active_memory(&mut active);
-        mlx_sys::mlx_get_cache_memory(&mut cache);
-        mlx_sys::mlx_get_peak_memory(&mut peak);
-        const M: f64 = 1024.0 * 1024.0;
-        (active as f64 / M, cache as f64 / M, peak as f64 / M)
-    }
-}
-
-#[cfg(not(feature = "local-mlx"))]
-#[allow(dead_code)]
-fn mlx_mem_mib() -> (f64, f64, f64) {
-    (0.0, 0.0, 0.0)
-}
-
-/// Common model dimensions needed for memory estimates.
-struct MemArgs {
-    hidden_size: i32,
-    num_hidden_layers: i32,
-    num_attention_heads: i32,
-    num_key_value_heads: i32,
-    head_dim: i32,
-    vocab_size: i32,
-}
-
-impl From<&super::mlx_lm::models::qwen3::ModelArgs> for MemArgs {
-    fn from(a: &super::mlx_lm::models::qwen3::ModelArgs) -> Self {
-        Self {
-            hidden_size: a.hidden_size,
-            num_hidden_layers: a.num_hidden_layers,
-            num_attention_heads: a.num_attention_heads,
-            num_key_value_heads: a.num_key_value_heads,
-            head_dim: a.head_dim,
-            vocab_size: a.vocab_size,
-        }
-    }
-}
-
-impl From<&super::mlx_lm::models::gemma4::Gemma4Config> for MemArgs {
-    fn from(a: &super::mlx_lm::models::gemma4::Gemma4Config) -> Self {
-        Self {
-            hidden_size: a.hidden_size,
-            num_hidden_layers: a.num_hidden_layers,
-            num_attention_heads: a.num_attention_heads,
-            num_key_value_heads: a.num_key_value_heads,
-            head_dim: a.head_dim,
-            vocab_size: a.vocab_size,
-        }
-    }
-}
-
-impl From<&super::mlx_lm::models::qwen3_5::ModelArgs> for MemArgs {
-    fn from(a: &super::mlx_lm::models::qwen3_5::ModelArgs) -> Self {
-        Self {
-            hidden_size: a.hidden_size,
-            num_hidden_layers: a.num_hidden_layers,
-            num_attention_heads: a.num_attention_heads,
-            num_key_value_heads: a.num_key_value_heads,
-            head_dim: a.head_dim,
-            vocab_size: a.vocab_size,
-        }
-    }
 }
 
 /// Synchronous generation entry. Runs on a blocking worker, holding the
@@ -386,12 +237,12 @@ fn generate_with_cache(
     loaded: &Arc<Mutex<Option<Loaded>>>,
     model_dir: &Path,
     model_id: &str,
-    messages: &[Value],
-    tools: &[Value],
-    engine_kv_bits: Option<u8>,
+    messages: &[ChatMessage],
+    _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::kv_layer::Qwen3LayerKv;
+    use super::mlx_lm::cache::{eval_all_caches, ConcatKeyValueCache};
+    use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
     use mlx_rs::Array;
@@ -404,6 +255,8 @@ fn generate_with_cache(
     }
     // Safe: we just ensured Some.
     let state = guard.as_mut().unwrap();
+    let model = &mut state.model;
+    let tokenizer = &mut state.tokenizer;
     let template = state.chat_template.clone();
     let n_layers = state.n_layers;
 
@@ -411,53 +264,95 @@ fn generate_with_cache(
     let gen_opt =
         crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
 
-    let encodings = state.tokenizer
-        .apply_chat_template_json_and_encode(
-            template,
-            model_id,
-            None,
-            messages,
-            tools,
-            None,
-            Some(true),
-            gen_opt.enable_thinking,
-        )
+    use super::mlx_prompt::{
+        strip_thinking_blocks, trim_conversation_history, MLX_MAX_HISTORY_TURNS,
+    };
+
+    // mlx-lm-utils Role has only User/Assistant. Fold System content into
+    // the first user turn so the chat template still renders correctly.
+    let mut convs: Vec<Conversation<TokRole, String>> = Vec::with_capacity(messages.len());
+    let mut pending_system = String::new();
+    for m in messages {
+        match m.role {
+            super::runtime::Role::System => {
+                if !pending_system.is_empty() {
+                    pending_system.push_str("\n\n");
+                }
+                pending_system.push_str(&m.content);
+            }
+            super::runtime::Role::User => {
+                let content = if pending_system.is_empty() {
+                    m.content.clone()
+                } else {
+                    let merged = format!("{}\n\n{}", pending_system, m.content);
+                    pending_system.clear();
+                    merged
+                };
+                convs.push(Conversation {
+                    role: TokRole::User,
+                    content,
+                });
+            }
+            super::runtime::Role::Assistant => {
+                let content = strip_thinking_blocks(&m.content);
+                if content.is_empty() {
+                    continue;
+                }
+                convs.push(Conversation {
+                    role: TokRole::Assistant,
+                    content,
+                });
+            }
+        }
+    }
+    if !pending_system.is_empty() {
+        // System-only — emit as a single user turn so the model has something to answer.
+        convs.push(Conversation {
+            role: TokRole::User,
+            content: pending_system,
+        });
+    }
+
+    let history_before = convs.len();
+    trim_conversation_history(&mut convs, MLX_MAX_HISTORY_TURNS);
+    if convs.len() < history_before {
+        tracing::info!(
+            "[local-mlx-native] history {} → {} messages after turn cap ({MLX_MAX_HISTORY_TURNS} user turns)",
+            history_before,
+            convs.len()
+        );
+    }
+
+    let enable_thinking = gen_opt.enable_thinking;
+    let args = ApplyChatTemplateArgs {
+        conversations: vec![convs.into()],
+        documents: None,
+        model_id,
+        chat_template_id: None,
+        add_generation_prompt: Some(true),
+        continue_final_message: None,
+        enable_thinking,
+    };
+    let encodings = tokenizer
+        .apply_chat_template_and_encode(template, args)
         .map_err(|e| anyhow::anyhow!("chat template apply failed: {e:?}"))?;
     let mut prompt: Vec<u32> = encodings
         .iter()
         .flat_map(|e| e.get_ids())
         .copied()
         .collect();
-    // Auto-enable TurboQuant KV when the weights are 4-bit and the user hasn't
-    // set an explicit override. Reading config.json here is cheap (OS page cache).
-    let auto_tq = if gen_opt.kv_cache_bits.is_none() && engine_kv_bits.is_none() {
-        detect_weight_bits(model_dir)
-            .filter(|&b| b <= 4)
-            .map(|_| 4u8)
-    } else {
-        None
-    };
-    let kv_bits_merged = gen_opt.kv_cache_bits.or(engine_kv_bits).or(auto_tq);
-    if auto_tq.is_some() {
-        tracing::info!("[local-mlx-native] 4-bit weights detected → auto-enabling TurboQuant TQ4 KV cache");
-    }
-
-    const DEFAULT_TQ_ACTIVATE_AT: i32 = 2048;
-    let tq_activate_at = gen_opt.tq_activate_at
-        .map(|v| v as i32)
-        .unwrap_or(DEFAULT_TQ_ACTIVATE_AT);
-
-    let raw_max_new = gen_opt
-        .max_new_tokens
-        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_NEW_TOKENS)
-        .clamp(1, 8192) as usize;
-
-    let max_new_tokens = raw_max_new;
-
     let max_prompt_tokens = gen_opt
         .max_prompt_tokens
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
         .clamp(512, 262_144) as usize;
+    let max_new_tokens = gen_opt
+        .max_new_tokens
+        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_NEW_TOKENS)
+        .clamp(1, 8192) as usize;
+    let max_kv_tokens = gen_opt
+        .max_kv_tokens
+        .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_KV_WINDOW_TOKENS)
+        .clamp(128, 262_144) as i32;
 
     if prompt.len() > max_prompt_tokens {
         let drop = prompt.len() - max_prompt_tokens;
@@ -468,369 +363,139 @@ fn generate_with_cache(
         );
         prompt.drain(..drop);
     }
+    // KV window also bounds prompt length — keeps prefill RAM/graph bounded per turn.
+    let max_kv_usize = max_kv_tokens as usize;
+    if prompt.len() > max_kv_usize {
+        let drop = prompt.len() - max_kv_usize;
+        tracing::warn!(
+            "[local-mlx-native] truncating prompt {} → {} tokens (max_kv_tokens; older context dropped)",
+            prompt.len(),
+            max_kv_usize
+        );
+        prompt.drain(..drop);
+    }
 
-    // Log the first/last few prompt tokens — lets us confirm the chat
-    // template produced `<|im_start|>` / `<|im_end|>` (Qwen3 = 151644 / 151645)
-    // rather than splitting them into many BPE pieces.
     tracing::info!(
-        "[local-mlx-native] prompt {} tokens, head={:?} tail={:?}",
+        "[local-mlx-native] prompt {} tokens, max_kv_window {}, head={:?} tail={:?}",
         prompt.len(),
+        max_kv_tokens,
         &prompt[..prompt.len().min(8)],
         &prompt[prompt.len().saturating_sub(8)..]
     );
-    let tq_mem = kv_bits_merged.is_some();
-
-    let mem_args: MemArgs = match &state.model {
-        LoadedModel::Qwen3(m) => MemArgs::from(&m.args),
-        LoadedModel::Gemma4(m) => MemArgs::from(&m.args),
-        LoadedModel::Qwen3_5(m) => MemArgs::from(&m.args),
-    };
-    log_local_mlx_memory_estimates(&mem_args, prompt.len(), max_new_tokens, None, tq_mem);
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
-    use super::mlx_lm::models::qwen3::sample;
+    // Pre-populate cache with `Some(...)` per layer (sliding window caps peak KV RAM).
+    let mut cache: Vec<Option<ConcatKeyValueCache>> = (0..n_layers)
+        .map(|_| Some(ConcatKeyValueCache::with_max(max_kv_tokens)))
+        .collect();
+
+    // Qwen3 stop tokens.
+    const QWEN3_IM_END: u32 = 151645;
+    const QWEN3_ENDOFTEXT: u32 = 151643;
+    let is_stop = |t: u32| t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT;
+
+    use super::mlx_lm::models::qwen3::{sample, ModelInput};
+    use mlx_rs::module::Module;
+
     let max_tokens: usize = max_new_tokens;
+    let mut buffer: Vec<Array> = Vec::new();
+    let mut hit_stop = false;
+    let mut generated_count = 0usize;
     let temperature: f32 = 0.0;
 
-    let rss_start = rss_mib();
-    let (mlx_a0, mlx_c0, _) = mlx_mem_mib();
-    tracing::info!(
-        "[local-mlx-native][mem] generate start — rss={:.0} MiB | mlx active={:.0} cache={:.0} MiB (prompt={} tokens, max_new={})",
-        rss_start, mlx_a0, mlx_c0, prompt.len(), max_new_tokens
-    );
+    // Prefill — feed full prompt, take logits at last position.
+    let prefill_input = ModelInput {
+        inputs: &prompt_tokens,
+        mask: None,
+        cache: &mut cache,
+    };
+    let logits = model
+        .forward(prefill_input)
+        .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
+    eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("prefill cache eval failed: {e:?}"))?;
+    let last_logits = logits.index((.., -1, ..));
+    eval(&[last_logits.clone()]).map_err(|e| anyhow::anyhow!("prefill logits eval failed: {e:?}"))?;
+    let mut next_token = sample(&last_logits, temperature)
+        .map_err(|e| anyhow::anyhow!("prefill sample failed: {e:?}"))?;
+    eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill token eval failed: {e:?}"))?;
+    buffer.push(next_token.clone());
+    generated_count += 1;
 
-    // ── Model-specific generation paths ──────────────────────────────────
-    // Each branch builds the right cache type and runs the decode loop.
-    // The loop body is identical; only the forward() call signature differs.
-    macro_rules! decode_loop {
-        ($model_forward:expr, $cache:expr, $is_stop:expr) => {{
-            let mut buffer: Vec<Array> = Vec::new();
-            let mut hit_stop = false;
-            let mut generated_count = 0usize;
+    for _step in 1..max_tokens {
+        let inputs = next_token
+            .reshape(&[1, 1])
+            .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
+        let decode_input = ModelInput {
+            inputs: &inputs,
+            mask: None,
+            cache: &mut cache,
+        };
+        let logits = model
+            .forward(decode_input)
+            .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
+        eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("decode cache eval failed: {e:?}"))?;
+        let last_logits = logits.index((.., -1, ..));
+        let y = sample(&last_logits, temperature)
+            .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?;
+        next_token = y;
+        buffer.push(next_token.clone());
+        generated_count += 1;
 
-            // Prefill
-            let t_prefill_start = std::time::Instant::now();
-            let mut next_token = {
-                let logits = $model_forward(&prompt_tokens, $cache)
-                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
-                sample(&logits.index((.., -1i32, ..)), temperature)
-                    .map_err(|e| anyhow::anyhow!("prefill sample failed: {e:?}"))?
-            };
-            eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill eval failed: {e:?}"))?;
-            let prefill_secs = t_prefill_start.elapsed().as_secs_f64();
-            let t_decode_start = std::time::Instant::now();
-            {
-                let (ma, mc, mp) = mlx_mem_mib();
+        if buffer.len() % 20 == 0 {
+            eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+            let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
+            if generated_count <= 20 {
+                let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
                 tracing::info!(
-                    "[local-mlx-native][mem] after prefill {:.0} tok/s — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB",
-                    prompt.len() as f64 / prefill_secs.max(0.001),
-                    rss_mib(), rss_mib() - rss_start, ma, mc, mp
+                    "[local-mlx-native] first {} token ids: {:?} → {:?}",
+                    slice.len(),
+                    slice,
+                    decoded_preview
                 );
             }
-            // Release prefill attention workspace from Metal buffer pool before decode.
-            // Prefill produces large intermediate arrays (seq_len×seq_len per layer) that
-            // stay in the pool; clearing here prevents them from inflating RSS during decode.
-            unsafe { mlx_sys::mlx_clear_cache(); }
-            buffer.push(next_token.clone());
-            generated_count += 1;
-
-            for _step in 1..max_tokens {
-                let inputs = next_token.reshape(&[1i32, 1i32])
-                    .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
-                let y = {
-                    let logits = $model_forward(&inputs, $cache)
-                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
-                    sample(&logits.index((.., -1i32, ..)), temperature)
-                        .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?
-                };
-                next_token = y;
-                eval(std::iter::once(&next_token))
-                    .map_err(|e| anyhow::anyhow!("step eval failed: {e:?}"))?;
-                buffer.push(next_token.clone());
-                generated_count += 1;
-
-                if buffer.len() % 20 == 0 {
-                    eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
-                    // Release decode-step intermediates every 100 tokens to cap Metal pool growth.
-                    // Each TQ attention step produces ~several MiB of temporary Q·K/softmax/V
-                    // tensors that stay in the pool; clearing periodically keeps total RSS stable.
-                    if generated_count % 100 == 0 {
-                        unsafe { mlx_sys::mlx_clear_cache(); }
-                    }
-                    {
-                        let (ma, mc, _) = mlx_mem_mib();
-                        tracing::info!(
-                            "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
-                            generated_count, rss_mib(), rss_mib() - rss_start, ma, mc
-                        );
-                    }
-                    let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
-                    if generated_count <= 20 {
-                        let decoded_preview = state.tokenizer.decode(&slice, false).unwrap_or_default();
-                        tracing::info!("[local-mlx-native] first {} token ids: {:?} → {:?}", slice.len(), slice, decoded_preview);
-                    }
-                    if let Some(&stop) = slice.iter().find(|&&t| $is_stop(t)) {
-                        let cut: Vec<u32> = slice.iter().copied().take_while(|&t| t != stop).collect();
-                        let text = state.tokenizer.decode(&cut, true)
-                            .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
-                        if !text.is_empty() { let _ = tx.blocking_send(text); }
-                        hit_stop = true;
-                        break;
-                    }
-                    let text = state.tokenizer.decode(&slice, true)
-                        .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
-                    if !text.is_empty() && tx.blocking_send(text).is_err() {
-                        log_local_mlx_memory_estimates(&mem_args, prompt.len(), max_new_tokens, Some(generated_count), tq_mem);
-                        return Ok(());
-                    }
+            if let Some(&stop) = slice.iter().find(|&&t| is_stop(t)) {
+                let cut: Vec<u32> = slice.iter().copied().take_while(|&t| t != stop).collect();
+                let text = tokenizer
+                    .decode(&cut, true)
+                    .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
+                if !text.is_empty() {
+                    let _ = tx.blocking_send(text);
                 }
+                hit_stop = true;
+                break;
             }
-
-            // Flush remaining buffer
-            let done_stop = hit_stop;
-            if !buffer.is_empty() {
-                eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
-                let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
-                let (slice_use, _) = if done_stop {
-                    // Already sent text up to stop; remaining tokens after stop are discarded.
-                    // (This path is unreachable: we break before hitting here when hit_stop=true,
-                    // but keep it for clarity.)
-                    (slice.as_slice(), false)
-                } else {
-                    (slice.as_slice(), true)
-                };
-                if !done_stop {
-                    let text = state.tokenizer.decode(slice_use, true)
-                        .map_err(|e| anyhow::anyhow!("final decode failed: {e:?}"))?;
-                    if !text.is_empty() { let _ = tx.blocking_send(text); }
-                }
+            let text = tokenizer
+                .decode(&slice, true)
+                .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
+            if !text.is_empty() && tx.blocking_send(text).is_err() {
+                return Ok(());
             }
-
-            {
-                let (ma, mc, mp) = mlx_mem_mib();
-                let decode_secs = t_decode_start.elapsed().as_secs_f64();
-                let decode_tps = (generated_count.saturating_sub(1)) as f64 / decode_secs.max(0.001);
-                let tag = if done_stop { "done (stop)" } else { "done" };
-                tracing::info!(
-                    "[local-mlx-native][mem] generate {} — {:.1} tok/s decode | rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
-                    tag, decode_tps, rss_mib(), rss_mib() - rss_start, ma, mc, mp, generated_count
-                );
-            }
-            unsafe { mlx_sys::mlx_clear_cache(); }
-            tracing::info!("[local-mlx-native][mem] cache cleared, mlx active={:.0} cache={:.0} MiB",
-                {let (a,_,_)=mlx_mem_mib();a}, {let(_,c,_)=mlx_mem_mib();c});
-            log_local_mlx_memory_estimates(&mem_args, prompt.len(), max_new_tokens, Some(generated_count), tq_mem);
-        }};
+        }
     }
-
-    let tq_bits = kv_bits_merged.map(|raw| {
-        if raw == 4 {
-            4u8
-        } else {
-            if raw != 3 {
-                tracing::warn!("[local-mlx-native] kv_cache_bits={raw}: clamping to TQ3");
-            }
-            3u8
-        }
-    });
-    if let Some(b) = tq_bits {
-        tracing::info!(
-            "[local-mlx-native] KV cache: TurboQuant TQ{b} (key={}bit value={}bit; activate_at={}tok)",
-            b - 1,
-            b,
-            tq_activate_at,
-        );
+    if hit_stop {
+        return Ok(());
     }
-
-    match &mut state.model {
-        LoadedModel::Qwen3(model) => {
-            use super::mlx_lm::models::qwen3::ModelInput;
-            use mlx_rs::module::Module;
-
-            const QWEN3_IM_END: u32 = 151645;
-            const QWEN3_ENDOFTEXT: u32 = 151643;
-            let is_stop = |t: u32| t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT;
-
-            let mut cache: Vec<Option<Qwen3LayerKv>> = match tq_bits {
-                Some(b) => (0..n_layers)
-                    .map(|_| {
-                        Some(
-                            Qwen3LayerKv::turbo(b, model.args.num_key_value_heads, model.args.head_dim, tq_activate_at)
-                                .expect("TQ cache init"),
-                        )
-                    })
-                    .collect(),
-                None => (0..n_layers).map(|_| Some(Qwen3LayerKv::dense())).collect(),
-            };
-
-            decode_loop!(
-                |inputs: &Array, c: &mut Vec<Option<Qwen3LayerKv>>| {
-                    model.forward(ModelInput { inputs, mask: None, cache: c })
-                },
-                &mut cache,
-                is_stop
-            );
-        }
-        LoadedModel::Gemma4(model) => {
-            use super::mlx_lm::models::higgs_kv::SteppingKeyValueCache;
-            use super::mlx_lm::models::higgs_turboquant_mlx::{KvCacheConfig, KvCacheMode};
-
-            // Gemma 4 stop tokens: eos=1, <turn|>=106, <tool_response|>=50
-            // (eos_token_id=[1, 106, 50] per config.json; token 107 is NOT end-of-turn)
-            const GEMMA_EOS: u32 = 1;
-            const GEMMA_TURN_END: u32 = 106;
-            const GEMMA_TOOL_RESP: u32 = 50;
-            let is_stop =
-                |t: u32| t == GEMMA_EOS || t == GEMMA_TURN_END || t == GEMMA_TOOL_RESP;
-
-            let n_kv = model.args.num_key_value_heads;
-            let hd = model.args.head_dim;
-            let mut cache: Vec<Option<SteppingKeyValueCache>> = match tq_bits {
-                Some(b) => (0..n_layers)
-                    .map(|_| {
-                        Some(
-                            SteppingKeyValueCache::new_turbo(
-                                KvCacheConfig {
-                                    mode: KvCacheMode::Turboquant,
-                                    bits: b,
-                                    norm_correction: true,
-                                    seed: 0,
-                                    ..KvCacheConfig::default()
-                                },
-                                n_kv,
-                                hd,
-                            )
-                            .expect("TQ cache init"),
-                        )
-                    })
-                    .collect(),
-                None => (0..n_layers).map(|_| Some(SteppingKeyValueCache::new())).collect(),
-            };
-
-            decode_loop!(
-                |inputs: &Array, c: &mut Vec<Option<SteppingKeyValueCache>>| {
-                    model.forward(inputs, None, c)
-                },
-                &mut cache,
-                is_stop
-            );
-        }
-        LoadedModel::Qwen3_5(model) => {
-            use super::mlx_lm::models::qwen3_5::{build_layer_caches, Qwen3_5LayerCache};
-
-            // Qwen3.5 EOS token
-            const QWEN35_EOS: u32 = 248044;
-            const QWEN35_IM_END: u32 = 248043;
-            let is_stop = |t: u32| t == QWEN35_EOS || t == QWEN35_IM_END;
-
-            let mut cache: Vec<Option<Qwen3_5LayerCache>> =
-                build_layer_caches(&model.args, tq_bits, tq_activate_at)
-                    .map_err(|e| anyhow::anyhow!("Qwen3.5 cache init failed: {e:?}"))?;
-
-            decode_loop!(
-                |inputs: &Array, c: &mut Vec<Option<Qwen3_5LayerCache>>| {
-                    model.forward(inputs, c)
-                },
-                &mut cache,
-                is_stop
-            );
+    if !buffer.is_empty() {
+        eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
+        let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
+        let text = tokenizer
+            .decode(&slice, true)
+            .map_err(|e| anyhow::anyhow!("final decode failed: {e:?}"))?;
+        if !text.is_empty() {
+            let _ = tx.blocking_send(text);
         }
     }
 
     Ok(())
 }
 
-/// Heuristic unified-memory breakdown for Apple Silicon (GiB). Not RSS: MLX keeps pools,
-/// prefill can allocate large **S×S** scratch per attention layer; FP16 **KV** grows ~linearly with seq.
-fn log_local_mlx_memory_estimates(
-    ma: &MemArgs,
-    prompt_tokens: usize,
-    max_new_tokens: usize,
-    generated_tokens: Option<usize>,
-    turboquant_kv: bool,
-) {
-    fn gib_u128(bytes: u128) -> f64 {
-        bytes as f64 / (1024.0_f64.powi(3))
-    }
-
-    let n_l = ma.num_hidden_layers as u128;
-    let n_kv = ma.num_key_value_heads as u128;
-    let n_h = ma.num_attention_heads as u128;
-    let hd = ma.head_dim as u128;
-    let s_pref = prompt_tokens as u128;
-    let seq_peak = prompt_tokens.saturating_add(max_new_tokens) as u128;
-
-    // Stored KV: per layer, FP16 K and V → 2 × (n_kv × seq × head_dim) elems × 2 bytes
-    let kv_peak_bytes = n_l * 2u128 * n_kv * seq_peak * hd * 2u128;
-
-    // Naive attention scores [..., heads, S, S] in f32 — kernels often avoid full materialization.
-    let attn_layer_bytes = n_h * s_pref * s_pref * 4u128;
-    let attn_all_layers_naive = attn_layer_bytes.saturating_mul(n_l);
-
-    tracing::info!(
-        "[local-mlx-native][mem] model hidden={} layers={} attn_heads={} kv_heads={} head_dim={} vocab={}",
-        ma.hidden_size,
-        ma.num_hidden_layers,
-        ma.num_attention_heads,
-        ma.num_key_value_heads,
-        ma.head_dim,
-        ma.vocab_size
-    );
-    tracing::info!(
-        "[local-mlx-native][mem] run budget max_new_tokens={} | seq_peak≈{} (= prompt + max decode)",
-        max_new_tokens,
-        seq_peak
-    );
-    if turboquant_kv {
-        // TQ3 ≈4× smaller than FP16 KV for the same seq (see turboquant-rs compression tests); heuristic only.
-        const TQ3_KV_VS_FP16: u128 = 4;
-        let kv_tq_heuristic = kv_peak_bytes / TQ3_KV_VS_FP16;
-        tracing::info!(
-            "[local-mlx-native][mem] KV TurboQuant TQ3 (heuristic ≈ FP16/{TQ3_KV_VS_FP16}): ≈{:.3} GiB peak — **not** FP16 concat; FP16 line below is SDPA-only reference",
-            gib_u128(kv_tq_heuristic)
-        );
-    }
-    tracing::info!(
-        "[local-mlx-native][mem] KV FP16 reference (if this were concat SDPA path): ≈{:.3} GiB",
-        gib_u128(kv_peak_bytes)
-    );
-    tracing::info!(
-        "[local-mlx-native][mem] prefill attention S×S f32 (naive matmul upper bound): ≈{:.3} GiB/layer at prompt_tokens={}, ×{} layers ≈{:.2} GiB if fully materialized — often **far less** with flash/sdpa; long prompts spike Activity Monitor anyway",
-        gib_u128(attn_layer_bytes),
-        prompt_tokens,
-        ma.num_hidden_layers,
-        gib_u128(attn_all_layers_naive)
-    );
-    tracing::info!(
-        "[local-mlx-native][mem] activations: prefill workspace ~S² per layer + transient tensors; lower max_prompt_tokens / TurboQuant cap on max_new to shrink CPU time and peak alloc"
-    );
-
-    if let Some(gen) = generated_tokens {
-        let final_seq = (prompt_tokens + gen) as u128;
-        let kv_final = n_l * 2u128 * n_kv * final_seq * hd * 2u128;
-        if turboquant_kv {
-            tracing::info!(
-                "[local-mlx-native][mem] done: new_tokens={} final_seq≈{} | KV TQ3 heuristic ≈{:.3} GiB | FP16 ref ≈{:.3} GiB",
-                gen,
-                prompt_tokens + gen,
-                gib_u128(kv_final / 4),
-                gib_u128(kv_final)
-            );
-        } else {
-            tracing::info!(
-                "[local-mlx-native][mem] done: new_tokens={} final_seq≈{} | KV FP16 ≈{:.3} GiB",
-                gen,
-                prompt_tokens + gen,
-                gib_u128(kv_final)
-            );
-        }
-    }
+#[derive(Debug, Clone, Copy)]
+enum Arch {
+    Qwen3,
 }
 
 /// Load a Qwen3 `Model`, applying `nn::quantize` when `config.json` declares a
-/// `quantization` block (mlx-community 4-bit / 8-bit variants). Without this
-/// step, plain `Linear` slots can't accept the packed-int safetensor weights
-/// and inference crashes with an `rms_norm` shape mismatch.
+/// `quantization` block (mlx-community 4-bit / 8-bit variants).
 fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwen3::Model> {
     use super::mlx_lm::models::qwen3::{get_qwen3_model_args, Model, WeightMap};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
@@ -858,12 +523,6 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
         );
         let m = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
             .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
-        // Force-materialize the int4-quantized params immediately so the
-        // original f32 random-init tensors from `Model::new` can be released
-        // by the Metal buffer pool before we start overwriting them with the
-        // real weights from safetensors. Without this `eval`, the lazy graph
-        // keeps both the random-init f32 (~16 GB for Qwen3-4B) AND the
-        // quantized derivation alive concurrently.
         m.eval()
             .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
         m
@@ -894,23 +553,8 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
         shard_files.push(single);
     }
 
-    let disk_bytes: u64 = shard_files
-        .iter()
-        .filter_map(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
-        .sum();
-    tracing::info!(
-        "[local-mlx-native][mem] safetensors on disk ≈ {:.3} GiB ({} file(s)); loaded VRAM/UM tends to track this for 4-bit + overhead",
-        disk_bytes as f64 / (1024.0_f64.powi(3)),
-        shard_files.len()
-    );
-
-    // Custom safetensors load with .weight → .inner.weight remap for
-    // QuantizedLinear / QuantizedEmbedding slots. Without this, the packed
-    // int4 weight tensor never reaches the model and inference yields
-    // uniform-noise logits even though scales/biases load fine.
     let n_layers = model.args.num_hidden_layers as usize;
-    let _ = n_layers; // (kept for debugging; lets us assert shard coverage if needed)
+    let _ = n_layers;
 
     let is_quant = quant.is_some();
     let mut total_loaded = 0usize;
@@ -936,24 +580,20 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
         for (raw_key, value) in loaded {
             let key = raw_key.as_str();
 
-            // Side-channel: stash embed_tokens.* for direct assignment after.
             match key {
                 "model.embed_tokens.weight" => {
                     embed_weight = Some(value);
                     total_loaded += 1;
-                    unfilled_slots.remove(key);
                     continue;
                 }
                 "model.embed_tokens.scales" => {
                     embed_scales = Some(value);
                     total_loaded += 1;
-                    unfilled_slots.remove(key);
                     continue;
                 }
                 "model.embed_tokens.biases" => {
                     embed_biases = Some(value);
                     total_loaded += 1;
-                    unfilled_slots.remove(key);
                     continue;
                 }
                 _ => {}
@@ -1041,7 +681,6 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
         );
     }
 
-    // Loading is lazy; eval to materialize.
     model
         .eval()
         .map_err(|e| anyhow::anyhow!("eval after load failed: {e:?}"))?;
@@ -1049,63 +688,25 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
     Ok(model)
 }
 
-/// Read the top-level `quantization.bits` from `config.json`, returns None if absent.
-fn detect_weight_bits(model_dir: &Path) -> Option<u8> {
-    let raw = std::fs::read_to_string(model_dir.join("config.json")).ok()?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    cfg.get("quantization")
-        .and_then(|q| q.get("bits"))
-        .and_then(|b| b.as_u64())
-        .map(|b| b as u8)
-}
-
 fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch> {
-    let cfg_path = model_dir.join("config.json");
-    let model_type = if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
-        serde_json::from_str::<serde_json::Value>(&raw)
-            .ok()
-            .and_then(|v| v.get("model_type").and_then(|x| x.as_str()).map(str::to_owned))
-    } else {
-        None
-    };
-
-    match model_type.as_deref() {
-        Some("qwen3") => return Ok(Arch::Qwen3),
-        Some("qwen3_5" | "qwen3_5_text") => return Ok(Arch::Qwen3_5),
-        Some("gemma3" | "gemma3_text" | "gemma4" | "gemma4_text") => return Ok(Arch::Gemma4),
-        _ => {}
-    }
-
     let lower = model_id.to_lowercase();
-    if lower.contains("qwen3.5") || lower.contains("qwen3_5") {
-        return Ok(Arch::Qwen3_5);
-    }
     if lower.contains("qwen3") {
         return Ok(Arch::Qwen3);
     }
-    if lower.contains("gemma") {
-        return Ok(Arch::Gemma4);
+    let cfg_path = model_dir.join("config.json");
+    if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(mt) = v.get("model_type").and_then(|x| x.as_str()) {
+                if mt.contains("qwen3") {
+                    return Ok(Arch::Qwen3);
+                }
+            }
+        }
     }
-
     anyhow::bail!(
-        "no native loader for `{}` (model_type={}) — supported: qwen3, gemma3, gemma4.",
-        model_id,
-        model_type.as_deref().unwrap_or("unknown")
+        "no native Qwen3 loader for `{}` — only Qwen3 MLX checkpoints are supported in this build.",
+        model_id
     )
-}
-
-fn load_gemma4_any(
-    model_dir: &Path,
-) -> anyhow::Result<super::mlx_lm::models::gemma4::Gemma4CausalLM> {
-    super::mlx_lm::models::gemma4::load_gemma4_model(model_dir)
-        .map_err(|e| anyhow::anyhow!("load_gemma4 failed: {e:?}"))
-}
-
-fn load_qwen35_any(
-    model_dir: &Path,
-) -> anyhow::Result<super::mlx_lm::models::qwen3_5::Model> {
-    super::mlx_lm::models::qwen3_5::load_qwen35_model(model_dir)
-        .map_err(|e| anyhow::anyhow!("load_qwen35 failed: {e:?}"))
 }
 
 #[cfg(test)]

@@ -26,49 +26,6 @@ macro_rules! try_unwrap {
     };
 }
 
-// def quantized_scaled_dot_product_attention(
-//     queries: mx.array,
-//     q_keys: tuple[mx.array, mx.array, mx.array],
-//     q_values: tuple[mx.array, mx.array, mx.array],
-//     scale: float,
-//     mask: Optional[mx.array],
-//     group_size: int = 64,
-//     bits: int = 8,
-// ) -> mx.array:
-//     B, n_q_heads, L, D = queries.shape
-//     n_kv_heads = q_keys[0].shape[-3]
-//     n_repeats = n_q_heads // n_kv_heads
-
-//     queries *= scale
-
-//     if n_repeats > 1:
-//         queries = mx.reshape(queries, (B, n_kv_heads, n_repeats, L, D))
-//         q_keys = tree_map(lambda x: mx.expand_dims(x, axis=-3), q_keys)
-//         q_values = tree_map(lambda x: mx.expand_dims(x, axis=-3), q_values)
-
-//     scores = mx.quantized_matmul(
-//         queries, *q_keys, transpose=True, group_size=group_size, bits=bits
-//     )
-//     if mask is not None:
-//         if isinstance(mask, str):
-//             qL, kL = scores.shape[-2:]
-//             q_indices = mx.arange(kL - qL, kL)
-//             k_indices = mx.arange(kL)
-//             mask = q_indices[:, None] >= k_indices[None]
-//         if mask.dtype == mx.bool_:
-//             scores = mx.where(mask, scores, mx.finfo(scores.dtype).min)
-//         else:
-//             scores += mask
-//     scores = mx.softmax(scores, axis=-1, precise=True)
-//     out = mx.quantized_matmul(
-//         scores, *q_values, transpose=False, group_size=group_size, bits=bits
-//     )
-
-//     if n_repeats > 1:
-//         out = mx.reshape(out, (B, n_q_heads, L, D))
-
-//     return out
-
 fn index_out_of_bound_exception() -> Exception {
     Exception::custom("index out of bound")
 }
@@ -118,11 +75,8 @@ pub(crate) fn quantized_scaled_dot_product_attention(
     )?;
 
     if let Some(mask) = mask {
-        // TODO: handle str type mask
-
         if mask.dtype() == Dtype::Bool {
             let finfo_min = scores.dtype().finfo_min()? as f32;
-            // GPU kernels reject float64; keep fill value in the same dtype family as `scores`.
             let fill = Array::from_f32(finfo_min).as_dtype(scores.dtype())?;
             scores = mlx_rs::ops::r#where(mask, scores, fill)?;
         } else {
@@ -192,35 +146,53 @@ pub(crate) fn scaled_dot_product_attention<C>(
 where
     C: KeyValueCache,
 {
-    // Dispatch on the actual key/value types, not the cache flag.
-    // TurboQuant caches set is_quantized()=true but their decode path is handled upstream
-    // (KvFetchResult::TurboQuant); this function is only reached on the FP16/prefill path.
-    match (keys.into(), values.into()) {
-        (MaybeQuantizedKeys::Quantized(qk), MaybeQuantizedValues::Quantized(qv)) => {
-            let cache = cache.ok_or_else(|| {
-                Exception::custom("quantized keys/values require a KV cache with group_size/bits")
-            })?;
+    let keys = keys.into();
+    let values = values.into();
+
+    if let Some(cache) = cache {
+        if cache.is_quantized() {
             let group_size = cache
                 .group_size()
                 .ok_or_else(|| Exception::custom("Cache is quantized but group size is not set"))?;
             let bits = cache
                 .bits()
                 .ok_or_else(|| Exception::custom("Cache is quantized but bits are not set"))?;
-            quantized_scaled_dot_product_attention(queries, qk, qv, scale, mask, group_size, bits)
+
+            let (keys, values) = match (keys, values) {
+                (MaybeQuantizedKeys::Quantized(keys), MaybeQuantizedValues::Quantized(values)) => {
+                    (keys, values)
+                }
+                _ => {
+                    return Err(Exception::custom(
+                        "Both keys and values must be quantized when KV cache is quantized",
+                    ));
+                }
+            };
+
+            return quantized_scaled_dot_product_attention(
+                queries, keys, values, scale, mask, group_size, bits,
+            );
         }
-        (MaybeQuantizedKeys::Original(keys), MaybeQuantizedValues::Original(values)) => {
-            mlx_rs::fast::scaled_dot_product_attention(
-                queries,
-                keys,
-                values,
-                scale,
-                mask.map(ScaledDotProductAttentionMask::Array),
-            )
-        }
-        _ => Err(Exception::custom(
-            "keys and values must both be quantized or both be plain arrays",
-        )),
     }
+
+    let (keys, values) = match (keys, values) {
+        (MaybeQuantizedKeys::Original(keys), MaybeQuantizedValues::Original(values)) => {
+            (keys, values)
+        }
+        _ => {
+            return Err(Exception::custom(
+                "Both keys and values must NOT be quantized when KV cache is NOT quantized",
+            ));
+        }
+    };
+
+    mlx_rs::fast::scaled_dot_product_attention(
+        queries,
+        keys,
+        values,
+        scale,
+        mask.map(ScaledDotProductAttentionMask::Array),
+    )
 }
 
 #[derive(Debug, Clone)]

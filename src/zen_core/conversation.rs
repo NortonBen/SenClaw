@@ -35,10 +35,23 @@ pub const INTERRUPT_MESSAGE: &str =
 
 /// Number of most-recent messages to keep during auto-compaction.
 const COMPACT_KEEP_RECENT: usize = 12;
-/// Hard cap for a single LLM request turn. Dispatch tasks have their own
-/// larger timeout, but the model call itself should not be able to hang
-/// silently with no message/tool events.
+/// Hard cap for a single LLM request turn (cloud/API providers).
+/// Dispatch tasks have their own larger timeout, but the model call itself
+/// should not be able to hang silently with no message/tool events.
 const LLM_TURN_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Timeout for local native inference (Candle CPU/Metal adapter).
+///
+/// CPU inference is O(L²) in sequence length and un-batched; even a small model
+/// (0.6B) on a debug build can take several minutes for a short response.
+/// Release builds are typically 8–15× faster, so this is intentionally generous.
+///
+/// Hard breakdown for `local-candle-native`:
+///   • prefill  ≤ 512 tokens × 28 layers → ~50 s (debug) / ~5 s (release)
+///   • decode   ≤ 512 tokens              → ~50 s (debug) / ~5 s (release)
+///   • total (debug)   ≈ 100–180 s
+///   • total (release) ≈ 10–20 s
+const LLM_TURN_TIMEOUT_LOCAL: Duration = Duration::from_secs(900);
 
 /// Compact message history when context length is exceeded.
 /// Keeps the first user message (original task framing) and the most recent messages,
@@ -128,11 +141,23 @@ pub async fn query(
             config.thinking,
             config.stream,
         );
-        let assistant_msg = match tokio::time::timeout(LLM_TURN_TIMEOUT, llm_call).await {
+        // Local native inference runs on CPU/Metal and is much slower than cloud APIs.
+        let turn_timeout = if config
+            .profile
+            .adapt
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("local-candle")
+        {
+            LLM_TURN_TIMEOUT_LOCAL
+        } else {
+            LLM_TURN_TIMEOUT
+        };
+        let assistant_msg = match tokio::time::timeout(turn_timeout, llm_call).await {
             Err(_) => {
                 let msg = format!(
                     "LLM request timed out after {}s without completing a turn",
-                    LLM_TURN_TIMEOUT.as_secs()
+                    turn_timeout.as_secs()
                 );
                 config
                     .event_bus
