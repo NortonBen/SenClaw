@@ -24,7 +24,6 @@ use super::super::{
     error::Error,
     utils::{
         create_attention_mask,
-        quantized_scaled_dot_product_attention,
         rope::{initialize_rope, FloatOrString, RopeVariant},
         scaled_dot_product_attention,
         AttentionMask,
@@ -131,6 +130,8 @@ pub struct AttentionInput<'a, C> {
     pub x: &'a Array,
     pub mask: Option<&'a Array>,
     pub cache: Option<&'a mut C>,
+    /// Absolute RoPE position for the first token in `x` (caller-maintained).
+    pub rope_offset: usize,
 }
 
 impl<C> Module<AttentionInput<'_, C>> for Attention
@@ -143,11 +144,18 @@ where
 
     #[allow(non_snake_case)]
     fn forward(&mut self, input: AttentionInput<'_, C>) -> Result<Self::Output, Self::Error> {
-        let AttentionInput { x, mask, mut cache } = input;
+        let AttentionInput {
+            x,
+            mask,
+            mut cache,
+            rope_offset,
+        } = input;
 
         let shape = x.shape();
         let B = shape[0];
         let L = shape[1];
+        let rope_off = i32::try_from(rope_offset)
+            .map_err(|_| Exception::custom("rope_offset exceeds i32::MAX"))?;
 
         let queries = self.q_proj.forward(x)?;
         let keys = self.k_proj.forward(x)?;
@@ -169,11 +177,11 @@ where
 
         let fetch = if let Some(cache) = cache.as_mut() {
             let q_input = nn::RopeInputBuilder::new(&queries)
-                .offset(cache.offset())
+                .offset(rope_off)
                 .build()?;
             queries = self.rope.forward(q_input)?;
             let k_input = nn::RopeInputBuilder::new(&keys)
-                .offset(cache.offset())
+                .offset(rope_off)
                 .build()?;
             keys = self.rope.forward(k_input)?;
 
@@ -188,21 +196,19 @@ where
             KvFetchResult::Fp16(keys, values) => {
                 scaled_dot_product_attention(queries, keys, values, cache, self.scale, mask)?
             }
-            KvFetchResult::Quantized {
-                keys: qk,
-                values: qv,
-            } => {
-                let gs = cache
-                    .as_ref()
-                    .and_then(|c| c.group_size())
-                    .ok_or_else(|| Exception::custom("quantized KV cache missing group_size"))?;
-                let bits = cache
-                    .as_ref()
-                    .and_then(|c| c.bits())
-                    .ok_or_else(|| Exception::custom("quantized KV cache missing bits"))?;
-                quantized_scaled_dot_product_attention(
-                    queries, qk, qv, self.scale, mask, gs, bits,
-                )?
+            KvFetchResult::TurboQuant => {
+                let c = cache
+                    .as_mut()
+                    .ok_or_else(|| Exception::custom("TurboQuant fetch without cache"))?;
+                if let Some(out) =
+                    c.turboquant_attention(&queries, self.scale, mask, self.n_heads, self.n_kv_heads)?
+                {
+                    out
+                } else {
+                    return Err(Exception::custom(
+                        "TurboQuant path active but turboquant_attention returned None",
+                    ));
+                }
             }
         }
         .transpose_axes(&[0, 2, 1, 3])?
@@ -329,12 +335,18 @@ where
     type Error = Exception;
 
     fn forward(&mut self, input: AttentionInput<'_, C>) -> Result<Self::Output, Self::Error> {
-        let AttentionInput { x, mask, cache } = input;
+        let AttentionInput {
+            x,
+            mask,
+            cache,
+            rope_offset,
+        } = input;
 
         let self_attn_input = AttentionInput {
             x: &self.input_layernorm.forward(x)?,
             mask,
             cache,
+            rope_offset,
         };
         let r = self.self_attn.forward(self_attn_input)?;
         let h = x.add(r)?;
@@ -399,6 +411,8 @@ pub struct ModelInput<'a, C> {
     pub inputs: &'a Array,
     pub mask: Option<&'a Array>,
     pub cache: &'a mut Vec<Option<C>>,
+    /// Absolute RoPE index for the first token in `inputs`.
+    pub rope_offset: usize,
 }
 
 impl<C> Module<ModelInput<'_, C>> for Qwen3Model
@@ -414,13 +428,14 @@ where
             inputs,
             mask,
             cache,
+            rope_offset,
         } = input;
 
         let mut h = self.embed_tokens.forward(inputs)?;
 
         let mask = match mask {
             Some(mask) => Some(mask.clone()),
-            None => match create_attention_mask(&h, cache, Some(true))? {
+            None => match create_attention_mask(&h, cache, rope_offset, Some(true))? {
                 Some(AttentionMask::Array(a)) => Some(a),
                 Some(AttentionMask::Causal) => {
                     return Err(Exception::custom("Only `Array` mask is supported"));
@@ -438,6 +453,7 @@ where
                 x: &h,
                 mask: mask.as_ref(),
                 cache: c.as_mut(),
+                rope_offset,
             };
             h = layer.forward(layer_input)?;
         }
@@ -596,7 +612,7 @@ where
 
 pub enum GenerateState<'a> {
     Prefill { prompt_token: &'a Array },
-    Decode { y: Array },
+    Decode { y: Array, rope_offset: usize },
 }
 
 macro_rules! tri {
@@ -621,24 +637,32 @@ where
                     inputs: prompt_token,
                     mask: None,
                     cache: self.cache,
+                    rope_offset: 0,
                 };
                 let logits = tri!(self.model.forward(input));
                 let y = tri!(sample(&logits.index((.., -1, ..)), self.temp));
-                self.state = GenerateState::Decode { y: y.clone() };
+                self.state = GenerateState::Decode {
+                    y: y.clone(),
+                    rope_offset: prompt_token.shape()[1] as usize,
+                };
 
                 Some(Ok(y))
             }
-            GenerateState::Decode { y } => {
+            GenerateState::Decode { y, rope_offset } => {
                 let inputs = y.index((.., NewAxis));
                 let input = ModelInput {
                     inputs: &inputs,
                     mask: None,
                     cache: self.cache,
+                    rope_offset: *rope_offset,
                 };
                 let logits = tri!(self.model.forward(input));
                 let y = tri!(sample(&logits, self.temp));
 
-                self.state = GenerateState::Decode { y: y.clone() };
+                self.state = GenerateState::Decode {
+                    y: y.clone(),
+                    rope_offset: rope_offset.saturating_add(1),
+                };
 
                 Some(Ok(y))
             }

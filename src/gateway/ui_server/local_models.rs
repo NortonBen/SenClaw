@@ -104,15 +104,17 @@ static MLX_ENGINES: Lazy<Mutex<HashMap<String, Arc<MlxNativeEngine>>>> =
 pub fn get_or_create_mlx_engine(id: &str, model_dir: &std::path::Path) -> Arc<MlxNativeEngine> {
     let cid = canonical_local_model_id(id);
     let settings_dir = model_dir.parent().unwrap_or(model_dir);
-    let mlx_kv_bits = load_settings_blocking(settings_dir).mlx_kv_cache_bits;
+    let kv_bits = load_settings_blocking(settings_dir)
+        .kv_cache_bits
+        .filter(|b| *b > 0);
     let mut map = MLX_ENGINES.lock().unwrap();
     if let Some(existing) = map.get(&cid) {
-        if existing.kv_cache_bits() == mlx_kv_bits {
+        if existing.kv_cache_bits() == kv_bits {
             return existing.clone();
         }
         map.remove(&cid);
     }
-    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, mlx_kv_bits));
+    let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, kv_bits));
     map.insert(cid, engine.clone());
     engine
 }

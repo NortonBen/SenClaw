@@ -15,6 +15,7 @@ use super::cache::KeyValueCache;
 
 pub mod rope;
 pub mod tokenizer;
+pub mod turboquant_attn;
 
 #[allow(unused_macros)]
 macro_rules! try_unwrap {
@@ -241,6 +242,7 @@ pub(crate) fn create_causal_mask(
 pub(crate) fn create_attention_mask<C>(
     h: &Array,
     cache: &[Option<C>],
+    rope_offset: usize,
     return_array: Option<bool>,
 ) -> Result<Option<AttentionMask>, Exception>
 where
@@ -249,14 +251,12 @@ where
     let mut return_array = return_array.unwrap_or(false);
     let T = h.shape()[1];
     if T > 1 {
-        let mut offset = 0;
+        let mut offset = rope_offset as i32;
         let mut window_size = None;
         if let Some(c) = cache.first().and_then(|c| c.as_ref()) {
-            offset = c.offset();
             if let Some(window_size_) = c.max_size() {
                 window_size = Some(window_size_);
                 offset = offset.min(window_size_);
-
                 return_array = return_array || (offset + T) > window_size_;
             }
         }

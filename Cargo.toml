@@ -148,6 +148,7 @@ minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
 # vendored under `src/local_model/mlx_lm*` — see oxiglade examples/mistral (mlx-rs-only)
 # vs examples/lm (mlx-lm).
 mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"], optional = true }
+turboquant-rs = { version = "0.4.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -186,6 +187,7 @@ local-candle-accelerate = ["local-candle", "candle-core/accelerate", "candle-nn/
 # Build: cargo build --features local-mlx
 local-mlx = [
     "dep:mlx-rs",
+    "dep:turboquant-rs",
     "dep:tokenizers",
     "dep:minijinja",
     "dep:minijinja-contrib",

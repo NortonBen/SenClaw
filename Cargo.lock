@@ -4114,6 +4114,7 @@ dependencies = [
  "tree-sitter-scala",
  "tree-sitter-typescript",
  "tree-sitter-verilog",
+ "turboquant-rs",
  "urlencoding",
  "uuid",
  "zip 2.4.2",
@@ -5269,6 +5270,17 @@ dependencies = [
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
+]
+
+[[package]]
+name = "turboquant-rs"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c57eff3747ac5d557d184a719bb34e0c6b4e72eef4a0ad86116eb89413e8a2f3"
+dependencies = [
+ "half",
+ "parking_lot",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

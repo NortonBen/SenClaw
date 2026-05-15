@@ -5,9 +5,9 @@
 //! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
 //! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
-//! KV cache: **`SteppingKeyValueCache` (FP16)** by default (`mlx_slice_update`, grow-by-256),
-//! or **`MlxQuantizedKeyValueCache`** when `mlx_kv_cache_bits` is `4` or `8`.
-//! Storage is bounded FP16 with a sliding window; attention quant packs are built per forward only.
+//! KV cache: **`SteppingKeyValueCache` (FP16)** — `slice_update` + grow-by-256, sliding window.
+//! Optional **`TurboQuantKeyValueCache`** when `kv_cache_bits` is set (`turboquant-rs` storage).
+//! RoPE uses **`ModelInput::rope_offset`** (caller `usize`), not cache-internal position.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -27,6 +27,8 @@ struct Loaded {
     tokenizer: super::mlx_lm_utils::tokenizer::Tokenizer,
     chat_template: String,
     n_layers: usize,
+    head_dim: i32,
+    n_kv_heads: i32,
 }
 
 /// In-process MLX inference engine. Caches the loaded model so subsequent
@@ -34,7 +36,7 @@ struct Loaded {
 pub struct MlxNativeEngine {
     model_dir: PathBuf,
     model_id: String,
-    /// `settings.json` `mlx_kv_cache_bits` (`4` / `8` → packed KV on Metal; `None` → FP16).
+    /// `settings.json` `kv_cache_bits` (`3` / `4` → TurboQuant storage; `None` → FP16 stepping).
     kv_cache_bits: Option<u8>,
     /// Arc-wrapped so we can clone the handle into the blocking worker that
     /// runs generation. MLX state is non-Send through naked references, but
@@ -218,14 +220,18 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     let model = load_qwen3_any(model_dir)
         .map_err(|e| anyhow::anyhow!("load_qwen3 failed: {e:?}"))?;
     let n_layers = model.args.num_hidden_layers as usize;
+    let head_dim = model.args.head_dim;
+    let n_kv_heads = model.args.num_key_value_heads;
     tracing::info!(
-        "[local-mlx-native] cached state ready for {model_id} ({n_layers} layers)"
+        "[local-mlx-native] cached state ready for {model_id} ({n_layers} layers, head_dim={head_dim}, kv_heads={n_kv_heads})"
     );
     Ok(Loaded {
         model,
         tokenizer,
         chat_template,
         n_layers,
+        head_dim,
+        n_kv_heads,
     })
 }
 
@@ -239,7 +245,7 @@ fn generate_with_cache(
     _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::cache::{eval_all_caches, DEFAULT_MLX_KV_GROUP_SIZE, KvCache};
+    use super::mlx_lm::cache::{eval_all_caches, DEFAULT_TQ_ACTIVATE_AT, KvCache};
     use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
@@ -382,28 +388,30 @@ fn generate_with_cache(
     );
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
-    let mlx_kv_bits = _kv_cache_bits
-        .or(gen_opt.mlx_kv_cache_bits)
-        .filter(|b| matches!(b, 4 | 8))
-        .map(|b| b as i32);
-    if let Some(bits) = mlx_kv_bits {
+    let tq_bits = _kv_cache_bits.or(gen_opt.kv_cache_bits).filter(|b| *b > 0);
+    let tq_activate_at = gen_opt
+        .tq_activate_at
+        .map(|v| v as i32)
+        .unwrap_or(DEFAULT_TQ_ACTIVATE_AT);
+    let head_dim = state.head_dim;
+    let n_kv_heads = state.n_kv_heads;
+    if let Some(bits) = tq_bits {
         tracing::info!(
-            "[local-mlx-native] MLX KV attention quant: {bits}-bit (storage FP16, max_kv_window {}, group_size={})",
-            max_kv_tokens,
-            DEFAULT_MLX_KV_GROUP_SIZE
+            "[local-mlx-native] TurboQuant KV: TQ{bits} (activate_at={tq_activate_at}, max_kv_window {max_kv_tokens})"
         );
     }
 
-    // Pre-populate cache with `Some(...)` per layer (sliding window caps peak KV RAM).
     let mut cache: Vec<Option<KvCache>> = (0..n_layers)
         .map(|_| {
-            Some(if let Some(bits) = mlx_kv_bits {
-                KvCache::quantized_with_max(DEFAULT_MLX_KV_GROUP_SIZE, bits, max_kv_tokens)
+            Some(if let Some(bits) = tq_bits {
+                KvCache::turboquant_with_max(bits, head_dim, n_kv_heads, max_kv_tokens, tq_activate_at)
             } else {
                 KvCache::fp16_with_max(max_kv_tokens)
             })
         })
         .collect();
+
+    let mut rope_offset = 0usize;
 
     // Qwen3 stop tokens.
     const QWEN3_IM_END: u32 = 151645;
@@ -424,10 +432,12 @@ fn generate_with_cache(
         inputs: &prompt_tokens,
         mask: None,
         cache: &mut cache,
+        rope_offset,
     };
     let logits = model
         .forward(prefill_input)
         .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?;
+    rope_offset += prompt.len();
     eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("prefill cache eval failed: {e:?}"))?;
     let last_logits = logits.index((.., -1, ..));
     eval(&[last_logits.clone()]).map_err(|e| anyhow::anyhow!("prefill logits eval failed: {e:?}"))?;
@@ -445,10 +455,12 @@ fn generate_with_cache(
             inputs: &inputs,
             mask: None,
             cache: &mut cache,
+            rope_offset,
         };
         let logits = model
             .forward(decode_input)
             .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
+        rope_offset += 1;
         eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("decode cache eval failed: {e:?}"))?;
         let last_logits = logits.index((.., -1, ..));
         eval(&[last_logits.clone()]).map_err(|e| anyhow::anyhow!("decode logits eval failed: {e:?}"))?;
