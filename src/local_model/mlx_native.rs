@@ -5,10 +5,9 @@
 //! NOTE: only Qwen3 MLX checkpoints are supported by the vendored loader today.
 //! Models that are not Qwen3 return an error from [`MlxNativeEngine::start`] when detected.
 //!
-//! KV cache: **`ConcatKeyValueCache` (FP16)** by default, or **`MlxQuantizedConcatKeyValueCache`**
-//! when `mlx_kv_cache_bits` is `4` or `8` in `~/.senclaw/local_models/settings.json`.
-//! Packed KV re-quantizes the full FP16 sequence each step (dequantize → concat → quantize)
-//! so Metal `quantized_scaled_dot_product_attention` stays correct.
+//! KV cache: **`SteppingKeyValueCache` (FP16)** by default (`mlx_slice_update`, grow-by-256),
+//! or **`MlxQuantizedKeyValueCache`** when `mlx_kv_cache_bits` is `4` or `8`.
+//! Storage is bounded FP16 with a sliding window; attention quant packs are built per forward only.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -389,9 +388,9 @@ fn generate_with_cache(
         .map(|b| b as i32);
     if let Some(bits) = mlx_kv_bits {
         tracing::info!(
-            "[local-mlx-native] MLX packed KV: {bits}-bit, group_size={}, max_kv_window {}",
-            DEFAULT_MLX_KV_GROUP_SIZE,
-            max_kv_tokens
+            "[local-mlx-native] MLX KV attention quant: {bits}-bit (storage FP16, max_kv_window {}, group_size={})",
+            max_kv_tokens,
+            DEFAULT_MLX_KV_GROUP_SIZE
         );
     }
 
@@ -452,6 +451,7 @@ fn generate_with_cache(
             .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?;
         eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("decode cache eval failed: {e:?}"))?;
         let last_logits = logits.index((.., -1, ..));
+        eval(&[last_logits.clone()]).map_err(|e| anyhow::anyhow!("decode logits eval failed: {e:?}"))?;
         let y = sample(&last_logits, temperature)
             .map_err(|e| anyhow::anyhow!("decode sample failed: {e:?}"))?;
         next_token = y;
@@ -502,6 +502,9 @@ fn generate_with_cache(
             let _ = tx.blocking_send(text);
         }
     }
+
+    // Release MLX compile cache / lazy graph peaks before the next chat turn.
+    mlx_rs::transforms::compile::clear_cache();
 
     Ok(())
 }

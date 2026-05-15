@@ -79,12 +79,19 @@ pub fn trim_conversation_history<T>(convs: &mut Vec<Conversation<Role, T>>, max_
     }
 
     if start > 0 {
+        let before = convs.len();
+        // First turn is user + merged system prompt — never drop it.
+        if convs.first().is_some_and(|c| c.role == Role::User) {
+            if start > 1 {
+                convs.drain(1..start);
+            }
+        } else {
+            convs.drain(..start);
+        }
         tracing::info!(
-            "[local-mlx-native] trimming chat history: {} → {} messages (keep last {max_turns} user turns)",
-            convs.len(),
-            convs.len() - start
+            "[local-mlx-native] trimming chat history: {before} → {} messages (keep last {max_turns} user turns, preserve system turn)",
+            convs.len()
         );
-        convs.drain(..start);
     }
 }
 
@@ -129,7 +136,8 @@ mod tests {
             },
         ];
         trim_conversation_history(&mut convs, 2);
-        assert_eq!(convs.len(), 3);
-        assert_eq!(convs[0].content, "2");
+        assert_eq!(convs[0].content, "1", "first user (system) turn preserved");
+        assert!(convs.len() >= 2);
+        assert_eq!(convs.last().unwrap().content, "3");
     }
 }

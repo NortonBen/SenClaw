@@ -526,7 +526,7 @@ export const LocalModelsSettings: React.FC = () => {
     <div>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>
-          Local Models (MLX)
+          Local Models
         </Title>
         <Button icon={<ReloadOutlined />} onClick={refresh}>
           Refresh
