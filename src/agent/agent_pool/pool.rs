@@ -37,6 +37,30 @@ use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
 use crate::util::local_time::local_iso_string_now;
 
+/// For Web UI only: fold structured `reasoning` + `content` into one string so the client
+/// renders a single bubble (`extractLeadingReasoningBlocks` + collapsible). Non-`web:` JIDs
+/// still receive plain `content` via [`AgentPool::broadcast_reply_now`].
+fn merge_assistant_reasoning_for_web_ui(reasoning: &str, content: &str) -> String {
+    let r = reasoning.trim();
+    if r.is_empty() {
+        return content.to_string();
+    }
+    let c = content.trim();
+    let sniff = if c.len() > 4096 { &c[..4096] } else { c };
+    let lower = sniff.to_ascii_lowercase();
+    if lower.contains(concat!("<", "think"))
+        || lower.contains(concat!("redacted_", "reasoning"))
+        || lower.contains(concat!("redacted_", "thinking"))
+    {
+        return content.to_string();
+    }
+    format!(
+        "{open}\n{r}\n{close}\n\n{c}",
+        open = concat!("<", "think", ">"),
+        close = concat!("</", "think", ">"),
+    )
+}
+
 // ===== AgentPool =====
 
 pub struct AgentPool {
@@ -2136,7 +2160,7 @@ impl AgentPool {
                         "[AgentPool] message_complete jid={jid} dispatch_task={dispatch_task} content_len={}",
                         data.content.len()
                     );
-                    if data.content.trim().is_empty() {
+                    if data.content.trim().is_empty() && data.reasoning.trim().is_empty() {
                         tracing::info!(
                             "[AgentPool] message_complete empty content jid={jid} dispatch_task={dispatch_task}"
                         );
@@ -2148,12 +2172,17 @@ impl AgentPool {
                         s.last_dispatch_replies
                             .insert(jid.clone(), data.content.clone());
                     }
-                    pool.broadcast_reply_now(&jid, &data.content, bot_token.as_deref());
+                    let reply_text = if jid.starts_with("web:") {
+                        merge_assistant_reasoning_for_web_ui(&data.reasoning, &data.content)
+                    } else {
+                        data.content.clone()
+                    };
+                    pool.broadcast_reply_now(&jid, &reply_text, bot_token.as_deref());
                     if let Some(logger) = pool.daily_logger.lock().unwrap().as_ref() {
                         logger.append(
                             &folder,
                             crate::memory::daily_logger::Role::Assistant,
-                            &data.content,
+                            reply_text.as_str(),
                         );
                     }
                 }),

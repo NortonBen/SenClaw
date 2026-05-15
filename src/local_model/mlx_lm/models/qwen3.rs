@@ -31,6 +31,8 @@ use super::super::{
     },
 };
 
+fn default_rope_theta() -> f32 { 1_000_000.0 }
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelArgs {
     pub model_type: String,
@@ -42,8 +44,10 @@ pub struct ModelArgs {
     pub vocab_size: i32,
     pub num_key_value_heads: i32,
     pub max_position_embeddings: i32,
+    #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
     pub head_dim: i32,
+    #[serde(default)]
     pub tie_word_embeddings: bool,
     pub rope_scaling: Option<HashMap<String, FloatOrString>>,
 }
@@ -163,7 +167,7 @@ where
                 .reshape(&[B, L, self.n_kv_heads, -1])?
                 .transpose_axes(&[0, 2, 1, 3])?,
         )?;
-        let mut values = values
+        let values = values
             .reshape(&[B, L, self.n_kv_heads, -1])?
             .transpose_axes(&[0, 2, 1, 3])?;
 
@@ -550,10 +554,24 @@ pub fn load_qwen3_tokenizer(model_dir: impl AsRef<Path>) -> Result<Tokenizer, Er
 
 pub fn get_qwen3_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, Error> {
     let model_args_filename = model_dir.as_ref().join("config.json");
-    let file = std::fs::File::open(model_args_filename)?;
-    let model_args: ModelArgs = serde_json::from_reader(file)?;
+    let raw: serde_json::Value = serde_json::from_reader(std::fs::File::open(model_args_filename)?)?;
 
-    Ok(model_args)
+    // Multimodal checkpoints nest text fields under `text_config`.
+    let value = if raw.get("hidden_size").is_none() {
+        if let Some(text_cfg) = raw.get("text_config").and_then(|v| v.as_object()) {
+            let mut merged = raw.as_object().cloned().unwrap_or_default();
+            for (k, v) in text_cfg {
+                merged.insert(k.clone(), v.clone());
+            }
+            serde_json::Value::Object(merged)
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+
+    Ok(serde_json::from_value(value)?)
 }
 
 #[derive(Debug, Clone, Deserialize)]

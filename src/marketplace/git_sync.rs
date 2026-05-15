@@ -20,7 +20,7 @@ pub fn clone_or_pull(url: &str, branch: &str, local_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn pull_existing(url: &str, branch: &str, local_path: &Path) -> Result<()> {
+fn pull_existing(_url: &str, branch: &str, local_path: &Path) -> Result<()> {
     let repo = git2::Repository::open(local_path)
         .with_context(|| format!("Failed to open existing repo at {:?}", local_path))?;
 

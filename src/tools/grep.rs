@@ -209,7 +209,7 @@ impl Tool for GrepTool {
             }
         };
 
-        let mut processed = apply_offset_limit(&raw_lines, offset, head_limit);
+        let processed = apply_offset_limit(&raw_lines, offset, head_limit);
         let num_files = if output_mode == "content" {
             // Count actual match lines (not context lines, not separators)
             processed
@@ -220,7 +220,7 @@ impl Tool for GrepTool {
             processed.len()
         };
 
-        let title = get_title(pattern, path, glob_filter);
+        let _title = get_title(pattern, path, glob_filter);
         let display = build_display(&processed, num_files, ctx.working_dir);
 
         Ok(vec![ToolOutput::Result {

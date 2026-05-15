@@ -1,11 +1,4 @@
-use std::collections::HashSet;
-use std::sync::Arc;
 
-use super::engine::ZenCoreApi;
-use super::pool::AgentPool;
-use super::traits::CoreApi;
-use super::types::PermissionsConfig;
-use super::workspace::WorkspaceStateFile;
 use crate::types::GroupBinding;
 
 fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {

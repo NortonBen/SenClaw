@@ -100,6 +100,7 @@ impl ZenCoreApi {
                                 if let Some(ref cb) = h.message_complete {
                                     cb(MessageCompleteData {
                                         agent_id: data.agent_id,
+                                        reasoning: data.reasoning,
                                         content: data.content,
                                     });
                                 }

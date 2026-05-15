@@ -18,7 +18,6 @@ use crate::plugins::db::{
     update_plugin_config, upsert_plugin, upsert_runtime, InstalledPlugin, PluginRuntime,
 };
 use crate::plugins::manifest::parse_plugin_md;
-use crate::plugins::registry::scan_installed_plugins;
 use super::core::{AppError, UiState};
 
 fn db(s: &UiState) -> Result<&crate::db::Db, AppError> {
@@ -32,7 +31,7 @@ fn internal(e: impl std::fmt::Display) -> AppError {
 
 fn now_ms() -> i64 { Utc::now().timestamp_millis() }
 
-fn registry(s: &UiState) -> String {
+fn registry(_s: &UiState) -> String {
     std::env::var("CLAWHUB_REGISTRY")
         .ok()
         .filter(|v| !v.is_empty())
@@ -66,7 +65,7 @@ pub(crate) async fn plugins_list(
     State(s): State<Arc<UiState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db(&s)?;
-    let mut rows = list_plugins(db).map_err(internal)?;
+    let rows = list_plugins(db).map_err(internal)?;
 
     // Merge runtime status
     let result: Vec<serde_json::Value> = rows.into_iter().map(|p| {

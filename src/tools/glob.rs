@@ -97,7 +97,7 @@ impl Tool for GlobTool {
             s
         };
 
-        let title = get_title(pattern, search_path);
+        let _title = get_title(pattern, search_path);
 
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!({

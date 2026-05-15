@@ -7,6 +7,7 @@ pub mod higgs_turboquant_mlx;
 pub mod higgs_weights;
 
 pub mod gemma2;
+pub mod gemma4;
 pub mod phi3;
 pub mod qwen3_moe;
 pub mod qwen3_next;
@@ -17,3 +18,4 @@ pub mod llama;
 pub mod mistral;
 pub mod qwen2;
 pub mod qwen3;
+pub mod qwen3_5;

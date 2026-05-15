@@ -607,7 +607,7 @@ impl ExternalMcpClient {
     /// Perform the MCP initialize handshake.  Must be called once after
     /// connect.
     pub async fn initialize(&mut self) -> Result<()> {
-        let session_id = Uuid::new_v4().to_string();
+        let _session_id = Uuid::new_v4().to_string();
         self.transport
             .request(
                 "initialize",

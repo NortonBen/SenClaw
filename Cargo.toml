@@ -145,7 +145,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 # vs examples/lm (mlx-lm).
 mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"], optional = true }
 mlx-sys = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", optional = true }
-minijinja = { version = "2", optional = true }
+minijinja = { version = "2", optional = true, features = ["serde"] }
 minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
 turboquant-rs = { version = "0.4.1", optional = true }
 

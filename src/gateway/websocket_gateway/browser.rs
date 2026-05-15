@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Result;
 use axum::extract::ws::Message;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};

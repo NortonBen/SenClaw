@@ -164,7 +164,7 @@ where
         let mut keys = keys
             .reshape(&[B, L, self.n_kv_heads, -1])?
             .transpose_axes(&[0, 2, 1, 3])?;
-        let mut values = values
+        let values = values
             .reshape(&[B, L, self.n_kv_heads, -1])?
             .transpose_axes(&[0, 2, 1, 3])?;
 

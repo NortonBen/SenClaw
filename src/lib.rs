@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use base64::Engine;
 
 pub mod agent;
 pub mod browser;

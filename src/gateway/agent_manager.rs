@@ -1,7 +1,6 @@
 //! Agent lifecycle management.
 //! Agents represent AI personas with their own folder, tools, and permissions.
 
-use std::fs;
 use std::sync::Mutex;
 
 use anyhow::Result;

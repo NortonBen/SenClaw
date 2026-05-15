@@ -270,9 +270,9 @@ pub(crate) async fn marketplace_plugin_toggle(
 
 /// POST /api/marketplace/sources/:id/plugins/:name/mcp/:server/use-tools - set MCP tool allowlist
 pub(crate) async fn marketplace_mcp_use_tools(
-    State(s): State<Arc<UiState>>,
-    AxumPath(params): AxumPath<(String, String, String)>,
-    Json(body): Json<SetUseToolsBody>,
+    State(_s): State<Arc<UiState>>,
+    AxumPath(_params): AxumPath<(String, String, String)>,
+    Json(_body): Json<SetUseToolsBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // This would need to be implemented in MarketplaceManager
     // For now, return success
@@ -281,7 +281,7 @@ pub(crate) async fn marketplace_mcp_use_tools(
 
 /// GET /api/marketplace/mcp-status - get MCP connection status
 pub(crate) async fn marketplace_mcp_status(
-    State(s): State<Arc<UiState>>,
+    State(_s): State<Arc<UiState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // This would need to query the MCP manager for connection status
     // For now, return empty status

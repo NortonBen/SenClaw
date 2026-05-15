@@ -16,7 +16,7 @@ use crate::db::Db;
 
 use super::parser::CodeParser;
 use super::schema::apply_code_graph_schema;
-use super::types::{IndexStats, Language, NodeKind, ParsedFile};
+use super::types::{IndexStats, Language};
 
 // Extensions we index
 const INDEXED_EXTENSIONS: &[&str] = &[

@@ -8,6 +8,7 @@ import 'highlight.js/styles/github.css';
 import type { ChatMessage, ImageAttachment } from '../types';
 import { PermissionCard, QuestionCard } from './PermissionCard';
 import { useAppContext } from '../contexts/AppContext';
+import { extractLeadingReasoningBlocks } from '../utils/reasoningBlocks';
 
 const { Text } = Typography;
 
@@ -41,6 +42,103 @@ function SaveIcon() {
       <polyline points="7 10 12 15 17 10"/>
       <line x1="12" y1="15" x2="12" y2="3"/>
     </svg>
+  );
+}
+
+function SparkleIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M12 2l1.2 4.2L18 8l-4.8 1.8L12 14l-1.2-4.2L6 8l4.8-1.8L12 2zM19 14l.7 2.5 2.5.7-2.5.7-.7 2.5-.7-2.5-2.5-.7 2.5-.7.7-2.5zM5 16l.6 2.1 2.1.6-2.1.6-.6 2.1-.6-2.1-2.1-.6 2.1-.6.6-2.1z"
+        fill="currentColor"
+        opacity="0.9"
+      />
+    </svg>
+  );
+}
+
+function ReasoningCollapsible({
+  markdown,
+  isDarkMode,
+  embedded,
+}: {
+  markdown: string;
+  isDarkMode: boolean;
+  embedded?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      className={embedded ? 'mb-2 rounded-lg overflow-hidden' : 'mb-3 rounded-xl overflow-hidden border transition-colors'}
+      style={
+        embedded
+          ? { background: token.colorFillTertiary }
+          : {
+              borderColor: token.colorBorderSecondary,
+              background: token.colorFillQuaternary,
+            }
+      }
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={open ? 'Thu gọn phần suy luận' : 'Mở xem tiến trình tư duy'}
+        className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left cursor-pointer select-none hover:opacity-95"
+        style={{ color: token.colorText }}
+      >
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
+          style={{
+            background: `linear-gradient(135deg, ${token.colorPrimary}33, ${token.colorInfo}44)`,
+            color: token.colorPrimary,
+          }}
+        >
+          <SparkleIcon className="w-3.5 h-3.5" />
+        </span>
+        <span className="flex-1 text-sm font-medium">Hiện tiến trình tư duy</span>
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="shrink-0 transition-transform duration-200"
+          style={{
+            color: token.colorTextSecondary,
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+          aria-hidden
+        >
+          <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          className="mx-3 mb-3 pl-3 border-l-2"
+          style={{ borderLeftColor: token.colorBorder }}
+        >
+          <div
+            className={`prose prose-sm max-w-none italic opacity-95 ${isDarkMode ? 'prose-invert' : ''}`}
+            style={{ color: token.colorTextSecondary }}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              {markdown}
+            </ReactMarkdown>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -85,6 +183,7 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: strin
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const { token } = theme.useToken();
+  const { reasoning, body } = extractLeadingReasoningBlocks(text);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
@@ -120,7 +219,17 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: strin
           borderColor: token.colorBorderSecondary
         }}
       >
-        <MarkdownContent content={text} isDarkMode={isDarkMode} />
+        {reasoning ? (
+          <ReasoningCollapsible markdown={reasoning} isDarkMode={isDarkMode} embedded />
+        ) : null}
+        {reasoning && body ? (
+          <div
+            className="my-2 border-t"
+            style={{ borderColor: token.colorBorderSecondary }}
+            aria-hidden
+          />
+        ) : null}
+        {body ? <MarkdownContent content={body} isDarkMode={isDarkMode} /> : null}
         <ImageAttachments attachments={attachments || []} />
       </div>
       <div className="flex items-center mt-1 gap-1">

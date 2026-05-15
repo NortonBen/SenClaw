@@ -159,7 +159,7 @@ async fn query_local_mlx_native(
 
     #[cfg(feature = "local-mlx")]
     {
-        use crate::local_model::{LocalModelRuntime, MlxNativeEngine};
+        use crate::local_model::LocalModelRuntime;
         use crate::config::Config;
 
         let api_msgs = openai_messages_for_api(messages, system_prompt)?;
@@ -1055,11 +1055,11 @@ impl LlmError {
             };
         }
 
-        // Auth
-        if msg_lower.contains("401")
-            || msg_lower.contains("auth")
-            || msg_lower.contains("unauthorized")
-        {
+        // Auth — **only** clear HTTP / API-key signals. Broad `contains("auth")` or bare
+        // `401` false-positive on local MLX + tools (paths like `.../authors/...`, "oauth"
+        // in JSON schema, tensor sizes mentioning 401, etc.) and surfaces misleading
+        // "check API key" even though no remote API is involved.
+        if looks_like_http_auth_failure(&msg_lower) {
             return Self {
                 code: "AUTH_ERROR".into(),
                 message: "API authentication failed — check API key".into(),
@@ -1068,8 +1068,13 @@ impl LlmError {
             };
         }
 
-        // Rate limit
-        if msg_lower.contains("429") || msg_lower.contains("rate limit") {
+        // Rate limit — avoid bare `429` (can appear in unrelated numeric errors).
+        if msg_lower.contains("rate limit")
+            || msg_lower.contains("too many requests")
+            || msg_lower.contains("429 too many")
+            || msg_lower.contains("http 429")
+            || msg_lower.contains("status 429")
+        {
             return Self {
                 code: "RATE_LIMIT".into(),
                 message: "API rate limit exceeded — retry later".into(),
@@ -1078,12 +1083,10 @@ impl LlmError {
             };
         }
 
-        // Network
-        if msg_lower.contains("fetch")
-            || msg_lower.contains("network")
-            || msg_lower.contains("connection")
-            || msg_lower.contains("timeout")
-        {
+        // Network — bare `timeout` / `connection` / `fetch` match MCP tool JSON (timeout_ms,
+        // "connection state", "Fetch …") when errors embed the full `tools` payload; classify
+        // only clear transport / HTTP-client signals.
+        if looks_like_network_transport_failure(&msg_lower) {
             return Self {
                 code: "NETWORK_ERROR".into(),
                 message: "Network error — check connectivity".into(),
@@ -1092,9 +1095,9 @@ impl LlmError {
             };
         }
 
-        // JSON parse
-        if msg_lower.contains("json") || msg_lower.contains("parse") || msg_lower.contains("serde")
-        {
+        // JSON / body parse — the word `json` appears in every `$schema` URL inside tool defs;
+        // avoid treating template / MLX errors as "API response parse" unless it looks like serde/JSON.
+        if looks_like_response_parse_failure(&msg_lower) {
             return Self {
                 code: "API_RESPONSE_ERROR".into(),
                 message: format!("API response parse error: {msg}"),
@@ -1128,6 +1131,89 @@ impl LlmError {
             },
         }
     }
+}
+
+/// True when `msg_lower` reads like an HTTP/API credential failure (not substring "auth"
+/// inside unrelated words such as `authors`, `oauth`, or bare `401` in tensor sizes).
+fn looks_like_http_auth_failure(msg_lower: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "401 unauthorized",
+        "http 401",
+        "https 401",
+        "status 401",
+        "status: 401",
+        "status = 401",
+        "unauthorized",
+        "invalid_api_key",
+        "invalid api key",
+        "incorrect api key",
+        "missing api key",
+        "api key missing",
+        "api key not found",
+        "api key expired",
+        "authentication failed",
+        "access token invalid",
+        "access token expired",
+        "no api key",
+        "wrong api key",
+        "bearer token",
+    ];
+    PHRASES.iter().any(|p| msg_lower.contains(p))
+}
+
+/// True for HTTP client / OS transport failures — not substrings like `timeout_ms` inside MCP schemas.
+fn looks_like_network_transport_failure(msg_lower: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "operation timed out",
+        "request timed out",
+        "timed out waiting",
+        "deadline has elapsed",
+        "connection refused",
+        "connection reset",
+        "connection aborted",
+        "broken pipe",
+        "unexpected eof",
+        "error sending request",
+        "error trying to connect",
+        "could not connect",
+        "failed to connect",
+        "tcp connect",
+        "dns error",
+        "failed to lookup",
+        "name or service not known",
+        "getaddrinfo",
+        "ssl error",
+        "tls handshake",
+        "certificate verify",
+        "reqwest::",
+        "hyper::",
+        "http connect",
+        "network unreachable",
+        "host unreachable",
+        "no route to host",
+    ];
+    PHRASES.iter().any(|p| msg_lower.contains(p))
+}
+
+/// True when the failure reads like JSON/body parsing — not `$schema` URLs in embedded tool JSON.
+fn looks_like_response_parse_failure(msg_lower: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "serde_json::error",
+        "serde_json::err",
+        "invalid escape",
+        "trailing characters",
+        "expected value at line",
+        "key must be a string",
+        "invalid json",
+        "failed to parse json",
+        "error decoding response body",
+        "error decoding response",
+        "json parse error",
+        "unexpected end of json",
+        "expected `,` or `}`",
+        "expected `:`",
+    ];
+    PHRASES.iter().any(|p| msg_lower.contains(p))
 }
 
 fn extract_http_status(msg: &str) -> Option<u16> {
@@ -1193,6 +1279,39 @@ mod tests {
         let err = anyhow::anyhow!("HTTP 401 Unauthorized");
         let classified = LlmError::classify(&err);
         assert_eq!(classified.code, "AUTH_ERROR");
+    }
+
+    #[test]
+    fn error_classify_auth_not_triggered_by_authors_path_or_bare_401() {
+        let err = anyhow::anyhow!(
+            "chat template apply failed: /Users/x/docs/authors/guide.md:12:5 error"
+        );
+        let c = LlmError::classify(&err);
+        assert_ne!(c.code, "AUTH_ERROR", "expected not AUTH_ERROR: {}", c.code);
+
+        let err2 = anyhow::anyhow!("mlx forward failed: shape [32, 401, 128] mismatch");
+        let c2 = LlmError::classify(&err2);
+        assert_ne!(c2.code, "AUTH_ERROR");
+    }
+
+    #[test]
+    fn error_classify_network_not_triggered_by_mcp_tool_json_noise() {
+        let err = anyhow::anyhow!(
+            "render failed: {{\n  \"tools\": [{{\n    \"timeout_ms\": 30000,\n    \"description\": \"connection state\"\n  }}]\n}}"
+        );
+        let c = LlmError::classify(&err);
+        assert_ne!(c.code, "NETWORK_ERROR");
+
+        let err2 = anyhow::anyhow!("https://json-schema.org/draft/2020-12/schema parse error in tool");
+        let c2 = LlmError::classify(&err2);
+        assert_ne!(c2.code, "API_RESPONSE_ERROR");
+    }
+
+    #[test]
+    fn error_classify_network_still_detects_connection_refused() {
+        let err = anyhow::anyhow!("error sending request: connection refused (os error 61)");
+        let c = LlmError::classify(&err);
+        assert_eq!(c.code, "NETWORK_ERROR");
     }
 
     #[test]

@@ -4,8 +4,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use anyhow::Result;
-use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::agent::group_queue::GroupQueue;
@@ -15,7 +13,7 @@ use crate::db::Db;
 use crate::gateway::binding_manager::BindingManager;
 use crate::gateway::command_dispatcher::dispatch_command;
 use crate::gateway::group_manager::{ensure_app_group, ensure_wechat_admin_group, GroupManager};
-use crate::gateway::trigger_checker::{should_trigger, should_trigger_entity};
+use crate::gateway::trigger_checker::should_trigger;
 use crate::gateway::websocket_gateway::WebSocketGateway;
 use crate::types::{AgentApi, BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
 

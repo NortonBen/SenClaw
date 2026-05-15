@@ -14,7 +14,6 @@ use crate::mcp::manager::McpManager;
 
 use super::core::{AppError, UiState};
 
-use axum::response::IntoResponse;
 
 // ===== MCP helper =====
 

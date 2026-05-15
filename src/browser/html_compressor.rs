@@ -298,7 +298,7 @@ pub fn compress_html(html: &str, config: &CompressConfig) -> CompressedHtml {
 fn parse_lightweight(html: &str) -> Vec<HtmlNode> {
     let mut nodes: Vec<HtmlNode> = Vec::new();
     let mut stack: Vec<(String, HashMap<String, String>, Vec<HtmlNode>)> = Vec::new();
-    let mut current_text = String::new();
+    let _current_text = String::new();
     let mut skip_until_close: Option<String> = None; // Tag name whose content to skip (script, style)
 
     let mut pos = 0;

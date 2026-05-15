@@ -74,11 +74,25 @@ use std::{
 };
 
 use minijinja::{context, Environment, Template};
+use minijinja::Value as MjValue;
 use serde::Serialize;
 use serde_json::Value;
 use tokenizers::Encoding;
 
 use super::error::Error;
+
+fn register_hf_chat_template_filters(env: &mut Environment<'static>) {
+    // HF chat templates (Qwen3, etc.) use Jinja's `tojson` filter for `{{- tool | tojson }}`.
+    // Python Jinja provides it; minijinja does not — register a serde_json-backed filter.
+    let _ = env.add_filter("tojson", |value: MjValue| -> Result<String, minijinja::Error> {
+        serde_json::to_string(&value).map_err(|e| {
+            minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                format!("tojson: {e}"),
+            )
+        })
+    });
+}
 
 /// Wrapper around [`tokenizers::Tokenizer`] and [`minijinja::Environment`]
 /// providing more utilities.
@@ -99,6 +113,7 @@ impl Tokenizer {
     pub fn from_tokenizer(tokenizer: tokenizers::Tokenizer) -> Self {
         let mut env = Environment::new();
         env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+        register_hf_chat_template_filters(&mut env);
         Self {
             inner: tokenizer,
             env,
@@ -557,6 +572,78 @@ where
     Ok(rendered)
 }
 
+/// HF Jinja templates (Qwen3, …) treat `message.content` like a Python `str` (`startswith`, `endswith`, …).
+/// OpenAI-style payloads often use multimodal `content` as a JSON array of `{ "type": "text", "text": "..." }`
+/// blocks; minijinja then exposes `content` as a sequence, which breaks those templates. Collapse text parts
+/// into a single string (same practical outcome as many Transformers code paths for tool / text-only flows).
+fn normalize_openai_messages_for_hf_jinja(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(normalize_one_openai_message_for_hf_jinja)
+        .collect()
+}
+
+fn normalize_one_openai_message_for_hf_jinja(msg: &Value) -> Value {
+    let Some(obj) = msg.as_object() else {
+        return msg.clone();
+    };
+    let mut out = obj.clone();
+    if let Some(content) = obj.get("content") {
+        if let Some(plain) = openai_message_content_to_plain_string(content) {
+            out.insert("content".to_string(), Value::String(plain));
+        }
+    }
+    Value::Object(out)
+}
+
+fn openai_message_content_to_plain_string(content: &Value) -> Option<String> {
+    match content {
+        Value::String(_) => None,
+        Value::Null => Some(String::new()),
+        Value::Array(parts) => Some(flatten_openai_content_parts(parts)),
+        Value::Object(block) => content_block_text(block).or_else(|| serde_json::to_string(content).ok()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+    }
+}
+
+fn flatten_openai_content_parts(parts: &[Value]) -> String {
+    let mut out = String::new();
+    for p in parts {
+        let piece = match p {
+            Value::Object(o) => content_block_text(o),
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        };
+        let Some(piece) = piece.filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&piece);
+    }
+    out
+}
+
+fn content_block_text(block: &serde_json::Map<String, Value>) -> Option<String> {
+    match block.get("text") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Array(chunks)) => {
+            let joined = chunks
+                .iter()
+                .filter_map(|c| c.as_str())
+                .collect::<String>();
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Render one conversation where `messages` / `tools` are JSON object lists (OpenAI chat-completions shape).
 ///
 /// HuggingFace chat templates expect the same kwargs as Transformers: `messages`, optional `documents`,
@@ -585,6 +672,8 @@ pub fn apply_chat_template_openai_shape(
         },
     };
 
+    let messages = normalize_openai_messages_for_hf_jinja(messages);
+
     template
         .render(context! {
             messages => messages,
@@ -595,3 +684,45 @@ pub fn apply_chat_template_openai_shape(
         .map_err(Into::into)
 }
 
+#[cfg(test)]
+mod hf_jinja_message_tests {
+    use super::*;
+
+    #[test]
+    fn array_content_becomes_concatenated_string() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "text", "text": "world"},
+            ],
+        })];
+        let n = normalize_openai_messages_for_hf_jinja(&messages);
+        assert_eq!(
+            n[0].get("content").and_then(|c| c.as_str()),
+            Some("hello\nworld")
+        );
+    }
+
+    #[test]
+    fn string_content_preserved() {
+        let messages = vec![serde_json::json!({
+            "role": "system",
+            "content": "sys",
+        })];
+        let n = normalize_openai_messages_for_hf_jinja(&messages);
+        assert_eq!(n[0].get("content").and_then(|c| c.as_str()), Some("sys"));
+    }
+
+    #[test]
+    fn tool_response_wrapped_text_stays_string_for_template() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "<tool_response>ok</tool_response>"}],
+        })];
+        let n = normalize_openai_messages_for_hf_jinja(&messages);
+        let s = n[0].get("content").and_then(|c| c.as_str()).unwrap();
+        assert!(s.starts_with("<tool_response>"));
+        assert!(s.ends_with("</tool_response>"));
+    }
+}

@@ -7,10 +7,10 @@
 //! Tool namespace: `space:*`
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, Local, TimeZone, Utc};
+use chrono::{Datelike, TimeZone, Utc};
 use rmcp::ServiceExt;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -424,7 +424,7 @@ impl McpSpaceServer {
                        (hôm nay, tuần này, ngày mai, lúc mấy giờ, etc.)."
     )]
     fn space_current_time(&self) -> String {
-        use chrono::{Datelike, Duration, Local, Timelike, Weekday};
+        use chrono::{Datelike, Duration, Local, Timelike};
         let now = Local::now();
         let today_start = now
             .date_naive()
@@ -1146,7 +1146,7 @@ impl SpaceServer {
     }
 
     pub fn today_summary(&self) -> ToolResult {
-        let now_ms = Utc::now().timestamp_millis();
+        let _now_ms = Utc::now().timestamp_millis();
         // Start of today (UTC midnight)
         let today_start = {
             let t = Utc::now();

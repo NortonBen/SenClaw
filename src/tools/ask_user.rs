@@ -176,7 +176,7 @@ impl Tool for AskUserTool {
             }
         };
 
-        let answers_json: Value = serde_json::to_value(&answers).unwrap_or_default();
+        let _answers_json: Value = serde_json::to_value(&answers).unwrap_or_default();
 
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!({

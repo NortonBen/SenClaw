@@ -4,7 +4,7 @@ use rusqlite::Row;
 use crate::types::{
     Agent, Binding, BindingWithRelations, Channel, ContextMode, CoworkBoardEntry, CoworkMember,
     CoworkMessage, CoworkRecordingSession, CoworkTask, CoworkTaskComment, CoworkWorkspace,
-    GroupBinding, RunStatus, ScheduleType, ScheduledTask, StoredMessage, TaskStatus,
+    GroupBinding, ScheduleType, ScheduledTask, StoredMessage, TaskStatus,
 };
 
 use super::helpers::parse_json_array;

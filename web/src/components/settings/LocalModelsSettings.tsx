@@ -452,29 +452,11 @@ export const LocalModelsSettings: React.FC = () => {
       </Space>
 
       <Paragraph type="secondary">
-        Download HuggingFace MLX models, then click <b>Load</b> to launch a
-        Python <code>mlx_lm.server</code> sidecar (auto-creates a venv on first
-        use). <b>Use in LLM</b> creates an OpenAI-compatible profile pointing
-        at the sidecar's local port.
+        Download HuggingFace MLX models, then click <b>Load</b> to start local
+        inference. <b>Use in LLM</b> creates an OpenAI-compatible profile
+        pointing at this daemon.
       </Paragraph>
 
-      {runtime && !runtime.python_available && (
-        <Alert
-          style={{ marginBottom: 16 }}
-          type="warning"
-          showIcon
-          message="Python 3.10–3.13 not found"
-          description={
-            <>
-              Local models run via a Python <code>mlx_lm.server</code> sidecar.
-              Install Python (e.g. <code>brew install python@3.13</code>) and
-              ensure it's on <code>PATH</code>. The daemon will auto-create a
-              venv at <code>{runtime.local_models_dir}/.venv</code> on first
-              Load.
-            </>
-          }
-        />
-      )}
       {runtime && runtime.platform !== 'macos' && (
         <Alert
           style={{ marginBottom: 16 }}

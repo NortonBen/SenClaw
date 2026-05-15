@@ -65,6 +65,7 @@ pub struct CachedTodos {
 #[derive(Debug, Clone)]
 pub struct MessageCompleteData {
     pub agent_id: String,
+    pub reasoning: String,
     pub content: String,
 }
 

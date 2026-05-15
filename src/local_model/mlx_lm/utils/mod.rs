@@ -192,53 +192,35 @@ pub(crate) fn scaled_dot_product_attention<C>(
 where
     C: KeyValueCache,
 {
-    let keys = keys.into();
-    let values = values.into();
-
-    if let Some(cache) = cache {
-        if cache.is_quantized() {
+    // Dispatch on the actual key/value types, not the cache flag.
+    // TurboQuant caches set is_quantized()=true but their decode path is handled upstream
+    // (KvFetchResult::TurboQuant); this function is only reached on the FP16/prefill path.
+    match (keys.into(), values.into()) {
+        (MaybeQuantizedKeys::Quantized(qk), MaybeQuantizedValues::Quantized(qv)) => {
+            let cache = cache.ok_or_else(|| {
+                Exception::custom("quantized keys/values require a KV cache with group_size/bits")
+            })?;
             let group_size = cache
                 .group_size()
                 .ok_or_else(|| Exception::custom("Cache is quantized but group size is not set"))?;
             let bits = cache
                 .bits()
                 .ok_or_else(|| Exception::custom("Cache is quantized but bits are not set"))?;
-
-            let (keys, values) = match (keys, values) {
-                (MaybeQuantizedKeys::Quantized(keys), MaybeQuantizedValues::Quantized(values)) => {
-                    (keys, values)
-                }
-                _ => {
-                    return Err(Exception::custom(
-                        "Both keys and values must be quantized when KV cache is quantized",
-                    ));
-                }
-            };
-
-            return quantized_scaled_dot_product_attention(
-                queries, keys, values, scale, mask, group_size, bits,
-            );
+            quantized_scaled_dot_product_attention(queries, qk, qv, scale, mask, group_size, bits)
         }
-    }
-
-    let (keys, values) = match (keys, values) {
         (MaybeQuantizedKeys::Original(keys), MaybeQuantizedValues::Original(values)) => {
-            (keys, values)
+            mlx_rs::fast::scaled_dot_product_attention(
+                queries,
+                keys,
+                values,
+                scale,
+                mask.map(ScaledDotProductAttentionMask::Array),
+            )
         }
-        _ => {
-            return Err(Exception::custom(
-                "Both keys and values must NOT be quantized when KV cache is NOT quantized",
-            ));
-        }
-    };
-
-    mlx_rs::fast::scaled_dot_product_attention(
-        queries,
-        keys,
-        values,
-        scale,
-        mask.map(ScaledDotProductAttentionMask::Array),
-    )
+        _ => Err(Exception::custom(
+            "keys and values must both be quantized or both be plain arrays",
+        )),
+    }
 }
 
 #[derive(Debug, Clone)]

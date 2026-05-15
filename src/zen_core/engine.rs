@@ -6,7 +6,6 @@
 //!
 //! Port of TS `ZenEngine` from sema-core.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 

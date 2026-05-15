@@ -833,7 +833,7 @@ impl DispatchServer {
         use crate::agent::dispatch_bridge::types::ChecklistItem;
         
         let mut found = false;
-        let mut error = String::new();
+        let _error = String::new();
         
         self.modify_state(|state| {
             for parent in &mut state.parents {

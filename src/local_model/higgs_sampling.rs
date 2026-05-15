@@ -199,7 +199,7 @@ fn sample_filtered_topk(
     params: &SamplingParams,
 ) -> Result<Array, Exception> {
     use mlx_rs::ops::{
-        argpartition_axis, argsort_axis, concatenate_axis, indexing::IndexOp, maximum,
+        argpartition_axis, argsort_axis, indexing::IndexOp,
     };
 
     let k_i32 = i32::try_from(k).map_err(|_| Exception::custom("k overflow for i32"))?;
@@ -260,8 +260,8 @@ fn sample_filtered_topk(
 /// Full-sort path: argsort the entire vocab, then apply top-k/min-p/top-p filtering.
 fn sample_filtered_full(
     probs: &Array,
-    n_vocab_i32: i32,
-    n_vocab: usize,
+    _n_vocab_i32: i32,
+    _n_vocab: usize,
     effective_k: usize,
     params: &SamplingParams,
 ) -> Result<Array, Exception> {

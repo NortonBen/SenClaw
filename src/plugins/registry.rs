@@ -1,11 +1,11 @@
 //! Scan managed plugins directory and return installed plugin entries.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use super::manifest::{parse_plugin_md, PluginManifest, PluginType};
+use super::manifest::{parse_plugin_md, PluginManifest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginEntry {

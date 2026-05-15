@@ -5,12 +5,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use serde_json::Value;
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
 use crate::db::Db;
-use super::db::{get_runtime, upsert_runtime, PluginRuntime};
+use super::db::{upsert_runtime, PluginRuntime};
 use super::manifest::parse_plugin_md;
 
 struct RunningProcess {

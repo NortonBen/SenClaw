@@ -13,7 +13,7 @@
 use anyhow::{Context, Result};
 use rmcp::ServiceExt;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::code_graph::{CodeGraphIndexer, GraphQuery};

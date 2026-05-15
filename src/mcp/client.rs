@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 // ===== JSON-RPC types =====

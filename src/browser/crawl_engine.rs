@@ -144,7 +144,7 @@ impl CrawlEngine {
         _current_url: &str,
     ) {
         let jobs = self.jobs.read().await;
-        if let Some(job) = jobs.get(job_id) {
+        if let Some(_job) = jobs.get(job_id) {
             tracing::debug!("[CrawlEngine] Job {job_id}: {pages_crawled}/{pages_total} pages");
         }
     }

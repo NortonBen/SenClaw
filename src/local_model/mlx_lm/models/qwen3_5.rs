@@ -21,7 +21,7 @@ use mlx_rs::{
     module::{Module, ModuleParametersExt},
     nn,
     ops::{concatenate_axis},
-    ops::indexing::{IndexOp, NewAxis},
+    ops::indexing::IndexOp,
     quantization::MaybeQuantized,
     Array,
 };
@@ -30,7 +30,6 @@ use serde_json::Value;
 
 use super::super::{
     cache::{KeyValueCache, KvFetchResult},
-    error::Error,
     utils::{
         create_causal_mask,
         scaled_dot_product_attention,
@@ -40,6 +39,15 @@ use super::super::{
 use crate::local_model::mlx_lm::kv_layer::Qwen3LayerKv;
 
 // ─── Config ─────────────────────────────────────────────────────────────────
+
+fn default_rope_theta() -> f32 { 10000.0 }
+fn default_partial_rotary_factor() -> f32 { 1.0 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuantizationConfig {
+    pub group_size: i32,
+    pub bits: i32,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelArgs {
@@ -58,10 +66,18 @@ pub struct ModelArgs {
     pub rms_norm_eps: f32,
     pub vocab_size: i32,
     pub max_position_embeddings: i32,
+    #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
+    #[serde(default = "default_partial_rotary_factor")]
     pub partial_rotary_factor: f32,
+    #[serde(default)]
     pub tie_word_embeddings: bool,
+    /// When true, q_proj outputs 2×n_heads×head_dim (Q||gate); gate SiLU-gated after attention.
+    #[serde(default)]
+    pub attn_output_gate: bool,
     pub rope_scaling: Option<HashMap<String, FloatOrString>>,
+    #[serde(default)]
+    pub quantization: Option<QuantizationConfig>,
 }
 
 impl ModelArgs {
@@ -144,6 +160,7 @@ pub struct SelfAttention {
     pub head_dim: i32,
     pub rope_dim: i32,
     pub scale: f32,
+    pub attn_output_gate: bool,
     #[quantizable] #[param] pub q_proj: MaybeQuantized<nn::Linear>,
     #[quantizable] #[param] pub k_proj: MaybeQuantized<nn::Linear>,
     #[quantizable] #[param] pub v_proj: MaybeQuantized<nn::Linear>,
@@ -161,10 +178,13 @@ impl SelfAttention {
         let head_dim = args.head_dim;
         let rope_dim = args.rope_dim();
         let scale = (head_dim as f32).sqrt().recip();
+        let attn_output_gate = args.attn_output_gate;
+        // With output gate, q_proj projects to (Q ++ gate), each n_heads * head_dim.
+        let q_out_dim = if attn_output_gate { 2 * n_heads * head_dim } else { n_heads * head_dim };
         let rope = initialize_rope(rope_dim, args.rope_theta, false, &args.rope_scaling, args.max_position_embeddings)?;
         Ok(Self {
-            n_heads, n_kv_heads, head_dim, rope_dim, scale,
-            q_proj: MaybeQuantized::Original(nn::LinearBuilder::new(dim, n_heads * head_dim).bias(false).build()?),
+            n_heads, n_kv_heads, head_dim, rope_dim, scale, attn_output_gate,
+            q_proj: MaybeQuantized::Original(nn::LinearBuilder::new(dim, q_out_dim).bias(false).build()?),
             k_proj: MaybeQuantized::Original(nn::LinearBuilder::new(dim, n_kv_heads * head_dim).bias(false).build()?),
             v_proj: MaybeQuantized::Original(nn::LinearBuilder::new(dim, n_kv_heads * head_dim).bias(false).build()?),
             o_proj: MaybeQuantized::Original(nn::LinearBuilder::new(n_heads * head_dim, dim).bias(false).build()?),
@@ -197,23 +217,33 @@ impl SelfAttention {
     }
 
     #[allow(non_snake_case)]
-    pub fn forward_attn(&mut self, x: &Array, mask: Option<&Array>, cache: Option<&mut Qwen3LayerKv>) -> Result<Array, Exception> {
+    pub fn forward_attn(&mut self, x: &Array, mask: Option<&Array>, mut cache: Option<&mut Qwen3LayerKv>) -> Result<Array, Exception> {
         let sh = x.shape();
         let B = sh[0] as i32;
         let L = sh[1] as i32;
         let hd = self.head_dim;
+        let nh = self.n_heads;
 
-        let queries = self.q_proj.forward(x)?;
-        let keys    = self.k_proj.forward(x)?;
-        let values  = self.v_proj.forward(x)?;
+        let q_raw = self.q_proj.forward(x)?;
+        let keys   = self.k_proj.forward(x)?;
+        let values = self.v_proj.forward(x)?;
+
+        // Split Q and optional output gate from the q_proj output.
+        let (queries_raw, gate) = if self.attn_output_gate {
+            let q = q_raw.index((.., .., ..nh * hd));
+            let g = q_raw.index((.., .., nh * hd..));
+            (q, Some(g))
+        } else {
+            (q_raw, None)
+        };
 
         let mut queries = self.q_norm.forward(
-            &queries.reshape(&[B, L, self.n_heads, hd])?.transpose_axes(&[0, 2, 1, 3])?
+            &queries_raw.reshape(&[B, L, nh, hd])?.transpose_axes(&[0, 2, 1, 3])?
         )?;
         let mut keys = self.k_norm.forward(
             &keys.reshape(&[B, L, self.n_kv_heads, hd])?.transpose_axes(&[0, 2, 1, 3])?
         )?;
-        let mut values = values.reshape(&[B, L, self.n_kv_heads, hd])?.transpose_axes(&[0, 2, 1, 3])?;
+        let values = values.reshape(&[B, L, self.n_kv_heads, hd])?.transpose_axes(&[0, 2, 1, 3])?;
 
         let offset = cache.as_ref().map(|c| c.offset()).unwrap_or(0);
         let kv_past = offset;
@@ -230,7 +260,7 @@ impl SelfAttention {
         let output = match fetch {
             KvFetchResult::TurboQuant => {
                 let c = cache.as_mut().ok_or_else(|| Exception::custom("TQ requires cache"))?;
-                c.turboquant_attention(queries, self.scale, mask, B, L, kv_past, self.n_heads, self.n_kv_heads, hd)?
+                c.turboquant_attention(queries, self.scale, mask, B, L, kv_past, nh, self.n_kv_heads, hd)?
             }
             KvFetchResult::Fp16(k, v) => {
                 scaled_dot_product_attention(queries, k, v, None::<&mut Qwen3LayerKv>, self.scale, mask)?
@@ -244,6 +274,13 @@ impl SelfAttention {
         }
         .transpose_axes(&[0, 2, 1, 3])?
         .reshape(&[B, L, -1])?;
+
+        // Apply output gate: output ⊙ silu(gate).
+        let output = if let Some(g) = gate {
+            output.multiply(&nn::silu(&g)?)?
+        } else {
+            output
+        };
 
         self.o_proj.forward(&output)
     }
@@ -356,7 +393,7 @@ impl LinearAttention {
 
     /// L2-normalize along last axis.
     fn l2_norm(x: &Array) -> Result<Array, Exception> {
-        let norm = x.square()?.sum(-1, true)?.sqrt()?.add(Array::from_f32(1e-6))?;
+        let norm = x.square()?.sum_axis(-1, true)?.sqrt()?.add(Array::from_f32(1e-6))?;
         x.divide(&norm)
     }
 
@@ -387,7 +424,7 @@ impl LinearAttention {
 
             // pred = S @ k_t  →  [B, n_v, vd]
             let k_t_exp = k_t.reshape(&[B, n_v, 1, kd])?;
-            let pred = S.multiply(&k_t_exp)?.sum(-1, false)?;
+            let pred = S.multiply(&k_t_exp)?.sum_axis(-1, false)?;
 
             // error = (v_t - pred) * beta_t  →  [B, n_v, vd]
             let beta_t_exp = beta_t.reshape(&[B, n_v, 1])?;
@@ -401,7 +438,7 @@ impl LinearAttention {
 
             // o_t = S @ q_t  →  [B, n_v, vd]
             let q_t_exp = q_t.reshape(&[B, n_v, 1, kd])?;
-            let o_t = S.multiply(&q_t_exp)?.sum(-1, false)?;
+            let o_t = S.multiply(&q_t_exp)?.sum_axis(-1, false)?;
 
             o_list.push(o_t);
         }
@@ -421,7 +458,7 @@ impl LinearAttention {
     }
 
     #[allow(non_snake_case)]
-    pub fn forward_gdn(&mut self, x: &Array, state: Option<&mut LinearAttnState>) -> Result<Array, Exception> {
+    pub fn forward_gdn(&mut self, x: &Array, mut state: Option<&mut LinearAttnState>) -> Result<Array, Exception> {
         let sh = x.shape();
         let B = sh[0] as i32;
         let L = sh[1] as i32;
@@ -441,7 +478,12 @@ impl LinearAttention {
         let b_in     = self.in_proj_b.forward(x)?;    // [B, L, nv]
 
         // ── Causal conv1d ────────────────────────────────────────────────
-        let mixed = self.causal_conv1d(&mixed, state)?;  // [B, L, conv_channels]
+        // Reborrow `state` so it remains accessible after the call.
+        let conv_state: Option<&mut LinearAttnState> = match state.as_mut() {
+            Some(s) => Some(&mut **s),
+            None => None,
+        };
+        let mixed = self.causal_conv1d(&mixed, conv_state)?;  // [B, L, conv_channels]
 
         // ── Split q / k / v ─────────────────────────────────────────────
         let q_flat = mixed.index((.., .., ..key_dim));             // [B, L, key_dim]
@@ -681,10 +723,192 @@ pub fn build_layer_caches(args: &ModelArgs, kv_bits: Option<u8>) -> Result<Vec<O
 
 // ─── Weight loading helpers ──────────────────────────────────────────────────
 
-pub fn get_qwen3_5_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, Error> {
+use crate::local_model::higgs_error::ModelError;
+
+/// Returns `(args, weight_prefix)`.
+/// VLM checkpoints (e.g. mlx-community OptiQ multimodal) store language-model weights
+/// under `language_model.*` and nest architecture fields under `text_config`.
+pub fn load_qwen3_5_model_args<P: AsRef<Path>>(
+    model_dir: P,
+) -> Result<(ModelArgs, Option<String>), ModelError> {
     let path = model_dir.as_ref().join("config.json");
-    let f = std::fs::File::open(path)?;
-    Ok(serde_json::from_reader(f)?)
+    let raw: serde_json::Value = serde_json::from_reader(std::fs::File::open(&path)?)?;
+
+    let is_vlm = raw.get("hidden_size").is_none() && raw.get("text_config").is_some();
+    let value = if is_vlm {
+        if let Some(text_cfg) = raw.get("text_config").and_then(|v| v.as_object()) {
+            let mut merged = raw.as_object().cloned().unwrap_or_default();
+            for (k, v) in text_cfg {
+                merged.insert(k.clone(), v.clone());
+            }
+            serde_json::Value::Object(merged)
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+
+    let cfg = serde_json::from_value(value)?;
+    let prefix = if is_vlm { Some("language_model.".to_owned()) } else { None };
+    Ok((cfg, prefix))
+}
+
+/// Load a Qwen3.5 model.
+///
+/// Applies uniform quantization structure when `config.json` has a `quantization` block,
+/// loads safetensors weights, fixes per-layer OptiQ bits, and directly assigns the
+/// non-parameter arrays (`conv1d.weight`, `A_log`, `dt_bias`) for linear-attention layers.
+pub fn load_qwen35_model<P: AsRef<Path>>(model_dir: P) -> Result<Model, ModelError> {
+    let model_path = model_dir.as_ref();
+    let (args, weight_prefix) = load_qwen3_5_model_args(model_path)?;
+
+    tracing::info!(
+        model_type = %args.model_type,
+        hidden = args.hidden_size,
+        layers = args.num_hidden_layers,
+        heads = args.num_attention_heads,
+        kv_heads = args.num_key_value_heads,
+        head_dim = args.head_dim,
+        vocab = args.vocab_size,
+        vlm = weight_prefix.is_some(),
+        "Loading Qwen3.5 model"
+    );
+
+    let quantization = args.quantization.clone();
+    let raw = Model::new(args)
+        .map_err(|e| ModelError::ShapeMismatch(format!("model init failed: {e}")))?;
+
+    let mut model = if let Some(ref qc) = quantization {
+        tracing::info!(group_size = qc.group_size, bits = qc.bits, "Quantizing Qwen3.5 structure");
+        mlx_rs::nn::quantize(raw, Some(qc.group_size), Some(qc.bits))
+            .map_err(|e| ModelError::ShapeMismatch(format!("quantize failed: {e}")))?
+    } else {
+        raw
+    };
+
+    if let Some(ref prefix) = weight_prefix {
+        super::higgs_weights::load_quantized_safetensors_weights_with_prefix(
+            &mut model,
+            model_path,
+            quantization.is_some(),
+            prefix,
+        )?;
+    } else {
+        super::higgs_weights::load_quantized_safetensors_weights(
+            &mut model,
+            model_path,
+            quantization.is_some(),
+        )?;
+    }
+
+    fix_optiq_bits_qwen35(&mut model);
+    load_non_param_arrays(&mut model, model_path, weight_prefix.as_deref())?;
+
+    tracing::info!("Qwen3.5 model loaded");
+    Ok(model)
+}
+
+fn fix_optiq_bits_qwen35(model: &mut Model) {
+    fix_embedding_bits_q35(&mut model.model.embed_tokens);
+    for layer in &mut model.model.layers {
+        if let Some(ref mut la) = layer.linear_attn {
+            fix_linear_bits_q35(&mut la.in_proj_qkv);
+            fix_linear_bits_q35(&mut la.in_proj_z);
+            fix_linear_bits_q35(&mut la.in_proj_a);
+            fix_linear_bits_q35(&mut la.in_proj_b);
+            fix_linear_bits_q35(&mut la.out_proj);
+        }
+        if let Some(ref mut sa) = layer.self_attn {
+            fix_linear_bits_q35(&mut sa.q_proj);
+            fix_linear_bits_q35(&mut sa.k_proj);
+            fix_linear_bits_q35(&mut sa.v_proj);
+            fix_linear_bits_q35(&mut sa.o_proj);
+        }
+        fix_linear_bits_q35(&mut layer.mlp.gate_proj);
+        fix_linear_bits_q35(&mut layer.mlp.down_proj);
+        fix_linear_bits_q35(&mut layer.mlp.up_proj);
+    }
+    if let Some(ref mut head) = model.lm_head {
+        fix_linear_bits_q35(head);
+    }
+}
+
+fn fix_linear_bits_q35(m: &mut MaybeQuantized<nn::Linear>) {
+    if let MaybeQuantized::Quantized(ref mut ql) = *m {
+        let w_cols = ql.inner.weight.value.shape().get(1).copied().unwrap_or(0) as i64;
+        let s_cols = ql.scales.value.shape().get(1).copied().unwrap_or(0) as i64;
+        let g = ql.group_size as i64;
+        if w_cols == 0 || s_cols == 0 || g == 0 { return; }
+        let inferred = (32 * w_cols / (s_cols * g)) as i32;
+        if (inferred == 4 || inferred == 8) && inferred != ql.bits {
+            tracing::debug!(from = ql.bits, to = inferred, "fix_optiq_bits: QuantizedLinear");
+            ql.bits = inferred;
+        }
+    }
+}
+
+fn fix_embedding_bits_q35(m: &mut MaybeQuantized<nn::Embedding>) {
+    if let MaybeQuantized::Quantized(ref mut qe) = *m {
+        let w_cols = qe.inner.weight.value.shape().get(1).copied().unwrap_or(0) as i64;
+        let s_cols = qe.scales.value.shape().get(1).copied().unwrap_or(0) as i64;
+        let g = qe.group_size as i64;
+        if w_cols == 0 || s_cols == 0 || g == 0 { return; }
+        let inferred = (32 * w_cols / (s_cols * g)) as i32;
+        if (inferred == 4 || inferred == 8) && inferred != qe.bits {
+            tracing::debug!(from = qe.bits, to = inferred, "fix_optiq_bits: QuantizedEmbedding");
+            qe.bits = inferred;
+        }
+    }
+}
+
+/// Directly assign the non-`#[param]` arrays for linear-attention layers:
+/// `conv1d.weight`, `A_log`, `dt_bias`. These are plain `Array` fields that
+/// the `ModuleParametersExt` derive skips, so the standard weight loader
+/// cannot populate them.
+fn load_non_param_arrays(
+    model: &mut Model,
+    model_path: &Path,
+    weight_prefix: Option<&str>,
+) -> Result<(), ModelError> {
+    let prefix = weight_prefix.unwrap_or("");
+    let safetensors_files = super::higgs_weights::collect_safetensors_files(model_path)?;
+    let mut loaded_count = 0usize;
+
+    for file_path in &safetensors_files {
+        let loaded = mlx_rs::Array::load_safetensors(file_path)
+            .map_err(|e| ModelError::Io(std::io::Error::other(e.to_string())))?;
+
+        for (key, value) in loaded {
+            let stripped: &str = if !prefix.is_empty() {
+                match key.strip_prefix(prefix) {
+                    Some(s) => s,
+                    None => continue,
+                }
+            } else {
+                key.as_str()
+            };
+
+            // Match: model.layers.{i}.linear_attn.{field}
+            let Some(rest) = stripped.strip_prefix("model.layers.") else { continue };
+            let dot = rest.find('.').unwrap_or(rest.len());
+            let Ok(layer_idx) = rest[..dot].parse::<usize>() else { continue };
+            let after_idx = &rest[dot..];
+
+            let Some(block) = model.model.layers.get_mut(layer_idx) else { continue };
+            let Some(ref mut la) = block.linear_attn else { continue };
+
+            match after_idx.trim_start_matches('.') {
+                "linear_attn.conv1d.weight" => { la.conv1d_weight = value; loaded_count += 1; }
+                "linear_attn.A_log" => { la.a_log = value; loaded_count += 1; }
+                "linear_attn.dt_bias" => { la.dt_bias = value; loaded_count += 1; }
+                _ => {}
+            }
+        }
+    }
+
+    tracing::info!(loaded_count, "non-param arrays loaded (conv1d.weight + A_log + dt_bias)");
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]

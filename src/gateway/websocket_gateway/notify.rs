@@ -1,6 +1,5 @@
 //! Event injection methods (called externally by daemon wiring).
 
-use std::sync::Arc;
 
 use super::gateway::WebSocketGateway;
 use super::wire::to_group_info;
