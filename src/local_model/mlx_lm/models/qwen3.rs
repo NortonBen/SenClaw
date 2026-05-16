@@ -549,6 +549,20 @@ pub fn get_qwen3_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, Er
     Ok(model_args)
 }
 
+/// Qwen3 chat template uses literal `<|im_start|>` / `<|im_end|>` ChatML markers,
+/// not `{{ bos_token }}` / `{{ eos_token }}`. Tool schemas are injected as
+/// `{{ tools | tojson }}` inside the system block — handled by the shared
+/// renderer with no extra special tokens needed.
+impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    fn resolve_special_tokens(
+        &self,
+        _template: &str,
+        _tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> crate::local_model::chat_template_openai::SpecialTokens {
+        crate::local_model::chat_template_openai::SpecialTokens::empty()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct WeightMap {
     pub metadata: HashMap<String, Value>,

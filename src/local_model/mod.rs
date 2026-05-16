@@ -24,6 +24,8 @@
 pub mod models;
 pub mod runtime;
 pub mod thinking_parse;
+#[cfg(feature = "local-mlx")]
+pub mod chat_template_openai;
 
 pub use models::{read_model_context_length_from_dir, KnownModel, KNOWN_MODELS};
 pub use runtime::{

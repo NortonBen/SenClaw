@@ -193,7 +193,7 @@ async fn query_local_candle_native(
         use crate::local_model::LocalModelRuntime;
 
         let api_msgs = openai_messages_for_api(messages, system_prompt)?;
-        let tool_objs = build_openai_tools(tools);
+        let tool_objs = build_hf_style_tools(tools);
 
         let cfg = Config::from_env();
         let model_key =
@@ -260,6 +260,22 @@ pub(crate) fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
                     "description": t.description(),
                     "parameters": schema,
                 }
+            })
+        })
+        .collect()
+}
+
+/// Build HF-style tools (direct function objects, no OpenAI wrapper)
+/// for models like Qwen that use Jinja templates expecting this format.
+pub(crate) fn build_hf_style_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|t| {
+            let schema = t.input_schema();
+            serde_json::json!({
+                "name": t.name(),
+                "description": t.description(),
+                "parameters": schema,
             })
         })
         .collect()
@@ -507,7 +523,7 @@ async fn query_local_mlx(
     _client: &Client,
     messages: &[Message],
     system_prompt: &str,
-    _tools: &[Arc<dyn Tool>],
+    tools: &[Arc<dyn Tool>],
     cancel: &CancellationToken,
     profile: &ModelProfile,
     _stream: bool,
@@ -523,33 +539,10 @@ async fn query_local_mlx(
     #[cfg(feature = "local-mlx")]
     {
         use crate::config::Config;
-        use crate::local_model::ChatMessage;
-        use crate::local_model::runtime::Role as LmRole;
+        use crate::local_model::LocalModelRuntime;
 
-        // Convert agent Message → ChatMessage (with system_prompt prepended).
-        let mut chat_msgs: Vec<ChatMessage> = Vec::new();
-        if !system_prompt.is_empty() {
-            chat_msgs.push(ChatMessage { role: LmRole::System, content: system_prompt.to_owned() });
-        }
-        for m in messages {
-            let role = match m.message.role.as_str() {
-                "assistant" => LmRole::Assistant,
-                "system" => LmRole::System,
-                _ => LmRole::User,
-            };
-            // Extract plain text from content blocks (skip images/tool results).
-            let mut text_buf = String::new();
-            for block in &m.message.content {
-                if let ContentBlock::Text { text } = block {
-                    if !text_buf.is_empty() { text_buf.push('\n'); }
-                    text_buf.push_str(text);
-                }
-            }
-            if text_buf.is_empty() {
-                continue; // skip messages with no text content
-            }
-            chat_msgs.push(ChatMessage { role, content: text_buf });
-        }
+        let api_msgs = openai_messages_for_api(messages, system_prompt)?;
+        let tool_objs = build_hf_style_tools(tools);
 
         let cfg = Config::from_env();
         let model_key =
@@ -574,9 +567,12 @@ async fn query_local_mlx(
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
 
         let engine_clone = engine.clone();
-        let msgs_clone = chat_msgs.clone();
+        let msgs_clone = api_msgs.clone();
+        let tools_clone = tool_objs.clone();
         let gen_handle = tokio::spawn(async move {
-            engine_clone.stream_to_channel(&msgs_clone, tx).await
+            engine_clone
+                .generate_stream(msgs_clone, tools_clone, tx)
+                .await
         });
 
         let mut text_buf = String::new();

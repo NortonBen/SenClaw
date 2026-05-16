@@ -1237,6 +1237,93 @@ pub fn load_mamba2_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
     Ok(model)
 }
 
+/// True when the tokenizer defines Mistral-style `[INST]` / `[/INST]` special
+/// tokens — the marker that `chat_template_fallback` should prefer the Mistral
+/// V1 [INST] template (Mamba-Codestral and friends ship no `chat_template`).
+fn tokenizer_has_mistral_inst_tokens(tokenizer_json: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(tokenizer_json) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(added) = v.get("added_tokens").and_then(|a| a.as_array()) else {
+        return false;
+    };
+    let mut has_inst = false;
+    let mut has_end_inst = false;
+    for entry in added {
+        let Some(content) = entry.get("content").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        if content == "[INST]" {
+            has_inst = true;
+        }
+        if content == "[/INST]" {
+            has_end_inst = true;
+        }
+    }
+    has_inst && has_end_inst
+}
+
+/// Mamba-class fallback for `chat_template_openai::load_chat_template_from_dir`.
+/// Returns the Mistral V1 `[INST]` template for checkpoints that ship the
+/// `[INST]` / `[/INST]` tokens (Mamba-Codestral *Instruct), otherwise `None`
+/// (caller falls back to a plain `User: … / Assistant:` transcript).
+pub fn chat_template_fallback(model_dir: &Path) -> std::io::Result<Option<String>> {
+    let tok = model_dir.join("tokenizer.json");
+    if tokenizer_has_mistral_inst_tokens(&tok) {
+        tracing::info!(
+            "[local-mlx-native] no chat template in model_dir; using Mistral V1 [INST] fallback"
+        );
+        return Ok(Some(MISTRAL_V1_INSTRUCT_CHAT_TEMPLATE.to_string()));
+    }
+    tracing::warn!(
+        "[local-mlx-native] no chat template in model_dir; using plain User/Assistant transcript"
+    );
+    Ok(None)
+}
+
+/// Mamba‑2 `[INST]` template references `{{ bos_token }}` / `{{ eos_token }}`.
+/// Prefer the tokenizer's literal `<s>` / `</s>` strings, falling back to
+/// `args.bos_token_id` / `args.stop_token_ids()[0]` when those special tokens
+/// aren't named in the tokenizer vocabulary.
+impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    fn resolve_special_tokens(
+        &self,
+        template: &str,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> crate::local_model::chat_template_openai::SpecialTokens {
+        use crate::local_model::chat_template_openai::{template_mentions, SpecialTokens};
+        let need_bos = template_mentions(template, "bos_token");
+        let need_eos = template_mentions(template, "eos_token");
+        if !need_bos && !need_eos {
+            return SpecialTokens::empty();
+        }
+        let bos = if need_bos {
+            tokenizer
+                .token_to_id("<s>")
+                .or(if self.args.bos_token_id > 0 {
+                    Some(self.args.bos_token_id as u32)
+                } else {
+                    None
+                })
+                .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+        } else {
+            None
+        };
+        let eos = if need_eos {
+            tokenizer
+                .token_to_id("</s>")
+                .or_else(|| self.args.stop_token_ids().first().copied())
+                .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+        } else {
+            None
+        };
+        SpecialTokens { bos, eos }
+    }
+}
+
 #[cfg(test)]
 mod mistral_template_tests {
     use super::*;

@@ -798,3 +798,35 @@ pub fn load_falcon_mamba_model(model_dir: impl AsRef<Path>) -> Result<Model, Err
     }
     Ok(model)
 }
+
+/// Falcon‑Mamba shares Mistral-style `<s>` / `</s>` markers — look them up by
+/// literal token name in the tokenizer vocabulary.
+impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    fn resolve_special_tokens(
+        &self,
+        template: &str,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> crate::local_model::chat_template_openai::SpecialTokens {
+        use crate::local_model::chat_template_openai::{template_mentions, SpecialTokens};
+        let need_bos = template_mentions(template, "bos_token");
+        let need_eos = template_mentions(template, "eos_token");
+        if !need_bos && !need_eos {
+            return SpecialTokens::empty();
+        }
+        let bos = if need_bos {
+            tokenizer
+                .token_to_id("<s>")
+                .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+        } else {
+            None
+        };
+        let eos = if need_eos {
+            tokenizer
+                .token_to_id("</s>")
+                .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+        } else {
+            None
+        };
+        SpecialTokens { bos, eos }
+    }
+}

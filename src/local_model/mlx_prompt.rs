@@ -1,8 +1,36 @@
 //! Prompt preprocessing for native MLX inference (RAM / token control).
 
+use serde_json::Value;
+
 use super::mlx_lm_utils::tokenizer::{Conversation, Role};
 
 pub use super::thinking_parse::{split_thinking_blocks, strip_thinking_blocks};
+
+/// Drop the oldest non-system + non-final-user message (one assistant or
+/// `tool` reply, or one user turn in the middle of the history). Used to
+/// shrink an OpenAI-shaped prompt that overshoots the KV budget — strictly
+/// preserves the system block and the most recent user turn.
+///
+/// Returns `true` when a message was removed, `false` when nothing could be
+/// trimmed (only system + last user remain, or no system + only one user).
+pub fn drop_oldest_openai_middle_message(messages: &mut Vec<Value>) -> bool {
+    let last_user_idx = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, m)| m.get("role").and_then(|v| v.as_str()) == Some("user"))
+        .map(|(i, _)| i);
+    let leading_system = messages
+        .first()
+        .is_some_and(|m| m.get("role").and_then(|v| v.as_str()) == Some("system"));
+    let start = if leading_system { 1 } else { 0 };
+    let end = last_user_idx.unwrap_or(messages.len());
+    if end <= start {
+        return false;
+    }
+    messages.remove(start);
+    true
+}
 
 /// User-assistant turns capped before templating; a leading `Role::System` is preserved with the first user turn when present.
 pub const MLX_MAX_HISTORY_TURNS: usize = 4;
@@ -118,5 +146,55 @@ mod tests {
         assert_eq!(convs[0].content, "sys");
         assert_eq!(convs[1].content, "u0");
         assert_eq!(convs.last().unwrap().content, "u2");
+    }
+
+    #[test]
+    fn drop_oldest_middle_preserves_system_and_last_user() {
+        let mut msgs: Vec<Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "u0"}),
+            serde_json::json!({"role": "assistant", "content": "a0"}),
+            serde_json::json!({"role": "user", "content": "u1"}),
+        ];
+        assert!(drop_oldest_openai_middle_message(&mut msgs));
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(msgs.last().unwrap()["content"], "u1");
+    }
+
+    #[test]
+    fn drop_oldest_middle_refuses_when_only_system_and_last_user() {
+        let mut msgs: Vec<Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "u0"}),
+        ];
+        assert!(!drop_oldest_openai_middle_message(&mut msgs));
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn drop_oldest_middle_refuses_when_single_user_no_system() {
+        let mut msgs: Vec<Value> = vec![
+            serde_json::json!({"role": "user", "content": "u0"}),
+        ];
+        assert!(!drop_oldest_openai_middle_message(&mut msgs));
+        assert_eq!(msgs.len(), 1);
+    }
+
+    #[test]
+    fn drop_oldest_middle_walks_history_until_only_essentials_left() {
+        let mut msgs: Vec<Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "u0"}),
+            serde_json::json!({"role": "assistant", "content": "a0"}),
+            serde_json::json!({"role": "user", "content": "u1"}),
+            serde_json::json!({"role": "assistant", "content": "a1"}),
+            serde_json::json!({"role": "user", "content": "u2"}),
+        ];
+        while drop_oldest_openai_middle_message(&mut msgs) {}
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["content"], "u2");
     }
 }

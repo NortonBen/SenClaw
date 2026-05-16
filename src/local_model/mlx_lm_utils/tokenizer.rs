@@ -8,9 +8,11 @@ use std::{
 
 use minijinja::{context, Environment, Template};
 use serde::Serialize;
+use serde_json::Value;
 use tokenizers::Encoding;
 
 use super::error::Error;
+use crate::local_model::chat_template_openai;
 
 /// Wrapper around [`tokenizers::Tokenizer`] and [`minijinja::Environment`]
 /// providing more utilities.
@@ -30,7 +32,7 @@ impl FromStr for Tokenizer {
 impl Tokenizer {
     pub fn from_tokenizer(tokenizer: tokenizers::Tokenizer) -> Self {
         let mut env = Environment::new();
-        env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+        chat_template_openai::configure_jinja_env(&mut env);
         Self {
             inner: tokenizer,
             env,
@@ -74,6 +76,40 @@ impl Tokenizer {
         inner
             .encode_batch(rendered_chats, false)
             .map_err(Into::into)
+    }
+
+    /// OpenAI / HF-shaped `messages` + `tools` for Qwen3-style Jinja templates.
+    pub fn apply_chat_template_json_and_encode(
+        &mut self,
+        model_template: String,
+        model_id: &str,
+        messages: &[Value],
+        tools: &[Value],
+        add_generation_prompt: Option<bool>,
+        enable_thinking: Option<bool>,
+        bos_token: Option<&str>,
+        eos_token: Option<&str>,
+    ) -> Result<Vec<Encoding>, Error> {
+        let rendered = chat_template_openai::apply_chat_template_openai_shape(
+            &mut self.env,
+            model_template,
+            model_id,
+            None,
+            messages,
+            tools,
+            add_generation_prompt,
+            enable_thinking,
+            bos_token,
+            eos_token,
+        )
+        .map_err(|e| match e {
+            chat_template_openai::Error::RenderTemplate(err) => Error::RenderTemplate(err),
+            chat_template_openai::Error::Encode(err) => Error::Encode(err),
+        })?;
+        self.inner
+            .encode(rendered, false)
+            .map_err(Into::into)
+            .map(|e| vec![e])
     }
 }
 

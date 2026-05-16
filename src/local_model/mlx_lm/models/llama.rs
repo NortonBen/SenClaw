@@ -540,3 +540,16 @@ pub fn load_llama_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
     }
     Ok(model)
 }
+
+/// Llama-3 chat templates use literal `<|begin_of_text|>` / `<|eot_id|>` headers
+/// inline; tools are emitted via `{{ tools | tojson }}` inside the system
+/// header. Neither needs runtime `bos_token` / `eos_token` injection.
+impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    fn resolve_special_tokens(
+        &self,
+        _template: &str,
+        _tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> crate::local_model::chat_template_openai::SpecialTokens {
+        crate::local_model::chat_template_openai::SpecialTokens::empty()
+    }
+}

@@ -808,3 +808,50 @@ pub fn load_gemma3_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
     model.eval()?;
     Ok(model)
 }
+
+/// Gemma‑3 chat template begins with `{{ bos_token }}` (token id `2`).
+/// Without this injection, the rendered prompt loses the leading BOS piece
+/// the model was trained on and quality regresses sharply.
+impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    fn resolve_special_tokens(
+        &self,
+        template: &str,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> crate::local_model::chat_template_openai::SpecialTokens {
+        use crate::local_model::chat_template_openai::{template_mentions, SpecialTokens};
+        let need_bos = template_mentions(template, "bos_token");
+        let need_eos = template_mentions(template, "eos_token");
+        if !need_bos && !need_eos {
+            return SpecialTokens::empty();
+        }
+        let bos = if need_bos {
+            self.args
+                .bos_token_id
+                .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+        } else {
+            None
+        };
+        if need_bos {
+            match &bos {
+                Some(s) if !s.is_empty() => tracing::debug!(
+                    "[local-mlx-native] chat_template bos_token injected (decoded len={})",
+                    s.len()
+                ),
+                _ => tracing::warn!(
+                    "[local-mlx-native] chat_template mentions bos_token — could not decode from bos_token_id={:?}",
+                    self.args.bos_token_id
+                ),
+            }
+        }
+        let eos = if need_eos {
+            self.args
+                .eos_token_ids
+                .first()
+                .copied()
+                .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+        } else {
+            None
+        };
+        SpecialTokens { bos, eos }
+    }
+}

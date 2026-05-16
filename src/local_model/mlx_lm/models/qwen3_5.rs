@@ -989,3 +989,15 @@ pub fn load_qwen35_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
         .map_err(|e| Error::Other(format!("eval: {e:?}").into()))?;
     Ok(model)
 }
+
+/// Qwen3.5 reuses ChatML markers (`<|im_start|>` / `<|im_end|>`); no
+/// `bos_token` / `eos_token` injection needed.
+impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    fn resolve_special_tokens(
+        &self,
+        _template: &str,
+        _tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> crate::local_model::chat_template_openai::SpecialTokens {
+        crate::local_model::chat_template_openai::SpecialTokens::empty()
+    }
+}

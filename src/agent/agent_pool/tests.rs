@@ -1,5 +1,10 @@
 
 use crate::types::GroupBinding;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use super::{AgentPool, PermissionsConfig, ZenCoreApi};
+use super::workspace::WorkspaceStateFile;
 
 fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
     GroupBinding {
@@ -20,12 +25,13 @@ fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
     }
 }
 
-#[tokio::test]
-async fn zen_core_api_process_message_dispatches() {
-    let api = ZenCoreApi::new(None);
-    let result = api.process_message("test:1", "hello", &fake_binding("test:1", false));
-    assert!(result.is_ok());
-}
+// TODO: This test is outdated - ZenCoreApi no longer has process_message method
+// #[tokio::test]
+// async fn zen_core_api_process_message_dispatches() {
+//     let api = ZenCoreApi::new(None);
+//     let result = api.process_message("test:1", "hello", &fake_binding("test:1", false));
+//     assert!(result.is_ok());
+// }
 
 #[test]
 fn agent_pool_send_reply_no_callback_does_not_panic() {

@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use super::runtime::{
-    ChatMessage, LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
+    LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
 };
 
 /// Architecture-tagged model handle. The transformer (Qwen3) and SSM (Mamba-2)
@@ -51,6 +51,27 @@ impl ModelKind {
             Self::Mamba2(_) => "mamba2",
             Self::FalconMamba(_) => "falcon_mamba",
             Self::BonsaiQ1(_) => "bonsai_q1",
+        }
+    }
+
+    /// Per-arch dispatch into [`ChatTemplateModel`]. Each variant delegates to
+    /// the model's own impl so `bos_token` / `eos_token` decoding lives next
+    /// to the `args` struct that defines them.
+    fn resolve_special_tokens(
+        &self,
+        template: &str,
+        tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> super::chat_template_openai::SpecialTokens {
+        use super::chat_template_openai::ChatTemplateModel;
+        match self {
+            Self::Qwen3(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::Qwen35(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::Llama(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::Gemma2(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::Gemma3(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::Mamba2(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::FalconMamba(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::BonsaiQ1(b) => b.resolve_special_tokens(template, tokenizer),
         }
     }
 }
@@ -186,43 +207,30 @@ impl LocalModelRuntime for MlxNativeEngine {
     async fn generate_stream(
         &self,
         messages: Vec<serde_json::Value>,
-        _tools: Vec<serde_json::Value>,
+        tools: Vec<serde_json::Value>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
-        // Convert OpenAI-format Value messages → ChatMessage.
-        let chat_msgs: Vec<ChatMessage> = messages
-            .iter()
-            .filter_map(|v| {
-                let role_str = v.get("role")?.as_str()?;
-                let content = v.get("content")?.as_str().unwrap_or("").to_owned();
-                let role = match role_str {
-                    "system" => super::runtime::Role::System,
-                    "assistant" => super::runtime::Role::Assistant,
-                    _ => super::runtime::Role::User,
-                };
-                Some(ChatMessage { role, content })
-            })
-            .collect();
-
-        self.stream_to_channel(&chat_msgs, tx).await
+        self.stream_openai_to_channel(&messages, &tools, tx).await
     }
 }
 
 impl MlxNativeEngine {
-    /// Public native-stream entry point used by `query_llm.rs`.
-    pub async fn stream_to_channel(
+    /// Public native-stream entry point used by `query_llm.rs` (OpenAI-shaped messages + tools).
+    pub async fn stream_openai_to_channel(
         &self,
-        messages: &[ChatMessage],
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
         let loaded = Arc::clone(&self.loaded);
         let model_dir = self.model_dir.clone();
         let model_id = self.model_id.clone();
         let messages = messages.to_vec();
+        let tools = tools.to_vec();
         let kv_bits = self.kv_cache_bits;
 
         let join = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            generate_with_cache(&loaded, &model_dir, &model_id, &messages, kv_bits, tx)
+            generate_with_cache(&loaded, &model_dir, &model_id, &messages, &tools, kv_bits, tx)
         });
 
         join.await??;
@@ -251,10 +259,9 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
 
     let arch = detect_architecture(model_id, model_dir)?;
     let tokenizer_file = model_dir.join("tokenizer.json");
-    let tokenizer_config = model_dir.join("tokenizer_config.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
-    let chat_template = load_mlx_chat_template(model_dir, model_id, &tokenizer_config)?;
+    let chat_template = load_mlx_chat_template(model_dir, model_id)?;
 
     let (model, n_layers, head_dim, n_kv_heads) = match arch {
         Arch::Qwen3 => {
@@ -431,238 +438,23 @@ fn mlx_release_after_turn() {
     mlx_rs::transforms::compile::clear_cache();
 }
 
-/// Resolve `bos_token` / `eos_token` strings for HF-style chat templates (`{{ bos_token }}`, etc.).
-/// Gemma‑3 prefixes the template with `{{ bos_token }}`; Minijinja must receive the literal BOS piece
-/// the tokenizer uses (typically id 2).
-fn mlx_chat_template_special_tokens(
-    tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer,
-    model: &ModelKind,
-    template: &str,
-) -> (Option<String>, Option<String>) {
-    let need_bos = template.contains("bos_token");
-    let need_eos = template.contains("eos_token");
-    if !need_bos && !need_eos {
-        return (None, None);
-    }
-    match model {
-        ModelKind::Gemma3(m) => {
-            let bos = if need_bos {
-                m.args.bos_token_id.and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            if need_bos {
-                match &bos {
-                    Some(s) if !s.is_empty() => {
-                        tracing::debug!(
-                            "[local-mlx-native] chat_template bos_token injected (decoded len={})",
-                            s.len()
-                        )
-                    }
-                    _ => tracing::warn!(
-                        "[local-mlx-native] chat_template mentions bos_token — could not decode from bos_token_id={:?}",
-                        m.args.bos_token_id
-                    ),
-                }
-            }
-
-            let eos = if need_eos {
-                m.args
-                    .eos_token_ids
-                    .first()
-                    .copied()
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            (bos, eos)
-        }
-        ModelKind::Gemma2(m) => {
-            let bos = if need_bos {
-                m.args
-                    .bos_token_id
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            if need_bos {
-                match &bos {
-                    Some(s) if !s.is_empty() => {
-                        tracing::debug!(
-                            "[local-mlx-native] chat_template bos_token injected for Gemma-2 (decoded len={})",
-                            s.len()
-                        )
-                    }
-                    _ => tracing::warn!(
-                        "[local-mlx-native] chat_template mentions bos_token — could not decode from bos_token_id={:?}",
-                        m.args.bos_token_id
-                    ),
-                }
-            }
-
-            let eos = if need_eos {
-                m.args
-                    .eos_token_ids
-                    .first()
-                    .copied()
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            (bos, eos)
-        }
-        ModelKind::BonsaiQ1(b) => {
-            let bos = if need_bos {
-                b.bos_token_id
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            if need_bos {
-                match &bos {
-                    Some(s) if !s.is_empty() => tracing::debug!(
-                        "[local-mlx-native] chat_template bos_token injected for Bonsai-Q1 (decoded len={})",
-                        s.len()
-                    ),
-                    _ => tracing::warn!(
-                        "[local-mlx-native] chat_template mentions bos_token — could not decode from bos_token_id={:?}",
-                        b.bos_token_id,
-                    ),
-                }
-            }
-
-            let eos = if need_eos {
-                b.eos_token_ids
-                    .first()
-                    .copied()
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            (bos, eos)
-        }
-        ModelKind::Mamba2(m) => {
-            let bos = if need_bos {
-                tokenizer
-                    .token_to_id("<s>")
-                    .or(if m.args.bos_token_id > 0 {
-                        Some(m.args.bos_token_id as u32)
-                    } else {
-                        None
-                    })
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            let eos = if need_eos {
-                tokenizer
-                    .token_to_id("</s>")
-                    .or_else(|| m.args.stop_token_ids().first().copied())
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            (bos, eos)
-        }
-        ModelKind::FalconMamba(_) => {
-            let bos = if need_bos {
-                tokenizer
-                    .token_to_id("<s>")
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            let eos = if need_eos {
-                tokenizer
-                    .token_to_id("</s>")
-                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
-            } else {
-                None
-            };
-            (bos, eos)
-        }
-        _ => {
-            if need_bos || need_eos {
-                tracing::warn!(
-                    "[local-mlx-native] chat template references bos_token/eos_token but special-token injection is only wired for Gemma-2/3 / Mamba (arch={}); leaving empty placeholders",
-                    model.arch_name(),
-                );
-            }
-            (None, None)
-        }
-    }
-}
-
-/// Load Jinja chat template: `tokenizer_config.json`, then `chat_template.jinja`, then
-/// architecture-specific fallbacks (Mistral `[INST]` for Mamba-Codestral / `[INST]` tokenizers).
+/// Load the model's Jinja chat template. Probes `tokenizer_config.json` →
+/// `chat_template.jinja` → arch-specific fallback (Mistral `[INST]` when the
+/// detected arch is Mamba-class and the tokenizer ships `[INST]` tokens).
 fn load_mlx_chat_template(
     model_dir: &Path,
     model_id: &str,
-    tokenizer_config_path: &Path,
 ) -> anyhow::Result<Option<String>> {
-    use super::mlx_lm_utils::tokenizer::load_model_chat_template_from_file;
-
-    if let Some(t) = load_model_chat_template_from_file(tokenizer_config_path).ok().flatten() {
-        return Ok(Some(t));
-    }
-    let jinja_path = model_dir.join("chat_template.jinja");
-    if jinja_path.exists() {
-        let t = std::fs::read_to_string(&jinja_path)
-            .map_err(|e| anyhow::anyhow!("read chat_template.jinja: {e}"))?;
-        tracing::info!(
-            "[local-mlx-native] loaded chat_template.jinja for {model_id}"
-        );
-        return Ok(Some(t));
-    }
-
-    let arch = detect_architecture(model_id, model_dir)?;
-    match arch {
-        Arch::Mamba2 | Arch::FalconMamba => {
-            let tok_path = model_dir.join("tokenizer.json");
-            if tokenizer_has_mistral_inst_tokens(&tok_path) {
-                tracing::info!(
-                    "[local-mlx-native] no chat template for {model_id}; \
-                     using Mistral V1 [INST] fallback (Mamba-Codestral / instruct)"
-                );
-                return Ok(Some(
-                    super::mlx_lm::models::mamba2::MISTRAL_V1_INSTRUCT_CHAT_TEMPLATE.to_string(),
-                ));
+    let detected = detect_architecture(model_id, model_dir)?;
+    super::chat_template_openai::load_chat_template_from_dir(model_dir, model_id, |dir| {
+        match detected {
+            Arch::Mamba2 | Arch::FalconMamba => {
+                super::mlx_lm::models::mamba2::chat_template_fallback(dir)
             }
-            tracing::warn!(
-                "[local-mlx-native] no chat template for {model_id}; \
-                 using plain User/Assistant transcript"
-            );
-            Ok(None)
+            _ => Ok(None),
         }
-        _ => Ok(None),
-    }
-}
-
-/// True when the tokenizer defines Mistral-style `[INST]` / `[/INST]` special tokens.
-fn tokenizer_has_mistral_inst_tokens(tokenizer_json: &Path) -> bool {
-    let Ok(raw) = std::fs::read_to_string(tokenizer_json) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
-    };
-    let Some(decoder) = v.get("added_tokens").and_then(|a| a.as_array()) else {
-        return false;
-    };
-    let mut has_inst = false;
-    let mut has_end_inst = false;
-    for entry in decoder {
-        let Some(content) = entry.get("content").and_then(|c| c.as_str()) else {
-            continue;
-        };
-        if content == "[INST]" {
-            has_inst = true;
-        }
-        if content == "[/INST]" {
-            has_end_inst = true;
-        }
-    }
-    has_inst && has_end_inst
+    })
+    .map_err(|e| anyhow::anyhow!("load chat template: {e}"))
 }
 
 /// Collect stop token ids for Mamba / Falcon-Mamba generation.
@@ -752,16 +544,64 @@ fn sample_decode_token_id(
 
 /// Synchronous generation entry. Runs on a blocking worker, holding the
 /// engine's `loaded` mutex for the duration of one inference call.
+fn preprocess_openai_messages_for_mlx(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    use super::thinking_parse::strip_thinking_blocks;
+    messages
+        .iter()
+        .map(|msg| {
+            let role = msg.get("role").and_then(|v| v.as_str());
+            if role != Some("assistant") {
+                return msg.clone();
+            }
+            let Some(content) = msg.get("content").and_then(|c| c.as_str()) else {
+                return msg.clone();
+            };
+            let stripped = strip_thinking_blocks(content);
+            let mut out = msg.clone();
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert("content".into(), serde_json::Value::String(stripped));
+            }
+            out
+        })
+        .collect()
+}
+
+fn openai_messages_to_plain_transcript(messages: &[serde_json::Value]) -> String {
+    let mut text = String::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+        let content = match msg.get("content") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|p| {
+                    p.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        if content.is_empty() {
+            continue;
+        }
+        text.push_str(&format!("{role}: {content}\n"));
+    }
+    text.push_str("Assistant:");
+    text
+}
+
 fn generate_with_cache(
     loaded: &Arc<Mutex<Option<Loaded>>>,
     model_dir: &Path,
     model_id: &str,
-    messages: &[ChatMessage],
+    messages: &[serde_json::Value],
+    tools: &[serde_json::Value],
     _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
     use super::mlx_lm::cache::{eval_all_caches, DEFAULT_TQ_ACTIVATE_AT, KvCache};
-    use super::mlx_lm_utils::tokenizer::{ApplyChatTemplateArgs, Conversation, Role as TokRole};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::eval;
     use mlx_rs::Array;
@@ -782,91 +622,9 @@ fn generate_with_cache(
     let gen_opt =
         crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
 
-    use super::mlx_prompt::{
-        strip_thinking_blocks, trim_conversation_history, MLX_MAX_HISTORY_TURNS,
-    };
-
-    // Pass `system` as its own message when present: Gemma-3's `chat_template`
-    // requires `messages[0].role == 'system'` to set `first_user_prefix`; merging
-    // system into the user blob skips that branch and mis-formats the prompt.
-    let mut convs: Vec<Conversation<TokRole, String>> = Vec::with_capacity(messages.len());
-    for m in messages {
-        match m.role {
-            super::runtime::Role::System => {
-                convs.push(Conversation {
-                    role: TokRole::System,
-                    content: m.content.clone(),
-                });
-            }
-            super::runtime::Role::User => {
-                convs.push(Conversation {
-                    role: TokRole::User,
-                    content: m.content.clone(),
-                });
-            }
-            super::runtime::Role::Assistant => {
-                let content = strip_thinking_blocks(&m.content);
-                if content.is_empty() {
-                    continue;
-                }
-                convs.push(Conversation {
-                    role: TokRole::Assistant,
-                    content,
-                });
-            }
-        }
-    }
-
-    let history_before = convs.len();
-    trim_conversation_history(&mut convs, MLX_MAX_HISTORY_TURNS);
-    if convs.len() < history_before {
-        tracing::info!(
-            "[local-mlx-native] history {} → {} messages after turn cap ({MLX_MAX_HISTORY_TURNS} user turns)",
-            history_before,
-            convs.len()
-        );
-    }
-
+    let messages = preprocess_openai_messages_for_mlx(messages);
     let enable_thinking = gen_opt.enable_thinking;
-    let mut prompt: Vec<u32> = if let Some(template) = template_opt {
-        let (bos_token, eos_token) =
-            mlx_chat_template_special_tokens(tokenizer, &state.model, template.as_str());
-        let args = ApplyChatTemplateArgs {
-            conversations: vec![convs.clone().into()],
-            documents: None,
-            model_id,
-            chat_template_id: None,
-            add_generation_prompt: Some(true),
-            continue_final_message: None,
-            enable_thinking,
-            bos_token,
-            eos_token,
-        };
-        let encodings = tokenizer
-            .apply_chat_template_and_encode(template, args)
-            .map_err(|e| anyhow::anyhow!("chat template apply failed: {e:?}"))?;
-        encodings
-            .iter()
-            .flat_map(|e| e.get_ids())
-            .copied()
-            .collect()
-    } else {
-        // No chat template (Mamba-2 base etc.) — fall back to a plain transcript.
-        let mut text = String::new();
-        for c in &convs {
-            let role = match c.role {
-                TokRole::User => "User",
-                TokRole::Assistant => "Assistant",
-                TokRole::System => "System",
-            };
-            text.push_str(&format!("{role}: {}\n", c.content));
-        }
-        text.push_str("Assistant:");
-        let enc = tokenizer
-            .encode(text, false)
-            .map_err(|e| anyhow::anyhow!("plain encode failed: {e:?}"))?;
-        enc.get_ids().to_vec()
-    };
+
     let max_prompt_tokens = gen_opt
         .max_prompt_tokens
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
@@ -879,27 +637,109 @@ fn generate_with_cache(
         .max_kv_tokens
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_KV_WINDOW_TOKENS)
         .clamp(128, 262_144) as i32;
-
-    if prompt.len() > max_prompt_tokens {
-        let drop = prompt.len() - max_prompt_tokens;
-        tracing::warn!(
-            "[local-mlx-native] truncating prompt {} → {} tokens (RAM/KV cap; edit ~/.senclaw/local_models/settings.json max_prompt_tokens)",
-            prompt.len(),
-            max_prompt_tokens
-        );
-        prompt.drain(..drop);
-    }
-    // KV window also bounds prompt length — keeps prefill RAM/graph bounded per turn.
     let max_kv_usize = max_kv_tokens as usize;
-    if prompt.len() > max_kv_usize {
-        let drop = prompt.len() - max_kv_usize;
-        tracing::warn!(
-            "[local-mlx-native] truncating prompt {} → {} tokens (max_kv_tokens; older context dropped)",
-            prompt.len(),
-            max_kv_usize
+    // Single budget = tighter of (RAM cap, KV cap). Render is iterative —
+    // trimming inputs and re-rendering is the only way to keep the prompt
+    // structurally valid; raw token-level truncation destroys the chat
+    // template's role headers and tool-schema framing.
+    let budget = max_prompt_tokens.min(max_kv_usize);
+    const MAX_FIT_ATTEMPTS: usize = 24;
+
+    let mut prompt: Vec<u32> = if let Some(template) = template_opt {
+        let special = state
+            .model
+            .resolve_special_tokens(template.as_str(), tokenizer);
+        let initial_msg_count = messages.len();
+        let initial_tool_count = tools.len();
+        let mut work_messages: Vec<serde_json::Value> = messages.clone();
+        let mut work_tools: Vec<serde_json::Value> = tools.to_vec();
+
+        // Fit-to-budget loop:
+        // 1. Render with current (messages, tools).
+        // 2. If under budget — done.
+        // 3. Else drop the oldest non-system / non-last-user message.
+        // 4. Else (no more middle messages) halve the tools list from the end.
+        // 5. Stop after MAX_FIT_ATTEMPTS or when nothing else can be trimmed.
+        let mut attempts = 0usize;
+        let mut tokens: Vec<u32> = loop {
+            let encs = tokenizer
+                .apply_chat_template_json_and_encode(
+                    template.clone(),
+                    model_id,
+                    &work_messages,
+                    &work_tools,
+                    Some(true),
+                    enable_thinking,
+                    special.bos.as_deref(),
+                    special.eos.as_deref(),
+                )
+                .map_err(|e| anyhow::anyhow!("chat template apply failed: {e:?}"))?;
+            let tokens: Vec<u32> = encs.iter().flat_map(|e| e.get_ids()).copied().collect();
+            if tokens.len() <= budget || attempts >= MAX_FIT_ATTEMPTS {
+                break tokens;
+            }
+            if super::mlx_prompt::drop_oldest_openai_middle_message(&mut work_messages) {
+                attempts += 1;
+                continue;
+            }
+            if !work_tools.is_empty() {
+                let new_len = work_tools.len() / 2;
+                let dropped = work_tools.len() - new_len;
+                tracing::warn!(
+                    "[local-mlx-native] prompt {} tokens > budget {}; dropped {} tool(s) from end of list (left {})",
+                    tokens.len(),
+                    budget,
+                    dropped,
+                    new_len,
+                );
+                work_tools.truncate(new_len);
+                attempts += 1;
+                continue;
+            }
+            break tokens;
+        };
+
+        tracing::info!(
+            "[local-mlx-native] chat template: {} → {} message(s), {} → {} tool(s), {} tokens (budget {})",
+            initial_msg_count,
+            work_messages.len(),
+            initial_tool_count,
+            work_tools.len(),
+            tokens.len(),
+            budget,
         );
-        prompt.drain(..drop);
-    }
+
+        if tokens.len() > budget {
+            let drop = tokens.len() - budget;
+            tracing::warn!(
+                "[local-mlx-native] prompt still {} > budget {} after {} trim attempt(s); hard truncating head — chat structure may break",
+                tokens.len(),
+                budget,
+                attempts,
+            );
+            tokens.drain(..drop);
+        }
+        tokens
+    } else {
+        // No chat template (Mamba-2 base etc.) — fall back to a plain transcript.
+        // No tool / chat structure to preserve, so token-level head-truncation
+        // is acceptable here.
+        let text = openai_messages_to_plain_transcript(&messages);
+        let enc = tokenizer
+            .encode(text, false)
+            .map_err(|e| anyhow::anyhow!("plain encode failed: {e:?}"))?;
+        let mut tokens = enc.get_ids().to_vec();
+        if tokens.len() > budget {
+            let drop = tokens.len() - budget;
+            tracing::warn!(
+                "[local-mlx-native] truncating plain-transcript prompt {} → {} tokens",
+                tokens.len(),
+                budget,
+            );
+            tokens.drain(..drop);
+        }
+        tokens
+    };
 
     tracing::info!(
         "[local-mlx-native] prompt {} tokens, max_kv_window {}, head={:?} tail={:?}",
