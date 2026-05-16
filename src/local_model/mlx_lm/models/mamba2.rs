@@ -131,7 +131,36 @@ pub struct ModelArgs {
     pub use_bias: bool,
     #[serde(default = "default_true")]
     pub use_conv_bias: bool,
+    /// HF `eos_token_id` (Mamba-Codestral sets `0`; real sequence end is usually `</s>` = 2).
+    #[serde(default)]
+    pub eos_token_id: i32,
+    /// HF `bos_token_id` (Codestral: `0`; chat templates use literal `<s>` = 1).
+    #[serde(default)]
+    pub bos_token_id: i32,
 }
+
+/// Mistral V1 instruct Jinja used by `mistralai/Mamba-Codestral-*` and other `[INST]` models.
+/// System text is prepended to the **last** user turn (Mistral convention).
+pub const MISTRAL_V1_INSTRUCT_CHAT_TEMPLATE: &str = r#"{%- if messages[0]["role"] == "system" %}
+ {%- set system_message = messages[0]["content"] %}
+ {%- set loop_messages = messages[1:] %}
+{%- else %}
+ {%- set loop_messages = messages %}
+{%- endif %}
+{{- bos_token }}
+{%- for message in loop_messages %}
+ {%- if message["role"] == "user" %}
+ {%- if loop.last and system_message is defined %}
+ {{- "[INST] " + system_message + "\n\n" + message["content"] + "[/INST]" }}
+ {%- else %}
+ {{- "[INST] " + message["content"] + "[/INST]" }}
+ {%- endif %}
+ {%- elif message["role"] == "assistant" %}
+ {{- " " + message["content"] + eos_token }}
+ {%- else %}
+ {{- raise_exception("Only user and assistant roles are supported, with optional system message!") }}
+ {%- endif %}
+{%- endfor %}"#;
 
 fn default_eps() -> f32 {
     1e-5
@@ -156,6 +185,16 @@ impl ModelArgs {
 
     pub fn conv_dim(&self) -> i32 {
         self.intermediate_size + 2 * self.n_groups * self.state_size
+    }
+
+    /// Token ids that should end generation for this checkpoint.
+    pub fn stop_token_ids(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
+        // HF often sets `eos_token_id: 0` (padding); still honour non-zero config ids.
+        if self.eos_token_id > 0 {
+            ids.push(self.eos_token_id as u32);
+        }
+        ids
     }
 }
 
@@ -1196,4 +1235,40 @@ pub fn load_mamba2_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
     }
 
     Ok(model)
+}
+
+#[cfg(test)]
+mod mistral_template_tests {
+    use super::*;
+
+    #[test]
+    fn codestral_stop_ids_skip_zero_eos() {
+        let args = ModelArgs {
+            model_type: "mamba2".into(),
+            hidden_size: 4096,
+            num_hidden_layers: 64,
+            vocab_size: 32768,
+            rms_norm_eps: 1e-5,
+            tie_word_embeddings: false,
+            intermediate_size: 8192,
+            expand: 2,
+            state_size: 128,
+            conv_kernel: 4,
+            n_groups: 8,
+            num_heads: 128,
+            head_dim: 64,
+            chunk_size: 256,
+            use_bias: false,
+            use_conv_bias: true,
+            eos_token_id: 0,
+            bos_token_id: 0,
+        };
+        assert!(args.stop_token_ids().is_empty());
+    }
+
+    #[test]
+    fn mistral_chat_template_contains_inst_markers() {
+        assert!(MISTRAL_V1_INSTRUCT_CHAT_TEMPLATE.contains("[INST]"));
+        assert!(MISTRAL_V1_INSTRUCT_CHAT_TEMPLATE.contains("bos_token"));
+    }
 }

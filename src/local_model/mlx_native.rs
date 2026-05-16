@@ -244,15 +244,14 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
 }
 
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
-    use super::mlx_lm_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer};
+    use super::mlx_lm_utils::tokenizer::Tokenizer;
 
     let arch = detect_architecture(model_id, model_dir)?;
     let tokenizer_file = model_dir.join("tokenizer.json");
     let tokenizer_config = model_dir.join("tokenizer_config.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
-    // Mamba-2 base models often ship without a chat template — render plain text.
-    let chat_template = load_model_chat_template_from_file(&tokenizer_config).ok().flatten();
+    let chat_template = load_mlx_chat_template(model_dir, model_id, &tokenizer_config)?;
 
     let (model, n_layers, head_dim, n_kv_heads) = match arch {
         Arch::Qwen3 => {
@@ -527,16 +526,152 @@ fn mlx_chat_template_special_tokens(
             };
             (bos, eos)
         }
+        ModelKind::Mamba2(m) => {
+            let bos = if need_bos {
+                tokenizer
+                    .token_to_id("<s>")
+                    .or(if m.args.bos_token_id > 0 {
+                        Some(m.args.bos_token_id as u32)
+                    } else {
+                        None
+                    })
+                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+            } else {
+                None
+            };
+            let eos = if need_eos {
+                tokenizer
+                    .token_to_id("</s>")
+                    .or_else(|| m.args.stop_token_ids().first().copied())
+                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+            } else {
+                None
+            };
+            (bos, eos)
+        }
+        ModelKind::FalconMamba(_) => {
+            let bos = if need_bos {
+                tokenizer
+                    .token_to_id("<s>")
+                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+            } else {
+                None
+            };
+            let eos = if need_eos {
+                tokenizer
+                    .token_to_id("</s>")
+                    .and_then(|id| tokenizer.decode(std::slice::from_ref(&id), false).ok())
+            } else {
+                None
+            };
+            (bos, eos)
+        }
         _ => {
             if need_bos || need_eos {
                 tracing::warn!(
-                    "[local-mlx-native] chat template references bos_token/eos_token but special-token injection is only wired for Gemma-2/3 (arch={}); leaving empty placeholders",
+                    "[local-mlx-native] chat template references bos_token/eos_token but special-token injection is only wired for Gemma-2/3 / Mamba (arch={}); leaving empty placeholders",
                     model.arch_name(),
                 );
             }
             (None, None)
         }
     }
+}
+
+/// Load Jinja chat template: `tokenizer_config.json`, then `chat_template.jinja`, then
+/// architecture-specific fallbacks (Mistral `[INST]` for Mamba-Codestral / `[INST]` tokenizers).
+fn load_mlx_chat_template(
+    model_dir: &Path,
+    model_id: &str,
+    tokenizer_config_path: &Path,
+) -> anyhow::Result<Option<String>> {
+    use super::mlx_lm_utils::tokenizer::load_model_chat_template_from_file;
+
+    if let Some(t) = load_model_chat_template_from_file(tokenizer_config_path).ok().flatten() {
+        return Ok(Some(t));
+    }
+    let jinja_path = model_dir.join("chat_template.jinja");
+    if jinja_path.exists() {
+        let t = std::fs::read_to_string(&jinja_path)
+            .map_err(|e| anyhow::anyhow!("read chat_template.jinja: {e}"))?;
+        tracing::info!(
+            "[local-mlx-native] loaded chat_template.jinja for {model_id}"
+        );
+        return Ok(Some(t));
+    }
+
+    let arch = detect_architecture(model_id, model_dir)?;
+    match arch {
+        Arch::Mamba2 | Arch::FalconMamba => {
+            let tok_path = model_dir.join("tokenizer.json");
+            if tokenizer_has_mistral_inst_tokens(&tok_path) {
+                tracing::info!(
+                    "[local-mlx-native] no chat template for {model_id}; \
+                     using Mistral V1 [INST] fallback (Mamba-Codestral / instruct)"
+                );
+                return Ok(Some(
+                    super::mlx_lm::models::mamba2::MISTRAL_V1_INSTRUCT_CHAT_TEMPLATE.to_string(),
+                ));
+            }
+            tracing::warn!(
+                "[local-mlx-native] no chat template for {model_id}; \
+                 using plain User/Assistant transcript"
+            );
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// True when the tokenizer defines Mistral-style `[INST]` / `[/INST]` special tokens.
+fn tokenizer_has_mistral_inst_tokens(tokenizer_json: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(tokenizer_json) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(decoder) = v.get("added_tokens").and_then(|a| a.as_array()) else {
+        return false;
+    };
+    let mut has_inst = false;
+    let mut has_end_inst = false;
+    for entry in decoder {
+        let Some(content) = entry.get("content").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        if content == "[INST]" {
+            has_inst = true;
+        }
+        if content == "[/INST]" {
+            has_end_inst = true;
+        }
+    }
+    has_inst && has_end_inst
+}
+
+/// Collect stop token ids for Mamba / Falcon-Mamba generation.
+fn mamba_stop_token_ids(
+    config_stops: &[u32],
+    tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer,
+) -> Vec<u32> {
+    let mut stops: Vec<u32> = Vec::new();
+    for &id in config_stops {
+        if !stops.contains(&id) {
+            stops.push(id);
+        }
+    }
+    for special in ["</s>", "<|endoftext|>", "[/INST]"] {
+        if let Some(id) = tokenizer.token_to_id(special) {
+            if !stops.contains(&id) {
+                stops.push(id);
+            }
+        }
+    }
+    if stops.is_empty() {
+        stops.push(2);
+    }
+    stops
 }
 
 /// Decoded token ids counted back from the current step (HF repetition penalty window).
@@ -863,12 +998,8 @@ fn generate_with_cache(
                 );
             }
             let c = m.make_cache();
-            // GPT-NeoX EOS = 0 by default; pick up tokenizer's eos id if present.
-            let eos = tokenizer
-                .token_to_id("<|endoftext|>")
-                .or_else(|| tokenizer.token_to_id("</s>"))
-                .unwrap_or(0);
-            (c, Box::new(move |t: u32| t == eos))
+            let stops = mamba_stop_token_ids(&m.args.stop_token_ids(), tokenizer);
+            (c, Box::new(move |t: u32| stops.contains(&t)))
         }
         ModelKind::FalconMamba(m) => {
             if tq_bits.is_some() {
@@ -877,14 +1008,8 @@ fn generate_with_cache(
                 );
             }
             let c = m.make_cache();
-            // Falcon tokenizer ships explicit `<|endoftext|>` (= 11); fall back
-            // to anything tokenizer can resolve, otherwise stop only on
-            // max_new_tokens.
-            let eos = tokenizer
-                .token_to_id("<|endoftext|>")
-                .or_else(|| tokenizer.token_to_id("</s>"))
-                .unwrap_or(11);
-            (c, Box::new(move |t: u32| t == eos))
+            let stops = mamba_stop_token_ids(&[], tokenizer);
+            (c, Box::new(move |t: u32| stops.contains(&t)))
         }
         ModelKind::BonsaiQ1(b) => {
             if tq_bits.is_some() {
@@ -1010,13 +1135,18 @@ fn generate_with_cache(
         &recent_decode_ids,
     )?;
     eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill token eval failed: {e:?}"))?;
+    let first_id = next_token.item::<u32>();
     mlx_recent_decode_push(
         &mut recent_decode_ids,
-        next_token.item::<u32>(),
+        first_id,
         MLX_REPEN_DECODE_WINDOW,
     );
-    buffer.push(next_token.clone());
-    generated_count += 1;
+    if is_stop(first_id) {
+        hit_stop = true;
+    } else {
+        buffer.push(next_token.clone());
+        generated_count += 1;
+    }
 
     {
         let (ma, mc, mp) = mlx_mem_mib();
@@ -1039,6 +1169,9 @@ fn generate_with_cache(
     }
 
     for _step in 1..max_tokens {
+        if hit_stop {
+            break;
+        }
         let inputs = next_token
             .reshape(&[1, 1])
             .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
@@ -1105,26 +1238,35 @@ fn generate_with_cache(
             &recent_decode_ids,
         )?;
         eval(&[y.clone()]).map_err(|e| anyhow::anyhow!("decode token eval failed: {e:?}"))?;
+        let token_id = y.item::<u32>();
         mlx_recent_decode_push(
             &mut recent_decode_ids,
-            y.item::<u32>(),
+            token_id,
             MLX_REPEN_DECODE_WINDOW,
         );
         next_token = y;
+
+        if is_stop(token_id) {
+            hit_stop = true;
+            break;
+        }
         buffer.push(next_token.clone());
         generated_count += 1;
 
-        if buffer.len() % 20 == 0 {
+        let should_flush = buffer.len() >= 20;
+        if should_flush {
             eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
-            let (ma, mc, _) = mlx_mem_mib();
-            tracing::info!(
-                "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
-                generated_count,
-                rss_mib(),
-                rss_mib() - rss_start,
-                ma,
-                mc
-            );
+            if generated_count <= 20 {
+                let (ma, mc, _) = mlx_mem_mib();
+                tracing::info!(
+                    "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
+                    generated_count,
+                    rss_mib(),
+                    rss_mib() - rss_start,
+                    ma,
+                    mc
+                );
+            }
             let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
             if generated_count <= 20 {
                 let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
@@ -1134,17 +1276,6 @@ fn generate_with_cache(
                     slice,
                     decoded_preview
                 );
-            }
-            if let Some(&stop) = slice.iter().find(|&&t| is_stop(t)) {
-                let cut: Vec<u32> = slice.iter().copied().take_while(|&t| t != stop).collect();
-                let text = tokenizer
-                    .decode(&cut, true)
-                    .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
-                if !text.is_empty() {
-                    let _ = tx.blocking_send(text);
-                }
-                hit_stop = true;
-                break;
             }
             let text = tokenizer
                 .decode(&slice, true)
