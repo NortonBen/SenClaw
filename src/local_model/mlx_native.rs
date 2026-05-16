@@ -235,6 +235,90 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     })
 }
 
+/// Current process RSS (MiB) via macOS Mach `task_info`. Returns **0** on failure or non-macOS.
+#[allow(deprecated)] // `libc::mach_task_self` deprecated in favor of `mach2`; keep single deps for MLX path.
+fn rss_mib() -> f64 {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        #[repr(C)]
+        struct MachTaskBasicInfo {
+            virtual_size: u64,
+            resident_size: u64,
+            resident_size_max: u64,
+            user_time: libc::time_value_t,
+            system_time: libc::time_value_t,
+            policy: i32,
+            suspend_count: i32,
+        }
+        const MACH_TASK_BASIC_INFO: libc::c_int = 20;
+        const MACH_TASK_BASIC_INFO_COUNT: u32 = 12;
+
+        let mut info: MachTaskBasicInfo = std::mem::zeroed();
+        let mut count: u32 = MACH_TASK_BASIC_INFO_COUNT;
+        let kr = libc::task_info(
+            libc::mach_task_self(),
+            MACH_TASK_BASIC_INFO as _,
+            &mut info as *mut _ as _,
+            &mut count,
+        );
+        if kr == 0 {
+            info.resident_size as f64 / (1024.0 * 1024.0)
+        } else {
+            0.0
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0.0
+    }
+}
+
+/// MLX Metal allocator stats (**active**, **cache**, **peak**) in MiB (via `mlx-sys`, same MLX build as `mlx-rs`).
+///
+/// **active**: bytes referenced by live arrays. **cache**: freed buffers held in MLX’s pool.
+/// **peak**: high-water since start (or since last [`mlx_sys::mlx_reset_peak_memory`]).
+#[inline]
+fn mlx_mem_mib() -> (f64, f64, f64) {
+    unsafe {
+        let mut active: usize = 0;
+        let mut cache: usize = 0;
+        let mut peak: usize = 0;
+        mlx_sys::mlx_get_active_memory(&mut active);
+        mlx_sys::mlx_get_cache_memory(&mut cache);
+        mlx_sys::mlx_get_peak_memory(&mut peak);
+        const M: f64 = 1024.0 * 1024.0;
+        (active as f64 / M, cache as f64 / M, peak as f64 / M)
+    }
+}
+
+fn mlx_log_generate_done(label: &'static str, rss_start: f64, generated_count: usize) {
+    let (ma, mc, mp) = mlx_mem_mib();
+    tracing::info!(
+        "[local-mlx-native][mem] {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB | new_tokens={}",
+        label,
+        rss_mib(),
+        rss_mib() - rss_start,
+        ma,
+        mc,
+        mp,
+        generated_count,
+    );
+}
+
+/// Drop MLX’s pooled device buffers (`mlx_clear_cache`) and the lazy compile cache before the next turn.
+fn mlx_release_after_turn() {
+    unsafe {
+        mlx_sys::mlx_clear_cache();
+    }
+    let (a, c, _) = mlx_mem_mib();
+    tracing::info!(
+        "[local-mlx-native][mem] MLX buffer pool cleared — active={:.0} cache={:.0} MiB",
+        a,
+        c,
+    );
+    mlx_rs::transforms::compile::clear_cache();
+}
+
 /// Synchronous generation entry. Runs on a blocking worker, holding the
 /// engine's `loaded` mutex for the duration of one inference call.
 fn generate_with_cache(
@@ -427,6 +511,17 @@ fn generate_with_cache(
     let mut generated_count = 0usize;
     let temperature: f32 = 0.0;
 
+    let rss_start = rss_mib();
+    let (mlx_a0, mlx_c0, _) = mlx_mem_mib();
+    tracing::info!(
+        "[local-mlx-native][mem] generate start — rss={:.0} MiB | mlx active={:.0} cache={:.0} MiB (prompt={} tokens, max_new={})",
+        rss_start,
+        mlx_a0,
+        mlx_c0,
+        prompt.len(),
+        max_new_tokens
+    );
+
     // Prefill — feed full prompt, take logits at last position.
     let prefill_input = ModelInput {
         inputs: &prompt_tokens,
@@ -446,6 +541,18 @@ fn generate_with_cache(
     eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill token eval failed: {e:?}"))?;
     buffer.push(next_token.clone());
     generated_count += 1;
+
+    {
+        let (ma, mc, mp) = mlx_mem_mib();
+        tracing::info!(
+            "[local-mlx-native][mem] after prefill — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} peak={:.0} MiB",
+            rss_mib(),
+            rss_mib() - rss_start,
+            ma,
+            mc,
+            mp
+        );
+    }
 
     for _step in 1..max_tokens {
         let inputs = next_token
@@ -472,6 +579,15 @@ fn generate_with_cache(
 
         if buffer.len() % 20 == 0 {
             eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+            let (ma, mc, _) = mlx_mem_mib();
+            tracing::info!(
+                "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
+                generated_count,
+                rss_mib(),
+                rss_mib() - rss_start,
+                ma,
+                mc
+            );
             let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
             if generated_count <= 20 {
                 let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
@@ -497,11 +613,14 @@ fn generate_with_cache(
                 .decode(&slice, true)
                 .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
             if !text.is_empty() && tx.blocking_send(text).is_err() {
+                mlx_release_after_turn();
                 return Ok(());
             }
         }
     }
     if hit_stop {
+        mlx_log_generate_done("stopped (eos/im_end)", rss_start, generated_count);
+        mlx_release_after_turn();
         return Ok(());
     }
     if !buffer.is_empty() {
@@ -515,8 +634,8 @@ fn generate_with_cache(
         }
     }
 
-    // Release MLX compile cache / lazy graph peaks before the next chat turn.
-    mlx_rs::transforms::compile::clear_cache();
+    mlx_log_generate_done("completed", rss_start, generated_count);
+    mlx_release_after_turn();
 
     Ok(())
 }
