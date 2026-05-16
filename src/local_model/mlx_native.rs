@@ -519,7 +519,7 @@ fn sample_decode_token_id(
     recent_decode_ids: &[u32],
 ) -> anyhow::Result<mlx_rs::Array> {
     use mlx_rs::ops::flatten;
-    use mlx_rs::Array;
+    use mlx_rs::{Array, Dtype};
 
     let mlx_sample = super::mlx_lm::models::qwen3::sample;
 
@@ -528,9 +528,18 @@ fn sample_decode_token_id(
     }
 
     let shape: Vec<i32> = last_logits.shape().to_vec();
+    // Quantized lm_head paths (Qwen3 4-bit, Gemma 4-bit, …) emit BF16/FP16
+    // logits. Cast to F32 once before reading the raw slice — `try_as_slice::<f32>`
+    // requires contiguous f32 memory and otherwise crashes the whole turn
+    // with `DtypeMismatch`.
     let flat = flatten(last_logits, None, None).map_err(|e| anyhow::anyhow!("flatten logits: {e:?}"))?;
-    mlx_rs::transforms::eval(std::slice::from_ref(&flat)).map_err(|e| anyhow::anyhow!("eval logits: {e:?}"))?;
-    let mut row = flat
+    let flat_f32 = if flat.dtype() == Dtype::Float32 {
+        flat
+    } else {
+        flat.as_dtype(Dtype::Float32).map_err(|e| anyhow::anyhow!("logits cast to f32: {e:?}"))?
+    };
+    mlx_rs::transforms::eval(std::slice::from_ref(&flat_f32)).map_err(|e| anyhow::anyhow!("eval logits: {e:?}"))?;
+    let mut row = flat_f32
         .try_as_slice::<f32>()
         .map_err(|e| anyhow::anyhow!("logits not contiguous f32: {e:?}"))?
         .to_vec();
@@ -638,11 +647,29 @@ fn generate_with_cache(
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_KV_WINDOW_TOKENS)
         .clamp(128, 262_144) as i32;
     let max_kv_usize = max_kv_tokens as usize;
-    // Single budget = tighter of (RAM cap, KV cap). Render is iterative —
-    // trimming inputs and re-rendering is the only way to keep the prompt
-    // structurally valid; raw token-level truncation destroys the chat
-    // template's role headers and tool-schema framing.
-    let budget = max_prompt_tokens.min(max_kv_usize);
+    // KV is a *sliding* window: every decode token evicts the oldest cached
+    // token once the cache is full. If the prompt already fills the cache,
+    // the first decode step pushes the system prompt / tool schemas out and
+    // the model loses its grounding within a few tokens — classic symptoms
+    // are mid-answer repetition spirals (`7 7 7 …`).
+    //
+    // Decode reserve = how many decode tokens can run before sliding starts
+    // evicting the system block. Capped at 2 048 (most tool-calling turns
+    // are well under that) so very large KV windows don't waste headroom
+    // that could hold more tool schemas. Hard ceiling at KV/4 protects
+    // small-KV configs from over-reserving.
+    const DECODE_RESERVE_CAP: usize = 2048;
+    let decode_reserve = max_new_tokens
+        .min(DECODE_RESERVE_CAP)
+        .min(max_kv_usize / 4)
+        .max(256);
+    // Single budget = tighter of (RAM cap, KV cap minus decode reserve).
+    // Render is iterative — trimming inputs and re-rendering is the only
+    // way to keep the prompt structurally valid; raw token-level truncation
+    // destroys the chat template's role headers and tool-schema framing.
+    let budget = max_prompt_tokens
+        .min(max_kv_usize.saturating_sub(decode_reserve))
+        .max(512);
     const MAX_FIT_ATTEMPTS: usize = 24;
 
     let mut prompt: Vec<u32> = if let Some(template) = template_opt {
@@ -683,10 +710,20 @@ fn generate_with_cache(
                 continue;
             }
             if !work_tools.is_empty() {
-                let new_len = work_tools.len() / 2;
+                // Linear-scale estimate: tokens ≈ fixed_cost + per_tool × count.
+                // Project the new tool count that should land just under
+                // budget — much better than blind halving (which dropped 28→14
+                // even when 28 only overshot by ~2 tokens). Subtract one more
+                // for safety so we converge inside the budget on the next
+                // render. Fall back to `len-1` if the estimate is degenerate.
+                let scaled = (work_tools.len() as u128 * budget as u128) / tokens.len() as u128;
+                let mut new_len = (scaled as usize).saturating_sub(1);
+                if new_len >= work_tools.len() {
+                    new_len = work_tools.len().saturating_sub(1);
+                }
                 let dropped = work_tools.len() - new_len;
                 tracing::warn!(
-                    "[local-mlx-native] prompt {} tokens > budget {}; dropped {} tool(s) from end of list (left {})",
+                    "[local-mlx-native] prompt {} tokens > budget {}; estimated per-tool cost → dropped {} tool(s) (kept {})",
                     tokens.len(),
                     budget,
                     dropped,
@@ -755,6 +792,26 @@ fn generate_with_cache(
         .tq_activate_at
         .map(|v| v as i32)
         .unwrap_or(DEFAULT_TQ_ACTIVATE_AT);
+    // TurboQuant runs its per-token KV quantization on CPU (`turboquant-rs`).
+    // Once activated it forces every subsequent KV update through that path —
+    // for a long prefill (tools-heavy prompt) the CPU work dominates and the
+    // turn can easily blow past the LLM-turn timeout. Warn the operator so
+    // the slowness isn't silent. Recommended: leave `kv_cache_bits` null
+    // unless conversations regularly exceed ~16K tokens.
+    if let Some(bits) = tq_bits {
+        let prefill_after_threshold = prompt.len() as i32 - tq_activate_at;
+        if prefill_after_threshold > 0 {
+            tracing::warn!(
+                "[local-mlx-native] TurboQuant TQ{} will activate mid-prefill: ~{} tokens × {} layers \
+                 will route through the CPU quant path — expect multi-minute prefill. \
+                 Raise `tq_activate_at` above prompt size, or set `kv_cache_bits: null` in settings.json \
+                 to disable TurboQuant entirely.",
+                bits,
+                prefill_after_threshold,
+                n_layers,
+            );
+        }
+    }
     let head_dim = state.head_dim;
     let n_kv_heads = state.n_kv_heads;
 
@@ -907,18 +964,45 @@ fn generate_with_cache(
     use super::mlx_lm::models::qwen3::ModelInput;
     use mlx_rs::module::Module;
 
+    // Per Qwen3 model card: temp=0.6 in thinking mode, 0.7 in non-thinking mode
+    // (https://huggingface.co/Qwen/Qwen3-4B#best-practices).
+    //
+    // Pure greedy (temp=0) is a trap for Qwen3-4B-4bit: a single biased token
+    // (a 4-bit precision artifact — e.g. preferring `!` to start a markdown
+    // image preview for search results) becomes a deterministic dead end the
+    // model can never escape. Empirically Qwen3-4B-4bit + greedy + 14 K-token
+    // tools-heavy prompts emits `![](...)` as turn 1 every single time.
+    // Sampling at the recommended temp gives the correct `<tool_call>` start
+    // a fair chance against the artifact.
     let decode_temperature = gen_opt
         .temperature
         .map(|t| t.clamp(0.0_f32, 4.0_f32))
         .unwrap_or_else(|| match &state.model {
             ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::BonsaiQ1(_) => 0.65_f32,
+            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) => {
+                if gen_opt.enable_thinking.unwrap_or(false) {
+                    0.6_f32
+                } else {
+                    0.7_f32
+                }
+            }
             _ => 0.0_f32,
         });
+    // Pure greedy (temp=0) plus rep_penalty=1.0 is a recipe for loops once
+    // the KV window slides and the model loses early context. Default to a
+    // mild penalty for Qwen / Llama transformer paths so greedy decoding
+    // still breaks out of `7 7 7 …` cycles; Gemma / Bonsai already use
+    // sampling + a stronger penalty.
     let decode_repetition_penalty = gen_opt
         .repetition_penalty
         .map(|p| p.clamp(1.0_f32, 2.0_f32))
         .unwrap_or_else(|| match &state.model {
             ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::BonsaiQ1(_) => 1.15_f32,
+            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_)
+                if decode_temperature == 0.0_f32 =>
+            {
+                1.05_f32
+            }
             _ => 1.0_f32,
         });
     let mut recent_decode_ids: Vec<u32> = Vec::new();

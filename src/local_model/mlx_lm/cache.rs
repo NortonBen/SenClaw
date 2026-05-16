@@ -13,7 +13,18 @@ use turboquant::{
 };
 
 /// Default TurboQuant activation threshold (tokens before quantizing KV storage).
-pub const DEFAULT_TQ_ACTIVATE_AT: i32 = 2048;
+///
+/// Once activated, every new KV pair routes through the `turboquant-rs` CPU
+/// path (f16→f32 cast + heap-allocated quant batch + 4-bit pack). For typical
+/// tool-calling prompts (~120 tokens / MCP tool × ~100 tools ≈ 12 K tokens),
+/// activating at 2 048 forces the entire post-2 048 chunk through the slow
+/// CPU path during **prefill**, easily blowing past the LLM turn timeout.
+///
+/// Setting this to 16 384 means TQ only kicks in for genuinely long sessions
+/// (multi-turn accumulating past 16 K) where the RAM saving is meaningful.
+/// Users who want earlier quantization can override `tq_activate_at` in
+/// `settings.json`.
+pub const DEFAULT_TQ_ACTIVATE_AT: i32 = 16_384;
 
 /// Growth chunk for pre-allocated FP16 KV buffers (mlx_lm / Higgs stepping).
 const KV_CACHE_STEP: i32 = 256;

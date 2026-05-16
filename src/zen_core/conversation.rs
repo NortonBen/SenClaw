@@ -40,11 +40,14 @@ const COMPACT_KEEP_RECENT: usize = 12;
 /// should not be able to hang silently with no message/tool events.
 const LLM_TURN_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Timeout for local native inference (Candle CPU/Metal adapter).
+/// Timeout for local native inference (Candle CPU/Metal **and** MLX native).
 ///
 /// CPU inference is O(L²) in sequence length and un-batched; even a small model
 /// (0.6B) on a debug build can take several minutes for a short response.
 /// Release builds are typically 8–15× faster, so this is intentionally generous.
+/// MLX native with TurboQuant KV quantization (`kv_cache_bits` set) is similarly
+/// slow on long prefill — TQ4 quantizes ~12 K tokens × 36 layers on CPU when the
+/// prompt holds many MCP tool schemas, and easily exceeds the cloud-API timeout.
 ///
 /// Hard breakdown for `local-candle-native`:
 ///   • prefill  ≤ 512 tokens × 28 layers → ~50 s (debug) / ~5 s (release)
@@ -141,14 +144,11 @@ pub async fn query(
             config.thinking,
             config.stream,
         );
-        // Local native inference runs on CPU/Metal and is much slower than cloud APIs.
-        let turn_timeout = if config
-            .profile
-            .adapt
-            .as_deref()
-            .unwrap_or("")
-            .starts_with("local-candle")
-        {
+        // Local native inference (Candle CPU/Metal, MLX native) runs in-process
+        // and is much slower than cloud APIs — especially MLX with TurboQuant
+        // KV (TQ4 prefill on long prompts blows past 180 s easily).
+        let adapt = config.profile.adapt.as_deref().unwrap_or("");
+        let turn_timeout = if adapt.starts_with("local-") {
             LLM_TURN_TIMEOUT_LOCAL
         } else {
             LLM_TURN_TIMEOUT

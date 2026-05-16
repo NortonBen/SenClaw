@@ -296,6 +296,19 @@ fn split_qwen_tool_calls_from_model_text(s: &str) -> (String, Vec<Value>) {
         out.push_str(&rest[..start]);
         let after = &rest[start + OPEN.len()..];
         let Some(end_rel) = after.find(CLOSE) else {
+            // Model emitted `<tool_call>` but never closed it before EOS /
+            // `<|im_end|>`. Surface this loudly — the user will otherwise see
+            // a raw `<tool_call> {"name": ...` blob in the UI with no
+            // explanation. Common with greedy decoding + low-precision
+            // (4-bit) quantization + long tools-heavy prompts: the model
+            // emits `<|im_end|>` token mid-arguments.
+            let partial: String = after.chars().take(160).collect();
+            tracing::warn!(
+                "[llm] truncated tool_call: `<tool_call>` opened but no `</tool_call>` close \
+                 before end of stream. Partial body (first 160 chars): {partial:?}. \
+                 Common fix: set `enable_thinking: false` in local model settings, or use a \
+                 less-quantized model — Qwen3 4-bit + thinking-on is prone to mid-args EOS."
+            );
             out.push_str(&rest[start..]);
             return (out, tool_calls);
         };
@@ -303,6 +316,9 @@ fn split_qwen_tool_calls_from_model_text(s: &str) -> (String, Vec<Value>) {
         rest = &after[end_rel + CLOSE.len()..];
 
         let Ok(v) = serde_json::from_str::<Value>(json_str) else {
+            tracing::warn!(
+                "[llm] tool_call JSON parse failed (skipping). Body: {json_str:?}"
+            );
             continue;
         };
 

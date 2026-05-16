@@ -608,15 +608,20 @@ pub const DEFAULT_CANDLE_MAX_PROMPT_TOKENS: u32 = 512;
 /// `max_new_tokens` in `settings.json` for longer outputs (beware latency).
 pub const DEFAULT_CANDLE_MAX_NEW_TOKENS: u32 = 512;
 
-/// Default KV-cache window (tokens).  The Candle engine never accumulates more
-/// than this many key/value entries per layer, bounding peak RAM regardless of
-/// conversation length.
+/// Default KV-cache window (tokens) — shared between the MLX (GPU/Metal) and
+/// Candle (CPU) engines. Both back-ends read this value through the same
+/// `max_kv_tokens` field in `settings.json`; tune there per deployment.
 ///
-/// Memory cost at this default (Qwen3-8B BF16, 32 layers, 8 KV heads, head 128):
-///   `2 × 32 × 8 × 128 × 4096 × 2 bytes ≈ 512 MB`
+/// Sized to fit the full MCP tool list (~120 tokens / tool × ~120 tools ≈
+/// 14 K tokens) **plus** the ~2 K-token decode reserve, plus headroom for
+/// chat history. Below this the trim loop has to drop a handful of tools
+/// from the end of the list.
 ///
-/// Configurable per-deployment via `max_kv_tokens` in `settings.json`.
-pub const DEFAULT_KV_WINDOW_TOKENS: u32 = 4096;
+/// Memory cost reference:
+/// - Qwen3-4B BF16 KV (36 layers × 8 KV heads × head 128): `≈ 2.9 GB` @ 20 K.
+/// - Candle CPU users on low-RAM devices should drop this in `settings.json`
+///   (attention is O(L²) on CPU, so wider window also costs prefill time).
+pub const DEFAULT_KV_WINDOW_TOKENS: u32 = 20_480;
 
 /// When TurboQuant KV is active, `mlx_native` caps **decode** at this (below API 8192)
 /// to cut RAM / CPU on the slow CPU attention path; raise via `max_new_tokens` in JSON only up to this cap.
@@ -673,7 +678,7 @@ pub struct LocalModelSettings {
     /// stays bounded.  RoPE positions remain absolute — quality is preserved for
     /// the retained context window.
     ///
-    /// `None` → [`DEFAULT_KV_WINDOW_TOKENS`] (4096).
+    /// `None` → [`DEFAULT_KV_WINDOW_TOKENS`] (16 384).
     /// Range: 128 – 262 144.
     #[serde(default)]
     pub max_kv_tokens: Option<u32>,

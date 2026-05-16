@@ -94,6 +94,8 @@ interface InferenceSettings {
   enable_thinking: boolean | null;
   max_prompt_tokens: number | null;
   max_new_tokens: number | null;
+  /** KV cache sliding window (tokens). Bounds prompt + decode in memory. */
+  max_kv_tokens: number | null;
   /** Sampling temperature; `0` = greedy. Server defaults to ~0.65 for Gemma‑3. */
   temperature: number | null;
   /** HuggingFace-style repetition penalty; `1` = off. Server defaults to ~1.15 for Gemma‑3. */
@@ -111,6 +113,7 @@ const DEFAULT_SETTINGS: InferenceSettings = {
   enable_thinking: false,
   max_prompt_tokens: null,
   max_new_tokens: null,
+  max_kv_tokens: null,
   temperature: null,
   repetition_penalty: null,
   idle_unload_secs: 60,
@@ -803,18 +806,18 @@ export const LocalModelsSettings: React.FC = () => {
             <Col xs={24} sm={12} md={8}>
               <Form.Item
                 label={
-                  <Tooltip title="Maximum prompt length after chat-template encoding. Older conversation is dropped from the start. Default: 8192.">
+                  <Tooltip title="Hard cap on prompt length after chat-template encoding. Acts together with Max KV tokens — the effective per-turn budget is the smaller of the two (minus decode headroom). Default: 128000.">
                     Max prompt tokens
                   </Tooltip>
                 }
               >
                 <InputNumber
                   style={{ width: '100%' }}
-                  min={256}
-                  max={131072}
+                  min={512}
+                  max={262144}
                   step={1024}
                   value={settings.max_prompt_tokens ?? undefined}
-                  placeholder="8192 (default)"
+                  placeholder="128000 (default)"
                   onChange={(v) =>
                     setSettings((s) => ({ ...s, max_prompt_tokens: v ?? null }))
                   }
@@ -826,20 +829,54 @@ export const LocalModelsSettings: React.FC = () => {
             <Col xs={24} sm={12} md={8}>
               <Form.Item
                 label={
-                  <Tooltip title="Maximum number of tokens to generate per request. Default: 2048.">
+                  <Tooltip title="Maximum number of tokens to generate per request. Default: 8192.">
                     Max new tokens
                   </Tooltip>
                 }
               >
                 <InputNumber
                   style={{ width: '100%' }}
-                  min={64}
+                  min={1}
                   max={8192}
                   step={256}
                   value={settings.max_new_tokens ?? undefined}
-                  placeholder="2048 (default)"
+                  placeholder="8192 (default)"
                   onChange={(v) =>
                     setSettings((s) => ({ ...s, max_new_tokens: v ?? null }))
+                  }
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Max KV-cache tokens (sliding window) */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip
+                    title={
+                      <span>
+                        KV-cache sliding window. Bounds prompt + decode in
+                        memory; ~25 % is reserved for decode so the prompt
+                        budget is roughly 75 % of this value. Raise for many
+                        MCP tools or long history; drop on low-RAM devices
+                        (Candle CPU is O(L²) — large values get slow). Default:
+                        16384.
+                      </span>
+                    }
+                  >
+                    Max KV tokens
+                  </Tooltip>
+                }
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={128}
+                  max={262144}
+                  step={1024}
+                  value={settings.max_kv_tokens ?? undefined}
+                  placeholder="16384 (default)"
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, max_kv_tokens: v ?? null }))
                   }
                 />
               </Form.Item>
