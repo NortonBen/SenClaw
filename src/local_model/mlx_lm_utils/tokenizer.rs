@@ -97,6 +97,8 @@ impl DerefMut for Tokenizer {
 pub enum Role {
     User,
     Assistant,
+    /// Used by Gemma / HF chat templates that branch on `messages[0].role == "system"`.
+    System,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,6 +173,10 @@ where
     pub continue_final_message: Option<bool>,
     /// Qwen3 templates: `false` pre-fills an empty thinking block to skip reasoning.
     pub enable_thinking: Option<bool>,
+    /// Injected into Jinja as `bos_token`. Gemma-3 templates open with `{{ bos_token }}`.
+    pub bos_token: Option<String>,
+    /// Injected as `eos_token` when templates reference it (`None` → empty string passed).
+    pub eos_token: Option<String>,
 }
 
 pub fn load_model_chat_template_from_str(content: &str) -> std::io::Result<Option<String>> {
@@ -209,6 +215,8 @@ where
         add_generation_prompt,
         continue_final_message,
         enable_thinking,
+        bos_token,
+        eos_token,
     } = args;
 
     let add_generation_prompt = add_generation_prompt.unwrap_or(false);
@@ -233,6 +241,8 @@ where
         Some(add_generation_prompt),
         Some(continue_final_message),
         enable_thinking,
+        bos_token.as_deref(),
+        eos_token.as_deref(),
     )
 }
 
@@ -243,6 +253,8 @@ fn render_jinja_tempalte<'a, R, T>(
     add_generation_prompt: Option<bool>,
     continue_final_message: Option<bool>,
     enable_thinking: Option<bool>,
+    bos_token: Option<&str>,
+    eos_token: Option<&str>,
 ) -> Result<Vec<String>, Error>
 where
     R: Serialize + 'a,
@@ -250,6 +262,8 @@ where
 {
     let add_generation_prompt = add_generation_prompt.unwrap_or(false);
     let continue_final_message = continue_final_message.unwrap_or(false);
+    let bos_slot = bos_token.unwrap_or("");
+    let eos_slot = eos_token.unwrap_or("");
 
     let mut rendered = Vec::new();
     for chat in conversations {
@@ -259,11 +273,15 @@ where
                 documents => documents,
                 add_generation_prompt => add_generation_prompt,
                 enable_thinking => thinking,
+                bos_token => bos_slot,
+                eos_token => eos_slot,
             })?,
             None => template.render(context! {
                 messages => chat,
                 documents => documents,
                 add_generation_prompt => add_generation_prompt,
+                bos_token => bos_slot,
+                eos_token => eos_slot,
             })?,
         };
 

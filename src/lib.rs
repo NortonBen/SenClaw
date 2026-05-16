@@ -1499,6 +1499,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     }
 
     // 7c. UI HTTP server
+    #[cfg(any(feature = "local-candle", feature = "local-mlx"))]
+    {
+        crate::gateway::ui_server::local_models::spawn_idle_unload_worker(
+            cfg.paths.local_models_dir.clone(),
+        );
+    }
     {
         struct RealUiApi {
             agent_pool: Arc<agent::agent_pool::AgentPool>,

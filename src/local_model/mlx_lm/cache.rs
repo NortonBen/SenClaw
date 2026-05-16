@@ -24,11 +24,20 @@ fn next_tq_seed() -> u64 {
     TQ_SEED.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Per-layer KV: FP16 stepping storage or TurboQuant-packed storage.
+/// Per-layer cache: FP16 attention KV, TurboQuant attention KV, Mamba-1 SSM state,
+/// or Mamba-2 SSM state.
+///
+/// SSM layers (Mamba-1 / Mamba-2) do not store KV pairs; they carry a fixed-size
+/// recurrent state (conv_state + ssm_state). When wrapped in this enum,
+/// [`KeyValueCache`] methods for SSM layers behave as a no-op (length reported as
+/// tokens-seen, attention ops bypassed). Mamba blocks access the cache directly
+/// via [`KvCache::as_mamba1_mut`] / [`KvCache::as_mamba2_mut`].
 #[derive(Debug)]
 pub enum KvCache {
     Fp16(SteppingKeyValueCache),
     TurboQuant(TurboQuantKeyValueCache),
+    Mamba1(Mamba1Cache),
+    Mamba2(Mamba2Cache),
 }
 
 impl KvCache {
@@ -52,10 +61,47 @@ impl KvCache {
         ))
     }
 
+    /// Allocate a Mamba-2 SSM state cache for a single layer.
+    pub fn mamba2(conv_dim: i32, d_conv: i32, n_heads: i32, head_dim: i32, d_state: i32) -> Self {
+        Self::Mamba2(Mamba2Cache::new(conv_dim, d_conv, n_heads, head_dim, d_state))
+    }
+
+    /// Allocate a Mamba-1 SSM state cache for a single layer.
+    ///
+    /// Mamba-1's recurrence is per-channel (no head grouping), so we only need
+    /// `d_inner` (= `intermediate_size`) and `d_state` to size the state.
+    pub fn mamba1(d_inner: i32, d_conv: i32, d_state: i32) -> Self {
+        Self::Mamba1(Mamba1Cache::new(d_inner, d_conv, d_state))
+    }
+
+    pub fn as_mamba2_mut(&mut self) -> Option<&mut Mamba2Cache> {
+        match self {
+            Self::Mamba2(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_mamba1_mut(&mut self) -> Option<&mut Mamba1Cache> {
+        match self {
+            Self::Mamba1(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn is_mamba2(&self) -> bool {
+        matches!(self, Self::Mamba2(_))
+    }
+
+    pub fn is_mamba1(&self) -> bool {
+        matches!(self, Self::Mamba1(_))
+    }
+
     pub(crate) fn eval_targets(&self) -> Vec<Array> {
         match self {
             Self::Fp16(c) => c.eval_targets(),
             Self::TurboQuant(c) => c.eval_targets(),
+            Self::Mamba1(c) => c.eval_targets(),
+            Self::Mamba2(c) => c.eval_targets(),
         }
     }
 }
@@ -65,6 +111,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.is_quantized(),
             Self::TurboQuant(c) => c.is_quantized(),
+            Self::Mamba1(_) | Self::Mamba2(_) => false,
         }
     }
 
@@ -72,6 +119,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.group_size(),
             Self::TurboQuant(c) => c.group_size(),
+            Self::Mamba1(_) | Self::Mamba2(_) => None,
         }
     }
 
@@ -79,6 +127,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.bits(),
             Self::TurboQuant(c) => c.bits(),
+            Self::Mamba1(_) | Self::Mamba2(_) => None,
         }
     }
 
@@ -86,6 +135,9 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.stored_len(),
             Self::TurboQuant(c) => c.stored_len(),
+            // Recurrent state has fixed footprint; attention-mask logic doesn't apply.
+            Self::Mamba1(c) => c.tokens_seen(),
+            Self::Mamba2(c) => c.tokens_seen(),
         }
     }
 
@@ -93,6 +145,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.max_size(),
             Self::TurboQuant(c) => c.max_size(),
+            Self::Mamba1(_) | Self::Mamba2(_) => None,
         }
     }
 
@@ -100,6 +153,14 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.update_and_fetch(keys, values),
             Self::TurboQuant(c) => c.update_and_fetch(keys, values),
+            Self::Mamba1(_) => Err(Exception::custom(
+                "Mamba1 cache does not support KV update_and_fetch; \
+                 use KvCache::as_mamba1_mut from the Mamba block",
+            )),
+            Self::Mamba2(_) => Err(Exception::custom(
+                "Mamba2 cache does not support KV update_and_fetch; \
+                 use KvCache::as_mamba2_mut from the Mamba block",
+            )),
         }
     }
 
@@ -118,6 +179,7 @@ impl KeyValueCache for KvCache {
             Self::TurboQuant(c) => {
                 c.turboquant_attention(queries, scale, mask, n_heads, n_kv_heads)
             }
+            Self::Mamba1(_) | Self::Mamba2(_) => Ok(None),
         }
     }
 }
@@ -699,13 +761,199 @@ fn slice_update_axis2(
     Ok(out)
 }
 
+/// Mamba-2 per-layer recurrent state.
+///
+/// Two pieces of state are carried across timesteps (mirroring `mlx-lm`'s
+/// `mamba2.py` reference):
+///
+/// - **conv_state**: rolling window into the depthwise short conv, shape
+///   `[B, d_conv - 1, conv_dim]` where `conv_dim = d_inner + 2 * n_groups * d_state`.
+///   Stored channels-last to match `mlx_rs::nn::Conv1d` NLC layout, so the block
+///   can `concatenate_axis(&[conv_state, xBC_token], 1)` directly.
+/// - **ssm_state**: per-head SSM hidden state, shape `[B, n_heads, head_dim, d_state]`.
+///   On the very first prefill call the cache is zero-initialised lazily so the
+///   block can support arbitrary batch sizes without re-allocating up front.
+///
+/// `tokens_seen` tracks total absolute position so callers can advance positional
+/// state if needed (mirrors `RopeInput::offset` semantics for SSM layers).
+#[derive(Debug)]
+pub struct Mamba2Cache {
+    pub conv_dim: i32,
+    pub d_conv: i32,
+    pub n_heads: i32,
+    pub head_dim: i32,
+    pub d_state: i32,
+    conv_state: Option<Array>,
+    ssm_state: Option<Array>,
+    tokens_seen: i32,
+}
+
+impl Mamba2Cache {
+    pub fn new(conv_dim: i32, d_conv: i32, n_heads: i32, head_dim: i32, d_state: i32) -> Self {
+        Self {
+            conv_dim,
+            d_conv,
+            n_heads,
+            head_dim,
+            d_state,
+            conv_state: None,
+            ssm_state: None,
+            tokens_seen: 0,
+        }
+    }
+
+    pub fn tokens_seen(&self) -> i32 {
+        self.tokens_seen
+    }
+
+    pub fn advance(&mut self, n: i32) {
+        self.tokens_seen = self.tokens_seen.saturating_add(n);
+    }
+
+    /// Channels-last conv state of length `d_conv - 1`, lazily zero-initialised.
+    pub fn conv_state_or_init(&mut self, batch: i32, dtype: Dtype) -> Result<&Array, Exception> {
+        if self.conv_state.is_none() {
+            let pad = (self.d_conv - 1).max(0);
+            self.conv_state = Some(zeros_dtype(&[batch, pad, self.conv_dim], dtype)?);
+        }
+        Ok(self
+            .conv_state
+            .as_ref()
+            .expect("conv_state initialised above"))
+    }
+
+    pub fn set_conv_state(&mut self, state: Array) {
+        self.conv_state = Some(state);
+    }
+
+    /// Per-head SSM hidden state `[B, n_heads, head_dim, d_state]`, lazily init.
+    pub fn ssm_state_or_init(&mut self, batch: i32, dtype: Dtype) -> Result<&Array, Exception> {
+        if self.ssm_state.is_none() {
+            self.ssm_state = Some(zeros_dtype(
+                &[batch, self.n_heads, self.head_dim, self.d_state],
+                dtype,
+            )?);
+        }
+        Ok(self
+            .ssm_state
+            .as_ref()
+            .expect("ssm_state initialised above"))
+    }
+
+    pub fn set_ssm_state(&mut self, state: Array) {
+        self.ssm_state = Some(state);
+    }
+
+    pub(crate) fn eval_targets(&self) -> Vec<Array> {
+        let mut out = Vec::with_capacity(2);
+        if let Some(c) = &self.conv_state {
+            out.push(c.clone());
+        }
+        if let Some(s) = &self.ssm_state {
+            out.push(s.clone());
+        }
+        out
+    }
+}
+
+/// Mamba-1 per-layer recurrent state.
+///
+/// Two pieces of state are carried across timesteps, matching the reference
+/// `mlx-lm` `mamba.py` (`ArraysCache(size=2)` slots):
+///
+/// - **conv_state**: rolling window into the depthwise short conv,
+///   shape `[B, d_conv - 1, d_inner]`. Stored channels-last to match the
+///   `mlx_rs::nn::Conv1d` NLC layout so the block can
+///   `concatenate_axis(&[conv_state, x_inner_token], 1)` directly.
+/// - **ssm_state**: per-channel SSM hidden state, shape `[B, d_inner, d_state]`.
+///   Unlike Mamba-2, Mamba-1 has no head/group structure — every channel of
+///   `d_inner` carries its own `d_state`-wide hidden state.
+///
+/// Both slots are lazily zero-initialised on the first prefill call so the
+/// block can support arbitrary batch sizes without re-allocating up front.
+/// `tokens_seen` tracks total absolute position (mirrors [`Mamba2Cache`]).
+#[derive(Debug)]
+pub struct Mamba1Cache {
+    pub d_inner: i32,
+    pub d_conv: i32,
+    pub d_state: i32,
+    conv_state: Option<Array>,
+    ssm_state: Option<Array>,
+    tokens_seen: i32,
+}
+
+impl Mamba1Cache {
+    pub fn new(d_inner: i32, d_conv: i32, d_state: i32) -> Self {
+        Self {
+            d_inner,
+            d_conv,
+            d_state,
+            conv_state: None,
+            ssm_state: None,
+            tokens_seen: 0,
+        }
+    }
+
+    pub fn tokens_seen(&self) -> i32 {
+        self.tokens_seen
+    }
+
+    pub fn advance(&mut self, n: i32) {
+        self.tokens_seen = self.tokens_seen.saturating_add(n);
+    }
+
+    /// Channels-last conv state of length `d_conv - 1`, lazily zero-initialised.
+    pub fn conv_state_or_init(&mut self, batch: i32, dtype: Dtype) -> Result<&Array, Exception> {
+        if self.conv_state.is_none() {
+            let pad = (self.d_conv - 1).max(0);
+            self.conv_state = Some(zeros_dtype(&[batch, pad, self.d_inner], dtype)?);
+        }
+        Ok(self
+            .conv_state
+            .as_ref()
+            .expect("conv_state initialised above"))
+    }
+
+    pub fn set_conv_state(&mut self, state: Array) {
+        self.conv_state = Some(state);
+    }
+
+    /// Has the SSM hidden state been populated yet (i.e. seen any tokens)?
+    pub fn has_ssm_state(&self) -> bool {
+        self.ssm_state.is_some()
+    }
+
+    /// Per-channel SSM hidden state `[B, d_inner, d_state]`. Returns `None` until
+    /// the first token has been processed — Mamba-1's recurrence skips the
+    /// `state * exp(dt * A)` decay term on the very first step (matching
+    /// `state is not None` in the Python reference).
+    pub fn ssm_state(&self) -> Option<&Array> {
+        self.ssm_state.as_ref()
+    }
+
+    pub fn set_ssm_state(&mut self, state: Array) {
+        self.ssm_state = Some(state);
+    }
+
+    pub(crate) fn eval_targets(&self) -> Vec<Array> {
+        let mut out = Vec::with_capacity(2);
+        if let Some(c) = &self.conv_state {
+            out.push(c.clone());
+        }
+        if let Some(s) = &self.ssm_state {
+            out.push(s.clone());
+        }
+        out
+    }
+}
+
 #[cfg(all(test, feature = "local-mlx"))]
 mod tests {
     use super::*;
     use mlx_rs::{array, Array};
 
     fn make_kv(seq_len: i32, fill: f32) -> (Array, Array) {
-        let t = Array::full(&[1, 1, seq_len, 1], array!(fill)).unwrap();
+        let t = Array::full::<f32>(&[1, 1, seq_len, 1], array!(fill)).unwrap();
         (t.clone(), t)
     }
 

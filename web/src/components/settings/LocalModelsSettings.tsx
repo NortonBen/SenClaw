@@ -94,6 +94,12 @@ interface InferenceSettings {
   enable_thinking: boolean | null;
   max_prompt_tokens: number | null;
   max_new_tokens: number | null;
+  /** Sampling temperature; `0` = greedy. Server defaults to ~0.65 for Gemma‑3. */
+  temperature: number | null;
+  /** HuggingFace-style repetition penalty; `1` = off. Server defaults to ~1.15 for Gemma‑3. */
+  repetition_penalty: number | null;
+  /** 0 = off; omit/null defaults to 60s on server; min 60 when explicitly set nonzero */
+  idle_unload_secs: number | null;
   /** "mlx" | "candle" | null (auto) */
   preferred_backend: string | null;
 }
@@ -105,6 +111,9 @@ const DEFAULT_SETTINGS: InferenceSettings = {
   enable_thinking: false,
   max_prompt_tokens: null,
   max_new_tokens: null,
+  temperature: null,
+  repetition_penalty: null,
+  idle_unload_secs: 60,
   preferred_backend: null,
 };
 
@@ -662,6 +671,35 @@ export const LocalModelsSettings: React.FC = () => {
             </Radio.Group>
           </Form.Item>
 
+          <Form.Item
+            label={
+              <Tooltip title="Unload weights after idle (MLX or Candle). Resets each run and after Load. Default 60s when unset. Set 0 to disable. Explicit nonzero values must be ≥ 60 (server). Max 604800 (7d).">
+                Auto unload after idle (seconds)
+              </Tooltip>
+            }
+            style={{ marginBottom: 12 }}
+          >
+            <Space align="center">
+              <InputNumber
+                style={{ width: 140 }}
+                min={0}
+                max={604800}
+                step={60}
+                value={settings.idle_unload_secs ?? undefined}
+                placeholder="60 — 0 off"
+                onChange={(v) =>
+                  setSettings((s) => ({
+                    ...s,
+                    idle_unload_secs: v === null || v === undefined ? null : v,
+                  }))
+                }
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                · default 60 · 0 = off
+              </Text>
+            </Space>
+          </Form.Item>
+
           <Divider style={{ margin: '8px 0 16px' }} />
 
           <Row gutter={24}>
@@ -802,6 +840,52 @@ export const LocalModelsSettings: React.FC = () => {
                   placeholder="2048 (default)"
                   onChange={(v) =>
                     setSettings((s) => ({ ...s, max_new_tokens: v ?? null }))
+                  }
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Temperature (native MLX sampling) */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="`0` = greedy argmax (default for Qwen/Llama via server). Leave empty to use server default (~0.65 for Gemma‑3) to reduce repetitive garbage output.">
+                    Temperature (MLX)
+                  </Tooltip>
+                }
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  max={4}
+                  step={0.05}
+                  value={settings.temperature ?? undefined}
+                  placeholder="default (Gemma ≈0.65)"
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, temperature: v ?? null }))
+                  }
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Repetition penalty */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="HuggingFace-style penalty on recent token logits. `1` = off. Leave empty for server default (~1.15 on Gemma‑3).">
+                    Repetition penalty (MLX)
+                  </Tooltip>
+                }
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={1}
+                  max={2}
+                  step={0.05}
+                  value={settings.repetition_penalty ?? undefined}
+                  placeholder="default (Gemma ≈1.15)"
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, repetition_penalty: v ?? null }))
                   }
                 />
               </Form.Item>

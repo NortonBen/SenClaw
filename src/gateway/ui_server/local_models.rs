@@ -14,7 +14,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Path as AxumPath, State},
@@ -83,7 +85,40 @@ static DOWNLOADS: Lazy<Mutex<HashMap<String, DownloadHandle>>> =
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "local-candle")]
-static LOADED_ENGINES: Lazy<Mutex<HashMap<String, Arc<CandleEngine>>>> =
+struct CandleSlot {
+    engine: Arc<CandleEngine>,
+    last_activity: Mutex<Instant>,
+    in_flight: AtomicUsize,
+}
+
+#[cfg(feature = "local-candle")]
+impl CandleSlot {
+    fn new(engine: Arc<CandleEngine>) -> Self {
+        Self {
+            engine,
+            last_activity: Mutex::new(Instant::now()),
+            in_flight: AtomicUsize::new(0),
+        }
+    }
+
+    fn touch(&self) {
+        if let Ok(mut g) = self.last_activity.lock() {
+            *g = Instant::now();
+        }
+    }
+
+    fn begin_inference(&self) {
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        self.touch();
+    }
+
+    fn end_inference(&self) {
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(feature = "local-candle")]
+static LOADED_ENGINES: Lazy<Mutex<HashMap<String, CandleSlot>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(not(feature = "local-candle"))]
@@ -97,8 +132,92 @@ static LOADED_ENGINES_STUB: Lazy<Mutex<std::collections::HashSet<String>>> =
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "local-mlx")]
-static MLX_ENGINES: Lazy<Mutex<HashMap<String, Arc<MlxNativeEngine>>>> =
+struct MlxSlot {
+    engine: Arc<MlxNativeEngine>,
+    last_activity: Mutex<Instant>,
+    in_flight: AtomicUsize,
+}
+
+#[cfg(feature = "local-mlx")]
+impl MlxSlot {
+    fn new(engine: Arc<MlxNativeEngine>) -> Self {
+        Self {
+            engine,
+            last_activity: Mutex::new(Instant::now()),
+            in_flight: AtomicUsize::new(0),
+        }
+    }
+
+    fn touch(&self) {
+        if let Ok(mut g) = self.last_activity.lock() {
+            *g = Instant::now();
+        }
+    }
+
+    fn begin_inference(&self) {
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        self.touch();
+    }
+
+    fn end_inference(&self) {
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(feature = "local-mlx")]
+static MLX_ENGINES: Lazy<Mutex<HashMap<String, MlxSlot>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(feature = "local-candle")]
+pub(crate) struct CandleInferenceGuard {
+    cid: String,
+}
+
+#[cfg(feature = "local-candle")]
+impl CandleInferenceGuard {
+    /// Marks this model id as actively generating until dropped (paired with unload sweeper).
+    pub(crate) fn new(model_id: &str) -> Self {
+        let cid = canonical_local_model_id(model_id);
+        if let Some(slot) = LOADED_ENGINES.lock().unwrap().get(&cid) {
+            slot.begin_inference();
+        }
+        Self { cid }
+    }
+}
+
+#[cfg(feature = "local-candle")]
+impl Drop for CandleInferenceGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = LOADED_ENGINES.lock().unwrap().get(&self.cid) {
+            slot.end_inference();
+        }
+    }
+}
+
+#[cfg(feature = "local-mlx")]
+pub(crate) struct MlxInferenceGuard {
+    cid: String,
+}
+
+#[cfg(feature = "local-mlx")]
+impl MlxInferenceGuard {
+    pub(crate) fn new(model_id: &str) -> Self {
+        let cid = canonical_local_model_id(model_id);
+        if let Some(slot) = MLX_ENGINES.lock().unwrap().get(&cid) {
+            slot.begin_inference();
+        }
+        Self { cid }
+    }
+}
+
+#[cfg(feature = "local-mlx")]
+impl Drop for MlxInferenceGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = MLX_ENGINES.lock().unwrap().get(&self.cid) {
+            slot.end_inference();
+        }
+    }
+}
 
 #[cfg(feature = "local-mlx")]
 pub fn get_or_create_mlx_engine(id: &str, model_dir: &std::path::Path) -> Arc<MlxNativeEngine> {
@@ -109,40 +228,125 @@ pub fn get_or_create_mlx_engine(id: &str, model_dir: &std::path::Path) -> Arc<Ml
         .filter(|b| *b > 0);
     let mut map = MLX_ENGINES.lock().unwrap();
     if let Some(existing) = map.get(&cid) {
-        if existing.kv_cache_bits() == kv_bits {
-            return existing.clone();
+        if existing.engine.kv_cache_bits() == kv_bits {
+            return existing.engine.clone();
         }
-        map.remove(&cid);
+        let old = map.remove(&cid).expect("mlx slot present");
+        old.engine.unload();
     }
     let engine = Arc::new(MlxNativeEngine::new(model_dir, &cid, kv_bits));
-    map.insert(cid, engine.clone());
+    map.insert(cid, MlxSlot::new(engine.clone()));
     engine
 }
 
 #[cfg(feature = "local-mlx")]
 pub fn get_mlx_engine(id: &str) -> Option<Arc<MlxNativeEngine>> {
     let cid = canonical_local_model_id(id);
-    MLX_ENGINES.lock().unwrap().get(&cid).cloned()
+    MLX_ENGINES.lock().unwrap().get(&cid).map(|s| s.engine.clone())
+}
+
+/// Periodic task: unload in-memory weights when [`LocalModelSettings::idle_unload_secs`] elapses since last activity.
+///
+/// Started from [`run_daemon`](crate::run_daemon) when **`local-candle`** and/or **`local-mlx`** is enabled.
+#[cfg(any(feature = "local-candle", feature = "local-mlx"))]
+pub fn spawn_idle_unload_worker(models_root: PathBuf) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            let settings = load_settings_blocking(&models_root);
+            let secs = settings.idle_unload_secs.unwrap_or(DEFAULT_IDLE_UNLOAD_SECS);
+            if secs == 0 {
+                continue;
+            }
+            sweep_idle_models(Duration::from_secs(secs as u64));
+        }
+    });
+}
+
+#[cfg(any(feature = "local-candle", feature = "local-mlx"))]
+fn sweep_idle_models(idle_after: Duration) {
+    #[cfg(feature = "local-candle")]
+    {
+        let cids: Vec<String> = LOADED_ENGINES.lock().unwrap().keys().cloned().collect();
+        for cid in cids {
+            let mut map = LOADED_ENGINES.lock().unwrap();
+            let Some(slot) = map.get(&cid) else {
+                continue;
+            };
+            if slot.in_flight.load(Ordering::Acquire) > 0 {
+                continue;
+            }
+            if !slot.engine.is_loaded() {
+                continue;
+            }
+            let last_ok = slot.last_activity.lock().ok().map(|g| *g);
+            let Some(last) = last_ok else {
+                continue;
+            };
+            if last.elapsed() < idle_after {
+                continue;
+            }
+            tracing::info!(
+                "[local-models] idle unload (Candle) — `{cid}` after {:?} inactivity",
+                idle_after
+            );
+            let slot = map.remove(&cid).expect("cid present");
+            drop(map);
+            slot.engine.unload();
+        }
+    }
+    #[cfg(feature = "local-mlx")]
+    {
+        let cids: Vec<String> = MLX_ENGINES.lock().unwrap().keys().cloned().collect();
+        for cid in cids {
+            let mut map = MLX_ENGINES.lock().unwrap();
+            let Some(slot) = map.get(&cid) else {
+                continue;
+            };
+            if slot.in_flight.load(Ordering::Acquire) > 0 {
+                continue;
+            }
+            if !slot.engine.is_loaded() {
+                continue;
+            }
+            let last_ok = slot.last_activity.lock().ok().map(|g| *g);
+            let Some(last) = last_ok else {
+                continue;
+            };
+            if last.elapsed() < idle_after {
+                continue;
+            }
+            tracing::info!(
+                "[local-models] idle unload (MLX native) — `{cid}` after {:?} inactivity",
+                idle_after
+            );
+            let slot = map.remove(&cid).expect("cid present");
+            drop(map);
+            slot.engine.unload();
+        }
+    }
 }
 
 fn loaded_ids() -> Vec<String> {
-    let mut ids: Vec<String>;
+    let mut ids: Vec<String> = Vec::new();
     #[cfg(feature = "local-candle")]
     {
-        ids = LOADED_ENGINES.lock().unwrap().keys().cloned().collect();
+        let map = LOADED_ENGINES.lock().unwrap();
+        ids.extend(map.iter().filter(|(_, slot)| slot.engine.is_loaded()).map(|(k, _)| k.clone()));
     }
     #[cfg(not(feature = "local-candle"))]
     {
-        ids = LOADED_ENGINES_STUB.lock().unwrap().iter().cloned().collect();
+        ids.extend(LOADED_ENGINES_STUB.lock().unwrap().iter().cloned());
     }
-    // Also include running MLX native engines.
     #[cfg(feature = "local-mlx")]
     {
         let mlx_ids: Vec<String> = MLX_ENGINES
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, e)| e.is_loaded())
+            .filter(|(_, slot)| slot.engine.is_loaded())
             .map(|(k, _)| k.clone())
             .collect();
         ids.extend(mlx_ids);
@@ -153,17 +357,36 @@ fn loaded_ids() -> Vec<String> {
 }
 
 fn is_loaded(id: &str) -> bool {
+    let cid = canonical_local_model_id(id);
     #[cfg(feature = "local-candle")]
     {
-        LOADED_ENGINES
+        if LOADED_ENGINES
             .lock()
             .unwrap()
-            .contains_key(&canonical_local_model_id(id))
+            .get(&cid)
+            .is_some_and(|slot| slot.engine.is_loaded())
+        {
+            return true;
+        }
     }
     #[cfg(not(feature = "local-candle"))]
     {
-        LOADED_ENGINES_STUB.lock().unwrap().contains(id)
+        if LOADED_ENGINES_STUB.lock().unwrap().contains(&cid) {
+            return true;
+        }
     }
+    #[cfg(feature = "local-mlx")]
+    {
+        if MLX_ENGINES
+            .lock()
+            .unwrap()
+            .get(&cid)
+            .is_some_and(|slot| slot.engine.is_loaded())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Public accessor for `query_llm.rs` to reuse a loaded engine.
@@ -171,7 +394,11 @@ fn is_loaded(id: &str) -> bool {
 #[cfg(feature = "local-candle")]
 pub fn get_loaded_engine(id: &str) -> Option<Arc<CandleEngine>> {
     let cid = canonical_local_model_id(id);
-    LOADED_ENGINES.lock().unwrap().get(&cid).cloned()
+    LOADED_ENGINES
+        .lock()
+        .unwrap()
+        .get(&cid)
+        .map(|slot| slot.engine.clone())
 }
 
 /// Normalize HuggingFace-style model id for registry keys (trim whitespace).
@@ -190,10 +417,10 @@ pub fn get_or_create_loaded_engine(
     let cid = canonical_local_model_id(id);
     let mut map = LOADED_ENGINES.lock().unwrap();
     if let Some(existing) = map.get(&cid) {
-        return existing.clone();
+        return existing.engine.clone();
     }
     let engine = Arc::new(CandleEngine::new(model_dir, &cid));
-    map.insert(cid, engine.clone());
+    map.insert(cid, CandleSlot::new(engine.clone()));
     engine
 }
 
@@ -400,10 +627,13 @@ pub const TURBOQUANT_MAX_NEW_TOKENS_CAP: u32 = 2048;
 /// `max_prompt_tokens` so `max_prompt_tokens + max_new_tokens ≤` this value.
 pub const TURBOQUANT_MAX_CONTEXT_TOKENS: u32 = 128_000 + 8192;
 
+/// Idle auto-unload: when **`idle_unload_secs`** is **`None`** (field omitted / JSON **`null`**), sweep uses this (**60** = one minute).
+pub const DEFAULT_IDLE_UNLOAD_SECS: u32 = 60;
+
 /// When `kv_cache_bits` is `2` (invalid for turboquant-rs QJL path), native MLX maps to this **TQ3** total bit budget (`3`).
 pub const DEFAULT_TURBOQUANT_KV_TOTAL_BITS: u8 = 3;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalModelSettings {
     /// TurboQuant KV total bit budget: **`3` = TQ3** (default remap), **`4` = TQ4**. **`2`** is accepted in JSON for compatibility but maps to [`DEFAULT_TURBOQUANT_KV_TOTAL_BITS`] (TQ3) at runtime.
     #[serde(default)]
@@ -417,6 +647,17 @@ pub struct LocalModelSettings {
     /// With TurboQuant KV (native MLX), runtime further caps at [`TURBOQUANT_MAX_NEW_TOKENS_CAP`].
     #[serde(default)]
     pub max_new_tokens: Option<u32>,
+    /// Sampling temperature. `Some(0.0)` keeps greedy argmax (`argmax`).
+    ///
+    /// `None` defaults to **`0`** for transformer families that usually run greedy (Qwen3, Llama);
+    /// for **Gemma‑3**, `None` → **0.65** to avoid greedy repetition loops with small checkpoints.
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// HF-style repetition penalty on recent token ids (>1 activates). **`1.0` = disabled.**
+    ///
+    /// `None` defaults to **`1.15`** for Gemma‑3 and **`1.0`** for other architectures on native MLX.
+    #[serde(default)]
+    pub repetition_penalty: Option<f32>,
     /// Pass `enable_thinking` to the chat template. `None` = let the template decide (model
     /// default). `false` = disable thinking (Qwen3 pre-fills `<think>\n\n</think>` to skip
     /// the reasoning block). Defaults to `false` to avoid unbounded thinking overhead.
@@ -448,6 +689,29 @@ pub struct LocalModelSettings {
     /// `None` → auto-detect: `"mlx"` when the `local-mlx` feature is compiled in, else `"candle"`.
     #[serde(default)]
     pub preferred_backend: Option<String>,
+    /// Unload cached local weights (**Candle** / **MLX native**) after this many seconds without use.
+    /// **`Some(0)`** = disabled. **`None`** (omitted / JSON **`null`**) uses [`DEFAULT_IDLE_UNLOAD_SECS`].
+    /// Timer resets on each inference and on explicit **Load** in the UI.
+    #[serde(default)]
+    pub idle_unload_secs: Option<u32>,
+}
+
+impl Default for LocalModelSettings {
+    fn default() -> Self {
+        Self {
+            kv_cache_bits: None,
+            max_prompt_tokens: None,
+            max_new_tokens: None,
+            temperature: None,
+            repetition_penalty: None,
+            enable_thinking: default_enable_thinking(),
+            tq_activate_at: None,
+            max_kv_tokens: None,
+            mlx_kv_cache_bits: None,
+            preferred_backend: None,
+            idle_unload_secs: Some(DEFAULT_IDLE_UNLOAD_SECS),
+        }
+    }
 }
 
 fn default_enable_thinking() -> Option<bool> {
@@ -517,6 +781,22 @@ pub(crate) async fn local_models_settings_put(
             ));
         }
     }
+    if let Some(t) = settings.temperature {
+        if !(0.0..=4.0).contains(&t) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("temperature must be between 0 and 4 (got {t})"),
+            ));
+        }
+    }
+    if let Some(p) = settings.repetition_penalty {
+        if !(1.0..=2.0).contains(&p) {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("repetition_penalty must be between 1 and 2 (got {p})"),
+            ));
+        }
+    }
     if let Some(n) = settings.max_kv_tokens {
         if !(128..=262_144).contains(&n) {
             return Err(AppError(
@@ -530,6 +810,20 @@ pub(crate) async fn local_models_settings_put(
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
                 format!("preferred_backend must be \"mlx\" or \"candle\" (got \"{b}\")"),
+            ));
+        }
+    }
+    if let Some(n) = settings.idle_unload_secs {
+        if n > 0 && n < 60 {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("idle_unload_secs must be 0 (disable) or at least 60 (got {n})"),
+            ));
+        }
+        if n > 604_800 {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("idle_unload_secs must not exceed 604800 (7 days); got {n}"),
             ));
         }
     }
@@ -753,6 +1047,9 @@ pub(crate) async fn local_models_load(
             .await
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(slot) = LOADED_ENGINES.lock().unwrap().get(&cid) {
+            slot.touch();
+        }
     }
     #[cfg(not(feature = "local-candle"))]
     {
@@ -769,8 +1066,8 @@ pub(crate) async fn local_models_unload(
     let cid = canonical_local_model_id(&id);
     #[cfg(feature = "local-candle")]
     {
-        if let Some(engine) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
-            engine.unload();
+        if let Some(slot) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
+            slot.engine.unload();
         }
     }
     #[cfg(not(feature = "local-candle"))]
@@ -780,8 +1077,8 @@ pub(crate) async fn local_models_unload(
     // Also unload any MLX native engine for this model.
     #[cfg(feature = "local-mlx")]
     {
-        if let Some(engine) = MLX_ENGINES.lock().unwrap().remove(&cid) {
-            engine.unload();
+        if let Some(slot) = MLX_ENGINES.lock().unwrap().remove(&cid) {
+            slot.engine.unload();
         }
     }
     Ok(Json(json!({ "ok": true, "id": cid, "loaded": false })))
@@ -817,6 +1114,9 @@ pub(crate) async fn local_models_load_mlx(
             .await
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("task panic: {e}")))?
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(slot) = MLX_ENGINES.lock().unwrap().get(&cid) {
+            slot.touch();
+        }
         Ok(Json(json!({
             "ok": true,
             "id": cid,

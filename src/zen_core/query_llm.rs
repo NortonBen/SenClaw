@@ -206,6 +206,7 @@ async fn query_local_candle_native(
             &model_key,
             &model_dir,
         );
+        let _idle_gen = crate::gateway::ui_server::local_models::CandleInferenceGuard::new(&model_key);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
 
         let engine_clone = engine.clone();
@@ -558,6 +559,8 @@ async fn query_local_mlx(
             &model_key,
             &model_dir,
         );
+        let _idle_gen =
+            crate::gateway::ui_server::local_models::MlxInferenceGuard::new(&model_key);
 
         // warm_up() loads weights if not yet loaded.
         let engine_wu = engine.clone();

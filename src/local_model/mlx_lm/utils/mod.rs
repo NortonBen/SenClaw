@@ -16,6 +16,7 @@ use super::cache::KeyValueCache;
 pub mod rope;
 pub mod tokenizer;
 pub mod turboquant_attn;
+pub mod yarn;
 
 #[allow(unused_macros)]
 macro_rules! try_unwrap {
@@ -227,7 +228,9 @@ pub(crate) fn create_causal_mask(
 
     let mut mask = linds.ge(&rinds)?;
     if let Some(window_size) = window_size {
-        mask = mask.logical_and(&linds.le(&(rinds + window_size))?)?;
+        // Align with `mlx_lm.models.base.create_causal_mask`: `linds < rinds + window`
+        // (strict `<`, not `<=`).
+        mask = mask.logical_and(&linds.lt(&(rinds + window_size))?)?;
     }
 
     if let Some(lengths) = lengths {

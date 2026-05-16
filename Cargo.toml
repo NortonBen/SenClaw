@@ -142,6 +142,9 @@ minijinja = { version = "2", optional = true, features = ["serde"] }
 minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
 
 # Native MLX inference on Apple Silicon (feature-gated; macOS-only build).
+half = { version = "2.4", optional = true }
+safetensors = { version = "0.4", optional = true }
+
 # Enable via: cargo build --features local-mlx
 # ML stack: **mlx-rs** only from [oxiglade/mlx-rs](https://github.com/oxiglade/mlx-rs)
 # (aligned with upstream oxideai tag v0.25.3). Qwen3 + chat-template helpers live
@@ -194,6 +197,8 @@ local-mlx = [
     "dep:tokenizers",
     "dep:minijinja",
     "dep:minijinja-contrib",
+    "dep:half",
+    "dep:safetensors",
 ]
 
 [profile.release]
