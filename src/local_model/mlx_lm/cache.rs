@@ -38,6 +38,8 @@ pub enum KvCache {
     TurboQuant(TurboQuantKeyValueCache),
     Mamba1(Mamba1Cache),
     Mamba2(Mamba2Cache),
+    /// Qwen3.5 GatedDeltaNet: conv rolling window + SSM state.
+    Qwen35Linear(Qwen35LinearCache),
 }
 
 impl KvCache {
@@ -66,6 +68,10 @@ impl KvCache {
         Self::Mamba2(Mamba2Cache::new(conv_dim, d_conv, n_heads, head_dim, d_state))
     }
 
+    pub fn qwen35_linear(conv_dim: i32, d_conv: i32, n_v_heads: i32, d_v: i32, d_k: i32) -> Self {
+        Self::Qwen35Linear(Qwen35LinearCache::new(conv_dim, d_conv, n_v_heads, d_v, d_k))
+    }
+
     /// Allocate a Mamba-1 SSM state cache for a single layer.
     ///
     /// Mamba-1's recurrence is per-channel (no head grouping), so we only need
@@ -77,6 +83,13 @@ impl KvCache {
     pub fn as_mamba2_mut(&mut self) -> Option<&mut Mamba2Cache> {
         match self {
             Self::Mamba2(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_qwen35_linear_mut(&mut self) -> Option<&mut Qwen35LinearCache> {
+        match self {
+            Self::Qwen35Linear(c) => Some(c),
             _ => None,
         }
     }
@@ -102,6 +115,7 @@ impl KvCache {
             Self::TurboQuant(c) => c.eval_targets(),
             Self::Mamba1(c) => c.eval_targets(),
             Self::Mamba2(c) => c.eval_targets(),
+            Self::Qwen35Linear(c) => c.eval_targets(),
         }
     }
 }
@@ -111,7 +125,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.is_quantized(),
             Self::TurboQuant(c) => c.is_quantized(),
-            Self::Mamba1(_) | Self::Mamba2(_) => false,
+            Self::Mamba1(_) | Self::Mamba2(_) | Self::Qwen35Linear(_) => false,
         }
     }
 
@@ -119,7 +133,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.group_size(),
             Self::TurboQuant(c) => c.group_size(),
-            Self::Mamba1(_) | Self::Mamba2(_) => None,
+            Self::Mamba1(_) | Self::Mamba2(_) | Self::Qwen35Linear(_) => None,
         }
     }
 
@@ -127,7 +141,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.bits(),
             Self::TurboQuant(c) => c.bits(),
-            Self::Mamba1(_) | Self::Mamba2(_) => None,
+            Self::Mamba1(_) | Self::Mamba2(_) | Self::Qwen35Linear(_) => None,
         }
     }
 
@@ -135,9 +149,9 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.stored_len(),
             Self::TurboQuant(c) => c.stored_len(),
-            // Recurrent state has fixed footprint; attention-mask logic doesn't apply.
             Self::Mamba1(c) => c.tokens_seen(),
             Self::Mamba2(c) => c.tokens_seen(),
+            Self::Qwen35Linear(c) => c.tokens_seen(),
         }
     }
 
@@ -145,7 +159,7 @@ impl KeyValueCache for KvCache {
         match self {
             Self::Fp16(c) => c.max_size(),
             Self::TurboQuant(c) => c.max_size(),
-            Self::Mamba1(_) | Self::Mamba2(_) => None,
+            Self::Mamba1(_) | Self::Mamba2(_) | Self::Qwen35Linear(_) => None,
         }
     }
 
@@ -160,6 +174,9 @@ impl KeyValueCache for KvCache {
             Self::Mamba2(_) => Err(Exception::custom(
                 "Mamba2 cache does not support KV update_and_fetch; \
                  use KvCache::as_mamba2_mut from the Mamba block",
+            )),
+            Self::Qwen35Linear(_) => Err(Exception::custom(
+                "Qwen3.5 linear cache does not support KV update_and_fetch",
             )),
         }
     }
@@ -179,7 +196,7 @@ impl KeyValueCache for KvCache {
             Self::TurboQuant(c) => {
                 c.turboquant_attention(queries, scale, mask, n_heads, n_kv_heads)
             }
-            Self::Mamba1(_) | Self::Mamba2(_) => Ok(None),
+            Self::Mamba1(_) | Self::Mamba2(_) | Self::Qwen35Linear(_) => Ok(None),
         }
     }
 }
@@ -929,6 +946,79 @@ impl Mamba1Cache {
     /// `state is not None` in the Python reference).
     pub fn ssm_state(&self) -> Option<&Array> {
         self.ssm_state.as_ref()
+    }
+
+    pub fn set_ssm_state(&mut self, state: Array) {
+        self.ssm_state = Some(state);
+    }
+
+    pub(crate) fn eval_targets(&self) -> Vec<Array> {
+        let mut out = Vec::with_capacity(2);
+        if let Some(c) = &self.conv_state {
+            out.push(c.clone());
+        }
+        if let Some(s) = &self.ssm_state {
+            out.push(s.clone());
+        }
+        out
+    }
+}
+
+/// Qwen3.5 GatedDeltaNet recurrent state (conv window + linear SSM).
+#[derive(Debug)]
+pub struct Qwen35LinearCache {
+    pub conv_dim: i32,
+    pub d_conv: i32,
+    pub n_v_heads: i32,
+    pub d_v: i32,
+    pub d_k: i32,
+    conv_state: Option<Array>,
+    ssm_state: Option<Array>,
+    tokens_seen: i32,
+}
+
+impl Qwen35LinearCache {
+    pub fn new(conv_dim: i32, d_conv: i32, n_v_heads: i32, d_v: i32, d_k: i32) -> Self {
+        Self {
+            conv_dim,
+            d_conv,
+            n_v_heads,
+            d_v,
+            d_k,
+            conv_state: None,
+            ssm_state: None,
+            tokens_seen: 0,
+        }
+    }
+
+    pub fn tokens_seen(&self) -> i32 {
+        self.tokens_seen
+    }
+
+    pub fn advance(&mut self, n: i32) {
+        self.tokens_seen = self.tokens_seen.saturating_add(n);
+    }
+
+    pub fn conv_state_or_init(&mut self, batch: i32, dtype: Dtype) -> Result<&Array, Exception> {
+        if self.conv_state.is_none() {
+            let pad = (self.d_conv - 1).max(0);
+            self.conv_state = Some(zeros_dtype(&[batch, pad, self.conv_dim], dtype)?);
+        }
+        Ok(self.conv_state.as_ref().expect("conv_state"))
+    }
+
+    pub fn set_conv_state(&mut self, state: Array) {
+        self.conv_state = Some(state);
+    }
+
+    pub fn ssm_state_or_init(&mut self, batch: i32) -> Result<&Array, Exception> {
+        if self.ssm_state.is_none() {
+            self.ssm_state = Some(zeros_dtype(
+                &[batch, self.n_v_heads, self.d_v, self.d_k],
+                Dtype::Float32,
+            )?);
+        }
+        Ok(self.ssm_state.as_ref().expect("ssm_state"))
     }
 
     pub fn set_ssm_state(&mut self, state: Array) {

@@ -4,6 +4,7 @@
 //!
 //! Supported architectures (autodetected from `config.json::model_type`):
 //! - **Qwen3** — `qwen3*` (transformer + GQA, with optional MLX quantization & TurboQuant KV).
+//! - **Qwen3.5** — `qwen3_5*` (hybrid GatedDeltaNet + full attention, OptiQ quants).
 //! - **Llama** — `llama` (Llama-3.x, Llama-3.2, Nesso; GQA, no Q/K norm, custom EOS from config).
 //! - **Gemma-2** — `gemma2` (alternating sliding-window/global attention, Gemma RMSNorm +1, attn/final soft-capping).
 //! - **Gemma-3** — `gemma3` / `gemma3_text` (hybrid sliding+full attention, Gemma RMSNorm, 4 norms/block, dual-RoPE).
@@ -30,6 +31,7 @@ use super::runtime::{
 /// cache shapes, and stop-token sets — so we keep one variant per supported arch.
 enum ModelKind {
     Qwen3(super::mlx_lm::models::qwen3::Model),
+    Qwen35(super::mlx_lm::models::qwen3_5::Model),
     Llama(super::mlx_lm::models::llama::Model),
     Gemma2(super::mlx_lm::models::gemma2::Gemma2CausalLM),
     Gemma3(super::mlx_lm::models::gemma3::Model),
@@ -42,6 +44,7 @@ impl ModelKind {
     fn arch_name(&self) -> &'static str {
         match self {
             Self::Qwen3(_) => "qwen3",
+            Self::Qwen35(_) => "qwen3_5",
             Self::Llama(_) => "llama",
             Self::Gemma2(_) => "gemma2",
             Self::Gemma3(_) => "gemma3",
@@ -264,6 +267,18 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
             let hd = m.args.head_dim;
             let kvh = m.args.num_key_value_heads;
             (ModelKind::Qwen3(m), n, hd, kvh)
+        }
+        Arch::Qwen35 => {
+            if chat_template.is_none() {
+                anyhow::bail!("Qwen3.5 chat template missing in tokenizer_config.json");
+            }
+            let m = super::mlx_lm::models::qwen3_5::load_qwen35_model(model_dir)
+                .map_err(|e| anyhow::anyhow!("load_qwen35 failed: {e:?}"))?;
+            let tc = &m.args.text_config;
+            let n = tc.num_hidden_layers as usize;
+            let hd = tc.head_dim;
+            let kvh = tc.num_key_value_heads;
+            (ModelKind::Qwen35(m), n, hd, kvh)
         }
         Arch::Llama => {
             let m = load_llama_any(model_dir)
@@ -930,6 +945,23 @@ fn generate_with_cache(
                 Box::new(|t: u32| t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT),
             )
         }
+        ModelKind::Qwen35(m) => {
+            if tq_bits.is_some() {
+                tracing::warn!(
+                    "[local-mlx-native] kv_cache_bits ignored for Qwen3.5 (TurboQuant KV not wired for full-attn layers)"
+                );
+            }
+            let c = m.make_cache();
+            let cfg_eos = m.args.text_config.eos_token_id.unwrap_or(248_044);
+            const QWEN3_IM_END: u32 = 151645;
+            const QWEN3_ENDOFTEXT: u32 = 151643;
+            (
+                c,
+                Box::new(move |t: u32| {
+                    t == cfg_eos || t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT
+                }),
+            )
+        }
         ModelKind::Llama(m) => {
             if let Some(bits) = tq_bits {
                 tracing::info!(
@@ -1083,6 +1115,9 @@ fn generate_with_cache(
             m.forward(prefill_input)
                 .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
         }
+        ModelKind::Qwen35(m) => m
+            .forward(&prompt_tokens, &mut cache, rope_offset)
+            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
         ModelKind::Llama(m) => {
             let prefill_input = ModelInput {
                 inputs: &prompt_tokens,
@@ -1186,6 +1221,9 @@ fn generate_with_cache(
                 m.forward(decode_input)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
             }
+            ModelKind::Qwen35(m) => m
+                .forward(&inputs, &mut cache, rope_offset)
+                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
             ModelKind::Llama(m) => {
                 let decode_input = ModelInput {
                     inputs: &inputs,
@@ -1311,6 +1349,7 @@ fn generate_with_cache(
 #[derive(Debug, Clone, Copy)]
 enum Arch {
     Qwen3,
+    Qwen35,
     Llama,
     Gemma2,
     Gemma3,
@@ -2029,6 +2068,9 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
                         "Qwen3-Next (`model_type={mt}`) is not supported by native MLX in this build."
                     );
                 }
+                if mt.contains("qwen3_5") {
+                    return Ok(Arch::Qwen35);
+                }
                 if mt.contains("qwen3") {
                     return Ok(Arch::Qwen3);
                 }
@@ -2067,6 +2109,9 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
             "no native MLX loader for `{model_id}` — Qwen3-Next is not supported in this build."
         );
     }
+    if lower.contains("qwen3.5") || lower.contains("qwen3_5") {
+        return Ok(Arch::Qwen35);
+    }
     if lower.contains("qwen3") {
         return Ok(Arch::Qwen3);
     }
@@ -2083,7 +2128,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
         return Ok(Arch::BonsaiQ1);
     }
     anyhow::bail!(
-        "no native loader for `{}` — supported model_type values: qwen3, llama, gemma2, gemma3, mamba2, mamba, falcon_mamba, bonsai / bonsai_q1.",
+        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, mamba2, mamba, falcon_mamba, bonsai / bonsai_q1.",
         model_id
     )
 }

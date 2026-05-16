@@ -236,8 +236,11 @@ async fn query_local_candle_native(
             .context("local-candle-native: generation task panicked")??;
         debug!("[local-candle-native] generated {} chars", text_buf.len());
 
-        let (clean_text, tool_calls_from_text) = split_qwen_tool_calls_from_model_text(&text_buf);
-        build_assistant_message(&clean_text, "", &tool_calls_from_text)
+        let (reasoning, visible) =
+            crate::local_model::thinking_parse::split_thinking_blocks(&text_buf);
+        let (clean_text, tool_calls_from_text) =
+            split_qwen_tool_calls_from_model_text(&visible);
+        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text)
     }
 }
 
@@ -594,8 +597,11 @@ async fn query_local_mlx(
             .context("local-mlx: generation task panicked")??;
         debug!("[local-mlx] generated {} chars", text_buf.len());
 
-        let (clean_text, tool_calls_from_text) = split_qwen_tool_calls_from_model_text(&text_buf);
-        build_assistant_message(&clean_text, "", &tool_calls_from_text)
+        let (reasoning, visible) =
+            crate::local_model::thinking_parse::split_thinking_blocks(&text_buf);
+        let (clean_text, tool_calls_from_text) =
+            split_qwen_tool_calls_from_model_text(&visible);
+        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text)
     }
 }
 

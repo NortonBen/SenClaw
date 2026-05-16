@@ -86,6 +86,14 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         vision: false,
     },
     KnownModel {
+        id: "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
+        label: "Qwen3.5 0.8B OptiQ 4-bit (mlx-community)",
+        approx_size_gb: 0.6,
+        context_length: 262_144,
+        native_supported: true,
+        vision: false,
+    },
+    KnownModel {
         id: "mlx-community/Qwen3-8B-bf16",
         label: "Qwen3 8B (bf16, mlx-community)",
         approx_size_gb: 16.0,
