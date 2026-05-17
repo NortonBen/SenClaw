@@ -129,6 +129,52 @@ impl KvCache {
             Self::Qwen35Linear(c) => c.eval_targets(),
         }
     }
+
+    /// One-line description of cache kind for log lines (e.g. `"fp16"`,
+    /// `"tq4"`, `"mamba2"`). Avoids dumping `Debug` impl (verbose, contains
+    /// internal `Array` handles).
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Fp16(_) => "fp16",
+            Self::TurboQuant(c) => match c.bits {
+                3 => "tq3",
+                4 => "tq4",
+                _ => "tq",
+            },
+            Self::Mamba1(_) => "mamba1",
+            Self::Mamba2(_) => "mamba2",
+            Self::Qwen35Linear(_) => "qwen35-linear",
+        }
+    }
+
+    /// Approximate **per-layer** cache memory (bytes). Sums K + V buffers
+    /// (FP16 → 2 B/elt) for attention caches; SSM caches return their state
+    /// tensor footprint. Used for `[mem] kv cache: …` log lines so the
+    /// operator can see RAM usage growing turn-by-turn.
+    pub fn approx_bytes(&self) -> usize {
+        match self {
+            Self::Fp16(c) => c.approx_bytes(),
+            Self::TurboQuant(c) => c.approx_bytes(),
+            Self::Mamba1(c) => c.approx_bytes(),
+            Self::Mamba2(c) => c.approx_bytes(),
+            Self::Qwen35Linear(c) => c.approx_bytes(),
+        }
+    }
+}
+
+/// Sum [`KvCache::approx_bytes`] across all layers + a one-line summary of
+/// (cache kind, tokens-stored). Cheap (just shape inspection) so it can run
+/// at every prefill/decode milestone.
+pub fn summarize_caches(caches: &[Option<KvCache>]) -> (usize, i32, &'static str) {
+    let mut total_bytes = 0usize;
+    let mut max_stored = 0i32;
+    let mut kind: &'static str = "empty";
+    for c in caches.iter().flatten() {
+        total_bytes += c.approx_bytes();
+        max_stored = max_stored.max(c.stored_len());
+        kind = c.kind_label();
+    }
+    (total_bytes, max_stored, kind)
 }
 
 impl KeyValueCache for KvCache {
@@ -390,6 +436,24 @@ impl SteppingKeyValueCache {
             out.push(v.clone());
         }
         out
+    }
+
+    /// Bytes used by the K + V buffers for this layer. Assumes the FP16 KV
+    /// stepping layout (`numel × 2 bytes`) — actual element size could be
+    /// BF16/FP16 which are both 2 B, so the figure is correct in practice.
+    pub(crate) fn approx_bytes(&self) -> usize {
+        fn array_bytes(a: &Array) -> usize {
+            let n: usize = a.shape().iter().map(|&d| d.max(0) as usize).product();
+            n * 2 // f16 / bf16 = 2 B per element
+        }
+        let mut total = 0usize;
+        if let Some(k) = &self.keys {
+            total += array_bytes(k);
+        }
+        if let Some(v) = &self.values {
+            total += array_bytes(v);
+        }
+        total
     }
 
     pub fn trim_by(&mut self, n: usize) {
@@ -671,6 +735,22 @@ impl TurboQuantKeyValueCache {
             self.staging.eval_targets()
         }
     }
+
+    /// Per-layer bytes. While staging (pre-activation) the storage matches
+    /// FP16 KV; once active the storage is TQ packed at `bits` bits per
+    /// element (plus small header / scale overhead, ignored here — rough
+    /// estimate only). Used for `[mem] kv cache:` log lines.
+    pub(crate) fn approx_bytes(&self) -> usize {
+        if !self.active {
+            return self.staging.approx_bytes();
+        }
+        let entries = self.tq.entry_count(0);
+        // bits per element, K + V = 2× the per-element cost
+        let bytes_per_elem = self.head_dim as usize * self.bits as usize / 8;
+        // entries are (tokens × heads); each entry holds head_dim packed elems
+        // for one of K or V (entry_count already counts K and V separately).
+        entries * bytes_per_elem
+    }
 }
 
 impl KeyValueCache for TurboQuantKeyValueCache {
@@ -882,6 +962,17 @@ impl Mamba2Cache {
         }
         out
     }
+
+    pub(crate) fn approx_bytes(&self) -> usize {
+        fn array_bytes(a: &Array) -> usize {
+            let n: usize = a.shape().iter().map(|&d| d.max(0) as usize).product();
+            n * 2
+        }
+        let mut total = 0;
+        if let Some(c) = &self.conv_state { total += array_bytes(c); }
+        if let Some(s) = &self.ssm_state { total += array_bytes(s); }
+        total
+    }
 }
 
 /// Mamba-1 per-layer recurrent state.
@@ -973,6 +1064,17 @@ impl Mamba1Cache {
         }
         out
     }
+
+    pub(crate) fn approx_bytes(&self) -> usize {
+        fn array_bytes(a: &Array) -> usize {
+            let n: usize = a.shape().iter().map(|&d| d.max(0) as usize).product();
+            n * 2
+        }
+        let mut total = 0;
+        if let Some(c) = &self.conv_state { total += array_bytes(c); }
+        if let Some(s) = &self.ssm_state { total += array_bytes(s); }
+        total
+    }
 }
 
 /// Qwen3.5 GatedDeltaNet recurrent state (conv window + linear SSM).
@@ -1045,6 +1147,18 @@ impl Qwen35LinearCache {
             out.push(s.clone());
         }
         out
+    }
+
+    pub(crate) fn approx_bytes(&self) -> usize {
+        fn array_bytes(a: &Array) -> usize {
+            let n: usize = a.shape().iter().map(|&d| d.max(0) as usize).product();
+            // ssm_state for Qwen3.5 is FP32 (4 B); conv is FP16. Approximate as 2 B avg.
+            n * 2
+        }
+        let mut total = 0;
+        if let Some(c) = &self.conv_state { total += array_bytes(c); }
+        if let Some(s) = &self.ssm_state { total += array_bytes(s); }
+        total
     }
 }
 

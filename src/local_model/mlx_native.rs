@@ -424,6 +424,59 @@ fn mlx_log_generate_done(label: &'static str, rss_start: f64, generated_count: u
     );
 }
 
+/// Human-readable byte count for log lines (`"3.42 GB"`, `"512 MB"`, …).
+fn fmt_bytes(n: usize) -> String {
+    const KB: f64 = 1024.0;
+    let n = n as f64;
+    if n < KB { return format!("{n:.0} B"); }
+    if n < KB * KB { return format!("{:.0} KB", n / KB); }
+    if n < KB * KB * KB { return format!("{:.1} MB", n / (KB * KB)); }
+    format!("{:.2} GB", n / (KB * KB * KB))
+}
+
+/// One-line summary of cumulative KV-cache state across all layers. Cheap
+/// (shape inspection only); intended for prefill/decode milestone logs so
+/// the operator can see how RAM grows turn-by-turn and which cache variant
+/// is active (FP16 vs TQ4 vs SSM).
+fn mlx_log_kv_cache(label: &str, caches: &[Option<super::mlx_lm::cache::KvCache>]) {
+    let (bytes, max_stored, kind) = super::mlx_lm::cache::summarize_caches(caches);
+    let n_layers = caches.iter().filter(|c| c.is_some()).count();
+    tracing::info!(
+        "[local-mlx-native][mem] {} — kv cache: {} ({}) across {} layer(s), longest stored={}",
+        label,
+        fmt_bytes(bytes),
+        kind,
+        n_layers,
+        max_stored,
+    );
+}
+
+/// Throughput summary for a finished turn: prefill tok/s + decode tok/s,
+/// computed from caller-tracked `Instant` markers. Lets the operator compare
+/// runs at a glance (e.g. tweaking `kv_cache_bits` should change decode
+/// tok/s; chunked prefill should change prefill tok/s; tools-heavy prompts
+/// blow up the prompt-tokens column).
+fn mlx_log_throughput(
+    prompt_tokens: usize,
+    prefill_elapsed: std::time::Duration,
+    decode_tokens: usize,
+    decode_elapsed: std::time::Duration,
+) {
+    let prefill_ms = prefill_elapsed.as_millis().max(1) as f64;
+    let decode_ms = decode_elapsed.as_millis().max(1) as f64;
+    let prefill_tps = (prompt_tokens as f64) * 1000.0 / prefill_ms;
+    let decode_tps = (decode_tokens as f64) * 1000.0 / decode_ms;
+    tracing::info!(
+        "[local-mlx-native][perf] turn done — prefill {} tok / {:.2} s ({:.1} tok/s) | decode {} tok / {:.2} s ({:.1} tok/s)",
+        prompt_tokens,
+        prefill_ms / 1000.0,
+        prefill_tps,
+        decode_tokens,
+        decode_ms / 1000.0,
+        decode_tps,
+    );
+}
+
 /// Drop MLX’s pooled device buffers (`mlx_clear_cache`) and the lazy compile cache before the next turn.
 fn mlx_release_after_turn() {
     unsafe {
@@ -1048,6 +1101,11 @@ fn generate_with_cache(
     let mut hit_stop = false;
     let mut generated_count = 0usize;
 
+    // Throughput markers — used by `mlx_log_throughput` at end-of-turn so the
+    // operator can see prefill tok/s and decode tok/s without doing log math.
+    let turn_start = std::time::Instant::now();
+    let mut prefill_done_at: Option<std::time::Instant> = None;
+    let prompt_token_count = prompt.len();
     let rss_start = rss_mib();
     let (mlx_a0, mlx_c0, _) = mlx_mem_mib();
     tracing::info!(
@@ -1282,7 +1340,9 @@ fn generate_with_cache(
             mc,
             mp
         );
+        mlx_log_kv_cache("after prefill", &cache);
     }
+    prefill_done_at = Some(std::time::Instant::now());
 
     // Decode operates on single tokens — the prefill's working-set pool
     // (often >10 GB after a 2k-token prompt) is dead weight from here on.
@@ -1469,6 +1529,20 @@ fn generate_with_cache(
         mlx_log_generate_done("stopped (eos/im_end)", rss_start, generated_count);
     } else {
         mlx_log_generate_done("completed", rss_start, generated_count);
+    }
+    // Throughput summary + final KV size. Help operator compare runs and
+    // spot regressions ("decode dropped from 35 to 14 tok/s after I bumped
+    // kv_cache_bits → TurboQuant activated on prefill").
+    mlx_log_kv_cache("end of turn", &cache);
+    if let Some(prefill_at) = prefill_done_at {
+        let prefill_elapsed = prefill_at.duration_since(turn_start);
+        let decode_elapsed = std::time::Instant::now().duration_since(prefill_at);
+        mlx_log_throughput(
+            prompt_token_count,
+            prefill_elapsed,
+            generated_count,
+            decode_elapsed,
+        );
     }
     mlx_release_after_turn();
 
