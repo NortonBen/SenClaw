@@ -1035,6 +1035,13 @@ where
     // Track time of first generated token (first `sample_fn` result used).
     let mut t_first_token: Option<std::time::Duration> = None;
 
+    // Stop check is BEFORE push: the EOS token itself is never streamed, and
+    // `break` falls through to the post-loop drain below. Do NOT add an early
+    // `return Ok(())` inside this branch — MLX once had that exact bug and
+    // dropped up to (flush_threshold − 1) tokens, including any pending
+    // `</tool_call>` close marker, causing the parser to reject otherwise
+    // valid tool calls as "truncated". The structural rule is: every exit
+    // path flushes the token buffer.
     for step in 0..max_new_tokens {
         if stop_tokens.contains(next_token) {
             break;

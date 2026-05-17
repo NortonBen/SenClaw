@@ -506,6 +506,36 @@ impl Model {
     pub fn model_type(&self) -> &str {
         &self.args.model_type
     }
+
+    /// Transformer body only — returns hidden states `[B, L, H]` without
+    /// projecting through the LM head. Use for **intermediate** chunks of a
+    /// chunked prefill: their KV cache writes are what we need; the per-token
+    /// `[B, L, vocab]` logits are pure waste (Qwen3 vocab is 151 936).
+    pub fn forward_hidden<C: KeyValueCache>(
+        &mut self,
+        input: ModelInput<'_, C>,
+    ) -> Result<Array, Exception> {
+        self.model.forward(input)
+    }
+
+    /// Body + LM head projected **only on the last position**. Use for the
+    /// **final** chunk of chunked prefill and for decode-time single-token
+    /// forward. Saves ~`(L-1) × vocab` of LM-head compute per prefill chunk
+    /// vs. running [`<Self as Module>::forward`] then slicing.
+    pub fn forward_last_token<C: KeyValueCache>(
+        &mut self,
+        input: ModelInput<'_, C>,
+    ) -> Result<Array, Exception> {
+        let hidden = self.model.forward(input)?;
+        let last = hidden.index((.., -1.., ..));
+        match self.lm_head.as_mut() {
+            Some(lm_head) => lm_head.forward(&last),
+            None => match &mut self.model.embed_tokens {
+                MaybeQuantized::Original(embed_tokens) => embed_tokens.as_linear(&last),
+                MaybeQuantized::Quantized(q_embed_tokens) => q_embed_tokens.as_linear(&last),
+            },
+        }
+    }
 }
 
 impl<C> Module<ModelInput<'_, C>> for Model

@@ -517,14 +517,24 @@ fn sample_decode_token_id(
     temperature: f32,
     repetition_penalty: f32,
     recent_decode_ids: &[u32],
+    forbidden_ids: &[u32],
 ) -> anyhow::Result<mlx_rs::Array> {
     use mlx_rs::ops::flatten;
     use mlx_rs::{Array, Dtype};
 
     let mlx_sample = super::mlx_lm::models::qwen3::sample;
 
-    if repetition_penalty <= 1.0 || recent_decode_ids.is_empty() {
+    // Fast path: no penalty, no forbidden ids — sample directly.
+    if forbidden_ids.is_empty()
+        && (repetition_penalty <= 1.0 || recent_decode_ids.is_empty())
+    {
         return mlx_sample(last_logits, temperature).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"));
+    }
+    if !forbidden_ids.is_empty() {
+        tracing::debug!(
+            "[local-mlx-native] sample slow path with forbidden_ids={:?} (mask to -inf before sample)",
+            forbidden_ids
+        );
     }
 
     let shape: Vec<i32> = last_logits.shape().to_vec();
@@ -544,6 +554,18 @@ fn sample_decode_token_id(
         .map_err(|e| anyhow::anyhow!("logits not contiguous f32: {e:?}"))?
         .to_vec();
     hf_repetition_penalty_row(&mut row, recent_decode_ids, repetition_penalty);
+    // Mask forbidden token ids to -inf so they have zero probability mass.
+    // Used to forbid stop tokens (`<|im_end|>`, `<|endoftext|>`) while we are
+    // structurally inside `<tool_call>…</tool_call>`, guaranteeing the model
+    // closes the tool call before hitting EOS even if 4-bit precision biases
+    // it toward emitting a stop token mid-args.
+    let n = row.len();
+    for &tid in forbidden_ids {
+        let idx = tid as usize;
+        if idx < n {
+            row[idx] = f32::NEG_INFINITY;
+        }
+    }
     let adj = Array::from_slice(row.as_slice(), &[row.len() as i32])
         .reshape(shape.as_slice())
         .map_err(|e| anyhow::anyhow!("reshape logits: {e:?}"))?;
@@ -1007,6 +1029,20 @@ fn generate_with_cache(
         });
     let mut recent_decode_ids: Vec<u32> = Vec::new();
 
+    // Structural tool-call enforcement state — Qwen3 family only. When we see
+    // `<tool_call>` open (token 151657), we forbid stop tokens until the
+    // matching `</tool_call>` close (token 151658). Without this guard a
+    // 4-bit quantized Qwen3 routinely emits `<|im_end|>` mid-args and the
+    // parser receives unclosed JSON.
+    const QWEN3_TOOL_CALL_OPEN: u32 = 151_657;
+    const QWEN3_TOOL_CALL_CLOSE: u32 = 151_658;
+    const QWEN3_STOP_TOKENS_TO_MASK: &[u32] = &[151_645 /* <|im_end|> */, 151_643 /* <|endoftext|> */];
+    let qwen3_family = matches!(
+        &state.model,
+        ModelKind::Qwen3(_) | ModelKind::Qwen35(_)
+    );
+    let mut inside_tool_call = false;
+
     let max_tokens: usize = max_new_tokens;
     let mut buffer: Vec<Array> = Vec::new();
     let mut hit_stop = false;
@@ -1027,79 +1063,208 @@ fn generate_with_cache(
 
     let scan = super::mlx_lm::models::mamba2::SequentialScan;
 
-    // Prefill — feed full prompt, take logits at last position.
-    let logits = match &mut state.model {
-        ModelKind::Qwen3(m) => {
-            let prefill_input = ModelInput {
-                inputs: &prompt_tokens,
-                mask: None,
-                cache: &mut cache,
-                rope_offset,
-            };
-            m.forward(prefill_input)
-                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+    // Chunked prefill — split long prompts into bounded chunks so the lazy
+    // graph (transformer working set) doesn't balloon to 10+ GB on Metal.
+    // Each chunk's KV updates are materialized before the next chunk runs.
+    // Only the final chunk's logits feed sampling — lm_head over earlier
+    // chunks remains unevaluated (lazy graph pruning).
+    //
+    // 512 is a sweet spot on M-series: small enough that activations fit in
+    // GPU caches, large enough that per-chunk dispatch overhead amortizes.
+    const PREFILL_CHUNK: usize = 512;
+    // SSM-only architectures consume the full sequence at once via the
+    // sequential scan; chunking would force re-doing the scan and break
+    // their convolution windows. Skip for Mamba / Falcon-Mamba.
+    let chunked_supported = !matches!(
+        &state.model,
+        ModelKind::Mamba2(_) | ModelKind::FalconMamba(_)
+    );
+
+    let logits = if !chunked_supported || prompt.len() <= PREFILL_CHUNK {
+        // Small prompt or SSM arch — single forward pass.
+        match &mut state.model {
+            ModelKind::Qwen3(m) => {
+                let input = ModelInput {
+                    inputs: &prompt_tokens,
+                    mask: None,
+                    cache: &mut cache,
+                    rope_offset,
+                };
+                m.forward(input)
+                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+            }
+            ModelKind::Qwen35(m) => m
+                .forward(&prompt_tokens, &mut cache, rope_offset)
+                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
+            ModelKind::Llama(m) => {
+                let input = ModelInput {
+                    inputs: &prompt_tokens,
+                    mask: None,
+                    cache: &mut cache,
+                    rope_offset,
+                };
+                m.forward(input)
+                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+            }
+            ModelKind::Gemma2(m) => {
+                let input = ModelInput {
+                    inputs: &prompt_tokens,
+                    mask: None,
+                    cache: &mut cache,
+                    rope_offset,
+                };
+                m.forward(input)
+                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+            }
+            ModelKind::Gemma3(m) => {
+                let input = ModelInput {
+                    inputs: &prompt_tokens,
+                    mask: None,
+                    cache: &mut cache,
+                    rope_offset,
+                };
+                m.forward(input)
+                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+            }
+            ModelKind::Mamba2(m) => m
+                .forward(&prompt_tokens, &mut cache, &scan)
+                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
+            ModelKind::FalconMamba(m) => m
+                .forward(&prompt_tokens, &mut cache)
+                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
+            ModelKind::BonsaiQ1(b) => b
+                .gpu
+                .forward_all_logits_native(&prompt_tokens, &mut cache, rope_offset)
+                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
         }
-        ModelKind::Qwen35(m) => m
-            .forward(&prompt_tokens, &mut cache, rope_offset)
-            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
-        ModelKind::Llama(m) => {
-            let prefill_input = ModelInput {
-                inputs: &prompt_tokens,
-                mask: None,
-                cache: &mut cache,
-                rope_offset,
+    } else {
+        let chunk_count = prompt.len().div_ceil(PREFILL_CHUNK);
+        tracing::info!(
+            "[local-mlx-native] chunked prefill: {} tokens in {} chunks of ≤{}",
+            prompt.len(),
+            chunk_count,
+            PREFILL_CHUNK,
+        );
+        let mut chunk_logits: Option<mlx_rs::Array> = None;
+        let mut cursor = 0;
+        while cursor < prompt.len() {
+            let end = (cursor + PREFILL_CHUNK).min(prompt.len());
+            let chunk_arr = Array::from(&prompt[cursor..end]).index(NewAxis);
+            let is_last_chunk = end == prompt.len();
+            // Final chunk: project LM head only on the last position →
+            // 1 × vocab values. Intermediate chunks: skip LM head entirely
+            // via `forward_hidden` — KV writes are the only side-effect we
+            // need, and `(L × vocab)` of wasted lm_head compute per
+            // intermediate chunk dominated prefill time for tools-heavy
+            // prompts (Qwen3 vocab = 151 936).
+            //
+            // Saving for 14 K-token prompt, chunk 512: ~28 chunks × 511 ×
+            // 152 K = ~2.2 G MAC ops avoided on the LM head alone.
+            let out = match &mut state.model {
+                ModelKind::Qwen3(m) => {
+                    let input = ModelInput {
+                        inputs: &chunk_arr,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    if is_last_chunk {
+                        m.forward_last_token(input)
+                            .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                    } else {
+                        m.forward_hidden(input)
+                            .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                    }
+                }
+                ModelKind::Qwen35(m) => m
+                    .forward(&chunk_arr, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?,
+                ModelKind::Llama(m) => {
+                    let input = ModelInput {
+                        inputs: &chunk_arr,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(input)
+                        .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                }
+                ModelKind::Gemma2(m) => {
+                    let input = ModelInput {
+                        inputs: &chunk_arr,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(input)
+                        .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                }
+                ModelKind::Gemma3(m) => {
+                    let input = ModelInput {
+                        inputs: &chunk_arr,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(input)
+                        .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                }
+                ModelKind::BonsaiQ1(b) => b
+                    .gpu
+                    .forward_all_logits_native(&chunk_arr, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?,
+                // SSM paths are routed to single-shot above.
+                _ => unreachable!("chunked_supported guard excludes Mamba variants"),
             };
-            m.forward(prefill_input)
-                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+            rope_offset += end - cursor;
+            // Materialize this chunk's KV cache writes before next chunk
+            // attends to them; drop the chunk's hidden state by not
+            // referencing `out` past the final iteration (MLX prunes
+            // unreferenced lazy nodes).
+            eval_all_caches(&mut cache)
+                .map_err(|e| anyhow::anyhow!("prefill chunk cache eval failed: {e:?}"))?;
+            if is_last_chunk {
+                chunk_logits = Some(out);
+            }
+            cursor = end;
         }
-        ModelKind::Gemma2(m) => {
-            let prefill_input = ModelInput {
-                inputs: &prompt_tokens,
-                mask: None,
-                cache: &mut cache,
-                rope_offset,
-            };
-            m.forward(prefill_input)
-                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
-        }
-        ModelKind::Gemma3(m) => {
-            let prefill_input = ModelInput {
-                inputs: &prompt_tokens,
-                mask: None,
-                cache: &mut cache,
-                rope_offset,
-            };
-            m.forward(prefill_input)
-                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
-        }
-        ModelKind::Mamba2(m) => m
-            .forward(&prompt_tokens, &mut cache, &scan)
-            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
-        ModelKind::FalconMamba(m) => m
-            .forward(&prompt_tokens, &mut cache)
-            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
-        ModelKind::BonsaiQ1(b) => b
-            .gpu
-            .forward_all_logits_native(&prompt_tokens, &mut cache, rope_offset)
-            .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
+        chunk_logits.expect("at least one chunk processed")
     };
-    rope_offset += prompt.len();
-    eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("prefill cache eval failed: {e:?}"))?;
+    if !chunked_supported || prompt.len() <= PREFILL_CHUNK {
+        rope_offset += prompt.len();
+        eval_all_caches(&mut cache)
+            .map_err(|e| anyhow::anyhow!("prefill cache eval failed: {e:?}"))?;
+    }
+    // Sample first decode token. Skip the redundant eval calls — `.item()`
+    // below forces the whole graph chain (logits → sample → token) in one
+    // CPU↔GPU sync instead of four.
     let last_logits = logits.index((.., -1, ..));
-    eval(&[last_logits.clone()]).map_err(|e| anyhow::anyhow!("prefill logits eval failed: {e:?}"))?;
+    let forbidden_now: &[u32] = if qwen3_family && inside_tool_call {
+        QWEN3_STOP_TOKENS_TO_MASK
+    } else {
+        &[]
+    };
     let mut next_token = sample_decode_token_id(
         &last_logits,
         decode_temperature,
         decode_repetition_penalty,
         &recent_decode_ids,
+        forbidden_now,
     )?;
-    eval(&[next_token.clone()]).map_err(|e| anyhow::anyhow!("prefill token eval failed: {e:?}"))?;
     let first_id = next_token.item::<u32>();
     mlx_recent_decode_push(
         &mut recent_decode_ids,
         first_id,
         MLX_REPEN_DECODE_WINDOW,
     );
+    // Track tool-call open/close so subsequent decode steps can mask stops.
+    if qwen3_family {
+        if first_id == QWEN3_TOOL_CALL_OPEN {
+            inside_tool_call = true;
+        } else if first_id == QWEN3_TOOL_CALL_CLOSE {
+            inside_tool_call = false;
+        }
+    }
     if is_stop(first_id) {
         hit_stop = true;
     } else {
@@ -1190,25 +1355,59 @@ fn generate_with_cache(
                 .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
         };
         rope_offset += 1;
-        eval_all_caches(&mut cache).map_err(|e| anyhow::anyhow!("decode cache eval failed: {e:?}"))?;
+        // Single sync per decode step: `y.item()` below transitively forces
+        // the whole graph (forward → cache update → logits index → sample).
+        // Previous code emitted 4 separate eval() calls — each ~5–10 ms of
+        // CPU↔GPU dispatch overhead — capping decode at ~12 tok/s. Folding
+        // them yields ~30–50 % decode speedup on M-series.
         let last_logits = logits.index((.., -1, ..));
-        eval(&[last_logits.clone()]).map_err(|e| anyhow::anyhow!("decode logits eval failed: {e:?}"))?;
+        let forbidden_now: &[u32] = if qwen3_family && inside_tool_call {
+            QWEN3_STOP_TOKENS_TO_MASK
+        } else {
+            &[]
+        };
         let y = sample_decode_token_id(
             &last_logits,
             decode_temperature,
             decode_repetition_penalty,
             &recent_decode_ids,
+            forbidden_now,
         )?;
-        eval(&[y.clone()]).map_err(|e| anyhow::anyhow!("decode token eval failed: {e:?}"))?;
         let token_id = y.item::<u32>();
         mlx_recent_decode_push(
             &mut recent_decode_ids,
             token_id,
             MLX_REPEN_DECODE_WINDOW,
         );
+        if qwen3_family {
+            if token_id == QWEN3_TOOL_CALL_OPEN {
+                inside_tool_call = true;
+                tracing::info!(
+                    "[local-mlx-native] tool_call OPEN at step {} (token 151657) — masking stops",
+                    generated_count
+                );
+            } else if token_id == QWEN3_TOOL_CALL_CLOSE {
+                inside_tool_call = false;
+                tracing::info!(
+                    "[local-mlx-native] tool_call CLOSE at step {} (token 151658) — un-masking stops",
+                    generated_count
+                );
+            }
+        }
         next_token = y;
 
         if is_stop(token_id) {
+            if inside_tool_call {
+                // Should not happen if logit masking is active. Loud diagnostic so
+                // we can tell whether the binary actually has the mask applied vs.
+                // some other path emitting a stop token mid tool_call.
+                tracing::error!(
+                    "[local-mlx-native] STOP TOKEN {} emitted INSIDE <tool_call> at step {}. \
+                     Mask must have failed — verify forbidden_ids was non-empty for this step.",
+                    token_id,
+                    generated_count,
+                );
+            }
             hit_stop = true;
             break;
         }
@@ -1248,11 +1447,13 @@ fn generate_with_cache(
             }
         }
     }
-    if hit_stop {
-        mlx_log_generate_done("stopped (eos/im_end)", rss_start, generated_count);
-        mlx_release_after_turn();
-        return Ok(());
-    }
+    // Flush any tokens still in the buffer regardless of whether we stopped
+    // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
+    // without flushing, which dropped up to the last 19 tokens (buffer flush
+    // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
+    // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
+    // never sees the closing tag and rejects the tool call as "truncated".
+    // The fix here is structural: drain the buffer on every exit path.
     if !buffer.is_empty() {
         eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
         let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
@@ -1264,7 +1465,11 @@ fn generate_with_cache(
         }
     }
 
-    mlx_log_generate_done("completed", rss_start, generated_count);
+    if hit_stop {
+        mlx_log_generate_done("stopped (eos/im_end)", rss_start, generated_count);
+    } else {
+        mlx_log_generate_done("completed", rss_start, generated_count);
+    }
     mlx_release_after_turn();
 
     Ok(())
