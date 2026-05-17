@@ -96,6 +96,17 @@ impl KvCache {
             }
         }
     }
+
+    /// Force the cache buffers to materialize into compact storage sized to
+    /// the current `stored_len`. Used right after a snapshot is taken so the
+    /// snapshot doesn't pin the live cache's full preallocated buffer
+    /// (~4.4 GB for Qwen3-4B + 32 K KV). See
+    /// [`SteppingKeyValueCache::compact_to_stored_len`].
+    pub fn compact_to_stored_len(&mut self) {
+        if let Self::Fp16(c) = self {
+            c.compact_to_stored_len();
+        }
+    }
 }
 
 impl KvCache {
@@ -529,6 +540,50 @@ impl SteppingKeyValueCache {
                 }
             }
             self.stored_len = new_len;
+        }
+    }
+
+    /// Force the K/V buffers to materialize into **independent storage**
+    /// sized exactly to `stored_len`. Pre-fix the K/V might be a view into
+    /// the live cache's much larger preallocated buffer (e.g. shape
+    /// `[1, 8, 32000, 128]` even though only the first `stored_len` slots
+    /// are used) — that pins ~4.4 GB per snapshot for Qwen3-4B + 32 K KV.
+    ///
+    /// `slice_update_axis2(zeros, view, 0, stored_len)` allocates a fresh
+    /// `[..., stored_len, ...]` buffer and copies the view's data in. The
+    /// snapshot then owns its own compact buffer; the live cache's larger
+    /// buffer is no longer pinned by the snapshot's Arc ref.
+    pub fn compact_to_stored_len(&mut self) {
+        let Some(k) = self.keys.as_ref() else { return; };
+        let Some(v) = self.values.as_ref() else { return; };
+        let k_shape = k.shape();
+        let v_shape = v.shape();
+        if k_shape.len() != 4 || v_shape.len() != 4 {
+            return;
+        }
+        let cur_t = k_shape[2];
+        if cur_t == self.stored_len {
+            // Already compact (no padding to drop).
+            return;
+        }
+        let target_t = self.stored_len.max(0);
+        let mut new_k_shape = k_shape.to_vec();
+        new_k_shape[2] = target_t;
+        let mut new_v_shape = v_shape.to_vec();
+        new_v_shape[2] = target_t;
+        let Ok(empty_k) = zeros_dtype(&new_k_shape, k.dtype()) else { return; };
+        let Ok(empty_v) = zeros_dtype(&new_v_shape, v.dtype()) else { return; };
+        let Ok(stored_k) = slice_axis2(k, 0, target_t) else { return; };
+        let Ok(stored_v) = slice_axis2(v, 0, target_t) else { return; };
+        if let Ok(compact_k) = slice_update_axis2(&empty_k, &stored_k, 0, target_t) {
+            if let Ok(compact_v) = slice_update_axis2(&empty_v, &stored_v, 0, target_t) {
+                // Force materialization so the resulting Array owns its
+                // storage instead of staying lazy (which would defer the
+                // copy and the live buffer would stay pinned).
+                let _ = eval(&[compact_k.clone(), compact_v.clone()]);
+                self.keys = Some(compact_k);
+                self.values = Some(compact_v);
+            }
         }
     }
 

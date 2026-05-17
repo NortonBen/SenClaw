@@ -34,9 +34,32 @@ use std::collections::VecDeque;
 
 use super::cache::KvCache;
 
-/// Maximum number of cached prefix entries. Each entry holds a full per-layer
-/// KV snapshot (~2-6 GB for a 4B model with 32K KV window). Keep small.
-pub const MAX_ENTRIES: usize = 4;
+/// Maximum number of cached prefix entries.
+///
+/// **RAM cost per entry** — Each entry pins the per-layer KV `Array` handles
+/// from the live cache. Because `trim_by` slices via `slice_axis2` (a view
+/// op, zero-copy in mlx), the snapshot SHARES storage with the live cache's
+/// preallocated buffer (`max_kv_tokens × layers × 2 × 2 B`). For typical
+/// Qwen3-4B at `max_kv_tokens=32000`: each entry pins ~4.4 GB until evicted.
+///
+/// **Why 2** — linear multi-turn chat only needs the latest snapshot;
+/// previous-turn snapshots are strict prefixes of the new one and get
+/// dropped by [`PrefixCache::store`]'s semantic eviction. The second slot
+/// is reserved as a safety net for one-step-back retries / branching
+/// conversations.
+///
+/// **Memory ceiling** — bounded by [`MAX_TOTAL_BYTES`] regardless of count;
+/// snapshots over budget are evicted oldest-first.
+pub const MAX_ENTRIES: usize = 2;
+
+/// Hard ceiling on combined snapshot bytes. Once exceeded, oldest entries are
+/// evicted until under budget — protects from runaway RAM when multiple
+/// distinct conversations cycle through the cache.
+///
+/// 6 GB sized for a typical M-series unified-memory setup with Qwen3-4B-4bit:
+/// `model 2.3 GB + 2 × snapshot 2.2 GB = 6.7 GB` covers two parallel chats.
+/// Raise if you see frequent `evict_for_bytes_budget` warnings.
+pub const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024 * 1024;
 
 /// Minimum prefix length to bother caching. Short prefixes (a few hundred
 /// tokens) prefill in well under a second — the cache lookup/clone overhead
@@ -93,17 +116,40 @@ impl PrefixCache {
         best
     }
 
-    /// Insert `(tokens, caches, rope_offset)`. Touches LRU: existing entry
-    /// with the exact same tokens is removed first (re-inserted to the
-    /// front). Oldest entry evicted when full.
+    /// Insert `(tokens, caches, rope_offset)`. Three eviction passes:
+    ///
+    /// 1. **Exact-duplicate drop** — same key replaces (LRU touch).
+    /// 2. **Semantic eviction** — entries whose `tokens` are a strict prefix
+    ///    of the new entry are redundant (the new entry dominates them) and
+    ///    get evicted. This is the dominant case for linear multi-turn chat:
+    ///    turn N+1's prefix is turn N's prefix + tool/user content, so the
+    ///    turn N entry is always strictly contained. Without this, two
+    ///    consecutive turns of a 14 K-token tools-heavy prompt would pin
+    ///    ~8.8 GB of KV state in the cache.
+    /// 3. **Count + byte budget** — fall back to LRU eviction when over
+    ///    [`MAX_ENTRIES`] or [`MAX_TOTAL_BYTES`].
     pub fn store(
         &mut self,
         tokens: Vec<u32>,
         caches: Vec<Option<KvCache>>,
         rope_offset: usize,
     ) {
+        // 1. Drop exact duplicate (will re-insert at front below as LRU touch).
         self.entries.retain(|e| e.tokens != tokens);
-        if self.entries.len() >= MAX_ENTRIES {
+        // 2. Semantic eviction: any existing entry whose token list is a
+        //    strict prefix of the new one is dominated and can be dropped.
+        //    Counts entries removed for logging.
+        let before = self.entries.len();
+        self.entries.retain(|e| !is_strict_prefix_of(&e.tokens, &tokens));
+        let dropped_dominated = before - self.entries.len();
+        if dropped_dominated > 0 {
+            tracing::debug!(
+                "[prefix-cache] semantic eviction dropped {} dominated entry/entries",
+                dropped_dominated
+            );
+        }
+        // 3a. Count cap.
+        while self.entries.len() >= MAX_ENTRIES {
             self.entries.pop_back();
         }
         self.entries.push_front(PrefixCacheEntry {
@@ -111,6 +157,25 @@ impl PrefixCache {
             caches,
             rope_offset,
         });
+        // 3b. Bytes cap — evict oldest until under budget. Guard against
+        //     the lone newest entry being itself over budget (don't loop forever).
+        while self.entries.len() > 1 && self.total_bytes() > MAX_TOTAL_BYTES {
+            if let Some(evicted) = self.entries.pop_back() {
+                tracing::info!(
+                    "[prefix-cache] bytes budget exceeded ({} > {}), evicted entry of {} tokens",
+                    fmt_bytes(self.total_bytes() + entry_bytes(&evicted)),
+                    fmt_bytes(MAX_TOTAL_BYTES),
+                    evicted.tokens.len(),
+                );
+            }
+        }
+    }
+
+    /// Combined byte footprint of all entries (approx — sum of layer caches'
+    /// `approx_bytes` which counts the **pinned** buffer storage, even for
+    /// snapshots that logically only need stored_len tokens).
+    pub fn total_bytes(&self) -> usize {
+        self.entries.iter().map(entry_bytes).sum()
     }
 
     /// Snapshot all cache variants in `live` via [`KvCache::try_snapshot`].
@@ -129,6 +194,14 @@ impl PrefixCache {
     /// store a prefix cache entry whose key excludes the assistant
     /// generation suffix — so the next turn's prompt (which lacks that
     /// suffix at the same position) still hits the cache.
+    ///
+    /// **Compact** — each layer's KV is then materialized into independent
+    /// storage sized exactly to `stored_len` (via
+    /// [`KvCache::compact_to_stored_len`]). Without this, the snapshot would
+    /// share the live cache's full preallocated buffer (~4.4 GB for Qwen3-4B
+    /// + 32 K KV) and the snapshot would pin ~4.4 GB even though it
+    /// logically only references the first ~14 K tokens. Post-compact each
+    /// snapshot pins only `stored_len × 4096 × 36 × 2 B` ≈ 2.2 GB.
     pub fn snapshot_layers_trimmed(
         live: &[Option<KvCache>],
         trim: usize,
@@ -138,6 +211,9 @@ impl PrefixCache {
             for slot in snap.iter_mut().flatten() {
                 slot.trim_by(trim);
             }
+        }
+        for slot in snap.iter_mut().flatten() {
+            slot.compact_to_stored_len();
         }
         Some(snap)
     }
@@ -154,6 +230,31 @@ impl PrefixCache {
 impl Default for PrefixCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// `a` is a STRICT prefix of `b` (shorter and matches all of `a`'s positions).
+fn is_strict_prefix_of(a: &[u32], b: &[u32]) -> bool {
+    a.len() < b.len() && a == &b[..a.len()]
+}
+
+fn entry_bytes(e: &PrefixCacheEntry) -> usize {
+    e.caches
+        .iter()
+        .filter_map(|c| c.as_ref())
+        .map(|c| c.approx_bytes())
+        .sum()
+}
+
+fn fmt_bytes(n: usize) -> String {
+    const KB: f64 = 1024.0;
+    let n = n as f64;
+    if n < KB * KB {
+        format!("{:.0} KB", n / KB)
+    } else if n < KB * KB * KB {
+        format!("{:.1} MB", n / (KB * KB))
+    } else {
+        format!("{:.2} GB", n / (KB * KB * KB))
     }
 }
 
@@ -206,9 +307,40 @@ mod tests {
     fn lru_evicts_oldest_when_full() {
         let mut pc = PrefixCache::new();
         for i in 0..(MAX_ENTRIES + 2) {
+            // Use DISTINCT (non-prefix) keys so semantic eviction doesn't drop them.
             let toks: Vec<u32> = std::iter::repeat(i as u32).take(MIN_PREFIX_LEN + 10).collect();
             pc.store(toks, vec![], 0);
         }
         assert_eq!(pc.len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn semantic_eviction_drops_strict_prefix_entries() {
+        let mut pc = PrefixCache::new();
+        let short: Vec<u32> = (0..(MIN_PREFIX_LEN as u32 + 100)).collect();
+        let long: Vec<u32> = (0..(MIN_PREFIX_LEN as u32 + 500)).collect();
+        // Turn 1 stores `short`.
+        pc.store(short.clone(), vec![], short.len());
+        assert_eq!(pc.len(), 1);
+        // Turn 2 stores `long` (superset of `short`). Semantic eviction drops short.
+        pc.store(long.clone(), vec![], long.len());
+        assert_eq!(pc.len(), 1, "old prefix should have been dropped");
+        assert_eq!(pc.entries[0].tokens, long);
+    }
+
+    #[test]
+    fn divergent_branches_both_kept() {
+        let mut pc = PrefixCache::new();
+        let base: Vec<u32> = (0..(MIN_PREFIX_LEN as u32 + 50)).collect();
+        let mut branch_a = base.clone();
+        branch_a.extend((0..100).map(|i| 1000 + i));
+        let mut branch_b = base.clone();
+        branch_b.extend((0..100).map(|i| 2000 + i));
+        // Note: `base` is a strict prefix of both branches and would be
+        // semantically dropped after either branch is stored. Branches don't
+        // contain each other → both retained.
+        pc.store(branch_a.clone(), vec![], branch_a.len());
+        pc.store(branch_b.clone(), vec![], branch_b.len());
+        assert_eq!(pc.len(), 2);
     }
 }
