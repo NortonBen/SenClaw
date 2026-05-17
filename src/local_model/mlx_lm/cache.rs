@@ -43,6 +43,15 @@ fn next_tq_seed() -> u64 {
 /// [`KeyValueCache`] methods for SSM layers behave as a no-op (length reported as
 /// tokens-seen, attention ops bypassed). Mamba blocks access the cache directly
 /// via [`KvCache::as_mamba1_mut`] / [`KvCache::as_mamba2_mut`].
+/// Cloning a cache copies the **MLX Array handles** (which are Arc-internal).
+/// Because every `update_*` method *replaces* the Option<Array> slot with a
+/// freshly-built Array (`slice_axis2`, `slice_update_axis2`, …) instead of
+/// mutating in place, snapshots stay independent of subsequent generation
+/// steps — this is what makes the [`PrefixCache`](super::prefix_cache) safe.
+///
+/// `TurboQuantKeyValueCache` cannot be cloned (it owns a `QuantizedKVCache`
+/// from `turboquant-rs` which is non-`Clone`); prefix caching is skipped for
+/// turns that activated TurboQuant.
 #[derive(Debug)]
 pub enum KvCache {
     Fp16(SteppingKeyValueCache),
@@ -51,6 +60,42 @@ pub enum KvCache {
     Mamba2(Mamba2Cache),
     /// Qwen3.5 GatedDeltaNet: conv rolling window + SSM state.
     Qwen35Linear(Qwen35LinearCache),
+}
+
+impl KvCache {
+    /// Snapshot-clone for prefix caching. Returns `None` if the variant is
+    /// not safe to clone (TurboQuant active state, etc.) — caller treats
+    /// that as "skip prefix cache for this turn".
+    pub fn try_snapshot(&self) -> Option<Self> {
+        match self {
+            Self::Fp16(c) => Some(Self::Fp16(c.clone())),
+            Self::TurboQuant(c) if !c.is_turbo_active() => {
+                Some(Self::Fp16(c.staging_clone()))
+            }
+            Self::TurboQuant(_) => None,
+            Self::Mamba1(c) => Some(Self::Mamba1(c.clone())),
+            Self::Mamba2(c) => Some(Self::Mamba2(c.clone())),
+            Self::Qwen35Linear(c) => Some(Self::Qwen35Linear(c.clone())),
+        }
+    }
+
+    /// Drop the last `n` cached tokens. Used by the prefix cache to strip
+    /// the per-turn assistant generation suffix (`<|im_start|>assistant\n`)
+    /// from a snapshot so subsequent turns can hit the shared prefix.
+    ///
+    /// Only meaningful for attention KV caches (`Fp16`); SSM / linear caches
+    /// have fixed-size state with no notion of "last N tokens", so it's a
+    /// no-op there (and prefix caching is disabled for them at call site).
+    pub fn trim_by(&mut self, n: usize) {
+        match self {
+            Self::Fp16(c) => c.trim_by(n),
+            Self::TurboQuant(_) | Self::Mamba1(_) | Self::Mamba2(_) | Self::Qwen35Linear(_) => {
+                // No-op: TurboQuant active path is excluded from prefix cache
+                // upstream; SSM/linear caches are recurrent and have no
+                // per-token slice to trim.
+            }
+        }
+    }
 }
 
 impl KvCache {
@@ -413,6 +458,19 @@ impl SteppingKeyValueCache {
         }
     }
 
+    /// Pre-sized KV cache. The current `update_dense` path allocates a
+    /// **dense** buffer of `max_seq_len` slots on the first write, which
+    /// wastes RAM when the actual prompt is much smaller than `max_seq_len`
+    /// (e.g. `max_kv_tokens=32000` allocates ~4.4 GB even for a 14 K-token
+    /// prompt).
+    ///
+    /// We accept the over-allocation as a deliberate trade-off: switching
+    /// to incremental growth (`KV_CACHE_STEP=256` chunks) would multiply
+    /// the per-layer `concatenate_axis` + `eval` work by `seq_len/step`,
+    /// adding ~250 GPU syncs for a 14 K prefill. On M-series unified memory
+    /// the RAM is cheap; CPU↔GPU dispatch overhead is not. Callers that
+    /// want lower RAM should set `max_kv_tokens` closer to their actual
+    /// `prompt + max_new` budget via `settings.json`.
     pub fn with_max(max_seq_len: i32) -> Self {
         Self {
             keys: None,
@@ -504,49 +562,82 @@ impl SteppingKeyValueCache {
         let write_pos = self.stored_len;
         let required_slots = write_pos + new_tokens;
 
-        let need_alloc = self.keys.is_none();
-        let need_grow = match max_cap {
-            Some(_) => need_alloc,
-            None => match self.keys.as_ref() {
-                None => true,
-                Some(k) => Self::dim(k.shape(), 2, "cached keys T")? < required_slots,
-            },
+        // Capacity of the existing K/V buffer along the time axis. Differs
+        // from `stored_len` when the buffer was pre-allocated past current
+        // tokens (max_cap path, first-alloc preallocation) OR when the buffer
+        // was sliced smaller (prefix-cache restore via `trim_by` sets
+        // shape[2] == stored_len). We always check the *real* shape so a
+        // restored snapshot can still grow into more writes.
+        //
+        // Pre-fix: `need_grow = need_alloc` for max_cap mode → restored
+        // snapshot's smaller buffer was never grown, `slice_update_axis2`
+        // wrote past the end and mlx returned shape `(...,0,...)` causing
+        // `broadcast_shapes` error mid-prefill.
+        let cap_now = match self.keys.as_ref() {
+            Some(k) => Self::dim(k.shape(), 2, "cached keys T")?,
+            None => 0,
         };
+        let need_grow = cap_now < required_slots;
 
-        if need_alloc || need_grow {
+        if need_grow {
             let b = Self::dim(k_shape, 0, "keys B")?;
             let n_kv_heads = Self::dim(k_shape, 1, "keys H")?;
             let k_head_dim = Self::dim(k_shape, 3, "keys D")?;
             let v_head_dim = Self::dim(v_shape, 3, "values D")?;
 
-            let new_slots = match max_cap {
-                Some(m) => m,
+            // Total post-grow buffer size along the time axis.
+            let new_cap = match max_cap {
+                Some(m) => m.max(required_slots),
                 None => {
                     let n_steps = (self.step + new_tokens - 1) / self.step;
                     let grow = n_steps * self.step;
-                    match self.keys.as_ref() {
-                        Some(k) => {
-                            let cap = Self::dim(k.shape(), 2, "cached keys T")?;
-                            (cap + grow).max(required_slots)
-                        }
-                        None => grow.max(required_slots),
-                    }
+                    (cap_now + grow).max(required_slots)
                 }
             };
 
-            let new_k = zeros_dtype(&[b, n_kv_heads, new_slots, k_head_dim], keys.dtype())?;
-            let new_v = zeros_dtype(&[b, n_kv_heads, new_slots, v_head_dim], values.dtype())?;
-
             let (grown_k, grown_v) = match (self.keys.take(), self.values.take()) {
                 (Some(old_k), Some(old_v)) => {
-                    let trimmed_k = slice_axis2(&old_k, 0, self.stored_len)?;
-                    let trimmed_v = slice_axis2(&old_v, 0, self.stored_len)?;
+                    // Trim existing buffer to stored_len (strips zero padding
+                    // past the live data; for restored snapshots cap_now ==
+                    // stored_len, so this is a no-op identity slice).
+                    let trimmed_k = if cap_now > self.stored_len {
+                        slice_axis2(&old_k, 0, self.stored_len)?
+                    } else {
+                        old_k
+                    };
+                    let trimmed_v = if cap_now > self.stored_len {
+                        slice_axis2(&old_v, 0, self.stored_len)?
+                    } else {
+                        old_v
+                    };
+                    // Pad up to new_cap from stored_len (NOT from cap_now —
+                    // we already stripped padding above).
+                    let pad_slots = (new_cap - self.stored_len).max(0);
+                    let pad_k = zeros_dtype(
+                        &[b, n_kv_heads, pad_slots, k_head_dim],
+                        keys.dtype(),
+                    )?;
+                    let pad_v = zeros_dtype(
+                        &[b, n_kv_heads, pad_slots, v_head_dim],
+                        values.dtype(),
+                    )?;
                     (
-                        concatenate_axis(&[trimmed_k, new_k], 2)?,
-                        concatenate_axis(&[trimmed_v, new_v], 2)?,
+                        concatenate_axis(&[trimmed_k, pad_k], 2)?,
+                        concatenate_axis(&[trimmed_v, pad_v], 2)?,
                     )
                 }
-                _ => (new_k, new_v),
+                _ => {
+                    // First-alloc — no existing buffer to keep.
+                    let fresh_k = zeros_dtype(
+                        &[b, n_kv_heads, new_cap, k_head_dim],
+                        keys.dtype(),
+                    )?;
+                    let fresh_v = zeros_dtype(
+                        &[b, n_kv_heads, new_cap, v_head_dim],
+                        values.dtype(),
+                    )?;
+                    (fresh_k, fresh_v)
+                }
             };
             self.keys = Some(grown_k);
             self.values = Some(grown_v);
@@ -662,6 +753,15 @@ impl TurboQuantKeyValueCache {
 
     pub fn is_turbo_active(&self) -> bool {
         self.active
+    }
+
+    /// Clone just the FP16 staging half — used by [`KvCache::try_snapshot`]
+    /// before TurboQuant activates so prefix caching still works for the
+    /// `prompt_len < tq_activate_at` path (the common case after my default
+    /// bump to 16384). Once TQ activates, snapshots are skipped because
+    /// `QuantizedKVCache` is not `Clone`.
+    pub(crate) fn staging_clone(&self) -> SteppingKeyValueCache {
+        self.staging.clone()
     }
 
     fn tokens_in_tq(&self) -> i32 {
@@ -884,7 +984,7 @@ fn slice_update_axis2(
 ///
 /// `tokens_seen` tracks total absolute position so callers can advance positional
 /// state if needed (mirrors `RopeInput::offset` semantics for SSM layers).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Mamba2Cache {
     pub conv_dim: i32,
     pub d_conv: i32,
@@ -991,7 +1091,7 @@ impl Mamba2Cache {
 /// Both slots are lazily zero-initialised on the first prefill call so the
 /// block can support arbitrary batch sizes without re-allocating up front.
 /// `tokens_seen` tracks total absolute position (mirrors [`Mamba2Cache`]).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Mamba1Cache {
     pub d_inner: i32,
     pub d_conv: i32,
@@ -1078,7 +1178,7 @@ impl Mamba1Cache {
 }
 
 /// Qwen3.5 GatedDeltaNet recurrent state (conv window + linear SSM).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Qwen35LinearCache {
     pub conv_dim: i32,
     pub d_conv: i32,

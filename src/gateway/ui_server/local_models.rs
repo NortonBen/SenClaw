@@ -114,6 +114,12 @@ impl CandleSlot {
 
     fn end_inference(&self) {
         self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        // Touch on END too — `touch()` at begin alone makes the idle timer
+        // start when inference STARTED, so a 50 s turn followed by ~10 s of
+        // user reading time would already cross a 60 s idle threshold and
+        // trigger a cold reload mid-conversation. Touching at end resets
+        // the countdown from the actual last-use moment.
+        self.touch();
     }
 }
 
@@ -161,6 +167,12 @@ impl MlxSlot {
 
     fn end_inference(&self) {
         self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        // Touch on END too — `touch()` at begin alone makes the idle timer
+        // start when inference STARTED, so a 50 s turn followed by ~10 s of
+        // user reading time would already cross a 60 s idle threshold and
+        // trigger a cold reload mid-conversation. Touching at end resets
+        // the countdown from the actual last-use moment.
+        self.touch();
     }
 }
 

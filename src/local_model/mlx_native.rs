@@ -89,6 +89,12 @@ struct Loaded {
     /// Attention-only dims; `0` for SSM-only models (Mamba-2 leaves them unused).
     head_dim: i32,
     n_kv_heads: i32,
+    /// In-memory prefix KV cache. Multi-turn agent chats reuse the
+    /// `[system + tools + previous turns]` prefix — caching the post-prefill
+    /// KV state cuts turn-2+ prefill from 30–50 s down to ~3-5 s. Dropped
+    /// with the rest of `Loaded` on idle unload (cache is rebuilt on the
+    /// first turn after reload).
+    prefix_cache: super::mlx_lm::prefix_cache::PrefixCache,
 }
 
 /// In-process MLX inference engine. Caches the loaded model so subsequent
@@ -351,6 +357,7 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
         n_layers,
         head_dim,
         n_kv_heads,
+        prefix_cache: super::mlx_lm::prefix_cache::PrefixCache::new(),
     })
 }
 
@@ -862,31 +869,60 @@ fn generate_with_cache(
     );
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
-    let tq_bits = _kv_cache_bits.or(gen_opt.kv_cache_bits).filter(|b| *b > 0);
+    let configured_tq_bits = _kv_cache_bits.or(gen_opt.kv_cache_bits).filter(|b| *b > 0);
     let tq_activate_at = gen_opt
         .tq_activate_at
         .map(|v| v as i32)
         .unwrap_or(DEFAULT_TQ_ACTIVATE_AT);
-    // TurboQuant runs its per-token KV quantization on CPU (`turboquant-rs`).
-    // Once activated it forces every subsequent KV update through that path —
-    // for a long prefill (tools-heavy prompt) the CPU work dominates and the
-    // turn can easily blow past the LLM-turn timeout. Warn the operator so
-    // the slowness isn't silent. Recommended: leave `kv_cache_bits` null
-    // unless conversations regularly exceed ~16K tokens.
-    if let Some(bits) = tq_bits {
-        let prefill_after_threshold = prompt.len() as i32 - tq_activate_at;
-        if prefill_after_threshold > 0 {
+
+    // TurboQuant auto-disable guard.
+    //
+    // TQ runs its per-token KV quantization on CPU (`turboquant-rs`). Once
+    // activated, every subsequent decode token routes through:
+    //   `Array.eval → cast f16→f32 → heap Vec<Vec<f32>> → 4-bit pack`
+    // …which costs ~500 ms – 1 s per token on M-series vs ~30 ms on FP16 GPU
+    // (20–30× slower). Worse, *activation itself* dumps the full staging
+    // buffer (16 K tokens × 36 layers × 8 heads = 4.7 M quant ops) through
+    // the same path in one shot — easily 30–60 s of stall.
+    //
+    // Symptom: decode logs the first 20 tokens then goes silent for minutes
+    // until the LLM_TIMEOUT fires.
+    //
+    // Auto-disable the configured `kv_cache_bits` when **prompt + decode
+    // headroom > tq_activate_at**, i.e. when TQ would activate during the
+    // current turn. Falls back to FP16 KV — the user's effective RAM is
+    // similar (prompt already fills most of the FP16 buffer) and decode
+    // stays on the fast GPU path.
+    let tq_bits = if let Some(bits) = configured_tq_bits {
+        let projected_max = prompt.len() as i32 + max_new_tokens as i32;
+        if projected_max > tq_activate_at {
             tracing::warn!(
-                "[local-mlx-native] TurboQuant TQ{} will activate mid-prefill: ~{} tokens × {} layers \
-                 will route through the CPU quant path — expect multi-minute prefill. \
-                 Raise `tq_activate_at` above prompt size, or set `kv_cache_bits: null` in settings.json \
-                 to disable TurboQuant entirely.",
+                "[local-mlx-native] TurboQuant TQ{} auto-disabled for this turn: \
+                 prompt({}) + max_new({}) = {} > tq_activate_at({}). \
+                 TQ activation mid-decode is ~20× slower and routinely hits LLM_TIMEOUT. \
+                 Using FP16 KV for this turn. Raise `tq_activate_at` ≥ {} in settings.json \
+                 to keep TurboQuant enabled.",
                 bits,
-                prefill_after_threshold,
-                n_layers,
+                prompt.len(),
+                max_new_tokens,
+                projected_max,
+                tq_activate_at,
+                projected_max,
             );
+            None
+        } else {
+            tracing::info!(
+                "[local-mlx-native] TurboQuant TQ{} enabled (activate_at={}, prompt={}, projected_max={})",
+                bits,
+                tq_activate_at,
+                prompt.len(),
+                projected_max,
+            );
+            Some(bits)
         }
-    }
+    } else {
+        None
+    };
     let head_dim = state.head_dim;
     let n_kv_heads = state.n_kv_heads;
 
@@ -1036,6 +1072,61 @@ fn generate_with_cache(
 
     let mut rope_offset = 0usize;
 
+    // ── Prefix cache restore ──────────────────────────────────────────────
+    // Multi-turn agent chats repeatedly send `[system + tools + prior turns]`
+    // prompts where 80–90 % of the tokens are unchanged from the previous
+    // turn. Restoring the post-prefill KV snapshot for the longest matching
+    // prefix lets prefill skip directly to the new suffix.
+    //
+    // Constraints:
+    // - Only for KvCache variants that support clone (`Fp16`; TQ-active
+    //   skipped). Filtered by `tq_bits.is_none()` here — TQ allocation
+    //   forces snapshot to `None` for active layers anyway.
+    // - Only for Qwen-family arches whose chat template ends with the
+    //   3-token assistant generation prompt (`<|im_start|>assistant\n`).
+    //   Other arches use different suffix lengths — would need per-arch
+    //   `gen_suffix_len` to extend.
+    const QWEN3_GEN_SUFFIX_LEN: usize = 3;
+    let prefix_cache_eligible = tq_bits.is_none()
+        && matches!(
+            &state.model,
+            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_)
+        );
+    let mut prefill_start = 0usize;
+    if prefix_cache_eligible {
+        if let Some(hit) = state.prefix_cache.find_longest_match(&prompt) {
+            // Need at least 1 new token to prefill for logits sampling. Full
+            // match would require a 1-token re-forward edge case we don't
+            // bother with — fall back to full prefill (rare in practice
+            // since the assistant generation suffix changes each turn).
+            if hit.tokens.len() < prompt.len() {
+                for (slot, snap_opt) in cache.iter_mut().zip(hit.caches.iter()) {
+                    *slot = snap_opt.as_ref().and_then(|s| s.try_snapshot());
+                }
+                rope_offset = hit.rope_offset;
+                prefill_start = hit.tokens.len();
+                tracing::info!(
+                    "[local-mlx-native] prefix cache HIT — restored {} KV tokens \
+                     (skip {:.1}% of prefill), prefill suffix = {} tokens",
+                    prefill_start,
+                    100.0 * (prefill_start as f64) / (prompt.len() as f64),
+                    prompt.len() - prefill_start,
+                );
+            } else {
+                tracing::info!(
+                    "[local-mlx-native] prefix cache full match ({} tokens) — skip restore, full prefill",
+                    hit.tokens.len(),
+                );
+            }
+        } else {
+            tracing::info!(
+                "[local-mlx-native] prefix cache miss (entries={}) — full prefill of {} tokens",
+                state.prefix_cache.len(),
+                prompt.len(),
+            );
+        }
+    }
+
     use super::mlx_lm::models::qwen3::ModelInput;
     use mlx_rs::module::Module;
 
@@ -1138,7 +1229,12 @@ fn generate_with_cache(
         ModelKind::Mamba2(_) | ModelKind::FalconMamba(_)
     );
 
-    let logits = if !chunked_supported || prompt.len() <= PREFILL_CHUNK {
+    // Force chunked path when we restored from prefix cache — single-shot
+    // would feed the entire `prompt_tokens` array (length N) into forward,
+    // which would re-walk positions [0..prefill_start] that are already
+    // populated by the restored KV state. Chunked path slices the prompt
+    // from `prefill_start` onwards, only doing work for the new suffix.
+    let logits = if (!chunked_supported || prompt.len() <= PREFILL_CHUNK) && prefill_start == 0 {
         // Small prompt or SSM arch — single forward pass.
         match &mut state.model {
             ModelKind::Qwen3(m) => {
@@ -1196,15 +1292,17 @@ fn generate_with_cache(
                 .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
         }
     } else {
-        let chunk_count = prompt.len().div_ceil(PREFILL_CHUNK);
+        let to_prefill = prompt.len() - prefill_start;
+        let chunk_count = to_prefill.div_ceil(PREFILL_CHUNK).max(1);
         tracing::info!(
-            "[local-mlx-native] chunked prefill: {} tokens in {} chunks of ≤{}",
-            prompt.len(),
+            "[local-mlx-native] chunked prefill: {} tokens (skipping {} restored) in {} chunks of ≤{}",
+            to_prefill,
+            prefill_start,
             chunk_count,
             PREFILL_CHUNK,
         );
         let mut chunk_logits: Option<mlx_rs::Array> = None;
-        let mut cursor = 0;
+        let mut cursor = prefill_start;
         while cursor < prompt.len() {
             let end = (cursor + PREFILL_CHUNK).min(prompt.len());
             let chunk_arr = Array::from(&prompt[cursor..end]).index(NewAxis);
@@ -1288,7 +1386,7 @@ fn generate_with_cache(
         }
         chunk_logits.expect("at least one chunk processed")
     };
-    if !chunked_supported || prompt.len() <= PREFILL_CHUNK {
+    if (!chunked_supported || prompt.len() <= PREFILL_CHUNK) && prefill_start == 0 {
         rope_offset += prompt.len();
         eval_all_caches(&mut cache)
             .map_err(|e| anyhow::anyhow!("prefill cache eval failed: {e:?}"))?;
@@ -1343,6 +1441,32 @@ fn generate_with_cache(
         mlx_log_kv_cache("after prefill", &cache);
     }
     prefill_done_at = Some(std::time::Instant::now());
+
+    // Store post-prefill KV state under `prompt[..prompt.len() - gen_suffix]`
+    // so the NEXT turn's prompt (which has different assistant content where
+    // turn-N's gen suffix used to be) can still hit the cache for the shared
+    // body. Skip when caching disabled (TQ active, non-Qwen arch) or when
+    // the trimmed key would be below the minimum useful length.
+    if prefix_cache_eligible {
+        let snapshot_key_len = prompt.len().saturating_sub(QWEN3_GEN_SUFFIX_LEN);
+        if snapshot_key_len >= super::mlx_lm::prefix_cache::MIN_PREFIX_LEN {
+            // Snapshot now (post-suffix prefill) and trim by gen_suffix so
+            // the cached KV state aligns with the trimmed key length.
+            let snap = super::mlx_lm::prefix_cache::PrefixCache::snapshot_layers_trimmed(
+                &cache,
+                QWEN3_GEN_SUFFIX_LEN,
+            );
+            if let Some(snap) = snap {
+                let key: Vec<u32> = prompt[..snapshot_key_len].to_vec();
+                state.prefix_cache.store(key, snap, snapshot_key_len);
+                tracing::info!(
+                    "[local-mlx-native] prefix cache stored ({} tokens, entries now={})",
+                    snapshot_key_len,
+                    state.prefix_cache.len(),
+                );
+            }
+        }
+    }
 
     // Decode operates on single tokens — the prefill's working-set pool
     // (often >10 GB after a 2k-token prompt) is dead weight from here on.
