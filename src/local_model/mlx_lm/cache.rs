@@ -641,8 +641,32 @@ impl SteppingKeyValueCache {
             let v_head_dim = Self::dim(v_shape, 3, "values D")?;
 
             // Total post-grow buffer size along the time axis.
+            //
+            // **Hybrid grow** (max_cap mode) — pure doubling overshoots near
+            // `max_cap`: e.g. cap=16 384, required=16 896 → double to
+            // 32 768 → capped at m=32 000 (the full sliding window), wasting
+            // 15 K slots ≈ 1.8 GB when the prompt only needs ~17 K. So:
+            //   - **Below 8 K** doubling (rapid amortized grow during early
+            //     prefill chunks; ~6 grows to reach 8 K).
+            //   - **At or above 8 K** linear `+2 K` per grow (tight cap so
+            //     the final buffer is close to actual stored_len, not 2×).
+            //
+            // For a 14 K prefill: cap progression 512→1024→2048→4096→8192→
+            // 10240→12288→14336→16384 (9 grows total, final ≈ 16 K instead
+            // of 32 K). Saves ~50 % live KV RAM when prompt ≪ max_cap.
+            // Pre-existing 2× overshoot kept for small caps where the
+            // absolute waste is negligible (a few hundred MB).
+            const DOUBLE_THRESHOLD: i32 = 8192;
+            const LINEAR_GROW_STEP: i32 = 2048;
             let new_cap = match max_cap {
-                Some(m) => m.max(required_slots),
+                Some(m) => {
+                    let target = if cap_now < DOUBLE_THRESHOLD {
+                        cap_now.saturating_mul(2).max(required_slots).max(self.step)
+                    } else {
+                        cap_now.saturating_add(LINEAR_GROW_STEP).max(required_slots)
+                    };
+                    target.min(m)
+                }
                 None => {
                     let n_steps = (self.step + new_tokens - 1) / self.step;
                     let grow = n_steps * self.step;
@@ -1338,5 +1362,62 @@ mod tests {
         let keys = cache.keys.as_ref().unwrap();
         assert_eq!(keys.index((.., .., 0, ..)).item::<f32>(), 2.0);
         assert_eq!(keys.index((.., .., 1, ..)).item::<f32>(), 3.0);
+    }
+
+    /// Buffer capacity should double per grow event, capped at `max_cap`.
+    /// Verifies the new lazy-allocation behaviour vs. the pre-fix
+    /// "preallocate full max" pattern.
+    #[test]
+    fn doubling_grow_bounded_by_max_cap() {
+        let mut cache = SteppingKeyValueCache::with_max(10000);
+        // Write 512 tokens — cap should be 512 (one step worth), NOT 10000.
+        let (k, v) = make_kv(512, 1.0);
+        let _ = cache.update_and_fetch(k, v).unwrap();
+        let keys = cache.keys.as_ref().unwrap();
+        let cap = keys.shape()[2];
+        assert!(
+            cap < 10000,
+            "expected lazy growth, got cap={cap} (should be << max_cap=10000)"
+        );
+        assert!(cap >= 512, "cap must be at least required (512), got {cap}");
+        // Write another 512 — cap should at most double or grow to required.
+        let prev_cap = cap;
+        let (k, v) = make_kv(512, 2.0);
+        let _ = cache.update_and_fetch(k, v).unwrap();
+        let new_cap = cache.keys.as_ref().unwrap().shape()[2];
+        assert!(
+            new_cap <= prev_cap * 2,
+            "doubling means new cap ≤ 2× prev: {new_cap} vs {prev_cap}×2"
+        );
+        assert!(new_cap >= 1024, "must fit required 1024, got {new_cap}");
+    }
+
+    /// Once cap is ≥ DOUBLE_THRESHOLD (8K), growth switches to linear +2K
+    /// per event — avoids 2× overshoot near max_cap that would pin nearly
+    /// the entire sliding-window buffer.
+    #[test]
+    fn hybrid_grow_uses_linear_above_threshold() {
+        let mut cache = SteppingKeyValueCache::with_max(64000);
+        // Fill cache up past the doubling threshold with one write.
+        let (k, v) = make_kv(10_000, 1.0);
+        let _ = cache.update_and_fetch(k, v).unwrap();
+        let cap_at_10k = cache.keys.as_ref().unwrap().shape()[2];
+        assert!(
+            cap_at_10k >= 10_000 && cap_at_10k <= 16_384,
+            "first big write may double up to ~16K, got {cap_at_10k}"
+        );
+        // Now add 100 more tokens. cap should grow by ≤ LINEAR_GROW_STEP
+        // (2 048), NOT double to ~32 K.
+        let (k, v) = make_kv(100, 2.0);
+        let _ = cache.update_and_fetch(k, v).unwrap();
+        let cap_after = cache.keys.as_ref().unwrap().shape()[2];
+        // If grow happened, it should be linear (+2048), not doubled.
+        if cap_after > cap_at_10k {
+            assert!(
+                cap_after - cap_at_10k <= 2_048,
+                "expected linear +≤2K grow above 8K threshold, got cap_at_10k={cap_at_10k} → cap_after={cap_after} (delta={})",
+                cap_after - cap_at_10k,
+            );
+        }
     }
 }

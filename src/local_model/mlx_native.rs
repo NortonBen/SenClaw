@@ -1374,13 +1374,29 @@ fn generate_with_cache(
             };
             rope_offset += end - cursor;
             // Materialize this chunk's KV cache writes before next chunk
-            // attends to them; drop the chunk's hidden state by not
-            // referencing `out` past the final iteration (MLX prunes
-            // unreferenced lazy nodes).
+            // attends to them.
             eval_all_caches(&mut cache)
                 .map_err(|e| anyhow::anyhow!("prefill chunk cache eval failed: {e:?}"))?;
             if is_last_chunk {
                 chunk_logits = Some(out);
+            } else {
+                // **Force eval of the intermediate chunk's hidden output**
+                // so MLX materializes (then can release) the chunk's lazy
+                // graph nodes — without this, MLX's buffer pool grows to
+                // ~10 GB during a 14 K-token prefill (28 chunks of ~430 MB
+                // activations each pinned as lazy graph holds refs). After
+                // this eval `out` goes out of scope and its underlying
+                // buffer becomes pool-reclaimable on the next clear.
+                let _ = eval(&[out]);
+                // Periodic pool flush every 8 chunks (~4 K tokens of
+                // intermediates) to keep transient peak memory bounded.
+                // Each call is a sync barrier (~2-5 ms) but reclaims
+                // hundreds of MB → net win on memory-constrained machines.
+                if cursor > 0 && (cursor / PREFILL_CHUNK) % 8 == 7 {
+                    unsafe {
+                        mlx_sys::mlx_clear_cache();
+                    }
+                }
             }
             cursor = end;
         }
