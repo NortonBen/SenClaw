@@ -7,6 +7,10 @@ use std::collections::HashMap;
 
 use tokio::sync::broadcast;
 
+use super::workbench::{
+    WorkbenchNewData, WorkbenchServiceCrashedData, WorkbenchServiceReadyData,
+    WorkbenchServiceStoppedData,
+};
 use super::*;
 
 /// Capacity for the broadcast channel. Must be large enough to absorb bursts
@@ -42,6 +46,10 @@ pub enum EngineEvent {
     TaskAgentStart(TaskAgentStartData),
     TaskAgentEnd(TaskAgentEndData),
     ConfigNoModels(ConfigNoModelsData),
+    WorkbenchNew(WorkbenchNewData),
+    WorkbenchServiceReady(WorkbenchServiceReadyData),
+    WorkbenchServiceCrashed(WorkbenchServiceCrashedData),
+    WorkbenchServiceStopped(WorkbenchServiceStoppedData),
 }
 
 /// Pub-sub event bus. Cheap to clone — wraps a `broadcast::Sender`.

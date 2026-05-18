@@ -153,12 +153,31 @@ struct SnapshotParams {
     depth: Option<u8>,
     #[serde(default)]
     include_hidden: bool,
-    #[serde(default = "default_compress")]
+    /// If true, include raw-HTML compression stats alongside the structured tree.
+    /// Default false — the structured tree is usually enough.
+    #[serde(default)]
     compress_html: bool,
-}
-
-fn default_compress() -> bool {
-    true
+    /// Pixels beyond the viewport to still include. -1 = strict viewport only,
+    /// 0 = include elements touching the edge, larger = include nearby off-screen.
+    /// Default 0.
+    #[serde(default)]
+    viewport_expansion: Option<i32>,
+    /// Cap on interactive elements (defends against huge pages). Default 300.
+    #[serde(default)]
+    max_interactive: Option<u16>,
+    /// Walk same-origin iframes. Default true.
+    #[serde(default)]
+    walk_iframes: Option<bool>,
+    /// Walk shadow DOM. Default true.
+    #[serde(default)]
+    walk_shadow: Option<bool>,
+    /// Draw numbered badge overlay on the page (for debug / screenshot). Default false.
+    #[serde(default)]
+    highlight: Option<bool>,
+    /// If true, return the full raw element list; otherwise only the compact LLM-friendly
+    /// `formatted` view + viewport info. Default false (more compact).
+    #[serde(default)]
+    include_elements: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -305,6 +324,116 @@ struct ClickAndWaitParams {
 struct StopTaskParams {
     #[serde(default)]
     tab_id: Option<String>,
+}
+
+/// Format the raw snapshot payload from the extension into a compact response.
+///
+/// Default mode (include_elements=false) returns just the pre-rendered `formatted`
+/// block plus viewport + counts — meant to be inlined into the LLM's context with
+/// minimal tokens. Pass include_elements=true to also include the raw element list
+/// (bbox, attributes, is_new, viewport_status, frame_path), which the LLM rarely
+/// needs but is useful for tooling.
+fn format_snapshot_response(
+    data: serde_json::Value,
+    include_elements: bool,
+    compress_html_requested: bool,
+) -> String {
+    // The extension now returns the rich BrowserState shape:
+    //   { url, title, elements, viewport, formatted: {header, content, footer},
+    //     total_interactive, capped, text_content_summary, compressed_html? }
+    // Older content scripts return just the legacy shape — handle gracefully.
+    let url = data.get("url").cloned().unwrap_or(serde_json::Value::Null);
+    let title = data.get("title").cloned().unwrap_or(serde_json::Value::Null);
+    let viewport = data
+        .get("viewport")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let formatted = data.get("formatted").cloned();
+    let total = data
+        .get("total_interactive")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let capped = data
+        .get("capped")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mut out = serde_json::Map::new();
+    out.insert("url".into(), url);
+    out.insert("title".into(), title);
+    out.insert("viewport".into(), viewport);
+    out.insert("total_interactive".into(), serde_json::json!(total));
+    if capped {
+        out.insert("capped".into(), serde_json::json!(true));
+    }
+
+    if let Some(f) = formatted {
+        // Stitch the three sections into one prompt-ready block.
+        let header = f
+            .get("header")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let content = f
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let footer = f
+            .get("footer")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt = if content.is_empty() {
+            format!("{header}\n{footer}")
+        } else {
+            format!("{header}\n\n{content}\n\n{footer}")
+        };
+        out.insert("formatted".into(), serde_json::Value::String(prompt));
+    } else {
+        // Legacy content script — synthesize a minimal one from elements.
+        if let Some(elements) = data.get("elements").and_then(|v| v.as_array()) {
+            let mut lines = Vec::with_capacity(elements.len());
+            for el in elements {
+                let idx = el.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let role = el.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                let text = el.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let role_part = if role.is_empty() {
+                    String::new()
+                } else {
+                    format!(" role={role:?}")
+                };
+                lines.push(format!("[{idx}]<{tag}{role_part}>{text}</{tag}>"));
+            }
+            out.insert("formatted".into(), serde_json::Value::String(lines.join("\n")));
+        }
+    }
+
+    if include_elements {
+        if let Some(elements) = data.get("elements") {
+            out.insert("elements".into(), elements.clone());
+        }
+    }
+
+    if compress_html_requested {
+        if let Some(cs) = data.get("compression_stats") {
+            out.insert("compression_stats".into(), cs.clone());
+        }
+    }
+
+    if let Some(summary) = data.get("text_content_summary") {
+        // Cap to avoid blowing prompt budget.
+        if let Some(s) = summary.as_str() {
+            let capped = if s.len() > 1500 { &s[..1500] } else { s };
+            out.insert(
+                "text_content_summary".into(),
+                serde_json::Value::String(capped.to_string()),
+            );
+        }
+    }
+
+    serde_json::to_string_pretty(&serde_json::Value::Object(out)).unwrap_or_default()
 }
 
 // ===== MCP Server wrapper =====
@@ -802,7 +931,19 @@ impl McpBrowserServer {
     // ===== Observation =====
 
     #[rmcp::tool(
-        description = "Capture the accessibility snapshot of the current page. Returns interactive elements with indices, text content, and compressed HTML. Use this before interacting with the page to understand what elements are available."
+        description = "Capture a structured snapshot of the current page. Returns: \
+            - `formatted` block ready to paste into a prompt: URL, title, viewport info, \
+              and one line per interactive element in the form `[N]<tag attrs>text</tag>` \
+              (a leading `*` marks elements that newly appeared since the previous snapshot). \
+            - `viewport` with width/height/scroll position and how many viewport-heights of \
+              content remain above/below. \
+            - `total_interactive` count and `capped` flag if the cap was reached. \
+            Pass `include_elements: true` to also get the raw element list (bbox, attributes, \
+            is_new, viewport_status, frame_path). Pass `highlight: true` to overlay numbered \
+            badges on the page for visual debugging. \
+            Index numbers from this snapshot are the addresses passed to `browser_click`, \
+            `browser_type`, `browser_hover`, etc. Take a fresh snapshot whenever the page \
+            changes — index numbers are tied to the most recent snapshot."
     )]
     async fn browser_snapshot(
         &self,
@@ -810,47 +951,24 @@ impl McpBrowserServer {
             SnapshotParams,
         >,
     ) -> String {
+        let include_elements = p.include_elements;
+        let compress = p.compress_html;
         match self
             .do_request(DaemonMessage::GetSnapshot {
                 request_id: Self::request_id(),
                 tab_id: p.tab_id,
                 depth: p.depth,
                 compress_html: p.compress_html,
+                viewport_expansion: p.viewport_expansion,
+                max_interactive: p.max_interactive,
+                walk_iframes: p.walk_iframes,
+                walk_shadow: p.walk_shadow,
+                highlight: p.highlight,
             })
             .await
         {
             Ok(ActionResult::Ok { data }) => {
-                // If compress_html is enabled and we got raw HTML, compress it
-                if p.compress_html {
-                    if let Some(html) = data.get("html").and_then(|v| v.as_str()) {
-                        let config = CompressConfig::snapshot();
-                        let compressed = html_compressor::compress_html(html, &config);
-                        let mut out = serde_json::json!({
-                            "url": data.get("url"),
-                            "title": data.get("title"),
-                            "elements": data.get("elements"),
-                            "text_content_summary": compressed.text_content,
-                            "compressed_html": format!(
-                                "Interactive elements: {}\nText preview: {}",
-                                compressed.interactive_elements.len(),
-                                &compressed.text_content[..compressed.text_content.len().min(2000)]
-                            ),
-                            "compression_stats": {
-                                "original_size": compressed.stats.original_size,
-                                "compressed_size": compressed.stats.compressed_size,
-                                "ratio": format!("{:.1}%", compressed.stats.compression_ratio * 100.0),
-                            },
-                        });
-                        // Include interactive elements list
-                        if !compressed.interactive_elements.is_empty() {
-                            out["interactive_elements"] =
-                                serde_json::to_value(&compressed.interactive_elements)
-                                    .unwrap_or_default();
-                        }
-                        return serde_json::to_string_pretty(&out).unwrap_or_default();
-                    }
-                }
-                serde_json::to_string_pretty(&data).unwrap_or_default()
+                format_snapshot_response(data, include_elements, compress)
             }
             Ok(ActionResult::Error { message, .. }) => format!("Error: {message}"),
             Err(e) => e,

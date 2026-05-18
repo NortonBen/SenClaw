@@ -121,6 +121,7 @@ pub struct UiState {
     pub cowork_agent_api: Option<Arc<dyn crate::types::AgentApi>>,
     pub mcp_manager: Option<Arc<McpManager>>,
     pub marketplace_manager: Option<Arc<Mutex<crate::marketplace::manager::MarketplaceManager>>>,
+    pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
     pub ws_port: u16,
     pub ws_token: String,
 }
@@ -367,6 +368,23 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/code/ws", get(code_chat_ws))
         .route("/api/code/sessions/:id/git-log", get(code_sessions_git_log))
         .route("/api/code/sessions/:id/rollback", post(code_sessions_rollback))
+        // Workbench reverse ops (artifacts published by tools)
+        .route(
+            "/api/workbench/:jid/:id/mark-viewed",
+            post(super::workbench::workbench_mark_viewed),
+        )
+        .route(
+            "/api/workbench/:jid/:id/close",
+            post(super::workbench::workbench_close),
+        )
+        .route(
+            "/api/workbench/:jid/:id/read-file",
+            get(super::workbench::workbench_read_file),
+        )
+        .route(
+            "/api/workbench/:jid/:id/logs",
+            get(super::workbench::workbench_fetch_logs),
+        )
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback

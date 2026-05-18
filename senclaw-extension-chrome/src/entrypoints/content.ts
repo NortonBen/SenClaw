@@ -2,7 +2,7 @@
 // Injected into every page. Listens for messages from background script.
 
 import {
-  buildSnapshot,
+  getBrowserState,
   extractText,
   extractLinks,
   extractTable,
@@ -14,55 +14,76 @@ import {
   scrollPage,
   hoverElement,
   pressKey,
-  executeJs,
+  executeJsAsync,
 } from '../agent/ActionExecutor';
 import {
   extractGoogleResults,
   extractBingResults,
 } from '../agent/SearchExtractor';
 import { compressHtml } from '../agent/HtmlCompressor';
+import { clearSeenElements } from '../agent/SelectorMap';
+import { clearHighlights } from '../agent/HighlightOverlay';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
   main() {
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      try {
-        const result = handleMessage(msg);
-        sendResponse(result);
-      } catch (e: unknown) {
-        sendResponse({
-          success: false,
-          message: e instanceof Error ? e.message : String(e),
-        });
+    // Reset selector map on every navigation so isNew detection makes sense.
+    let lastUrl = location.href;
+    const checkUrl = () => {
+      if (location.href !== lastUrl) {
+        clearSeenElements();
+        clearHighlights();
+        lastUrl = location.href;
       }
-      // Return true for async response support
+    };
+    window.addEventListener('popstate', checkUrl);
+    window.addEventListener('hashchange', checkUrl);
+    // SPA route changes — observe a high-level container
+    try {
+      new MutationObserver(checkUrl).observe(document, { subtree: true, childList: true });
+    } catch {
+      /* document not ready yet */
+    }
+
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      // Async path: return true and resolve via sendResponse
+      handleMessage(msg)
+        .then((result) => sendResponse(result))
+        .catch((e: unknown) =>
+          sendResponse({
+            success: false,
+            message: e instanceof Error ? e.message : String(e),
+          }),
+        );
       return true;
     });
   },
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function handleMessage(msg: any): any {
+async function handleMessage(msg: any): Promise<any> {
   switch (msg.type) {
     // ===== Observation =====
     case 'GetSnapshot': {
-      const snapshot = buildSnapshot(msg.depth);
+      const state = getBrowserState({
+        viewport_expansion: msg.viewport_expansion,
+        max_interactive: msg.max_interactive,
+        walk_iframes: msg.walk_iframes,
+        walk_shadow: msg.walk_shadow,
+        highlight: msg.highlight,
+      });
       if (msg.compress_html) {
         const compressed = compressHtml(document.documentElement.outerHTML);
         return {
-          url: snapshot.url,
-          title: snapshot.title,
-          elements: snapshot.elements,
-          text_content_summary: snapshot.text_content_summary,
+          ...state,
           compressed_html: JSON.stringify({
             interactive_elements: compressed.interactiveElements.length,
             text_preview: compressed.textContent.slice(0, 2000),
           }),
           compression_stats: compressed.stats,
-          html: document.documentElement.outerHTML,
         };
       }
-      return snapshot;
+      return state;
     }
 
     case 'ExtractText': {
@@ -96,7 +117,7 @@ function handleMessage(msg: any): any {
     }
 
     case 'Scroll': {
-      return scrollPage(msg.direction, msg.amount);
+      return scrollPage(msg.direction, msg.amount, msg.container_index);
     }
 
     case 'Hover': {
@@ -108,7 +129,7 @@ function handleMessage(msg: any): any {
     }
 
     case 'ExecuteJs': {
-      return executeJs(msg.script);
+      return await executeJsAsync(msg.script);
     }
 
     // ===== Fill Form =====

@@ -179,6 +179,10 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         self.agent_pool.stop_agent(group_jid).await;
     }
 
+    fn set_agent_mode(&self, group_jid: &str, mode: &str) {
+        self.agent_pool.set_agent_mode(group_jid, mode);
+    }
+
     /// Snapshot of all dispatch parents — sent to admin clients on subscribe.
     fn get_dispatch_parents(&self) -> serde_json::Value {
         let bridge = self.agent_pool.dispatch_bridge_snapshot();
@@ -904,9 +908,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 4. GroupQueue + AgentPool =====
     let group_queue = agent::group_queue::GroupQueue::new(cfg.agent.max_concurrent);
-    let agent_pool = agent::agent_pool::AgentPool::new(Arc::new(
-        agent::agent_pool::ZenCoreApi::new(Some(Arc::clone(&mcp_manager))),
-    ));
+    // Keep a typed Arc<ZenCoreApi> so we can wire late dependencies (workbench bridge).
+    let zen_core_api = Arc::new(agent::agent_pool::ZenCoreApi::new(Some(Arc::clone(
+        &mcp_manager,
+    ))));
+    let agent_pool = agent::agent_pool::AgentPool::new(zen_core_api.clone());
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
 
@@ -952,6 +958,37 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     ));
     agent_pool.set_daily_logger(daily_logger);
     tracing::info!("[SenClaw] DailyLogger initialized");
+
+    // ===== WorkbenchBridge =====
+    // Relays workbench:* events from each per-group ZenEngine to WS clients +
+    // IM text-fallback. AgentPool calls bridge.bind_engine(...) after each
+    // engine is created; callbacks below are set once at startup.
+    let workbench_bridge = Arc::new(agent::workbench_bridge::WorkbenchBridge::new());
+    zen_core_api.set_workbench_bridge(Arc::clone(&workbench_bridge));
+    agent_pool.set_workbench_bridge(Arc::clone(&workbench_bridge));
+    {
+        let chs = Arc::clone(&channels);
+        workbench_bridge.set_send_channel_notice(Arc::new(
+            move |jid: &str, text: &str, bot_token: Option<&str>| {
+                let chs = Arc::clone(&chs);
+                let jid = jid.to_string();
+                let text = text.to_string();
+                let bt = bot_token.map(|s| s.to_string());
+                tokio::spawn(async move {
+                    let guard = chs.lock().await;
+                    for c in guard.iter() {
+                        if c.owns_jid(&jid) {
+                            if let Err(e) = c.send_message(&jid, &text, bt.as_deref()).await {
+                                tracing::warn!("[WorkbenchBridge] channel notify failed for {jid}: {e}");
+                            }
+                            break;
+                        }
+                    }
+                });
+            },
+        ));
+    }
+    tracing::info!("[SenClaw] WorkbenchBridge initialized");
 
     tracing::info!(
         "[SenClaw] AgentPool (zen-core engine) + GroupQueue (max_concurrent={}) ready",
@@ -1197,6 +1234,73 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let parents = parents.clone();
                 tokio::spawn(async move {
                     gw.notify_dispatch_update(&parents).await;
+                });
+            }));
+        }
+
+        // Wire WorkbenchBridge → WebSocket gateway. Forwards artifact
+        // lifecycle events to subscribed clients (workbench panel renders).
+        {
+            let gw_new = Arc::clone(&gw);
+            workbench_bridge.set_on_new(Box::new(move |chat_jid, payload| {
+                let gw = Arc::clone(&gw_new);
+                let jid = chat_jid.to_string();
+                let artifact = serde_json::to_value(&payload.artifact).unwrap_or_default();
+                let replaces = payload.replaces_id.clone();
+                tokio::spawn(async move {
+                    gw.notify_workbench_new(&jid, &artifact, replaces.as_deref()).await;
+                });
+            }));
+            let gw_ready = Arc::clone(&gw);
+            workbench_bridge.set_on_service_ready(Box::new(move |chat_jid, payload| {
+                let gw = Arc::clone(&gw_ready);
+                let jid = chat_jid.to_string();
+                let aid = payload.artifact_id.clone();
+                let ready = payload.ready;
+                tokio::spawn(async move {
+                    gw.notify_workbench_service_ready(&jid, &aid, ready).await;
+                });
+            }));
+            let gw_crashed = Arc::clone(&gw);
+            workbench_bridge.set_on_service_crashed(Box::new(move |chat_jid, payload| {
+                let gw = Arc::clone(&gw_crashed);
+                let jid = chat_jid.to_string();
+                let aid = payload.artifact_id.clone();
+                let logs = payload.last_log_lines.clone();
+                tokio::spawn(async move {
+                    gw.notify_workbench_service_crashed(&jid, &aid, &logs).await;
+                });
+            }));
+            let gw_stopped = Arc::clone(&gw);
+            workbench_bridge.set_on_service_stopped(Box::new(move |chat_jid, payload| {
+                let gw = Arc::clone(&gw_stopped);
+                let jid = chat_jid.to_string();
+                let aid = payload.artifact_id.clone();
+                let reason = payload.reason.clone();
+                tokio::spawn(async move {
+                    gw.notify_workbench_service_stopped(&jid, &aid, &reason).await;
+                });
+            }));
+        }
+
+        // Wire ZenCoreApi → WebSocket gateway for Plan-mode exit requests.
+        // When an agent calls the `ExitPlanMode` tool, the engine emits
+        // `EngineEvent::PlanExitRequest` which the API forwards here. The UI
+        // catches `plan:exit:request` and renders the `PlanExitDialog`.
+        {
+            let gw_plan = Arc::clone(&gw);
+            zen_core_api.set_on_plan_exit_request(Arc::new(move |jid, data| {
+                let gw = Arc::clone(&gw_plan);
+                tokio::spawn(async move {
+                    gw.notify_plan_exit_request(
+                        &jid,
+                        &data.agent_id,
+                        &data.plan_file_path,
+                        &data.plan_content,
+                        &data.options.start_editing,
+                        &data.options.clear_context_and_start,
+                    )
+                    .await;
                 });
             }));
         }
@@ -1567,6 +1671,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         })
                     })
             ))),
+            workbench_bridge: Some(Arc::clone(&workbench_bridge)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });

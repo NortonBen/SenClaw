@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { theme } from 'antd';
 import type { GroupInfo, ChatMessage, AgentState, UsageData, ImageAttachment } from '../types';
+import type { AgentMode } from '../hooks/useWebSocket';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 import { Progress, Space, Typography } from 'antd';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
@@ -20,11 +21,14 @@ interface Props {
   onStop: () => void;
   onResolvePermission: (requestId: string, optionKey: string) => void;
   onResolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
+  /** Active agent mode for this chat (defaults to 'Agent' when undefined). */
+  agentMode?: AgentMode;
+  onModeChange?: (mode: AgentMode) => void;
 }
 
 const PAGE_SIZE = 5;
 
-export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion }: Props) {
+export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion, agentMode, onModeChange }: Props) {
   const { token } = theme.useToken();
   const [input, setInput]           = useState('');
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -375,6 +379,8 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
         helperText={isPaused
           ? 'Press ▶ to resume · / @ # gợi ý · Shift+Enter xuống dòng'
           : 'Enter để gửi · Shift+Enter xuống dòng · / @ # gợi ý'}
+        agentMode={agentMode}
+        onModeChange={onModeChange}
       >
         <AgentCommandInput
           value={input}

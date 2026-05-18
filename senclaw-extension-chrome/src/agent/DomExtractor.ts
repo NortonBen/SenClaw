@@ -1,81 +1,123 @@
-// DOM extraction: flattened accessibility tree with interactive element indexing.
-import type { SnapshotElement, PageSnapshot } from '../types/protocol';
+// DOM extraction entry points. Thin wrappers around DomTreeBuilder.
+//
+// The legacy `buildSnapshot()` shape is preserved as a compatibility flag.
+// New consumers should call `getBrowserState()` for the rich payload.
 
-const INTERACTIVE_SELECTOR = [
-  'a', 'button', 'input', 'select', 'textarea',
-  '[role="button"]', '[role="link"]', '[role="textbox"]',
-  '[role="combobox"]', '[role="checkbox"]', '[role="radio"]',
-  '[tabindex]:not([tabindex="-1"])', '[contenteditable="true"]',
-  'details', 'summary', '[onclick]',
-].join(',');
+import {
+  buildDomTree,
+  renderBrowserState,
+  type DomTreeResult,
+  type ViewportInfo,
+} from './DomTreeBuilder';
+import { drawHighlights, clearHighlights } from './HighlightOverlay';
+import { getElementByIndex } from './SelectorMap';
 
-const KEEP_ATTRS = [
-  'href', 'src', 'alt', 'title', 'placeholder', 'type',
-  'name', 'id', 'value', 'role', 'aria-label', 'aria-expanded',
-  'aria-selected', 'aria-checked', 'checked', 'disabled',
-  'selected', 'readonly', 'required', 'maxlength',
-];
-
-function implicitRole(el: Element): string {
-  const tag = el.tagName.toLowerCase();
-  const type = (el as HTMLInputElement).type;
-  if (tag === 'a' && el.hasAttribute('href')) return 'link';
-  if (tag === 'button') return 'button';
-  if (tag === 'input') {
-    if (type === 'checkbox') return 'checkbox';
-    if (type === 'radio') return 'radio';
-    if (type === 'submit' || type === 'button') return 'button';
-    return 'textbox';
-  }
-  if (tag === 'select') return 'combobox';
-  if (tag === 'textarea') return 'textbox';
-  if (tag === 'img') return 'img';
-  return '';
+export interface ExtractedElement {
+  index: number;
+  tag: string;
+  role: string;
+  text: string;
+  attributes: Record<string, string>;
+  bbox: { x: number; y: number; width: number; height: number };
+  enabled: boolean;
+  selected: boolean;
+  is_new: boolean;
+  viewport_status: 'in' | 'above' | 'below';
+  frame_path?: string;
 }
 
-function getAttributes(el: Element): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  for (const key of KEEP_ATTRS) {
-    const val = el.getAttribute(key);
-    if (val) attrs[key] = val;
-  }
-  return attrs;
+export interface BrowserState {
+  url: string;
+  title: string;
+  elements: ExtractedElement[];
+  viewport: ViewportInfo;
+  /** Pre-rendered tab-indented compact view for the LLM. */
+  formatted: {
+    header: string;
+    content: string;
+    footer: string;
+  };
+  /** Total interactive elements found before any cap. */
+  total_interactive: number;
+  /** Whether the result was capped at maxInteractive. */
+  capped: boolean;
+  text_content_summary: string;
 }
 
-export function buildSnapshot(depth?: number): PageSnapshot {
-  const elements: SnapshotElement[] = [];
-  const interactive = document.querySelectorAll(INTERACTIVE_SELECTOR);
+export interface GetSnapshotOptions {
+  viewport_expansion?: number;
+  max_interactive?: number;
+  walk_iframes?: boolean;
+  walk_shadow?: boolean;
+  highlight?: boolean;
+}
 
-  interactive.forEach((el, i) => {
-    if (i >= 500) return; // cap at 500 elements
-
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return; // skip invisible
-
-    const text = (el.textContent?.trim().slice(0, 200)
-      || el.getAttribute('aria-label')
-      || (el as HTMLInputElement).placeholder
-      || (el as HTMLInputElement).value
-      || '');
-
-    elements.push({
-      index: i,
-      tag: el.tagName.toLowerCase(),
-      role: el.getAttribute('role') || implicitRole(el),
-      text,
-      attributes: getAttributes(el),
-      bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      enabled: !(el as HTMLButtonElement).disabled,
-      selected: (el as HTMLInputElement).checked
-        || el.getAttribute('aria-selected') === 'true',
-    });
+export function getBrowserState(opts: GetSnapshotOptions = {}): BrowserState {
+  const tree = buildDomTree({
+    viewportExpansion: opts.viewport_expansion ?? 0,
+    maxInteractive: opts.max_interactive ?? 300,
+    walkIframes: opts.walk_iframes ?? true,
+    walkShadow: opts.walk_shadow ?? true,
   });
 
+  if (opts.highlight) {
+    const targets: { index: number; el: HTMLElement }[] = [];
+    for (const n of tree.interactive) {
+      if (n.viewportStatus !== 'in') continue;
+      const el = getElementByIndex(n.highlightIndex!);
+      if (el) targets.push({ index: n.highlightIndex!, el });
+    }
+    drawHighlights(targets);
+  } else {
+    clearHighlights();
+  }
+
+  return toBrowserState(tree);
+}
+
+function toBrowserState(tree: DomTreeResult): BrowserState {
+  const elements: ExtractedElement[] = tree.interactive.map((n) => ({
+    index: n.highlightIndex!,
+    tag: n.tag,
+    role: n.role,
+    text: n.text,
+    attributes: n.attributes,
+    bbox: n.bbox,
+    enabled: n.enabled,
+    selected: n.selected,
+    is_new: !!n.isNew,
+    viewport_status: n.viewportStatus,
+    frame_path: n.framePath,
+  }));
+
+  const formatted = renderBrowserState(tree);
+  const summary = (document.body?.innerText ?? '').slice(0, 2000);
+
   return {
-    url: location.href,
-    title: document.title,
+    url: tree.url,
+    title: tree.title,
     elements,
-    text_content_summary: (document.body?.innerText ?? '').slice(0, 1000),
+    viewport: tree.viewport,
+    formatted,
+    total_interactive: tree.interactive.length,
+    capped: tree.interactive.length >= 300,
+    text_content_summary: summary,
+  };
+}
+
+/** Legacy shape kept for the existing browser_server.rs snapshot path. */
+export function buildSnapshot(): {
+  url: string;
+  title: string;
+  elements: ExtractedElement[];
+  text_content_summary: string;
+} {
+  const state = getBrowserState();
+  return {
+    url: state.url,
+    title: state.title,
+    elements: state.elements,
+    text_content_summary: state.text_content_summary,
   };
 }
 
@@ -87,7 +129,9 @@ export function extractText(selector?: string): { text: string; url: string } {
   };
 }
 
-export function extractLinks(selector?: string): { links: { text: string; url: string }[]; source_url: string } {
+export function extractLinks(
+  selector?: string,
+): { links: { text: string; url: string }[]; source_url: string } {
   const container = selector ? document.querySelector(selector) : document.body;
   const links = Array.from((container ?? document).querySelectorAll('a[href]'))
     .map((a) => ({
@@ -98,9 +142,11 @@ export function extractLinks(selector?: string): { links: { text: string; url: s
   return { links, source_url: location.href };
 }
 
-export function extractTable(selector?: string): { data: Record<string, string>[]; source_url: string } {
+export function extractTable(
+  selector?: string,
+): { data: Record<string, string>[]; source_url: string } {
   const table = selector
-    ? document.querySelector(selector) as HTMLTableElement
+    ? (document.querySelector(selector) as HTMLTableElement | null)
     : document.querySelector('table');
 
   if (!table) return { data: [], source_url: location.href };

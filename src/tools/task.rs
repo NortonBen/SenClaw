@@ -58,6 +58,11 @@ pub fn default_agent_configs() -> Vec<AgentConfig> {
 
 const AGENT_PROMPT_GENERAL: &str = "You are a helpful AI assistant with access to tools.";
 
+/// Closure that returns the current main-agent tool list (already filtered
+/// by `use_tools` / Plan mode / cowork rules). Called per subagent spawn so
+/// the subagent inherits live engine state instead of a stale snapshot.
+pub type ToolResolver = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
+
 pub struct TaskTool {
     http_client: Client,
     event_bus: EventBus,
@@ -66,8 +71,10 @@ pub struct TaskTool {
     agent_configs: Vec<AgentConfig>,
     working_dir: String,
     agent_data_dir: String,
-    /// All tools (for filtering). TaskTool itself is excluded.
-    tools: Vec<Arc<dyn Tool>>,
+    /// Resolves the current main-agent tool list at spawn time. Calling this
+    /// every subagent call means the subagent sees `use_tools` / Plan-mode
+    /// updates that happened after TaskTool was constructed.
+    tools_resolver: ToolResolver,
     /// Model profile
     profile: ModelProfile,
 }
@@ -82,7 +89,7 @@ impl TaskTool {
         agent_configs: Vec<AgentConfig>,
         working_dir: String,
         agent_data_dir: String,
-        tools: Vec<Arc<dyn Tool>>,
+        tools_resolver: ToolResolver,
         profile: ModelProfile,
     ) -> Self {
         Self {
@@ -93,7 +100,7 @@ impl TaskTool {
             agent_configs,
             working_dir,
             agent_data_dir,
-            tools,
+            tools_resolver,
             profile,
         }
     }
@@ -222,19 +229,29 @@ impl Tool for TaskTool {
         // 3. Build subagent system prompt
         let system_prompt = agent_config.prompt.clone();
 
-        // 4. Determine tools for subagent (exclude Task itself)
+        // 4. Determine tools for subagent. The resolver returns the current
+        //    main-agent tool list (already filtered by use_tools, Plan mode,
+        //    cowork rules). On top of that we layer:
+        //    (a) `agent_config.tools` whitelist ("*" = inherit all)
+        //    (b) `SUBAGENT_EXCLUDED_TOOLS` — token-saving guard: subagents never
+        //        see Task / PeekBgJob / StopBgJob / AskUser* / ExitPlanMode /
+        //        TodoWrite (mirrors sema-core's `SUBAGENT_EXCLUDED_TOOLS`).
+        use crate::zen_core::prompt::SUBAGENT_EXCLUDED_TOOLS;
+        let main_tools = (self.tools_resolver)();
         let subagent_tools: Vec<Arc<dyn Tool>> = if agent_config.tools.iter().any(|t| t == "*") {
-            self.tools
+            main_tools
                 .iter()
-                .filter(|t| t.name() != "Task")
+                .filter(|t| !SUBAGENT_EXCLUDED_TOOLS.contains(&t.name()))
                 .cloned()
                 .collect()
         } else {
             let allowed: std::collections::HashSet<&str> =
                 agent_config.tools.iter().map(|s| s.as_str()).collect();
-            self.tools
+            main_tools
                 .iter()
-                .filter(|t| allowed.contains(t.name()) && t.name() != "Task")
+                .filter(|t| {
+                    allowed.contains(t.name()) && !SUBAGENT_EXCLUDED_TOOLS.contains(&t.name())
+                })
                 .cloned()
                 .collect()
         };

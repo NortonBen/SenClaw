@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Typography, Card, Button, Table, Space, Tag, message, Modal, Form, Input, Select, Spin } from 'antd';
-import { PlusOutlined, CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import { PlusOutlined, CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SettingOutlined, SearchOutlined } from '@ant-design/icons';
+import { ClawHubSearchDialog } from './ClawHubSearchDialog';
 
 const { Title, Text } = Typography;
 
@@ -27,6 +28,7 @@ export default function MarketplacePanel() {
   const [sources, setSources] = useState<MarketplaceSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [addModalVisible, setAddModalVisible] = useState(false);
+  const [clawhubOpen, setClawhubOpen] = useState(false);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -186,6 +188,12 @@ export default function MarketplacePanel() {
           <Button icon={<ReloadOutlined />} onClick={fetchSources}>
             Refresh
           </Button>
+          <Button
+            icon={<SearchOutlined />}
+            onClick={() => setClawhubOpen(true)}
+          >
+            Search ClaWHub
+          </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalVisible(true)}>
             Add Source
           </Button>
@@ -267,6 +275,12 @@ export default function MarketplacePanel() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <ClawHubSearchDialog
+        open={clawhubOpen}
+        onClose={() => setClawhubOpen(false)}
+        onInstalled={() => fetchSources()}
+      />
     </div>
   );
 }

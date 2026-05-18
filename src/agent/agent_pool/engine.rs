@@ -31,6 +31,18 @@ pub struct ZenCoreApi {
     handlers: Arc<Mutex<HashMap<String, CoreHandlers>>>,
     http_client: Client,
     mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
+    /// Optional WorkbenchBridge — when set, `ensure_engine` binds each new
+    /// engine's event stream so artifacts surface in the UI / IM fallback.
+    workbench_bridge: Mutex<Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>>,
+    /// Per-jid bot tokens used by the workbench-bridge IM fallback.
+    bot_tokens: Mutex<HashMap<String, Option<String>>>,
+    /// Callback invoked when an engine emits a plan-exit request. Caller
+    /// (lib.rs) uses it to broadcast the event over WS so the UI can render
+    /// the plan-approval modal. `Arc<Mutex>` so spawned event loops can hold
+    /// a cheap clone and pick up callbacks set after engine creation.
+    on_plan_exit_request: Arc<
+        Mutex<Option<Arc<dyn Fn(String, crate::zen_core::PlanExitRequestData) + Send + Sync>>>,
+    >,
 }
 
 impl ZenCoreApi {
@@ -44,7 +56,38 @@ impl ZenCoreApi {
                 .build()
                 .expect("ZenCoreApi http client"),
             mcp_manager,
+            workbench_bridge: Mutex::new(None),
+            bot_tokens: Mutex::new(HashMap::new()),
+            on_plan_exit_request: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Wire a callback fired when any engine emits `EngineEvent::PlanExitRequest`.
+    /// Used by lib.rs to broadcast `plan:exit:request` over the WebSocket gateway.
+    pub fn set_on_plan_exit_request(
+        &self,
+        cb: Arc<dyn Fn(String, crate::zen_core::PlanExitRequestData) + Send + Sync>,
+    ) {
+        *self.on_plan_exit_request.lock().unwrap() = Some(cb);
+    }
+
+    /// Inject the WorkbenchBridge so future-created engines emit artifact
+    /// events into the bridge. Idempotent — last setter wins.
+    pub fn set_workbench_bridge(
+        &self,
+        bridge: Arc<crate::agent::workbench_bridge::WorkbenchBridge>,
+    ) {
+        *self.workbench_bridge.lock().unwrap() = Some(bridge);
+    }
+
+    /// Update the cached `bot_token` for a JID. AgentPool calls this when
+    /// loading group bindings so the workbench-bridge IM fallback can target
+    /// the right bot when artifacts are published.
+    pub fn set_bot_token(&self, jid: &str, bot_token: Option<String>) {
+        self.bot_tokens
+            .lock()
+            .unwrap()
+            .insert(jid.to_string(), bot_token);
     }
 
     fn get_handlers(&self, jid: &str) -> Option<CoreHandlers> {
@@ -76,6 +119,11 @@ impl ZenCoreApi {
                 engine.refresh_mcp_tools().await;
             });
         }
+        // Bind WorkbenchBridge if wired (relays artifact events to UI + IM fallback).
+        if let Some(bridge) = self.workbench_bridge.lock().unwrap().clone() {
+            let bot_token = self.bot_tokens.lock().unwrap().get(jid).cloned().flatten();
+            bridge.bind_engine(engine.clone(), jid, bot_token);
+        }
         engines.insert(jid.to_string(), engine.clone());
         engine
     }
@@ -84,6 +132,9 @@ impl ZenCoreApi {
     fn bridge_events(&self, jid: &str, engine: &Arc<ZenEngine>) {
         let jid = jid.to_string();
         let handlers_map = Arc::clone(&self.handlers);
+        // Snapshot the plan-exit callback shared Mutex so the spawned loop
+        // can fire it without re-locking through `&self`.
+        let plan_callback_for_loop = self.on_plan_exit_request.clone();
         let mut rx = engine.event_bus.subscribe();
 
         tokio::spawn(async move {
@@ -187,6 +238,16 @@ impl ZenCoreApi {
                             EngineEvent::ConversationUsage(data) => {
                                 if let Some(ref cb) = h.conversation_usage {
                                     cb(data);
+                                }
+                            }
+                            EngineEvent::PlanExitRequest(data) => {
+                                // Independent of CoreHandlers — uses the global
+                                // ZenCoreApi callback wired at startup. Forwards
+                                // to lib.rs which broadcasts the WS event so the
+                                // UI can render the PlanExitDialog.
+                                let cb_opt = plan_callback_for_loop.lock().unwrap().clone();
+                                if let Some(cb) = cb_opt {
+                                    cb(jid.clone(), data);
                                 }
                             }
                             _ => {}
@@ -318,6 +379,25 @@ impl CoreApi for ZenCoreApi {
             .get(jid)
             .map(|e| e.has_session_tool_results())
             .unwrap_or(false)
+    }
+
+    fn update_agent_mode(&self, jid: &str, mode: &str) {
+        use crate::zen_core::AgentMode;
+        let parsed = match mode {
+            "Plan" => AgentMode::Plan,
+            "Agent" => AgentMode::Agent,
+            other => {
+                tracing::warn!(
+                    "[ZenCoreApi] update_agent_mode: unknown mode '{other}' for {jid}, ignored"
+                );
+                return;
+            }
+        };
+        if let Some(engine) = self.engines.lock().unwrap().get(jid).cloned() {
+            engine.update_agent_mode(parsed);
+        } else {
+            tracing::warn!("[ZenCoreApi] update_agent_mode: no engine for {jid}");
+        }
     }
 
     fn on_message_complete(

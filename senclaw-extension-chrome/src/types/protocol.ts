@@ -17,6 +17,12 @@ export interface SnapshotElement {
   bbox: BoundingBox;
   enabled: boolean;
   selected: boolean;
+  /** True if the element wasn't present in the previous snapshot at this URL. */
+  is_new: boolean;
+  /** Where the element sits relative to the current viewport. */
+  viewport_status: 'in' | 'above' | 'below';
+  /** Frame path for nested iframes (undefined if in top frame). */
+  frame_path?: string;
 }
 
 export interface BoundingBox {
@@ -26,10 +32,30 @@ export interface BoundingBox {
   height: number;
 }
 
+export interface ViewportInfo {
+  width: number;
+  height: number;
+  scroll_x: number;
+  scroll_y: number;
+  document_width: number;
+  document_height: number;
+  pages_above: number;
+  pages_below: number;
+}
+
 export interface PageSnapshot {
   url: string;
   title: string;
   elements: SnapshotElement[];
+  viewport: ViewportInfo;
+  /** Pre-rendered three-section view for the LLM. */
+  formatted: {
+    header: string;
+    content: string;
+    footer: string;
+  };
+  total_interactive: number;
+  capped: boolean;
   text_content_summary: string;
   compressed_html?: string;
 }
@@ -118,7 +144,7 @@ export type DaemonMessage =
   | { type: 'UploadFile'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; file_paths: string[] }
   | { type: 'ExecuteJs'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; script: string }
   | { type: 'WaitFor'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; condition: WaitCondition }
-  | { type: 'GetSnapshot'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; depth?: number; compress_html?: boolean }
+  | { type: 'GetSnapshot'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; depth?: number; compress_html?: boolean; viewport_expansion?: number; max_interactive?: number; walk_iframes?: boolean; walk_shadow?: boolean; highlight?: boolean }
   | { type: 'GetScreenshot'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; full_page: boolean; format: string; quality?: number }
   | { type: 'ExtractText'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
   | { type: 'ExtractLinks'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }

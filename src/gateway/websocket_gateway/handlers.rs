@@ -1239,6 +1239,44 @@ pub(crate) async fn handle_list_dispatch(
     );
 }
 
+pub(crate) async fn handle_agent_mode(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
+    let mode = msg["mode"].as_str().unwrap_or("").to_string();
+    if group_jid.is_empty() || mode.is_empty() {
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "groupJid and mode required"}),
+        );
+        return;
+    }
+    if !matches!(mode.as_str(), "Agent" | "Plan") {
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": format!("Unknown mode: {mode}")}),
+        );
+        return;
+    }
+    state.api.set_agent_mode(&group_jid, &mode);
+    // Echo back so the originating tab + other tabs reflect the new mode.
+    send_json(
+        sender,
+        &serde_json::json!({
+            "type": "agent:mode:changed",
+            "groupJid": group_jid,
+            "mode": mode,
+        }),
+    );
+}
+
 pub(crate) async fn handle_agent_control(
     clients: &Arc<Mutex<Vec<WsClient>>>,
     client_idx: usize,

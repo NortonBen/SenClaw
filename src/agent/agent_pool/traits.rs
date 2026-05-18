@@ -143,6 +143,9 @@ pub trait CoreApi: Send + Sync {
         false
     }
 
+    /// Update the agent mode for `jid` (`"Agent" | "Plan"`). Default no-op.
+    fn update_agent_mode(&self, _jid: &str, _mode: &str) {}
+
     /// Register event listeners on the underlying core.
     /// Default no-ops — real sema-core will implement these.
     fn on_message_complete(

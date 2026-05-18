@@ -42,6 +42,8 @@ pub trait WsGatewayApi: Send + Sync {
     fn resume_agent(&self, _group_jid: &str, _query: Option<&str>) {}
     /// Stop the agent for a group.
     async fn stop_agent(&self, _group_jid: &str) {}
+    /// Switch agent mode (`"Agent" | "Plan"`) for a group's engine.
+    fn set_agent_mode(&self, _group_jid: &str, _mode: &str) {}
 
     /// Get current dispatch parents (for admin clients on subscribe).
     fn get_dispatch_parents(&self) -> serde_json::Value {

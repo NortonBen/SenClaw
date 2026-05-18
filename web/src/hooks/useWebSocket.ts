@@ -85,6 +85,37 @@ export interface WsHook {
   notifications: EventNotification[];
   markNotificationRead: (id: string) => void;
   clearAllNotifications: () => void;
+  // Plan mode (AgentMode::Plan workflow)
+  /** Active plan-exit request — non-null when an agent is awaiting plan approval. */
+  planExitRequest: PlanExitRequest | null;
+  /** Send the user's plan-exit decision back to the engine. */
+  resolvePlanExit: (selected: PlanExitOption) => void;
+  /** Dismiss the pending plan-exit dialog without responding (UI-only). */
+  dismissPlanExit: () => void;
+  // Agent mode toggle (per chat JID)
+  /** Per-JID active agent mode (defaults to `Agent` when absent). */
+  agentModes: Record<string, AgentMode>;
+  /** Switch the engine's mode for a specific chat JID. */
+  setAgentMode: (jid: string, mode: AgentMode) => void;
+}
+
+export type AgentMode = 'Agent' | 'Plan';
+
+export type PlanExitOption = 'startEditing' | 'clearContextAndStart';
+
+export interface PlanExitRequest {
+  /** Group/agent JID that originated the request. */
+  groupJid: string;
+  /** Internal agent id (usually `main`). */
+  agentId: string;
+  /** Absolute path of the plan file written by the agent. */
+  planFilePath: string;
+  /** Markdown plan content. */
+  planContent: string;
+  /** Display labels for the two approval options. */
+  options: { startEditing: string; clearContextAndStart: string };
+  /** UTC timestamp the request arrived (used for cache invalidation). */
+  receivedAt: number;
 }
 
 export function useWebSocket(): WsHook {
@@ -106,6 +137,8 @@ export function useWebSocket(): WsHook {
   const [toolRules, setToolRules]             = useState<ToolAutoAcceptRule[]>(loadRules);
   const [dangerouslyAcceptAll, setAcceptAllState] = useState<boolean>(loadAcceptAll);
   const [notifications, setNotifications]     = useState<EventNotification[]>([]);
+  const [planExitRequest, setPlanExitRequest] = useState<PlanExitRequest | null>(null);
+  const [agentModes, setAgentModes] = useState<Record<string, AgentMode>>({});
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -491,6 +524,42 @@ export function useWebSocket(): WsHook {
             });
             break;
           }
+          case 'plan:exit:request': {
+            // Engine has prepared a plan and is awaiting user approval.
+            // Surface a modal to the user; resolvePlanExit() posts the choice back.
+            const opts = (msg.options as { startEditing?: string; clearContextAndStart?: string } | undefined) ?? {};
+            setPlanExitRequest({
+              groupJid: (msg.groupJid as string) ?? '',
+              agentId: (msg.agentId as string) ?? 'main',
+              planFilePath: (msg.planFilePath as string) ?? '',
+              planContent: (msg.planContent as string) ?? '',
+              options: {
+                startEditing: opts.startEditing ?? 'Approve plan and start editing',
+                clearContextAndStart: opts.clearContextAndStart ?? 'Clear context and start fresh',
+              },
+              receivedAt: Date.now(),
+            });
+            break;
+          }
+          case 'plan:exit:response': {
+            // Server-side confirmation that the engine accepted our choice.
+            // Clearing local state collapses the dialog if still open.
+            setPlanExitRequest(null);
+            break;
+          }
+          case 'plan:implement': {
+            // Engine moved into implementation phase — close any pending dialog.
+            setPlanExitRequest(null);
+            break;
+          }
+          case 'agent:mode:changed': {
+            const jid = msg.groupJid as string;
+            const mode = msg.mode as AgentMode;
+            if (jid && (mode === 'Agent' || mode === 'Plan')) {
+              setAgentModes((prev) => ({ ...prev, [jid]: mode }));
+            }
+            break;
+          }
           case 'group:registered':
             setGroups(prev => {
               const g = msg.group as GroupInfo;
@@ -716,6 +785,28 @@ export function useWebSocket(): WsHook {
   // suppress unused warning — findRequestJid is available for future use
   void findRequestJid;
 
+  const resolvePlanExit = useCallback((selected: PlanExitOption) => {
+    const req = planExitRequest;
+    if (!req) return;
+    rawSend({
+      type: 'plan:exit:response',
+      groupJid: req.groupJid,
+      agentId: req.agentId,
+      selected,
+    });
+    setPlanExitRequest(null);
+  }, [planExitRequest, rawSend]);
+
+  const dismissPlanExit = useCallback(() => {
+    setPlanExitRequest(null);
+  }, []);
+
+  const setAgentMode = useCallback((jid: string, mode: AgentMode) => {
+    // Optimistic UI update — the server echoes `agent:mode:changed` to confirm.
+    setAgentModes((prev) => ({ ...prev, [jid]: mode }));
+    rawSend({ type: 'agent:mode', groupJid: jid, mode });
+  }, [rawSend]);
+
   return useMemo(() => ({
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -724,6 +815,8 @@ export function useWebSocket(): WsHook {
     updateChannel, updateAgent, updateBinding,
     toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
     notifications, markNotificationRead, clearAllNotifications,
+    planExitRequest, resolvePlanExit, dismissPlanExit,
+    agentModes, setAgentMode,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -732,5 +825,7 @@ export function useWebSocket(): WsHook {
     updateChannel, updateAgent, updateBinding,
     toolRules, dangerouslyAcceptAll, addToolRule, removeToolRule, toggleToolRule, setDangerouslyAcceptAll,
     notifications, markNotificationRead, clearAllNotifications,
+    planExitRequest, resolvePlanExit, dismissPlanExit,
+    agentModes, setAgentMode,
   ]);
 }

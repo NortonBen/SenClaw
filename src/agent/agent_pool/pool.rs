@@ -73,6 +73,7 @@ pub struct AgentPool {
     send_reply: Mutex<Option<SendReplyFn>>,
     typing_fn: Mutex<Option<TypingFn>>,
     permission_bridge: Mutex<Option<Arc<PermissionBridge>>>,
+    workbench_bridge: Mutex<Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>>,
     daily_logger: Mutex<Option<Arc<DailyLogger>>>,
     agent_event_sink: Mutex<Option<Arc<dyn AgentEventSink>>>,
     dispatch_bridge: Mutex<Option<Arc<dyn DispatchBridgeApi>>>,
@@ -107,6 +108,7 @@ impl AgentPool {
             send_reply: Mutex::new(None),
             typing_fn: Mutex::new(None),
             permission_bridge: Mutex::new(None),
+            workbench_bridge: Mutex::new(None),
             daily_logger: Mutex::new(None),
             agent_event_sink: Mutex::new(None),
             dispatch_bridge: Mutex::new(None),
@@ -193,6 +195,16 @@ impl AgentPool {
 
     pub fn set_daily_logger(&self, logger: Arc<DailyLogger>) {
         *self.daily_logger.lock().unwrap() = Some(logger);
+    }
+
+    /// Workbench bridge — bound to each per-group engine after creation.
+    pub fn set_workbench_bridge(&self, bridge: Arc<crate::agent::workbench_bridge::WorkbenchBridge>) {
+        *self.workbench_bridge.lock().unwrap() = Some(bridge);
+    }
+
+    /// Get the workbench bridge (if wired). Used by engine factory to bind.
+    pub fn workbench_bridge(&self) -> Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>> {
+        self.workbench_bridge.lock().unwrap().clone()
     }
 
     /// `~/.senclaw/` — overrides the home-dir default.
@@ -1695,6 +1707,14 @@ impl AgentPool {
     // ===== Phase 3: pause / resume / stop / destroy =====
 
     /// Pause the agent for `jid`. Three modes (mirrors TS 931–982):
+    /// Switch the engine's agent mode for `jid`. Mode values: `"Agent"` (default)
+    /// or `"Plan"`. Idempotent — unknown modes are ignored with a warning.
+    /// The change applies to the next LLM turn: Plan mode strips
+    /// `TodoWrite` from the tool list and injects the plan-mode reminder.
+    pub fn set_agent_mode(&self, jid: &str, mode: &str) {
+        self.core_api.update_agent_mode(jid, mode);
+    }
+
     ///   A. **core-pause** — active PAW → `CoreApi::pause_session`
     ///   B. **dispatch-pause** — active dispatch → record in set, notify
     ///   C. **synth-pause** — fully idle → record in set, notify

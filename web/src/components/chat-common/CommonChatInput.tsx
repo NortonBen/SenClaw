@@ -2,6 +2,8 @@ import React from 'react';
 import { theme } from 'antd';
 import { getChatActionButtonStyle, getChatTextareaStyle } from './chatInputStyles';
 import { shouldIgnoreEnterSubmit, useGuardedChatSubmit } from './useGuardedChatSubmit';
+import { AgentModeSelector } from './AgentModeSelector';
+import type { AgentMode } from '../../hooks/useWebSocket';
 
 export interface CommonChatInputProps {
   className?: string;
@@ -17,6 +19,13 @@ export interface CommonChatInputProps {
   onSubmit?: () => void;
   /** Custom input row (e.g. AgentCommandInput). When set, default textarea + send are omitted. */
   children?: React.ReactNode;
+  /**
+   * Active agent mode for this chat. When provided alongside `onModeChange`,
+   * a Plan/Agent mode dropdown is rendered below the textarea. Omit the props
+   * to hide the selector entirely (cowork / virtual JIDs etc.).
+   */
+  agentMode?: AgentMode;
+  onModeChange?: (mode: AgentMode) => void;
 }
 
 function DefaultPlaneIcon() {
@@ -40,6 +49,8 @@ export function CommonChatInput({
   onChange,
   onSubmit,
   children,
+  agentMode,
+  onModeChange,
 }: CommonChatInputProps) {
   const { token } = theme.useToken();
   const placeholderClass = `common-chat-ph-${React.useId().replace(/[^a-zA-Z0-9_-]/g, '') || 'x'}`;
@@ -92,10 +103,18 @@ export function CommonChatInput({
           </button>
         </div>
       )}
-      {helperText ? (
-        <p className="text-[11px] mt-1.5 px-1" style={{ color: token.colorTextTertiary }}>
-          {helperText}
-        </p>
+      {(agentMode && onModeChange) || helperText ? (
+        <div
+          className="flex items-center justify-between gap-2 mt-1.5 px-1"
+          style={{ color: token.colorTextTertiary, fontSize: 11 }}
+        >
+          {agentMode && onModeChange ? (
+            <AgentModeSelector mode={agentMode} onChange={onModeChange} disabled={disabled} />
+          ) : (
+            <span />
+          )}
+          {helperText ? <span>{helperText}</span> : <span />}
+        </div>
       ) : null}
     </div>
   );

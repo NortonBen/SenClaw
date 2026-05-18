@@ -24,6 +24,7 @@ mod spa;
 mod subagents;
 pub mod types;
 mod wiki;
+mod workbench;
 
 // Re-exports for external use
 pub use core::{build_router, start_ui_server, AppError, UiApi, UiState};

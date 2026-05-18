@@ -19,11 +19,24 @@ pub struct SnapshotElement {
     pub tag: String,
     pub role: String,
     pub text: String,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub attributes: HashMap<String, String>,
     pub bbox: BoundingBox,
     pub enabled: bool,
     pub selected: bool,
+    /// True if not present in the previous snapshot at this URL.
+    #[serde(default)]
+    pub is_new: bool,
+    /// "in" | "above" | "below" relative to current viewport.
+    #[serde(default = "default_viewport_status")]
+    pub viewport_status: String,
+    /// Frame path for nested iframes; None if in top frame.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame_path: Option<String>,
+}
+
+fn default_viewport_status() -> String {
+    "in".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,13 +47,45 @@ pub struct BoundingBox {
     pub height: f32,
 }
 
+/// Viewport/scroll metadata returned alongside the element list.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ViewportInfo {
+    pub width: f32,
+    pub height: f32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub document_width: f32,
+    pub document_height: f32,
+    /// Number of viewport-heights of content above the current scroll position.
+    pub pages_above: f32,
+    /// Number of viewport-heights of content below.
+    pub pages_below: f32,
+}
+
+/// Three-section pre-rendered string view for the LLM.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FormattedState {
+    pub header: String,
+    pub content: String,
+    pub footer: String,
+}
+
 /// Full page snapshot returned by content script.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageSnapshot {
     pub url: String,
     pub title: String,
     pub elements: Vec<SnapshotElement>,
+    #[serde(default)]
+    pub viewport: ViewportInfo,
+    #[serde(default)]
+    pub formatted: FormattedState,
+    #[serde(default)]
+    pub total_interactive: u32,
+    #[serde(default)]
+    pub capped: bool,
     pub text_content_summary: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compressed_html: Option<String>,
 }
 

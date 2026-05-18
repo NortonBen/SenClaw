@@ -61,6 +61,8 @@ export function ChatPage() {
                 onStop={() => ws.stopAgent(selectedJid!)}
                 onResolvePermission={ws.resolvePermission}
                 onResolveQuestion={ws.resolveQuestion}
+                agentMode={ws.agentModes[selectedJid!] ?? 'Agent'}
+                onModeChange={(mode) => ws.setAgentMode(selectedJid!, mode)}
               />
             ) : (
               <div className="flex h-full items-center justify-center">

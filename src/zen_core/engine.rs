@@ -64,6 +64,9 @@ pub struct ZenEngine {
 
     // Hook system
     pub hook_manager: Arc<HookManager>,
+
+    // Workbench artifact service (artifact publishing + reverse ops)
+    pub workbench_service: Arc<crate::zen_core::workbench::WorkbenchService>,
 }
 
 impl ZenEngine {
@@ -88,6 +91,10 @@ impl ZenEngine {
         let state = Arc::new(Mutex::new(StateManager::new()));
         let skill_registry = Arc::new(SkillRegistry::default());
 
+        let workbench_service = Arc::new(crate::zen_core::workbench::WorkbenchService::new(
+            event_bus.clone(),
+        ));
+
         let engine = Arc::new(Self {
             instance_id,
             event_bus,
@@ -103,6 +110,7 @@ impl ZenEngine {
             mcp_manager,
             session_id: RwLock::new(None),
             hook_manager: Arc::new(HookManager::empty()),
+            workbench_service,
         });
 
         // Register engine-dependent tools
@@ -112,9 +120,17 @@ impl ZenEngine {
         // Register static tools (no engine deps)
         engine.register_tools(crate::tools::all_tools());
 
-        // Register TaskTool last so it knows about all other tools
-        let all_tools = engine.builtin_tools.read().unwrap().clone();
+        // Register TaskTool last so it knows about all other tools.
+        // Pass a resolver closure (vs a snapshot) so spawned subagents inherit
+        // `use_tools` / Plan-mode / cowork filters as they evolve at runtime.
         let profile = Self::resolve_model_profile();
+        let engine_for_resolver = Arc::downgrade(&engine);
+        let tools_resolver: crate::tools::task::ToolResolver = Arc::new(move || {
+            engine_for_resolver
+                .upgrade()
+                .map(|e| e.tools_for_main_agent())
+                .unwrap_or_default()
+        });
         engine.register_tool(Arc::new(TaskTool::new(
             engine.http_client.clone(),
             engine.event_bus.clone(),
@@ -123,7 +139,7 @@ impl ZenEngine {
             crate::tools::task::default_agent_configs(),
             engine.options.read().unwrap().working_dir.clone(),
             engine.options.read().unwrap().agent_data_dir.clone(),
-            all_tools,
+            tools_resolver,
             profile,
         )));
 
@@ -177,7 +193,20 @@ impl ZenEngine {
         }
     }
 
-    pub fn get_tools(&self) -> Vec<Arc<dyn Tool>> {
+    /// Resolve the tool list for the **main agent** turn. This is what gets
+    /// serialized into the LLM API `tools` field every turn.
+    ///
+    /// Filter layers (applied in order — token-saving funnel):
+    ///   1. **Registry**: all `builtin_tools` registered on the engine.
+    ///   2. **`use_tools` whitelist**: empty = no restriction; otherwise keep
+    ///      only names that appear. Mirrors sema-core `getAvailableBuiltinTools`.
+    ///   3. **Plan-mode filter**: drops `TodoWrite` (Plan-mode policy).
+    ///   4. **Cowork-mode filter**: drops interactive ask-tools for synthetic
+    ///      `cowork:*` instance ids (no UI subscriber to answer questions).
+    ///
+    /// This method does NOT apply the subagent exclusion list — call
+    /// [`Self::tools_for_subagent`] for that path.
+    pub fn tools_for_main_agent(&self) -> Vec<Arc<dyn Tool>> {
         let opts = self.options.read().unwrap();
         let use_tools = &opts.use_tools;
         let is_plan = opts.agent_mode == AgentMode::Plan;
@@ -209,6 +238,39 @@ impl ZenEngine {
         }
 
         filtered
+    }
+
+    /// Backwards-compatible alias used by existing call sites. Prefer
+    /// [`Self::tools_for_main_agent`] in new code.
+    pub fn get_tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.tools_for_main_agent()
+    }
+
+    /// Resolve the tool list for a **subagent** turn. Applies all main-agent
+    /// filters then layers two more:
+    ///
+    ///   5. **`SUBAGENT_EXCLUDED_TOOLS`** — strip Task / bg-job / picker /
+    ///      plan-exit / todo tools (subagents must not spawn nested subagents
+    ///      and can't surface UI prompts). Mirrors sema-core's
+    ///      `SUBAGENT_EXCLUDED_TOOLS` set — saves ~7 tool definitions per
+    ///      subagent turn.
+    ///   6. **`agent_tools` whitelist** — when provided and not `["*"]`, keep
+    ///      only the tools the subagent persona is declared to use. This is
+    ///      the per-persona `tools` field from the agent config.
+    ///
+    /// Returns an empty list if every tool was filtered out.
+    pub fn tools_for_subagent(&self, agent_tools: Option<&[String]>) -> Vec<Arc<dyn Tool>> {
+        use crate::zen_core::prompt::SUBAGENT_EXCLUDED_TOOLS;
+        let mut tools = self.tools_for_main_agent();
+        tools.retain(|t| !SUBAGENT_EXCLUDED_TOOLS.contains(&t.name()));
+        if let Some(allowed) = agent_tools {
+            if !allowed.iter().any(|t| t == "*") {
+                let set: std::collections::HashSet<&str> =
+                    allowed.iter().map(|s| s.as_str()).collect();
+                tools.retain(|t| set.contains(t.name()));
+            }
+        }
+        tools
     }
 
     // ============================================================
@@ -317,7 +379,12 @@ impl ZenEngine {
             | EngineEvent::PlanImplement(_)
             | EngineEvent::FileReference(_)
             | EngineEvent::TopicUpdate(_)
-            | EngineEvent::ConfigNoModels(_) => {}
+            | EngineEvent::ConfigNoModels(_)
+            // Workbench events — consumed by WorkbenchBridge via event_bus subscription
+            | EngineEvent::WorkbenchNew(_)
+            | EngineEvent::WorkbenchServiceReady(_)
+            | EngineEvent::WorkbenchServiceCrashed(_)
+            | EngineEvent::WorkbenchServiceStopped(_) => {}
         }
     }
 
@@ -591,21 +658,21 @@ impl ZenCore for ZenEngine {
         let opts = self.options.read().unwrap().clone();
         let tools = self.get_tools();
         // Debug: log all tools being sent to LLM so we can verify browser tools appear
-        {
-            let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-            let mcp_tools: Vec<&str> = tool_names
-                .iter()
-                .filter(|n| n.starts_with("mcp__"))
-                .copied()
-                .collect();
-            info!(
-                "[{}] get_tools: {} total ({} mcp__*): {:?}",
-                self.instance_id,
-                tool_names.len(),
-                mcp_tools.len(),
-                mcp_tools
-            );
-        }
+        // {
+        //     let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        //     let mcp_tools: Vec<&str> = tool_names
+        //         .iter()
+        //         .filter(|n| n.starts_with("mcp__"))
+        //         .copied()
+        //         .collect();
+        //     info!(
+        //         "[{}] get_tools: {} total ({} mcp__*): {:?}",
+        //         self.instance_id,
+        //         tool_names.len(),
+        //         mcp_tools.len(),
+        //         mcp_tools
+        //     );
+        // }
         let messages = {
             let state = self.state.lock().unwrap();
             state.message_history(MAIN_AGENT_ID)
@@ -615,10 +682,25 @@ impl ZenCore for ZenEngine {
         let response_registry = self.response_registry.clone();
         let state_for_spawn = self.state.clone();
 
-        // Build system prompt (stable base + dynamic system context appended)
+        // Build system prompt (stable base + dynamic system context appended).
+        // When the Skill tool is registered we append a skills reminder so the
+        // LLM can auto-trigger skills by metadata (`name` + `description` +
+        // `when-to-use`) — mirrors sema-core `generateSkillsReminder`.
+        let has_skill_tool = self
+            .builtin_tools
+            .read()
+            .unwrap()
+            .iter()
+            .any(|t| t.name() == "Skill");
+        let skills_reminder = if has_skill_tool {
+            self.build_skills_reminder()
+        } else {
+            None
+        };
         let system_prompt = Self::assemble_system_prompt(
             &opts.system_prompt,
             &opts.working_dir,
+            skills_reminder.as_deref(),
         );
 
         // Resolve profile from active UI config first, env fallback second.
@@ -796,6 +878,7 @@ impl ZenCore for ZenEngine {
         self.abort_current();
         self.state.lock().unwrap().clear_all();
         self.response_registry.clear();
+        self.workbench_service.shutdown();
 
         // Fire SessionEnd hook (non-blockable, fire-and-forget)
         if self
@@ -1034,22 +1117,50 @@ impl ZenEngine {
     /// 2. Core behavioural directives — static text, also stable.
     /// 3. System context (cwd, OS, shell, git status) — dynamic but small; appended
     ///    last so any prefix cache hit on (1)+(2) is preserved when context changes.
-    fn assemble_system_prompt(base: &str, working_dir: &str) -> String {
-        const CORE_DIRECTIVES: &str = "\
-Go straight to the point. Keep your text output brief and direct. \
-Do not use a colon before tool calls. \
-When working with tool results, write down any important information you might need later, \
-as original tool results may be cleared during context compaction.";
-
+    fn assemble_system_prompt(
+        base: &str,
+        working_dir: &str,
+        skills_reminder: Option<&str>,
+    ) -> String {
+        // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
+        // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
         let base = if base.trim().is_empty() {
-            "You are a helpful AI assistant."
+            crate::zen_core::prompt::SYSTEM_PROMPT
         } else {
             base
         };
 
         let sys_ctx = Self::collect_system_context(working_dir);
 
-        format!("{base}\n\n{CORE_DIRECTIVES}\n\n# System\n{sys_ctx}")
+        let mut out = format!("{base}\n\n# System\n{sys_ctx}");
+        if let Some(reminder) = skills_reminder {
+            out.push_str("\n\n");
+            out.push_str(reminder);
+        }
+        out
+    }
+
+    /// Render the metadata-driven skills reminder block when the `Skill` tool
+    /// is registered. Returns `None` when there are zero auto-invokable skills.
+    fn build_skills_reminder(&self) -> Option<String> {
+        use crate::zen_core::prompt::{render_skills_reminder, SkillReminderRow};
+        // Snapshot skill names then re-fetch metadata so we don't hold the
+        // registry lock across the borrow into SkillReminderRow.
+        let names = self.skill_registry.names();
+        let skills: Vec<_> = names
+            .iter()
+            .filter_map(|n| self.skill_registry.find(n))
+            .collect();
+        let rows: Vec<SkillReminderRow<'_>> = skills
+            .iter()
+            .map(|s| SkillReminderRow {
+                name: s.metadata.name.as_str(),
+                description: s.metadata.description.as_str(),
+                when_to_use: s.metadata.when_to_use.as_deref(),
+                disable_model_invocation: s.metadata.disable_model_invocation,
+            })
+            .collect();
+        render_skills_reminder(&rows)
     }
 
     /// Collect runtime system context: working dir, OS, shell, git status.
@@ -1317,6 +1428,132 @@ mod tests {
         assert!(o.skip_file_edit_permission);
         assert!(o.skip_bash_exec_permission);
         assert!(o.skip_skill_permission);
+    }
+
+    #[test]
+    fn tools_for_main_agent_respects_use_tools_whitelist() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-tools-1".into(),
+            use_tools: vec!["Bash".into(), "Read".into()],
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_main_agent();
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"Bash"));
+        assert!(names.contains(&"Read"));
+        assert!(!names.contains(&"Write"));
+        assert!(!names.contains(&"Glob"));
+    }
+
+    #[test]
+    fn tools_for_main_agent_empty_use_tools_returns_all() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-tools-2".into(),
+            use_tools: vec![],
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_main_agent();
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"Bash"));
+        assert!(names.contains(&"TodoWrite"));
+    }
+
+    #[test]
+    fn tools_for_main_agent_plan_mode_drops_todo_write() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-tools-3".into(),
+            agent_mode: AgentMode::Plan,
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_main_agent();
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"TodoWrite"));
+    }
+
+    #[test]
+    fn tools_for_main_agent_cowork_drops_ask_tools() {
+        let opts = ZenCoreOptions {
+            instance_id: "cowork:ws1:alice".into(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_main_agent();
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"AskUser"));
+        assert!(!names.contains(&"AskUserQuestion"));
+    }
+
+    #[test]
+    fn tools_for_subagent_strips_excluded_set() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-sub-1".into(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_subagent(None);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        // SUBAGENT_EXCLUDED_TOOLS items must be gone.
+        for excluded in ["Task", "TodoWrite", "PeekBgJob", "ExitPlanMode"] {
+            assert!(!names.contains(&excluded), "should drop {excluded}");
+        }
+        // Read/Bash should still be there.
+        assert!(names.contains(&"Read"));
+        assert!(names.contains(&"Bash"));
+    }
+
+    #[test]
+    fn tools_for_subagent_respects_agent_whitelist() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-sub-2".into(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let allowed = vec!["Read".to_string(), "Glob".to_string()];
+        let tools = engine.tools_for_subagent(Some(&allowed));
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(
+            names.iter().filter(|n| **n == "Read" || **n == "Glob").count(),
+            2
+        );
+        assert!(!names.contains(&"Bash"));
+        assert!(!names.contains(&"Write"));
+    }
+
+    #[test]
+    fn tools_for_subagent_star_inherits_full_main_minus_excluded() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-sub-3".into(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let star = vec!["*".to_string()];
+        let tools_star = engine.tools_for_subagent(Some(&star));
+        let names_star: std::collections::HashSet<&str> =
+            tools_star.iter().map(|t| t.name()).collect();
+        let tools_none = engine.tools_for_subagent(None);
+        let names_none: std::collections::HashSet<&str> =
+            tools_none.iter().map(|t| t.name()).collect();
+        assert_eq!(names_star, names_none);
+    }
+
+    #[test]
+    fn tools_for_subagent_inherits_use_tools_filter() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-sub-4".into(),
+            use_tools: vec!["Bash".into(), "Read".into(), "Task".into()],
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_subagent(None);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        // Bash + Read survive use_tools filter. Task gets stripped by SUBAGENT_EXCLUDED_TOOLS.
+        assert!(names.contains(&"Bash"));
+        assert!(names.contains(&"Read"));
+        assert!(!names.contains(&"Task"));
+        assert!(!names.contains(&"Write")); // not in use_tools
     }
 
     #[tokio::test]

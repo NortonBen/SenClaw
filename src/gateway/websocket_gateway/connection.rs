@@ -196,6 +196,9 @@ async fn handle_message(
         "agent:control" => {
             super::handlers::handle_agent_control(clients, client_idx, &sender, state, msg).await
         }
+        "agent:mode" => {
+            super::handlers::handle_agent_mode(clients, client_idx, &sender, state, msg).await
+        }
         "list:channels" => {
             super::entity_handlers::handle_list_channels(clients, client_idx, &sender, state).await
         }

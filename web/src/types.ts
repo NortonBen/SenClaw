@@ -471,3 +471,39 @@ export interface EventNotification {
   receivedAt: number;
   read: boolean;
 }
+
+// ===== Workbench =====
+
+export interface WorkbenchFile {
+  path: string;
+  content?: string;
+  mimeType?: string;
+  /** Optional content hash used for cache invalidation in renderers. */
+  hash?: string;
+  /** Resolved extension (for legacy renderers). Inferred from path if omitted. */
+  extension?: 'html' | 'md' | string;
+}
+
+export interface WorkbenchProcess {
+  status: 'starting' | 'ready' | 'crashed' | 'stopped';
+  logPath?: string;
+}
+
+export interface WorkbenchArtifact {
+  id: string;
+  title: string;
+  mode: 'static' | 'web' | 'backend';
+  files?: WorkbenchFile[];
+  url?: string;
+  process?: WorkbenchProcess;
+  usage?: string;
+  createdAt: number;
+}
+
+/** Per-groupJid workbench frontend state. */
+export interface WorkbenchState {
+  current: WorkbenchArtifact | null;
+  /** History excludes current. */
+  history: WorkbenchArtifact[];
+}
+

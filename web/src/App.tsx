@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom';
 import { ConfigProvider, theme } from 'antd';
 import { useWebSocket } from './hooks/useWebSocket';
 import { AppContext } from './contexts/AppContext';
+import { PlanExitDialog } from './components/PlanExitDialog';
 import { ChatPage } from './pages/ChatPage';
 import { WikiPage } from './pages/WikiPage';
 import { PluginsPage } from './pages/PluginsPage';
@@ -49,6 +50,12 @@ export function App() {
           <Route path="code" element={<CodePage />} />
           <Route path="space/*" element={<SpacePage />} />
         </Routes>
+        {/* Global Plan-mode approval modal — surfaces when any agent calls ExitPlanMode. */}
+        <PlanExitDialog
+          request={ws.planExitRequest}
+          onResolve={ws.resolvePlanExit}
+          onDismiss={ws.dismissPlanExit}
+        />
       </AppContext.Provider>
     </ConfigProvider>
   );

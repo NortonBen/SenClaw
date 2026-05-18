@@ -26,10 +26,12 @@ pub mod events;
 pub mod hooks;
 pub mod model_manager;
 pub mod permissions;
+pub mod prompt;
 pub mod query_llm;
 pub mod run_tools;
 pub mod state;
 pub mod vision;
+pub mod workbench;
 
 use std::collections::HashMap;
 
@@ -46,6 +48,11 @@ pub use engine::ZenEngine;
 pub use events::{EngineEvent, EventBus, ResponseRegistry};
 pub use model_manager::{with_model_manager, ModelManager, ModelUpdateData, TaskConfig};
 pub use state::StateManager;
+pub use workbench::{
+    ProcessInfo, StopReason, WorkbenchArtifact, WorkbenchFile, WorkbenchMode, WorkbenchNewData,
+    WorkbenchService, WorkbenchServiceCrashedData, WorkbenchServiceReadyData,
+    WorkbenchServiceStoppedData,
+};
 
 /// Agent id used for root-agent events.
 pub const MAIN_AGENT_ID: &str = "main";

@@ -116,6 +116,21 @@ pub enum DaemonMessage {
         depth: Option<u8>,
         #[serde(default)]
         compress_html: bool,
+        /// Pixels beyond the viewport to include. -1 = strict viewport.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        viewport_expansion: Option<i32>,
+        /// Hard cap on interactive elements indexed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_interactive: Option<u16>,
+        /// Walk same-origin iframes (default true).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        walk_iframes: Option<bool>,
+        /// Walk shadow DOM (default true).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        walk_shadow: Option<bool>,
+        /// Draw numbered badge overlay on the page (default false).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        highlight: Option<bool>,
     },
     GetScreenshot {
         request_id: RequestId,

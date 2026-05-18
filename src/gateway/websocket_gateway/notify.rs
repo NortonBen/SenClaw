@@ -289,6 +289,120 @@ impl WebSocketGateway {
         .await;
     }
 
+    // ===== Plan mode (ExitPlanMode tool) =====
+
+    /// Forwarded from `EngineEvent::PlanExitRequest`. UI renders the modal
+    /// `PlanExitDialog` and POSTs back via `plan:exit:response` with the
+    /// chosen option (`startEditing` | `clearContextAndStart`).
+    pub async fn notify_plan_exit_request(
+        &self,
+        chat_jid: &str,
+        agent_id: &str,
+        plan_file_path: &str,
+        plan_content: &str,
+        option_start_editing: &str,
+        option_clear_context: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "plan:exit:request",
+            "groupJid": chat_jid,
+            "agentId": agent_id,
+            "planFilePath": plan_file_path,
+            "planContent": plan_content,
+            "options": {
+                "startEditing": option_start_editing,
+                "clearContextAndStart": option_clear_context,
+            },
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
+    /// Server-side confirmation that the engine accepted the user's choice.
+    /// Sent after `respond_to_plan_exit` completes so UI can close the modal
+    /// even if it was opened in multiple browser sessions.
+    pub async fn notify_plan_exit_response(
+        &self,
+        chat_jid: &str,
+        agent_id: &str,
+        selected: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "plan:exit:response",
+            "groupJid": chat_jid,
+            "agentId": agent_id,
+            "selected": selected,
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
+    // ===== Workbench events =====
+
+    pub async fn notify_workbench_new(
+        &self,
+        chat_jid: &str,
+        artifact: &serde_json::Value,
+        replaces_id: Option<&str>,
+    ) {
+        let msg = serde_json::json!({
+            "type": "workbench:new",
+            "groupJid": chat_jid,
+            "artifact": artifact,
+            "replacesId": replaces_id,
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
+    pub async fn notify_workbench_service_ready(
+        &self,
+        chat_jid: &str,
+        artifact_id: &str,
+        ready: bool,
+    ) {
+        let msg = serde_json::json!({
+            "type": "workbench:service_ready",
+            "groupJid": chat_jid,
+            "artifactId": artifact_id,
+            "ready": ready,
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
+    pub async fn notify_workbench_service_crashed(
+        &self,
+        chat_jid: &str,
+        artifact_id: &str,
+        last_log_lines: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "workbench:service_crashed",
+            "groupJid": chat_jid,
+            "artifactId": artifact_id,
+            "lastLogLines": last_log_lines,
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
+    pub async fn notify_workbench_service_stopped(
+        &self,
+        chat_jid: &str,
+        artifact_id: &str,
+        reason: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "workbench:service_stopped",
+            "groupJid": chat_jid,
+            "artifactId": artifact_id,
+            "reason": reason,
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
     /// Push last-known agent state to a newly subscribed client.
     pub async fn push_last_known_state(
         &self,
