@@ -644,8 +644,24 @@ pub const TURBOQUANT_MAX_NEW_TOKENS_CAP: u32 = 2048;
 /// `max_prompt_tokens` so `max_prompt_tokens + max_new_tokens ≤` this value.
 pub const TURBOQUANT_MAX_CONTEXT_TOKENS: u32 = 128_000 + 8192;
 
-/// Idle auto-unload: when **`idle_unload_secs`** is **`None`** (field omitted / JSON **`null`**), sweep uses this (**60** = one minute).
-pub const DEFAULT_IDLE_UNLOAD_SECS: u32 = 60;
+/// Idle auto-unload: when **`idle_unload_secs`** is **`None`** (field omitted
+/// / JSON **`null`**), sweep uses this default (**300 s = 5 min**).
+///
+/// Why 5 min, not the old 60 s default:
+/// - In normal multi-turn chat the user pauses 30 s – 3 min between messages
+///   (read reply → think → type next prompt). At 60 s the model unloads
+///   during nearly every pause, forcing a ~1 s reload **and** a cold
+///   prefill (15 K-token tools-heavy prompts re-prefilling take ~30 s).
+/// - Matches `prefix_cache::IDLE_TTL_SECS = 300 s` so the prefix cache TTL
+///   actually fires before the model itself unloads. Pre-fix the prefix
+///   cache was effectively useless after pauses because the model unload
+///   dropped the whole `Loaded` (including the cache) at 60 s.
+/// - On Apple Silicon unified memory, holding a 4-bit Qwen3-4B (~2.3 GB)
+///   for an extra few minutes is cheap; the prefill saving on the next
+///   resume (~30 s) is much more valuable.
+///
+/// Override via `idle_unload_secs` in `settings.json` for RAM-tight setups.
+pub const DEFAULT_IDLE_UNLOAD_SECS: u32 = 300;
 
 /// When `kv_cache_bits` is `2` (invalid for turboquant-rs QJL path), native MLX maps to this **TQ3** total bit budget (`3`).
 pub const DEFAULT_TURBOQUANT_KV_TOTAL_BITS: u8 = 3;
@@ -1081,10 +1097,12 @@ pub(crate) async fn local_models_unload(
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let cid = canonical_local_model_id(&id);
+    let mut unloaded_any = false;
     #[cfg(feature = "local-candle")]
     {
         if let Some(slot) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
             slot.engine.unload();
+            unloaded_any = true;
         }
     }
     #[cfg(not(feature = "local-candle"))]
@@ -1096,9 +1114,50 @@ pub(crate) async fn local_models_unload(
     {
         if let Some(slot) = MLX_ENGINES.lock().unwrap().remove(&cid) {
             slot.engine.unload();
+            unloaded_any = true;
         }
     }
+    let _ = unloaded_any;
     Ok(Json(json!({ "ok": true, "id": cid, "loaded": false })))
+}
+
+/// Unload **all** in-memory engines (both Candle and MLX) and return
+/// approximate freed bytes. Use this when the user wants to reclaim RAM
+/// without waiting for `idle_unload_secs` to elapse.
+pub(crate) async fn local_models_unload_all(
+    State(_state): State<Arc<UiState>>,
+) -> Result<impl IntoResponse, AppError> {
+    let mut unloaded: Vec<String> = Vec::new();
+    #[cfg(feature = "local-candle")]
+    {
+        let cids: Vec<String> = LOADED_ENGINES.lock().unwrap().keys().cloned().collect();
+        for cid in cids {
+            if let Some(slot) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
+                slot.engine.unload();
+                unloaded.push(cid);
+            }
+        }
+    }
+    #[cfg(feature = "local-mlx")]
+    {
+        let cids: Vec<String> = MLX_ENGINES.lock().unwrap().keys().cloned().collect();
+        for cid in cids {
+            if let Some(slot) = MLX_ENGINES.lock().unwrap().remove(&cid) {
+                slot.engine.unload();
+                unloaded.push(cid);
+            }
+        }
+    }
+    tracing::info!(
+        "[local-models] manual unload-all: dropped {} engine(s): {:?}",
+        unloaded.len(),
+        unloaded,
+    );
+    Ok(Json(json!({
+        "ok": true,
+        "unloaded": unloaded,
+        "count": unloaded.len(),
+    })))
 }
 
 /// Load a model using the MLX native backend (in-process mlx-rs inference).

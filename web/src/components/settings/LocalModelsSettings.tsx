@@ -290,6 +290,24 @@ export const LocalModelsSettings: React.FC = () => {
     refresh();
   };
 
+  /** Unload every loaded engine (Candle + MLX). Useful to reclaim RAM
+   *  without waiting for `idle_unload_secs`. Returns the list that was
+   *  actually dropped so we can show feedback. */
+  const handleUnloadAll = async () => {
+    const res = await fetch(`/api/local-models/unload-all`, { method: 'POST' });
+    if (!res.ok) {
+      message.error(`Unload-all failed`);
+      return;
+    }
+    const body: { count: number; unloaded: string[] } = await res.json();
+    if (body.count === 0) {
+      message.info('No models were loaded — nothing to unload');
+    } else {
+      message.success(`Unloaded ${body.count} model(s): ${body.unloaded.join(', ')}`);
+    }
+    refresh();
+  };
+
   const handleUseAsLlm = async (id: string) => {
     // Pass ?backend= so the server uses the right profile type.
     const backendParam = settings.preferred_backend
@@ -540,9 +558,21 @@ export const LocalModelsSettings: React.FC = () => {
         <Title level={3} style={{ margin: 0 }}>
           Local Models
         </Title>
-        <Button icon={<ReloadOutlined />} onClick={refresh}>
-          Refresh
-        </Button>
+        <Space>
+          <Tooltip title="Drop all in-memory model weights + prefix caches now. Use this to reclaim ~5–10 GB RAM without waiting for the idle timer.">
+            <Button
+              size="small"
+              danger
+              icon={<PoweroffOutlined />}
+              onClick={handleUnloadAll}
+            >
+              Unload all
+            </Button>
+          </Tooltip>
+          <Button icon={<ReloadOutlined />} onClick={refresh}>
+            Refresh
+          </Button>
+        </Space>
       </Space>
 
       <Paragraph type="secondary">
@@ -763,7 +793,27 @@ export const LocalModelsSettings: React.FC = () => {
             <Col xs={24} sm={12} md={8}>
               <Form.Item
                 label={
-                  <Tooltip title="Minimum context length (tokens already in cache) before TurboQuant activates. Set to 0 to quantize immediately. Default: 2048.">
+                  <Tooltip
+                    title={
+                      <span>
+                        Number of cached tokens before TurboQuant kicks in.
+                        Once activated, new KV tokens route through a
+                        CPU-side 4-bit pack (~20× slower per token) — only
+                        worthwhile for very long contexts where the RAM
+                        saving justifies the latency. The auto-disable guard
+                        keeps TQ off any turn where{' '}
+                        <code>prompt + max_new &gt; tq_activate_at</code> so
+                        decode never stalls.
+                        <br />
+                        <br />
+                        Default: <strong>16384</strong>. Raise to keep TQ on
+                        for longer prompts; lower (or to 0) to quantize
+                        aggressively. Setting{' '}
+                        <code>kv_cache_bits = null</code> disables TQ
+                        entirely.
+                      </span>
+                    }
+                  >
                     TQ activate after (tokens)
                   </Tooltip>
                 }
@@ -771,10 +821,10 @@ export const LocalModelsSettings: React.FC = () => {
                 <InputNumber
                   style={{ width: '100%' }}
                   min={0}
-                  max={65536}
-                  step={256}
-                  value={settings.tq_activate_at ?? 2048}
-                  placeholder="2048"
+                  max={262144}
+                  step={1024}
+                  value={settings.tq_activate_at ?? undefined}
+                  placeholder="16384 (default)"
                   onChange={(v) =>
                     setSettings((s) => ({ ...s, tq_activate_at: v ?? null }))
                   }

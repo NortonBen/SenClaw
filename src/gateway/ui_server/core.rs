@@ -33,7 +33,7 @@ use super::local_models::{
     local_models_cancel, local_models_delete, local_models_download, local_models_list,
     local_models_load, local_models_load_mlx, local_models_loaded_list, local_models_runtime,
     local_models_settings_get, local_models_settings_put, local_models_status,
-    local_models_unload, local_models_use_as_llm,
+    local_models_unload, local_models_unload_all, local_models_use_as_llm,
 };
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
@@ -217,6 +217,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/local-models/:id/load", post(local_models_load))
         .route("/api/local-models/:id/load-mlx", post(local_models_load_mlx))
         .route("/api/local-models/:id/unload", post(local_models_unload))
+        .route("/api/local-models/unload-all", post(local_models_unload_all))
         .route("/api/local-models/loaded", get(local_models_loaded_list))
         .route("/api/local-models/:id/use-as-llm", post(local_models_use_as_llm))
         // Embedding provider config

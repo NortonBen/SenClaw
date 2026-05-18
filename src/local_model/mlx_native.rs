@@ -127,13 +127,44 @@ impl MlxNativeEngine {
         self.loaded.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
-    /// Drop the cached model + tokenizer, freeing the bulk of RAM used by
-    /// this engine. Safe to call when nothing is loaded (no-op).
+    /// Drop the cached model + tokenizer + prefix cache, freeing the bulk
+    /// of RAM used by this engine. Safe to call when nothing is loaded
+    /// (no-op). Explicitly clears MLX's buffer pool so reclaimed memory
+    /// returns to the OS immediately instead of waiting for the next pool
+    /// cycle.
     pub fn unload(&self) {
         if let Ok(mut g) = self.loaded.lock() {
-            *g = None;
+            // Dropping the `Loaded` releases model weights, tokenizer, AND
+            // every PrefixCacheEntry's snapshot Arrays. Whatever MLX
+            // buffers those Arc-pinned end up free-listed once their refs
+            // hit zero — the `mlx_clear_cache` call below then evicts the
+            // free list back to the OS.
+            let prev = g.take();
+            if let Some(loaded) = prev.as_ref() {
+                tracing::info!(
+                    "[local-mlx-native] unload: dropping model + prefix cache ({} entries, {})",
+                    loaded.prefix_cache.len(),
+                    fmt_bytes(loaded.prefix_cache.total_bytes()),
+                );
+            }
+            drop(prev);
         }
+        // Force MLX pool release so the freed-up KV / model buffers return
+        // to the OS immediately. Without this, the OS RSS often stays high
+        // until the next allocation cycle pressures MLX to reclaim.
+        unsafe {
+            mlx_sys::mlx_clear_cache();
+        }
+        // Also clear the compile cache so the next reload doesn't ship
+        // with stale Metal kernels keyed on the old weights.
+        mlx_rs::transforms::compile::clear_cache();
         self.set_status(RuntimeStatus::Stopped);
+        let (active, cached, _) = mlx_mem_mib();
+        tracing::info!(
+            "[local-mlx-native] unload complete — mlx active={:.0} cache={:.0} MiB",
+            active,
+            cached,
+        );
     }
 
     /// Force a load now (used by the UI "Load" button). Equivalent to the
@@ -1094,6 +1125,12 @@ fn generate_with_cache(
         );
     let mut prefill_start = 0usize;
     if prefix_cache_eligible {
+        // Reclaim stale snapshots (default TTL 5 min). Run on every turn —
+        // cheap O(entries) check + actual free when stale. Without this,
+        // a forgotten conversation pins ~2.5 GB of KV until the model
+        // itself unloads (which can be 5–60 min depending on
+        // `idle_unload_secs`).
+        state.prefix_cache.evict_idle();
         if let Some(hit) = state.prefix_cache.find_longest_match(&prompt) {
             // Need at least 1 new token to prefill for logits sampling. Full
             // match would require a 1-token re-forward edge case we don't
@@ -1644,6 +1681,21 @@ fn generate_with_cache(
             if !text.is_empty() && tx.blocking_send(text).is_err() {
                 mlx_release_after_turn();
                 return Ok(());
+            }
+            // Periodic pool flush during long decode. Each forward pass
+            // adds small intermediate buffers (attention scores, MLP
+            // activations) that aren't reclaimed until the next eval
+            // barrier. Without this, decode of 1000+ tokens grows pool by
+            // ~1 GB. The flush is a sync barrier (~10-20 ms) but reclaims
+            // hundreds of MB → net win for long generation.
+            //
+            // Every 5 flushes = every 100 decode tokens. Trade-off:
+            // - Too frequent → wastes time on syncs that have nothing to free.
+            // - Too rare → pool grows; user sees ~1 GB jump mid-decode.
+            if generated_count > 0 && generated_count % 100 == 0 {
+                unsafe {
+                    mlx_sys::mlx_clear_cache();
+                }
             }
         }
     }

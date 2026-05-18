@@ -31,6 +31,7 @@
 //! the same conversation share their common prefix).
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use super::cache::KvCache;
 
@@ -61,6 +62,16 @@ pub const MAX_ENTRIES: usize = 2;
 /// Raise if you see frequent `evict_for_bytes_budget` warnings.
 pub const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024 * 1024;
 
+/// Idle TTL — entries with no `find_longest_match` hit for this long are
+/// evicted by [`PrefixCache::evict_idle`]. The point is to release the
+/// ~2.5 GB per-entry KV pin when a conversation has gone quiet but the
+/// model itself is still loaded (model unload runs on a separate timer
+/// configured via `idle_unload_secs`).
+///
+/// 5 minutes covers normal "user reads, then replies" pauses without
+/// rebuilding the prefix on every reply, but evicts forgotten chats.
+pub const IDLE_TTL_SECS: u64 = 5 * 60;
+
 /// Minimum prefix length to bother caching. Short prefixes (a few hundred
 /// tokens) prefill in well under a second — the cache lookup/clone overhead
 /// would dwarf the savings.
@@ -77,6 +88,9 @@ pub struct PrefixCacheEntry {
     /// RoPE absolute position after the cached prefill — caller resumes
     /// decode at `rope_offset = tokens.len()` after restore.
     pub rope_offset: usize,
+    /// Wall-clock timestamp of the most recent `store` or
+    /// `find_longest_match` hit. Drives [`PrefixCache::evict_idle`].
+    pub last_used: Instant,
 }
 
 /// Small fixed-capacity LRU. We could use the `lru` crate but a 4-entry
@@ -94,26 +108,62 @@ impl PrefixCache {
 
     /// Find the entry whose cached `tokens` is the **longest** prefix of
     /// `prompt`. Returns `None` when no entry shares ≥ [`MIN_PREFIX_LEN`]
-    /// tokens with `prompt` (cache miss).
+    /// tokens with `prompt` (cache miss). Takes `&mut self` so the
+    /// matched entry's `last_used` can be touched (drives idle TTL
+    /// eviction so frequently-hit prefixes survive while stale ones age out).
     ///
     /// O(`entries × min(prompt_len, cached_len)`) — fine for ≤ 4 entries.
-    pub fn find_longest_match(&self, prompt: &[u32]) -> Option<&PrefixCacheEntry> {
-        let mut best: Option<&PrefixCacheEntry> = None;
+    pub fn find_longest_match(&mut self, prompt: &[u32]) -> Option<&PrefixCacheEntry> {
+        let mut best_idx: Option<usize> = None;
         let mut best_len = MIN_PREFIX_LEN.saturating_sub(1);
-        for entry in &self.entries {
+        for (idx, entry) in self.entries.iter().enumerate() {
             if entry.tokens.len() > prompt.len() {
                 continue;
             }
             if entry.tokens.len() <= best_len {
                 continue;
             }
-            // Compare full cached prefix against prompt.
             if entry.tokens.as_slice() == &prompt[..entry.tokens.len()] {
                 best_len = entry.tokens.len();
-                best = Some(entry);
+                best_idx = Some(idx);
             }
         }
-        best
+        best_idx.map(|i| {
+            self.entries[i].last_used = Instant::now();
+            &self.entries[i]
+        })
+    }
+
+    /// Drop entries whose `last_used` is older than [`IDLE_TTL_SECS`].
+    /// Returns the number of evictions + bytes freed (for logging).
+    ///
+    /// Call at the start of every `generate_with_cache` so RAM is reclaimed
+    /// the moment the operator returns after a long pause (5+ min) — without
+    /// this, a single forgotten prefix would pin ~2.5 GB until the model
+    /// itself unloaded. Cheap (O(entries), no allocation when nothing
+    /// expires).
+    pub fn evict_idle(&mut self) -> (usize, usize) {
+        let cutoff = Instant::now() - Duration::from_secs(IDLE_TTL_SECS);
+        let mut freed_bytes = 0usize;
+        let mut evicted = 0usize;
+        self.entries.retain(|e| {
+            if e.last_used < cutoff {
+                freed_bytes += entry_bytes(e);
+                evicted += 1;
+                false
+            } else {
+                true
+            }
+        });
+        if evicted > 0 {
+            tracing::info!(
+                "[prefix-cache] idle eviction: dropped {} entry/entries (TTL {}s), freed {}",
+                evicted,
+                IDLE_TTL_SECS,
+                fmt_bytes(freed_bytes),
+            );
+        }
+        (evicted, freed_bytes)
     }
 
     /// Insert `(tokens, caches, rope_offset)`. Three eviction passes:
@@ -156,6 +206,7 @@ impl PrefixCache {
             tokens,
             caches,
             rope_offset,
+            last_used: Instant::now(),
         });
         // 3b. Bytes cap — evict oldest until under budget. Guard against
         //     the lone newest entry being itself over budget (don't loop forever).
@@ -267,6 +318,7 @@ mod tests {
             tokens: toks,
             caches: vec![],
             rope_offset: 0,
+            last_used: Instant::now(),
         }
     }
 
@@ -326,6 +378,34 @@ mod tests {
         pc.store(long.clone(), vec![], long.len());
         assert_eq!(pc.len(), 1, "old prefix should have been dropped");
         assert_eq!(pc.entries[0].tokens, long);
+    }
+
+    #[test]
+    fn evict_idle_drops_stale_entries() {
+        let mut pc = PrefixCache::new();
+        let toks: Vec<u32> = (0..(MIN_PREFIX_LEN as u32 + 50)).collect();
+        pc.entries.push_back(PrefixCacheEntry {
+            tokens: toks,
+            caches: vec![],
+            rope_offset: 0,
+            // Simulate an entry from 10 minutes ago (well past TTL).
+            last_used: Instant::now() - Duration::from_secs(IDLE_TTL_SECS + 60),
+        });
+        assert_eq!(pc.len(), 1);
+        let (evicted, _) = pc.evict_idle();
+        assert_eq!(evicted, 1);
+        assert_eq!(pc.len(), 0);
+    }
+
+    #[test]
+    fn evict_idle_keeps_fresh_entries() {
+        let mut pc = PrefixCache::new();
+        let toks: Vec<u32> = (0..(MIN_PREFIX_LEN as u32 + 50)).collect();
+        pc.store(toks, vec![], 1024);
+        assert_eq!(pc.len(), 1);
+        let (evicted, _) = pc.evict_idle();
+        assert_eq!(evicted, 0, "fresh entry should not be evicted");
+        assert_eq!(pc.len(), 1);
     }
 
     #[test]
