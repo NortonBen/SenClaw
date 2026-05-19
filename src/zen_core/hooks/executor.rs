@@ -186,6 +186,19 @@ fn aggregate_results(
         .last()
         .and_then(|(_, out)| out.updated_input.clone());
 
+    // Last OutputFilter hook to set `updatedOutput` wins — same convention
+    // as `updated_input`.
+    let updated_output = results
+        .iter()
+        .filter(|(_, out)| out.updated_output.is_some())
+        .last()
+        .and_then(|(_, out)| out.updated_output.clone());
+
+    // Any explicit `decision: "allow"` from a PrePermission hook grants
+    // the tool. Deny (blocked) still wins because the aggregate above
+    // already short-circuits via `blocked`.
+    let allow = results.iter().any(|(_, out)| out.is_allow());
+
     let additional_context: Vec<String> = results
         .iter()
         .filter_map(|(_, out)| out.additional_context.clone())
@@ -196,6 +209,8 @@ fn aggregate_results(
         abort,
         reason,
         updated_input,
+        updated_output,
+        allow,
         additional_context,
         errors,
     }

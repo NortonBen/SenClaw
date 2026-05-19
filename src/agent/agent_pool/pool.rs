@@ -1590,6 +1590,11 @@ impl AgentPool {
                 ];
                 let is_transient = transient.iter().any(|p| msg.contains(p));
                 let is_network = data.code == "NETWORK_ERROR" || msg.contains("NETWORK_ERROR");
+                // EMPTY_COMPLETION is upstream-recoverable (auth blip / tool overload /
+                // model not ready) — preserve the engine so the user can resend
+                // without a 30s+ MCP cold-restart and history loss.
+                let is_preservable = data.code == "EMPTY_COMPLETION"
+                    || msg.contains("EMPTY_COMPLETION");
 
                 if is_transient && retries_left > 0 {
                     tracing::warn!(
@@ -1614,9 +1619,14 @@ impl AgentPool {
                         retries_left - 1,
                     ))
                     .await
-                } else if is_network {
+                } else if is_network || is_preservable {
                     tracing::warn!(
-                        "[AgentPool] Network error for {jid_owned}: {msg}, preserving session context"
+                        "[AgentPool] {} error for {jid_owned}: {msg}, preserving session context",
+                        if is_preservable && !is_network {
+                            "Recoverable"
+                        } else {
+                            "Network"
+                        }
                     );
                     self.core_api.interrupt_session(&jid_owned);
                     {
@@ -1627,16 +1637,20 @@ impl AgentPool {
                         sink.notify_agent_state(&jid_owned, "idle");
                     }
                     if let Some(bridge) = self.dispatch_bridge.lock().unwrap().as_ref() {
-                        bridge.notify_error(&jid_owned, &format!("[NETWORK_ERROR] {msg}"));
+                        bridge.notify_error(&jid_owned, &format!("[{}] {msg}", data.code));
                     }
-                    self.broadcast_reply(
-                        &jid_owned,
-                        &format!(
+                    let user_msg = if is_preservable && !is_network {
+                        format!(
+                            "⚠️ The model returned no response (likely upstream issue: {msg}). \
+                             Context preserved — just resend your message."
+                        )
+                    } else {
+                        format!(
                             "⚠️ Network error: {msg}\nContext preserved — you can continue from where I left off."
-                        ),
-                        bot_token.as_deref(),
-                    )
-                    .await;
+                        )
+                    };
+                    self.broadcast_reply(&jid_owned, &user_msg, bot_token.as_deref())
+                        .await;
                     Err(anyhow::anyhow!(msg))
                 } else {
                     self.destroy_inner(&jid_owned).await;

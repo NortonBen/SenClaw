@@ -44,6 +44,7 @@ pub use manager::HookManager;
 pub use types::{
     AggregatedHookResult, ErrorInput, HookConfig, HookDefinition, HookError, HookEvent,
     HookEventConfig, HookInput, HookInputBase, HookOutput, HookType, NotificationInput,
-    PermissionRequestInput, PostToolUseInput, PreCompactInput, PreToolUseInput, SessionInput,
-    StopInput, SubagentInput, UserPromptSubmitInput,
+    OutputFilterInput, PermissionRequestInput, PostToolUseInput, PreCompactInput,
+    PrePermissionInput, PreToolUseInput, SessionInput, StopInput, SubagentInput,
+    UserPromptSubmitInput,
 };

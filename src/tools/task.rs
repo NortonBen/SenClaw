@@ -265,13 +265,20 @@ impl Tool for TaskTool {
         // 6. Get shared abort token
         let abort = ctx.abort.clone();
 
-        // 7. Run subagent conversation
+        // 7. Run subagent conversation.
+        // Wrap the resolved subagent tool list into a resolver so QueryConfig
+        // matches the new `ToolsResolver` shape. Subagents don't dynamically
+        // discover (ToolSearch is in SUBAGENT_EXCLUDED), so a static
+        // captured list is correct.
+        let subagent_tools_static = subagent_tools.clone();
+        let subagent_tools_resolver: crate::zen_core::conversation::ToolsResolver =
+            Arc::new(move || subagent_tools_static.clone());
         let query_config = QueryConfig {
             agent_id: task_id.clone(),
             working_dir: self.working_dir.clone(),
             agent_data_dir: self.agent_data_dir.clone(),
             system_prompt,
-            tools: subagent_tools,
+            tools: subagent_tools_resolver,
             http_client: self.http_client.clone(),
             event_bus: self.event_bus.clone(),
             response_registry: None,

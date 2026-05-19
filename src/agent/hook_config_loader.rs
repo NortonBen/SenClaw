@@ -84,6 +84,8 @@ fn parse_hook_event(s: &str) -> Option<HookEvent> {
         "PreToolUse" => Some(HookEvent::PreToolUse),
         "PostToolUse" => Some(HookEvent::PostToolUse),
         "PermissionRequest" => Some(HookEvent::PermissionRequest),
+        "PrePermission" => Some(HookEvent::PrePermission),
+        "OutputFilter" => Some(HookEvent::OutputFilter),
         "Stop" => Some(HookEvent::Stop),
         "SessionStart" => Some(HookEvent::SessionStart),
         "SessionEnd" => Some(HookEvent::SessionEnd),

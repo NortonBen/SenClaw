@@ -95,10 +95,23 @@ pub async fn query_llm(
                 .iter()
                 .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
                 .count();
-            info!(
-                "[llm] request complete provider={} model={} blocks={} tool_calls={}",
-                profile.provider, profile.model_name, blocks, tool_calls
-            );
+            if blocks == 0 && tool_calls == 0 {
+                // Silent upstream failure — adapter parsed 200 OK but no
+                // content came through. Log a loud WARN so it's findable in
+                // production logs; `conversation.rs` will catch this and
+                // surface a SessionError to the UI.
+                tracing::warn!(
+                    "[llm] EMPTY response provider={} model={} adapter={} \
+                     blocks=0 tool_calls=0 — endpoint returned 200 OK with no content. \
+                     Check endpoint logs (auth / rate-limit / tool count overload).",
+                    profile.provider, profile.model_name, adapt
+                );
+            } else {
+                info!(
+                    "[llm] request complete provider={} model={} blocks={} tool_calls={}",
+                    profile.provider, profile.model_name, blocks, tool_calls
+                );
+            }
         }
         Err(e) => {
             tracing::warn!(

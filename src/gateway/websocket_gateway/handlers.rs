@@ -102,6 +102,7 @@ pub(crate) async fn handle_subscribe(
             );
         }
         let todos = state.api.get_agent_todos();
+        let mem_has_todos = matches!(&todos, serde_json::Value::Object(m) if !m.is_empty());
         if let serde_json::Value::Object(map) = &todos {
             tracing::info!(
                 "[WsGateway] subscribe snapshot client #{client_idx}: agent:todos for {} agent(s)",
@@ -134,6 +135,32 @@ pub(crate) async fn handle_subscribe(
                 sender,
                 &serde_json::json!({"type": "agent:todos", "todos": todos}),
             );
+        }
+        // Fallback: in-memory snapshot is empty (e.g. fresh daemon restart
+        // before any agent has emitted). Replay from DB so the Agent Console
+        // still shows the last-known todos for each known agent.
+        if !mem_has_todos {
+            if let Ok(rows) = state.db.get_all_agent_todos() {
+                if !rows.is_empty() {
+                    tracing::info!(
+                        "[WsGateway] subscribe snapshot client #{client_idx}: agent:todos DB fallback for {} agent(s)",
+                        rows.len()
+                    );
+                    for row in &rows {
+                        let todos_val: serde_json::Value = serde_json::from_str(&row.todos_json)
+                            .unwrap_or(serde_json::Value::Null);
+                        send_json(
+                            sender,
+                            &serde_json::json!({
+                                "type": "agent:todos",
+                                "agentJid": row.agent_jid,
+                                "agentName": row.agent_name,
+                                "todos": todos_val,
+                            }),
+                        );
+                    }
+                }
+            }
         }
 
         // Push agent tool rosters so the Agent Console can render every
@@ -199,26 +226,90 @@ pub(crate) async fn handle_subscribe(
     }
 
     // Load and push chat history so the Web UI shows past conversation.
-    if let Ok(messages) = state.db.get_group_messages(&jid, None) {
-        if !messages.is_empty() {
-            let history: Vec<serde_json::Value> = messages
-                .iter()
-                .map(|m| {
-                    serde_json::json!({
-                        "id": m.message_id,
-                        "role": if m.is_bot_reply { "agent" } else { "user" },
-                        "senderName": m.sender_name,
-                        "text": m.content,
-                        "timestamp": m.timestamp,
-                    })
-                })
-                .collect();
+    // Text messages (group_messages) and tool executions (tool_executions)
+    // are stored separately but merged here in timestamp order so the client
+    // sees a single chronologically-ordered list and re-renders
+    // ToolGroupCard runs identically to the live path.
+    {
+        let text_msgs = state.db.get_group_messages(&jid, None).unwrap_or_default();
+        let tool_msgs = state
+            .db
+            .get_tool_executions(&jid, None)
+            .unwrap_or_default();
+
+        if !text_msgs.is_empty() || !tool_msgs.is_empty() {
+            let mut history: Vec<serde_json::Value> = Vec::with_capacity(
+                text_msgs.len() + tool_msgs.len(),
+            );
+            for m in &text_msgs {
+                history.push(serde_json::json!({
+                    "id": m.message_id,
+                    "role": if m.is_bot_reply { "agent" } else { "user" },
+                    "senderName": m.sender_name,
+                    "text": m.content,
+                    "timestamp": m.timestamp,
+                }));
+            }
+            for t in &tool_msgs {
+                // Parse content_json back to a JSON value; fall back to the
+                // raw string if it doesn't parse so the UI still sees something.
+                let content: serde_json::Value = serde_json::from_str(&t.content_json)
+                    .unwrap_or_else(|_| serde_json::Value::String(t.content_json.clone()));
+                history.push(serde_json::json!({
+                    "id": format!("tool-{}", t.id),
+                    "role": "tool",
+                    "agentId": t.agent_id,
+                    "toolName": t.tool_name,
+                    "title": t.title,
+                    "summary": t.summary,
+                    "content": content,
+                    "ok": t.ok,
+                    "timestamp": t.timestamp,
+                }));
+            }
+            // Stable sort by timestamp string (RFC3339 / ISO8601 sorts
+            // lexicographically) so text and tool rows interleave correctly.
+            history.sort_by(|a, b| {
+                let ta = a.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+                let tb = b.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+                ta.cmp(tb)
+            });
+
             send_json(
                 sender,
                 &serde_json::json!({
                     "type": "history:load",
                     "groupJid": jid,
                     "messages": history,
+                }),
+            );
+        }
+    }
+
+    // Replay ephemeral chat events (agent:state, permission/question
+    // request+resolved) so a reload rebuilds in-flight UI state.
+    if let Ok(events) = state.db.get_chat_events(&jid, Some(200)) {
+        if !events.is_empty() {
+            let payload: Vec<serde_json::Value> = events
+                .iter()
+                .map(|e| {
+                    let inner: serde_json::Value = serde_json::from_str(&e.payload_json)
+                        .unwrap_or(serde_json::Value::Null);
+                    serde_json::json!({
+                        "id": e.id,
+                        "eventType": e.event_type,
+                        "requestId": e.request_id,
+                        "payload": inner,
+                        "timestamp": e.timestamp,
+                    })
+                })
+                .collect();
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "chat:history",
+                    "groupJid": jid,
+                    "events": payload,
                 }),
             );
         }
@@ -814,6 +905,84 @@ pub(crate) async fn handle_permission_response(
         return;
     }
     state.api.resolve_permission(&request_id, &option_key);
+}
+
+pub(crate) async fn handle_plan_list(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    let jid = msg["groupJid"].as_str().unwrap_or("").to_string();
+    if jid.is_empty() {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "groupJid required"}));
+        return;
+    }
+    match state.db.list_plans_for_chat(&jid, Some(100)) {
+        Ok(rows) => {
+            let plans: Vec<serde_json::Value> = rows.iter().map(|p| serde_json::json!({
+                "id": p.id,
+                "chatJid": p.chat_jid,
+                "agentId": p.agent_id,
+                "title": p.title,
+                "filePath": p.file_path,
+                "approval": p.approval,
+                "createdAt": p.created_at,
+                "approvedAt": p.approved_at,
+            })).collect();
+            send_json(sender, &serde_json::json!({
+                "type": "plans:list",
+                "groupJid": jid,
+                "plans": plans,
+            }));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "[handle_plan_list] db error");
+            send_json(sender, &serde_json::json!({"type": "error", "message": "plan list failed"}));
+        }
+    }
+}
+
+pub(crate) async fn handle_plan_get(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    let id = msg["id"].as_str().unwrap_or("");
+    if id.is_empty() {
+        send_json(sender, &serde_json::json!({"type": "error", "message": "id required"}));
+        return;
+    }
+    match state.db.get_plan(id) {
+        Ok(Some(p)) => {
+            send_json(sender, &serde_json::json!({
+                "type": "plans:get",
+                "plan": {
+                    "id": p.id,
+                    "chatJid": p.chat_jid,
+                    "agentId": p.agent_id,
+                    "title": p.title,
+                    "filePath": p.file_path,
+                    "contentMd": p.content_md,
+                    "approval": p.approval,
+                    "createdAt": p.created_at,
+                    "approvedAt": p.approved_at,
+                },
+            }));
+        }
+        Ok(None) => {
+            send_json(sender, &serde_json::json!({"type": "error", "message": "plan not found"}));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "[handle_plan_get] db error");
+            send_json(sender, &serde_json::json!({"type": "error", "message": "plan get failed"}));
+        }
+    }
 }
 
 pub(crate) async fn handle_tool_rule_add(

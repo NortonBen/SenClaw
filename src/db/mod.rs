@@ -35,9 +35,14 @@ mod bindings;
 mod channels;
 mod embedding;
 mod groups;
+mod agent_todos;
+mod chat_events;
 mod messages;
+pub mod plans;
 mod router_state;
 mod scheduled_tasks;
+mod tool_executions;
+mod tool_rules;
 
 pub mod cowork;
 

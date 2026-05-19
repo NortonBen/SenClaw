@@ -43,6 +43,25 @@ pub struct ZenCoreApi {
     on_plan_exit_request: Arc<
         Mutex<Option<Arc<dyn Fn(String, crate::zen_core::PlanExitRequestData) + Send + Sync>>>,
     >,
+    /// Callback fired for every `EngineEvent::ToolExecutionComplete` and
+    /// `ToolExecutionError`. Lets `lib.rs` push a `tool:execution` WS event so
+    /// the chat UI can render a claude-code-style collapsible "Read 3 files,
+    /// ran 1 command" tool-group card.
+    on_tool_execution: Arc<
+        Mutex<Option<Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>>>,
+    >,
+}
+
+/// Wire-format tool-execution event used by the AgentPool → WS gateway path.
+/// `ok = true` for `ToolExecutionComplete`, `ok = false` for `Error`.
+#[derive(Debug, Clone)]
+pub struct ToolExecutionEvent {
+    pub agent_id: String,
+    pub tool_name: String,
+    pub title: String,
+    pub summary: String,
+    pub content: serde_json::Value,
+    pub ok: bool,
 }
 
 impl ZenCoreApi {
@@ -59,6 +78,7 @@ impl ZenCoreApi {
             workbench_bridge: Mutex::new(None),
             bot_tokens: Mutex::new(HashMap::new()),
             on_plan_exit_request: Arc::new(Mutex::new(None)),
+            on_tool_execution: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -69,6 +89,16 @@ impl ZenCoreApi {
         cb: Arc<dyn Fn(String, crate::zen_core::PlanExitRequestData) + Send + Sync>,
     ) {
         *self.on_plan_exit_request.lock().unwrap() = Some(cb);
+    }
+
+    /// Wire a callback fired for every tool execution (complete or error).
+    /// Used by lib.rs to broadcast `tool:execution` over the WebSocket gateway
+    /// so the chat UI can render tool-call activity inline.
+    pub fn set_on_tool_execution(
+        &self,
+        cb: Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>,
+    ) {
+        *self.on_tool_execution.lock().unwrap() = Some(cb);
     }
 
     /// Inject the WorkbenchBridge so future-created engines emit artifact
@@ -135,6 +165,7 @@ impl ZenCoreApi {
         // Snapshot the plan-exit callback shared Mutex so the spawned loop
         // can fire it without re-locking through `&self`.
         let plan_callback_for_loop = self.on_plan_exit_request.clone();
+        let tool_exec_callback_for_loop = self.on_tool_execution.clone();
         let mut rx = engine.event_bus.subscribe();
 
         tokio::spawn(async move {
@@ -248,6 +279,32 @@ impl ZenCoreApi {
                                 let cb_opt = plan_callback_for_loop.lock().unwrap().clone();
                                 if let Some(cb) = cb_opt {
                                     cb(jid.clone(), data);
+                                }
+                            }
+                            EngineEvent::ToolExecutionComplete(data) => {
+                                let cb_opt = tool_exec_callback_for_loop.lock().unwrap().clone();
+                                if let Some(cb) = cb_opt {
+                                    cb(jid.clone(), ToolExecutionEvent {
+                                        agent_id: data.agent_id,
+                                        tool_name: data.tool_name,
+                                        title: data.title,
+                                        summary: data.summary,
+                                        content: data.content,
+                                        ok: true,
+                                    });
+                                }
+                            }
+                            EngineEvent::ToolExecutionError(data) => {
+                                let cb_opt = tool_exec_callback_for_loop.lock().unwrap().clone();
+                                if let Some(cb) = cb_opt {
+                                    cb(jid.clone(), ToolExecutionEvent {
+                                        agent_id: data.agent_id,
+                                        tool_name: data.tool_name,
+                                        title: data.title,
+                                        summary: String::new(),
+                                        content: serde_json::Value::String(data.content),
+                                        ok: false,
+                                    });
                                 }
                             }
                             _ => {}

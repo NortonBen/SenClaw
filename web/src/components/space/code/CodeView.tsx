@@ -11,9 +11,10 @@ import { FileTree } from './FileTree';
 import { GitLog } from './GitLog';
 import { FolderPicker } from './FolderPicker';
 import type { CodeSession, FileNode, GitCommit, CodeChatGroup, CodeChatMessage } from '../../../hooks/useCode';
-import type { PermissionMessage } from '../../../types';
+import type { PermissionMessage, QuestionMessage, ToolMessage } from '../../../types';
 import { useAppContext } from '../../../contexts/AppContext';
 import { AgentCommandInput, CommonChatInput, CommonPermissionRequestCard } from '../../chat-common';
+import { ToolGroupCard } from '../../ToolGroupCard';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -64,15 +65,22 @@ interface Props {
 
 interface LocalChatMessage {
   id: string;
-  role: 'user' | 'agent' | 'permission';
+  role: 'user' | 'agent' | 'permission' | 'question' | 'tool' | 'tool-group';
   text: string;
   createdAt: number;
   status?: 'queued' | 'processing' | 'done' | 'failed';
   dagPlan?: string | null;
+  // Permission fields
   requestId?: string;
   toolName?: string;
   options?: Array<{ key: string; label: string }>;
   resolved?: { key: string; label: string };
+  // Question fields (AskUserQuestion) — engine emits via `question:request`
+  questions?: QuestionMessage['questions'];
+  questionResolved?: boolean;
+  // Tool fields (one entry per tool call; grouped by helper into `tool-group`)
+  tool?: ToolMessage;
+  toolGroup?: ToolMessage[];
 }
 
 export function CodeView({
@@ -248,30 +256,61 @@ export function CodeView({
     ws.subscribe(codeAgentJid);
   }, [codeAgentJid, ws]);
 
-  const permissionMessages = React.useMemo<LocalChatMessage[]>(() => {
+  // Merge **all** interactive event types from the WS message stream into
+  // the local chat list. Previously only `permission` was forwarded — which
+  // meant `AskUserQuestion` (role=question) and inline tool activity
+  // (role=tool) silently disappeared, leaving the user staring at
+  // "Agent đang suy nghĩ…" forever.
+  const wsInteractiveMessages = React.useMemo<LocalChatMessage[]>(() => {
     if (!codeAgentJid) return [];
     const messages = ws.messages[codeAgentJid] ?? [];
-    return messages
-      .filter((m): m is PermissionMessage => m.role === 'permission')
-      .map((m) => ({
-        id: `perm-${m.requestId}`,
-        role: 'permission',
-        text: m.content,
-        createdAt: new Date(m.timestamp).getTime(),
-        requestId: m.requestId,
-        toolName: m.toolName,
-        options: m.options,
-        resolved: m.resolved,
-      }));
+    const out: LocalChatMessage[] = [];
+    for (const m of messages) {
+      const created = new Date(m.timestamp).getTime();
+      if (m.role === 'permission') {
+        const p = m as PermissionMessage;
+        out.push({
+          id: `perm-${p.requestId}`,
+          role: 'permission',
+          text: p.content,
+          createdAt: created,
+          requestId: p.requestId,
+          toolName: p.toolName,
+          options: p.options,
+          resolved: p.resolved,
+        });
+      } else if (m.role === 'question') {
+        const q = m as QuestionMessage;
+        out.push({
+          id: `q-${q.requestId}`,
+          role: 'question',
+          text: q.questions.map(qq => qq.question).join('\n'),
+          createdAt: created,
+          requestId: q.requestId,
+          questions: q.questions,
+          questionResolved: q.resolved,
+        });
+      } else if (m.role === 'tool') {
+        const t = m as ToolMessage;
+        out.push({
+          id: t.id,
+          role: 'tool',
+          text: `${t.toolName}${t.title ? ` · ${t.title}` : ''}`,
+          createdAt: created,
+          tool: t,
+        });
+      }
+    }
+    return out;
   }, [codeAgentJid, ws.messages]);
 
   const sessionMessages = React.useMemo(() => {
     const base = activeGroupId ? (chatByGroup[activeGroupId] ?? []) : [];
     const map = new Map<string, LocalChatMessage>();
     for (const m of base) map.set(m.id, m);
-    for (const m of permissionMessages) map.set(m.id, m);
+    for (const m of wsInteractiveMessages) map.set(m.id, m);
     return Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
-  }, [activeGroupId, chatByGroup, permissionMessages]);
+  }, [activeGroupId, chatByGroup, wsInteractiveMessages]);
 
   React.useEffect(() => {
     const el = chatScrollRef.current;
@@ -634,10 +673,21 @@ export function CodeView({
                   </div>
                 )}
 
-                {sessionMessages.map(msg => (
+                {renderCodeSessionMessages(sessionMessages).map(msg => (
                   <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                    <div style={{ maxWidth: '78%' }}>
-                      {msg.role === 'permission' && msg.requestId ? (
+                    <div style={{ maxWidth: msg.role === 'tool-group' ? '92%' : '78%' }}>
+                      {msg.role === 'tool-group' && msg.toolGroup ? (
+                        <ToolGroupCard messages={msg.toolGroup} />
+                      ) : msg.role === 'question' && msg.requestId && msg.questions ? (
+                        <QuestionRequestCard
+                          requestId={msg.requestId}
+                          questions={msg.questions}
+                          resolved={msg.questionResolved ?? false}
+                          onResolve={(rid, answers, otherTexts) =>
+                            ws.resolveQuestion(rid, answers, otherTexts)
+                          }
+                        />
+                      ) : msg.role === 'permission' && msg.requestId ? (
                         <CommonPermissionRequestCard
                           toolName={msg.toolName ?? 'tool'}
                           content={msg.text}
@@ -1021,5 +1071,180 @@ export function CodeView({
         </Form>
       </Modal>
     </Layout>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Walk the message list and coalesce consecutive `role === 'tool'` entries
+ * into a single `role === 'tool-group'` synthetic message — mirrors the
+ * grouping ChatView does for the main chat. The grouped card renders as
+ * "Read 3 files, edited 1 file, ran 1 command ›".
+ */
+function renderCodeSessionMessages(messages: LocalChatMessage[]): LocalChatMessage[] {
+  const out: LocalChatMessage[] = [];
+  let pending: ToolMessage[] = [];
+  const flush = () => {
+    if (pending.length === 0) return;
+    const first = pending[0];
+    out.push({
+      id: `toolgroup-${first.id}`,
+      role: 'tool-group',
+      text: '',
+      createdAt: new Date(first.timestamp).getTime(),
+      toolGroup: pending,
+    });
+    pending = [];
+  };
+  for (const m of messages) {
+    if (m.role === 'tool' && m.tool) {
+      pending.push(m.tool);
+    } else {
+      flush();
+      out.push(m);
+    }
+  }
+  flush();
+  return out;
+}
+
+// ─── QuestionRequestCard ──────────────────────────────────────────────────
+
+interface QuestionRequestCardProps {
+  requestId: string;
+  questions: QuestionMessage['questions'];
+  resolved: boolean;
+  onResolve: (
+    requestId: string,
+    answers: Record<number, number | number[]>,
+    otherTexts?: Record<number, string>,
+  ) => void;
+}
+
+/**
+ * Minimal inline UI for `AskUserQuestion` events emitted from the engine.
+ * Renders each question with its options as a radio set (single-select) or
+ * checkboxes (multi-select). Tracks selected indices + optional "Other"
+ * text per question, then submits to the WS resolver.
+ */
+function QuestionRequestCard({
+  requestId,
+  questions,
+  resolved,
+  onResolve,
+}: QuestionRequestCardProps) {
+  const { token } = theme.useToken();
+  const [selections, setSelections] = useState<Record<number, number | number[]>>({});
+  const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
+
+  const canSubmit = !resolved && questions.every((q, qi) => {
+    const sel = selections[qi];
+    if (sel === undefined) return false;
+    if (Array.isArray(sel)) return sel.length > 0;
+    return true;
+  });
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 8,
+        padding: 12,
+        background: token.colorBgContainer,
+        fontSize: 13,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>Agent is asking</div>
+      {questions.map((q, qi) => (
+        <div key={qi} style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ background: token.colorFillSecondary, padding: '1px 6px', borderRadius: 4, fontSize: 11, marginRight: 8 }}>
+              {q.header}
+            </span>
+            {q.question}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {q.options.map((opt, oi) => {
+              const isSelected = q.multiSelect
+                ? Array.isArray(selections[qi]) && (selections[qi] as number[]).includes(oi)
+                : selections[qi] === oi;
+              return (
+                <label
+                  key={oi}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    cursor: resolved ? 'default' : 'pointer',
+                    padding: 6,
+                    borderRadius: 4,
+                    background: isSelected ? token.colorFillSecondary : 'transparent',
+                  }}
+                >
+                  <input
+                    type={q.multiSelect ? 'checkbox' : 'radio'}
+                    name={`q-${requestId}-${qi}`}
+                    disabled={resolved}
+                    checked={isSelected}
+                    onChange={() => {
+                      setSelections(prev => {
+                        const next = { ...prev };
+                        if (q.multiSelect) {
+                          const cur = (Array.isArray(prev[qi]) ? prev[qi] as number[] : []);
+                          next[qi] = cur.includes(oi) ? cur.filter(v => v !== oi) : [...cur, oi];
+                        } else {
+                          next[qi] = oi;
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{opt.label}</div>
+                    {opt.description && (
+                      <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                        {opt.description}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+            <input
+              type="text"
+              placeholder="Other (optional)"
+              disabled={resolved}
+              value={otherTexts[qi] ?? ''}
+              onChange={e =>
+                setOtherTexts(prev => ({ ...prev, [qi]: e.target.value }))
+              }
+              style={{
+                marginTop: 4,
+                padding: '4px 8px',
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 4,
+                fontSize: 12,
+                background: token.colorBgLayout,
+                color: token.colorText,
+              }}
+            />
+          </div>
+        </div>
+      ))}
+      <div style={{ textAlign: 'right', marginTop: 8 }}>
+        <Button
+          type="primary"
+          size="small"
+          disabled={!canSubmit}
+          onClick={() => {
+            const hasOther = Object.values(otherTexts).some(s => s.trim().length > 0);
+            onResolve(requestId, selections, hasOther ? otherTexts : undefined);
+          }}
+        >
+          {resolved ? 'Sent' : 'Submit'}
+        </Button>
+      </div>
+    </div>
   );
 }

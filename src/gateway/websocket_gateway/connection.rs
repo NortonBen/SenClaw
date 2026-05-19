@@ -159,6 +159,12 @@ async fn handle_message(
         "permission:accept-all" => {
             super::handlers::handle_tool_accept_all(clients, client_idx, &sender, state, msg).await
         }
+        "plan:list" => {
+            super::handlers::handle_plan_list(clients, client_idx, &sender, state, msg).await
+        }
+        "plan:get" => {
+            super::handlers::handle_plan_get(clients, client_idx, &sender, state, msg).await
+        }
         "question:response" => {
             super::handlers::handle_question_response(clients, client_idx, &sender, state, msg)
                 .await

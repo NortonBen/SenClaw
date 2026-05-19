@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -97,6 +97,30 @@ export interface WsHook {
   agentModes: Record<string, AgentMode>;
   /** Switch the engine's mode for a specific chat JID. */
   setAgentMode: (jid: string, mode: AgentMode) => void;
+  // Plan history (persisted ExitPlanMode requests)
+  /** Per-jid list of plan summaries fetched via requestPlanList. */
+  plansByJid: Record<string, PlanSummary[]>;
+  /** Last full plan fetched via requestPlan (keyed by plan id). */
+  planById: Record<string, PlanFull>;
+  /** Request the persisted plan list for a group. */
+  requestPlanList: (jid: string) => void;
+  /** Request the full markdown for a single plan by id. */
+  requestPlan: (id: string) => void;
+}
+
+export interface PlanSummary {
+  id: string;
+  chatJid: string;
+  agentId: string;
+  title: string;
+  filePath: string;
+  approval: string;
+  createdAt: string;
+  approvedAt?: string | null;
+}
+
+export interface PlanFull extends PlanSummary {
+  contentMd: string;
 }
 
 export type AgentMode = 'Agent' | 'Plan';
@@ -131,6 +155,8 @@ export function useWebSocket(): WsHook {
   const [coworkChanged, setCoworkChanged]     = useState(0);
   const [lastTaskResult, setLastTaskResult]   = useState<TaskResultEvent | null>(null);
   const [coworkResourceChanged, setCoworkResourceChanged] = useState(0);
+  const [plansByJid, setPlansByJid] = useState<Record<string, PlanSummary[]>>({});
+  const [planById, setPlanById] = useState<Record<string, PlanFull>>({});
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [agents, setAgents]     = useState<AgentInfo[]>([]);
   const [bindings, setBindings] = useState<BindingWithRelationsInfo[]>([]);
@@ -348,6 +374,14 @@ export function useWebSocket(): WsHook {
     });
   }, [rawSend]);
 
+  const requestPlanList = useCallback((jid: string) => {
+    rawSend({ type: 'plan:list', groupJid: jid });
+  }, [rawSend]);
+
+  const requestPlan = useCallback((id: string) => {
+    rawSend({ type: 'plan:get', id });
+  }, [rawSend]);
+
   const toggleToolRule = useCallback((id: string) => {
     setToolRules(prev => {
       const next = prev.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r);
@@ -416,18 +450,101 @@ export function useWebSocket(): WsHook {
             break;
           case 'history:load': {
             const hjid = msg.groupJid as string;
-            const msgs = msg.messages as Array<{ id: string; role: string; senderName?: string; text: string; timestamp: string }>;
+            // history:load carries polymorphic entries: text messages
+            // (role: 'user' | 'agent') and persisted tool executions
+            // (role: 'tool'). Discriminate by role so ChatView's
+            // consecutive-tool grouping (ToolGroupCard) lights up
+            // identically to the live `tool:execution` path.
+            const msgs = msg.messages as Array<Record<string, unknown>>;
             if (Array.isArray(msgs)) {
-              setMessages(prev => ({
-                ...prev,
-                [hjid]: msgs.map(m => ({
+              const hydrated: ChatMessage[] = msgs.map((m): ChatMessage => {
+                if (m.role === 'tool') {
+                  return {
+                    id:        m.id as string,
+                    role:      'tool',
+                    agentId:   (m.agentId as string) ?? 'main',
+                    toolName:  (m.toolName as string) ?? '',
+                    title:     (m.title as string) ?? '',
+                    summary:   (m.summary as string) ?? '',
+                    content:   m.content,
+                    ok:        m.ok !== false,
+                    timestamp: m.timestamp as string,
+                  } as ToolMessage;
+                }
+                return {
                   id:         m.id as string,
                   role:       (m.role === 'agent' ? 'agent' : 'user'),
-                  senderName: m.senderName,
-                  text:       m.text as string,
+                  senderName: m.senderName as string | undefined,
+                  text:       (m.text as string) ?? '',
                   timestamp:  m.timestamp as string,
-                } as TextMessage)) as ChatMessage[],
+                } as TextMessage;
+              });
+              setMessages(prev => ({
+                ...prev,
+                [hjid]: hydrated,
               }));
+            }
+            break;
+          }
+          case 'chat:history': {
+            // Replay of ephemeral chat events (agent:state + permission/
+            // question request/resolved pairs). Server emits this right
+            // after history:load on every subscribe so the UI rebuilds
+            // in-flight interactions after a page reload.
+            const hjid = msg.groupJid as string;
+            const events = msg.events as Array<{
+              id: number;
+              eventType: string;
+              requestId?: string | null;
+              payload: Record<string, unknown> | null;
+              timestamp: string;
+            }>;
+            if (!Array.isArray(events)) break;
+
+            // Pre-scan for resolved request IDs so we don't re-add pending
+            // PermissionMessage / QuestionMessage entries that have already
+            // been answered.
+            const resolved = new Set<string>();
+            for (const e of events) {
+              if ((e.eventType === 'permission:resolved' || e.eventType === 'question:resolved') && e.requestId) {
+                resolved.add(`${e.eventType}|${e.requestId}`);
+              }
+            }
+
+            for (const e of events) {
+              const p = (e.payload ?? {}) as Record<string, unknown>;
+              if (e.eventType === 'agent:state') {
+                const s = typeof p.state === 'string' ? p.state : undefined;
+                if (s) {
+                  setAgentStates(prev => ({ ...prev, [hjid]: s as AgentState }));
+                  if (s === 'idle') setAgentCompacting(prev => ({ ...prev, [hjid]: false }));
+                }
+              } else if (e.eventType === 'permission:request' && e.requestId) {
+                if (resolved.has(`permission:resolved|${e.requestId}`)) continue;
+                addMessage(hjid, {
+                  id:        `perm-${e.requestId}`,
+                  role:      'permission',
+                  requestId: e.requestId,
+                  toolName:  (p.toolName as string) ?? '',
+                  title:     (p.title as string) ?? '',
+                  content:   (p.content as string) ?? '',
+                  options:   (p.options as PermissionMessage['options']) ?? [],
+                  timestamp: e.timestamp,
+                });
+              } else if (e.eventType === 'question:request' && e.requestId) {
+                if (resolved.has(`question:resolved|${e.requestId}`)) continue;
+                addMessage(hjid, {
+                  id:         `q-${e.requestId}`,
+                  role:       'question',
+                  requestId:  e.requestId,
+                  agentId:    (p.agentId as string) ?? 'main',
+                  questions:  (p.questions as QuestionMessage['questions']) ?? [],
+                  selections: {},
+                  resolved:   false,
+                  timestamp:  e.timestamp,
+                });
+              }
+              // *:resolved events are handled implicitly via the pre-scan.
             }
             break;
           }
@@ -521,6 +638,37 @@ export function useWebSocket(): WsHook {
               const q = m as QuestionMessage;
               if (q.resolved) return m; // already resolved locally
               return { ...q, resolved: true };
+            });
+            break;
+          }
+          case 'plans:list': {
+            const jid = msg.groupJid as string;
+            const plans = (msg.plans as PlanSummary[]) ?? [];
+            setPlansByJid(prev => ({ ...prev, [jid]: plans }));
+            break;
+          }
+          case 'plans:get': {
+            const plan = msg.plan as PlanFull | undefined;
+            if (plan?.id) setPlanById(prev => ({ ...prev, [plan.id]: plan }));
+            break;
+          }
+          case 'tool:execution': {
+            // Inline tool-call activity for the chat UI. ChatView groups
+            // consecutive ToolMessages from the same agent turn into one
+            // collapsible card. Each message is one tool call.
+            const jid = msg.groupJid as string;
+            const toolName = (msg.toolName as string) ?? '';
+            const title = (msg.title as string) ?? toolName;
+            addMessage(jid, {
+              id: `tool-${jid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              role: 'tool',
+              agentId: (msg.agentId as string) ?? 'main',
+              toolName,
+              title,
+              summary: (msg.summary as string) ?? '',
+              content: msg.content,
+              ok: msg.ok !== false,
+              timestamp: (msg.ts as string) ?? new Date().toISOString(),
             });
             break;
           }
@@ -817,6 +965,7 @@ export function useWebSocket(): WsHook {
     notifications, markNotificationRead, clearAllNotifications,
     planExitRequest, resolvePlanExit, dismissPlanExit,
     agentModes, setAgentMode,
+    plansByJid, planById, requestPlanList, requestPlan,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -827,5 +976,6 @@ export function useWebSocket(): WsHook {
     notifications, markNotificationRead, clearAllNotifications,
     planExitRequest, resolvePlanExit, dismissPlanExit,
     agentModes, setAgentMode,
+    plansByJid, planById, requestPlanList, requestPlan,
   ]);
 }

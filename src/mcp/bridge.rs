@@ -94,4 +94,112 @@ impl Tool for McpBridgeTool {
     fn get_display_title(&self, _input: &Value) -> String {
         self.display_name.clone()
     }
+
+    // ===== Lazy-load policy =====
+    //
+    // 100+ MCP tools across 11 servers blow the prompt to ~17k tokens. Default
+    // to **deferred** so they're only included after the LLM finds them via
+    // `ToolSearch`. A small whitelist of high-frequency tools stays loaded.
+    fn should_defer(&self) -> bool {
+        !ALWAYS_LOADED_MCP_TOOLS.contains(&self.full_name.as_str())
+    }
+
+    fn search_hint(&self) -> String {
+        // First sentence of description, prefixed with display_name so name
+        // tokens contribute to scoring.
+        let first_sentence = self
+            .desc
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if first_sentence.is_empty() {
+            self.display_name.clone()
+        } else {
+            format!("{} — {first_sentence}", self.display_name)
+        }
+    }
+}
+
+/// MCP tools that **always** stay in the initial prompt — never deferred.
+///
+/// Pick these for capabilities the model needs to invoke without prior
+/// discovery (memory retrieval, schedule listing, etc.). Override-able by
+/// the per-group `allowed_tools` whitelist if admins want a different set.
+pub const ALWAYS_LOADED_MCP_TOOLS: &[&str] = &[
+    // Both naming schemes covered (engine.rs strips "senclaw-" for the
+    // per-engine McpRegistryBridgeTool path; the manager-driven McpBridgeTool
+    // keeps the full prefix). Listing both lets either bridge match.
+    "mcp__memory__search",
+    "mcp__senclaw-memory__search",
+    "mcp__memory__memory_search",
+    "mcp__senclaw-memory__memory_search",
+    "mcp__schedule__list_schedules",
+    "mcp__senclaw-schedule__list_schedules",
+    "mcp__workspace__workspace_info",
+    "mcp__senclaw-workspace__workspace_info",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn mk(full_name: &str, desc: &str) -> McpBridgeTool {
+        // Use a real McpManager constructed with throwaway paths — none of these
+        // tests exercise `call()` so the manager never spawns any subprocess.
+        let mgr = Arc::new(McpManager::new(
+            PathBuf::from("/tmp"),
+            PathBuf::from("/tmp"),
+        ));
+        McpBridgeTool {
+            full_name: full_name.to_string(),
+            display_name: full_name
+                .rsplit("__")
+                .next()
+                .unwrap_or(full_name)
+                .to_string(),
+            desc: desc.to_string(),
+            schema: Value::Null,
+            manager: mgr,
+        }
+    }
+
+    #[test]
+    fn defers_unknown_mcp_tools() {
+        let t = mk(
+            "mcp__senclaw-browser__screenshot",
+            "Capture a screenshot of the current page.",
+        );
+        assert!(t.should_defer());
+    }
+
+    #[test]
+    fn always_loaded_set_overrides_defer() {
+        let t = mk(
+            "mcp__senclaw-memory__search",
+            "Search the memory store.",
+        );
+        assert!(!t.should_defer());
+    }
+
+    #[test]
+    fn search_hint_uses_first_sentence() {
+        let t = mk(
+            "mcp__senclaw-browser__screenshot",
+            "Capture a screenshot of the current page. Returns PNG bytes.",
+        );
+        let hint = t.search_hint();
+        assert!(hint.contains("screenshot"));
+        assert!(hint.contains("Capture a screenshot of the current page"));
+        // No second sentence
+        assert!(!hint.contains("PNG bytes"));
+    }
+
+    #[test]
+    fn search_hint_falls_back_to_display_name_when_desc_empty() {
+        let t = mk("mcp__senclaw-x__foo", "");
+        assert_eq!(t.search_hint(), "foo");
+    }
 }

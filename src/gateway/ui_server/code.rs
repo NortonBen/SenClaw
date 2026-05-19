@@ -943,13 +943,76 @@ async fn process_group_queue(
 
         if role == "user" {
             let parsed_q = parse_prompt(&content);
+
+            // Open the per-turn CodeSession (cheap — just struct + git probe).
+            // Used for ref resolution, system prompt, and auto-checkpoint.
+            let session = crate::code_engine::CodeSession::open(
+                session_id.to_string(),
+                workspace.to_string(),
+                /* init_git */ false,
+            )
+            .ok();
+
+            // Resolve `@ref` tokens to absolute workspace paths so the agent
+            // gets concrete file references rather than the raw `@foo.rs`.
+            let resolved_refs: Vec<String> = if let Some(ref s) = session {
+                parsed_q
+                    .refs
+                    .iter()
+                    .filter_map(|r| s.resolve_path(r).ok())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            // Auto-checkpoint git before agent edits — gives `/rollback` a
+            // clean reference point per user turn. Best-effort: failures
+            // shouldn't block dispatch.
+            if let Some(ref s) = session {
+                let first_line = parsed_q
+                    .plain_text
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect::<String>();
+                let checkpoint_msg = if first_line.is_empty() {
+                    format!("turn @ {}", now_ms())
+                } else {
+                    format!("turn: {first_line}")
+                };
+                if let Err(e) = s.checkpoint(&checkpoint_msg) {
+                    tracing::warn!(
+                        "[CodeChat] git checkpoint failed group_id={group_id}: {e}"
+                    );
+                }
+            }
+
             let dispatch_reply = if let Some(api) = agent_api.as_ref() {
-                let code_jid = format!("code-chat:{group_id}");
-                let group_binding = build_code_group_binding(&code_jid, session_id, session_name);
-                let prompt_for_agent = format!(
-                    "<code_chat session_id=\"{}\" group_id=\"{}\" workspace=\"{}\">\n{}\n</code_chat>",
-                    session_id, group_id, workspace, parsed_q.normalized_prompt
-                );
+                // Build per-session spec via CodeAgentSpec — encapsulates JID,
+                // GroupBinding (tools + paths + folder), and system prompt.
+                let spec = match session.as_ref() {
+                    Some(s) => crate::code_engine::CodeAgentSpec::for_session(
+                        s,
+                        session_name,
+                        group_id,
+                    ),
+                    None => crate::code_engine::CodeAgentSpec::for_session(
+                        &crate::code_engine::CodeSession {
+                            session_id: session_id.to_string(),
+                            workspace: std::path::PathBuf::from(workspace),
+                            git_enabled: false,
+                            tracker: Default::default(),
+                        },
+                        session_name,
+                        group_id,
+                    ),
+                };
+                let code_jid = spec.jid().to_string();
+                let group_binding = spec.binding().clone();
+                let prompt_for_agent = spec.user_prompt(&parsed_q, &resolved_refs);
                 tracing::info!(
                     "[CodeChat] dag_dispatch_start group_id={} msg_id={} jid={}",
                     group_id,

@@ -242,6 +242,65 @@ mod tests {
     }
 
     #[test]
+    fn pre_permission_event_matches_by_tool_name() {
+        use crate::zen_core::hooks::types::PrePermissionInput;
+        let mut hooks: HashMap<HookEvent, Vec<HookEventConfig>> = HashMap::new();
+        hooks.insert(
+            HookEvent::PrePermission,
+            vec![HookEventConfig {
+                matcher: Some("Bash".into()),
+                if_condition: None,
+                hooks: vec![bash_hook()],
+            }],
+        );
+        let mgr = HookManager::new(HookConfig { hooks });
+
+        let input = HookInput::PrePermission(PrePermissionInput {
+            base: base(HookEvent::PrePermission),
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({"command": "ls"}),
+        });
+        assert_eq!(
+            mgr.get_matching_hooks(&HookEvent::PrePermission, &input).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn output_filter_event_matches_by_tool_name() {
+        use crate::zen_core::hooks::types::OutputFilterInput;
+        let mut hooks: HashMap<HookEvent, Vec<HookEventConfig>> = HashMap::new();
+        hooks.insert(
+            HookEvent::OutputFilter,
+            vec![HookEventConfig {
+                matcher: Some("Read".into()),
+                if_condition: None,
+                hooks: vec![bash_hook()],
+            }],
+        );
+        let mgr = HookManager::new(HookConfig { hooks });
+
+        let input = HookInput::OutputFilter(OutputFilterInput {
+            base: base(HookEvent::OutputFilter),
+            tool_name: "Read".into(),
+            tool_input: serde_json::json!({"path": "x"}),
+            tool_output: serde_json::json!({"content": "abc"}),
+        });
+        assert_eq!(
+            mgr.get_matching_hooks(&HookEvent::OutputFilter, &input).len(),
+            1
+        );
+        assert!(mgr.has_hooks_for_event(&HookEvent::OutputFilter));
+    }
+
+    #[test]
+    fn empty_manager_has_no_hooks_for_new_events() {
+        let mgr = HookManager::empty();
+        assert!(!mgr.has_hooks_for_event(&HookEvent::PrePermission));
+        assert!(!mgr.has_hooks_for_event(&HookEvent::OutputFilter));
+    }
+
+    #[test]
     fn wildcard_matcher_matches_all_tools() {
         let mut hooks: HashMap<HookEvent, Vec<HookEventConfig>> = HashMap::new();
         hooks.insert(

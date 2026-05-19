@@ -25,7 +25,7 @@ use super::*;
 use crate::gateway::group_manager::load_llm_configs;
 use crate::mcp::SharedMcpRegistry;
 use crate::skills::SkillRegistry;
-use crate::tools::{SkillTool, TaskTool, TodoWriteTool};
+use crate::tools::{SkillTool, TaskTool, TodoWriteTool, ToolSearchTool};
 use events::ResponseRegistry;
 use permissions::PermissionManager;
 
@@ -67,6 +67,18 @@ pub struct ZenEngine {
 
     // Workbench artifact service (artifact publishing + reverse ops)
     pub workbench_service: Arc<crate::zen_core::workbench::WorkbenchService>,
+
+    /// Tool names that became available via `ToolSearch` during this session.
+    /// `tools_for_main_agent` includes these even when `should_defer() == true`,
+    /// so the model can actually call what ToolSearch promised. Reset on
+    /// `dispose()` / new session.
+    pub(crate) discovered_tools:
+        Arc<Mutex<std::collections::HashSet<String>>>,
+
+    /// Weak self-reference set during construction. Lets `&self` methods hand
+    /// out closures that re-fetch live engine state without holding a strong
+    /// ref (which would prevent drop). Mirror of `AgentPool::self_weak`.
+    self_weak: Mutex<std::sync::Weak<Self>>,
 }
 
 impl ZenEngine {
@@ -111,7 +123,10 @@ impl ZenEngine {
             session_id: RwLock::new(None),
             hook_manager: Arc::new(HookManager::empty()),
             workbench_service,
+            discovered_tools: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            self_weak: Mutex::new(std::sync::Weak::new()),
         });
+        *engine.self_weak.lock().unwrap() = Arc::downgrade(&engine);
 
         // Register engine-dependent tools
         engine.register_tool(Arc::new(TodoWriteTool::new(state)));
@@ -119,6 +134,39 @@ impl ZenEngine {
 
         // Register static tools (no engine deps)
         engine.register_tools(crate::tools::all_tools());
+
+        // Register ToolSearch — discovery mechanism for deferred tools. Uses
+        // Weak<Self> so the resolver re-fetches live `deferred_tools()` on
+        // each call (use_tools / Plan / cowork filters apply).
+        let engine_for_search = Arc::downgrade(&engine);
+        let deferred_resolver: crate::tools::DeferredToolsFn = Arc::new(move || {
+            engine_for_search
+                .upgrade()
+                .map(|e| e.deferred_tools())
+                .unwrap_or_default()
+        });
+        let engine_for_discovery = Arc::downgrade(&engine);
+        let register_discovered: crate::tools::tool_search::RegisterDiscoveredFn =
+            Arc::new(move |name: &str| {
+                if let Some(e) = engine_for_discovery.upgrade() {
+                    e.discovered_tools
+                        .lock()
+                        .unwrap()
+                        .insert(name.to_string());
+                    tracing::info!("[ToolSearch] discovered tool: {name}");
+                }
+            });
+        engine.register_tool(Arc::new(
+            ToolSearchTool::new(deferred_resolver).with_discovery(register_discovered),
+        ));
+
+        // EnterPlanMode — flip the engine's `agent_mode` to Plan. Mirror of
+        // `ExitPlanMode` (which requests approval). Both are `always_load`
+        // builtins so the model doesn't need ToolSearch to find them.
+        let engine_for_plan = Arc::downgrade(&engine);
+        engine.register_tool(Arc::new(
+            crate::tools::EnterPlanModeTool::for_engine(engine_for_plan),
+        ));
 
         // Register TaskTool last so it knows about all other tools.
         // Pass a resolver closure (vs a snapshot) so spawned subagents inherit
@@ -203,6 +251,13 @@ impl ZenEngine {
     ///   3. **Plan-mode filter**: drops `TodoWrite` (Plan-mode policy).
     ///   4. **Cowork-mode filter**: drops interactive ask-tools for synthetic
     ///      `cowork:*` instance ids (no UI subscriber to answer questions).
+    ///   5. **Defer filter** (claude-code pattern): drops tools whose
+    ///      `should_defer() == true && !always_load()`. The LLM discovers
+    ///      these via `ToolSearch`. Cuts ~80% of tool tokens for MCP-heavy
+    ///      workloads.
+    ///   6. **Stable sort**: alphabetical-by-name so the tool list is
+    ///      byte-identical turn-over-turn — preserves Anthropic prompt cache
+    ///      hits.
     ///
     /// This method does NOT apply the subagent exclusion list — call
     /// [`Self::tools_for_subagent`] for that path.
@@ -237,7 +292,54 @@ impl ZenEngine {
             });
         }
 
+        // Layer 5 — defer filter. Deferred tools are excluded unless either:
+        //   - they opted into `always_load()` (e.g. ToolSearch itself), OR
+        //   - the model has already discovered them via a prior `ToolSearch`
+        //     call this session. Discovery flips the tool into the active set
+        //     so subsequent turns can actually invoke it. Mirrors claude-code's
+        //     "lazy load" UX without breaking the dispatch lookup.
+        let discovered = self.discovered_tools.lock().unwrap().clone();
+        filtered.retain(|t| {
+            t.always_load() || !t.should_defer() || discovered.contains(t.name())
+        });
+
+        // Layer 6 — stable sort for prompt-cache stability.
+        filtered.sort_by(|a, b| a.name().cmp(b.name()));
+
         filtered
+    }
+
+    /// Return tools currently marked `should_defer() && !always_load()`. These
+    /// are NOT sent in the initial prompt — the LLM finds them through
+    /// `ToolSearch`. Layer 1-4 filters (`use_tools`, Plan, cowork) still apply
+    /// so admins can completely disable a tool, not just defer it.
+    pub fn deferred_tools(&self) -> Vec<Arc<dyn Tool>> {
+        let opts = self.options.read().unwrap();
+        let use_tools = &opts.use_tools;
+        let is_plan = opts.agent_mode == AgentMode::Plan;
+        let tools = self.builtin_tools.read().unwrap();
+
+        let mut deferred: Vec<Arc<dyn Tool>> = tools
+            .iter()
+            .filter(|t| {
+                let name = t.name();
+                if !use_tools.is_empty() && !use_tools.contains(&name.to_string()) {
+                    return false;
+                }
+                if is_plan && name == "TodoWrite" {
+                    return false;
+                }
+                if self.instance_id.starts_with("cowork:")
+                    && (name == "AskUser" || name == "AskUserQuestion")
+                {
+                    return false;
+                }
+                t.should_defer() && !t.always_load()
+            })
+            .cloned()
+            .collect();
+        deferred.sort_by(|a, b| a.name().cmp(b.name()));
+        deferred
     }
 
     /// Backwards-compatible alias used by existing call sites. Prefer
@@ -656,7 +758,18 @@ impl ZenCore for ZenEngine {
         let instance_id = self.instance_id.clone();
         let event_bus = self.event_bus.clone();
         let opts = self.options.read().unwrap().clone();
-        let tools = self.get_tools();
+        let tools_initial = self.get_tools();
+        // Resolver re-evaluates the live tool set each turn so ToolSearch
+        // discoveries flow into subsequent turns within this same user input.
+        let engine_for_tools = self.self_weak.lock().unwrap().clone();
+        let tools_resolver: crate::zen_core::conversation::ToolsResolver = Arc::new(move || {
+            engine_for_tools
+                .upgrade()
+                .map(|e| e.tools_for_main_agent())
+                .unwrap_or_default()
+        });
+        // Keep `tools` binding for the existing log lines below.
+        let tools = tools_initial;
         // Debug: log all tools being sent to LLM so we can verify browser tools appear
         // {
         //     let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
@@ -697,10 +810,14 @@ impl ZenCore for ZenEngine {
         } else {
             None
         };
+        // Build deferred-tools reminder so the LLM knows ToolSearch can load
+        // specialized tools on demand.
+        let deferred_reminder = self.build_deferred_tools_reminder();
         let system_prompt = Self::assemble_system_prompt(
             &opts.system_prompt,
             &opts.working_dir,
             skills_reminder.as_deref(),
+            deferred_reminder.as_deref(),
         );
 
         // Resolve profile from active UI config first, env fallback second.
@@ -748,15 +865,35 @@ impl ZenCore for ZenEngine {
         });
 
         // Build the user message (after hooks may have modified prompt).
-        // On the very first turn inject volatile context (CLAUDE.md, date) as a
+        // On the very first turn inject volatile context (SENCLAW.md, date) as a
         // hidden <system-reminder> block so it doesn't destabilise the system prompt
         // for prompt caching.
+        //
+        // SENCLAW.md is only relevant for sessions that operate on a real
+        // workspace (code editing, cowork). For regular chat JIDs (`web:*`,
+        // `app:*`, `virtual:*`, etc.) the project doc is noise — wastes ~2k
+        // tokens per turn and dilutes the model's attention from the actual
+        // user query. Date-only context is still injected for everyone.
         let user_msg = {
             let mut blocks = Vec::<ContentBlock>::new();
             if messages.is_empty() {
-                if let Some(ctx) = Self::collect_first_turn_context(&opts.working_dir) {
+                let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
+                if let Some(ctx) = Self::collect_first_turn_context(
+                    &opts.working_dir,
+                    include_project_doc,
+                ) {
                     blocks.push(ContentBlock::Text { text: ctx });
                 }
+            }
+            // Skill pre-match: scan the prompt against loaded skill triggers
+            // and surface a hard recommendation if any match. Mirrors the
+            // claude-code pattern of a "preferred skill" hint, but driven by
+            // keyword overlap (no LLM call). The reminder is part of the user
+            // message so it gets the model's full attention on the very first
+            // pass — vs the skill list at the end of the system prompt which
+            // the model often skims.
+            if let Some(hint) = self.build_skill_match_reminder(&prompt) {
+                blocks.push(ContentBlock::Text { text: hint });
             }
             blocks.push(ContentBlock::Text {
                 text: prompt.clone(),
@@ -778,7 +915,7 @@ impl ZenCore for ZenEngine {
                 working_dir: opts.working_dir.clone(),
                 agent_data_dir: opts.agent_data_dir.clone(),
                 system_prompt: system_prompt.clone(),
-                tools: tools.clone(),
+                tools: tools_resolver.clone(),
                 http_client: http_client.clone(),
                 event_bus: event_bus_spawn,
                 response_registry: Some(response_registry.clone()),
@@ -879,6 +1016,7 @@ impl ZenCore for ZenEngine {
         self.state.lock().unwrap().clear_all();
         self.response_registry.clear();
         self.workbench_service.shutdown();
+        self.discovered_tools.lock().unwrap().clear();
 
         // Fire SessionEnd hook (non-blockable, fire-and-forget)
         if self
@@ -1121,6 +1259,7 @@ impl ZenEngine {
         base: &str,
         working_dir: &str,
         skills_reminder: Option<&str>,
+        deferred_reminder: Option<&str>,
     ) -> String {
         // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
         // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
@@ -1137,7 +1276,34 @@ impl ZenEngine {
             out.push_str("\n\n");
             out.push_str(reminder);
         }
+        if let Some(reminder) = deferred_reminder {
+            out.push_str("\n\n");
+            out.push_str(reminder);
+        }
         out
+    }
+
+    /// Build the deferred-tools system reminder. Returns `None` when zero
+    /// tools are deferred so callers skip the empty block.
+    fn build_deferred_tools_reminder(&self) -> Option<String> {
+        use crate::zen_core::prompt::{render_deferred_tools_reminder, DeferredToolHint};
+        let deferred = self.deferred_tools();
+        if deferred.is_empty() {
+            return None;
+        }
+        // Materialize hints so we don't hold tool refs across closure bounds.
+        let hints: Vec<(String, String)> = deferred
+            .iter()
+            .map(|t| (t.name().to_string(), t.search_hint()))
+            .collect();
+        let rows: Vec<DeferredToolHint<'_>> = hints
+            .iter()
+            .map(|(n, h)| DeferredToolHint {
+                name: n.as_str(),
+                search_hint: h.clone(),
+            })
+            .collect();
+        render_deferred_tools_reminder(&rows)
     }
 
     /// Render the metadata-driven skills reminder block when the `Skill` tool
@@ -1195,35 +1361,136 @@ impl ZenEngine {
         lines.join("\n")
     }
 
-    /// Read CLAUDE.md (walks up from `working_dir`) and current date.
+    /// Pre-match user prompt against installed skills' `when-to-use` triggers
+    /// and return a hard skill recommendation block when one matches.
+    ///
+    /// The block is appended to the user message (not the system prompt) so it
+    /// sits adjacent to the actual query — models attend much more strongly
+    /// here than to the skill list buried in the system prompt.
+    ///
+    /// Match heuristic:
+    ///   - lowercase both sides
+    ///   - require ≥3 distinct word overlaps OR an explicit quoted-trigger
+    ///     ("…") substring hit
+    ///   - ignore skills with `disable_model_invocation` (user-only)
+    fn build_skill_match_reminder(&self, prompt: &str) -> Option<String> {
+        let prompt_lower = prompt.to_lowercase();
+        let prompt_words: std::collections::HashSet<String> = prompt_lower
+            .split(|c: char| !c.is_alphanumeric() && c != '\u{0301}' && c != '\u{0303}')
+            .filter(|w| w.len() >= 3)
+            .map(|w| w.to_string())
+            .collect();
+
+        let names = self.skill_registry.names();
+        let mut best: Option<(u32, String, String)> = None;
+        for n in &names {
+            let Some(skill) = self.skill_registry.find(n) else { continue };
+            if skill.metadata.disable_model_invocation {
+                continue;
+            }
+            let Some(when) = skill.metadata.when_to_use.as_deref() else { continue };
+            let when_lower = when.to_lowercase();
+
+            // Score = exact quoted-trigger substring hits (heavy) + word overlap.
+            let mut score: u32 = 0;
+            for quote in extract_quoted_phrases(&when_lower) {
+                if prompt_lower.contains(&quote) {
+                    score += 50;
+                }
+            }
+            for word in when_lower
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| w.len() >= 3)
+            {
+                if prompt_words.contains(word) {
+                    score += 5;
+                }
+            }
+            if score >= 15 {
+                if best.as_ref().map(|(s, _, _)| score > *s).unwrap_or(true) {
+                    best = Some((score, skill.metadata.name.clone(), skill.metadata.description.clone()));
+                }
+            }
+        }
+
+        let (_, name, desc) = best?;
+        let first_sentence = desc.split('.').next().unwrap_or(&desc).trim();
+        Some(format!(
+            "<system-reminder>\n\
+🎯 SKILL MATCH: This request looks like a job for the `{name}` skill — {first_sentence}.\n\
+\n\
+**Recommended workflow:**\n\
+1. Invoke it with `Skill {{ \"skill\": \"{name}\" }}` to load its instructions.\n\
+2. Follow the skill's workflow — it knows the right MCP tools to call.\n\
+3. Do NOT answer from memory for time-sensitive or external data.\n\
+</system-reminder>\n\n"
+        ))
+    }
+
+    /// Whether the given instance id corresponds to an agent that operates
+    /// inside a real workspace (code edits, file ops, project bash). Only
+    /// these sessions get `SENCLAW.md` injected into their first user turn;
+    /// regular chat agents (`web:*`, `app:*`, `virtual:*`) skip it to save
+    /// ~2k tokens per turn and avoid polluting attention with project docs
+    /// irrelevant to the chat query.
+    fn instance_uses_workspace(instance_id: &str) -> bool {
+        // Convention from `code_engine::agent_builder::code_session_jid`:
+        // `code-chat:<group>`. Cowork agents (`cowork:<workspace>:<member>`)
+        // also operate inside a workspace.
+        instance_id.starts_with("code-chat:")
+            || instance_id.starts_with("cowork:")
+            || instance_id.starts_with("code:")
+    }
+
+    /// Read `SENCLAW.md` (walks up from `working_dir`) and current date.
     /// Returns a `<system-reminder>` block to inject into the first user turn,
     /// or `None` if nothing useful was found.
-    fn collect_first_turn_context(working_dir: &str) -> Option<String> {
+    ///
+    /// When `include_project_doc` is `false`, only the date line is emitted —
+    /// the project markdown is skipped entirely. Used for non-workspace agents.
+    ///
+    /// Reads `SENCLAW.md` first, then falls back to `CLAUDE.md` for backward
+    /// compatibility with existing repos that haven't renamed yet.
+    fn collect_first_turn_context(
+        working_dir: &str,
+        include_project_doc: bool,
+    ) -> Option<String> {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let mut parts: Vec<String> = vec![format!("Today's date is {date}.")];
 
-        // Walk up the directory tree looking for CLAUDE.md
-        let mut dir = std::path::Path::new(working_dir).to_path_buf();
-        let claude_md = loop {
-            let candidate = dir.join("CLAUDE.md");
-            if candidate.exists() {
-                break std::fs::read_to_string(&candidate).ok();
-            }
-            if !dir.pop() {
-                break None;
-            }
-        };
-        if let Some(content) = claude_md {
-            if !content.trim().is_empty() {
-                parts.push(format!(
-                    "Project instructions (CLAUDE.md):\n{}",
-                    content.trim()
-                ));
+        if include_project_doc {
+            // Walk up the directory tree looking for SENCLAW.md, then CLAUDE.md.
+            let mut dir = std::path::Path::new(working_dir).to_path_buf();
+            let project_doc: Option<(&'static str, String)> = loop {
+                let mut hit: Option<(&'static str, String)> = None;
+                for fname in ["SENCLAW.md", "CLAUDE.md"] {
+                    let candidate = dir.join(fname);
+                    if candidate.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&candidate) {
+                            hit = Some((fname, content));
+                            break;
+                        }
+                    }
+                }
+                if let Some(found) = hit {
+                    break Some(found);
+                }
+                if !dir.pop() {
+                    break None;
+                }
+            };
+            if let Some((fname, content)) = project_doc {
+                if !content.trim().is_empty() {
+                    parts.push(format!(
+                        "Project instructions ({fname}):\n{}",
+                        content.trim()
+                    ));
+                }
             }
         }
 
         if parts.len() == 1 && parts[0].contains("date") {
-            // Only date — not worth injecting a wrapper
+            // Only date — still inject so the model knows the day.
             return Some(format!("<system-reminder>\n{}\n</system-reminder>\n\n", parts[0]));
         }
 
@@ -1351,11 +1618,88 @@ impl Tool for McpRegistryBridgeTool {
             content: input.clone(),
         })
     }
+
+    // ===== Lazy-load policy =====
+    //
+    // Mirrors `McpBridgeTool::should_defer` (the *other* MCP wrapper used by
+    // `refresh_mcp_tools`). Both bridge structs need identical defer policy
+    // or some MCP tools will leak into the initial prompt.
+    fn should_defer(&self) -> bool {
+        !crate::mcp::bridge::ALWAYS_LOADED_MCP_TOOLS.contains(&self.full_name.as_str())
+    }
+
+    fn search_hint(&self) -> String {
+        // `server_name — tool_name — first sentence of description`
+        let first_sentence = self
+            .desc
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let server_display = self
+            .server_name
+            .strip_prefix("senclaw-")
+            .unwrap_or(&self.server_name);
+        if first_sentence.is_empty() {
+            format!("{server_display} {tool}", tool = self.tool_name)
+        } else {
+            format!(
+                "{server_display} {tool} — {first_sentence}",
+                tool = self.tool_name
+            )
+        }
+    }
+}
+
+/// Extract substrings inside straight or curly double-quotes. Used by skill
+/// pre-match to give high weight to explicit example triggers like
+/// `e.g. "tìm giá vàng hôm nay"` in `when-to-use` descriptions.
+fn extract_quoted_phrases(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut inside = false;
+    for ch in s.chars() {
+        match ch {
+            '"' | '\u{201C}' | '\u{201D}' => {
+                if inside {
+                    let trimmed = current.trim().to_string();
+                    if trimmed.len() >= 3 {
+                        out.push(trimmed);
+                    }
+                    current.clear();
+                    inside = false;
+                } else {
+                    inside = true;
+                }
+            }
+            _ if inside => current.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_quoted_phrases_straight_quotes() {
+        let out = extract_quoted_phrases("e.g. \"tìm giá vàng hôm nay\", \"screenshot github\"");
+        assert_eq!(out, vec!["tìm giá vàng hôm nay", "screenshot github"]);
+    }
+
+    #[test]
+    fn extract_quoted_phrases_curly() {
+        let out = extract_quoted_phrases("\u{201C}hello world\u{201D}");
+        assert_eq!(out, vec!["hello world"]);
+    }
+
+    #[test]
+    fn extract_quoted_phrases_empty_when_none() {
+        assert!(extract_quoted_phrases("no quotes here").is_empty());
+    }
 
     #[test]
     fn engine_creation_and_basic_state() {

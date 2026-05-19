@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { theme } from 'antd';
-import type { GroupInfo, ChatMessage, AgentState, UsageData, ImageAttachment } from '../types';
+import type { GroupInfo, ChatMessage, ToolMessage, AgentState, UsageData, ImageAttachment } from '../types';
 import type { AgentMode } from '../hooks/useWebSocket';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
+import { ToolGroupCard } from './ToolGroupCard';
 import { Progress, Space, Typography } from 'antd';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
 
@@ -339,14 +340,13 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
             </button>
           </div>
         )}
-        {visibleMessages.map(msg => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            onResolvePermission={onResolvePermission}
-            onResolveQuestion={onResolveQuestion}
-          />
-        ))}
+        {/* Render with consecutive ToolMessages collapsed into one card —
+            claude-code style "Read 3 files, edited 1, ran 1 command ›". */}
+        {renderMessagesWithToolGroups(
+          visibleMessages,
+          onResolvePermission,
+          onResolveQuestion,
+        )}
         {isProcessing && <TypingIndicator />}
         <div ref={bottomRef} />
       </div>
@@ -457,4 +457,49 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
       )}
     </div>
   );
+}
+
+/**
+ * Walk the message list and emit React nodes, but coalesce runs of
+ * `role === 'tool'` messages into a single `<ToolGroupCard>` so the chat
+ * reads as "[user message] · [Read 3 files, ran 1 command ›] · [agent reply]"
+ * rather than 4 separate tool rows.
+ */
+function renderMessagesWithToolGroups(
+  messages: ChatMessage[],
+  onResolvePermission: (requestId: string, optionKey: string) => void,
+  onResolveQuestion: (
+    requestId: string,
+    answers: Record<number, number | number[]>,
+    otherTexts?: Record<number, string>,
+  ) => void,
+): JSX.Element[] {
+  const nodes: JSX.Element[] = [];
+  let pendingTools: ToolMessage[] = [];
+
+  const flushTools = () => {
+    if (pendingTools.length === 0) return;
+    nodes.push(
+      <ToolGroupCard key={`tools-${pendingTools[0].id}`} messages={pendingTools} />,
+    );
+    pendingTools = [];
+  };
+
+  for (const msg of messages) {
+    if (msg.role === 'tool') {
+      pendingTools.push(msg as ToolMessage);
+    } else {
+      flushTools();
+      nodes.push(
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          onResolvePermission={onResolvePermission}
+          onResolveQuestion={onResolveQuestion}
+        />,
+      );
+    }
+  }
+  flushTools();
+  return nodes;
 }

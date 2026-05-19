@@ -289,6 +289,37 @@ impl WebSocketGateway {
         .await;
     }
 
+    // ===== Tool execution (chat-inline display) =====
+
+    /// Broadcast a single tool execution event so the chat UI can render a
+    /// claude-code-style tool-call card (collapsed: "Read 3 files, ran 1
+    /// command"; expanded: per-call detail). Only sent to clients subscribed
+    /// to `chat_jid` so we don't spam admins with irrelevant tool noise.
+    pub async fn notify_tool_execution(
+        &self,
+        chat_jid: &str,
+        agent_id: &str,
+        tool_name: &str,
+        title: &str,
+        summary: &str,
+        content: &serde_json::Value,
+        ok: bool,
+        ts: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "tool:execution",
+            "groupJid": chat_jid,
+            "agentId": agent_id,
+            "toolName": tool_name,
+            "title": title,
+            "summary": summary,
+            "content": content,
+            "ok": ok,
+            "ts": ts,
+        });
+        self.broadcast(chat_jid, &msg).await;
+    }
+
     // ===== Plan mode (ExitPlanMode tool) =====
 
     /// Forwarded from `EngineEvent::PlanExitRequest`. UI renders the modal

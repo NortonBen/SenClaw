@@ -93,6 +93,77 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_group_msg_ts
           ON group_messages(chat_jid, timestamp);
 
+        -- Tool execution events. Kept in a SEPARATE table from group_messages
+        -- so the discriminator (`role: 'tool'`) stays explicit at the storage
+        -- layer too. Replayed on subscribe so the chat UI can re-render the
+        -- claude-code-style tool cards after a page reload.
+        -- Ephemeral chat events (agent state transitions, permission/question
+        -- requests + their resolutions). Replayed on subscribe so the
+        -- chat UI can rebuild interactive state after a page reload.
+        CREATE TABLE IF NOT EXISTS chat_events (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_jid    TEXT NOT NULL,
+          event_type  TEXT NOT NULL,
+          request_id  TEXT,
+          payload     TEXT NOT NULL DEFAULT '{}',
+          timestamp   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_events_chat_ts
+          ON chat_events(chat_jid, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_chat_events_req
+          ON chat_events(request_id);
+
+        -- Per-agent TODO snapshot for the Agent Console. Replayed on
+        -- admin reconnect so the list survives daemon restart, not just
+        -- in-memory cache rebuilds.
+        CREATE TABLE IF NOT EXISTS agent_todos (
+          agent_jid   TEXT PRIMARY KEY,
+          agent_name  TEXT NOT NULL DEFAULT '',
+          todos_json  TEXT NOT NULL DEFAULT '[]',
+          updated_at  TEXT NOT NULL
+        );
+
+        -- Plans produced by ExitPlanMode. Persisted at request time so
+        -- the markdown is queryable as history even if the user never
+        -- clicks approve. The approval column tracks the eventual response.
+        CREATE TABLE IF NOT EXISTS plans (
+          id           TEXT PRIMARY KEY,
+          chat_jid     TEXT NOT NULL,
+          agent_id     TEXT NOT NULL DEFAULT 'main',
+          title        TEXT NOT NULL DEFAULT '',
+          file_path    TEXT NOT NULL,
+          content_md   TEXT NOT NULL,
+          approval     TEXT NOT NULL DEFAULT 'pending',
+          created_at   TEXT NOT NULL,
+          approved_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_plans_chat_ts
+          ON plans(chat_jid, created_at DESC);
+
+        -- Tool auto-accept/deny rules. Stored as a JSON blob so new
+        -- matcher/action variants in the Rust enum don't need a schema
+        -- migration. The server is the source of truth; the browser
+        -- localStorage cache mirrors the canonical list.
+        CREATE TABLE IF NOT EXISTS tool_rules (
+          id          TEXT PRIMARY KEY,
+          rule_json   TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS tool_executions (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_jid      TEXT NOT NULL,
+          agent_id      TEXT NOT NULL DEFAULT 'main',
+          tool_name     TEXT NOT NULL,
+          title         TEXT NOT NULL DEFAULT '',
+          summary       TEXT NOT NULL DEFAULT '',
+          content_json  TEXT NOT NULL DEFAULT '{}',
+          ok            INTEGER NOT NULL DEFAULT 1,
+          timestamp     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_exec_chat_ts
+          ON tool_executions(chat_jid, timestamp);
+
         CREATE TABLE IF NOT EXISTS scheduled_tasks (
           id             TEXT PRIMARY KEY,
           group_folder   TEXT NOT NULL,

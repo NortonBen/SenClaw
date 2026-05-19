@@ -492,6 +492,52 @@ pub trait Tool: Send + Sync {
         let _ = input;
         None
     }
+
+    // ========================================================================
+    // Lazy-load metadata (mirrors `claude-code` tool discovery pattern)
+    //
+    // Most tools should set defaults below. Override only when:
+    //   - The tool is rarely used → `should_defer() = true` to remove it from
+    //     the initial tool list. The LLM can find it via `ToolSearch`.
+    //   - The tool is core / always relevant → `always_load() = true` to force
+    //     inclusion even in restricted modes.
+    //   - The tool was renamed → expose `aliases()` so old tool_use calls
+    //     still resolve.
+    // ========================================================================
+
+    /// Short keyword hint (3-10 words) used by `ToolSearch` to discover this
+    /// tool when it's deferred. Default = first sentence of `description()`.
+    fn search_hint(&self) -> String {
+        self.description()
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    }
+
+    /// When true, this tool is excluded from the initial tool list sent to the
+    /// LLM each turn. The LLM must call `ToolSearch` first to discover it,
+    /// then it becomes available for subsequent turns.
+    ///
+    /// Massive token saver — 100+ MCP tools can be deferred so only ~14 core
+    /// tools land in the initial prompt.
+    fn should_defer(&self) -> bool {
+        false
+    }
+
+    /// Override `should_defer()` — when true, this tool is **always** included
+    /// in the initial prompt regardless of any defer policy. Use for
+    /// session-critical tools (`ToolSearch` itself, `Task`, `Bash`, etc.).
+    fn always_load(&self) -> bool {
+        false
+    }
+
+    /// Alternative names this tool was previously known by. Lets old
+    /// conversation history (tool_use blocks with renamed names) keep working.
+    fn aliases(&self) -> &[&str] {
+        &[]
+    }
 }
 
 // ============================================================================

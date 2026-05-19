@@ -56,6 +56,7 @@ use channels::Channel;
 struct RealWsApi {
     group_queue: Arc<agent::group_queue::GroupQueue>,
     agent_pool: Arc<agent::agent_pool::AgentPool>,
+    db: Arc<db::Db>,
 }
 
 struct RealPermissionApi {
@@ -131,18 +132,23 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
     }
 
     fn add_tool_rule(&self, rule: crate::agent::permission_bridge::types::ToolAutoAcceptRule) {
+        persist_tool_rule(&self.db, &rule);
         if let Some(bridge) = self.agent_pool.permission_bridge() {
             bridge.add_rule(rule);
         }
     }
 
     fn remove_tool_rule(&self, rule_id: &str) {
+        if let Err(e) = self.db.delete_tool_rule(rule_id) {
+            tracing::warn!(error = %e, rule_id, "[ToolRules] failed to delete from DB");
+        }
         if let Some(bridge) = self.agent_pool.permission_bridge() {
             bridge.remove_rule(rule_id);
         }
     }
 
     fn update_tool_rule(&self, rule: crate::agent::permission_bridge::types::ToolAutoAcceptRule) {
+        persist_tool_rule(&self.db, &rule);
         if let Some(bridge) = self.agent_pool.permission_bridge() {
             bridge.update_rule(rule);
         }
@@ -263,6 +269,91 @@ fn dispatch_parent_to_json(p: &agent::dispatch_bridge::DispatchParent) -> serde_
 
 struct WsAgentEventSink {
     gateway: Arc<gateway::websocket_gateway::WebSocketGateway>,
+    db: Arc<db::Db>,
+}
+
+/// Best-effort persistence of an `ExitPlanMode` plan request. Writes the
+/// markdown to `<plans_dir>/<chat>-<ts>.md` and inserts a `plans` row.
+/// Both operations are logged on failure but never block.
+fn persist_plan(
+    db: &Arc<db::Db>,
+    plans_dir: &std::path::Path,
+    chat_jid: &str,
+    agent_id: &str,
+    content_md: &str,
+) {
+    if let Err(e) = std::fs::create_dir_all(plans_dir) {
+        tracing::warn!(error = %e, dir = %plans_dir.display(), "[Plans] mkdir failed");
+        return;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = chrono::Utc::now().to_rfc3339();
+    // Sanitize jid for filename (replace ':' and '/').
+    let safe_jid = chat_jid.replace([':', '/'], "_");
+    let stem = format!("{safe_jid}-{}", ts.replace([':', '.'], "_"));
+    let file_path = plans_dir.join(format!("{stem}.md"));
+    if let Err(e) = std::fs::write(&file_path, content_md) {
+        tracing::warn!(error = %e, path = %file_path.display(), "[Plans] write file failed");
+        // continue — DB insert still useful even if disk write failed
+    }
+    // Derive a short title from the first markdown heading or first line.
+    let title = content_md
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim().trim_start_matches('#').trim().to_string())
+        .unwrap_or_default();
+    let plan = db::plans::StoredPlan {
+        id,
+        chat_jid: chat_jid.to_string(),
+        agent_id: agent_id.to_string(),
+        title,
+        file_path: file_path.to_string_lossy().to_string(),
+        content_md: content_md.to_string(),
+        approval: "pending".to_string(),
+        created_at: ts,
+        approved_at: None,
+    };
+    if let Err(e) = db.insert_plan(&plan) {
+        tracing::warn!(error = %e, "[Plans] DB insert failed");
+    }
+}
+
+/// Best-effort persistence of a tool auto-accept rule. We log and swallow
+/// failures so a transient DB error never blocks the in-memory rule update.
+fn persist_tool_rule(
+    db: &Arc<db::Db>,
+    rule: &crate::agent::permission_bridge::types::ToolAutoAcceptRule,
+) {
+    let json = match serde_json::to_string(rule) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, rule_id = %rule.id, "[ToolRules] serialize failed");
+            return;
+        }
+    };
+    let ts = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = db.upsert_tool_rule(&rule.id, &json, &ts) {
+        tracing::warn!(error = %e, rule_id = %rule.id, "[ToolRules] DB upsert failed");
+    }
+}
+
+/// Best-effort persistence of an ephemeral chat event. Logs and swallows
+/// failures so a transient DB error never blocks the live broadcast.
+fn persist_chat_event(
+    db: &Arc<db::Db>,
+    chat_jid: &str,
+    event_type: &str,
+    request_id: Option<&str>,
+    payload: &serde_json::Value,
+) {
+    let payload_json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+    let ts = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = db.insert_chat_event(chat_jid, event_type, request_id, &payload_json, &ts) {
+        tracing::warn!(
+            error = %e, chat_jid = %chat_jid, event = %event_type,
+            "[WsAgentEventSink] failed to persist chat event; live broadcast continues"
+        );
+    }
 }
 
 impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
@@ -277,9 +368,12 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
 
     fn notify_agent_state(&self, chat_jid: &str, state: &str) {
         let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
         let jid = chat_jid.to_string();
         let state = state.to_string();
         tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "agent:state", None,
+                &serde_json::json!({"state": state}));
             gw.notify_agent_state(&jid, &state).await;
         });
     }
@@ -291,10 +385,12 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         payload: agent::permission_bridge::PermissionPayload,
     ) {
         let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
         let jid = chat_jid.to_string();
         let req = request_id.to_string();
         let payload = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
         tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "permission:request", Some(&req), &payload);
             gw.notify_permission_request(&jid, &req, &payload).await;
         });
     }
@@ -306,10 +402,12 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         payload: agent::permission_bridge::AskQuestionPayload,
     ) {
         let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
         let jid = chat_jid.to_string();
         let req = request_id.to_string();
         let payload = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
         tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "question:request", Some(&req), &payload);
             gw.notify_ask_question_request(&jid, &req, &payload).await;
         });
     }
@@ -322,11 +420,14 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         option_label: &str,
     ) {
         let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
         let jid = chat_jid.to_string();
         let req = request_id.to_string();
         let key = option_key.to_string();
         let label = option_label.to_string();
         tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "permission:resolved", Some(&req),
+                &serde_json::json!({"key": key, "label": label}));
             gw.notify_permission_resolved(&jid, &req, &key, &label)
                 .await;
         });
@@ -339,10 +440,12 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         answers: std::collections::HashMap<String, String>,
     ) {
         let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
         let jid = chat_jid.to_string();
         let req = request_id.to_string();
         let answers = serde_json::to_value(&answers).unwrap_or(serde_json::Value::Null);
         tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "question:resolved", Some(&req), &answers);
             gw.notify_ask_question_resolved(&jid, &req, &answers).await;
         });
     }
@@ -358,10 +461,21 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
             todos.len()
         );
         let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
         let jid = agent_jid.to_string();
         let name = agent_name.to_string();
         let todos = serde_json::to_value(todos).unwrap_or(serde_json::Value::Null);
         tokio::spawn(async move {
+            // Persist before broadcasting so an admin reconnecting right
+            // after the emit still sees the list across a daemon restart.
+            let todos_json = serde_json::to_string(&todos).unwrap_or_else(|_| "[]".to_string());
+            let ts = chrono::Utc::now().to_rfc3339();
+            if let Err(e) = db.upsert_agent_todos(&jid, &name, &todos_json, &ts) {
+                tracing::warn!(
+                    error = %e, agent_jid = %jid,
+                    "[WsAgentEventSink] failed to persist agent_todos; live broadcast continues"
+                );
+            }
             gw.notify_agent_todos(&jid, &name, &todos).await;
         });
     }
@@ -952,6 +1066,22 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         None,
     )));
 
+    // Seed the permission bridge with any persisted tool rules from DB so
+    // the server is the source of truth across restarts and browsers.
+    if let (Some(bridge), Ok(rows)) = (agent_pool.permission_bridge(), db.list_tool_rules()) {
+        let mut loaded = 0usize;
+        for row in &rows {
+            match serde_json::from_str::<agent::permission_bridge::types::ToolAutoAcceptRule>(&row.rule_json) {
+                Ok(rule) => {
+                    bridge.add_rule(rule);
+                    loaded += 1;
+                }
+                Err(e) => tracing::warn!(error = %e, rule_id = %row.id, "[ToolRules] DB row deserialize failed"),
+            }
+        }
+        tracing::info!("[ToolRules] seeded permission bridge with {loaded} persisted rule(s)");
+    }
+
     // ===== DailyLogger for conversation history =====
     let daily_logger = Arc::new(memory::daily_logger::DailyLogger::new(
         cfg.paths.agents_dir.clone(),
@@ -1191,6 +1321,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         let ws_api = Arc::new(RealWsApi {
             group_queue: Arc::clone(&group_queue),
             agent_pool: agent_pool.clone(),
+            db: Arc::clone(&db),
         });
 
         let browser_relay = Arc::new(gateway::websocket_gateway::BrowserRelay::new());
@@ -1219,6 +1350,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // clients (Agent Console) see currently-running agents.
         agent_pool.set_agent_event_sink(Arc::new(WsAgentEventSink {
             gateway: Arc::clone(&gw),
+            db: Arc::clone(&db),
         }));
 
         // Wire MessageRouter → WebSocket gateway for real-time incoming messages.
@@ -1289,9 +1421,20 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // catches `plan:exit:request` and renders the `PlanExitDialog`.
         {
             let gw_plan = Arc::clone(&gw);
+            let db_plan = Arc::clone(&db);
+            let plans_dir = cfg.paths.db_path
+                .parent()
+                .map(|p| p.join("plans"))
+                .unwrap_or_else(|| std::path::PathBuf::from("plans"));
             zen_core_api.set_on_plan_exit_request(Arc::new(move |jid, data| {
                 let gw = Arc::clone(&gw_plan);
+                let db = Arc::clone(&db_plan);
+                let plans_dir = plans_dir.clone();
                 tokio::spawn(async move {
+                    // Persist the plan to disk + DB at request time so the
+                    // markdown is queryable as history even if the user
+                    // never clicks approve. Approval starts as "pending".
+                    persist_plan(&db, &plans_dir, &jid, &data.agent_id, &data.plan_content);
                     gw.notify_plan_exit_request(
                         &jid,
                         &data.agent_id,
@@ -1299,6 +1442,58 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         &data.plan_content,
                         &data.options.start_editing,
                         &data.options.clear_context_and_start,
+                    )
+                    .await;
+                });
+            }));
+        }
+
+        // Tool execution → WS gateway. Each completed (or errored) tool call
+        // is broadcast as a single `tool:execution` message so the chat UI
+        // can group consecutive calls into a "Read 3 files, ran 1 command"
+        // collapsible card (claude-code style).
+        {
+            let gw_tool = Arc::clone(&gw);
+            let db_tool = Arc::clone(&db);
+            let default_msg_limit = cfg.agent.max_messages_per_group;
+            zen_core_api.set_on_tool_execution(Arc::new(move |jid, ev| {
+                let gw = Arc::clone(&gw_tool);
+                let db = Arc::clone(&db_tool);
+                tokio::spawn(async move {
+                    // Compute the timestamp once so the persisted row and the
+                    // live wire frame agree.
+                    let ts = chrono::Utc::now().to_rfc3339();
+                    // Persist before broadcasting so a reload immediately
+                    // after the event still includes it in `history:load`.
+                    let content_json = serde_json::to_string(&ev.content)
+                        .unwrap_or_else(|_| "{}".to_string());
+                    if let Err(e) = db.insert_tool_execution(
+                        &jid,
+                        &ev.agent_id,
+                        &ev.tool_name,
+                        &ev.title,
+                        &ev.summary,
+                        &content_json,
+                        ev.ok,
+                        &ts,
+                        default_msg_limit,
+                    ) {
+                        tracing::warn!(
+                            error = %e,
+                            jid = %jid,
+                            tool = %ev.tool_name,
+                            "[WsGateway] failed to persist tool execution; live broadcast continues"
+                        );
+                    }
+                    gw.notify_tool_execution(
+                        &jid,
+                        &ev.agent_id,
+                        &ev.tool_name,
+                        &ev.title,
+                        &ev.summary,
+                        &ev.content,
+                        ev.ok,
+                        &ts,
                     )
                     .await;
                 });

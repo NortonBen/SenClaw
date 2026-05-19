@@ -14,9 +14,35 @@ use tracing::{debug, warn};
 
 use super::hooks::{
     self as zen_hooks, ExecuteHooksOptions, HookEvent, HookInput, HookInputBase, HookManager,
-    PermissionRequestInput, PostToolUseInput, PreToolUseInput,
+    OutputFilterInput, PermissionRequestInput, PostToolUseInput, PrePermissionInput,
+    PreToolUseInput,
 };
 use super::*;
+
+/// Outcome of running the `PrePermission` hook chain. `Passthrough` means
+/// no hook expressed an opinion, so the normal user-prompted permission
+/// flow should run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrePermissionDecision {
+    Allow,
+    Deny,
+    Passthrough,
+}
+
+/// Map an `AggregatedHookResult` from a PrePermission hook chain into a
+/// concrete decision. Deny wins over Allow when both signals are present
+/// in the same chain (safer default for ambiguous configs).
+pub fn classify_pre_permission(
+    res: &super::hooks::AggregatedHookResult,
+) -> PrePermissionDecision {
+    if res.blocked || res.abort {
+        return PrePermissionDecision::Deny;
+    }
+    if res.allow {
+        return PrePermissionDecision::Allow;
+    }
+    PrePermissionDecision::Passthrough
+}
 
 /// Abstract permission checker — injected by the engine so RunTools doesn't
 /// need to know about PermissionManager internals.
@@ -288,17 +314,74 @@ async fn run_single_tool(
             return vec![create_tool_result_stop(&tool_id)];
         }
 
-        tracing::info!(
-            "[RunTools] permission check agent={} tool={} id={}",
-            ctx.agent_id,
-            tool_name,
-            tool_id
-        );
-        match ctx
-            .permission_checker
-            .check(tool.as_ref(), &input, cancel, ctx.agent_id)
-            .await
-        {
+        // PrePermission hook — runs synchronously so it can short-circuit
+        // the user prompt entirely. `decision: "allow"` skips the prompt
+        // and grants the tool; blocked/`decision: "reject"` denies the
+        // tool without bothering the user; otherwise we fall through to
+        // the normal permission flow.
+        let pre_perm_decision: PrePermissionDecision =
+            if let Some(ref hm) = ctx.hook_manager {
+                if hm.has_hooks_for_event(&HookEvent::PrePermission) {
+                    let base = HookInputBase {
+                        hook_event_name: HookEvent::PrePermission,
+                        session_id: ctx.session_id.clone(),
+                        agent_id: ctx.agent_id.to_string(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        cwd: ctx.working_dir.to_string(),
+                    };
+                    let input_for_hook = HookInput::PrePermission(PrePermissionInput {
+                        base,
+                        tool_name: tool_name.clone(),
+                        tool_input: input.clone(),
+                    });
+                    let res = zen_hooks::execute_hooks(
+                        hm,
+                        &HookEvent::PrePermission,
+                        &input_for_hook,
+                        &ExecuteHooksOptions {
+                            client: ctx.hook_client.as_ref(),
+                            profile: ctx.hook_profile.as_ref(),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    classify_pre_permission(&res)
+                } else {
+                    PrePermissionDecision::Passthrough
+                }
+            } else {
+                PrePermissionDecision::Passthrough
+            };
+
+        // Short-circuit on allow/deny; otherwise continue to the user prompt.
+        let permission_result: Result<bool> = match pre_perm_decision {
+            PrePermissionDecision::Allow => {
+                tracing::info!(
+                    "[RunTools] PrePermission hook allowed tool={} id={}",
+                    tool_name, tool_id
+                );
+                Ok(true)
+            }
+            PrePermissionDecision::Deny => {
+                tracing::warn!(
+                    "[RunTools] PrePermission hook denied tool={} id={}",
+                    tool_name, tool_id
+                );
+                Ok(false)
+            }
+            PrePermissionDecision::Passthrough => {
+                tracing::info!(
+                    "[RunTools] permission check agent={} tool={} id={}",
+                    ctx.agent_id,
+                    tool_name,
+                    tool_id
+                );
+                ctx.permission_checker
+                    .check(tool.as_ref(), &input, cancel, ctx.agent_id)
+                    .await
+            }
+        };
+        match permission_result {
             Ok(true) => {
                 // Permission granted — proceed
                 tracing::info!(
@@ -392,6 +475,51 @@ async fn run_single_tool(
                         data,
                         result_for_assistant,
                     } => {
+                        // OutputFilter hook — last chance to redact / truncate
+                        // the structured tool output before it reaches the
+                        // chat UI and the engine context.
+                        let mut data = data;
+                        let mut result_for_assistant = result_for_assistant;
+                        if let Some(ref hm) = ctx.hook_manager {
+                            if hm.has_hooks_for_event(&HookEvent::OutputFilter) {
+                                let base = HookInputBase {
+                                    hook_event_name: HookEvent::OutputFilter,
+                                    session_id: ctx.session_id.clone(),
+                                    agent_id: ctx.agent_id.to_string(),
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                    cwd: ctx.working_dir.to_string(),
+                                };
+                                let res = zen_hooks::execute_hooks(
+                                    hm,
+                                    &HookEvent::OutputFilter,
+                                    &HookInput::OutputFilter(OutputFilterInput {
+                                        base,
+                                        tool_name: tool_name.clone(),
+                                        tool_input: input.clone(),
+                                        tool_output: data.clone(),
+                                    }),
+                                    &ExecuteHooksOptions {
+                                        client: ctx.hook_client.as_ref(),
+                                        profile: ctx.hook_profile.as_ref(),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await;
+                                if let Some(new_out) = res.updated_output {
+                                    // Mirror the replacement into the
+                                    // assistant-facing text too.
+                                    if let Some(s) = new_out.as_str() {
+                                        result_for_assistant = s.to_string();
+                                    } else {
+                                        result_for_assistant =
+                                            serde_json::to_string(&new_out)
+                                                .unwrap_or(result_for_assistant);
+                                    }
+                                    data = new_out;
+                                }
+                            }
+                        }
+
                         // Emit tool:execution:complete
                         let msg = tool.gen_tool_result_message(&data, &input);
                         (ctx.fire)(EngineEvent::ToolExecutionComplete(
@@ -508,6 +636,38 @@ fn validate_tool_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::zen_core::hooks::AggregatedHookResult;
+
+    fn empty_aggr() -> AggregatedHookResult {
+        AggregatedHookResult::empty()
+    }
+
+    #[test]
+    fn classify_pre_permission_no_signals_is_passthrough() {
+        assert_eq!(classify_pre_permission(&empty_aggr()), PrePermissionDecision::Passthrough);
+    }
+
+    #[test]
+    fn classify_pre_permission_allow_flag_is_allow() {
+        let mut a = empty_aggr();
+        a.allow = true;
+        assert_eq!(classify_pre_permission(&a), PrePermissionDecision::Allow);
+    }
+
+    #[test]
+    fn classify_pre_permission_blocked_overrides_allow() {
+        let mut a = empty_aggr();
+        a.allow = true;
+        a.blocked = true;
+        assert_eq!(classify_pre_permission(&a), PrePermissionDecision::Deny);
+    }
+
+    #[test]
+    fn classify_pre_permission_abort_is_deny() {
+        let mut a = empty_aggr();
+        a.abort = true;
+        assert_eq!(classify_pre_permission(&a), PrePermissionDecision::Deny);
+    }
 
     struct TestReadTool;
     #[async_trait::async_trait]

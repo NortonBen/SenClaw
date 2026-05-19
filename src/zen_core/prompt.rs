@@ -75,6 +75,18 @@ Parallelize independent tool calls in a single response. Sequence dependent ones
 Use `Task` to parallelize independent research or shield the main context from large results. Use `subagent_type=SearchCodebase` for broad codebase exploration (when >3 queries are needed). Don't duplicate work a subagent is already doing.
 
 `/<skill-name>` invokes a user skill via the `Skill` tool. Only use skills listed in the available skills section.
+
+## Real-time data — ALWAYS use a tool, never fabricate
+
+When the user asks about anything **time-sensitive or external** — prices, exchange rates, news, weather, schedules, today's events, search results, status of a website — you MUST use a tool to fetch fresh data:
+
+1. If a `Skill` with a matching `when-to-use` trigger exists (e.g. `agent-browser` for prices/news), invoke it first.
+2. Otherwise call `ToolSearch { query: \"browser search\" }` then `mcp__browser__search` to look it up.
+3. If browser tools are unavailable, fall back to `WebFetch` on a known source.
+
+**Forbidden**: writing out prices, rates, dates, statistics, quotes, or any \"current\" data from memory. Training data is stale; fabricated numbers cause real user harm. If no tool works, say \"I couldn't fetch fresh data; try X\" instead of guessing.
+
+This rule overrides brevity. Even one number from memory is wrong.
 ";
 
 /// Appended to system prompts of spawned subagents.
@@ -178,6 +190,7 @@ pub const SUBAGENT_EXCLUDED_TOOLS: &[&str] = &[
     "AskUser",
     "ExitPlanMode",  // PlanToAgent — plan mode is a main-agent flow
     "TodoWrite",     // CreateTodo / ListTodos / GetTodo / UpdateTodo (gộp)
+    "ToolSearch",    // Subagents have narrow scope set by parent — no defer-discovery needed
 ];
 
 /// Filter a tool list down to those allowed for subagents.
@@ -186,6 +199,103 @@ pub fn filter_tools_for_subagent<T, F: Fn(&T) -> &str>(tools: &[T], name_of: F) 
         .iter()
         .filter(|t| !SUBAGENT_EXCLUDED_TOOLS.contains(&name_of(t)))
         .collect()
+}
+
+// ============================================================================
+// Deferred tools reminder — informs the LLM that `ToolSearch` is available
+// ============================================================================
+
+/// One deferred tool's metadata for the reminder block.
+#[derive(Debug, Clone)]
+pub struct DeferredToolHint<'a> {
+    pub name: &'a str,
+    pub search_hint: String,
+}
+
+/// Render the deferred-tools system reminder. Returns `None` when zero tools
+/// are deferred so callers can skip the empty block.
+///
+/// Format groups MCP tools by server prefix (`mcp__<server>__<rest>`) to keep
+/// the reminder compact even when 100+ tools are deferred:
+///
+/// ```text
+/// <system-reminder>
+/// 105 specialized tools are deferred. Call `ToolSearch { query: "..." }`
+/// to load them on demand.
+///
+/// Categories:
+///   - mcp__senclaw-browser (30 tools) — screenshot, navigate, click, fill...
+///   - mcp__senclaw-space (24 tools) — calendar, email, notes, schedules...
+/// </system-reminder>
+/// ```
+pub fn render_deferred_tools_reminder(deferred: &[DeferredToolHint<'_>]) -> Option<String> {
+    if deferred.is_empty() {
+        return None;
+    }
+
+    // Group by MCP server prefix for compact rendering.
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, Vec<&DeferredToolHint<'_>>> = BTreeMap::new();
+    let mut ungrouped: Vec<&DeferredToolHint<'_>> = Vec::new();
+
+    for t in deferred {
+        if let Some(rest) = t.name.strip_prefix("mcp__") {
+            // server name is the part before the next `__`
+            let server = rest.split("__").next().unwrap_or(rest);
+            groups
+                .entry(server.to_string())
+                .or_default()
+                .push(t);
+        } else {
+            ungrouped.push(t);
+        }
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!(
+        "{} specialized tools are deferred — not loaded by default to save tokens. Call `ToolSearch {{ query: \"<keywords>\" }}` to load them on demand.",
+        deferred.len()
+    ));
+    lines.push(String::new());
+    lines.push("Available tool categories:".to_string());
+
+    for (server, tools) in &groups {
+        // First 3 tool names as flavour text.
+        let preview: Vec<&str> = tools
+            .iter()
+            .take(3)
+            .map(|t| t.name.rsplit("__").next().unwrap_or(t.name))
+            .collect();
+        let more = if tools.len() > 3 {
+            format!(", +{} more", tools.len() - 3)
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "  - **{server}** ({} tools): {}{more}",
+            tools.len(),
+            preview.join(", ")
+        ));
+    }
+
+    if !ungrouped.is_empty() {
+        let names: Vec<&str> = ungrouped.iter().map(|t| t.name).collect();
+        lines.push(format!(
+            "  - **builtin** ({} tools): {}",
+            ungrouped.len(),
+            names.join(", ")
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push(
+        "Example: `ToolSearch { query: \"screenshot page\" }` returns matching tools you can then call directly.".to_string(),
+    );
+
+    Some(format!(
+        "<system-reminder>\n{}\n</system-reminder>",
+        lines.join("\n")
+    ))
 }
 
 // ============================================================================
@@ -218,10 +328,15 @@ pub fn render_skills_reminder(skills: &[SkillReminderRow<'_>]) -> Option<String>
         if s.disable_model_invocation {
             continue;
         }
+        // Two lines per skill: description first, then explicit `Triggers:`
+        // on its own line. Bold-line format attracts model attention much
+        // more reliably than the previous italic `*(when: ...)*` parenthetical,
+        // which models tended to skim as a side note.
         let mut row = format!("- **{}**: {}", s.name, s.description);
         if let Some(w) = s.when_to_use {
-            if !w.trim().is_empty() {
-                row.push_str(&format!(" *(when: {})*", w.trim()));
+            let w = w.trim();
+            if !w.is_empty() {
+                row.push_str(&format!("\n    Triggers: {w}"));
             }
         }
         rows.push(row);
@@ -230,7 +345,11 @@ pub fn render_skills_reminder(skills: &[SkillReminderRow<'_>]) -> Option<String>
         return None;
     }
     Some(format!(
-        "<system-reminder>\nAvailable skills (invoke via the `Skill` tool with `skill: <name>`):\n\n{}\n\nPrefer a skill when its description matches the user's request — it captures domain workflow you should follow.\n</system-reminder>",
+        "<system-reminder>\nAvailable skills (invoke via the `Skill` tool with `skill: <name>`):\n\n{}\n\n\
+         **CHECK SKILL TRIGGERS BEFORE ANSWERING.** If the user's request matches a skill's \
+         `Triggers:` line, invoke the skill via `Skill {{ \"skill\": \"<name>\" }}` first — \
+         it encodes the correct workflow and tools for that domain.\n\
+         </system-reminder>",
         rows.join("\n")
     ))
 }
@@ -347,9 +466,49 @@ mod tests {
         ];
         let out = render_skills_reminder(&rows).expect("non-empty");
         assert!(out.contains("**pdf**"));
-        assert!(out.contains("when: any .pdf file"));
+        assert!(out.contains("Triggers: any .pdf file"));
         assert!(!out.contains("internal"));
         assert!(out.contains("<system-reminder>"));
+        assert!(out.contains("CHECK SKILL TRIGGERS"));
+    }
+
+    #[test]
+    fn deferred_reminder_returns_none_for_empty() {
+        assert!(render_deferred_tools_reminder(&[]).is_none());
+    }
+
+    #[test]
+    fn deferred_reminder_groups_by_mcp_server() {
+        let rows = vec![
+            DeferredToolHint {
+                name: "mcp__senclaw-browser__screenshot",
+                search_hint: "screenshot".into(),
+            },
+            DeferredToolHint {
+                name: "mcp__senclaw-browser__navigate",
+                search_hint: "navigate".into(),
+            },
+            DeferredToolHint {
+                name: "mcp__senclaw-space__create_event",
+                search_hint: "create event".into(),
+            },
+        ];
+        let out = render_deferred_tools_reminder(&rows).unwrap();
+        assert!(out.contains("3 specialized tools"));
+        assert!(out.contains("senclaw-browser") && out.contains("(2 tools)"));
+        assert!(out.contains("senclaw-space") && out.contains("(1 tools)"));
+        assert!(out.contains("ToolSearch"));
+    }
+
+    #[test]
+    fn deferred_reminder_includes_builtin_category() {
+        let rows = vec![DeferredToolHint {
+            name: "WebFetch",
+            search_hint: "fetch url".into(),
+        }];
+        let out = render_deferred_tools_reminder(&rows).unwrap();
+        assert!(out.contains("builtin") && out.contains("(1 tools)"));
+        assert!(out.contains("WebFetch"));
     }
 
     #[test]

@@ -13,7 +13,16 @@ pub enum HookEvent {
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
+    /// Fired AFTER permission was granted (notification-only).
     PermissionRequest,
+    /// Fired BEFORE the user is prompted for permission. A hook can return
+    /// `decision: "allow"` to skip the prompt, or `decision: "reject"` /
+    /// `blocked: true` to deny without bothering the user.
+    PrePermission,
+    /// Fired after a tool returns its output. A hook can return a value in
+    /// `updatedOutput` to replace the content the engine emits (used for
+    /// redaction / truncation).
+    OutputFilter,
     Stop,
     SessionStart,
     SessionEnd,
@@ -149,6 +158,8 @@ pub enum HookInput {
     PreToolUse(PreToolUseInput),
     PostToolUse(PostToolUseInput),
     PermissionRequest(PermissionRequestInput),
+    PrePermission(PrePermissionInput),
+    OutputFilter(OutputFilterInput),
     PreCompact(PreCompactInput),
     Session(SessionInput),
     Stop(StopInput),
@@ -182,6 +193,20 @@ impl HookInput {
                     i.tool_input.to_string()
                 }
             }
+            HookInput::PrePermission(i) => {
+                if let Some(cmd) = i.tool_input.get("command").and_then(|v| v.as_str()) {
+                    cmd.to_string()
+                } else {
+                    i.tool_input.to_string()
+                }
+            }
+            HookInput::OutputFilter(i) => {
+                if let Some(cmd) = i.tool_input.get("command").and_then(|v| v.as_str()) {
+                    cmd.to_string()
+                } else {
+                    i.tool_input.to_string()
+                }
+            }
             HookInput::Notification(i) => i.message.clone(),
             HookInput::Error(i) => i.error_message.clone(),
             other => serde_json::to_string(other).unwrap_or_default(),
@@ -194,6 +219,8 @@ impl HookInput {
             HookInput::PreToolUse(i) => Some(&i.tool_name),
             HookInput::PostToolUse(i) => Some(&i.tool_name),
             HookInput::PermissionRequest(i) => Some(&i.tool_name),
+            HookInput::PrePermission(i) => Some(&i.tool_name),
+            HookInput::OutputFilter(i) => Some(&i.tool_name),
             HookInput::Notification(i) => i.notification_type.as_deref(),
             _ => None,
         }
@@ -230,6 +257,30 @@ pub struct PermissionRequestInput {
     pub base: HookInputBase,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+}
+
+/// Sent BEFORE the user is prompted for permission. Hook returns
+/// `{"decision": "allow"}` to skip the prompt, or `{"decision": "reject"}`
+/// (or `{"blocked": true}`) to auto-deny. Anything else falls through to
+/// the existing permission flow.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrePermissionInput {
+    #[serde(flatten)]
+    pub base: HookInputBase,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+}
+
+/// Sent AFTER the tool returns its raw output, BEFORE the engine emits
+/// `ToolExecutionComplete`. Hook can return `{"updatedOutput": {...}}`
+/// to replace the content (useful for redaction / truncation).
+#[derive(Debug, Clone, Serialize)]
+pub struct OutputFilterInput {
+    #[serde(flatten)]
+    pub base: HookInputBase,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub tool_output: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -290,6 +341,11 @@ pub struct HookOutput {
     pub abort: Option<bool>,
     #[serde(rename = "updatedInput")]
     pub updated_input: Option<serde_json::Value>,
+    /// Replacement value emitted by an OutputFilter hook. The engine swaps
+    /// the tool's raw output for this before constructing
+    /// `ToolExecutionComplete` and the assistant-facing message.
+    #[serde(rename = "updatedOutput")]
+    pub updated_output: Option<serde_json::Value>,
     #[serde(rename = "additionalContext")]
     pub additional_context: Option<String>,
     pub response: Option<String>,
@@ -302,6 +358,11 @@ impl HookOutput {
 
     pub fn is_abort(&self) -> bool {
         self.abort.unwrap_or(false)
+    }
+
+    /// True when a `PrePermission` hook returned `decision: "allow"`.
+    pub fn is_allow(&self) -> bool {
+        self.decision.as_deref() == Some("allow")
     }
 }
 
@@ -322,6 +383,12 @@ pub struct AggregatedHookResult {
     pub reason: Option<String>,
     /// Updated tool input from a hook (PreToolUse only).
     pub updated_input: Option<serde_json::Value>,
+    /// Replacement tool output from an OutputFilter hook (the last hook
+    /// in the chain to set `updatedOutput` wins).
+    pub updated_output: Option<serde_json::Value>,
+    /// `true` when any hook explicitly returned `decision: "allow"` —
+    /// used by `PrePermission` to grant a tool without prompting.
+    pub allow: bool,
     /// Additional context strings to inject into the conversation.
     pub additional_context: Vec<String>,
     pub errors: Vec<HookError>,
@@ -334,6 +401,8 @@ impl AggregatedHookResult {
             abort: false,
             reason: None,
             updated_input: None,
+            updated_output: None,
+            allow: false,
             additional_context: Vec::new(),
             errors: Vec::new(),
         }

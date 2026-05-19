@@ -88,7 +88,35 @@ export interface QuestionMessage {
   timestamp: string;
 }
 
-export type ChatMessage = TextMessage | PermissionMessage | QuestionMessage;
+/**
+ * One tool invocation rendered inline in the chat.
+ *
+ * The ChatView aggregates **consecutive** ToolMessages from the same agent
+ * turn into a single collapsible card ("Read 2 files, edited 1 file, ran 1
+ * command ›"). Each row inside the card maps back to one ToolMessage.
+ */
+export interface ToolMessage {
+  id: string;
+  role: 'tool';
+  agentId: string;
+  /** Internal tool id like `Bash`, `Read`, `mcp__browser__search`. */
+  toolName: string;
+  /** Display title (e.g. file path, search query, URL). */
+  title: string;
+  /** One-line summary (e.g. "+12 -3 lines", "8 results"). */
+  summary: string;
+  /** Raw structured payload for the expanded detail view. */
+  content: unknown;
+  /** `false` when the call errored — UI shows a red badge. */
+  ok: boolean;
+  /** Optional milliseconds the tool took (claude-code parity). */
+  duration?: number;
+  /** Optional structured error message for failed calls. */
+  errorMessage?: string;
+  timestamp: string;
+}
+
+export type ChatMessage = TextMessage | PermissionMessage | QuestionMessage | ToolMessage;
 
 export type AgentState = 'idle' | 'processing' | string;
 

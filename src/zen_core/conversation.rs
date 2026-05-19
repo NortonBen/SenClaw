@@ -84,12 +84,20 @@ fn compact_messages(messages: &mut Vec<Message>) -> bool {
 
 /// Configuration passed to the query loop. All fields are owned so the config
 /// can be moved into spawned tasks.
+/// Resolver returning the current tool list. Called once per turn so newly
+/// `ToolSearch`-discovered tools become available without recreating the
+/// engine. Mirrors the same pattern used by `TaskTool::tools_resolver`.
+pub type ToolsResolver = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
+
 pub struct QueryConfig {
     pub agent_id: String,
     pub working_dir: String,
     pub agent_data_dir: String,
     pub system_prompt: String,
-    pub tools: Vec<Arc<dyn Tool>>,
+    /// Closure returning the current tool list. Re-invoked each conversation
+    /// turn so `ToolSearch` discoveries flow into subsequent turns within
+    /// the same user input (the loop is one user message → many LLM turns).
+    pub tools: ToolsResolver,
     pub http_client: Client,
     pub event_bus: EventBus,
     pub response_registry: Option<Arc<ResponseRegistry>>,
@@ -126,19 +134,22 @@ pub async fn query(
             return Ok(messages);
         }
 
-        // 1. Call the LLM
+        // 1. Call the LLM. Resolve tools fresh each turn so any tool the
+        //    model discovered via `ToolSearch` earlier in this conversation
+        //    is included starting from the very next turn.
+        let turn_tools: Vec<Arc<dyn Tool>> = (config.tools)();
         info!(
             "[{}] LLM turn start: messages={} tools={} stream={}",
             config.agent_id,
             messages.len(),
-            config.tools.len(),
+            turn_tools.len(),
             config.stream
         );
         let llm_call = query_llm::query_llm(
             &config.http_client,
             &messages,
             &config.system_prompt,
-            &config.tools,
+            &turn_tools,
             cancel,
             &config.profile,
             config.thinking,
@@ -415,6 +426,35 @@ pub async fn query(
             reasoning.len(),
             tool_uses.len()
         );
+
+        // Guard against silent empty completions. Some custom OpenAI-compat
+        // endpoints (observed with `qwen3.5-4b-optiq` under heavy tool counts)
+        // return 200 OK with zero blocks and zero tool calls — model didn't
+        // actually generate anything. Treat as a session error rather than
+        // accepting an empty assistant message into history, which would
+        // poison every subsequent turn.
+        if text_content.trim().is_empty() && reasoning.trim().is_empty() && tool_uses.is_empty() {
+            warn!(
+                "[{}] empty LLM completion (blocks=0, tool_calls=0). \
+                 Likely upstream endpoint issue (auth, rate-limit, malformed SSE). \
+                 Dropping empty assistant message to preserve history.",
+                config.agent_id
+            );
+            config.event_bus.emit(EngineEvent::SessionError(
+                crate::zen_core::SessionErrorData {
+                    error_type: "empty_completion".to_string(),
+                    error: crate::zen_core::SessionErrorDetail {
+                        code: "EMPTY_COMPLETION".to_string(),
+                        message: "LLM returned empty response (no text / reasoning / tool calls). \
+                                 Check endpoint logs — common causes: auth failure, model overload, \
+                                 tool count exceeds endpoint limit."
+                            .to_string(),
+                        details: None,
+                    },
+                },
+            ));
+            return Ok(messages);
+        }
         let tool_call_infos: Option<Vec<ToolCallInfo>> = if has_tool_calls {
             Some(
                 tool_uses
@@ -476,7 +516,7 @@ pub async fn query(
             agent_id: &config.agent_id,
             working_dir: &config.working_dir,
             agent_data_dir: &config.agent_data_dir,
-            tools: &config.tools,
+            tools: &turn_tools,
             fire: &|event| config.event_bus.emit(event),
             permission_checker: config.permission_checker.as_ref(),
             event_bus: Some(&config.event_bus),
