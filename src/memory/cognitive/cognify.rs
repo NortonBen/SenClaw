@@ -110,6 +110,11 @@ pub struct CognifyReport {
     pub chunks_deduped: usize,
     pub entities_added: usize,
     pub entities_reused: usize,
+    /// True when the LLM call itself failed (no client wired, rate-limit,
+    /// auth, etc.) — distinct from "LLM ran but returned 0 triplets".
+    /// Lets callers (CogAdd, agent_pool reflection) tell the user "set up
+    /// an LLM" vs "your message had no facts to extract".
+    pub llm_skipped: bool,
     pub edges_added: usize,
     pub edges_strengthened: usize,
 }
@@ -165,10 +170,16 @@ impl CognifyPipeline {
                 }
             };
 
-            let triplets = self
+            let (triplets, skipped) = self
                 .extract_triplets(&ch.text)
                 .await
                 .context("extract triplets")?;
+            // Latch the skipped flag across chunks — one bad chunk shouldn't
+            // mask the rest, but we want the report to flag the run as a
+            // whole when the LLM never came up.
+            if skipped {
+                report.llm_skipped = true;
+            }
 
             for raw in triplets.into_iter().take(opts.max_triplets_per_chunk) {
                 self.upsert_triplet(&chunk_node, &raw, opts, &mut report, now)
@@ -179,27 +190,28 @@ impl CognifyPipeline {
         Ok(report)
     }
 
-    async fn extract_triplets(&self, text: &str) -> Result<Vec<RawTriplet>> {
+    /// Extract triplets from one chunk.
+    ///
+    /// Returns `(triplets, llm_skipped)`:
+    ///   * `llm_skipped=true` means the LLM call itself failed (no client,
+    ///     network, auth, etc.) — caller distinguishes "user needs to
+    ///     configure an LLM" from "your text had no facts".
+    ///   * `llm_skipped=false` + empty Vec means the LLM ran and produced
+    ///     nothing useful (parse error or empty triplet list).
+    async fn extract_triplets(&self, text: &str) -> Result<(Vec<RawTriplet>, bool)> {
         let user = build_user_prompt(text, &[]);
-        // Treat both LLM-call failures (no client configured, network
-        // error, rate-limit) AND JSON-parse failures as soft errors. The
-        // chunk has still been embedded by the caller; missing triplets
-        // just means no edges this round — Hebbian dynamics will rebuild
-        // them on the next pass when an LLM is available.
         let raw = match self.llm.complete(SYSTEM_PROMPT, &user).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = %e, "[cognify] LLM call failed; skipping triplet extraction");
-                return Ok(Vec::new());
+                return Ok((Vec::new(), true));
             }
         };
         match parse_triplets(&raw) {
-            Ok(t) => Ok(t),
+            Ok(t) => Ok((t, false)),
             Err(e) => {
-                // Defensive: a single chunk failing to parse should not abort
-                // the whole document. Log + return empty.
                 tracing::warn!(error = %e, "[cognify] triplet parse failed; skipping chunk");
-                Ok(Vec::new())
+                Ok((Vec::new(), false))
             }
         }
     }
@@ -380,6 +392,36 @@ mod tests {
         assert_eq!(second.entities_added, 0);
         assert!(second.edges_strengthened >= 3);
         assert_eq!(second.edges_added, 0);
+    }
+
+    #[tokio::test]
+    async fn cognify_marks_llm_skipped_when_client_fails() {
+        // StubLlm with empty replies → first complete() call returns
+        // "StubLlm exhausted" Err → extract_triplets soft-fails → flag set.
+        // Chunk should still be embedded though.
+        let pipe = build_pipeline(vec![]);
+        let report = pipe
+            .cognify("Ada invented the compiler.", "doc", &CognifyOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(report.chunks_added, 1, "chunk still stored when LLM fails");
+        assert_eq!(report.entities_added, 0);
+        assert_eq!(report.edges_added, 0);
+        assert!(report.llm_skipped, "llm_skipped must latch on LLM error");
+    }
+
+    #[tokio::test]
+    async fn cognify_does_not_flag_skipped_on_empty_triplets() {
+        // LLM runs but returns 0 triplets — that's a content issue, not an
+        // infrastructure issue. The flag must stay false so callers don't
+        // misreport a quiet day as a config error.
+        let canned = r#"{"triplets":[]}"#.to_string();
+        let pipe = build_pipeline(vec![canned]);
+        let report = pipe
+            .cognify("Hôm nay trời đẹp.", "doc", &CognifyOptions::default())
+            .await
+            .unwrap();
+        assert!(!report.llm_skipped);
     }
 
     #[tokio::test]

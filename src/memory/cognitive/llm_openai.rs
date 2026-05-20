@@ -205,32 +205,47 @@ impl LlmClient for OpenAiCompatLlm {
 // =====================================================================
 
 /// Build a cognitive LLM client from the current `Config`, or return None
-/// if no LLM is configured. Resolution order:
+/// if no LLM is configured anywhere. Resolution order:
 ///
-/// 1. **Settings → LLM Models → Cognitive Model**  — when the user has picked
-///    a dedicated LLM in the UI (`activeCognitiveLlmConfigId` in
-///    `global_config.json`), use its credentials and model name. This is the
-///    new path added so `cog_cognify` can share the LLM Models settings.
-/// 2. **Env / MemoryConfig** — historical fallback using
-///    `SENCLAW_OPENAI_API_KEY` + `SENCLAW_OPENAI_BASE_URL` +
-///    `SENCLAW_COG_CHAT_MODEL`.
-/// 3. **None** — `cog_cognify` will then return a "no LLM configured" error.
+/// 1. **Settings → LLM Models → Cognitive Model** (explicit user pick).
+/// 2. **Settings → LLM Models → Main Model** — most installs only set
+///    the Main model. Borrowing it here means the cognify pipeline works
+///    out of the box without the user having to configure a second LLM.
+/// 3. **Settings → LLM Models → Quick Model** — last UI fallback.
+/// 4. **Env / MemoryConfig** — legacy `SENCLAW_OPENAI_*` env vars.
+/// 5. **None** → cognify will soft-skip triplet extraction (chunks still
+///    embed); CogAdd warns the agent in its return message.
+///
+/// All three UI variants point at the same `LlmConfig` shape, so resolution
+/// is a single helper that just walks ids in priority order.
 pub fn create_cognitive_llm(config: &crate::config::Config) -> Option<OpenAiCompatLlm> {
-    // (1) Prefer the Settings UI selection.
     let stored = crate::gateway::group_manager::load_llm_configs(
         &config.paths.global_config_path,
     );
-    if let Some(active_id) = stored.active_cognitive_id.as_deref() {
-        if let Some(cfg) = stored.configs.iter().find(|c| c.id == active_id) {
+
+    // Try each LLM-config id in priority order. First one with both an
+    // API key AND a base URL wins.
+    let try_ids: [Option<&str>; 3] = [
+        stored.active_cognitive_id.as_deref(),
+        stored.active_id.as_deref(),
+        stored.active_quick_id.as_deref(),
+    ];
+    for id in try_ids.iter().flatten() {
+        if let Some(cfg) = stored.configs.iter().find(|c| c.id == *id) {
             let key = cfg.api_key.trim();
             let base = cfg.base_url.trim();
             if !key.is_empty() && !base.is_empty() {
+                tracing::debug!(
+                    llm_id = %cfg.id,
+                    model = %cfg.model_name,
+                    "[cognitive] LLM resolved from Settings"
+                );
                 return OpenAiCompatLlm::new(base, key, cfg.model_name.clone()).ok();
             }
         }
     }
 
-    // (2) Env fallback.
+    // Env fallback.
     let key = config.memory.openai_api_key.trim();
     if key.is_empty() {
         return None;

@@ -140,14 +140,28 @@ impl Tool for CogAddTool {
             "entities_reused": report.entities_reused,
             "edges_added": report.edges_added,
             "edges_strengthened": report.edges_strengthened,
+            "llm_skipped": report.llm_skipped,
         });
-        let summary = format!(
+        // Two failure modes call for distinct hints to the agent:
+        //   * llm_skipped=true → no LLM configured; chunk saved but no
+        //     facts extracted. Tell the user to set Cognitive/Main LLM.
+        //   * no skipped, but zero entities/edges → LLM ran, text had no
+        //     facts (or was a question). Quiet success.
+        let mut summary = format!(
             "Saved: {} chunk(s), {} entity, {} edge added; {} edge strengthened",
             report.chunks_added,
             report.entities_added,
             report.edges_added,
             report.edges_strengthened
         );
+        if report.llm_skipped {
+            summary.push_str(
+                "\n⚠ LLM not configured — the sentence was stored as a chunk but no \
+                 (subject, predicate, object) triplets were extracted. \
+                 Configure a Cognitive Model (or any LLM Model) in Settings → LLM Models, \
+                 then re-save the message to build edges.",
+            );
+        }
         Ok(vec![assistant_result(summary, data)])
     }
 
