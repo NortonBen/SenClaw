@@ -6,6 +6,7 @@ pub mod ask_user;
 pub mod ask_user_question;
 pub mod bash;
 pub mod bg_jobs;
+pub mod cognitive;
 pub mod edit;
 pub mod enter_plan_mode;
 pub mod exit_plan_mode;
@@ -30,6 +31,9 @@ use crate::zen_core::Tool;
 pub use ask_user::AskUserTool;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
+pub use cognitive::{
+    CogAddTool, CogForgetTool, CogRecallTool, CogSearchTool, CogStatsTool,
+};
 pub use edit::EditTool;
 pub use enter_plan_mode::{EnterPlanFn, EnterPlanModeTool};
 pub use exit_plan_mode::ExitPlanModeTool;
@@ -66,5 +70,14 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(ExitPlanModeTool),
         Arc::new(PeekBgJobTool),
         Arc::new(StopBgJobTool),
+        // Cognitive memory — direct in-process access to the knowledge graph.
+        // Was previously exposed via the senclaw-cognitive MCP server (P6).
+        // Now built-in so every agent gets them by default with zero IPC
+        // overhead. The MCP file is kept around for standalone stdio use.
+        Arc::new(CogAddTool),
+        Arc::new(CogSearchTool),
+        Arc::new(CogRecallTool),
+        Arc::new(CogForgetTool),
+        Arc::new(CogStatsTool),
     ]
 }

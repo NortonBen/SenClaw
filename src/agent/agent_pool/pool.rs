@@ -28,9 +28,9 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, cognitive_mcp_config,
-    dispatch_mcp_config, litho_mcp_config, memory_mcp_config, schedule_mcp_config,
-    send_mcp_config, space_mcp_config, wiki_mcp_config, workspace_mcp_config,
+    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config,
+    litho_mcp_config, memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config,
+    wiki_mcp_config, workspace_mcp_config,
     McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
@@ -996,19 +996,12 @@ impl AgentPool {
                 },
                 custom_memory_dir.as_deref(),
             ));
-            // Cognitive memory MCP — graph + Hebbian dynamics.
-            // cog_cognify needs an LLM; the stdio server picks one up from
-            // either Settings → LLM Models → Cognitive Model or the legacy
-            // SENCLAW_OPENAI_API_KEY env. We only disable when no embedding
-            // provider is configured (cognitive layer is dormant in that case
-            // and tools would all 503).
-            let cog_llm_disabled =
-                cfg.memory.embedding_provider == crate::config::EmbeddingProvider::None;
-            mcp_servers.push(cognitive_mcp_config(
-                &db_path_s,
-                &binding.folder,
-                cog_llm_disabled,
-            ));
+            // Cognitive memory used to ship as the `senclaw-cognitive` MCP
+            // server here. It's now built into the in-process tool list
+            // (see `tools::all_tools` — CogAdd/CogSearch/CogRecall/CogForget/
+            // CogStats). The MCP server binary is still available for
+            // out-of-process callers; we just don't spawn it as a per-agent
+            // subprocess any more.
             mcp_servers.push(wiki_mcp_config(
                 cfg.paths.wiki_dir.to_string_lossy().as_ref(),
             ));
@@ -1347,6 +1340,29 @@ impl AgentPool {
                 crate::memory::daily_logger::Role::User,
                 prompt,
             );
+        }
+
+        // ---- P14: auto-reflection ----
+        // Fire-and-forget cognify on the user message so the knowledge
+        // graph grows passively while the agent works. Spawn runs in the
+        // background — failures are isolated to the spawn task and never
+        // affect this turn. The config flag lets ops disable it for
+        // privacy or cost reasons.
+        {
+            let reflect_enabled = self
+                .config
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|c| c.memory.cognitive_reflection)
+                .unwrap_or(true);
+            if reflect_enabled {
+                let prompt_owned = prompt.to_string();
+                let folder_owned = group.folder.clone();
+                tokio::spawn(async move {
+                    cognitive_reflect(prompt_owned, folder_owned).await;
+                });
+            }
         }
 
         // ---- event bridge channels ----
@@ -2862,6 +2878,111 @@ async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: 
             tracing::warn!("[AgentPool] Cognitive pre-retrieval failed: {e}");
             String::new()
         }
+    }
+}
+
+/// Filter for the auto-reflection path (P14).
+///
+/// We're choosing what to feed the LLM-driven cognify pipeline on every
+/// user turn. Two failure modes to guard against:
+///
+///   * **Noise** — one-word acknowledgements ("ok", "yes", "thanks") run
+///     up LLM cost for zero useful triplets.
+///   * **Questions** — questions are queries, not facts. Cognifying
+///     "do you know where my keys are?" would persist a bogus
+///     (you, know_where, my-keys) triplet.
+///
+/// Returns true when the message is long enough AND isn't pure-question
+/// shaped. Heuristic, not exhaustive — false positives are cheap because
+/// cognify dedupes by content hash.
+pub(crate) fn should_reflect(text: &str) -> bool {
+    let t = text.trim();
+    if t.chars().count() < 20 {
+        return false;
+    }
+    // Pure-question heuristic: ends with question mark AND there's only one
+    // sentence. "Where is X? It's on the table." → still reflect (statement
+    // present). "Where is X?" alone → skip.
+    let only_question = t.ends_with('?')
+        && !t.contains(". ")
+        && !t.contains("。")
+        && !t.contains('.');
+    !only_question
+}
+
+/// Fire-and-forget cognify on a user message. Runs in `tokio::spawn` from
+/// the call site so it never blocks the agent reply. Silently no-ops when:
+///   * cognitive system isn't booted (no embedding provider)
+///   * the configured Cognitive LLM is the disabled placeholder — the
+///     cognify pipeline will still embed the chunk (P14 graceful path) but
+///     produce zero edges, which is fine
+///   * `should_reflect` rejects the text
+async fn cognitive_reflect(text: String, group_folder: String) {
+    if !should_reflect(&text) {
+        return;
+    }
+    let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+        return;
+    };
+    let opts = crate::memory::cognitive::CognifyOptions {
+        node_sets: vec![crate::memory::cognitive::NodeSet::group(
+            &group_folder,
+            "default_memory",
+        )],
+        ..Default::default()
+    };
+    match sys.cognify(&text, "reflection", &opts).await {
+        Ok(r) => {
+            if r.entities_added > 0 || r.edges_added > 0 {
+                tracing::info!(
+                    chunks_added = r.chunks_added,
+                    entities_added = r.entities_added,
+                    edges_added = r.edges_added,
+                    "[reflection] auto-cognified user message"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "[reflection] cognify failed");
+        }
+    }
+}
+
+#[cfg(test)]
+mod reflection_tests {
+    use super::should_reflect;
+
+    #[test]
+    fn skip_short_messages() {
+        assert!(!should_reflect("ok"));
+        assert!(!should_reflect("yes"));
+        assert!(!should_reflect("thanks!"));
+    }
+
+    #[test]
+    fn skip_pure_questions() {
+        assert!(!should_reflect("where are my keys right now?"));
+        assert!(!should_reflect("bạn có biết tôi tên gì không?"));
+    }
+
+    #[test]
+    fn accept_factual_statements() {
+        assert!(should_reflect(
+            "tôi tên là Sen, sống ở Hà Nội và thích cà phê đen."
+        ));
+        assert!(should_reflect(
+            "Today I learned that Rust has a borrow checker."
+        ));
+    }
+
+    #[test]
+    fn accept_mixed_statements_with_trailing_question() {
+        // Mixed content — there's a fact AND a question. Reflect anyway
+        // since the cognify pipeline will pull triplets only from the
+        // statement part.
+        assert!(should_reflect(
+            "My phone is 0901234567. What's yours?"
+        ));
     }
 }
 

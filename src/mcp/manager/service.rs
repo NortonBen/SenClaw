@@ -314,21 +314,9 @@ impl McpManager {
                     ),
                 ],
             },
-            BuiltInServerInfo {
-                name: "senclaw-cognitive".into(),
-                transport: "stdio".into(),
-                description: Some(
-                    "Cognitive memory — knowledge graph with Hebbian dynamics + spreading activation.".into(),
-                ),
-                tools: vec![
-                    t("cog_add", "Ingest text as a chunk node (no LLM extraction)"),
-                    t("cog_cognify", "Full pipeline: chunk → LLM triplet extraction → graph upsert"),
-                    t("cog_search", "Search cognitive memory (modes: chunks | triplet | graph | spreading)"),
-                    t("cog_recall", "Recall memories via spreading activation with Hebbian write-back"),
-                    t("cog_forget", "Delete a node and its edges from cognitive memory"),
-                    t("cog_memory_stats", "Return counts of nodes/edges in cognitive memory"),
-                ],
-            },
+            // senclaw-cognitive used to live here as an MCP stdio server.
+            // The cognitive tools are now built-in (see `tools::cognitive`),
+            // so the UI no longer needs to list them as MCP-provided.
             BuiltInServerInfo {
                 name: "senclaw-dispatch".into(),
                 transport: "stdio".into(),
