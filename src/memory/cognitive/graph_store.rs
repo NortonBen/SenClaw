@@ -58,6 +58,20 @@ pub trait GraphStore: Send + Sync {
     ) -> Result<Vec<DataPoint>>;
     fn count_nodes(&self, kind: Option<&str>) -> Result<usize>;
     fn recent_decay_runs(&self, limit: usize) -> Result<Vec<DecayLogRow>>;
+
+    /// Return the top-`limit` nodes ordered by incident-edge count
+    /// descending. Used by the Graph Explorer to surface "interesting"
+    /// nodes — high-degree entities are usually the natural seeds for
+    /// browsing a knowledge graph.
+    fn top_nodes_by_degree(&self, limit: usize) -> Result<Vec<NodeWithDegree>>;
+}
+
+/// `DataPoint` paired with its incident-edge count. Returned by
+/// [`GraphStore::top_nodes_by_degree`] for the Graph Explorer UI.
+#[derive(Debug, Clone)]
+pub struct NodeWithDegree {
+    pub node: DataPoint,
+    pub degree: usize,
 }
 
 /// Row shape returned by [`GraphStore::recent_decay_runs`].
@@ -448,6 +462,37 @@ impl GraphStore for SqliteGraphStore {
         })
     }
 
+    fn top_nodes_by_degree(&self, limit: usize) -> Result<Vec<NodeWithDegree>> {
+        self.db.with_conn(|conn| {
+            // Degree = count of incident edges in cog_edges (src or dst).
+            // We pre-aggregate per-node via UNION ALL so SQLite can use the
+            // (src) and (dst) indexes; doing OR in the WHERE clause forces
+            // a full scan and is slow on big graphs.
+            let mut stmt = conn.prepare(
+                "WITH deg AS (
+                   SELECT src AS id, COUNT(*) AS c FROM cog_edges GROUP BY src
+                   UNION ALL
+                   SELECT dst AS id, COUNT(*) AS c FROM cog_edges GROUP BY dst
+                 ), totals AS (
+                   SELECT id, SUM(c) AS degree FROM deg GROUP BY id
+                 )
+                 SELECT n.*, COALESCE(t.degree, 0) AS degree
+                 FROM cog_nodes n
+                 LEFT JOIN totals t ON t.id = n.id
+                 ORDER BY degree DESC, n.last_seen_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit as i64], |row| {
+                    let node = row_to_node(row)?;
+                    let degree: i64 = row.get("degree")?;
+                    Ok(NodeWithDegree { node, degree: degree as usize })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
     fn recent_decay_runs(&self, limit: usize) -> Result<Vec<DecayLogRow>> {
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
@@ -554,5 +599,45 @@ mod tests {
         let dup = store.find_node_by_content_hash("hash-1").unwrap();
         assert!(dup.is_some());
         assert_eq!(dup.unwrap().id, chunk.id);
+    }
+
+    #[test]
+    fn top_nodes_by_degree_orders_correctly() {
+        // hub --(rel)--> a, b, c   (degree 3)
+        // a   --(rel)--> b         (degree 2)
+        // b                         (degree 2 from above)
+        // c                         (degree 1)
+        // → expected ordering by degree desc: hub, a, b, c
+        let store = SqliteGraphStore::new(test_db());
+        let hub = DataPoint::entity("hub", 1);
+        let a = DataPoint::entity("a", 1);
+        let b = DataPoint::entity("b", 1);
+        let c = DataPoint::entity("c", 1);
+        let lonely = DataPoint::entity("lonely", 1);
+        for n in [&hub, &a, &b, &c, &lonely] {
+            store.upsert_node(n).unwrap();
+        }
+        let mk = |src, dst| {
+            let mut e = RelationshipEdge::new(src, dst, "rel", 1);
+            e.last_activated = 1;
+            e
+        };
+        store.upsert_edge(&mk(hub.id, a.id)).unwrap();
+        store.upsert_edge(&mk(hub.id, b.id)).unwrap();
+        store.upsert_edge(&mk(hub.id, c.id)).unwrap();
+        store.upsert_edge(&mk(a.id, b.id)).unwrap();
+
+        let top = store.top_nodes_by_degree(10).unwrap();
+        // 5 nodes, ordered by degree desc
+        assert_eq!(top.len(), 5);
+        assert_eq!(top[0].node.name, "hub");
+        assert_eq!(top[0].degree, 3);
+        // a and b both have degree 2 — order between them depends on
+        // last_seen_at tiebreaker, but both must precede c (deg 1).
+        let degrees: Vec<usize> = top.iter().map(|x| x.degree).collect();
+        assert_eq!(degrees, vec![3, 2, 2, 1, 0]);
+        // The lonely node lands last with degree 0.
+        assert_eq!(top[4].node.name, "lonely");
+        assert_eq!(top[4].degree, 0);
     }
 }

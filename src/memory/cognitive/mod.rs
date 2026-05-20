@@ -41,7 +41,7 @@ pub use data_point::{DataPoint, NodeKind};
 pub use decay_tick::{run_decay, start_decay_ticker, DecayConfig, DecayReport};
 pub use embed::{embed_node, CognitiveEmbedder};
 pub use gnn::{GraphScorer, LightGcnScorer};
-pub use graph_store::{DecayLogRow, GraphStore, SqliteGraphStore};
+pub use graph_store::{DecayLogRow, GraphStore, NodeWithDegree, SqliteGraphStore};
 pub use llm::{LlmClient, RawTriplet};
 pub use llm_openai::{create_cognitive_llm, OpenAiCompatLlm};
 pub use mlx_embedder::MlxStaticEmbedder;

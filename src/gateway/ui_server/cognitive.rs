@@ -270,6 +270,167 @@ pub(crate) async fn cognitive_decay_log(
 }
 
 // =====================================================================
+// GET /api/cognitive/top-nodes
+// =====================================================================
+//
+// Used by the Graph Explorer to surface "interesting" seed candidates —
+// the user picks a name from this list (or accepts the default selection)
+// and the UI calls /sample to actually render the subgraph.
+//
+// Cheap query: degree aggregate over `cog_edges`, no embeddings needed.
+
+#[derive(Debug, Deserialize)]
+pub struct TopNodesQuery {
+    #[serde(default = "default_top_limit")]
+    pub limit: usize,
+}
+fn default_top_limit() -> usize {
+    20
+}
+
+#[derive(Debug, Serialize)]
+pub struct TopNodeView {
+    pub node: NodeView,
+    pub degree: usize,
+}
+
+pub(crate) async fn cognitive_top_nodes(
+    State(_s): State<Arc<UiState>>,
+    Query(q): Query<TopNodesQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let limit = q.limit.clamp(1, 200);
+    let rows = sys
+        .graph
+        .top_nodes_by_degree(limit)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let views: Vec<TopNodeView> = rows
+        .into_iter()
+        .map(|r| TopNodeView { node: r.node.into(), degree: r.degree })
+        .collect();
+    Ok(Json(serde_json::json!({ "nodes": views })))
+}
+
+// =====================================================================
+// GET /api/cognitive/sample
+// =====================================================================
+//
+// Returns a merged subgraph reachable from the top-K most-connected
+// nodes. Use this as the Graph Explorer's "default sample" on mount.
+// `seed_count` chooses how many top-degree nodes to use as BFS seeds;
+// `hops` and `limit` clamp the resulting size like /subgraph does.
+//
+// Multi-seed merge happens server-side so the UI gets a single payload
+// with deduplicated nodes/edges — saves the client from N round-trips +
+// client-side union logic.
+
+#[derive(Debug, Deserialize)]
+pub struct SampleQuery {
+    #[serde(default = "default_seed_count")]
+    pub seed_count: usize,
+    #[serde(default = "default_sample_hops")]
+    pub hops: u8,
+    #[serde(default = "default_sample_limit")]
+    pub limit: usize,
+}
+fn default_seed_count() -> usize {
+    5
+}
+fn default_sample_hops() -> u8 {
+    2
+}
+fn default_sample_limit() -> usize {
+    150
+}
+
+pub(crate) async fn cognitive_sample(
+    State(_s): State<Arc<UiState>>,
+    Query(q): Query<SampleQuery>,
+) -> Result<Json<SubgraphResponse>, AppError> {
+    let sys = require_system()?;
+    let seed_count = q.seed_count.clamp(1, 20);
+    let hops = q.hops.clamp(1, 5);
+    let limit = q.limit.clamp(2, 500);
+
+    // Pick top-degree seeds.
+    let seeds = sys
+        .graph
+        .top_nodes_by_degree(seed_count)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if seeds.is_empty() {
+        return Ok(Json(SubgraphResponse {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            truncated: false,
+        }));
+    }
+
+    // Multi-seed BFS, dedup as we go. Same skeleton as `cognitive_subgraph`
+    // but with N starting points.
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut visited: HashMap<Uuid, DataPoint> = HashMap::new();
+    let mut frontier: VecDeque<Uuid> = VecDeque::new();
+    let mut next_frontier: VecDeque<Uuid> = VecDeque::new();
+    let mut edges: Vec<RelationshipEdge> = Vec::new();
+    let mut seen_edges: HashSet<(Uuid, Uuid, String)> = HashSet::new();
+
+    for s in seeds {
+        if visited.len() >= limit {
+            break;
+        }
+        visited.insert(s.node.id, s.node.clone());
+        frontier.push_back(s.node.id);
+    }
+
+    let mut truncated = false;
+    for _ in 0..hops {
+        while let Some(nid) = frontier.pop_front() {
+            if visited.len() >= limit {
+                truncated = true;
+                break;
+            }
+            let nbrs = sys
+                .graph
+                .neighbors(nid, 32)
+                .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            for edge in nbrs {
+                let other = if edge.src == nid { edge.dst } else { edge.src };
+                if !visited.contains_key(&other) {
+                    if visited.len() >= limit {
+                        truncated = true;
+                        continue;
+                    }
+                    if let Ok(Some(n)) = sys.graph.get_node(other) {
+                        visited.insert(n.id, n);
+                        next_frontier.push_back(other);
+                    }
+                }
+                let key = (edge.src, edge.dst, edge.predicate.clone());
+                if !seen_edges.contains(&key) {
+                    seen_edges.insert(key);
+                    edges.push(edge);
+                }
+            }
+        }
+        std::mem::swap(&mut frontier, &mut next_frontier);
+        next_frontier.clear();
+        if visited.len() >= limit || frontier.is_empty() {
+            break;
+        }
+    }
+
+    // Drop edges with endpoints outside the visited set (defensive).
+    let edges: Vec<EdgeView> = edges
+        .into_iter()
+        .filter(|e| visited.contains_key(&e.src) && visited.contains_key(&e.dst))
+        .map(EdgeView::from)
+        .collect();
+    let nodes: Vec<NodeView> = visited.into_values().map(NodeView::from).collect();
+
+    Ok(Json(SubgraphResponse { nodes, edges, truncated }))
+}
+
+// =====================================================================
 // GET /api/cognitive/subgraph
 // =====================================================================
 //

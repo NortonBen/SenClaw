@@ -56,6 +56,12 @@ const TIER_COLORS = ['#6B7280', '#3B82F6', '#10B981'];
 
 interface Props {
   data: SubgraphPayload | null;
+  /**
+   * Optional fixed width. Default = fluid: GraphView measures its parent
+   * via ResizeObserver and re-runs the force layout when the available
+   * space changes. Pass an explicit number only when the host needs a
+   * stable canvas (e.g. screenshot mode).
+   */
   width?: number;
   height?: number;
   /** Click handler to re-seed the graph at a clicked node. */
@@ -161,8 +167,8 @@ function runForceLayout(
 
 export function GraphView({
   data,
-  width = 720,
-  height = 480,
+  width: widthProp,
+  height = 520,
   onNodeClick,
   highlightId = null,
 }: Props) {
@@ -171,6 +177,32 @@ export function GraphView({
   const [ty, setTy] = useState(0);
   const [scale, setScale] = useState(1);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Fluid width: measure the wrapper via ResizeObserver. We re-run the
+  // force layout each time the measured width crosses a meaningful threshold
+  // (>= 4px) so a sidebar drawer opening/closing reflows the graph nicely
+  // without us having to plumb a `width` prop through every parent.
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [measuredWidth, setMeasuredWidth] = useState<number>(widthProp ?? 720);
+
+  useEffect(() => {
+    if (widthProp != null) {
+      setMeasuredWidth(widthProp);
+      return;
+    }
+    if (!wrapperRef.current) return;
+    const el = wrapperRef.current;
+    const update = () => {
+      const w = el.clientWidth;
+      if (w > 0) setMeasuredWidth(prev => (Math.abs(prev - w) >= 4 ? w : prev));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [widthProp]);
+
+  const width = measuredWidth;
 
   const sim = useMemo(() => {
     if (!data) return [] as SimNode[];
@@ -182,8 +214,9 @@ export function GraphView({
   if (!data || data.nodes.length === 0) {
     return (
       <div
+        ref={wrapperRef}
         style={{
-          width,
+          width: '100%',
           height,
           display: 'flex',
           alignItems: 'center',
@@ -215,16 +248,28 @@ export function GraphView({
   };
 
   return (
-    <svg
-      width={width}
-      height={height}
-      onWheel={onWheel}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
-      style={{ background: 'rgba(0,0,0,0.05)', cursor: dragRef.current ? 'grabbing' : 'grab' }}
-    >
+    <div ref={wrapperRef} style={{ width: '100%', lineHeight: 0 }}>
+      {/*
+        SVG takes 100% of the wrapper. The wrapper is what ResizeObserver
+        watches; setting `lineHeight: 0` strips the inline-baseline gap
+        browsers add below inline SVGs so the parent card hugs the canvas.
+      */}
+      <svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        onWheel={onWheel}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={onMouseUp}
+        style={{
+          background: 'rgba(0,0,0,0.05)',
+          cursor: dragRef.current ? 'grabbing' : 'grab',
+          display: 'block',
+        }}
+      >
       <g transform={`translate(${tx},${ty}) scale(${scale})`}>
         {data.edges.map((e, i) => {
           const a = posById.get(e.src);
@@ -280,5 +325,6 @@ export function GraphView({
         })}
       </g>
     </svg>
+    </div>
   );
 }

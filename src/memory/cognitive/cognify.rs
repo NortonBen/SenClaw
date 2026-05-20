@@ -33,11 +33,34 @@ use super::llm::{parse_triplets, LlmClient, RawTriplet};
 use super::node_set::NodeSet;
 use super::triplet::RelationshipEdge;
 
+// System prompt for the triplet-extraction LLM call.
+//
+// Design notes:
+//   * Multilingual on purpose — chats arrive in Vietnamese, English, etc.
+//     Earlier prompt only said "extract triplets" and small models would
+//     return `{"triplets":[]}` on Vietnamese first-person statements like
+//     "tôi tên là Sen" because no English noun was present. We now spell
+//     out that everyday self-introductions count as facts and that entity
+//     names MUST stay in the source script (no transliteration).
+//   * One-shot example anchors the schema for instruct models that drift
+//     on JSON formatting (Qwen, smaller Llamas, etc.).
+//   * `response_format=json_object` is already set by OpenAiCompatLlm, so
+//     we don't need defensive "JSON only" reminders past the example.
 const SYSTEM_PROMPT: &str = "\
-You are an expert knowledge-graph builder. From the text, extract (subject, predicate, object) \
-triplets that capture meaningful, factual relationships. Skip trivial or speculative claims. \
-Use short, canonical entity names — prefer existing names when reasonable. Respond with JSON only, \
-following this exact schema: {\"triplets\":[{\"subject\":\"...\",\"predicate\":\"...\",\"object\":\"...\"}]}.";
+You are a knowledge-graph builder. Read the text and extract every (subject, predicate, object) \
+factual relationship — including everyday claims like names, locations, preferences, ownerships, \
+roles, and identities, even when the sentence is short or first-person. Treat first-person pronouns \
+(I/tôi/我/etc.) as a concrete subject when an identity statement is being made. Keep entity names \
+in the SAME script as the source (don't translate or transliterate). Use compact, lowercase, \
+English predicates (e.g. `name`, `lives_in`, `likes`, `is_a`, `works_at`, `owns`). Skip filler \
+words and questions. Return JSON only.\n\n\
+Schema: {\"triplets\":[{\"subject\":\"...\",\"predicate\":\"...\",\"object\":\"...\"}]}\n\n\
+Example input: \"tôi tên là Sen, sống ở Hà Nội và thích cà phê đen.\"\n\
+Example output: {\"triplets\":[\
+{\"subject\":\"tôi\",\"predicate\":\"name\",\"object\":\"Sen\"},\
+{\"subject\":\"tôi\",\"predicate\":\"lives_in\",\"object\":\"Hà Nội\"},\
+{\"subject\":\"tôi\",\"predicate\":\"likes\",\"object\":\"cà phê đen\"}\
+]}";
 
 fn content_hash(text: &str) -> String {
     let mut h = Sha256::new();
@@ -158,7 +181,18 @@ impl CognifyPipeline {
 
     async fn extract_triplets(&self, text: &str) -> Result<Vec<RawTriplet>> {
         let user = build_user_prompt(text, &[]);
-        let raw = self.llm.complete(SYSTEM_PROMPT, &user).await?;
+        // Treat both LLM-call failures (no client configured, network
+        // error, rate-limit) AND JSON-parse failures as soft errors. The
+        // chunk has still been embedded by the caller; missing triplets
+        // just means no edges this round — Hebbian dynamics will rebuild
+        // them on the next pass when an LLM is available.
+        let raw = match self.llm.complete(SYSTEM_PROMPT, &user).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "[cognify] LLM call failed; skipping triplet extraction");
+                return Ok(Vec::new());
+            }
+        };
         match parse_triplets(&raw) {
             Ok(t) => Ok(t),
             Err(e) => {

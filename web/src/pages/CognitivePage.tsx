@@ -5,6 +5,12 @@ import {
 } from 'antd';
 import { AppLayout } from '../components/AppLayout';
 import { GraphView, type SubgraphPayload } from '../components/cognitive/GraphView';
+import {
+  CognitiveSidebar,
+  type CognitiveSection,
+} from '../components/cognitive/CognitiveSidebar';
+import { DataPointsView } from '../components/cognitive/DataPointsView';
+import { GraphExplorerView } from '../components/cognitive/GraphExplorerView';
 
 const { Content } = Layout;
 
@@ -51,6 +57,13 @@ type SearchMode = 'graph' | 'chunks' | 'triplet' | 'spreading';
 
 export function CognitivePage() {
   const { token } = theme.useToken();
+
+  // Section navigation lives in the page so refreshing within a section
+  // doesn't reset which view the user picked. Default = search/graph view.
+  const [section, setSection] = useState<CognitiveSection>('search');
+  // Bumped on any memory mutation (forget) so the sidebar re-fetches stats.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bumpRefresh = useCallback(() => setRefreshKey(k => k + 1), []);
 
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [decayRuns, setDecayRuns] = useState<DecayRunRow[]>([]);
@@ -163,10 +176,11 @@ export function CognitivePage() {
       message.success('forgotten');
       setHits(hs => hs.filter(h => h.node.id !== id));
       loadStats();
+      bumpRefresh();
     } catch (e) {
       message.error(`forget failed: ${e}`);
     }
-  }, [loadStats]);
+  }, [loadStats, bumpRefresh]);
 
   const hitColumns = useMemo(() => [
     {
@@ -229,41 +243,32 @@ export function CognitivePage() {
     { title: 'ms', dataIndex: 'duration_ms', width: 80 },
   ], []);
 
-  return (
-    <AppLayout sidebar={null}>
-      <Content style={{ padding: 24, overflow: 'auto' }}>
-        {dormant && (
-          <Card style={{ marginBottom: 16, borderColor: token.colorWarning }}>
-            <strong>Cognitive memory is dormant.</strong>{' '}
-            Configure an embedding provider
-            (<code>SENCLAW_MEMORY_EMBEDDING_PROVIDER=openai | ollama | local</code>)
-            and restart the daemon to enable.
-          </Card>
-        )}
+  // Each section is its own JSX so the active one drops straight into
+  // Content without an outer Row driving N hidden cards.
+  const searchSection = (
+    <Row gutter={[16, 16]}>
+      <Col span={24}>
+        <Card title="Stats" size="small">
+          <Row gutter={16}>
+            <Col span={6}>
+              <Statistic title="Edges" value={stats?.edges ?? 0} />
+            </Col>
+            <Col span={6}>
+              <Statistic title="Nodes" value={stats?.nodes_total ?? 0} />
+            </Col>
+            <Col span={12}>
+              <Space wrap>
+                {(stats?.nodes_by_kind ?? []).map(([k, n]) => (
+                  <Tag key={k}>{k}: {n}</Tag>
+                ))}
+              </Space>
+            </Col>
+          </Row>
+        </Card>
+      </Col>
 
-        <Row gutter={[16, 16]}>
-          <Col span={24}>
-            <Card title="Stats" size="small">
-              <Row gutter={16}>
-                <Col span={6}>
-                  <Statistic title="Edges" value={stats?.edges ?? 0} />
-                </Col>
-                <Col span={6}>
-                  <Statistic title="Nodes" value={stats?.nodes_total ?? 0} />
-                </Col>
-                <Col span={12}>
-                  <Space wrap>
-                    {(stats?.nodes_by_kind ?? []).map(([k, n]) => (
-                      <Tag key={k}>{k}: {n}</Tag>
-                    ))}
-                  </Space>
-                </Col>
-              </Row>
-            </Card>
-          </Col>
-
-          <Col span={24}>
-            <Card title="Search" size="small">
+      <Col span={24}>
+        <Card title="Search" size="small">
               <Space.Compact style={{ width: '100%' }}>
                 <Input
                   placeholder="query…"
@@ -352,7 +357,6 @@ export function CognitivePage() {
                 <>
                   <GraphView
                     data={graph}
-                    width={900}
                     height={520}
                     highlightId={seedId}
                     onNodeClick={n => setSeedId(n.id)}
@@ -369,27 +373,66 @@ export function CognitivePage() {
               )}
             </Card>
           </Col>
-
-          <Col span={24}>
-            <Card
-              title="Decay log"
-              size="small"
-              extra={<Button size="small" onClick={loadDecay}>Refresh</Button>}
-            >
-              {decayRuns.length === 0 ? (
-                <Empty description="No decay sweeps recorded yet" />
-              ) : (
-                <Table
-                  rowKey="run_at"
-                  columns={decayColumns as any}
-                  dataSource={decayRuns}
-                  pagination={false}
-                  size="small"
-                />
-              )}
-            </Card>
-          </Col>
         </Row>
+  );
+
+  const decaySection = (
+    <Card
+      title="Decay log"
+      size="small"
+      extra={<Button size="small" onClick={loadDecay}>Refresh</Button>}
+    >
+      {decayRuns.length === 0 ? (
+        <Empty description="No decay sweeps recorded yet" />
+      ) : (
+        <Table
+          rowKey="run_at"
+          columns={decayColumns as any}
+          dataSource={decayRuns}
+          pagination={false}
+          size="small"
+        />
+      )}
+    </Card>
+  );
+
+  const datapointsSection = (
+    <DataPointsView
+      onMutated={() => {
+        bumpRefresh();
+        loadStats();
+      }}
+      onOpenInGraph={id => {
+        setSeedId(id);
+        setSection('search');
+      }}
+    />
+  );
+
+  return (
+    <AppLayout
+      sidebar={
+        <CognitiveSidebar
+          activeSection={section}
+          onSelect={setSection}
+          refreshKey={refreshKey}
+        />
+      }
+    >
+      <Content style={{ padding: 24, overflow: 'auto' }}>
+        {dormant && (
+          <Card style={{ marginBottom: 16, borderColor: token.colorWarning }}>
+            <strong>Cognitive memory is dormant.</strong>{' '}
+            Configure an embedding provider
+            (<code>SENCLAW_MEMORY_EMBEDDING_PROVIDER=openai | ollama | local</code>)
+            and restart the daemon to enable.
+          </Card>
+        )}
+
+        {section === 'search' && searchSection}
+        {section === 'explorer' && <GraphExplorerView />}
+        {section === 'datapoints' && datapointsSection}
+        {section === 'decay' && decaySection}
       </Content>
     </AppLayout>
   );

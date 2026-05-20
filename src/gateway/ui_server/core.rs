@@ -398,6 +398,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route("/api/cognitive/search", post(super::cognitive::cognitive_search))
         .route("/api/cognitive/subgraph", get(super::cognitive::cognitive_subgraph))
+        .route("/api/cognitive/top-nodes", get(super::cognitive::cognitive_top_nodes))
+        .route("/api/cognitive/sample", get(super::cognitive::cognitive_sample))
         // Embedding model management
         .route(
             "/api/embedding/features",

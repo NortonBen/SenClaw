@@ -272,40 +272,31 @@ impl CognitiveServer {
         source: Option<&str>,
         tags: &[String],
     ) -> ToolResult {
-        // "add without cognify" → store as a single chunk node, embed, tag.
-        // Reuses cognify with a no-op LLM by setting max_triplets_per_chunk=0.
-        let mut opts = CognifyOptions {
+        // `cog_add` is the agent's "remember this" entry point. Originally we
+        // shipped a chunk-only fast path here so it'd work even without an
+        // LLM, but that turned out to be the wrong default: callers expect
+        // sentences like "tôi tên là Sen" to produce (tôi)-[name]->(Sen)
+        // edges, not an orphan chunk node. We now delegate to the full
+        // cognify pipeline. When the LLM is missing the pipeline still
+        // stores the chunk + embedding (triplet step fails silently per the
+        // existing graceful-degradation in `extract_triplets`) so we don't
+        // regress the no-LLM case.
+        let opts = CognifyOptions {
             node_sets: self.build_node_sets(tags),
-            max_triplets_per_chunk: 0,
             ..Default::default()
         };
-        // Don't trigger LLM at all by skipping triplet extraction implicitly.
-        opts.importance = 0.5;
-
-        // We can't reach into cognify to skip extraction cheaply, so embed
-        // a single chunk directly via the public embedder.
-        let now = chrono::Utc::now().timestamp();
-        let hash = {
-            use sha2::{Digest, Sha256};
-            let mut h = Sha256::new();
-            h.update(text.as_bytes());
-            format!("{:x}", h.finalize())
-        };
-        if let Ok(Some(existing)) = self.sys.graph.find_node_by_content_hash(&hash) {
-            return ToolResult::ok(format!(
-                "{{\"deduped\":true,\"node_id\":\"{}\"}}",
-                existing.id
-            ));
+        match self
+            .sys
+            .cognify(text, source.unwrap_or("mcp:cog_add"), &opts)
+            .await
+        {
+            Ok(r) => ToolResult::ok(format!(
+                "{{\"chunks_added\":{},\"chunks_deduped\":{},\"entities_added\":{},\"entities_reused\":{},\"edges_added\":{},\"edges_strengthened\":{}}}",
+                r.chunks_added, r.chunks_deduped, r.entities_added,
+                r.entities_reused, r.edges_added, r.edges_strengthened
+            )),
+            Err(e) => ToolResult::err(format!("cog_add failed: {e}")),
         }
-        let node = crate::memory::cognitive::DataPoint::chunk(text, Some(hash), now);
-        if let Err(e) = self.sys.embedder.add_node(&node).await {
-            return ToolResult::err(format!("cog_add failed: {e}"));
-        }
-        for set in self.build_node_sets(tags) {
-            let _ = self.sys.graph.tag_node(node.id, &set);
-        }
-        let _ = source; // reserved for provenance edges in a future revision
-        ToolResult::ok(format!("{{\"node_id\":\"{}\"}}", node.id))
     }
 
     pub async fn cog_cognify(
