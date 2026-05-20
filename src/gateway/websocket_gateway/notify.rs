@@ -22,10 +22,15 @@ impl WebSocketGateway {
     }
 
     pub async fn notify_agent_reply(&self, chat_jid: &str, text: &str) {
+        // Stamp at emit time so the client can chronologically interleave
+        // agent:reply with tool:execution events (both carry `ts`).
+        // Without this, agent:reply used the client's WS-arrival clock and
+        // could land out of order vs server-timestamped tool events.
         let payload = serde_json::json!({
             "type": "agent:reply",
             "groupJid": chat_jid,
             "text": text,
+            "ts": chrono::Utc::now().to_rfc3339(),
         });
         self.broadcast(chat_jid, &payload).await;
     }

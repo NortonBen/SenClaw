@@ -1,6 +1,7 @@
 //! Memory subsystem. Port targets: src-old/memory/*.ts
 
 pub mod chunker;
+pub mod cognitive;
 pub mod daily_logger;
 pub mod embedding;
 pub mod embedding_providers;

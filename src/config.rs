@@ -354,6 +354,74 @@ impl Config {
             _ => 1536,
         }
     }
+
+    /// Layer the persisted Settings → Embedding UI choices on top of the
+    /// env-derived defaults. Env still wins when set explicitly; this only
+    /// fills in `memory.*` fields the user has chosen in the UI.
+    ///
+    /// **Call this at daemon boot** (`run_daemon`) — it's the bridge between
+    /// the persisted JSON config and the in-memory `Config`. Without it the
+    /// Settings page silently writes a file the daemon never reads.
+    pub fn apply_persisted_overrides(&mut self, global_config_path: &std::path::Path) {
+        // Embedding provider + per-provider credentials.
+        if let Some(ec) =
+            crate::gateway::group_manager::load_embedding_config(global_config_path)
+        {
+            // Provider — only override when the user actually picked one.
+            let parsed = EmbeddingProvider::parse(&ec.provider);
+            if parsed != EmbeddingProvider::None
+                || !ec.provider.is_empty() && ec.provider != "none"
+            {
+                self.memory.embedding_provider = parsed;
+            }
+
+            // Per-provider fields. `skip_serializing_if = "String::is_empty"`
+            // on the source struct means empty strings *are* meaningful here
+            // — they mean "use env default", so we only patch when non-empty.
+            if !ec.api_key.is_empty() {
+                match parsed {
+                    EmbeddingProvider::Openai => self.memory.openai_api_key = ec.api_key.clone(),
+                    EmbeddingProvider::Openrouter => {
+                        self.memory.openrouter_api_key = ec.api_key.clone()
+                    }
+                    _ => {}
+                }
+            }
+            if !ec.base_url.is_empty() {
+                match parsed {
+                    EmbeddingProvider::Openai => self.memory.openai_base_url = ec.base_url.clone(),
+                    EmbeddingProvider::Openrouter => {
+                        self.memory.openrouter_base_url = ec.base_url.clone()
+                    }
+                    EmbeddingProvider::Ollama => {
+                        self.memory.ollama_base_url = ec.base_url.clone()
+                    }
+                    _ => {}
+                }
+            }
+            if !ec.model_name.is_empty() {
+                match parsed {
+                    EmbeddingProvider::Openai => self.memory.openai_model = ec.model_name.clone(),
+                    EmbeddingProvider::Openrouter => {
+                        self.memory.openrouter_model = ec.model_name.clone()
+                    }
+                    EmbeddingProvider::Ollama => {
+                        self.memory.ollama_model = ec.model_name.clone()
+                    }
+                    EmbeddingProvider::Local => self.memory.local_model = ec.model_name.clone(),
+                    _ => {}
+                }
+            }
+            if !ec.model_path.is_empty() && parsed == EmbeddingProvider::Local {
+                self.memory.local_model_path = ec.model_path.clone();
+            }
+            if let Some(d) = ec.dimensions {
+                if d > 0 {
+                    self.memory.embedding_dimensions = d;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

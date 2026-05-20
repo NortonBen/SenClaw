@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { theme, Typography } from 'antd';
+import { BulbFilled } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -64,10 +65,25 @@ function SparkleIcon({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Compact "thinking" indicator — visually matches `ToolGroupCard` so a
+ * conversation reads as one consistent timeline:
+ *
+ *   ● Read 3 files, ran 1 command  ›
+ *   ◐ think                         ›
+ *   ● cog add                       ›
+ *
+ * Collapsed = single inline row (icon + "think" + chevron) at the same
+ * font size / spacing as a tool group. Expanded = indented italic body
+ * with the same left-border treatment ToolGroupCard uses.
+ *
+ * Kept here (not in ToolGroupCard) because reasoning isn't a real tool
+ * call — no result/status semantics — but the visual language is shared.
+ */
 function ReasoningCollapsible({
   markdown,
   isDarkMode,
-  embedded,
+  embedded: _embedded,
 }: {
   markdown: string;
   isDarkMode: boolean;
@@ -77,60 +93,49 @@ function ReasoningCollapsible({
   const { token } = theme.useToken();
 
   return (
-    <div
-      className={embedded ? 'mb-2 rounded-lg overflow-hidden' : 'mb-3 rounded-xl overflow-hidden border transition-colors'}
-      style={
-        embedded
-          ? { background: token.colorFillTertiary }
-          : {
-              borderColor: token.colorBorderSecondary,
-              background: token.colorFillQuaternary,
-            }
-      }
-    >
+    <div style={{ margin: '4px 0', padding: 0, background: 'transparent' }}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         title={open ? 'Thu gọn phần suy luận' : 'Mở xem tiến trình tư duy'}
-        className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left cursor-pointer select-none hover:opacity-95"
-        style={{ color: token.colorText }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: 'transparent',
+          border: 'none',
+          padding: '4px 0',
+          cursor: 'pointer',
+          color: token.colorTextSecondary,
+          fontSize: 13,
+          textAlign: 'left',
+          width: '100%',
+        }}
       >
-        <span
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
-          style={{
-            background: `linear-gradient(135deg, ${token.colorPrimary}33, ${token.colorInfo}44)`,
-            color: token.colorPrimary,
-          }}
-        >
-          <SparkleIcon className="w-3.5 h-3.5" />
+        {/* Same icon family + sizing as ToolGroupCard's CheckCircleFilled
+            so a "think" row is visually indistinguishable from a tool row in
+            the timeline. Color uses colorInfo (soft blue) to mark this as
+            reasoning, not a green success — same shape, different semantic. */}
+        <BulbFilled style={{ color: token.colorInfo, fontSize: 11 }} />
+        <span style={{ color: 'inherit' }}>think</span>
+        <span style={{ color: token.colorTextQuaternary }}>
+          {open ? '▾' : '›'}
         </span>
-        <span className="flex-1 text-sm font-medium">Hiện tiến trình tư duy</span>
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          className="shrink-0 transition-transform duration-200"
-          style={{
-            color: token.colorTextSecondary,
-            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-          }}
-          aria-hidden
-        >
-          <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
       </button>
+
       {open && (
         <div
-          className="mx-3 mb-3 pl-3 border-l-2"
-          style={{ borderLeftColor: token.colorBorder }}
+          style={{
+            marginTop: 6,
+            marginLeft: 18,
+            paddingLeft: 12,
+            borderLeft: `2px solid ${token.colorBorderSecondary}`,
+          }}
         >
           <div
             className={`prose prose-sm max-w-none italic opacity-95 ${isDarkMode ? 'prose-invert' : ''}`}
-            style={{ color: token.colorTextSecondary }}
+            style={{ color: token.colorTextSecondary, fontSize: 12 }}
           >
             <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
               {markdown}
@@ -318,10 +323,26 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
 
   const isAgent = role === 'agent';
 
+  // Reasoning-only fast path: an agent message that's pure <thinking> with
+  // no follow-on text and no attachments shouldn't carry the full avatar +
+  // chat-bubble chrome — it'd look like a "message" the model said when in
+  // fact it's just reasoning preamble that belongs in the tool-row
+  // timeline. Render the inline ToolGroupCard-style "think" row instead.
+  if (isAgent && (!attachments || attachments.length === 0)) {
+    const { reasoning, body } = extractLeadingReasoningBlocks(text);
+    if (reasoning && !body.trim()) {
+      return (
+        <div className="ml-[38px]" /* matches avatar (28px) + gap (10px) so it aligns with bubbles */>
+          <ReasoningCollapsible markdown={reasoning} isDarkMode={isDarkMode} />
+        </div>
+      );
+    }
+  }
+
   return (
     <div className="flex gap-2.5 items-end">
       {/* Avatar */}
-      <div 
+      <div
         className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mb-5 text-[10px] font-bold shadow-lg"
         style={{
           background: isAgent ? token.colorPrimary : token.colorFillSecondary,

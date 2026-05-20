@@ -62,6 +62,8 @@ enum Command {
     CodeServer,
     /// Start the Litho (deepwiki-rs) MCP server (stdio JSON-RPC)
     LithoServer,
+    /// Start the cognitive memory MCP server — graph + Hebbian (stdio JSON-RPC)
+    CognitiveServer,
 }
 
 #[tokio::main]
@@ -88,6 +90,7 @@ async fn main() -> Result<()> {
         | Command::CodeGraphServer
         | Command::CodeServer
         | Command::LithoServer
+        | Command::CognitiveServer
         )
     );
 
@@ -105,7 +108,11 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Command::Start) {
         Command::Start => {
-            let cfg = senclaw::config::Config::from_env();
+            let mut cfg = senclaw::config::Config::from_env();
+            // Settings UI persists embedding choices to global_config.json.
+            // Layer them on top of env so the UI actually drives runtime.
+            let gcp = cfg.paths.global_config_path.clone();
+            cfg.apply_persisted_overrides(&gcp);
             senclaw::run_daemon(cfg).await
         }
         Command::Skills { cmd } => senclaw::cli::commands::skills::run(cmd).await,
@@ -128,5 +135,6 @@ async fn main() -> Result<()> {
         Command::CodeGraphServer => senclaw::mcp::code_graph_server::run_code_graph_server().await,
         Command::CodeServer => senclaw::mcp::code_server::run_code_server().await,
         Command::LithoServer => senclaw::mcp::litho_server::run_stdio_server().await,
+        Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
     }
 }

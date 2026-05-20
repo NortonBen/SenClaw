@@ -443,7 +443,7 @@ async fn embed_local(_p: &LocalProvider, _texts: &[String]) -> Result<Vec<Vec<f3
 // ── candle internals (compiled only when local-embed feature is on) ───────────
 
 #[cfg(feature = "local-embed")]
-pub(super) mod local_candle {
+pub(crate) mod local_candle {
     use anyhow::{Context, Result};
     use candle_core::{DType, Device, Tensor};
     use candle_nn::VarBuilder;
@@ -561,7 +561,7 @@ pub(super) mod local_candle {
     }
 
     fn best_device() -> Device {
-        #[cfg(feature = "metal")]
+        #[cfg(feature = "local-embed-metal")]
         {
             match Device::new_metal(0) {
                 Ok(d) => {

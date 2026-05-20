@@ -769,7 +769,7 @@ impl ZenCore for ZenEngine {
                 .unwrap_or_default()
         });
         // Keep `tools` binding for the existing log lines below.
-        let tools = tools_initial;
+        let _tools = tools_initial;
         // Debug: log all tools being sent to LLM so we can verify browser tools appear
         // {
         //     let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();

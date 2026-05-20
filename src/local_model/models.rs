@@ -136,49 +136,49 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         vision: false,
     },
 
-    // ── Mamba 1 (SSM — state-spaces, backbone.* prefix in safetensors) ───
-    KnownModel {
-        id: "state-spaces/mamba-2.8b",
-        label: "Mamba 1 2.8B (SSM)",
-        approx_size_gb: 5.6,
-        context_length: 2_048,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "state-spaces/mamba-1.4b",
-        label: "Mamba 1 1.4B (SSM)",
-        approx_size_gb: 2.8,
-        context_length: 2_048,
-        native_supported: true,
-        vision: false,
-    },
+    // // ── Mamba 1 (SSM — state-spaces, backbone.* prefix in safetensors) ───
+    // KnownModel {
+    //     id: "state-spaces/mamba-2.8b",
+    //     label: "Mamba 1 2.8B (SSM)",
+    //     approx_size_gb: 5.6,
+    //     context_length: 2_048,
+    //     native_supported: true,
+    //     vision: false,
+    // },
+    // KnownModel {
+    //     id: "state-spaces/mamba-1.4b",
+    //     label: "Mamba 1 1.4B (SSM)",
+    //     approx_size_gb: 2.8,
+    //     context_length: 2_048,
+    //     native_supported: true,
+    //     vision: false,
+    // },
 
-    // ── Mamba 2 (SSD — state-spaces, backbone.* prefix in safetensors) ───
-    KnownModel {
-        id: "state-spaces/mamba2-2.7b",
-        label: "Mamba 2 2.7B (SSM/SSD)",
-        approx_size_gb: 5.4,
-        context_length: 4_096,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "state-spaces/mamba2-1.3b",
-        label: "Mamba 2 1.3B (SSM/SSD)",
-        approx_size_gb: 2.6,
-        context_length: 4_096,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "state-spaces/mamba2-370m",
-        label: "Mamba 2 370M (SSM/SSD)",
-        approx_size_gb: 0.74,
-        context_length: 4_096,
-        native_supported: true,
-        vision: false,
-    },
+    // // ── Mamba 2 (SSD — state-spaces, backbone.* prefix in safetensors) ───
+    // KnownModel {
+    //     id: "state-spaces/mamba2-2.7b",
+    //     label: "Mamba 2 2.7B (SSM/SSD)",
+    //     approx_size_gb: 5.4,
+    //     context_length: 4_096,
+    //     native_supported: true,
+    //     vision: false,
+    // },
+    // KnownModel {
+    //     id: "state-spaces/mamba2-1.3b",
+    //     label: "Mamba 2 1.3B (SSM/SSD)",
+    //     approx_size_gb: 2.6,
+    //     context_length: 4_096,
+    //     native_supported: true,
+    //     vision: false,
+    // },
+    // KnownModel {
+    //     id: "state-spaces/mamba2-370m",
+    //     label: "Mamba 2 370M (SSM/SSD)",
+    //     approx_size_gb: 0.74,
+    //     context_length: 4_096,
+    //     native_supported: true,
+    //     vision: false,
+    // },
 
     // ── Qwen3 4-bit (MLX quantisation — NOT compatible with Candle loader) ─
     KnownModel {

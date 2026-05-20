@@ -13,7 +13,7 @@ use mlx_rs::{
     builder::Builder,
     error::Exception,
     macros::{ModuleParameters, Quantizable},
-    module::{Module, ModuleParameters, ModuleParametersExt, Param},
+    module::{Module, ModuleParameters, Param},
     nn,
     ops::{
         concatenate_axis, indexing::IndexOp, ones_dtype, sigmoid,

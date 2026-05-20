@@ -51,6 +51,7 @@ pub fn load_llm_configs(config_path: &Path) -> LlmConfigResult {
         configs: cfg.llm_configs.unwrap_or_default(),
         active_id: cfg.active_llm_config_id,
         active_quick_id: cfg.active_quick_llm_config_id,
+        active_cognitive_id: cfg.active_cognitive_llm_config_id,
     }
 }
 
@@ -76,6 +77,9 @@ pub fn remove_llm_config(config_path: &Path, id: &str) -> Result<()> {
     if cfg.active_quick_llm_config_id.as_deref() == Some(id) {
         cfg.active_quick_llm_config_id = None;
     }
+    if cfg.active_cognitive_llm_config_id.as_deref() == Some(id) {
+        cfg.active_cognitive_llm_config_id = None;
+    }
     save_global_config(config_path, &cfg)
 }
 
@@ -88,6 +92,12 @@ pub fn set_active_llm_config(config_path: &Path, id: Option<&str>) -> Result<()>
 pub fn set_active_quick_llm_config(config_path: &Path, id: Option<&str>) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.active_quick_llm_config_id = id.map(|s| s.to_string());
+    save_global_config(config_path, &cfg)
+}
+
+pub fn set_active_cognitive_llm_config(config_path: &Path, id: Option<&str>) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.active_cognitive_llm_config_id = id.map(|s| s.to_string());
     save_global_config(config_path, &cfg)
 }
 // ===== Embedding config =====

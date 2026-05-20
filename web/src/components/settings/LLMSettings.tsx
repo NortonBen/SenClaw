@@ -180,6 +180,7 @@ export const LLMSettings: React.FC = () => {
   const [configs, setConfigs] = useState<LLMConfig[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeQuickId, setActiveQuickId] = useState<string | null>(null);
+  const [activeCognitiveId, setActiveCognitiveId] = useState<string | null>(null);
   const [semaModel, setSemaModel] = useState<{ modelName: string; provider: string } | null>(null);
   const [semaQuickModel, setSemaQuickModel] = useState<{ modelName: string; provider: string } | null>(null);
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
@@ -208,6 +209,7 @@ export const LLMSettings: React.FC = () => {
         setConfigs(d.configs ?? d.data ?? []);
         setActiveId(d.activeId ?? null);
         setActiveQuickId(d.activeQuickId ?? null);
+        setActiveCognitiveId(d.activeCognitiveId ?? null);
         setSemaModel(d.semaModel ?? null);
         setSemaQuickModel(d.semaQuickModel ?? null);
         setThinkingEnabled(d.thinkingEnabled ?? true);
@@ -352,6 +354,16 @@ export const LLMSettings: React.FC = () => {
     if (cfg) setSemaQuickModel({ modelName: cfg.modelName, provider: cfg.provider });
   };
 
+  /** Pick the LLM used by cognitive memory's cognify pipeline. */
+  const handleSetCognitive = async (id: string) => {
+    await fetch('/api/llm-config/active', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, type: 'cognitive' }),
+    });
+    setActiveCognitiveId(id);
+  };
+
   const handleThinkingToggle = async () => {
     const next = !thinkingEnabled;
     setThinkingEnabled(next);
@@ -395,6 +407,14 @@ export const LLMSettings: React.FC = () => {
 
   const activeConfig = configs.find(c => c.id === activeId);
   const activeQuickConfig = configs.find(c => c.id === activeQuickId);
+  const activeCognitiveConfig = configs.find(c => c.id === activeCognitiveId);
+  const displayCognitive = activeCognitiveConfig
+    ? {
+        modelName: activeCognitiveConfig.modelName,
+        providerLabel:
+          PROVIDERS[activeCognitiveConfig.provider]?.name ?? activeCognitiveConfig.provider,
+      }
+    : null;
 
   const displayMain = activeConfig
     ? { modelName: activeConfig.modelName, providerLabel: PROVIDERS[activeConfig.provider]?.name ?? activeConfig.provider }
@@ -507,6 +527,7 @@ export const LLMSettings: React.FC = () => {
       render: (_: any, record: LLMConfig) => {
         const isMain  = record.id === activeId;
         const isQuick = record.id === activeQuickId;
+        const isCog   = record.id === activeCognitiveId;
         return (
           <Space>
             <Tooltip title={isMain ? 'Current main model' : 'Set as Main Model'}>
@@ -529,6 +550,17 @@ export const LLMSettings: React.FC = () => {
                 style={{ fontSize: 11, ...(isQuick ? { background: '#7c3aed', borderColor: '#7c3aed' } : {}) }}
               >
                 {isQuick ? '● Quick' : 'Quick'}
+              </Button>
+            </Tooltip>
+            <Tooltip title={isCog ? 'Current cognitive model (cog_cognify)' : 'Set as Cognitive Model (used by cog_cognify)'}>
+              <Button
+                size="small"
+                type={isCog ? 'primary' : 'default'}
+                disabled={isCog}
+                onClick={() => handleSetCognitive(record.id)}
+                style={{ fontSize: 11, ...(isCog ? { background: '#10B981', borderColor: '#10B981' } : {}) }}
+              >
+                {isCog ? '● Cognitive' : 'Cognitive'}
               </Button>
             </Tooltip>
             <Popconfirm
@@ -593,6 +625,14 @@ export const LLMSettings: React.FC = () => {
                 <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{displayQuick?.providerLabel}</Text>
               </div>
               <Tag color="purple" style={{ fontSize: 10 }}>Quick Model</Tag>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981', flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Text strong style={{ fontSize: 13 }}>{displayCognitive?.modelName ?? '— (not configured)'}</Text>
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{displayCognitive?.providerLabel ?? 'cog_cognify will fail until set'}</Text>
+              </div>
+              <Tag color="green" style={{ fontSize: 10 }}>Cognitive Model</Tag>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>Thinking</Text>

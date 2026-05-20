@@ -238,7 +238,7 @@ impl SseTransport {
             tokio::pin!(stream);
 
             let mut buf = String::new();
-            let mut current_event: Option<String> = None;
+            let _current_event: Option<String> = None;
 
             while let Some(chunk) = stream.next().await {
                 match chunk {
@@ -289,9 +289,6 @@ impl SseTransport {
                                     }
                                 }
                             }
-
-                            current_event = event_type;
-                            let _ = current_event;
                         }
                     }
                     Err(e) => {

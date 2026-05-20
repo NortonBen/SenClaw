@@ -14,9 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Path as AxumPath, State},
@@ -1097,7 +1095,7 @@ pub(crate) async fn local_models_unload(
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let cid = canonical_local_model_id(&id);
-    let mut unloaded_any = false;
+    let unloaded_any = false;
     #[cfg(feature = "local-candle")]
     {
         if let Some(slot) = LOADED_ENGINES.lock().unwrap().remove(&cid) {
@@ -1127,7 +1125,7 @@ pub(crate) async fn local_models_unload(
 pub(crate) async fn local_models_unload_all(
     State(_state): State<Arc<UiState>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let mut unloaded: Vec<String> = Vec::new();
+    let unloaded: Vec<String> = Vec::new();
     #[cfg(feature = "local-candle")]
     {
         let cids: Vec<String> = LOADED_ENGINES.lock().unwrap().keys().cloned().collect();

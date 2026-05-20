@@ -813,7 +813,12 @@ pub(crate) async fn handle_message_send(
         if let Some(output) = dispatch_command(&state.db, &text, Some(&group_jid)) {
             send_json(
                 sender,
-                &serde_json::json!({"type": "agent:reply", "groupJid": group_jid, "text": output}),
+                &serde_json::json!({
+                    "type": "agent:reply",
+                    "groupJid": group_jid,
+                    "text": output,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                }),
             );
             // After reset, push empty history so the frontend clears its local messages.
             if is_reset {

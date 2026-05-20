@@ -481,10 +481,9 @@ fn extract_request_id(msg: &DaemonMessage) -> String {
         DaemonMessage::ListTabs { request_id, .. } => request_id.clone(),
         DaemonMessage::GetStatus { request_id, .. } => request_id.clone(),
         DaemonMessage::CrawlStart { job_id, .. } => job_id.clone(),
-        DaemonMessage::CrawlStop { .. } => Uuid::new_v4().to_string(),
-        DaemonMessage::CrawlPause { .. } => Uuid::new_v4().to_string(),
-        DaemonMessage::CrawlResume { .. } => Uuid::new_v4().to_string(),
-        _ => Uuid::new_v4().to_string(),
+        DaemonMessage::CrawlStop { .. }
+        | DaemonMessage::CrawlPause { .. }
+        | DaemonMessage::CrawlResume { .. } => Uuid::new_v4().to_string(),
     }
 }
 

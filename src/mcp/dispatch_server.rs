@@ -36,7 +36,7 @@ pub trait PersonaResolver: Send + Sync {
 /// One Cowork workspace member injected via `SENCLAW_DISPATCH_COWORK_AGENTS_JSON`.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CoworkDispatchAgentRow {
+pub struct CoworkDispatchAgentRow {
     pub member_id: String,
     pub role: String,
     pub jid: String,

@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 
 use crate::types::GroupBinding;
 use std::collections::HashSet;

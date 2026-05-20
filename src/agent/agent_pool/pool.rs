@@ -28,9 +28,9 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config,
-    litho_mcp_config, memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config,
-    wiki_mcp_config, workspace_mcp_config,
+    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, cognitive_mcp_config,
+    dispatch_mcp_config, litho_mcp_config, memory_mcp_config, schedule_mcp_config,
+    send_mcp_config, space_mcp_config, wiki_mcp_config, workspace_mcp_config,
     McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
@@ -996,6 +996,19 @@ impl AgentPool {
                 },
                 custom_memory_dir.as_deref(),
             ));
+            // Cognitive memory MCP — graph + Hebbian dynamics.
+            // cog_cognify needs an LLM; the stdio server picks one up from
+            // either Settings → LLM Models → Cognitive Model or the legacy
+            // SENCLAW_OPENAI_API_KEY env. We only disable when no embedding
+            // provider is configured (cognitive layer is dormant in that case
+            // and tools would all 503).
+            let cog_llm_disabled =
+                cfg.memory.embedding_provider == crate::config::EmbeddingProvider::None;
+            mcp_servers.push(cognitive_mcp_config(
+                &db_path_s,
+                &binding.folder,
+                cog_llm_disabled,
+            ));
             mcp_servers.push(wiki_mcp_config(
                 cfg.paths.wiki_dir.to_string_lossy().as_ref(),
             ));
@@ -1294,15 +1307,32 @@ impl AgentPool {
                             .take(max_results)
                             .collect();
                         let mem_context = crate::memory::manager::format_search_results(&filtered);
-                        if mem_context.is_empty() {
-                            prompt.to_string()
-                        } else {
-                            format!("<memory>\n{mem_context}\n</memory>\n\n{prompt}")
+                        let cog_context =
+                            cognitive_pre_retrieval(prompt, &group.folder, max_results).await;
+                        match (mem_context.is_empty(), cog_context.is_empty()) {
+                            (true, true) => prompt.to_string(),
+                            (false, true) => format!("<memory>\n{mem_context}\n</memory>\n\n{prompt}"),
+                            (true, false) => format!(
+                                "<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
+                            ),
+                            (false, false) => format!(
+                                "<memory>\n{mem_context}\n</memory>\n<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
+                            ),
                         }
                     }
                     Err(e) => {
                         tracing::warn!("[AgentPool] Memory pre-retrieval failed: {e}");
-                        prompt.to_string()
+                        // FTS failed — try cognitive on its own so users don't lose
+                        // recall when only one backend is misbehaving.
+                        let cog_context =
+                            cognitive_pre_retrieval(prompt, &group.folder, max_results).await;
+                        if cog_context.is_empty() {
+                            prompt.to_string()
+                        } else {
+                            format!(
+                                "<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
+                            )
+                        }
                     }
                 }
             } else {
@@ -2790,6 +2820,40 @@ pub(crate) fn persist_todo_transitions_to_cowork(
         }
     }
     inserted
+}
+
+/// Cognitive-memory pre-retrieval. Spreading-activation recall scoped to the
+/// caller's group folder, with Hebbian write-back happening as a side effect.
+/// Returns an empty string when:
+///   * the cognitive system was never booted (no embedding provider, etc.)
+///   * no hits cross the relevance floor
+///   * any error occurs — pre-retrieval is **never** allowed to fail the
+///     surrounding agent turn, so failures log + drop quietly.
+async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: usize) -> String {
+    let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+        return String::new();
+    };
+    let mut q = crate::memory::cognitive::SearchQuery::spreading(
+        prompt.to_string(),
+        max_results,
+        2,
+    );
+    q.node_sets = vec![crate::memory::cognitive::NodeSet::group(
+        group_folder,
+        "default_memory",
+    )];
+    match sys.search(&q).await {
+        Ok(hits) => {
+            // Drop very-low-confidence hits — at <0.1 score the LLM context
+            // budget is better spent on the user prompt itself.
+            let filtered: Vec<_> = hits.into_iter().filter(|h| h.score >= 0.1).collect();
+            crate::memory::cognitive::format_hits_for_prompt(&filtered, 200)
+        }
+        Err(e) => {
+            tracing::warn!("[AgentPool] Cognitive pre-retrieval failed: {e}");
+            String::new()
+        }
+    }
 }
 
 #[cfg(test)]

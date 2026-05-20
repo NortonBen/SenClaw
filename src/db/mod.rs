@@ -93,6 +93,18 @@ impl Db {
         schema::apply_code_tables(conn)?;
         schema::apply_marketplace_tables(conn)?;
         crate::code_graph::schema::apply_code_graph_schema(conn)?;
+        crate::memory::cognitive::schema::apply_cognitive_schema(conn)?;
+        // cog_vec is best-effort: if sqlite-vec extension is loaded, the
+        // virtual table is created; otherwise we fall back to the BLOB
+        // column on cog_nodes (see graph_store / vector_store).
+        let provider = config.memory.embedding_provider;
+        if provider != crate::config::EmbeddingProvider::None {
+            let dims = crate::config::Config::resolve_dimensions(
+                provider,
+                config.memory.embedding_dimensions,
+            );
+            let _ = crate::memory::cognitive::schema::apply_cognitive_vec_schema(conn, dims);
+        }
         Ok(())
     }
 

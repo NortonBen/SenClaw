@@ -66,6 +66,24 @@ pub fn workspace_mcp_config(
     cfg
 }
 
+// ===== CognitiveTool =====
+
+pub fn cognitive_mcp_config(
+    db_path: &str,
+    group_folder: &str,
+    llm_disabled: bool,
+) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-cognitive", "cognitive-server");
+    cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
+    cfg.env
+        .insert("SENCLAW_GROUP_FOLDER".into(), group_folder.to_owned());
+    if llm_disabled {
+        cfg.env
+            .insert("SENCLAW_COG_LLM_DISABLED".into(), "1".to_owned());
+    }
+    cfg
+}
+
 // ===== SpaceTool =====
 
 pub fn space_mcp_config(db_path: &str, group_folder: &str, chat_jid: &str) -> McpServerConfig {

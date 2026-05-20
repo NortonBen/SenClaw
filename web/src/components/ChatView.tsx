@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { theme } from 'antd';
 import type { GroupInfo, ChatMessage, ToolMessage, AgentState, UsageData, ImageAttachment } from '../types';
 import type { AgentMode } from '../hooks/useWebSocket';
@@ -55,8 +55,36 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
     }
   }, [group.jid, messages.length]);
 
-  const visibleMessages = messages.slice(Math.max(0, messages.length - visibleCount));
-  const hasMore = messages.length > visibleCount;
+  /**
+   * Render order = strict chronological by `timestamp` ascending.
+   *
+   * WHY: live `tool:execution` events and `agent:reply` events arrive on
+   * the WebSocket in network-order, which often disagrees with the order
+   * the LLM actually emitted them. E.g. a final assistant text bubble can
+   * be appended to `messages` before its preceding tool-call events land,
+   * causing the chat to read "[final answer] · [tool calls]" — confusing
+   * since the answer obviously came AFTER the tools that produced it.
+   *
+   * We sort by `timestamp` here (every ChatMessage variant carries one).
+   * `Array.prototype.sort` is stable in modern engines, so messages with
+   * identical timestamps keep their insertion order — that's what we want
+   * as a tie-break (server-side stable order wins).
+   *
+   * We sort the FULL message list first, then slice the tail, so paging
+   * boundaries don't accidentally hide tool calls that belong to the
+   * displayed window because their timestamps shuffle near the edge.
+   */
+  const sortedMessages = useMemo(() => {
+    return [...messages].sort((a, b) => {
+      const ta = Date.parse(a.timestamp) || 0;
+      const tb = Date.parse(b.timestamp) || 0;
+      return ta - tb;
+    });
+  }, [messages]);
+  const visibleMessages = sortedMessages.slice(
+    Math.max(0, sortedMessages.length - visibleCount),
+  );
+  const hasMore = sortedMessages.length > visibleCount;
 
   // On group switch / initial mount: jump scroll to bottom synchronously after layout
   useLayoutEffect(() => {
@@ -479,8 +507,14 @@ function renderMessagesWithToolGroups(
 
   const flushTools = () => {
     if (pendingTools.length === 0) return;
+    // Indent matches MessageBubble's avatar column (28px circle + 10px gap)
+    // so a tool row sits flush under the AI bubble it belongs to.
+    // Identical to the `ml-[38px]` used by the reasoning-only fast path in
+    // MessageBubble — keep both in sync if you change either.
     nodes.push(
-      <ToolGroupCard key={`tools-${pendingTools[0].id}`} messages={pendingTools} />,
+      <div key={`tools-${pendingTools[0].id}`} className="ml-[38px]">
+        <ToolGroupCard messages={pendingTools} />
+      </div>,
     );
     pendingTools = [];
   };

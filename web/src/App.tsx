@@ -11,6 +11,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { CoworkPage } from './pages/CoworkPage';
 import { CodePage } from './pages/CodePage';
 import { SpacePage } from './pages/SpacePage';
+import { CognitivePage } from './pages/CognitivePage';
 
 export function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -49,6 +50,7 @@ export function App() {
           <Route path="cowork" element={<CoworkPage />} />
           <Route path="code" element={<CodePage />} />
           <Route path="space/*" element={<SpacePage />} />
+          <Route path="cognitive" element={<CognitivePage />} />
         </Routes>
         {/* Global Plan-mode approval modal — surfaces when any agent calls ExitPlanMode. */}
         <PlanExitDialog

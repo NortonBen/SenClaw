@@ -13,6 +13,7 @@ import {
   BellFilled,
   CheckOutlined,
   ClockCircleOutlined,
+  DeploymentUnitOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { WsStatus, EventNotification } from '../types';
@@ -106,6 +107,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
     if (path.startsWith('/cowork')) return 'cowork';
     if (path.startsWith('/code')) return 'code';
     if (path.startsWith('/space')) return 'space';
+    if (path.startsWith('/cognitive')) return 'cognitive';
     return '';
   };
 
@@ -200,6 +202,13 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
                 type={currentKey === 'plugins' ? 'primary' : 'text'}
                 icon={<ApiOutlined />}
                 onClick={() => navigate('/plugins')}
+              />
+            </Tooltip>
+            <Tooltip title="Cognitive memory">
+              <Button
+                type={currentKey === 'cognitive' ? 'primary' : 'text'}
+                icon={<DeploymentUnitOutlined />}
+                onClick={() => navigate('/cognitive')}
               />
             </Tooltip>
             <Tooltip title="Settings">

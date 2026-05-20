@@ -51,7 +51,7 @@ settings.local.json
 target/
 **/*.rs.bk
 
-code-old/
+# code-old/
 hub-backend/bin/server
 hub-backend/server
 test_parse

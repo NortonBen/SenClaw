@@ -719,6 +719,31 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let _memory_mgr = memory::manager::init(Arc::clone(&db), &cfg);
     tracing::info!("[SenClaw] MemoryManager initialized");
 
+    // ===== 1c. Cognitive layer (graph + Hebbian + decay ticker) =====
+    {
+        use crate::memory::cognitive::{llm::LlmClient, llm_openai::create_cognitive_llm};
+        struct DormantLlm;
+        #[async_trait]
+        impl LlmClient for DormantLlm {
+            async fn complete(&self, _system: &str, _user: &str) -> Result<String> {
+                anyhow::bail!("cognify LLM not configured: set SENCLAW_OPENAI_API_KEY")
+            }
+        }
+        let llm: Arc<dyn LlmClient> = match create_cognitive_llm(&cfg) {
+            Some(real) => Arc::new(real),
+            None => Arc::new(DormantLlm),
+        };
+        match memory::cognitive::init_daemon(Arc::clone(&db), &cfg, llm) {
+            Some(sys) => tracing::info!(
+                edges = sys.stats().map(|s| s.edges).unwrap_or(0),
+                "[SenClaw] Cognitive system booted (decay ticker running, 300s)"
+            ),
+            None => tracing::info!(
+                "[SenClaw] Cognitive system dormant — no embedding provider configured"
+            ),
+        }
+    }
+
     // ===== 1c. Ensure main agent directory =====
     // Ensure main agent skeleton exists (missing dirs + SOUL.md/MEMORY.md templates),
     // avoiding the case where user accidentally deletes it and no group has isAdmin permissions.

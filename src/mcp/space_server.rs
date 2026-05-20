@@ -7,7 +7,7 @@
 //! Tool namespace: `space:*`
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use rmcp::ServiceExt;
 use rusqlite::params;
 use serde::Deserialize;

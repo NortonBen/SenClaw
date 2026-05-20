@@ -181,6 +181,12 @@ pub(super) struct GlobalConfig {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
+        rename = "activeCognitiveLlmConfigId"
+    )]
+    pub(super) active_cognitive_llm_config_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
         rename = "thinkingEnabled"
     )]
     pub(super) thinking_enabled: Option<bool>,
@@ -219,4 +225,5 @@ pub struct LlmConfigResult {
     pub configs: Vec<LlmConfig>,
     pub active_id: Option<String>,
     pub active_quick_id: Option<String>,
+    pub active_cognitive_id: Option<String>,
 }

@@ -41,7 +41,7 @@ use mlx_rs::{
     error::Exception,
     fast,
     macros::{ModuleParameters, Quantizable},
-    module::{Module, ModuleParametersExt, Param},
+    module::{Module, Param},
     nn,
     ops::{
         concatenate_axis, ones_dtype,
@@ -156,6 +156,7 @@ impl ModelArgs {
 /// [`MaybeQuantized`] so 4/8-bit checkpoints round-trip through
 /// `mlx_rs::nn::quantize`.
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
+#[allow(non_snake_case)]
 pub struct MambaBlock {
     pub hidden_size: i32,
     pub intermediate_size: i32,

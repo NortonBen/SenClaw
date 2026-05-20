@@ -8,10 +8,12 @@
 //! `sema-code-core` model manager which hasn't been ported yet.
 
 mod code;
+mod cognitive;
 mod config_handler;
 pub mod core;
 mod cowork;
 mod embedding_config;
+mod embedding_models;
 mod llm_config;
 pub mod local_models;
 mod marketplace;

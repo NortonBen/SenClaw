@@ -21,7 +21,7 @@ use crate::browser::types::*;
 pub(crate) type PendingRequest = oneshot::Sender<ActionResult>;
 
 /// Shared browser relay state — lives in WsState.
-pub(crate) struct BrowserRelay {
+pub struct BrowserRelay {
     /// Sender to the connected extension (if any).
     ext_tx: RwLock<Option<mpsc::UnboundedSender<Message>>>,
     /// Tab state registry.
@@ -300,7 +300,6 @@ fn extract_request_id(msg: &DaemonMessage) -> String {
         DaemonMessage::CrawlStop { .. }
         | DaemonMessage::CrawlPause { .. }
         | DaemonMessage::CrawlResume { .. } => uuid::Uuid::new_v4().to_string(),
-        _ => uuid::Uuid::new_v4().to_string(),
     }
 }
 

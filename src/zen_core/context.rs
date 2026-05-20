@@ -55,7 +55,6 @@ pub struct CoreConfig {
     pub use_tools: Vec<String>,
 }
 
-/// Task-local storage for the current engine's store.
 tokio::task_local! {
     static ENGINE_STORE: Option<EngineStore>;
 }

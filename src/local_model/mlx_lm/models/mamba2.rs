@@ -33,7 +33,7 @@ use mlx_rs::{
     builder::Builder,
     error::Exception,
     macros::{ModuleParameters, Quantizable},
-    module::{Module, ModuleParametersExt, Param},
+    module::{Module, Param},
     nn,
     ops::{
         broadcast_to, concatenate_axis, zeros_dtype,
@@ -369,6 +369,7 @@ fn repeat_groups_to_heads(
 /// Param naming matches HF safetensors keys for `mlx-community/mamba2-*`:
 /// `in_proj`, `conv1d`, `dt_bias`, `A_log`, `D`, `norm`, `out_proj`.
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
+#[allow(non_snake_case)]
 pub struct Mamba2Mixer {
     pub hidden_size: i32,
     pub intermediate_size: i32,

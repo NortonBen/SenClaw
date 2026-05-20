@@ -576,11 +576,15 @@ export function useWebSocket(): WsHook {
             break;
           }
           case 'agent:reply':
+            // Prefer server-stamped `ts` so this bubble interleaves with
+            // tool:execution events (which also carry server `ts`).
+            // Falls back to client clock only when the server didn't send one,
+            // which keeps us compatible with older daemons.
             addMessage(msg.groupJid as string, {
               id:        `agent-${Date.now()}-${Math.random()}`,
               role:      'agent',
               text:      msg.text as string,
-              timestamp: new Date().toISOString(),
+              timestamp: (msg.ts as string) ?? new Date().toISOString(),
             });
             // State is managed solely by agent:state events — do not override here.
             // agent:reply can fire for intermediate replies during multi-turn dispatch,

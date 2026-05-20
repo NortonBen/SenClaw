@@ -174,6 +174,35 @@ pub fn create_embedding_provider(
         } else {
             Some(config.memory.local_model_path.clone())
         };
+
+        // Prefer the MLX-native cognitive embedder when its feature is on,
+        // model files are present, and the user opted in via env var.
+        // Falls back to candle `LocalProvider` otherwise.
+        #[cfg(feature = "cognitive-mlx-embed")]
+        {
+            let want_mlx = std::env::var("SENCLAW_LOCAL_EMBED_BACKEND")
+                .ok()
+                .as_deref()
+                == Some("mlx");
+            if want_mlx {
+                let name = model.clone().unwrap_or_else(|| "bge-small-en-v1.5".into());
+                match super::cognitive::MlxStaticEmbedder::new(name, model_path.clone()) {
+                    Ok(emb) => {
+                        tracing::info!(
+                            "[Embedding] Using MLX-native cognitive embedder (mlx-static)"
+                        );
+                        return Some(Box::new(CachedEmbeddingProvider::new(Box::new(emb), db)));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "[Embedding] MLX embedder unavailable; falling back to candle LocalProvider"
+                        );
+                    }
+                }
+            }
+        }
+
         let inner = super::embedding_providers::LocalProvider::new(model, model_path);
         return Some(Box::new(CachedEmbeddingProvider::new(Box::new(inner), db)));
     }

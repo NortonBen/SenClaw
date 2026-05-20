@@ -385,6 +385,32 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/workbench/:jid/:id/logs",
             get(super::workbench::workbench_fetch_logs),
         )
+        // Cognitive memory (graph + Hebbian)
+        .route("/api/cognitive/stats", get(super::cognitive::cognitive_stats))
+        .route("/api/cognitive/nodes", get(super::cognitive::cognitive_list_nodes))
+        .route(
+            "/api/cognitive/node/:id",
+            get(super::cognitive::cognitive_get_node).delete(super::cognitive::cognitive_forget),
+        )
+        .route(
+            "/api/cognitive/decay-log",
+            get(super::cognitive::cognitive_decay_log),
+        )
+        .route("/api/cognitive/search", post(super::cognitive::cognitive_search))
+        .route("/api/cognitive/subgraph", get(super::cognitive::cognitive_subgraph))
+        // Embedding model management
+        .route(
+            "/api/embedding/features",
+            get(super::embedding_models::embedding_features),
+        )
+        .route(
+            "/api/embedding/models",
+            get(super::embedding_models::embedding_list_models),
+        )
+        .route(
+            "/api/embedding/download-model",
+            post(super::embedding_models::embedding_download_model),
+        )
         // Static files
         .nest_service("/", serve_dir)
         // SPA fallback

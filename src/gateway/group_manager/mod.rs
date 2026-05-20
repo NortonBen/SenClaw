@@ -21,7 +21,8 @@ pub use dirs::{ensure_agent_dirs, write_soul_md};
 pub use llm::{
     get_admin_permissions_config, get_thinking_enabled, load_embedding_config, load_llm_configs,
     remove_llm_config, save_admin_permissions_config, save_embedding_config, save_llm_config,
-    save_thinking_enabled, set_active_llm_config, set_active_quick_llm_config,
+    save_thinking_enabled, set_active_cognitive_llm_config, set_active_llm_config,
+    set_active_quick_llm_config,
 };
 pub use manager::{ensure_admin_group, ensure_app_group, ensure_wechat_admin_group, GroupManager};
 pub use types::{

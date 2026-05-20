@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::gateway::group_manager::{
     get_thinking_enabled, load_llm_configs, remove_llm_config, save_llm_config,
-    set_active_llm_config, set_active_quick_llm_config, LlmConfig,
+    set_active_cognitive_llm_config, set_active_llm_config, set_active_quick_llm_config, LlmConfig,
 };
 
 use super::core::{AppError, UiState};
@@ -75,6 +75,7 @@ pub(crate) async fn llm_config_list(State(s): State<Arc<UiState>>) -> Json<serde
         "configs": stored.configs,
         "activeId": stored.active_id,
         "activeQuickId": stored.active_quick_id,
+        "activeCognitiveId": stored.active_cognitive_id,
         "thinkingEnabled": get_thinking_enabled(&s.config.paths.global_config_path),
     }))
 }
@@ -167,14 +168,25 @@ pub(crate) async fn llm_config_set_active(
     State(s): State<Arc<UiState>>,
     Json(body): Json<ActiveLlmBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if body.llm_type == "quick" {
-        set_active_quick_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
+    match body.llm_type.as_str() {
+        "quick" => {
+            set_active_quick_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
+                .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok(Json(serde_json::json!({ "activeQuickId": body.id })))
+        }
+        "cognitive" => {
+            set_active_cognitive_llm_config(
+                &s.config.paths.global_config_path,
+                body.id.as_deref(),
+            )
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        Ok(Json(serde_json::json!({ "activeQuickId": body.id })))
-    } else {
-        set_active_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
-            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        Ok(Json(serde_json::json!({ "activeId": body.id })))
+            Ok(Json(serde_json::json!({ "activeCognitiveId": body.id })))
+        }
+        _ => {
+            set_active_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
+                .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok(Json(serde_json::json!({ "activeId": body.id })))
+        }
     }
 }
 
