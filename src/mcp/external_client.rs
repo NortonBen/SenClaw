@@ -253,7 +253,6 @@ impl SseTransport {
 
                             // Parse SSE frame lines
                             let mut data = String::new();
-                            let mut event_type = None::<String>;
 
                             for line in frame.lines() {
                                 if let Some(rest) = line.strip_prefix("data:") {
@@ -261,9 +260,8 @@ impl SseTransport {
                                         data.push('\n');
                                     }
                                     data.push_str(rest.trim());
-                                } else if let Some(rest) = line.strip_prefix("event:") {
-                                    event_type = Some(rest.trim().to_string());
                                 }
+                                // "event:" prefix intentionally ignored — we only need data lines
                             }
 
                             if !data.is_empty() {

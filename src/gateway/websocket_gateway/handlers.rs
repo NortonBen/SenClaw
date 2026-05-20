@@ -286,11 +286,15 @@ pub(crate) async fn handle_subscribe(
         }
     }
 
-    // Replay ephemeral chat events (agent:state, permission/question
-    // request+resolved) so a reload rebuilds in-flight UI state.
+    // Replay ephemeral chat events (permission/question request+resolved)
+    // so a reload rebuilds in-flight UI state.
+    // Note: agent:state is intentionally excluded — the current state is sent
+    // via last_known_states snapshot above, and DB-replayed agent:state can be
+    // stale (e.g. from before a server restart where the agent was destroyed).
     if let Ok(events) = state.db.get_chat_events(&jid, Some(200)) {
-        if !events.is_empty() {
-            let payload: Vec<serde_json::Value> = events
+        let filtered: Vec<_> = events.into_iter().filter(|e| e.event_type != "agent:state").collect();
+        if !filtered.is_empty() {
+            let payload: Vec<serde_json::Value> = filtered
                 .iter()
                 .map(|e| {
                     let inner: serde_json::Value = serde_json::from_str(&e.payload_json)

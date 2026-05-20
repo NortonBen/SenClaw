@@ -159,6 +159,7 @@ fn stateless_rms_norm(x: &Array, eps: f32) -> Result<Array, Exception> {
 }
 
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
+#[allow(non_snake_case)]
 pub struct GatedDeltaNet {
     pub hidden_size: i32,
     pub num_v_heads: i32,

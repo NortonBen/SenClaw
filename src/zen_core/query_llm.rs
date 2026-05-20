@@ -548,13 +548,14 @@ pub(crate) fn openai_messages_for_api(messages: &[Message], system_prompt: &str)
 /// - MLX native: ~60–100 tok/s decode (BF16 GEMV kernels, full GPU memory bandwidth)
 /// - Candle Accelerate: ~12 tok/s (F32 BLAS on CPU)
 /// - Candle Metal: ~7 tok/s (BM=32 GEMM tile, 3% GPU occupancy at M=1)
+#[allow(unused_variables)]
 async fn query_local_mlx(
     _client: &Client,
-    _messages: &[Message],
-    _system_prompt: &str,
-    _tools: &[Arc<dyn Tool>],
-    _cancel: &CancellationToken,
-    _profile: &ModelProfile,
+    messages: &[Message],
+    system_prompt: &str,
+    tools: &[Arc<dyn Tool>],
+    cancel: &CancellationToken,
+    profile: &ModelProfile,
     _stream: bool,
 ) -> Result<Message> {
     #[cfg(not(feature = "local-mlx"))]

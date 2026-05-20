@@ -130,15 +130,15 @@ impl MlxStaticEmbedder {
     /// Build a new embedder. `model_path` overrides the default discovery
     /// (`~/.senclaw/models/<model_name>`).
     pub fn new(model_name: impl Into<String>, model_path: Option<String>) -> Result<Self> {
-        let model_name = model_name.into();
+        let _model_name = model_name.into();
 
         #[cfg(feature = "cognitive-mlx-embed")]
         {
-            let model_dir = resolve_model_dir(&model_name, model_path.as_deref());
+            let model_dir = resolve_model_dir(&_model_name, model_path.as_deref());
             let (tok_path, weights_path) = require_files(&model_dir)?;
             let inner = imp::Inner::load(&tok_path, &weights_path)?;
             let dims = inner.dims as u32;
-            return Ok(Self { model_name, inner, dims });
+            return Ok(Self { model_name: _model_name, inner, dims });
         }
 
         #[cfg(not(feature = "cognitive-mlx-embed"))]

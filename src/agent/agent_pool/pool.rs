@@ -1549,6 +1549,9 @@ impl AgentPool {
                     if let Some(bridge) = self.dispatch_bridge.lock().unwrap().as_ref() {
                         bridge.notify_error(&jid_owned, "Agent timeout");
                     }
+                    if let Some(sink) = self.agent_event_sink.lock().unwrap().as_ref() {
+                        sink.notify_agent_state(&jid_owned, "idle");
+                    }
                     // Cleanup registrations.
                     {
                         let mut s = self.state.lock().unwrap();
@@ -1602,6 +1605,9 @@ impl AgentPool {
                     "[AgentPool] PAW stopped jid={jid_owned} dispatch_task={} reason={reason}",
                     dispatch_task_id.as_deref().unwrap_or("-")
                 );
+                if let Some(sink) = self.agent_event_sink.lock().unwrap().as_ref() {
+                    sink.notify_agent_state(&jid_owned, "idle");
+                }
                 Err(anyhow::anyhow!("Agent aborted"))
             }
             LoopResult::Error(data) => {
@@ -1684,6 +1690,9 @@ impl AgentPool {
                     Err(anyhow::anyhow!(msg))
                 } else {
                     self.destroy_inner(&jid_owned).await;
+                    if let Some(sink) = self.agent_event_sink.lock().unwrap().as_ref() {
+                        sink.notify_agent_state(&jid_owned, "idle");
+                    }
                     if let Some(bridge) = self.dispatch_bridge.lock().unwrap().as_ref() {
                         bridge.notify_error(
                             &jid_owned,
