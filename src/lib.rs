@@ -480,6 +480,14 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         });
     }
 
+    fn notify_cowork_changed(&self) {
+        let gw = Arc::clone(&self.gateway);
+        tokio::spawn(async move {
+            gw.broadcast_to_all(&serde_json::json!({"type": "cowork:changed"}))
+                .await;
+        });
+    }
+
     fn notify_agent_compacting(&self, chat_jid: &str, is_compacting: bool) {
         let gw = Arc::clone(&self.gateway);
         let jid = chat_jid.to_string();

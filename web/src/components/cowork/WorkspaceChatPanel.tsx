@@ -6,8 +6,9 @@ import {
   RobotOutlined, UserOutlined, SendOutlined, AlertOutlined,
   CheckCircleOutlined, ArrowRightOutlined, LoadingOutlined,
 } from '@ant-design/icons';
-import type { CoworkMessage, CoworkTask, TaskResultEvent } from '../../types';
+import type { CoworkMessage, CoworkTask, TaskResultEvent, ToolMessage } from '../../types';
 import { TaskResultCard } from './TaskResultCard';
+import { ToolGroupCard } from '../ToolGroupCard';
 
 const { Text, Paragraph } = Typography;
 
@@ -32,6 +33,11 @@ interface WorkspaceChatPanelProps {
   lastTaskResult: TaskResultEvent | null;
   onSend: (content: string) => void;
   sending?: boolean;
+  /** Tool execution events for this workspace's member agents, gathered
+   *  from the WS hook by the parent. Interleaved chronologically with
+   *  `CoworkMessage`s so the user sees the same claude-code-style diff /
+   *  command cards inline with the conversation. */
+  toolMessages?: ToolMessage[];
 }
 
 // Fake optimistic message inserted immediately on submit
@@ -159,6 +165,7 @@ export function WorkspaceChatPanel({
   lastTaskResult,
   onSend,
   sending,
+  toolMessages = [],
 }: WorkspaceChatPanelProps) {
   const [messages, setMessages]       = useState<CoworkMessage[]>([]);
   const [optimistic, setOptimistic]   = useState<CoworkMessage | null>(null);
@@ -229,6 +236,25 @@ export function WorkspaceChatPanel({
     })[]
   ).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
+  // Discriminated union for interleaving cowork bubbles with tool-call
+  // cards. Sorted by timestamp; runs of consecutive tool entries get
+  // collapsed into a single ToolGroupCard like the main ChatView.
+  type TimelineEntry =
+    | { kind: 'msg'; ts: number; msg: CoworkMessage & { isOptimistic?: boolean } }
+    | { kind: 'tool'; ts: number; tool: ToolMessage };
+  const timeline: TimelineEntry[] = [
+    ...allMessages.map<TimelineEntry>(m => ({
+      kind: 'msg',
+      ts: new Date(m.createdAt).getTime(),
+      msg: m,
+    })),
+    ...toolMessages.map<TimelineEntry>(t => ({
+      kind: 'tool',
+      ts: new Date(t.timestamp).getTime(),
+      tool: t,
+    })),
+  ].sort((a, b) => a.ts - b.ts);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
@@ -248,28 +274,10 @@ export function WorkspaceChatPanel({
       <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
         {loading && messages.length === 0 ? (
           <div style={{ textAlign: 'center', paddingTop: 40 }}><Spin /></div>
-        ) : allMessages.length === 0 ? (
+        ) : timeline.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có tin nhắn" style={{ marginTop: 40 }} />
         ) : (
-          allMessages.map(msg => {
-            // Collect tasks linked to this message (taskId match) + done tasks linked via result messages
-            const linked: CoworkTask[] = [];
-            if (msg.taskId && taskMap[msg.taskId]) {
-              const t = taskMap[msg.taskId];
-              if (t.status === 'done') linked.push(t);
-            }
-            // Also: result-type messages → find task by content heuristic (taskId on msg)
-            return (
-              <Bubble
-                key={msg.id}
-                msg={msg}
-                linkedTasks={linked}
-                highlightTaskId={highlightTaskId}
-                isOptimistic={msg.isOptimistic}
-                taskValidations={taskValidations}
-              />
-            );
-          })
+          renderTimeline(timeline, taskMap, highlightTaskId, taskValidations)
         )}
         <div ref={bottomRef} />
       </div>
@@ -296,4 +304,56 @@ export function WorkspaceChatPanel({
       </div>
     </div>
   );
+}
+
+/** Walk the merged timeline and emit React nodes. Consecutive tool
+ *  entries collapse into a single ToolGroupCard — same convention as the
+ *  main ChatView so the inline diff / command renderers light up. */
+function renderTimeline(
+  timeline: Array<
+    | { kind: 'msg'; ts: number; msg: CoworkMessage & { isOptimistic?: boolean } }
+    | { kind: 'tool'; ts: number; tool: ToolMessage }
+  >,
+  taskMap: Record<string, CoworkTask>,
+  highlightTaskId: string | null,
+  taskValidations: Record<string, import('../../types').OutputValidation>,
+): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let pendingTools: ToolMessage[] = [];
+
+  const flushTools = () => {
+    if (pendingTools.length === 0) return;
+    nodes.push(
+      <div key={`tools-${pendingTools[0].id}`} style={{ margin: '8px 0' }}>
+        <ToolGroupCard messages={pendingTools} />
+      </div>,
+    );
+    pendingTools = [];
+  };
+
+  for (const entry of timeline) {
+    if (entry.kind === 'tool') {
+      pendingTools.push(entry.tool);
+      continue;
+    }
+    flushTools();
+    const msg = entry.msg;
+    const linked: CoworkTask[] = [];
+    if (msg.taskId && taskMap[msg.taskId]) {
+      const t = taskMap[msg.taskId];
+      if (t.status === 'done') linked.push(t);
+    }
+    nodes.push(
+      <Bubble
+        key={msg.id}
+        msg={msg}
+        linkedTasks={linked}
+        highlightTaskId={highlightTaskId}
+        isOptimistic={msg.isOptimistic}
+        taskValidations={taskValidations}
+      />,
+    );
+  }
+  flushTools();
+  return nodes;
 }

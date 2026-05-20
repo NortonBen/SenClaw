@@ -2305,6 +2305,16 @@ impl AgentPool {
                             active_form: item.active_form,
                         })
                         .collect();
+                    // Diff against the previous snapshot to find todos that
+                    // just transitioned. Done BEFORE we replace cached_todos.
+                    let prev_snapshot: Vec<TodoSnapshot> = {
+                        let s = pool.state.lock().unwrap();
+                        s.cached_todos
+                            .get(&jid)
+                            .map(|c| c.todos.clone())
+                            .unwrap_or_default()
+                    };
+                    let transitions = diff_todo_transitions(&prev_snapshot, &todos);
                     {
                         let mut s = pool.state.lock().unwrap();
                         s.cached_todos.insert(
@@ -2321,6 +2331,28 @@ impl AgentPool {
                         tracing::warn!(
                             "[AgentPool] todos_update handler for {jid}: NO agent_event_sink set"
                         );
+                    }
+                    // Surface progress milestones (in_progress / completed) as
+                    // messages in the cowork workspace chat so the user can see
+                    // what the agent has been doing without staring at the
+                    // Agent Console todos panel.
+                    if !transitions.is_empty() {
+                        if let Some(db) = pool.db.lock().unwrap().clone() {
+                            let inserted = persist_todo_transitions_to_cowork(
+                                &db,
+                                &jid,
+                                &name,
+                                &transitions,
+                            );
+                            // If any rows landed, ping the web UI to reload.
+                            if inserted > 0 {
+                                if let Some(sink) =
+                                    pool.agent_event_sink.lock().unwrap().as_ref()
+                                {
+                                    sink.notify_cowork_changed();
+                                }
+                            }
+                        }
                     }
                 }),
             );
@@ -2666,5 +2698,146 @@ impl AgentPool {
         }
         tracing::warn!("[AgentPool] Cannot resolve Feishu credentials for botToken={bot_token:?}");
         None
+    }
+}
+
+/// One todo whose `status` changed between two snapshots — used to drive
+/// progress messages into the cowork chat panel.
+#[derive(Debug, Clone)]
+pub(crate) struct TodoTransition {
+    pub content: String,
+    pub active_form: Option<String>,
+    pub from: Option<String>,
+    pub to: String,
+}
+
+/// Compare two ordered lists of todos and return entries whose status
+/// changed. Matching is by `content` because there's no stable ID. New
+/// items (no previous match) are treated as transitions from `None`.
+pub(crate) fn diff_todo_transitions(
+    prev: &[TodoSnapshot],
+    next: &[TodoSnapshot],
+) -> Vec<TodoTransition> {
+    let mut out = Vec::new();
+    for n in next {
+        let prev_status = prev
+            .iter()
+            .find(|p| p.content == n.content)
+            .map(|p| p.status.clone());
+        if prev_status.as_deref() != Some(n.status.as_str()) {
+            out.push(TodoTransition {
+                content: n.content.clone(),
+                active_form: n.active_form.clone(),
+                from: prev_status,
+                to: n.status.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Persist meaningful todo transitions (in_progress / completed) into the
+/// cowork workspace's chat history so the user sees what the agent has been
+/// doing without watching the right-hand Agent Console.
+///
+/// `agent_jid` must follow the `cowork:{workspace_id}:{member_id}` pattern
+/// — non-cowork jids are ignored.
+pub(crate) fn persist_todo_transitions_to_cowork(
+    db: &Arc<Db>,
+    agent_jid: &str,
+    agent_name: &str,
+    transitions: &[TodoTransition],
+) -> usize {
+    let Some(workspace_id) = crate::cowork::workspace_id_from_cowork_jid(agent_jid) else {
+        return 0;
+    };
+    let member_id = agent_jid.splitn(3, ':').nth(2).unwrap_or(agent_name);
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut inserted = 0usize;
+    for t in transitions {
+        let (label, msg_type) = match t.to.as_str() {
+            "in_progress" => {
+                let verb = t.active_form.as_deref().unwrap_or(&t.content);
+                (format!("• {verb}…"), "status")
+            }
+            "completed" => {
+                // Strike-through-style "Done" with the original content.
+                (format!("✓ {}", t.content), "result")
+            }
+            _ => continue, // ignore "pending" + any future variants
+        };
+        let msg = crate::types::CoworkMessage {
+            id: format!(
+                "cwmsg-{}",
+                uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+            ),
+            workspace_id: workspace_id.to_string(),
+            from_member: member_id.to_string(),
+            to_member: None,
+            message_type: msg_type.to_string(),
+            content: label,
+            attachments: None,
+            task_id: None,
+            is_read: false,
+            created_at: now.clone(),
+        };
+        match db.insert_cowork_message(&msg) {
+            Ok(_) => inserted += 1,
+            Err(e) => tracing::warn!(
+                error = %e, jid = %agent_jid,
+                "[AgentPool] failed to persist todo transition to cowork_messages"
+            ),
+        }
+    }
+    inserted
+}
+
+#[cfg(test)]
+mod todo_transition_tests {
+    use super::{diff_todo_transitions, TodoSnapshot};
+
+    fn t(content: &str, status: &str) -> TodoSnapshot {
+        TodoSnapshot {
+            content: content.into(),
+            status: status.into(),
+            active_form: None,
+        }
+    }
+
+    #[test]
+    fn detects_new_item_as_transition_from_none() {
+        let prev: Vec<TodoSnapshot> = vec![];
+        let next = vec![t("Frame scope", "pending")];
+        let diffs = diff_todo_transitions(&prev, &next);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].from, None);
+        assert_eq!(diffs[0].to, "pending");
+    }
+
+    #[test]
+    fn detects_status_change() {
+        let prev = vec![t("Search Shopee", "pending"), t("Synth", "pending")];
+        let next = vec![t("Search Shopee", "in_progress"), t("Synth", "pending")];
+        let diffs = diff_todo_transitions(&prev, &next);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].content, "Search Shopee");
+        assert_eq!(diffs[0].from.as_deref(), Some("pending"));
+        assert_eq!(diffs[0].to, "in_progress");
+    }
+
+    #[test]
+    fn ignores_unchanged_items() {
+        let prev = vec![t("A", "completed"), t("B", "in_progress")];
+        let next = vec![t("A", "completed"), t("B", "in_progress")];
+        assert!(diff_todo_transitions(&prev, &next).is_empty());
+    }
+
+    #[test]
+    fn detects_completion() {
+        let prev = vec![t("A", "in_progress")];
+        let next = vec![t("A", "completed")];
+        let diffs = diff_todo_transitions(&prev, &next);
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].to, "completed");
     }
 }

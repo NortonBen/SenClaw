@@ -28,7 +28,8 @@ import { WorkspaceChatPanel } from '../components/cowork/WorkspaceChatPanel';
 import { AgentCard } from '../components/cowork/AgentCard';
 import type {
   CoworkWorkspace, CoworkBoardEntry,
-  CoworkTask, CoworkMessage, CoworkTemplate, CoworkMember
+  CoworkTask, CoworkMessage, CoworkTemplate, CoworkMember,
+  ToolMessage, ChatMessage,
 } from '../types';
 
 const { Title, Text, Paragraph } = Typography;
@@ -198,7 +199,7 @@ function renderMarkdown(md: string): string {
 export function CoworkPage() {
   const { ws } = useAppContext();
   const navigate = useNavigate();
-  const { lastTaskResult, coworkResourceChanged } = ws;
+  const { lastTaskResult, coworkResourceChanged, messages: wsMessages } = ws;
   const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
 
   // State
@@ -354,6 +355,24 @@ export function CoworkPage() {
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastTaskResult]);
+
+  // Tool execution events for THIS workspace, gathered from the WS hook
+  // for every member that has a JID assigned. Sorted chronologically and
+  // passed to WorkspaceChatPanel so it can interleave the same diff /
+  // command cards as the main ChatView (per claude-code parity).
+  const workspaceToolMessages = useMemo<ToolMessage[]>(() => {
+    const out: ToolMessage[] = [];
+    for (const m of members) {
+      if (!m.jid) continue;
+      const stream = wsMessages[m.jid] as ChatMessage[] | undefined;
+      if (!stream) continue;
+      for (const msg of stream) {
+        if (msg.role === 'tool') out.push(msg as ToolMessage);
+      }
+    }
+    out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    return out;
+  }, [members, wsMessages]);
 
   // Compute workspace file entries at current navigation depth
   const wsEntries = useMemo(() => {
@@ -1278,6 +1297,7 @@ export function CoworkPage() {
                         workspaceId={selectedWs.id}
                         tasks={tasks}
                         lastTaskResult={lastTaskResult}
+                        toolMessages={workspaceToolMessages}
                         onSend={(content) => {
                           if (!selectedWs) return;
                           fetch(`/api/cowork/workspaces/${selectedWs.id}/messages`, {

@@ -143,9 +143,22 @@ export function ToolGroupCard({ messages }: Props) {
   );
 }
 
+/** Tools whose detail view is shown inline by default (no extra click).
+ *  Mirrors claude-code's behaviour of always rendering the diff/snippet
+ *  immediately under file-mutation tool calls. */
+function shouldAutoExpand(toolName: string): boolean {
+  return (
+    toolName === 'Edit' ||
+    toolName === 'Write' ||
+    toolName === 'NotebookEdit' ||
+    toolName.endsWith('edit_file') ||
+    toolName.endsWith('write_file')
+  );
+}
+
 function ToolRow({ message }: { message: ToolMessage }) {
   const { token } = theme.useToken();
-  const [showRaw, setShowRaw] = useState(false);
+  const [showRaw, setShowRaw] = useState(() => shouldAutoExpand(message.toolName));
   const verb = verbFor(message.toolName);
   return (
     <div style={{ fontSize: 12 }}>

@@ -59,6 +59,10 @@ pub trait AgentEventSink: Send + Sync {
     /// and on snapshot replay for new admin clients).
     fn notify_agent_tools(&self, agent_jid: &str, agent_name: &str, tools: &[AgentToolInfo]) {}
     fn notify_agent_usage(&self, agent_jid: &str, usage: crate::zen_core::ConversationUsageData) {}
+    /// Signal that cowork DB state has changed (e.g. a new `cowork_messages`
+    /// row was inserted by the pool itself). The gateway broadcasts a
+    /// `cowork:changed` frame so the Web UI refreshes the affected panels.
+    fn notify_cowork_changed(&self) {}
 }
 
 /// Lightweight tool descriptor exposed to the Web UI through `agent:tools`.

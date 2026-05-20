@@ -594,8 +594,12 @@ export function CodeView({
             </div>
 
             {/* Body - Agent chat first */}
-            <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0 }}>
+              {/* minWidth: 0 lets the chat column actually shrink when the
+                  side panel mounts; without it the column refuses to give
+                  up natural-content width and the panel renders off-screen
+                  (clipped by the parent's overflow:hidden). */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
                 <div style={{ padding: '10px 16px', borderBottom: `1px solid ${token.colorBorderSecondary}`, display: 'flex', gap: 8, alignItems: 'center' }}>
                   <Text style={{ fontSize: 12, color: token.colorTextSecondary }}>Group chat</Text>
                   <Select
