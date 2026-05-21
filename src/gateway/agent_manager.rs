@@ -53,6 +53,7 @@ impl AgentManager {
         ensure_agent_dirs(config, folder, name);
         // Write user's core_prompt to SOUL.md (overrides the default template)
         write_soul_md(config, folder, name, core_prompt);
+        spawn_soul_ingest(config.paths.agents_dir.clone(), folder.to_string());
 
         let id = db.insert_agent(
             folder,
@@ -138,6 +139,7 @@ impl AgentManager {
         if let Some(cp) = core_prompt {
             if let Ok(Some(agent)) = db.get_agent(id) {
                 write_soul_md(config, &agent.folder, &agent.name, cp);
+                spawn_soul_ingest(config.paths.agents_dir.clone(), agent.folder.clone());
             }
         }
 
@@ -150,4 +152,32 @@ impl Default for AgentManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Re-cognify an agent's SOUL.md into the cognitive graph after a write.
+///
+/// Fire-and-forget — runs on the tokio runtime so the HTTP handler that
+/// triggered the write returns immediately. No-ops silently when the
+/// cognitive system is dormant (no embedding provider). Re-runs always
+/// hit content-hash dedupe in the cognify pipeline, so frequent writes
+/// only strengthen edges via Hebbian instead of bloating the graph.
+fn spawn_soul_ingest(agents_dir: std::path::PathBuf, folder: String) {
+    tokio::spawn(async move {
+        let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+            return; // cognitive dormant — silent skip
+        };
+        match crate::memory::cognitive::ingest_soul_from_disk(&sys, &agents_dir, &folder).await {
+            Ok(Some(report)) => {
+                tracing::info!(
+                    folder = %folder,
+                    edges_added = report.edges_added,
+                    edges_strengthened = report.edges_strengthened,
+                    llm_skipped = report.llm_skipped,
+                    "[soul] re-ingested SOUL.md after write"
+                );
+            }
+            Ok(None) => { /* file missing — would mean write_soul_md just failed */ }
+            Err(e) => tracing::warn!(folder = %folder, error = %e, "[soul] re-ingest failed"),
+        }
+    });
 }

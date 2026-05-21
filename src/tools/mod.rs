@@ -14,6 +14,7 @@ pub mod glob;
 pub mod grep;
 pub mod notebook_edit;
 pub mod peek_bg_job;
+pub mod persona_update;
 pub mod read;
 pub mod skill;
 pub mod stop_bg_job;
@@ -41,6 +42,7 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use notebook_edit::NotebookEditTool;
 pub use peek_bg_job::PeekBgJobTool;
+pub use persona_update::PersonaUpdateTool;
 pub use read::ReadTool;
 pub use skill::SkillTool;
 pub use stop_bg_job::StopBgJobTool;
@@ -79,5 +81,8 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(CogRecallTool),
         Arc::new(CogForgetTool),
         Arc::new(CogStatsTool),
+        // Persona-shaping: structured SOUL.md editor. Triggered by user
+        // instructions like "from now on respond more concisely".
+        Arc::new(PersonaUpdateTool),
     ]
 }

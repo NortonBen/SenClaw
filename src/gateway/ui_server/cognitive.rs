@@ -600,6 +600,66 @@ pub(crate) async fn cognitive_search(
 }
 
 // =====================================================================
+// POST /api/cognitive/node/:id/re-extract
+// =====================================================================
+//
+// Re-run cognify on an existing chunk's text. Use when:
+//   * chunks were saved while the cognitive LLM was dormant (no edges)
+//   * the LLM prompt was changed and you want to back-fill old chunks
+//   * a chunk's triplets were wrong / out-of-date
+//
+// Only valid on chunk-kind nodes — entities have no source text.
+
+pub(crate) async fn cognitive_re_extract(
+    State(_s): State<Arc<UiState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let uuid = parse_uuid(&id)?;
+    let node = sys
+        .graph
+        .get_node(uuid)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "node not found".into()))?;
+
+    // Only chunk nodes carry the raw text to re-extract from. Entity /
+    // summary nodes are derived artefacts — their existence already
+    // implies extraction happened.
+    if node.kind != crate::memory::cognitive::NodeKind::Chunk {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "re-extract only valid on chunk nodes; this node is `{}`",
+                node.kind.as_str()
+            ),
+        ));
+    }
+    if node.summary.trim().is_empty() {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "chunk has no text to extract".into(),
+        ));
+    }
+
+    // Forward into the same cognify pipeline used by CogAdd. Content-hash
+    // dedupe will reuse the existing chunk node — we only get new edges.
+    let opts = crate::memory::cognitive::CognifyOptions::default();
+    let report = sys
+        .cognify(&node.summary, "re-extract", &opts)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "chunks_deduped": report.chunks_deduped,
+        "entities_added": report.entities_added,
+        "entities_reused": report.entities_reused,
+        "edges_added": report.edges_added,
+        "edges_strengthened": report.edges_strengthened,
+        "llm_skipped": report.llm_skipped,
+    })))
+}
+
+// =====================================================================
 // DELETE /api/cognitive/node/:id
 // =====================================================================
 

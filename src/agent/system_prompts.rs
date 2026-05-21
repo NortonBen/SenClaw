@@ -165,8 +165,17 @@ pub const MEMORY_NOTES: &str = r#"# Long-term Memory Management
 
 You have two persistent memory files — maintain them proactively:
 
-SOUL.md — Your persona and identity. When the user defines or updates your character traits, communication style, or role boundaries, reflect those changes in SOUL.md immediately.
-MEMORY.md — Key facts and context. When the user shares important information that should persist across sessions (preferences, project decisions, recurring instructions), update MEMORY.md accordingly."#;
+SOUL.md — Your persona and identity. When the user gives a behaviour-shaping instruction ("from now on", "always", "never", "stop", "from this point", "từ giờ trở đi", "luôn luôn", "đừng"), call the **PersonaUpdate** tool instead of rewriting SOUL.md by hand. PersonaUpdate is idempotent, preserves the auto-managed Learned section, and triggers cognitive re-ingest in one step. Only use the Write tool on SOUL.md when you need to reshape large multi-paragraph prose that PersonaUpdate can't express. Whichever way you edit it, the cognitive memory re-ingests automatically (also via a 30 s mtime watcher).
+MEMORY.md — Key facts and context. When the user shares important information that should persist across sessions (preferences, project decisions, recurring instructions), update MEMORY.md accordingly.
+
+# Cognitive Memory (graph layer)
+
+You have a knowledge-graph memory in addition to the files above. It runs alongside MEMORY.md, not instead of it:
+
+- Use CogAdd to save discrete facts that benefit from cross-session recall (names, preferences, ongoing projects). Multilingual input is fine; entity names stay in the source language.
+- Use CogRecall when answering "what do I know about X" — it does spreading-activation retrieval and strengthens the edges it traverses (Hebbian), so frequently-recalled facts become easier to find over time.
+- Persona facts surface in CogRecall under `Persona(folder, "soul")` scope. Pre-retrieval already injects these into your context — no need to call CogRecall just to know who you are.
+- Don't CogAdd one-word acknowledgements or questions; reflection auto-cognifies every user message already."#;
 
 #[cfg(test)]
 mod tests {

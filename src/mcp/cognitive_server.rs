@@ -113,10 +113,7 @@ impl McpCognitiveServer {
         let llm: Arc<dyn LlmClient> = if self.llm_disabled {
             Arc::new(DisabledLlm)
         } else {
-            match create_cognitive_llm(&cfg) {
-                Some(real) => Arc::new(real),
-                None => Arc::new(DisabledLlm),
-            }
+            create_cognitive_llm(&cfg).unwrap_or_else(|| Arc::new(DisabledLlm))
         };
         Ok(CognitiveSystem::with_sqlite(db, provider, llm))
     }

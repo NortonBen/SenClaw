@@ -25,7 +25,12 @@ import {
   message,
   theme,
 } from 'antd';
-import { DeleteOutlined, NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  NodeIndexOutlined,
+  ReloadOutlined,
+  ExperimentOutlined,
+} from '@ant-design/icons';
 
 interface NodeRow {
   id: string;
@@ -98,6 +103,38 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
     [fetchPage, onMutated],
   );
 
+  /**
+   * Re-run cognify on a chunk's text so back-filled chunks (saved when
+   * the LLM was dormant) finally get entity/edge extraction. The endpoint
+   * dedupes by content hash so the chunk node stays — only new edges
+   * land in the graph.
+   */
+  const reExtract = useCallback(
+    async (id: string) => {
+      try {
+        const r = await fetch(`/api/cognitive/node/${id}/re-extract`, {
+          method: 'POST',
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const body = await r.json();
+        if (body.llm_skipped) {
+          message.warning(
+            'Cognitive LLM not configured — set Cognitive (or Main) Model in Settings.',
+          );
+        } else {
+          message.success(
+            `Extracted +${body.entities_added} entity, +${body.edges_added} edge`,
+          );
+        }
+        onMutated?.();
+        fetchPage();
+      } catch (e: any) {
+        message.error(`Re-extract failed: ${e?.message ?? e}`);
+      }
+    },
+    [fetchPage, onMutated],
+  );
+
   const columns = useMemo(
     () => [
       {
@@ -154,7 +191,7 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
       },
       {
         title: '',
-        width: 130,
+        width: 160,
         render: (_: unknown, row: NodeRow) => (
           <Space size="small">
             <Button
@@ -163,6 +200,14 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
               onClick={() => onOpenInGraph?.(row.id)}
               title="Open in Graph"
             />
+            {row.kind === 'chunk' && (
+              <Button
+                size="small"
+                icon={<ExperimentOutlined />}
+                onClick={() => reExtract(row.id)}
+                title="Re-run triplet extraction (useful when the chunk was saved before an LLM was configured)"
+              />
+            )}
             <Button
               size="small"
               danger

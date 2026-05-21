@@ -393,6 +393,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(super::cognitive::cognitive_get_node).delete(super::cognitive::cognitive_forget),
         )
         .route(
+            "/api/cognitive/node/:id/re-extract",
+            post(super::cognitive::cognitive_re_extract),
+        )
+        .route(
             "/api/cognitive/decay-log",
             get(super::cognitive::cognitive_decay_log),
         )

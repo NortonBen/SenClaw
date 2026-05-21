@@ -729,15 +729,35 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 anyhow::bail!("cognify LLM not configured: set SENCLAW_OPENAI_API_KEY")
             }
         }
-        let llm: Arc<dyn LlmClient> = match create_cognitive_llm(&cfg) {
-            Some(real) => Arc::new(real),
-            None => Arc::new(DormantLlm),
-        };
+        let llm: Arc<dyn LlmClient> = create_cognitive_llm(&cfg)
+            .unwrap_or_else(|| Arc::new(DormantLlm));
         match memory::cognitive::init_daemon(Arc::clone(&db), &cfg, llm) {
-            Some(sys) => tracing::info!(
-                edges = sys.stats().map(|s| s.edges).unwrap_or(0),
-                "[SenClaw] Cognitive system booted (decay ticker running, 300s)"
-            ),
+            Some(sys) => {
+                tracing::info!(
+                    edges = sys.stats().map(|s| s.edges).unwrap_or(0),
+                    "[SenClaw] Cognitive system booted (decay ticker running, 300s)"
+                );
+                // Persona ingest: every agent's SOUL.md becomes nodes/edges
+                // in the cognitive graph so the agent can recall its own
+                // identity via CogRecall (scoped to Persona(folder, "soul")).
+                // Spawn in background — slow first-time LLM calls shouldn't
+                // delay daemon readiness.
+                let sys_clone = Arc::clone(&sys);
+                let agents_dir = cfg.paths.agents_dir.clone();
+                let agents_dir_for_watch = agents_dir.clone();
+                let sys_for_watch = Arc::clone(&sys);
+                tokio::spawn(async move {
+                    memory::cognitive::ingest_all_souls(sys_clone, agents_dir).await;
+                });
+                // Then start the mtime-poll watcher so external edits to
+                // SOUL.md (vim, VS Code, git pull, …) trigger re-ingest
+                // without needing the API write hook.
+                memory::cognitive::spawn_soul_watcher(
+                    sys_for_watch,
+                    agents_dir_for_watch,
+                    std::time::Duration::from_secs(30),
+                );
+            }
             None => tracing::info!(
                 "[SenClaw] Cognitive system dormant — no embedding provider configured"
             ),

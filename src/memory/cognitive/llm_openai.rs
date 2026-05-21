@@ -216,9 +216,16 @@ impl LlmClient for OpenAiCompatLlm {
 /// 5. **None** → cognify will soft-skip triplet extraction (chunks still
 ///    embed); CogAdd warns the agent in its return message.
 ///
-/// All three UI variants point at the same `LlmConfig` shape, so resolution
-/// is a single helper that just walks ids in priority order.
-pub fn create_cognitive_llm(config: &crate::config::Config) -> Option<OpenAiCompatLlm> {
+/// Returns an `Arc<dyn LlmClient>` so we can pick the right adapter at
+/// resolution time. Earlier this returned a concrete `OpenAiCompatLlm`,
+/// which silently misbehaved when the user picked an Anthropic-provider
+/// LLM as the Cognitive Model — `/v1/messages` and `/v1/chat/completions`
+/// take incompatible payloads, so requests 4xx'd and cognify soft-failed
+/// with `llm_skipped = true` even though the LLM *was* configured. We
+/// now dispatch by [`LlmConfig::adapt`] (`"openai"` vs `"anthropic"`).
+pub fn create_cognitive_llm(
+    config: &crate::config::Config,
+) -> Option<std::sync::Arc<dyn super::llm::LlmClient>> {
     let stored = crate::gateway::group_manager::load_llm_configs(
         &config.paths.global_config_path,
     );
@@ -232,20 +239,67 @@ pub fn create_cognitive_llm(config: &crate::config::Config) -> Option<OpenAiComp
     ];
     for id in try_ids.iter().flatten() {
         if let Some(cfg) = stored.configs.iter().find(|c| c.id == *id) {
+            let adapt_lc = cfg.adapt.trim().to_lowercase();
+            tracing::debug!(
+                llm_id = %cfg.id,
+                model = %cfg.model_name,
+                adapt = %adapt_lc,
+                "[cognitive] LLM resolved from Settings"
+            );
+
+            // ───── Local in-process runtimes ─────
+            // These don't speak HTTP, so empty `api_key`/`base_url` is
+            // expected (the UI form may leave both blank for local
+            // profiles). Dispatch BEFORE the http-fields validation.
+            if adapt_lc == "local-mlx" {
+                match super::llm_local_mlx::LocalMlxLlm::new(&cfg.model_name) {
+                    Ok(c) => return Some(std::sync::Arc::new(c)),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "[cognitive] local-mlx adapter unavailable; trying next candidate"
+                        );
+                        continue;
+                    }
+                }
+            }
+            if adapt_lc == "local-candle-native" {
+                match super::llm_local_candle::LocalCandleLlm::new(&cfg.model_name) {
+                    Ok(c) => return Some(std::sync::Arc::new(c)),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "[cognitive] local-candle-native adapter unavailable; trying next candidate"
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            // ───── HTTP adapters ─────
             let key = cfg.api_key.trim();
             let base = cfg.base_url.trim();
-            if !key.is_empty() && !base.is_empty() {
-                tracing::debug!(
-                    llm_id = %cfg.id,
-                    model = %cfg.model_name,
-                    "[cognitive] LLM resolved from Settings"
-                );
-                return OpenAiCompatLlm::new(base, key, cfg.model_name.clone()).ok();
+            if key.is_empty() || base.is_empty() {
+                continue;
+            }
+            let client: Option<std::sync::Arc<dyn super::llm::LlmClient>> =
+                if adapt_lc == "anthropic" || adapt_lc == "claude" {
+                    super::llm_anthropic::AnthropicLlm::new(base, key, cfg.model_name.clone())
+                        .ok()
+                        .map(|c| std::sync::Arc::new(c) as _)
+                } else {
+                    OpenAiCompatLlm::new(base, key, cfg.model_name.clone())
+                        .ok()
+                        .map(|c| std::sync::Arc::new(c) as _)
+                };
+            if let Some(c) = client {
+                return Some(c);
             }
         }
     }
 
-    // Env fallback.
+    // Env fallback (assumes OpenAI shape — no Anthropic env vars are
+    // wired today).
     let key = config.memory.openai_api_key.trim();
     if key.is_empty() {
         return None;
@@ -260,7 +314,9 @@ pub fn create_cognitive_llm(config: &crate::config::Config) -> Option<OpenAiComp
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
 
-    OpenAiCompatLlm::new(base_url, key.to_owned(), model).ok()
+    OpenAiCompatLlm::new(base_url, key.to_owned(), model)
+        .ok()
+        .map(|c| std::sync::Arc::new(c) as std::sync::Arc<dyn super::llm::LlmClient>)
 }
 
 #[cfg(test)]
@@ -349,5 +405,102 @@ mod tests {
         cfg.memory.openai_api_key = "sk-test-123".into();
         cfg.memory.openai_base_url = "https://example.com".into();
         assert!(create_cognitive_llm(&cfg).is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "local-mlx")]
+    fn create_picks_local_mlx_when_stored_adapt_is_local_mlx() {
+        // Without the local-mlx feature this branch returns Err from the
+        // adapter ctor and continues to the next candidate. With the
+        // feature enabled, construction is lazy (engine isn't touched
+        // until complete()), so a config alone is enough to resolve.
+        use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
+        let cfg = cfg_with_isolated_config();
+        let llm_cfg = crate::gateway::group_manager::LlmConfig {
+            id: "test-mlx".into(),
+            label: "MLX test".into(),
+            provider: "local".into(),
+            // Local MLX has no http endpoint — these fields are usually
+            // empty in the UI. Resolution MUST NOT fail on that.
+            base_url: String::new(),
+            api_key: String::new(),
+            model_name: "mlx-community/Qwen3-4B-4bit".into(),
+            adapt: "local-mlx".into(),
+            max_tokens: 4096,
+            context_length: 32_000,
+            vision: None,
+        };
+        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
+        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-mlx")).unwrap();
+        assert!(
+            create_cognitive_llm(&cfg).is_some(),
+            "local-mlx adapt with feature on must produce a client (regardless of empty base_url/api_key)"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "local-candle")]
+    fn create_picks_local_candle_when_stored_adapt_is_local_candle_native() {
+        // Same property as the local-mlx variant: in-process runtimes
+        // must resolve even with empty base_url / api_key (the LLM
+        // Settings form leaves those blank for local profiles).
+        use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
+        let cfg = cfg_with_isolated_config();
+        let llm_cfg = crate::gateway::group_manager::LlmConfig {
+            id: "test-candle".into(),
+            label: "Candle test".into(),
+            provider: "local".into(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model_name: "Qwen/Qwen3-4B-Instruct".into(),
+            adapt: "local-candle-native".into(),
+            max_tokens: 4096,
+            context_length: 32_000,
+            vision: None,
+        };
+        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
+        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-candle"))
+            .unwrap();
+        assert!(
+            create_cognitive_llm(&cfg).is_some(),
+            "local-candle-native with feature on must produce a client (regardless of empty base_url/api_key)"
+        );
+    }
+
+    #[test]
+    fn create_picks_anthropic_adapter_when_stored_adapt_is_anthropic() {
+        // Reproduces the original bug report: user picked an Anthropic
+        // LLM as Cognitive Model and saw the "not configured" warning
+        // because OpenAiCompatLlm couldn't talk to /v1/messages.
+        // We can't make a real HTTP request, so we just verify
+        // `create_cognitive_llm` doesn't return None and that the
+        // resolved client is wired (the integration is exercised by
+        // `endpoint_handles_bare_host` for AnthropicLlm).
+        use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
+        let cfg = cfg_with_isolated_config();
+        let llm_cfg = crate::gateway::group_manager::LlmConfig {
+            id: "test-anthropic".into(),
+            label: "Anthropic test".into(),
+            provider: "anthropic".into(),
+            base_url: "https://api.anthropic.com".into(),
+            api_key: "sk-ant-test-key".into(),
+            model_name: "claude-3-5-sonnet-20241022".into(),
+            adapt: "anthropic".into(),
+            max_tokens: 4096,
+            context_length: 200_000,
+            vision: None,
+        };
+        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
+        set_active_cognitive_llm_config(
+            &cfg.paths.global_config_path,
+            Some("test-anthropic"),
+        )
+        .unwrap();
+
+        let client = create_cognitive_llm(&cfg);
+        assert!(
+            client.is_some(),
+            "Anthropic config in Cognitive Model slot must produce a client"
+        );
     }
 }

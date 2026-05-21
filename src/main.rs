@@ -64,6 +64,22 @@ enum Command {
     LithoServer,
     /// Start the cognitive memory MCP server — graph + Hebbian (stdio JSON-RPC)
     CognitiveServer,
+    /// Train the GraphSAGE re-ranker on the current cognitive graph.
+    /// Writes weights to ~/.senclaw/cognitive/sage_<dim>.bin.
+    CognitiveTrain {
+        /// Training epochs. Default 20.
+        #[arg(long, default_value_t = 20)]
+        epochs: usize,
+        /// Learning rate. Default 1e-3.
+        #[arg(long, default_value_t = 1e-3)]
+        lr: f32,
+        /// Negative samples per positive edge. Default 3.
+        #[arg(long, default_value_t = 3)]
+        neg_per_pos: usize,
+        /// Maximum nodes to include from the graph. None = all.
+        #[arg(long)]
+        max_nodes: Option<usize>,
+    },
 }
 
 #[tokio::main]
@@ -136,5 +152,11 @@ async fn main() -> Result<()> {
         Command::CodeServer => senclaw::mcp::code_server::run_code_server().await,
         Command::LithoServer => senclaw::mcp::litho_server::run_stdio_server().await,
         Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
+        Command::CognitiveTrain {
+            epochs,
+            lr,
+            neg_per_pos,
+            max_nodes,
+        } => senclaw::cli::commands::cognitive::train(epochs, lr, neg_per_pos, max_nodes).await,
     }
 }

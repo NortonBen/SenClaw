@@ -64,6 +64,21 @@ pub trait GraphStore: Send + Sync {
     /// nodes — high-degree entities are usually the natural seeds for
     /// browsing a knowledge graph.
     fn top_nodes_by_degree(&self, limit: usize) -> Result<Vec<NodeWithDegree>>;
+
+    /// Return edges that originate from a node inside the given NodeSet.
+    /// Used by the persona-consolidate path to find "what the agent has
+    /// learned about itself" and pour it back into SOUL.md.
+    ///
+    /// `min_strength` filters out weak/decaying edges; `require_ltp` keeps
+    /// only edges that have hit any LTP state (Burst/Weekly/Full) so the
+    /// resulting facts are ones the graph considers durable.
+    fn edges_from_set(
+        &self,
+        set: &NodeSet,
+        min_strength: f32,
+        require_ltp: bool,
+        limit: usize,
+    ) -> Result<Vec<(RelationshipEdge, DataPoint, DataPoint)>>;
 }
 
 /// `DataPoint` paired with its incident-edge count. Returned by
@@ -459,6 +474,71 @@ impl GraphStore for SqliteGraphStore {
                 conn.query_row("SELECT COUNT(*) FROM cog_nodes", [], |r| r.get(0))?
             };
             Ok(n as usize)
+        })
+    }
+
+    fn edges_from_set(
+        &self,
+        set: &NodeSet,
+        min_strength: f32,
+        require_ltp: bool,
+        limit: usize,
+    ) -> Result<Vec<(RelationshipEdge, DataPoint, DataPoint)>> {
+        self.db.with_conn(|conn| {
+            // Edges whose `src` is tagged with this NodeSet. We skip the
+            // MENTIONS provenance predicate — those tie chunks to entities
+            // and aren't statements *about* the agent in a way SOUL.md
+            // should consume.
+            let mut stmt = conn.prepare(
+                "SELECT e.* FROM cog_edges e
+                 JOIN cog_node_tags t ON t.node_id = e.src
+                 JOIN cog_node_sets s ON s.id = t.node_set_id
+                 WHERE s.scope_kind = ?1 AND s.scope_id = ?2 AND s.tag = ?3
+                   AND e.predicate <> 'MENTIONS'
+                   AND e.strength >= ?4
+                   AND (?5 = 0 OR e.ltp_status > 0)
+                 ORDER BY e.strength DESC, e.activation_count DESC
+                 LIMIT ?6",
+            )?;
+            let raw_rows: Vec<RelationshipEdge> = stmt
+                .query_map(
+                    params![
+                        set.scope_kind.as_str(),
+                        set.scope_id,
+                        set.tag,
+                        min_strength as f64,
+                        require_ltp as i64,
+                        limit as i64,
+                    ],
+                    row_to_edge,
+                )?
+                .collect::<rusqlite::Result<_>>()?;
+            drop(stmt);
+            // Resolve src + dst nodes for each edge so the caller can
+            // format readable bullets without a second round-trip.
+            let mut out = Vec::with_capacity(raw_rows.len());
+            for edge in raw_rows {
+                let src_blob = uuid_bytes(edge.src).to_vec();
+                let dst_blob = uuid_bytes(edge.dst).to_vec();
+                let src: Option<DataPoint> = conn
+                    .query_row(
+                        "SELECT * FROM cog_nodes WHERE id = ?1",
+                        params![src_blob],
+                        row_to_node,
+                    )
+                    .optional()?;
+                let dst: Option<DataPoint> = conn
+                    .query_row(
+                        "SELECT * FROM cog_nodes WHERE id = ?1",
+                        params![dst_blob],
+                        row_to_node,
+                    )
+                    .optional()?;
+                if let (Some(s), Some(d)) = (src, dst) {
+                    out.push((edge, s, d));
+                }
+            }
+            Ok(out)
         })
     }
 
