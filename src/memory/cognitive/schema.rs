@@ -26,6 +26,51 @@ use rusqlite::Connection;
 /// `cog_vec` (sqlite-vec) is intentionally **not created here** — it is added
 /// by [`apply_cognitive_vec_schema`] once dimensions are known (P2 / MLX
 /// embedder), mirroring how `apply_memory_schema` defers `memory_chunks_vec`.
+/// ALTER TABLE for existing DBs that pre-date the extraction_state /
+/// extracted_at columns. Safe to call on fresh DBs (the CREATE TABLE
+/// already includes them; ALTER will error → swallowed).
+fn migrate_extraction_state(conn: &Connection) -> Result<()> {
+    // Use `column_names` pattern from src/db/schema.rs: check before alter.
+    let exists = |name: &str| -> bool {
+        let mut stmt = match conn.prepare(&format!("PRAGMA table_info({name})")) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default();
+        !cols.is_empty()
+    };
+    if !exists("cog_nodes") {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare("PRAGMA table_info(cog_nodes)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !cols.iter().any(|c| c == "extraction_state") {
+        conn.execute(
+            "ALTER TABLE cog_nodes ADD COLUMN extraction_state INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        // Back-fill: every chunk that already has outgoing edges (other
+        // than MENTIONS, which are auto-generated) was extracted before
+        // this migration ran — mark them `done` so the dedupe-skip gate
+        // works on existing data without re-LLMing the whole graph.
+        conn.execute(
+            "UPDATE cog_nodes SET extraction_state = 1
+             WHERE kind = 'chunk'
+               AND id IN (SELECT DISTINCT src FROM cog_edges WHERE predicate <> 'MENTIONS')",
+            [],
+        )?;
+    }
+    if !cols.iter().any(|c| c == "extracted_at") {
+        conn.execute("ALTER TABLE cog_nodes ADD COLUMN extracted_at INTEGER", [])?;
+    }
+    Ok(())
+}
+
 pub fn apply_cognitive_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -49,6 +94,15 @@ pub fn apply_cognitive_schema(conn: &Connection) -> Result<()> {
             mention_count   INTEGER NOT NULL DEFAULT 1,
             is_proper_noun  INTEGER NOT NULL DEFAULT 0,
             selectivity     REAL,
+            -- Triplet-extraction state machine (chunk nodes only — others
+            -- are derived from extraction so they're implicitly "done"):
+            --   0 = pending           — needs LLM extraction
+            --   1 = done              — extraction completed; do not re-run
+            --   2 = skipped_no_llm    — LLM was dormant; retry when one is up
+            --   3 = skipped_no_facts  — LLM ran but returned 0 useful triplets
+            -- Encoded as INTEGER (not TEXT) for cheap WHERE filtering.
+            extraction_state INTEGER NOT NULL DEFAULT 0,
+            extracted_at     INTEGER,
             -- tier / lifecycle
             created_at      INTEGER NOT NULL,
             updated_at      INTEGER NOT NULL,
@@ -146,6 +200,8 @@ pub fn apply_cognitive_schema(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
+    // Migrations for older cog_nodes that pre-date extraction_state cols.
+    migrate_extraction_state(conn)?;
     Ok(())
 }
 

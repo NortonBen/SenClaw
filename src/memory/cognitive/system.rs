@@ -30,16 +30,42 @@ pub struct CognitiveSystem {
     pub embedder: Arc<CognitiveEmbedder>,
     pub retriever: Arc<CognitiveRetriever>,
     pipeline: CognifyPipeline,
+    /// Governs how many cognify calls can run at once. Sized from
+    /// `CognitiveConfig.max_concurrent` at boot. Defends against the
+    /// scenario where a busy chat queues N parallel local-LLM calls that
+    /// each tie up the runtime for 30 s+ — by the time the queue drains
+    /// the user has long forgotten they sent any of those messages.
+    cognify_semaphore: Arc<tokio::sync::Semaphore>,
+    /// True when the master `enabled` switch is off. cognify() short-
+    /// circuits to a no-op report so callers can keep their interfaces
+    /// unchanged.
+    enabled: bool,
 }
 
 impl CognitiveSystem {
-    /// Construct from already-built dependencies. Used by tests and by the
-    /// daemon boot path which builds the LLM client separately.
+    /// Construct from already-built dependencies. Tests + daemon boot use
+    /// this. Defaults to a single-permit semaphore + enabled=true so
+    /// existing callers behave like before — the daemon overrides via
+    /// `with_config` to apply the env-driven governance knobs.
     pub fn new(
         graph: Arc<dyn GraphStore>,
         vector: Arc<dyn VectorStore>,
         provider: Arc<dyn EmbeddingProvider>,
         llm: Arc<dyn LlmClient>,
+    ) -> Self {
+        Self::new_with_limits(graph, vector, provider, llm, 1, true)
+    }
+
+    /// Like [`Self::new`] but lets the caller specify concurrency cap +
+    /// master-enabled flag. Used by the daemon boot path which reads
+    /// `CognitiveConfig` from the live `Config`.
+    pub fn new_with_limits(
+        graph: Arc<dyn GraphStore>,
+        vector: Arc<dyn VectorStore>,
+        provider: Arc<dyn EmbeddingProvider>,
+        llm: Arc<dyn LlmClient>,
+        max_concurrent: usize,
+        enabled: bool,
     ) -> Self {
         let embedder = Arc::new(CognitiveEmbedder::new(
             Arc::clone(&graph),
@@ -61,7 +87,15 @@ impl CognitiveSystem {
         );
         let retriever = Arc::new(CognitiveRetriever::new(Arc::new(retr_embed)));
         let pipeline = CognifyPipeline::new(pipe_embed, llm);
-        Self { graph, vector, embedder, retriever, pipeline }
+        Self {
+            graph,
+            vector,
+            embedder,
+            retriever,
+            pipeline,
+            cognify_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent.max(1))),
+            enabled,
+        }
     }
 
     /// Convenience constructor that wires the SQLite-backed stores from a
@@ -76,15 +110,33 @@ impl CognitiveSystem {
         Self::new(graph, vector, provider, llm)
     }
 
-    /// Run cognify. Thin pass-through; kept on the facade so callers don't
-    /// need to know about `CognifyPipeline`.
+    /// Run cognify, governed by the system's enabled flag + concurrency
+    /// semaphore. When disabled, returns an empty report immediately so
+    /// callers don't have to plumb the flag. When at capacity, await a
+    /// permit (cheap because cognify is rate-limited, not throughput-bound).
     pub async fn cognify(
         &self,
         text: &str,
         source: &str,
         opts: &CognifyOptions,
     ) -> Result<CognifyReport> {
+        if !self.enabled {
+            return Ok(CognifyReport::default());
+        }
+        let _permit = self
+            .cognify_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow::anyhow!("cognify semaphore closed: {e}"))?;
         self.pipeline.cognify(text, source, opts).await
+    }
+
+    /// True when the master `cognitive.enabled` flag is on. Used by callers
+    /// (e.g. reflection) that want to short-circuit BEFORE building the
+    /// expensive payload, not just before acquiring a permit.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
@@ -142,7 +194,19 @@ pub fn init_daemon(
     }
     let provider_box = create_embedding_provider(config, Arc::clone(&db))?;
     let provider: Arc<dyn EmbeddingProvider> = Arc::from(provider_box);
-    let sys = Arc::new(CognitiveSystem::with_sqlite(db, provider, llm));
+    // Pull the governance knobs from CognitiveConfig so the daemon-built
+    // system respects user-tuned `enabled` + `max_concurrent`. Tests still
+    // get the defaults via `new()`.
+    let graph: Arc<dyn GraphStore> = Arc::new(SqliteGraphStore::new(Arc::clone(&db)));
+    let vector: Arc<dyn VectorStore> = Arc::new(SqliteVectorStore::new(db));
+    let sys = Arc::new(CognitiveSystem::new_with_limits(
+        graph,
+        vector,
+        provider,
+        llm,
+        config.cognitive.max_concurrent,
+        config.cognitive.enabled,
+    ));
 
     let handle = sys.start_decay(super::decay_tick::DecayConfig::default());
     *DECAY_HANDLE.lock().unwrap() = Some(handle);

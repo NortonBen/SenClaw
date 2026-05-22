@@ -72,13 +72,23 @@ impl LlmClient for LocalCandleLlm {
                 engine_for_gen.generate_stream(messages, vec![], tx).await
             });
 
-            let mut text = String::new();
+            // Same output cap as the MLX adapter — see
+            // `llm_local_mlx::output_char_cap` for rationale.
+            let cap = super::llm_local_mlx::output_char_cap();
+            let mut text = String::with_capacity(cap.min(8 * 1024));
             while let Some(chunk) = rx.recv().await {
                 text.push_str(&chunk);
+                if text.len() >= cap {
+                    tracing::warn!(
+                        bytes = text.len(),
+                        cap,
+                        "[local-candle-cognitive] output cap hit; closing stream"
+                    );
+                    drop(rx);
+                    break;
+                }
             }
-            gen_handle
-                .await
-                .map_err(|e| anyhow::anyhow!("candle generate join: {e}"))??;
+            let _ = gen_handle.await;
 
             // Strip <think>…</think> reasoning blocks — Qwen3 family emits
             // them; cognify wants JSON only.

@@ -22,6 +22,14 @@ use super::triplet::RelationshipEdge;
 /// when serving async contexts.
 pub trait GraphStore: Send + Sync {
     fn upsert_node(&self, node: &DataPoint) -> Result<()>;
+    /// Update the extraction-state machine on a chunk node. Called by
+    /// the cognify pipeline after each LLM attempt. No-op on missing id.
+    fn set_extraction_state(
+        &self,
+        id: Uuid,
+        state: crate::memory::cognitive::ExtractionState,
+        at: i64,
+    ) -> Result<()>;
     fn get_node(&self, id: Uuid) -> Result<Option<DataPoint>>;
     fn find_node_by_content_hash(&self, hash: &str) -> Result<Option<DataPoint>>;
     fn find_entity_by_name(&self, name: &str) -> Result<Option<DataPoint>>;
@@ -146,6 +154,10 @@ fn row_to_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<DataPoint> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         last_seen_at: row.get("last_seen_at")?,
+        extraction_state: super::data_point::ExtractionState::from_i64(
+            row.get::<_, i64>("extraction_state").unwrap_or(0),
+        ),
+        extracted_at: row.get::<_, Option<i64>>("extracted_at").unwrap_or(None),
     })
 }
 
@@ -196,21 +208,28 @@ impl GraphStore for SqliteGraphStore {
     fn upsert_node(&self, node: &DataPoint) -> Result<()> {
         let id = uuid_bytes(node.id).to_vec();
         let props_json = serde_json::to_string(&node.props).unwrap_or_else(|_| "{}".into());
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             conn.execute(
                 r#"INSERT INTO cog_nodes
                    (id, kind, type_name, name, summary, content_hash, props_json,
                     salience, mention_count, is_proper_noun, selectivity,
-                    created_at, updated_at, last_seen_at)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                    created_at, updated_at, last_seen_at,
+                    extraction_state, extracted_at)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                    ON CONFLICT(id) DO UPDATE SET
-                     summary       = excluded.summary,
-                     props_json    = excluded.props_json,
-                     salience      = excluded.salience,
-                     mention_count = excluded.mention_count,
-                     selectivity   = excluded.selectivity,
-                     updated_at    = excluded.updated_at,
-                     last_seen_at  = excluded.last_seen_at"#,
+                     summary          = excluded.summary,
+                     props_json       = excluded.props_json,
+                     salience         = excluded.salience,
+                     mention_count    = excluded.mention_count,
+                     selectivity      = excluded.selectivity,
+                     updated_at       = excluded.updated_at,
+                     last_seen_at     = excluded.last_seen_at,
+                     -- Persist state advances on conflict, but never demote:
+                     -- a `done` row stays `done` even if the caller passes
+                     -- `pending` (e.g. building a DataPoint from a partial
+                     -- in-memory copy without consulting the DB first).
+                     extraction_state = MAX(extraction_state, excluded.extraction_state),
+                     extracted_at     = COALESCE(excluded.extracted_at, extracted_at)"#,
                 params![
                     id,
                     node.kind.as_str(),
@@ -226,7 +245,29 @@ impl GraphStore for SqliteGraphStore {
                     node.created_at,
                     node.updated_at,
                     node.last_seen_at,
+                    node.extraction_state as i64,
+                    node.extracted_at,
                 ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn set_extraction_state(
+        &self,
+        id: Uuid,
+        state: crate::memory::cognitive::ExtractionState,
+        at: i64,
+    ) -> Result<()> {
+        let id_blob = uuid_bytes(id).to_vec();
+        self.db.with_cog_conn(|conn| {
+            conn.execute(
+                "UPDATE cog_nodes
+                 SET extraction_state = ?1,
+                     extracted_at     = ?2,
+                     updated_at       = ?2
+                 WHERE id = ?3",
+                params![state as i64, at, id_blob],
             )?;
             Ok(())
         })
@@ -234,7 +275,7 @@ impl GraphStore for SqliteGraphStore {
 
     fn get_node(&self, id: Uuid) -> Result<Option<DataPoint>> {
         let id_blob = uuid_bytes(id).to_vec();
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let row = conn
                 .query_row(
                     "SELECT * FROM cog_nodes WHERE id = ?1",
@@ -247,7 +288,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn find_node_by_content_hash(&self, hash: &str) -> Result<Option<DataPoint>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let row = conn
                 .query_row(
                     "SELECT * FROM cog_nodes WHERE content_hash = ?1 LIMIT 1",
@@ -260,7 +301,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn find_entity_by_name(&self, name: &str) -> Result<Option<DataPoint>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let row = conn
                 .query_row(
                     "SELECT * FROM cog_nodes WHERE kind = 'entity' AND name = ?1 LIMIT 1",
@@ -274,7 +315,7 @@ impl GraphStore for SqliteGraphStore {
 
     fn delete_node(&self, id: Uuid) -> Result<()> {
         let id_blob = uuid_bytes(id).to_vec();
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             conn.execute("DELETE FROM cog_nodes WHERE id = ?1", params![id_blob])?;
             Ok(())
         })
@@ -286,7 +327,7 @@ impl GraphStore for SqliteGraphStore {
         let props = serde_json::to_string(&edge.props).unwrap_or_else(|_| "{}".into());
         let acts = serde_json::to_string(&edge.activation_timestamps).unwrap_or_else(|_| "[]".into());
         let ep_id = edge.source_episode_id.map(|u| uuid_bytes(u).to_vec());
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             conn.execute(
                 r#"INSERT INTO cog_edges
                    (src, dst, predicate, props_json, valid_from, valid_to,
@@ -338,7 +379,7 @@ impl GraphStore for SqliteGraphStore {
     fn delete_edge(&self, src: Uuid, dst: Uuid, predicate: &str) -> Result<()> {
         let src = uuid_bytes(src).to_vec();
         let dst = uuid_bytes(dst).to_vec();
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             conn.execute(
                 "DELETE FROM cog_edges WHERE src = ?1 AND dst = ?2 AND predicate = ?3",
                 params![src, dst, predicate],
@@ -349,7 +390,7 @@ impl GraphStore for SqliteGraphStore {
 
     fn neighbors(&self, node: Uuid, max: usize) -> Result<Vec<RelationshipEdge>> {
         let id = uuid_bytes(node).to_vec();
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT * FROM cog_edges
                  WHERE src = ?1 OR dst = ?1
@@ -364,7 +405,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn scan_edges(&self, limit: usize, offset: usize) -> Result<Vec<RelationshipEdge>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT * FROM cog_edges
                  ORDER BY last_activated ASC
@@ -378,7 +419,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn count_edges(&self) -> Result<usize> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let n: i64 = conn.query_row("SELECT COUNT(*) FROM cog_edges", [], |r| r.get(0))?;
             Ok(n as usize)
         })
@@ -392,7 +433,7 @@ impl GraphStore for SqliteGraphStore {
         edges_promoted: usize,
         duration_ms: i64,
     ) -> Result<()> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO cog_decay_log
                  (run_at, edges_scanned, edges_pruned, edges_promoted, duration_ms)
@@ -412,7 +453,7 @@ impl GraphStore for SqliteGraphStore {
     fn tag_node(&self, node: Uuid, set: &NodeSet) -> Result<()> {
         let node_blob = uuid_bytes(node).to_vec();
         let now = chrono::Utc::now().timestamp();
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             // upsert the node_set, get its id
             conn.execute(
                 "INSERT OR IGNORE INTO cog_node_sets (scope_kind, scope_id, tag, created_at)
@@ -439,7 +480,7 @@ impl GraphStore for SqliteGraphStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<DataPoint>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             if let Some(k) = kind {
                 let mut stmt = conn.prepare(
                     "SELECT * FROM cog_nodes WHERE kind = ?1
@@ -463,7 +504,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn count_nodes(&self, kind: Option<&str>) -> Result<usize> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let n: i64 = if let Some(k) = kind {
                 conn.query_row(
                     "SELECT COUNT(*) FROM cog_nodes WHERE kind = ?1",
@@ -484,7 +525,7 @@ impl GraphStore for SqliteGraphStore {
         require_ltp: bool,
         limit: usize,
     ) -> Result<Vec<(RelationshipEdge, DataPoint, DataPoint)>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             // Edges whose `src` is tagged with this NodeSet. We skip the
             // MENTIONS provenance predicate — those tie chunks to entities
             // and aren't statements *about* the agent in a way SOUL.md
@@ -543,7 +584,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn top_nodes_by_degree(&self, limit: usize) -> Result<Vec<NodeWithDegree>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             // Degree = count of incident edges in cog_edges (src or dst).
             // We pre-aggregate per-node via UNION ALL so SQLite can use the
             // (src) and (dst) indexes; doing OR in the WHERE clause forces
@@ -574,7 +615,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn recent_decay_runs(&self, limit: usize) -> Result<Vec<DecayLogRow>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT run_at, edges_scanned, edges_pruned, edges_promoted, duration_ms
                  FROM cog_decay_log
@@ -597,7 +638,7 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn nodes_in_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<DataPoint>> {
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT n.* FROM cog_nodes n
                  JOIN cog_node_tags t ON t.node_id = n.id

@@ -528,17 +528,26 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_soul_is_idempotent_via_content_hash() {
+        // After P-cognify-skip (the "câu đã extract rồi, không extract
+        // lại" change), re-ingesting an unchanged SOUL section short-
+        // circuits the LLM entirely once the chunk has edges. So the
+        // contract is now: 2nd pass = pure no-op modulo `chunks_deduped`.
+        // Strengthening still happens, but on the *recall* side via
+        // SpreadingActivation — not via wasted re-extraction.
         let r = r#"{"triplets":[{"subject":"agent","predicate":"is","object":"helpful"}]}"#.to_string();
+        // Only the first reply should ever be consumed. The extras are a
+        // canary — if the LLM gets called a second time something regressed.
         let sys = build_system(vec![r.clone(), r.clone(), r.clone(), r]);
 
         let soul = "## Identity\n\nYou are helpful.\n";
         let first = ingest_soul(&sys, "main", soul).await.unwrap();
         let second = ingest_soul(&sys, "main", soul).await.unwrap();
 
-        // Second pass dedupes the chunk and only strengthens existing edges.
         assert!(first.chunks_added >= 1);
         assert_eq!(second.chunks_added, 0, "re-ingest must dedupe chunks");
-        assert!(second.edges_strengthened >= 1, "edges must strengthen on repeat");
+        // Re-ingest with existing edges = no LLM, no edge churn.
         assert_eq!(second.edges_added, 0, "no new edges on identical content");
+        assert_eq!(second.edges_strengthened, 0, "skip gate prevents extraction");
+        assert!(!second.llm_skipped);
     }
 }

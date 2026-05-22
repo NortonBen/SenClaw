@@ -221,8 +221,10 @@ mod tests {
         let report = run_decay(&*g, &DecayConfig::default()).unwrap();
         assert_eq!(report.edges_scanned, 0);
 
+        // cog_decay_log lives on the cognitive connection (DB split — see
+        // db/mod.rs::cog_conn). Probe the right handle.
         let count: i64 = db
-            .with_conn(|conn| {
+            .with_cog_conn(|conn| {
                 conn.query_row("SELECT COUNT(*) FROM cog_decay_log", [], |r| r.get(0))
                     .map_err(Into::into)
             })

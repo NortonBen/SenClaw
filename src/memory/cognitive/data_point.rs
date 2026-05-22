@@ -36,6 +36,38 @@ impl NodeKind {
     }
 }
 
+/// Triplet-extraction state for chunk nodes. Persisted on `cog_nodes`
+/// so the cognify pipeline can decide whether to call the LLM again
+/// without inferring it from "does this chunk have edges?". Cheaper to
+/// query (one column read vs. neighbor scan) and unambiguous (the
+/// `skipped_no_facts` case has zero edges by definition but should NOT
+/// be retried — the LLM has already told us there's nothing to extract).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(i64)]
+pub enum ExtractionState {
+    Pending = 0,
+    Done = 1,
+    /// LLM call itself failed (no client wired, network error, …).
+    /// Cognify should retry next time an LLM is available.
+    SkippedNoLlm = 2,
+    /// LLM ran but produced no usable triplets (parse error, empty
+    /// triplets array). Don't retry by default — the LLM has already
+    /// decided this chunk has nothing extract-worthy. User can force a
+    /// retry via the DataPoints "re-extract" button.
+    SkippedNoFacts = 3,
+}
+
+impl ExtractionState {
+    pub fn from_i64(v: i64) -> Self {
+        match v {
+            1 => Self::Done,
+            2 => Self::SkippedNoLlm,
+            3 => Self::SkippedNoFacts,
+            _ => Self::Pending,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataPoint {
     pub id: Uuid,
@@ -56,6 +88,13 @@ pub struct DataPoint {
     pub created_at: i64,
     pub updated_at: i64,
     pub last_seen_at: i64,
+    /// Persisted extraction state — `Pending` for fresh chunks, advanced
+    /// by [`super::cognify::CognifyPipeline`] after each LLM attempt.
+    /// Entity / summary nodes are derived artefacts → always `Done`.
+    pub extraction_state: ExtractionState,
+    /// Unix-seconds of the last extraction attempt (success OR skip).
+    /// `None` for chunks that have never been processed.
+    pub extracted_at: Option<i64>,
 }
 
 impl DataPoint {
@@ -77,6 +116,8 @@ impl DataPoint {
             created_at: now,
             updated_at: now,
             last_seen_at: now,
+            extraction_state: ExtractionState::Pending,
+            extracted_at: None,
         }
     }
 
@@ -99,6 +140,10 @@ impl DataPoint {
             created_at: now,
             updated_at: now,
             last_seen_at: now,
+            // Entities are produced BY extraction — there's nothing to
+            // extract from them.
+            extraction_state: ExtractionState::Done,
+            extracted_at: Some(now),
         }
     }
 }

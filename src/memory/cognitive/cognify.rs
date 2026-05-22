@@ -144,8 +144,10 @@ impl CognifyPipeline {
 
         for ch in chunks {
             let hash = content_hash(&ch.text);
-            // Dedupe by content hash.
-            let chunk_node = match self
+            // Dedupe by content hash. `was_deduped` carries forward so we
+            // can decide whether the LLM still has work to do on this chunk
+            // — see the "skip if already extracted" gate below.
+            let (chunk_node, was_deduped) = match self
                 .embedder
                 .graph
                 .find_node_by_content_hash(&hash)
@@ -153,7 +155,7 @@ impl CognifyPipeline {
             {
                 Some(existing) => {
                     report.chunks_deduped += 1;
-                    existing
+                    (existing, true)
                 }
                 None => {
                     let node = DataPoint::chunk(ch.text.clone(), Some(hash), now);
@@ -166,9 +168,34 @@ impl CognifyPipeline {
                         let _ = self.embedder.graph.tag_node(node.id, set);
                     }
                     report.chunks_added += 1;
-                    node
+                    (node, false)
                 }
             };
+
+            // Stronger dedupe via the persisted extraction_state column.
+            // Beats the old "does this chunk have neighbors?" probe because:
+            //   * One column read vs. a neighbors() scan.
+            //   * Disambiguates `SkippedNoFacts` (LLM said nothing to
+            //     extract — don't retry) from `SkippedNoLlm` (LLM was
+            //     dormant — DO retry next time).
+            if was_deduped {
+                match chunk_node.extraction_state {
+                    super::ExtractionState::Done
+                    | super::ExtractionState::SkippedNoFacts => {
+                        tracing::debug!(
+                            chunk_id = %chunk_node.id,
+                            state = ?chunk_node.extraction_state,
+                            "[cognify] skip re-extraction — chunk already processed"
+                        );
+                        continue;
+                    }
+                    super::ExtractionState::Pending
+                    | super::ExtractionState::SkippedNoLlm => {
+                        // Either fresh (race?) or back-fill needed — fall
+                        // through and let the LLM try again.
+                    }
+                }
+            }
 
             let (triplets, skipped) = self
                 .extract_triplets(&ch.text)
@@ -180,6 +207,19 @@ impl CognifyPipeline {
             if skipped {
                 report.llm_skipped = true;
             }
+            // Persist the new state for this chunk so the next call can
+            // short-circuit at the dedupe gate above.
+            let new_state = if skipped {
+                super::ExtractionState::SkippedNoLlm
+            } else if triplets.is_empty() {
+                super::ExtractionState::SkippedNoFacts
+            } else {
+                super::ExtractionState::Done
+            };
+            let _ = self
+                .embedder
+                .graph
+                .set_extraction_state(chunk_node.id, new_state, now);
 
             for raw in triplets.into_iter().take(opts.max_triplets_per_chunk) {
                 self.upsert_triplet(&chunk_node, &raw, opts, &mut report, now)
@@ -375,23 +415,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cognify_is_idempotent_and_strengthens() {
+    async fn cognify_dedupe_skips_re_extraction_when_edges_exist() {
+        // P-cognify-skip: re-cognify on the same text MUST short-circuit
+        // the LLM call entirely once the chunk has edges from a prior
+        // extraction. Hebbian strengthen happens via CogRecall, not via
+        // wasted LLM passes — there's no reason to re-extract the same
+        // sentence on every restart / reflection / SOUL ingest.
         let r1 = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#.to_string();
-        let r2 = r1.clone();
-        let pipe = build_pipeline(vec![r1, r2]);
+        // Second reply MUST stay unused — if it gets pulled, the gate
+        // didn't fire and we're wasting tokens on duplicate work.
+        let r2_unused = r1.clone();
+        let pipe = build_pipeline(vec![r1, r2_unused]);
 
         let opts = CognifyOptions::default();
         let first = pipe.cognify("Ada invented the compiler.", "doc1", &opts).await.unwrap();
         let second = pipe.cognify("Ada invented the compiler.", "doc1", &opts).await.unwrap();
 
-        // Second pass dedupes the chunk + reuses entities + strengthens edges.
         assert_eq!(first.chunks_added, 1);
+        assert!(first.edges_added > 0);
+
+        // Second pass dedupes the chunk and then bails out before the LLM.
         assert_eq!(second.chunks_added, 0);
         assert_eq!(second.chunks_deduped, 1);
-        assert_eq!(second.entities_reused, 2);
         assert_eq!(second.entities_added, 0);
-        assert!(second.edges_strengthened >= 3);
+        // No edges added, no strengthen, no LLM skip — clean no-op.
         assert_eq!(second.edges_added, 0);
+        assert_eq!(second.edges_strengthened, 0);
+        assert!(!second.llm_skipped);
     }
 
     #[tokio::test]

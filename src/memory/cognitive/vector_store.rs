@@ -91,7 +91,7 @@ impl VectorStore for SqliteVectorStore {
     fn upsert(&self, node_id: Uuid, embedding: &[f32], model: &str) -> Result<()> {
         let id_blob = node_id.as_bytes().to_vec();
         let emb_blob = floats_to_blob(embedding);
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             // Authoritative copy on cog_nodes.embedding
             conn.execute(
                 "UPDATE cog_nodes SET embedding = ?1, embedding_model = ?2 WHERE id = ?3",
@@ -110,7 +110,7 @@ impl VectorStore for SqliteVectorStore {
 
     fn delete(&self, node_id: Uuid) -> Result<()> {
         let id_blob = node_id.as_bytes().to_vec();
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             conn.execute(
                 "UPDATE cog_nodes SET embedding = NULL, embedding_model = NULL WHERE id = ?1",
                 params![id_blob],
@@ -124,7 +124,7 @@ impl VectorStore for SqliteVectorStore {
 
     fn search(&self, query: &[f32], k: usize) -> Result<Vec<VectorHit>> {
         let q_blob = floats_to_blob(query);
-        self.db.with_conn(|conn| {
+        self.db.with_cog_conn(|conn| {
             // Try sqlite-vec path
             if vec_table_exists(conn) {
                 let sql = "SELECT node_id, distance FROM cog_vec

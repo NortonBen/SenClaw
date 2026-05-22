@@ -97,13 +97,31 @@ impl LlmClient for LocalMlxLlm {
             // Drain the stream into a single string. No tools here, so we
             // don't need the qwen-tool-call splitter — just concatenate
             // raw chunks and strip any <think> blocks at the end.
-            let mut text = String::new();
+            // Cap the streamed output by total chars. Without this a
+            // Qwen3 turn with thinking enabled can decode 2000+ tokens
+            // (mostly `<think>` blocks), blocking the engine for over a
+            // minute. The cognify JSON we actually want is < 1 KB; the
+            // remaining budget is just for the reasoning preamble.
+            let cap = output_char_cap();
+            let mut text = String::with_capacity(cap.min(8 * 1024));
             while let Some(chunk) = rx.recv().await {
                 text.push_str(&chunk);
+                if text.len() >= cap {
+                    tracing::warn!(
+                        bytes = text.len(),
+                        cap,
+                        "[local-mlx-cognitive] output cap hit; closing stream to stop runaway decode"
+                    );
+                    // Drop receiver explicitly — closing the channel makes
+                    // the generator task observe a send-error and exit
+                    // gracefully on its next yield.
+                    drop(rx);
+                    break;
+                }
             }
-            gen_handle
-                .await
-                .map_err(|e| anyhow::anyhow!("mlx generate join: {e}"))??;
+            // Best-effort join; the generator may have already aborted from
+            // the channel close above.
+            let _ = gen_handle.await;
 
             // Qwen reasoning models emit `<think>…</think>` blocks. The
             // cognify pipeline expects JSON only, so we keep just the
@@ -124,9 +142,31 @@ impl LlmClient for LocalMlxLlm {
     }
 }
 
+/// Resolve the output-byte cap once per call. Cheap — just reads
+/// `SENCLAW_COGNITIVE_MAX_OUTPUT_CHARS` (matches the CognitiveConfig env
+/// var) or falls back to 8 KB. Keeping this as a free function rather
+/// than threading the config through every adapter keeps the trait
+/// surface minimal — the cap is uniform across local adapters.
+pub(crate) fn output_char_cap() -> usize {
+    std::env::var("SENCLAW_COGNITIVE_MAX_OUTPUT_CHARS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(8 * 1024)
+        .max(256)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_char_cap_has_safe_floor() {
+        // Even if a user sets a comically low value, the cap stays ≥256 so
+        // we don't truncate every response into garbage.
+        std::env::set_var("SENCLAW_COGNITIVE_MAX_OUTPUT_CHARS", "10");
+        assert_eq!(output_char_cap(), 256);
+        std::env::remove_var("SENCLAW_COGNITIVE_MAX_OUTPUT_CHARS");
+    }
 
     #[cfg(not(feature = "local-mlx"))]
     #[test]

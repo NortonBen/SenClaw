@@ -43,7 +43,7 @@ pub mod triplet;
 pub mod vector_store;
 
 pub use cognify::{CognifyOptions, CognifyPipeline, CognifyReport};
-pub use data_point::{DataPoint, NodeKind};
+pub use data_point::{DataPoint, ExtractionState, NodeKind};
 pub use decay_tick::{run_decay, start_decay_ticker, DecayConfig, DecayReport};
 pub use embed::{embed_node, CognitiveEmbedder};
 pub use gnn::{GraphScorer, LightGcnScorer};
