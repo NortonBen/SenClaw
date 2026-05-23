@@ -271,16 +271,33 @@ impl WebSocketGateway {
     /// Push a calendar event reminder to all connected UI clients.
     ///
     /// `kind` is `"reminder"` (pre-event) or `"renotify"` (ongoing re-alert).
-    pub async fn push_event_reminder(&self, event_id: &str, title: &str, start_at_ms: i64, kind: &str) {
+    /// `notification_id` is the persisted `event_notifications.id` so the
+    /// frontend can dedupe across the live frame and the subscribe replay,
+    /// and so `notification:read` can target a specific row.
+    /// `delayed_ms` is non-zero when the daemon was down past the trigger
+    /// time (so the UI can render a "late" badge).
+    pub async fn push_event_reminder(
+        &self,
+        notification_id: &str,
+        event_id: &str,
+        title: &str,
+        start_at_ms: i64,
+        kind: &str,
+        fired_at_ms: i64,
+        delayed_ms: i64,
+    ) {
         let payload = serde_json::json!({
             "type": "space:event:reminder",
+            "id": notification_id,
             "eventId": event_id,
             "title": title,
             "startAt": start_at_ms,
             "kind": kind,
+            "firedAt": fired_at_ms,
+            "delayedMs": delayed_ms,
         });
         tracing::info!(
-            "[WsGateway] emit space:event:reminder event_id={event_id} kind={kind}"
+            "[WsGateway] emit space:event:reminder id={notification_id} event_id={event_id} kind={kind} delayed_ms={delayed_ms}"
         );
         self.broadcast_to_all(&payload).await;
     }

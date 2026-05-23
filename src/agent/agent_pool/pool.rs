@@ -2884,20 +2884,24 @@ async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: 
 /// Filter for the auto-reflection path (P14).
 ///
 /// We're choosing what to feed the LLM-driven cognify pipeline on every
-/// user turn. Two failure modes to guard against:
+/// user turn. Three failure modes to guard against:
 ///
 ///   * **Noise** — one-word acknowledgements ("ok", "yes", "thanks") run
 ///     up LLM cost for zero useful triplets.
 ///   * **Questions** — questions are queries, not facts. Cognifying
 ///     "do you know where my keys are?" would persist a bogus
 ///     (you, know_where, my-keys) triplet.
+///   * **Paste bombs** — a user pasting a 50 KB log shouldn't trigger
+///     cognify; the prompt blowup would tie up the local model for minutes
+///     extracting nonsense. The agent can still call CogAdd explicitly.
 ///
-/// Returns true when the message is long enough AND isn't pure-question
-/// shaped. Heuristic, not exhaustive — false positives are cheap because
-/// cognify dedupes by content hash.
-pub(crate) fn should_reflect(text: &str) -> bool {
+/// `min_chars`/`max_chars` come from `CognitiveConfig` so users can tune
+/// per environment. Heuristic, not exhaustive — false positives are cheap
+/// because cognify dedupes by content hash.
+pub(crate) fn should_reflect(text: &str, min_chars: usize, max_chars: usize) -> bool {
     let t = text.trim();
-    if t.chars().count() < 20 {
+    let n = t.chars().count();
+    if n < min_chars || n > max_chars {
         return false;
     }
     // Pure-question heuristic: ends with question mark AND there's only one
@@ -2918,12 +2922,26 @@ pub(crate) fn should_reflect(text: &str) -> bool {
 ///     produce zero edges, which is fine
 ///   * `should_reflect` rejects the text
 async fn cognitive_reflect(text: String, group_folder: String) {
-    if !should_reflect(&text) {
+    // Honor the master-enabled flag AND size bounds from CognitiveConfig.
+    // `Config::from_env` re-reads env each call — cheap (just var lookups)
+    // and lets ops tune limits live by exporting + restarting the daemon.
+    let cfg = crate::config::Config::from_env();
+    if !cfg.cognitive.enabled {
+        return;
+    }
+    if !should_reflect(
+        &text,
+        cfg.cognitive.reflect_min_chars,
+        cfg.cognitive.reflect_max_chars,
+    ) {
         return;
     }
     let Some(sys) = crate::memory::cognitive::try_get_instance() else {
         return;
     };
+    if !sys.is_enabled() {
+        return;
+    }
     let opts = crate::memory::cognitive::CognifyOptions {
         node_sets: vec![crate::memory::cognitive::NodeSet::group(
             &group_folder,
@@ -2951,27 +2969,41 @@ async fn cognitive_reflect(text: String, group_folder: String) {
 #[cfg(test)]
 mod reflection_tests {
     use super::should_reflect;
+    const MIN: usize = 20;
+    const MAX: usize = 2000;
 
     #[test]
     fn skip_short_messages() {
-        assert!(!should_reflect("ok"));
-        assert!(!should_reflect("yes"));
-        assert!(!should_reflect("thanks!"));
+        assert!(!should_reflect("ok", MIN, MAX));
+        assert!(!should_reflect("yes", MIN, MAX));
+        assert!(!should_reflect("thanks!", MIN, MAX));
     }
 
     #[test]
     fn skip_pure_questions() {
-        assert!(!should_reflect("where are my keys right now?"));
-        assert!(!should_reflect("bạn có biết tôi tên gì không?"));
+        assert!(!should_reflect("where are my keys right now?", MIN, MAX));
+        assert!(!should_reflect("bạn có biết tôi tên gì không?", MIN, MAX));
+    }
+
+    #[test]
+    fn skip_paste_bombs() {
+        // 3000-char paste — beyond MAX (2000). Cognify would chew through
+        // it for nothing useful; user can CogAdd manually if needed.
+        let long = "x".repeat(3000);
+        assert!(!should_reflect(&long, MIN, MAX));
     }
 
     #[test]
     fn accept_factual_statements() {
         assert!(should_reflect(
-            "tôi tên là Sen, sống ở Hà Nội và thích cà phê đen."
+            "tôi tên là Sen, sống ở Hà Nội và thích cà phê đen.",
+            MIN,
+            MAX,
         ));
         assert!(should_reflect(
-            "Today I learned that Rust has a borrow checker."
+            "Today I learned that Rust has a borrow checker.",
+            MIN,
+            MAX,
         ));
     }
 
@@ -2980,9 +3012,7 @@ mod reflection_tests {
         // Mixed content — there's a fact AND a question. Reflect anyway
         // since the cognify pipeline will pull triplets only from the
         // statement part.
-        assert!(should_reflect(
-            "My phone is 0901234567. What's yours?"
-        ));
+        assert!(should_reflect("My phone is 0901234567. What's yours?", MIN, MAX));
     }
 }
 

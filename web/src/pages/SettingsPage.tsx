@@ -10,6 +10,7 @@ import {
   FilterOutlined,
   DatabaseOutlined,
   CloudDownloadOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -22,6 +23,7 @@ import { LLMSettings } from '../components/settings/LLMSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
 import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
 import { LocalModelsSettings } from '../components/settings/LocalModelsSettings';
+import { CognitiveSettings } from '../components/settings/CognitiveSettings';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -34,7 +36,8 @@ type SettingsSection =
   | 'agents'
   | 'llm'
   | 'embedding'
-  | 'local-models';
+  | 'local-models'
+  | 'cognitive';
 
 export const SettingsPage: React.FC = () => {
   const { ws } = useAppContext();
@@ -57,6 +60,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
+      { key: 'cognitive', icon: <ExperimentOutlined />, label: 'Cognitive' },
     ],
     []
   );
@@ -106,6 +110,8 @@ export const SettingsPage: React.FC = () => {
         return <EmbeddingSettings />;
       case 'local-models':
         return <LocalModelsSettings />;
+      case 'cognitive':
+        return <CognitiveSettings />;
       default:
         return null;
     }

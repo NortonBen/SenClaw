@@ -53,6 +53,18 @@ fn cowork_handoff_result_has(haystack: &str, needle: &str) -> bool {
     h.contains(&n)
 }
 
+/// Truncate `s` to at most `max_bytes` UTF-8 bytes without splitting a multibyte character.
+fn truncate_utf8_prefix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Validate task output against member's output format requirements.
 fn validate_output_format(
     output: &str,
@@ -512,7 +524,7 @@ impl CoworkManager {
             let task_title = format!(
                 "[handoff from {}] {}",
                 assignee_id,
-                if completed_task.title.len() > 60 { &completed_task.title[..60] } else { &completed_task.title }
+                truncate_utf8_prefix(&completed_task.title, 60)
             );
             let description = format!(
                 "Handoff from {assignee_id}.\n\nOriginal task: {}\n\nResult:\n{result_content}",
@@ -901,11 +913,7 @@ impl CoworkManager {
                                 &format!(
                                     "[from {}] {}",
                                     from_user,
-                                    if content.len() > 60 {
-                                        &content[..60]
-                                    } else {
-                                        content
-                                    }
+                                    truncate_utf8_prefix(content, 60)
                                 ),
                                 Some(content),
                                 Some(&member.member_id),
@@ -1048,11 +1056,7 @@ impl CoworkManager {
                             "[status: {} from {}] {}",
                             new_status,
                             task.assignee.as_deref().unwrap_or("unknown"),
-                            if task.title.len() > 60 {
-                                &task.title[..60]
-                            } else {
-                                &task.title
-                            }
+                            truncate_utf8_prefix(&task.title, 60)
                         );
 
                         let description = format!(
@@ -1433,7 +1437,7 @@ impl CoworkManager {
         if let Some(agent) = lead {
             // Create a planning/execution task for the lead agent
             let task_title = if content.len() > 80 {
-                format!("{}...", &content[..80])
+                format!("{}...", truncate_utf8_prefix(content, 80))
             } else {
                 content.to_string()
             };
@@ -2836,5 +2840,19 @@ Plan gate (switch-style): (1) First execution on a goal: output Plan and create/
 impl Default for CoworkManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_utf8_prefix;
+
+    #[test]
+    fn truncate_utf8_prefix_vietnamese_at_60_bytes() {
+        let title = "[handoff from researcher] [handoff from research-lead] nghiên cứu bổ trợ lực ";
+        assert!(title.len() > 60);
+        let truncated = truncate_utf8_prefix(title, 60);
+        assert!(truncated.len() <= 60);
+        assert!(std::str::from_utf8(truncated.as_bytes()).is_ok());
     }
 }

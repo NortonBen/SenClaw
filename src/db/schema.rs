@@ -97,6 +97,27 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         -- so the discriminator (`role: 'tool'`) stays explicit at the storage
         -- layer too. Replayed on subscribe so the chat UI can re-render the
         -- claude-code-style tool cards after a page reload.
+        -- Persisted log of every space-event reminder/renotify the
+        -- EventNotifier has fired. Today reminders only broadcast as
+        -- live WS frames — if the user wasn't connected, they're gone.
+        -- The DB row lets reload still surface the notification, and
+        -- tracks `delayed_ms` so the UI can flag late reminders (daemon
+        -- was down past the trigger time).
+        CREATE TABLE IF NOT EXISTS event_notifications (
+          id          TEXT PRIMARY KEY,
+          event_id    TEXT NOT NULL,
+          title       TEXT NOT NULL,
+          start_at    INTEGER NOT NULL,
+          kind        TEXT NOT NULL,
+          fired_at    INTEGER NOT NULL,
+          delayed_ms  INTEGER NOT NULL DEFAULT 0,
+          read_at     INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_event_notif_fired
+          ON event_notifications(fired_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_event_notif_event
+          ON event_notifications(event_id);
+
         -- Ephemeral chat events (agent state transitions, permission/question
         -- requests + their resolutions). Replayed on subscribe so the
         -- chat UI can rebuild interactive state after a page reload.

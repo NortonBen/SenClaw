@@ -25,7 +25,6 @@ pub mod local_model;
 pub mod marketplace;
 pub mod mcp;
 pub mod memory;
-pub mod proto;
 pub mod scheduler;
 pub mod setup;
 pub mod plugins;
@@ -715,6 +714,26 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);
     tracing::info!("[SenClaw] DB initialized: {}", cfg.paths.db_path.display());
 
+    // ===== 1a. Boot cleanup of stale pending interactions =====
+    // `chat_events` persists permission:request / question:request rows
+    // so the UI can replay them on reconnect. When the daemon was killed
+    // mid-prompt (or the user just hasn't run senclaw in days), those
+    // rows linger and the Agent Console resurrects a ghost approval the
+    // agent has no memory of. Wipe anything unresolved that's older than
+    // 1 hour — recent requests survive so an active session reconnect
+    // still works.
+    {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        match db.cleanup_stale_pending_interactions(&cutoff) {
+            Ok(n) if n > 0 => tracing::info!(
+                rows_deleted = n,
+                "[SenClaw] cleaned up stale pending permission/question rows on boot"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "[SenClaw] stale-pending cleanup failed"),
+        }
+    }
+
     // ===== 1b. MemoryManager =====
     let _memory_mgr = memory::manager::init(Arc::clone(&db), &cfg);
     tracing::info!("[SenClaw] MemoryManager initialized");
@@ -756,6 +775,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     sys_for_watch,
                     agents_dir_for_watch,
                     std::time::Duration::from_secs(30),
+                );
+
+                // Periodic maintenance: cleanup junk + merge duplicate
+                // entities. Cadence comes from CognitiveConfig (0 disables).
+                let interval = std::time::Duration::from_secs(
+                    cfg.cognitive.maintenance_interval_hours.saturating_mul(3600),
+                );
+                memory::cognitive::start_maintenance_ticker(
+                    Arc::clone(&sys.graph),
+                    memory::cognitive::MaintenanceConfig { interval },
                 );
             }
             None => tracing::info!(
@@ -1817,13 +1846,26 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // to get the Arc<dyn EventNotifySink> the EventNotifier expects.
         struct WsEventSinkWrapper(Arc<gateway::websocket_gateway::WebSocketGateway>);
         impl scheduler::EventNotifySink for WsEventSinkWrapper {
-            fn notify_event_reminder(&self, event_id: &str, title: &str, start_at_ms: i64, kind: &str) {
+            fn notify_event_reminder(
+                &self,
+                notification_id: &str,
+                event_id: &str,
+                title: &str,
+                start_at_ms: i64,
+                kind: &str,
+                fired_at_ms: i64,
+                delayed_ms: i64,
+            ) {
                 let gw = Arc::clone(&self.0);
-                let id = event_id.to_string();
+                let nid = notification_id.to_string();
+                let eid = event_id.to_string();
                 let t = title.to_string();
                 let k = kind.to_string();
                 tokio::spawn(async move {
-                    gw.push_event_reminder(&id, &t, start_at_ms, &k).await;
+                    gw.push_event_reminder(
+                        &nid, &eid, &t, start_at_ms, &k, fired_at_ms, delayed_ms,
+                    )
+                    .await;
                 });
             }
         }

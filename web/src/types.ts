@@ -494,10 +494,17 @@ export interface EventNotification {
   eventId: string;
   title: string;
   startAt: number;
-  /** "reminder" = pre-event alert, "renotify" = ongoing re-alert */
-  kind: 'reminder' | 'renotify';
+  /** "reminder" = pre-event alert, "renotify" = ongoing re-alert, "pending" = chưa phát */
+  kind: 'reminder' | 'renotify' | 'pending';
   receivedAt: number;
   read: boolean;
+  /** Thời điểm thông báo thực sự phát (epoch ms). Không có với pending. */
+  firedAt?: number;
+  /** >0 khi daemon trễ so với trigger */
+  delayedMs?: number;
+  /** Với pending: thời điểm sẽ phát nhắc */
+  triggerAt?: number;
+  reminderMin?: number;
 }
 
 // ===== Workbench =====

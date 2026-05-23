@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import {
-  Card, Tag, Typography, Collapse, Space, Button, Tooltip, Badge, List, Alert,
+  Card, Tag, Typography, Collapse, Space, Button, Tooltip, Badge, Alert, Modal,
 } from 'antd';
 import {
   CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined,
   CodeOutlined, FileTextOutlined, CopyOutlined, CheckOutlined, CloseOutlined,
+  ExpandOutlined,
 } from '@ant-design/icons';
 import type { CoworkTask, OutputValidation } from '../../types';
+import { MarkdownBody } from '../shared/MarkdownBody';
+import { truncateToPreview } from '../../utils/markdownPreview';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 const STATUS_COLOR: Record<string, string> = {
   backlog:     '#8c8c8c',
@@ -29,6 +32,57 @@ interface TaskResultCardProps {
   task: CoworkTask;
   highlight?: boolean;
   outputValidation?: OutputValidation | null;
+}
+
+function ResultOutputBody({ output }: { output: string }) {
+  const [detailOpen, setDetailOpen] = useState(false);
+  const { preview, isTruncated } = truncateToPreview(output);
+
+  return (
+    <>
+      <div
+        style={{
+          background: '#fafafa',
+          padding: 12,
+          borderRadius: 4,
+          maxHeight: isTruncated ? 220 : 400,
+          overflow: isTruncated ? 'hidden' : 'auto',
+        }}
+      >
+        <MarkdownBody content={preview} compact />
+      </div>
+      {isTruncated && (
+        <Button
+          type="link"
+          size="small"
+          icon={<ExpandOutlined />}
+          onClick={() => setDetailOpen(true)}
+          style={{ padding: '4px 0 0', height: 'auto' }}
+        >
+          Chi tiết
+        </Button>
+      )}
+      <Modal
+        title={
+          <Space>
+            <FileTextOutlined />
+            <span>Kết quả chi tiết</span>
+            <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+              {output.length} ký tự
+            </Text>
+          </Space>
+        }
+        open={detailOpen}
+        onCancel={() => setDetailOpen(false)}
+        footer={null}
+        width="min(960px, 92vw)"
+        styles={{ body: { maxHeight: '75vh', overflow: 'auto', paddingTop: 8 } }}
+        destroyOnClose
+      >
+        <MarkdownBody content={output} />
+      </Modal>
+    </>
+  );
 }
 
 export function TaskResultCard({ task, highlight, outputValidation }: TaskResultCardProps) {
@@ -78,23 +132,7 @@ export function TaskResultCard({ task, highlight, outputValidation }: TaskResult
           />
         </Tooltip>
       ),
-      children: (
-        <Paragraph
-          style={{
-            whiteSpace: 'pre-wrap',
-            fontFamily: 'monospace',
-            fontSize: 12,
-            background: '#fafafa',
-            padding: 12,
-            borderRadius: 4,
-            maxHeight: 400,
-            overflow: 'auto',
-            margin: 0,
-          }}
-        >
-          {task.resultOutput}
-        </Paragraph>
-      ),
+      children: <ResultOutputBody output={task.resultOutput} />,
     });
   }
 

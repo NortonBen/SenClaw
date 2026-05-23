@@ -17,6 +17,7 @@ import {
   Card,
   Empty,
   Pagination,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -30,6 +31,7 @@ import {
   NodeIndexOutlined,
   ReloadOutlined,
   ExperimentOutlined,
+  ClearOutlined,
 } from '@ant-design/icons';
 
 interface NodeRow {
@@ -109,6 +111,42 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
    * dedupes by content hash so the chunk node stays — only new edges
    * land in the graph.
    */
+  /**
+   * One-shot bulk cleanup. The backend removes envelope-wrapped chunks
+   * (legacy junk from before the runtime sanitizer) and orphan entities
+   * (entities left behind when their chunks were forgotten). Confirmed
+   * via Popconfirm because the operation is destructive — we don't want
+   * a misclick wiping data the user spent LLM cycles building.
+   */
+  const cleanupJunk = useCallback(async () => {
+    try {
+      // Run the full maintenance sweep — cleanup + merge — so duplicates
+      // get folded onto a canonical entity in the same pass. Backed by the
+      // same routine the periodic ticker runs.
+      const r = await fetch('/api/cognitive/maintenance', { method: 'POST' });
+      if (!r.ok) throw new Error(await r.text());
+      const body = await r.json();
+      const cleaned =
+        (body.envelope_chunks_removed ?? 0) +
+        (body.orphan_entities_removed ?? 0);
+      const merged = body.entities_merged ?? 0;
+      if (cleaned === 0 && merged === 0) {
+        message.success('Nothing to clean — your Data memory is already tidy.');
+      } else {
+        message.success(
+          `Removed ${body.envelope_chunks_removed} envelope chunk(s) + ` +
+            `${body.orphan_entities_removed} orphan entity(ies). ` +
+            `Merged ${merged} duplicate entity(ies) across ` +
+            `${body.groups_merged ?? 0} group(s).`,
+        );
+      }
+      fetchPage();
+      onMutated?.();
+    } catch (e: any) {
+      message.error(`Cleanup failed: ${e?.message ?? e}`);
+    }
+  }, [fetchPage, onMutated]);
+
   const reExtract = useCallback(
     async (id: string) => {
       try {
@@ -252,6 +290,17 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
           >
             Refresh
           </Button>
+          <Popconfirm
+            title="Clean up junk?"
+            description="Removes envelope-wrapped chunks and orphan entities. The good data stays. This cannot be undone."
+            onConfirm={cleanupJunk}
+            okText="Clean up"
+            okButtonProps={{ danger: true }}
+          >
+            <Button size="small" icon={<ClearOutlined />}>
+              Clean junk
+            </Button>
+          </Popconfirm>
         </Space>
       }
     >

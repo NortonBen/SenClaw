@@ -226,6 +226,12 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/embedding-config",
             get(embedding_config_get).post(embedding_config_save),
         )
+        // Cognitive config
+        .route(
+            "/api/cognitive-config",
+            get(super::cognitive_config::cognitive_config_get)
+                .post(super::cognitive_config::cognitive_config_save),
+        )
         // Wiki API
         .route("/api/wiki/tree", get(wiki_tree))
         .route("/api/wiki/file", get(wiki_read).put(wiki_write))
@@ -404,6 +410,11 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/cognitive/subgraph", get(super::cognitive::cognitive_subgraph))
         .route("/api/cognitive/top-nodes", get(super::cognitive::cognitive_top_nodes))
         .route("/api/cognitive/sample", get(super::cognitive::cognitive_sample))
+        .route("/api/cognitive/cleanup", post(super::cognitive::cognitive_cleanup))
+        .route(
+            "/api/cognitive/maintenance",
+            post(super::cognitive::cognitive_maintenance),
+        )
         // Embedding model management
         .route(
             "/api/embedding/features",

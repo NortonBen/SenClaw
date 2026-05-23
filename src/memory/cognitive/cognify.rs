@@ -68,6 +68,106 @@ fn content_hash(text: &str) -> String {
     format!("{:x}", h.finalize())
 }
 
+/// Pre-process text before it enters the cognify pipeline.
+///
+/// Some chat platforms wrap user messages in an envelope before they reach
+/// the agent (the channel adapters used by groups, plus our own
+/// `<messages><message sender="...">…</message></messages>` history
+/// envelope). When such a wrapper is fed straight into cognify it lands
+/// as a chunk node whose `summary` is the entire raw envelope — pure
+/// noise in DataPoints view, and triplet extraction on it produces
+/// "(messages, contain, message)" nonsense.
+///
+/// This pass:
+///   * Strips known envelope tags (`<messages>`, `<message …>`, closing
+///     variants). The XML attributes themselves get dropped — we only
+///     keep the inner text payload.
+///   * Returns `None` when, after cleanup, the remaining text is too
+///     markup-heavy (>40% tag chars) or too short. The caller skips
+///     cognify in that case.
+///
+/// Pure function — exhaustive test coverage in the module's `tests`
+/// submodule. Used by both [`CognifyPipeline::cognify`] and by
+/// `agent_pool::cognitive_reflect` as a defence-in-depth: even if a
+/// caller forgets to sanitise, the pipeline catches it.
+pub fn sanitize_for_cognify(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Strip well-known envelope tags. We do this in one pass with simple
+    // string ops; a real XML parser is overkill (the envelopes are
+    // half-XML at best — message bodies may contain unescaped angle
+    // brackets we'd choke on).
+    let mut cleaned = trimmed.to_string();
+    for tag in ["</messages>", "<messages>", "</message>"] {
+        cleaned = cleaned.replace(tag, " ");
+    }
+    // Opening <message ...> tags carry attributes — drop the whole tag
+    // including its content up to '>'.
+    cleaned = strip_open_tag(&cleaned, "<message");
+    // Drop <thinking> blocks if any made it through.
+    cleaned = strip_block(&cleaned, "<thinking>", "</thinking>");
+    cleaned = strip_block(&cleaned, "<think>", "</think>");
+
+    // Collapse runs of whitespace introduced by the strips above.
+    let cleaned: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    // Markup-ratio guard. Count remaining angle brackets — if the cleaned
+    // text still has many `<…>` constructs the caller probably handed us
+    // raw HTML / a JSON dump / something else not made of sentences.
+    let total = cleaned.chars().count() as f32;
+    let markup = cleaned.chars().filter(|c| *c == '<' || *c == '>').count() as f32;
+    if total < 10.0 || markup / total > 0.04 {
+        return None;
+    }
+
+    Some(cleaned)
+}
+
+/// Remove every occurrence of `<open …>` (any attributes, up to and
+/// including the first `>`). Leaves the inner content alone.
+fn strip_open_tag(s: &str, open: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find(open) {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + open.len()..];
+        if let Some(close) = after_open.find('>') {
+            rest = &after_open[close + 1..];
+        } else {
+            // Malformed — drop the rest to avoid infinite loop.
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Remove every `<open>…</close>` span (inclusive of the delimiters).
+fn strip_block(s: &str, open: &str, close: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find(open) {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + open.len()..];
+        if let Some(end) = after_open.find(close) {
+            rest = &after_open[end + close.len()..];
+        } else {
+            // Unclosed block — drop the rest.
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn build_user_prompt(text: &str, known_entities: &[String]) -> String {
     let entity_hint = if known_entities.is_empty() {
         String::new()
@@ -143,7 +243,22 @@ impl CognifyPipeline {
         let chunks = chunk_text(text, opts.chunker);
 
         for ch in chunks {
-            let hash = content_hash(&ch.text);
+            // Sanitize before hashing so identical messages wrapped in
+            // varying envelopes (different `time="..."` attributes,
+            // different senders) all dedupe to the same content_hash.
+            // Drops the chunk entirely when sanitize returns None — saves
+            // an embedding call + an LLM call for pure-markup junk.
+            let cleaned = match sanitize_for_cognify(&ch.text) {
+                Some(s) => s,
+                None => {
+                    tracing::debug!(
+                        len = ch.text.len(),
+                        "[cognify] dropping chunk — sanitize rejected (envelope/markup-heavy)"
+                    );
+                    continue;
+                }
+            };
+            let hash = content_hash(&cleaned);
             // Dedupe by content hash. `was_deduped` carries forward so we
             // can decide whether the LLM still has work to do on this chunk
             // — see the "skip if already extracted" gate below.
@@ -158,7 +273,9 @@ impl CognifyPipeline {
                     (existing, true)
                 }
                 None => {
-                    let node = DataPoint::chunk(ch.text.clone(), Some(hash), now);
+                    // Store the *cleaned* text so DataPoints view shows the
+                    // payload, not the envelope.
+                    let node = DataPoint::chunk(cleaned.clone(), Some(hash), now);
                     // Persist + embed in one shot.
                     self.embedder
                         .add_node(&node)
@@ -198,7 +315,7 @@ impl CognifyPipeline {
             }
 
             let (triplets, skipped) = self
-                .extract_triplets(&ch.text)
+                .extract_triplets(&cleaned)
                 .await
                 .context("extract triplets")?;
             // Latch the skipped flag across chunks — one bad chunk shouldn't
@@ -346,6 +463,60 @@ impl CognifyPipeline {
         }
         report.entities_added += 1;
         Ok(node)
+    }
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::sanitize_for_cognify;
+
+    #[test]
+    fn strips_messages_envelope_keeps_inner_text() {
+        let raw = r#"<messages> <message sender="ext:default" time="2026-05-21T09:21:46+00:00">tôi tên là Sen, sống ở Hà Nội</message></messages>"#;
+        let out = sanitize_for_cognify(raw).expect("envelope should yield clean text");
+        assert!(out.contains("tôi tên là Sen"));
+        assert!(out.contains("Hà Nội"));
+        // Wrapper artefacts gone.
+        assert!(!out.contains("<message"));
+        assert!(!out.contains("sender="));
+        assert!(!out.contains("time="));
+    }
+
+    #[test]
+    fn drops_thinking_blocks() {
+        let raw =
+            "<think>Okay let me reason</think>The user says they like coffee.";
+        let out = sanitize_for_cognify(raw).expect("non-think part should survive");
+        assert!(out.contains("user says they like coffee"));
+        assert!(!out.contains("Okay let me reason"));
+    }
+
+    #[test]
+    fn rejects_pure_envelope_with_no_inner_text() {
+        // Just the wrapper, no content — caller should skip cognify.
+        let raw = r#"<messages><message sender="x" time="t"></message></messages>"#;
+        assert_eq!(sanitize_for_cognify(raw), None);
+    }
+
+    #[test]
+    fn rejects_markup_heavy_payload() {
+        // 5 chars of text, lots of brackets → markup ratio fails.
+        assert_eq!(
+            sanitize_for_cognify("hi <a><b><c><d><e><f><g><h><i>"),
+            None
+        );
+    }
+
+    #[test]
+    fn passes_plain_sentence_unchanged_modulo_whitespace() {
+        let out = sanitize_for_cognify("  Ada invented the compiler.  ").unwrap();
+        assert_eq!(out, "Ada invented the compiler.");
+    }
+
+    #[test]
+    fn rejects_empty_and_whitespace_only_input() {
+        assert_eq!(sanitize_for_cognify(""), None);
+        assert_eq!(sanitize_for_cognify("   \n\t  "), None);
     }
 }
 

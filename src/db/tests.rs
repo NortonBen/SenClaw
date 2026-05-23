@@ -312,7 +312,11 @@ fn migration_adds_missing_columns_on_existing_db() {
         )
         .unwrap();
     }
-    let db = Db::open_at(tmp.path(), &cfg()).unwrap();
+    // Test uses a single SQLite file for both main + cognitive — the
+    // public API supports any two paths but reusing the same file
+    // keeps the fixture simple. Db::open_at opens two separate
+    // Connections regardless, so locking still works.
+    let db = Db::open_at(tmp.path(), tmp.path(), &cfg()).unwrap();
     db.upsert_group(&sample_group()).unwrap();
     let got = db.get_group("tg:group:1").unwrap().unwrap();
     assert_eq!(

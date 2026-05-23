@@ -660,6 +660,56 @@ pub(crate) async fn cognitive_re_extract(
 }
 
 // =====================================================================
+// POST /api/cognitive/cleanup
+// =====================================================================
+//
+// One-shot bulk-cleanup of junk that accumulated before the runtime
+// sanitizer existed (envelope-wrapped chunks, orphan entities). Triggered
+// from the DataPoints view header so users don't have to forget rows
+// one at a time.
+
+pub(crate) async fn cognitive_cleanup(
+    State(_s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let report = sys
+        .graph
+        .cleanup_junk()
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "envelope_chunks_removed": report.envelope_chunks_removed,
+        "orphan_entities_removed": report.orphan_entities_removed,
+    })))
+}
+
+// =====================================================================
+// POST /api/cognitive/maintenance
+// =====================================================================
+//
+// Full maintenance sweep: cleanup_junk + merge_duplicate_entities. This
+// is the same routine the background ticker runs on a schedule; the
+// endpoint lets users trigger it on demand from the Settings UI.
+
+pub(crate) async fn cognitive_maintenance(
+    State(_s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let graph = Arc::clone(&sys.graph);
+    let report = tokio::task::spawn_blocking(move || cognitive::run_maintenance(&*graph))
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "envelope_chunks_removed": report.cleanup.envelope_chunks_removed,
+        "orphan_entities_removed": report.cleanup.orphan_entities_removed,
+        "groups_merged": report.merge.groups_merged,
+        "entities_merged": report.merge.entities_merged,
+        "edges_redirected": report.merge.edges_redirected,
+        "duration_ms": report.duration_ms,
+    })))
+}
+
+// =====================================================================
 // DELETE /api/cognitive/node/:id
 // =====================================================================
 

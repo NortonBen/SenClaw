@@ -1,7 +1,7 @@
 import React from 'react';
 import { theme } from 'antd';
 import { getChatActionButtonStyle, getChatTextareaStyle } from './chatInputStyles';
-import { shouldIgnoreEnterSubmit, useGuardedChatSubmit } from './useGuardedChatSubmit';
+import { useChatCompositionGuard, useGuardedChatSubmit } from './useGuardedChatSubmit';
 import { AgentModeSelector } from './AgentModeSelector';
 import type { AgentMode } from '../../hooks/useWebSocket';
 
@@ -55,6 +55,7 @@ export function CommonChatInput({
   const { token } = theme.useToken();
   const placeholderClass = `common-chat-ph-${React.useId().replace(/[^a-zA-Z0-9_-]/g, '') || 'x'}`;
   const guardedSubmit = useGuardedChatSubmit(onSubmit);
+  const { onCompositionStart, onCompositionEnd, shouldBlockEnterSubmit } = useChatCompositionGuard();
 
   const submit = () => {
     if (actionDisabled) return;
@@ -63,7 +64,7 @@ export function CommonChatInput({
 
   const keyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      if (shouldIgnoreEnterSubmit(e)) return;
+      if (shouldBlockEnterSubmit(e)) return;
       e.preventDefault();
       submit();
     }
@@ -79,6 +80,8 @@ export function CommonChatInput({
           <textarea
             value={value}
             onChange={e => onChange?.(e.target.value)}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={onCompositionEnd}
             onKeyDown={keyDown}
             disabled={disabled}
             placeholder={placeholder}

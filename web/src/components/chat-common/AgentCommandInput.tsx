@@ -1,7 +1,7 @@
 import React from 'react';
 import { Input, Typography, theme } from 'antd';
 import { getChatActionButtonStyle, getChatTextareaStyle } from './chatInputStyles';
-import { shouldIgnoreEnterSubmit, useGuardedChatSubmit } from './useGuardedChatSubmit';
+import { useChatCompositionGuard, useGuardedChatSubmit } from './useGuardedChatSubmit';
 
 const { Text } = Typography;
 
@@ -56,6 +56,7 @@ export function AgentCommandInput({
   const [skills, setSkills] = React.useState<AgentCommandItem[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const guardedSubmit = useGuardedChatSubmit(onSubmit);
+  const { onCompositionStart, onCompositionEnd, shouldBlockEnterSubmit } = useChatCompositionGuard();
 
   const handleFileButtonClick = () => {
     fileInputRef.current?.click();
@@ -199,6 +200,8 @@ export function AgentCommandInput({
           placeholder={placeholder}
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={disabled}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
           onKeyDown={(e) => {
             if (triggerState) {
               if (e.key === 'ArrowDown') {
@@ -225,7 +228,7 @@ export function AgentCommandInput({
               }
             }
             if (e.key === 'Enter' && !e.shiftKey) {
-              if (shouldIgnoreEnterSubmit(e)) return;
+              if (shouldBlockEnterSubmit(e)) return;
               e.preventDefault();
               if (buttonDisabled) return;
               guardedSubmit();

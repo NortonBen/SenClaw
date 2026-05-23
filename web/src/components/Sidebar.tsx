@@ -67,6 +67,8 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
             const timeStr = startDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
             const dateStr = startDate.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
             const isRenotify = n.kind === 'renotify';
+            const isPending = n.kind === 'pending';
+            const isLate = (n.delayedMs ?? 0) > 60_000;
             return (
               <List.Item
                 style={{
@@ -79,11 +81,17 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
                 onClick={() => onMarkRead(n.id)}
               >
                 <div className="flex gap-2 w-full">
-                  <ClockCircleOutlined style={{ color: isRenotify ? token.colorWarning : token.colorPrimary, marginTop: 2, flexShrink: 0 }} />
+                  <ClockCircleOutlined style={{ color: isRenotify ? token.colorWarning : isPending ? token.colorTextSecondary : token.colorPrimary, marginTop: 2, flexShrink: 0 }} />
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate" style={{ color: token.colorText }}>{n.title}</div>
                     <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-                      {isRenotify ? '🔁 Đang diễn ra' : '⏰ Nhắc nhở'} · {dateStr} {timeStr}
+                      {isPending
+                        ? `📅 Sắp nhắc · ${dateStr} ${timeStr}`
+                        : isRenotify
+                          ? '🔁 Đang diễn ra'
+                          : '⏰ Nhắc nhở'}
+                      {!isPending && ` · ${dateStr} ${timeStr}`}
+                      {isLate && ' · trễ'}
                     </div>
                   </div>
                   {!n.read && (

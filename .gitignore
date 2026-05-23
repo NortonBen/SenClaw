@@ -60,3 +60,6 @@ test_prompt.sh
 
 
 *.tar.gz
+.cursor/
+.claude/
+.vscode/

@@ -398,9 +398,27 @@ export function useWebSocket(): WsHook {
     rawSend({ type: 'permission:accept-all', enabled });
   }, [rawSend]);
 
+  const upsertNotification = useCallback((incoming: EventNotification) => {
+    setNotifications(prev => {
+      const withoutPending = incoming.kind !== 'pending'
+        ? prev.filter(n => !(n.kind === 'pending' && n.eventId === incoming.eventId))
+        : prev;
+      const idx = withoutPending.findIndex(n => n.id === incoming.id);
+      if (idx >= 0) {
+        const next = [...withoutPending];
+        next[idx] = { ...next[idx], ...incoming };
+        return next;
+      }
+      return [...withoutPending, incoming];
+    });
+  }, []);
+
   const markNotificationRead = useCallback((id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  }, []);
+    if (!id.startsWith('pending-')) {
+      rawSend({ type: 'notification:read', id });
+    }
+  }, [rawSend]);
 
   const clearAllNotifications = useCallback(() => {
     setNotifications([]);
@@ -833,15 +851,30 @@ export function useWebSocket(): WsHook {
             setCoworkResourceChanged(prev => prev + 1);
             break;
           case 'space:event:reminder':
-            setNotifications(prev => [...prev, {
-              id: `notif-${Date.now()}-${Math.random()}`,
+            upsertNotification({
+              id: (msg.id as string) ?? `notif-${Date.now()}`,
               eventId: msg.eventId as string,
               title: msg.title as string,
               startAt: msg.startAt as number,
               kind: (msg.kind as 'reminder' | 'renotify') ?? 'reminder',
               receivedAt: Date.now(),
+              read: Boolean(msg.read),
+              firedAt: msg.firedAt as number | undefined,
+              delayedMs: (msg.delayedMs as number) ?? 0,
+            });
+            break;
+          case 'space:event:pending':
+            upsertNotification({
+              id: `pending-${msg.eventId as string}`,
+              eventId: msg.eventId as string,
+              title: msg.title as string,
+              startAt: msg.startAt as number,
+              kind: 'pending',
+              receivedAt: Date.now(),
               read: false,
-            }]);
+              triggerAt: msg.triggerAt as number,
+              reminderMin: msg.reminderMin as number,
+            });
             break;
           case 'permission:rules':
             setToolRules(() => {

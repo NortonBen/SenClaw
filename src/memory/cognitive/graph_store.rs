@@ -87,6 +87,51 @@ pub trait GraphStore: Send + Sync {
         require_ltp: bool,
         limit: usize,
     ) -> Result<Vec<(RelationshipEdge, DataPoint, DataPoint)>>;
+
+    /// Bulk-delete junk nodes: envelope-wrapped chunks plus orphan entities
+    /// (zero incident edges). Used by the Data memory cleanup button. Two
+    /// signals identify junk:
+    ///   * `chunk` nodes whose `summary` contains any of the well-known
+    ///     envelope markers (`<messages>`, `<message ` etc.). These get
+    ///     past the runtime sanitizer because they were ingested BEFORE
+    ///     we added it.
+    ///   * Any `entity` whose UUID appears nowhere in `cog_edges`. These
+    ///     are leftovers from prior `forget` operations that removed the
+    ///     incident edges but left the node.
+    /// Cascade deletes any incident edges too (FK ON DELETE CASCADE
+    /// from the schema).
+    fn cleanup_junk(&self) -> Result<CleanupReport>;
+
+    /// Merge duplicate `entity` nodes that share the same case-insensitive
+    /// `name`. For each duplicate group:
+    ///   * Pick a canonical (highest `mention_count`, tie-broken by oldest
+    ///     `created_at`).
+    ///   * Redirect every incident edge from the duplicates to the canonical
+    ///     using `INSERT OR IGNORE` so PK collisions silently coalesce.
+    ///   * Bump the canonical's `mention_count` by the sum of the merged
+    ///     mention counts and refresh `last_seen_at`.
+    ///   * Delete the duplicate nodes.
+    /// Returns counts for the UI summary.
+    fn merge_duplicate_entities(&self) -> Result<MergeReport>;
+}
+
+/// Result of a [`GraphStore::cleanup_junk`] call. Returned to the HTTP
+/// caller so the UI can summarise "removed 12 envelope-chunks, 3 orphans".
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct CleanupReport {
+    pub envelope_chunks_removed: usize,
+    pub orphan_entities_removed: usize,
+}
+
+/// Result of a [`GraphStore::merge_duplicate_entities`] call.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct MergeReport {
+    /// Number of duplicate-name groups that had at least one merge applied.
+    pub groups_merged: usize,
+    /// Total entity nodes deleted (= sum of (group_size - 1) across groups).
+    pub entities_merged: usize,
+    /// Edges that survived redirection (re-pointed to canonical).
+    pub edges_redirected: usize,
 }
 
 /// `DataPoint` paired with its incident-edge count. Returned by
@@ -583,6 +628,176 @@ impl GraphStore for SqliteGraphStore {
         })
     }
 
+    fn cleanup_junk(&self) -> Result<CleanupReport> {
+        self.db.with_cog_conn(|conn| {
+            // Envelope-wrapped chunks. The patterns mirror what the
+            // sanitize_for_cognify helper rejects at ingest time, applied
+            // here retroactively to legacy data. We use LIKE not regex so
+            // SQLite doesn't need a compiled extension.
+            let envelope_chunks_removed = conn.execute(
+                "DELETE FROM cog_nodes
+                 WHERE kind = 'chunk'
+                   AND (
+                     summary LIKE '%<messages>%'
+                     OR summary LIKE '%<message %'
+                     OR summary LIKE '%</message>%'
+                     OR summary LIKE '%<think>%'
+                   )",
+                [],
+            )?;
+
+            // Orphan entities: no incident edges. These accrue when an
+            // upstream chunk was deleted (forget) but the entities it
+            // produced stayed behind, or when an early cognify run was
+            // partially aborted.
+            let orphan_entities_removed = conn.execute(
+                "DELETE FROM cog_nodes
+                 WHERE kind = 'entity'
+                   AND id NOT IN (SELECT src FROM cog_edges UNION SELECT dst FROM cog_edges)",
+                [],
+            )?;
+
+            Ok(CleanupReport {
+                envelope_chunks_removed,
+                orphan_entities_removed,
+            })
+        })
+    }
+
+    fn merge_duplicate_entities(&self) -> Result<MergeReport> {
+        self.db.with_cog_conn(|conn| {
+            // Find groups of entity nodes sharing a normalised name. We
+            // exclude empty names so chunks/auto-generated nodes don't get
+            // collapsed.
+            let mut stmt = conn.prepare(
+                "SELECT LOWER(TRIM(name)) AS norm, COUNT(*) AS c
+                 FROM cog_nodes
+                 WHERE kind = 'entity' AND TRIM(name) <> ''
+                 GROUP BY norm
+                 HAVING c > 1",
+            )?;
+            let group_keys: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+
+            let now = chrono::Utc::now().timestamp();
+            let mut groups_merged = 0usize;
+            let mut entities_merged = 0usize;
+            let mut edges_redirected = 0usize;
+
+            for norm in group_keys {
+                // Members ranked by canonical-preference: highest mention,
+                // then oldest. First row is the survivor.
+                let mut q = conn.prepare(
+                    "SELECT id, mention_count
+                     FROM cog_nodes
+                     WHERE kind = 'entity' AND LOWER(TRIM(name)) = ?1
+                     ORDER BY mention_count DESC, created_at ASC",
+                )?;
+                let members: Vec<(Vec<u8>, i64)> = q
+                    .query_map([&norm], |r| {
+                        Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                drop(q);
+
+                if members.len() < 2 {
+                    continue;
+                }
+                let (canonical_id, _) = &members[0];
+                let mut group_edges_kept = 0usize;
+                let mut mention_sum: i64 = 0;
+
+                for (dup_id, dup_mentions) in members.iter().skip(1) {
+                    mention_sum += *dup_mentions;
+
+                    // Redirect outgoing edges. INSERT OR IGNORE lets PK
+                    // collisions (same canonical→dst,predicate already exists)
+                    // drop the duplicate edge silently. We count what survived.
+                    let inserted_src = conn.execute(
+                        "INSERT OR IGNORE INTO cog_edges
+                            (src, dst, predicate, props_json,
+                             valid_from, valid_to,
+                             strength, tier, activation_count, last_activated,
+                             ltp_status, ltp_detected_at,
+                             entity_confidence, endpoint_selectivity, forman_curvature,
+                             activation_timestamps,
+                             source_episode_id, context, created_at)
+                         SELECT ?1, dst, predicate, props_json,
+                                valid_from, valid_to,
+                                strength, tier, activation_count, last_activated,
+                                ltp_status, ltp_detected_at,
+                                entity_confidence, endpoint_selectivity, forman_curvature,
+                                activation_timestamps,
+                                source_episode_id, context, created_at
+                         FROM cog_edges WHERE src = ?2",
+                        rusqlite::params![canonical_id, dup_id],
+                    )?;
+                    conn.execute(
+                        "DELETE FROM cog_edges WHERE src = ?1",
+                        rusqlite::params![dup_id],
+                    )?;
+
+                    // Redirect incoming edges.
+                    let inserted_dst = conn.execute(
+                        "INSERT OR IGNORE INTO cog_edges
+                            (src, dst, predicate, props_json,
+                             valid_from, valid_to,
+                             strength, tier, activation_count, last_activated,
+                             ltp_status, ltp_detected_at,
+                             entity_confidence, endpoint_selectivity, forman_curvature,
+                             activation_timestamps,
+                             source_episode_id, context, created_at)
+                         SELECT src, ?1, predicate, props_json,
+                                valid_from, valid_to,
+                                strength, tier, activation_count, last_activated,
+                                ltp_status, ltp_detected_at,
+                                entity_confidence, endpoint_selectivity, forman_curvature,
+                                activation_timestamps,
+                                source_episode_id, context, created_at
+                         FROM cog_edges WHERE dst = ?2",
+                        rusqlite::params![canonical_id, dup_id],
+                    )?;
+                    conn.execute(
+                        "DELETE FROM cog_edges WHERE dst = ?1",
+                        rusqlite::params![dup_id],
+                    )?;
+
+                    group_edges_kept += inserted_src + inserted_dst;
+
+                    // Delete the duplicate node (FK cascade no-ops since we
+                    // already cleared its edges).
+                    conn.execute(
+                        "DELETE FROM cog_nodes WHERE id = ?1",
+                        rusqlite::params![dup_id],
+                    )?;
+                    entities_merged += 1;
+                }
+
+                // Roll up the merged mention counts onto the survivor and
+                // bump last_seen.
+                conn.execute(
+                    "UPDATE cog_nodes
+                     SET mention_count = mention_count + ?2,
+                         last_seen_at = ?3,
+                         updated_at   = ?3
+                     WHERE id = ?1",
+                    rusqlite::params![canonical_id, mention_sum, now],
+                )?;
+
+                edges_redirected += group_edges_kept;
+                groups_merged += 1;
+            }
+
+            Ok(MergeReport {
+                groups_merged,
+                entities_merged,
+                edges_redirected,
+            })
+        })
+    }
+
     fn top_nodes_by_degree(&self, limit: usize) -> Result<Vec<NodeWithDegree>> {
         self.db.with_cog_conn(|conn| {
             // Degree = count of incident edges in cog_edges (src or dst).
@@ -760,5 +975,54 @@ mod tests {
         // The lonely node lands last with degree 0.
         assert_eq!(top[4].node.name, "lonely");
         assert_eq!(top[4].degree, 0);
+    }
+
+    #[test]
+    fn cleanup_junk_removes_envelope_chunks_and_orphans() {
+        let store = SqliteGraphStore::new(test_db());
+
+        // Junk chunk #1 — envelope wrapper.
+        let mut junk = DataPoint::chunk(
+            "<messages><message sender=\"x\" time=\"t\">hi</message></messages>",
+            Some("h1".into()),
+            1,
+        );
+        junk.id = uuid::Uuid::new_v4();
+        store.upsert_node(&junk).unwrap();
+
+        // Junk chunk #2 — has a `<message ` tag mid-text.
+        let mut junk2 =
+            DataPoint::chunk("prefix <message sender=\"a\">x</message>", Some("h2".into()), 1);
+        junk2.id = uuid::Uuid::new_v4();
+        store.upsert_node(&junk2).unwrap();
+
+        // Good chunk — plain sentence, kept.
+        let mut good = DataPoint::chunk("Ada invented the compiler", Some("h3".into()), 1);
+        good.id = uuid::Uuid::new_v4();
+        store.upsert_node(&good).unwrap();
+
+        // Orphan entity — no edges incident.
+        let mut orphan = DataPoint::entity("OrphanEntity", 1);
+        orphan.id = uuid::Uuid::new_v4();
+        store.upsert_node(&orphan).unwrap();
+
+        // Connected entity — has incoming edge from `good`.
+        let mut connected = DataPoint::entity("ConnectedEntity", 1);
+        connected.id = uuid::Uuid::new_v4();
+        store.upsert_node(&connected).unwrap();
+        let mut e = RelationshipEdge::new(good.id, connected.id, "MENTIONS", 1);
+        e.last_activated = 1;
+        store.upsert_edge(&e).unwrap();
+
+        let report = store.cleanup_junk().unwrap();
+        assert_eq!(report.envelope_chunks_removed, 2);
+        assert_eq!(report.orphan_entities_removed, 1);
+
+        // Survivors only.
+        assert!(store.get_node(good.id).unwrap().is_some());
+        assert!(store.get_node(connected.id).unwrap().is_some());
+        assert!(store.get_node(junk.id).unwrap().is_none());
+        assert!(store.get_node(junk2.id).unwrap().is_none());
+        assert!(store.get_node(orphan.id).unwrap().is_none());
     }
 }

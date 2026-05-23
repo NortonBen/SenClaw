@@ -179,7 +179,14 @@ impl DispatchBridge {
         parent_goal: &str,
         result: Option<String>,
     ) {
-        if let Some(cb) = self.on_task_lifecycle.lock().unwrap().as_ref() {
+        // Clone callback before invoking — Cowork handoff logic may panic on bad
+        // input; holding the mutex across the callback would poison it.
+        let cb = self
+            .on_task_lifecycle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(cb) = cb.as_ref() {
             cb(task_id, status, label, parent_goal, result);
         }
     }

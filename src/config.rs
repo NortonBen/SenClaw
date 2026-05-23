@@ -56,6 +56,12 @@ pub struct SchedulerConfig {
 #[derive(Debug, Clone)]
 pub struct PathsConfig {
     pub db_path: PathBuf,
+    /// Cognitive memory database — separate SQLite file from the main
+    /// `db_path` so the user can wipe the cognitive graph (which is
+    /// rebuildable from sources like SOUL.md / user chat) without
+    /// touching irreplaceable data (channel messages, scheduled tasks).
+    /// Defaults to a sibling `senclaw_cognitive.db` next to `db_path`.
+    pub cognitive_db_path: PathBuf,
     pub agents_dir: PathBuf,
     pub workspace_dir: PathBuf,
     pub global_config_path: PathBuf,
@@ -164,6 +170,70 @@ pub struct AppConfig {
     pub access_token: String,
 }
 
+/// Governance knobs for the cognitive memory layer.
+///
+/// Backstory: cognify runs an LLM per user message (via P14 auto-reflection)
+/// + per CogAdd call. On a local model with thinking enabled (Qwen3, R1
+/// family) one extraction can emit 2000+ tokens (mostly `<think>` reasoning)
+/// and tie up the runtime for over a minute. Without limits, a busy chat can
+/// queue 5+ concurrent cognify calls and saturate the engine. The knobs
+/// below cap input size, total in-flight cognify calls, and output bytes so
+/// the cognitive layer can't drown out the foreground agent.
+#[derive(Debug, Clone)]
+pub struct CognitiveConfig {
+    /// Master switch. When false, cognify is short-circuited everywhere
+    /// (CogAdd → ok with `llm_skipped`, reflection → no-op, SOUL ingest →
+    /// chunk-only). Useful for slow local models where the cognitive layer
+    /// would just queue forever.
+    pub enabled: bool,
+    /// Maximum cognify calls allowed to run at once. Acquired via semaphore
+    /// in `CognitiveSystem::cognify`. When the cap is hit, new calls block
+    /// until a permit frees. 1 = strictly serial.
+    pub max_concurrent: usize,
+    /// Hard cap on bytes the cognify LLM can stream back. Local-MLX
+    /// adapters close the receiver once exceeded — Qwen3 `<think>` blocks
+    /// that run away get cut at this byte budget instead of decoding to
+    /// `eos`. The JSON we actually care about is < 1 KB; default 8 KB
+    /// leaves ample headroom for reasoning preamble.
+    pub max_output_chars: usize,
+    /// Reflection (auto-cognify on user messages, P14) skips messages
+    /// shorter than this — short ack/yes/no has no facts to extract.
+    pub reflect_min_chars: usize,
+    /// Reflection skips messages longer than this — a 10 KB paste would
+    /// blow up the prompt token count. Caller can still CogAdd manually.
+    pub reflect_max_chars: usize,
+    /// Minimum interval between reflection calls for the same agent.
+    /// Defends against busy-chat storms. 0 = no cooldown.
+    pub reflect_cooldown_ms: u64,
+    /// Cadence for the periodic maintenance sweep (cleanup junk +
+    /// merge duplicate entities). `0` disables the sweep entirely; the
+    /// user can still trigger it manually from the Settings UI.
+    pub maintenance_interval_hours: u64,
+}
+
+impl Default for CognitiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // Local LLMs don't parallelise well; 1 = serial cognify is the
+            // safe default. Remote APIs can crank this up via env.
+            max_concurrent: 1,
+            // ~8 KB ≈ 2K tokens — enough for a `<think>` preamble + JSON.
+            max_output_chars: 8 * 1024,
+            reflect_min_chars: 20,
+            // ~2 KB ≈ 500 tokens — anything longer is a paste, not a
+            // sentence; user can still CogAdd it explicitly.
+            reflect_max_chars: 2000,
+            // 2 s cooldown lets multi-line replies in quick succession
+            // queue without firing 5 cognifies back-to-back.
+            reflect_cooldown_ms: 2000,
+            // Daily maintenance. Cheap on small graphs; bigger ones can
+            // raise the cadence via the Settings UI.
+            maintenance_interval_hours: 24,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub telegram: TelegramConfig,
@@ -172,6 +242,7 @@ pub struct Config {
     pub scheduler: SchedulerConfig,
     pub paths: PathsConfig,
     pub memory: MemoryConfig,
+    pub cognitive: CognitiveConfig,
     pub ui_server: UiServerConfig,
     pub mcp: McpConfig,
     pub ws_port: u16,
@@ -233,6 +304,10 @@ impl Config {
             },
             paths: PathsConfig {
                 db_path: env_path("DB_PATH", senclaw_home.join("senclaw.db")),
+                cognitive_db_path: env_path(
+                    "COGNITIVE_DB_PATH",
+                    senclaw_home.join("senclaw_cognitive.db"),
+                ),
                 agents_dir: env_path("AGENTS_DIR", senclaw_data.join("agents")),
                 workspace_dir: env_path("WORKSPACE_DIR", senclaw_data.join("workspace")),
                 global_config_path: env_path(
@@ -331,6 +406,20 @@ impl Config {
                 pre_retrieval: env_bool("SENCLAW_PRE_RETRIEVAL", false),
                 cognitive_reflection: env_bool("SENCLAW_COGNITIVE_REFLECTION", true),
             },
+            cognitive: CognitiveConfig {
+                enabled: env_bool("SENCLAW_COGNITIVE_ENABLED", true),
+                max_concurrent: env_int::<usize>("SENCLAW_COGNITIVE_MAX_CONCURRENT", 1).max(1),
+                max_output_chars: env_int::<usize>("SENCLAW_COGNITIVE_MAX_OUTPUT_CHARS", 8 * 1024)
+                    .max(256),
+                reflect_min_chars: env_int::<usize>("SENCLAW_COGNITIVE_REFLECT_MIN_CHARS", 20),
+                reflect_max_chars: env_int::<usize>("SENCLAW_COGNITIVE_REFLECT_MAX_CHARS", 2000)
+                    .max(100),
+                reflect_cooldown_ms: env_int::<u64>("SENCLAW_COGNITIVE_REFLECT_COOLDOWN_MS", 2000),
+                maintenance_interval_hours: env_int::<u64>(
+                    "SENCLAW_COGNITIVE_MAINTENANCE_HOURS",
+                    24,
+                ),
+            },
             ui_server: UiServerConfig {
                 port: env_int("SENCLAW_UI_PORT", 18788),
                 ws_token: match env::var("SENCLAW_WS_TOKEN") {
@@ -425,6 +514,37 @@ impl Config {
                 if d > 0 {
                     self.memory.embedding_dimensions = d;
                 }
+            }
+        }
+
+        // Cognitive governance knobs. Same precedence as embedding: env
+        // wins when explicitly set; UI fills in everything else.
+        if let Some(cc) =
+            crate::gateway::group_manager::load_cognitive_config(global_config_path)
+        {
+            if let Some(v) = cc.enabled {
+                self.cognitive.enabled = v;
+            }
+            if let Some(v) = cc.max_concurrent {
+                self.cognitive.max_concurrent = v.max(1);
+            }
+            if let Some(v) = cc.max_output_chars {
+                self.cognitive.max_output_chars = v.max(256);
+            }
+            if let Some(v) = cc.reflect_min_chars {
+                self.cognitive.reflect_min_chars = v;
+            }
+            if let Some(v) = cc.reflect_max_chars {
+                self.cognitive.reflect_max_chars = v.max(100);
+            }
+            if let Some(v) = cc.reflect_cooldown_ms {
+                self.cognitive.reflect_cooldown_ms = v;
+            }
+            if let Some(v) = cc.auto_reflection {
+                self.memory.cognitive_reflection = v;
+            }
+            if let Some(v) = cc.maintenance_interval_hours {
+                self.cognitive.maintenance_interval_hours = v;
             }
         }
     }

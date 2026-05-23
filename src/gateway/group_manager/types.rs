@@ -196,6 +196,67 @@ pub(super) struct GlobalConfig {
         rename = "embeddingConfig"
     )]
     pub(super) embedding_config: Option<EmbeddingConfig>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "cognitiveConfig"
+    )]
+    pub(super) cognitive_config: Option<PersistedCognitiveConfig>,
+}
+
+/// Settings → Cognitive UI form. Maps 1:1 onto [`crate::config::CognitiveConfig`]
+/// at boot via `apply_persisted_overrides`. All fields optional so older
+/// config files keep working (missing fields fall back to env / defaults).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PersistedCognitiveConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "maxConcurrent"
+    )]
+    pub max_concurrent: Option<usize>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "maxOutputChars"
+    )]
+    pub max_output_chars: Option<usize>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "reflectMinChars"
+    )]
+    pub reflect_min_chars: Option<usize>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "reflectMaxChars"
+    )]
+    pub reflect_max_chars: Option<usize>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "reflectCooldownMs"
+    )]
+    pub reflect_cooldown_ms: Option<u64>,
+    /// Toggle for `MemoryConfig.cognitive_reflection` — auto-cognify
+    /// every user message. Off = manual CogAdd only.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "autoReflection"
+    )]
+    pub auto_reflection: Option<bool>,
+    /// Cadence (hours) for the periodic maintenance sweep that runs
+    /// `cleanup_junk` + `merge_duplicate_entities`. `0` disables it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "maintenanceIntervalHours"
+    )]
+    pub maintenance_interval_hours: Option<u64>,
 }
 
 /// Fields that can be updated on a [`GroupBinding`].

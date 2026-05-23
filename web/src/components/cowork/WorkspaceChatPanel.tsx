@@ -9,6 +9,7 @@ import {
 import type { CoworkMessage, CoworkTask, TaskResultEvent, ToolMessage } from '../../types';
 import { TaskResultCard } from './TaskResultCard';
 import { ToolGroupCard } from '../ToolGroupCard';
+import { useChatCompositionGuard, useGuardedChatSubmit } from '../chat-common/useGuardedChatSubmit';
 
 const { Text, Paragraph } = Typography;
 
@@ -214,7 +215,7 @@ export function WorkspaceChatPanel({
     return () => clearTimeout(t);
   }, [lastTaskResult, workspaceId, loadMessages]);
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text) return;
     // Optimistic: show immediately
@@ -223,7 +224,10 @@ export function WorkspaceChatPanel({
     onSend(text);
     // Reload after short delay to get server messages
     setTimeout(() => loadMessages(), 1200);
-  };
+  }, [input, onSend, loadMessages]);
+
+  const guardedSend = useGuardedChatSubmit(handleSend);
+  const { onCompositionStart, onCompositionEnd, shouldBlockEnterSubmit } = useChatCompositionGuard();
 
   const activeTasks = tasks.filter(t => t.status === 'in_progress');
 
@@ -287,8 +291,14 @@ export function WorkspaceChatPanel({
         <Input.TextArea
           value={input}
           onChange={e => setInput(e.target.value)}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+            if (e.key === 'Enter' && !e.shiftKey) {
+              if (shouldBlockEnterSubmit(e)) return;
+              e.preventDefault();
+              guardedSend();
+            }
           }}
           placeholder="Gửi yêu cầu tới workspace… (Enter để gửi)"
           autoSize={{ minRows: 1, maxRows: 4 }}
@@ -297,7 +307,7 @@ export function WorkspaceChatPanel({
         <Button
           type="primary"
           icon={<SendOutlined />}
-          onClick={handleSend}
+          onClick={guardedSend}
           loading={sending}
           disabled={!input.trim()}
         />

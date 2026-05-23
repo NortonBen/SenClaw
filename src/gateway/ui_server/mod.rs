@@ -9,6 +9,7 @@
 
 mod code;
 mod cognitive;
+mod cognitive_config;
 mod config_handler;
 pub mod core;
 mod cowork;

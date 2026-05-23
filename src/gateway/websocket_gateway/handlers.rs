@@ -25,6 +25,7 @@ pub(crate) async fn handle_connect(
     sender: &tokio::sync::mpsc::UnboundedSender<Message>,
     token: &Option<String>,
     msg: &serde_json::Value,
+    state: &Arc<WsState>,
 ) {
     if let Some(ref required_token) = token {
         let provided = msg["token"].as_str().unwrap_or("");
@@ -41,6 +42,115 @@ pub(crate) async fn handle_connect(
         client.authenticated = true;
     }
     send_json(sender, &serde_json::json!({"type": "auth:ok"}));
+    replay_event_notification_snapshot(sender, &state.db).await;
+}
+
+/// On connect, replay persisted reminders and forward-looking pending items so
+/// reload / reconnect still shows notifications the user missed offline.
+pub(crate) async fn replay_event_notification_snapshot(
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    db: &Arc<crate::db::Db>,
+) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    const PENDING_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+
+    match db.list_event_notifications(Some(50)) {
+        Ok(rows) => {
+            if !rows.is_empty() {
+                tracing::info!(
+                    "[WsGateway] connect snapshot: replaying {} event notification(s)",
+                    rows.len()
+                );
+            }
+            for row in rows {
+                send_json(
+                    sender,
+                    &serde_json::json!({
+                        "type": "space:event:reminder",
+                        "replay": true,
+                        "id": row.id,
+                        "eventId": row.event_id,
+                        "title": row.title,
+                        "startAt": row.start_at,
+                        "kind": row.kind,
+                        "firedAt": row.fired_at,
+                        "delayedMs": row.delayed_ms,
+                        "read": row.read_at.is_some(),
+                    }),
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[WsGateway] connect snapshot: list notifications failed: {e}");
+        }
+    }
+
+    match db.list_pending_event_reminders(now_ms, PENDING_WINDOW_MS) {
+        Ok(pending) => {
+            if !pending.is_empty() {
+                tracing::info!(
+                    "[WsGateway] connect snapshot: {} pending event reminder(s)",
+                    pending.len()
+                );
+            }
+            for p in pending {
+                send_json(
+                    sender,
+                    &serde_json::json!({
+                        "type": "space:event:pending",
+                        "eventId": p.event_id,
+                        "title": p.title,
+                        "startAt": p.start_at,
+                        "triggerAt": p.trigger_at,
+                        "reminderMin": p.reminder_min,
+                    }),
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[WsGateway] connect snapshot: list pending reminders failed: {e}");
+        }
+    }
+}
+
+pub(crate) async fn handle_notification_read(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let Some(id) = msg["id"].as_str() else {
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "id required"}),
+        );
+        return;
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    match state.db.mark_event_notification_read(id, now_ms) {
+        Ok(0) => {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "notification not found"}),
+            );
+        }
+        Ok(_) => {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "notification:read:ok", "id": id}),
+            );
+        }
+        Err(e) => {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": format!("mark read failed: {e}")}),
+            );
+        }
+    }
 }
 
 pub(crate) async fn handle_subscribe(

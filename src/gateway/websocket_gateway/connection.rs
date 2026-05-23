@@ -45,6 +45,7 @@ pub(crate) async fn handle_connection(
 
     if auto_auth {
         let _ = tx.send(Message::Text(r#"{"type":"auth:ok"}"#.to_string().into()));
+        super::handlers::replay_event_notification_snapshot(&tx, &state.db).await;
     }
 
     // Forward channel messages → WebSocket sink.
@@ -111,7 +112,11 @@ async fn handle_message(
 
     match msg_type {
         "connect" => {
-            super::handlers::handle_connect(clients, client_idx, &sender, token, msg).await
+            super::handlers::handle_connect(clients, client_idx, &sender, token, msg, state).await
+        }
+        "notification:read" => {
+            super::handlers::handle_notification_read(clients, client_idx, &sender, state, msg)
+                .await
         }
         "subscribe" => {
             super::handlers::handle_subscribe(

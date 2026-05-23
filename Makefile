@@ -24,3 +24,9 @@ run-backend:
 
 run-web:
 	cd web && npm run dev
+
+run:
+	cargo run --features local-mlx --features local-embed-metal --features local-embed
+
+build-extension:
+	cd senclaw-extension-chrome && npm run build

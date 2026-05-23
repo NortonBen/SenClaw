@@ -106,6 +106,21 @@ pub fn load_embedding_config(config_path: &Path) -> Option<EmbeddingConfig> {
     load_global_config(config_path).embedding_config
 }
 
+pub fn load_cognitive_config(
+    config_path: &Path,
+) -> Option<super::types::PersistedCognitiveConfig> {
+    load_global_config(config_path).cognitive_config
+}
+
+pub fn save_cognitive_config(
+    config_path: &Path,
+    c: &super::types::PersistedCognitiveConfig,
+) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.cognitive_config = Some(c.clone());
+    save_global_config(config_path, &cfg)
+}
+
 pub fn save_embedding_config(config_path: &Path, c: &EmbeddingConfig) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.embedding_config = Some(c.clone());
