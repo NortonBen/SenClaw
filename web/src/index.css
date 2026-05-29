@@ -11,6 +11,41 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Desktop app (Tauri) — make it feel native rather than like a web page. */
+.desktop-app,
+.desktop-app * {
+  /* Kill the macOS rubber-band / overscroll bounce on every scroll area. */
+  overscroll-behavior: none;
+}
+
+.desktop-app {
+  /* No page-level scroll bounce or accidental rubber-banding. */
+  overflow: hidden;
+}
+
+/* Don't let UI chrome (sidebar, buttons, labels) be selected like a web page,
+   but keep text content and inputs fully selectable for copying. */
+.desktop-app {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.desktop-app input,
+.desktop-app textarea,
+.desktop-app [contenteditable="true"],
+.desktop-app .prose,
+.desktop-app .prose *,
+.desktop-app code,
+.desktop-app pre,
+.desktop-app p,
+.desktop-app span,
+.desktop-app td,
+.desktop-app th,
+.desktop-app li {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 ::-webkit-scrollbar {
   width: 4px;
 }

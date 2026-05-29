@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Core permissions for the chat and main windows","local":true,"windows":["chat","main"],"permissions":["core:default"]}}

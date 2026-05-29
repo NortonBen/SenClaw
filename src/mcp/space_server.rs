@@ -955,7 +955,11 @@ impl SpaceServer {
                 conn.execute("UPDATE space_events SET description=?1 WHERE id=?2 AND deleted_at IS NULL", params![description, event_id])?;
             }
             if let Some(v) = start_at {
-                conn.execute("UPDATE space_events SET start_at=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+                // Re-arm reminder + start notifications when the event moves.
+                conn.execute(
+                    "UPDATE space_events SET start_at=?1, reminder_sent_at=NULL, start_sent_at=NULL WHERE id=?2 AND deleted_at IS NULL",
+                    params![v, event_id],
+                )?;
             }
             if let Some(v) = end_at {
                 conn.execute("UPDATE space_events SET end_at=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
@@ -978,7 +982,7 @@ impl SpaceServer {
             if reset_reminder {
                 // Clear sent flags so EventNotifier fires the reminder again.
                 conn.execute(
-                    "UPDATE space_events SET reminder_sent_at=NULL, renotify_sent_at=NULL WHERE id=?1 AND deleted_at IS NULL",
+                    "UPDATE space_events SET reminder_sent_at=NULL, renotify_sent_at=NULL, start_sent_at=NULL WHERE id=?1 AND deleted_at IS NULL",
                     params![event_id],
                 )?;
             }

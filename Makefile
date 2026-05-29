@@ -30,3 +30,21 @@ run:
 
 build-extension:
 	cd senclaw-extension-chrome && npm run build
+
+# ===== Desktop app (Tauri 2.0) =====
+# Requires: cargo install tauri-cli --version "^2"
+
+app-icons:
+	cargo tauri icon "senclaw_logo_simple_1_1777475846377.png"
+
+app-dev:
+	cd web && npx vite build
+	cargo tauri dev
+
+# Full installer build: web UI + CLI sidecar + bundle.
+app-build:
+	cd web && npx vite build
+	cargo build --release --bin senclaw
+	mkdir -p src-tauri/binaries
+	cp target/release/senclaw src-tauri/binaries/senclaw
+	cargo tauri build

@@ -296,6 +296,12 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
     );
   }
 
+  // Tool invocations are aggregated into a ToolGroupCard by ChatView, never
+  // rendered through MessageBubble. Guard narrows the union to TextMessage.
+  if (message.role === 'tool') {
+    return null;
+  }
+
   const { role, text, timestamp, senderName, attachments } = message;
 
   if (role === 'user') {

@@ -178,6 +178,47 @@ impl EventNotifier {
                 )?;
             }
 
+            // ── 2.5 Fire "event is starting" notifications ───────────────────
+            // Every event pings at its start time, regardless of whether a
+            // reminder_min was configured. This is the baseline guarantee:
+            // "notification khi đến thời điểm". `start_sent_at` makes it
+            // exactly-once. Catches events the user created without an
+            // explicit reminder (e.g. "thêm sự kiện Đi Uniqlo lúc 14h").
+            let mut stmt = conn.prepare(
+                "SELECT id, title, start_at
+                 FROM space_events
+                 WHERE deleted_at IS NULL
+                   AND start_sent_at IS NULL
+                   AND start_at <= ?1
+                   AND end_at > ?1",
+            )?;
+            let starts: Vec<(String, String, i64)> = stmt
+                .query_map(params![now_ms], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for (id, title, start_at) in starts {
+                info!(
+                    "[EventNotifier] start → \"{}\" is starting now (local: {}, delayed_ms={})",
+                    title,
+                    local_iso_string_now(),
+                    (now_ms - start_at).max(0)
+                );
+                // trigger_at = start_at → delayed_ms measured from the
+                // event's actual start moment.
+                self.persist_and_notify(conn, &id, &title, start_at, "start", start_at, now_ms)?;
+                conn.execute(
+                    "UPDATE space_events SET start_sent_at = ?1, updated_at = ?1 WHERE id = ?2",
+                    params![now_ms, id],
+                )?;
+            }
+
             // ── 3. Re-notifications for ongoing events ───────────────────────
             let mut stmt = conn.prepare(
                 "SELECT id, title, start_at, renotify_min, renotify_sent_at
@@ -336,5 +377,84 @@ mod tests {
             })
             .unwrap();
         assert_eq!(status, "done");
+    }
+
+    #[test]
+    fn start_notification_fires_for_event_without_reminder() {
+        // The core guarantee: an event with NO reminder_min STILL pings at
+        // its start time. This is the "Đi Uniqlo lúc 14h" case — created
+        // without a reminder, must still notify when 14h arrives.
+        let cfg = crate::config::Config::from_env();
+        let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        db.with_conn(|conn| {
+            // Started 1 min ago, ends in 59 min, NO reminder.
+            insert_event(conn, "ev-start", "Đi Uniqlo", now_ms - 60_000, now_ms + 59 * 60_000, None, None);
+            Ok(())
+        })
+        .unwrap();
+
+        let rec = Arc::new(Recorder(Mutex::new(vec![])));
+        let notifier = EventNotifier::new(db.clone(), rec.clone(), 60);
+        notifier.tick().unwrap();
+
+        let fired = rec.0.lock().unwrap().clone();
+        assert!(
+            fired.iter().any(|(_, id, kind, _)| id == "ev-start" && kind == "start"),
+            "start notification must fire even without reminder_min; got {fired:?}"
+        );
+        // Persisted as a `start` notification row.
+        let rows = db.list_event_notifications(None).unwrap();
+        assert!(rows.iter().any(|r| r.event_id == "ev-start" && r.kind == "start"));
+    }
+
+    #[test]
+    fn start_notification_fires_exactly_once() {
+        let cfg = crate::config::Config::from_env();
+        let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        db.with_conn(|conn| {
+            insert_event(conn, "ev-once", "Họp", now_ms - 30_000, now_ms + 30 * 60_000, None, None);
+            Ok(())
+        })
+        .unwrap();
+
+        let rec = Arc::new(Recorder(Mutex::new(vec![])));
+        let notifier = EventNotifier::new(db, rec.clone(), 60);
+        notifier.tick().unwrap();
+        notifier.tick().unwrap();
+        notifier.tick().unwrap();
+
+        let count = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, id, kind, _)| id == "ev-once" && kind == "start")
+            .count();
+        assert_eq!(count, 1, "start notification must be exactly-once");
+    }
+
+    #[test]
+    fn future_event_does_not_fire_start_yet() {
+        let cfg = crate::config::Config::from_env();
+        let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        db.with_conn(|conn| {
+            // Starts in 10 min — start notification must NOT fire now.
+            insert_event(conn, "ev-future", "Tương lai", now_ms + 10 * 60_000, now_ms + 70 * 60_000, None, None);
+            Ok(())
+        })
+        .unwrap();
+
+        let rec = Arc::new(Recorder(Mutex::new(vec![])));
+        let notifier = EventNotifier::new(db, rec.clone(), 60);
+        notifier.tick().unwrap();
+
+        let fired = rec.0.lock().unwrap().clone();
+        assert!(
+            !fired.iter().any(|(_, id, _, _)| id == "ev-future"),
+            "future event must not fire start notification yet"
+        );
     }
 }

@@ -5,7 +5,57 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::types::{CoworkBoardEntry, CoworkMember, CoworkTask, CoworkWorkspace};
+use crate::types::{
+    CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkWorkspace,
+};
+
+/// Collapse newlines + tabs into single spaces and trim, so a chat-style
+/// message renders cleanly on a single XML line in the prompt. Prevents the
+/// `<message>X</message>` tag from being broken by stray `\n` and keeps the
+/// prompt parseable by the receiving model.
+pub(crate) fn sanitize_one_line(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_space = false;
+    for ch in s.chars() {
+        let mapped = if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch };
+        if mapped == ' ' {
+            if !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+        } else {
+            out.push(mapped);
+            last_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Truncate to at most `max_chars` *characters* (not bytes), appending `…`
+/// when shortened. Counts by Unicode scalar, so Vietnamese diacritics stay
+/// intact and don't blow the per-message cap.
+pub(crate) fn clip_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Cap on the number of cowork chat messages embedded as `<recent_activity>`
+/// context. Picked to give the agent enough continuity ("what did the user
+/// and other members say last") without ballooning the prompt past the
+/// LLM's effective attention window — observed empty-completions when the
+/// surrounding prompt got over ~12K chars.
+pub const RECENT_MESSAGES_CAP: usize = 8;
+/// Per-message character cap so a single rambling reply doesn't dominate.
+pub const RECENT_MESSAGE_CHARS: usize = 400;
+/// Cap on the number of recently-completed cross-member tasks shown so the
+/// agent understands the project state, not just its own assigned slice.
+pub const RECENT_TASKS_CAP: usize = 5;
+/// Per-task description char cap for the recent-tasks section.
+pub const RECENT_TASK_DESC_CHARS: usize = 200;
 
 /// Explain where shared uploads live and list `shared/` so all agents see the same files.
 pub fn shared_workspace_files_context(workspace: &CoworkWorkspace) -> String {
@@ -61,16 +111,40 @@ pub fn shared_workspace_files_context(workspace: &CoworkWorkspace) -> String {
     lines.join("\n")
 }
 
-/// Build a prompt for a cowork agent to execute a task.
-///
-/// The prompt wraps the task in XML-style context tags that give the agent a
-/// clear picture of its role, the workspace state, and what's expected.
+/// Backwards-compatible thin wrapper — preserves the original 5-arg signature
+/// for callers (and tests) that don't have workspace chat history handy.
 pub fn build_cowork_task_prompt(
     task: &CoworkTask,
     member: &CoworkMember,
     workspace: &CoworkWorkspace,
     board_entries: &[CoworkBoardEntry],
     dependent_results: &[CoworkTask],
+) -> String {
+    build_cowork_task_prompt_with_history(
+        task,
+        member,
+        workspace,
+        board_entries,
+        dependent_results,
+        &[],
+        &[],
+    )
+}
+
+/// Build a prompt for a cowork agent to execute a task, including recent
+/// workspace chat + cross-member completed tasks so each turn feels like a
+/// continuation rather than a cold start.
+///
+/// The prompt wraps the task in XML-style context tags that give the agent a
+/// clear picture of its role, the workspace state, and what's expected.
+pub fn build_cowork_task_prompt_with_history(
+    task: &CoworkTask,
+    member: &CoworkMember,
+    workspace: &CoworkWorkspace,
+    board_entries: &[CoworkBoardEntry],
+    dependent_results: &[CoworkTask],
+    recent_messages: &[CoworkMessage],
+    recent_completed_tasks: &[CoworkTask],
 ) -> String {
     let mut p = String::new();
 
@@ -115,6 +189,79 @@ pub fn build_cowork_task_prompt(
             ));
         }
         p.push_str("</board_context>\n\n");
+    }
+
+    // Recent workspace activity — chat messages + cross-member completed
+    // tasks. Gives the agent continuity across the cowork DAG so consecutive
+    // members understand what already happened without having to be told.
+    // Capped (RECENT_*_CAP / *_CHARS constants) to keep the prompt under
+    // the LLM's effective attention window.
+    let has_history =
+        !recent_messages.is_empty() || !recent_completed_tasks.is_empty();
+    if has_history {
+        p.push_str("<recent_activity>\n");
+
+        if !recent_completed_tasks.is_empty() {
+            p.push_str("  <completed_tasks>\n");
+            let tasks: Vec<&CoworkTask> = recent_completed_tasks
+                .iter()
+                .rev()
+                .take(RECENT_TASKS_CAP)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            for t in tasks {
+                p.push_str(&format!(
+                    "    <task assignee=\"{}\" status=\"{}\">\n",
+                    t.assignee.as_deref().unwrap_or("unknown"),
+                    t.status,
+                ));
+                p.push_str(&format!(
+                    "      <title>{}</title>\n",
+                    sanitize_one_line(&t.title)
+                ));
+                if let Some(desc) = t.description.as_deref() {
+                    let body = clip_chars(desc, RECENT_TASK_DESC_CHARS);
+                    p.push_str(&format!(
+                        "      <summary>{}</summary>\n",
+                        sanitize_one_line(&body)
+                    ));
+                }
+                p.push_str("    </task>\n");
+            }
+            p.push_str("  </completed_tasks>\n");
+        }
+
+        if !recent_messages.is_empty() {
+            p.push_str("  <chat_messages>\n");
+            let msgs: Vec<&CoworkMessage> = recent_messages
+                .iter()
+                .rev()
+                .take(RECENT_MESSAGES_CAP)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            for m in msgs {
+                let to = m
+                    .to_member
+                    .as_deref()
+                    .map(|t| format!(" to=\"{t}\""))
+                    .unwrap_or_default();
+                let body = clip_chars(&m.content, RECENT_MESSAGE_CHARS);
+                p.push_str(&format!(
+                    "    <message from=\"{}\"{} type=\"{}\">{}</message>\n",
+                    m.from_member,
+                    to,
+                    m.message_type,
+                    sanitize_one_line(&body),
+                ));
+            }
+            p.push_str("  </chat_messages>\n");
+        }
+
+        p.push_str("</recent_activity>\n\n");
     }
 
     // Role & persona
@@ -505,5 +652,127 @@ mod tests {
         assert!(p.contains("Implement login page"));
         assert!(!p.contains("<persona>"));
         assert!(!p.contains("<responsibilities>"));
+    }
+
+    fn sample_message(from: &str, msg_type: &str, content: &str) -> CoworkMessage {
+        CoworkMessage {
+            id: format!("msg-{from}-{}", content.len()),
+            workspace_id: "ws-test".into(),
+            from_member: from.into(),
+            to_member: None,
+            message_type: msg_type.into(),
+            content: content.into(),
+            attachments: None,
+            task_id: None,
+            is_read: false,
+            created_at: "2026-05-23T04:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn history_block_omitted_when_empty() {
+        let p = build_cowork_task_prompt_with_history(
+            &sample_task(), &sample_member(), &sample_workspace(),
+            &[], &[], &[], &[],
+        );
+        assert!(!p.contains("<recent_activity>"));
+    }
+
+    #[test]
+    fn history_block_includes_chat_and_tasks() {
+        let msgs = vec![
+            sample_message("user", "status", "Bắt đầu nghiên cứu"),
+            sample_message("research-lead", "handoff", "Giao cho researcher"),
+            sample_message("researcher", "result", "Đã tổng hợp 3 nguồn"),
+        ];
+        let done_tasks = vec![CoworkTask {
+            id: "done-1".into(),
+            workspace_id: "ws-test".into(),
+            title: "Khảo sát thị trường".into(),
+            description: Some("Đã xong báo cáo sơ bộ về 4 tài sản".into()),
+            status: "done".into(),
+            assignee: Some("researcher".into()),
+            reviewer: None,
+            priority: "medium".into(),
+            depends_on: None,
+            attachments: None,
+            created_by: "user".into(),
+            created_at: "2026-05-23T03:00:00Z".into(),
+            updated_at: "2026-05-23T03:30:00Z".into(),
+            due_at: None,
+            completed_at: Some("2026-05-23T03:30:00Z".into()),
+            input_summary: None,
+            result_output: None,
+            references: None,
+            artifacts: None,
+        }];
+        let p = build_cowork_task_prompt_with_history(
+            &sample_task(), &sample_member(), &sample_workspace(),
+            &[], &[], &msgs, &done_tasks,
+        );
+        assert!(p.contains("<recent_activity>"));
+        assert!(p.contains("<chat_messages>"));
+        assert!(p.contains("Bắt đầu nghiên cứu"));
+        assert!(p.contains("Đã tổng hợp 3 nguồn"));
+        assert!(p.contains("<completed_tasks>"));
+        assert!(p.contains("Khảo sát thị trường"));
+        assert!(p.contains("Đã xong báo cáo sơ bộ"));
+    }
+
+    #[test]
+    fn history_clips_long_message_and_keeps_diacritics() {
+        let long = "Đây là một tin nhắn rất dài ".repeat(60);
+        let msgs = vec![sample_message("researcher", "result", &long)];
+        let p = build_cowork_task_prompt_with_history(
+            &sample_task(), &sample_member(), &sample_workspace(),
+            &[], &[], &msgs, &[],
+        );
+        // Clipped — ellipsis present, and the content stays UTF-8 safe.
+        assert!(p.contains('…'));
+        // Diacritics survived the clip.
+        assert!(p.contains("Đây"));
+    }
+
+    #[test]
+    fn history_collapses_newlines_in_chat() {
+        let msgs = vec![sample_message(
+            "user",
+            "status",
+            "Dòng 1\n\nDòng 2\tDòng 3",
+        )];
+        let p = build_cowork_task_prompt_with_history(
+            &sample_task(), &sample_member(), &sample_workspace(),
+            &[], &[], &msgs, &[],
+        );
+        // sanitize_one_line drops \n and \t — message renders inline.
+        assert!(p.contains("Dòng 1 Dòng 2 Dòng 3"));
+        // And the <message> tag isn't broken by stray newlines.
+        let line = p.lines().find(|l| l.contains("Dòng 1")).expect("message line");
+        assert!(line.contains("<message"));
+        assert!(line.contains("</message>"));
+    }
+
+    #[test]
+    fn history_caps_message_count() {
+        // Build more messages than the cap; only the latest RECENT_MESSAGES_CAP
+        // should land in the prompt (oldest dropped). Tag each message with a
+        // bracketed marker so substring tests aren't fooled by "msg-1" being a
+        // prefix of "msg-10".
+        let total = RECENT_MESSAGES_CAP + 5;
+        let mut msgs = Vec::new();
+        for i in 0..total {
+            msgs.push(sample_message("user", "status", &format!("[m{i:03}]")));
+        }
+        let p = build_cowork_task_prompt_with_history(
+            &sample_task(), &sample_member(), &sample_workspace(),
+            &[], &[], &msgs, &[],
+        );
+        let n_in_prompt = (0..total)
+            .filter(|i| p.contains(&format!("[m{i:03}]")))
+            .count();
+        assert_eq!(n_in_prompt, RECENT_MESSAGES_CAP);
+        // The oldest messages got dropped — only the tail survives.
+        assert!(!p.contains("[m000]"));
+        assert!(p.contains(&format!("[m{:03}]", total - 1)));
     }
 }

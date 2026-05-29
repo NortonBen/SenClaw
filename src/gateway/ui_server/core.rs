@@ -128,6 +128,13 @@ pub struct UiState {
 
 /// Return the web/dist directory, falling back to cwd-based path.
 fn resolve_dist_dir() -> PathBuf {
+    // Desktop app bundles web/dist as a resource and points here via env.
+    if let Ok(dir) = std::env::var("SENCLAW_WEB_DIST") {
+        let p = PathBuf::from(dir);
+        if p.exists() {
+            return p;
+        }
+    }
     // Try relative to the binary first, then cwd
     let cwd_dist = PathBuf::from("web/dist");
     if cwd_dist.exists() {

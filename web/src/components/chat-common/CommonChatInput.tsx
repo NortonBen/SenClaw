@@ -70,8 +70,30 @@ export function CommonChatInput({
     }
   };
 
+  const isPlan = agentMode === 'Plan';
+
   return (
     <div className={className}>
+      {isPlan && (
+        // Read-only Plan mode banner: makes the restriction visible so the
+        // user understands why the agent won't edit files until they approve
+        // the plan. Mirrors the tool-level enforcement in the engine.
+        <div
+          className="flex items-center gap-2 mb-1.5 px-3 py-1.5 rounded-lg"
+          style={{
+            background: `${token.colorWarning}14`,
+            border: `1px solid ${token.colorWarning}33`,
+            color: token.colorWarningText,
+            fontSize: 12,
+          }}
+        >
+          <span>📝</span>
+          <span>
+            <strong>Plan mode</strong> — chỉ nghiên cứu (read-only). Agent sẽ
+            viết kế hoạch rồi xin bạn duyệt trước khi chỉnh sửa.
+          </span>
+        </div>
+      )}
       {children ? (
         <div className="w-full">{children}</div>
       ) : (

@@ -35,6 +35,14 @@ pub const INTERRUPT_MESSAGE: &str =
 
 /// Number of most-recent messages to keep during auto-compaction.
 const COMPACT_KEEP_RECENT: usize = 12;
+
+/// Fallback context window when a model profile reports no `context_length`.
+/// Mirrors the TS default in `util/tokens.ts` / `util/compact.ts`.
+const DEFAULT_CONTEXT_LENGTH: u64 = 128_000;
+
+/// Trigger proactive auto-compaction once input tokens reach this fraction of
+/// the model context window. Mirrors TS `AUTO_COMPACT_THRESHOLD_RATIO`.
+const AUTO_COMPACT_THRESHOLD_RATIO: f64 = 0.75;
 /// Hard cap for a single LLM request turn (cloud/API providers).
 /// Dispatch tasks have their own larger timeout, but the model call itself
 /// should not be able to hang silently with no message/tool events.
@@ -82,6 +90,274 @@ fn compact_messages(messages: &mut Vec<Message>) -> bool {
     true
 }
 
+/// Prompt used to ask the main model for a lossless session snapshot.
+/// Ported verbatim from TS `prompt/compact.ts` `COMPRESSION_PROMPT`.
+const COMPRESSION_PROMPT: &str = "Create a lossless state snapshot of this session so any later instance can seamlessly resume work.
+
+Cover the following (merge sections freely, but omit nothing):
+
+A. **Intent evolution** — User requests in time order, how they changed, final shape. Include key user messages verbatim.
+B. **Technical context** — Frameworks, toolchains, architecture, runtime environment.
+C. **Artifacts & changes** — Files examined/modified/created. Embed full source for key changes.
+D. **Errors & fixes** — All anomalies, fix paths, and user corrections.
+E. **Open items** — Closed vs in-progress vs remaining work, with blockers.
+F. **Interruption point** — Exact files, functions, edit actions at the moment of interruption.
+G. **Continuation path** (only if applicable) — Quote user's follow-up intent, task name, suggested handoff.
+
+## Rules
+- Archive only from conversation content — no speculation or fabrication.
+- Label gaps as \"not confirmed in context\".
+- No tool calls — pure text reasoning and archival.
+- Prefer full source over vague description.
+";
+
+const COMPACT_NOTICE: &str = "[Context Compression Notice]
+The conversation has been automatically compressed due to token limit. Below is a comprehensive summary.";
+
+/// Fire a PreCompact/PostCompact hook (non-blocking, spawned). No-op when no
+/// hook manager or no hooks registered for the event.
+fn spawn_compact_hook(config: &QueryConfig, messages: &[Message], event: HookEvent) {
+    let Some(hm) = config.hook_manager.clone() else {
+        return;
+    };
+    if !hm.has_hooks_for_event(&event) {
+        return;
+    }
+    let base = HookInputBase {
+        hook_event_name: event.clone(),
+        session_id: config.session_id.clone(),
+        agent_id: config.agent_id.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        cwd: config.working_dir.clone(),
+    };
+    let context_history: Vec<serde_json::Value> = messages
+        .iter()
+        .filter_map(|m| serde_json::to_value(m).ok())
+        .collect();
+    let hook_input = HookInput::PreCompact(PreCompactInput {
+        base,
+        message_count: messages.len(),
+        context_history,
+    });
+    let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+    tokio::spawn(async move {
+        let _ = super::hooks::execute_hooks(
+            &hm,
+            &event,
+            &hook_input,
+            &super::hooks::ExecuteHooksOptions {
+                env: std::collections::HashMap::new(),
+                cancel: None,
+                client: client.as_ref(),
+                profile: profile.as_ref(),
+                messages: None,
+            },
+        )
+        .await;
+    });
+}
+
+/// Index of the last "real" user message (not a tool_result carrier). History
+/// before this index can be safely compacted while the current turn is kept
+/// intact, guaranteeing the message list still ends on a user message and that
+/// tool_use/tool_result pairs are not split. Mirrors TS `autoCompact`.
+fn last_real_user_index(messages: &[Message]) -> Option<usize> {
+    messages.iter().rposition(|m| {
+        m.msg_type == "user"
+            && !matches!(
+                m.message.content.first(),
+                Some(ContentBlock::ToolResult { .. })
+            )
+    })
+}
+
+/// Build the post-compaction history: a compression notice (user) followed by
+/// the model-generated summary (assistant). The summary message carries a
+/// corrected usage reflecting only notice + summary, so the token gauge drops
+/// immediately. Mirrors TS `executeAutoCompact`.
+async fn summarize_history(
+    history: &[Message],
+    config: &QueryConfig,
+    cancel: &CancellationToken,
+) -> Result<(Vec<Message>, String)> {
+    let mut msgs = history.to_vec();
+    msgs.push(create_user_message(vec![ContentBlock::Text {
+        text: COMPRESSION_PROMPT.to_string(),
+    }]));
+
+    let summary_msg = query_llm::query_llm(
+        &config.http_client,
+        &msgs,
+        "An AI assistant that helps summarize coding conversations.",
+        &[],
+        cancel,
+        &config.profile,
+        false,
+        false,
+    )
+    .await?;
+
+    let (summary_text, _reasoning, _tools) = extract_content(&summary_msg);
+    if summary_text.trim().is_empty() {
+        anyhow::bail!("compaction produced an empty summary");
+    }
+
+    let notice = create_user_message(vec![ContentBlock::Text {
+        text: COMPACT_NOTICE.to_string(),
+    }]);
+
+    // Correct usage: post-compaction context ≈ notice (~30 tokens) + summary.
+    let summary_tokens = summary_msg.usage.as_ref().map(|u| u.output()).unwrap_or(0);
+    let corrected_usage = if summary_tokens > 0 {
+        Some(RawUsage {
+            input_tokens: Some(30 + summary_tokens),
+            output_tokens: Some(summary_tokens),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
+    let summary_assistant = Message {
+        msg_type: "assistant".to_string(),
+        message: MessagePayload {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: summary_text.clone(),
+            }],
+        },
+        uuid: uuid::Uuid::new_v4().to_string(),
+        usage: corrected_usage,
+    };
+
+    Ok((vec![notice, summary_assistant], summary_text))
+}
+
+/// Result of an auto-compaction attempt.
+struct CompactOutcome {
+    messages: Vec<Message>,
+    exec: CompactExecData,
+    /// Usage to broadcast after compaction (reflects the compacted history).
+    usage: UsageData,
+    /// True when compaction actually changed the message list.
+    changed: bool,
+}
+
+/// Proactively compact the conversation via LLM summarization, preserving the
+/// current turn. Falls back to deterministic keep-recent truncation if the
+/// summary call fails. Mirrors TS `autoCompact` + `compactMessages`.
+async fn auto_compact(
+    messages: Vec<Message>,
+    config: &QueryConfig,
+    cancel: &CancellationToken,
+) -> CompactOutcome {
+    let ctx = config.profile.context_length;
+    let token_before = count_tokens(&messages, ctx).use_tokens;
+
+    let Some(idx) = last_real_user_index(&messages) else {
+        return CompactOutcome {
+            usage: count_tokens(&messages, ctx),
+            exec: CompactExecData {
+                err_msg: Some("no user message to anchor compaction".into()),
+                token_before,
+                token_compact: token_before,
+                compact_rate: 1.0,
+                summary: None,
+            },
+            messages,
+            changed: false,
+        };
+    };
+
+    let history = &messages[..idx];
+    let keep = messages[idx..].to_vec();
+
+    if history.len() < 2 {
+        return CompactOutcome {
+            usage: count_tokens(&messages, ctx),
+            exec: CompactExecData {
+                err_msg: Some("history too small to compact".into()),
+                token_before,
+                token_compact: token_before,
+                compact_rate: 1.0,
+                summary: None,
+            },
+            messages,
+            changed: false,
+        };
+    }
+
+    let (compacted_history, summary, err_msg) =
+        match summarize_history(history, config, cancel).await {
+            Ok((compacted, summary)) => (compacted, Some(summary), None),
+            Err(e) => {
+                // Fallback: deterministic keep-recent truncation over the full list.
+                warn!(
+                    agent_id = %config.agent_id,
+                    error = %e,
+                    "LLM compaction failed — falling back to keep-recent truncation"
+                );
+                let mut truncated = messages.clone();
+                let did = compact_messages(&mut truncated);
+                if !did {
+                    return CompactOutcome {
+                        usage: count_tokens(&messages, ctx),
+                        exec: CompactExecData {
+                            err_msg: Some(format!("compaction failed: {e}")),
+                            token_before,
+                            token_compact: token_before,
+                            compact_rate: 1.0,
+                            summary: None,
+                        },
+                        messages,
+                        changed: false,
+                    };
+                }
+                // For the truncation fallback the whole list is the result.
+                let usage = count_tokens(&truncated, ctx);
+                return CompactOutcome {
+                    exec: CompactExecData {
+                        err_msg: None,
+                        token_before,
+                        token_compact: usage.use_tokens,
+                        compact_rate: if token_before > 0 {
+                            usage.use_tokens as f64 / token_before as f64
+                        } else {
+                            1.0
+                        },
+                        summary: None,
+                    },
+                    usage,
+                    messages: truncated,
+                    changed: true,
+                };
+            }
+        };
+
+    // Usage after compaction reflects only the compacted history (notice +
+    // summary); the kept current turn re-counts on the next real LLM turn.
+    let usage_after = count_tokens(&compacted_history, ctx);
+    let mut final_messages = compacted_history;
+    final_messages.extend(keep);
+
+    CompactOutcome {
+        exec: CompactExecData {
+            err_msg,
+            token_before,
+            token_compact: usage_after.use_tokens,
+            compact_rate: if token_before > 0 {
+                usage_after.use_tokens as f64 / token_before as f64
+            } else {
+                1.0
+            },
+            summary,
+        },
+        usage: usage_after,
+        messages: final_messages,
+        changed: true,
+    }
+}
+
 /// Configuration passed to the query loop. All fields are owned so the config
 /// can be moved into spawned tasks.
 /// Resolver returning the current tool list. Called once per turn so newly
@@ -127,11 +403,54 @@ pub async fn query(
     cancel: &CancellationToken,
 ) -> Result<Vec<Message>> {
     let mut compacted = false;
+    let mut proactively_compacted = false;
     loop {
         // Check cancellation before each LLM call
         if cancel.is_cancelled() {
             info!("[{}] query loop cancelled before LLM call", config.agent_id);
             return Ok(messages);
+        }
+
+        // 0. Proactive compaction: if the context is approaching the model
+        //    limit, summarize the history *before* the next call so we don't
+        //    hit a hard context_length error. Runs at most once per user input
+        //    (the reactive path below remains as a safety net). Subagents skip.
+        if !config.is_subagent
+            && !proactively_compacted
+            && needs_auto_compact(&messages, config.profile.context_length)
+        {
+            info!(
+                agent_id = %config.agent_id,
+                msg_count = messages.len(),
+                "Context near limit — proactively compacting"
+            );
+            config
+                .event_bus
+                .emit(EngineEvent::CompactStart(CompactStartData {
+                    message_count: messages.len(),
+                }));
+            spawn_compact_hook(config, &messages, HookEvent::PreCompact);
+
+            let outcome = auto_compact(std::mem::take(&mut messages), config, cancel).await;
+            messages = outcome.messages;
+            proactively_compacted = true;
+
+            config
+                .event_bus
+                .emit(EngineEvent::CompactExec(outcome.exec));
+            spawn_compact_hook(config, &messages, HookEvent::PostCompact);
+            if outcome.changed {
+                config
+                    .event_bus
+                    .emit(EngineEvent::ConversationUsage(ConversationUsageData {
+                        usage: outcome.usage,
+                    }));
+                info!(
+                    agent_id = %config.agent_id,
+                    new_msg_count = messages.len(),
+                    "Proactive compaction complete"
+                );
+            }
         }
 
         // 1. Call the LLM. Resolve tools fresh each turn so any tool the
@@ -272,47 +591,15 @@ pub async fn query(
                         .emit(EngineEvent::CompactStart(CompactStartData {
                             message_count: messages.len(),
                         }));
+                    spawn_compact_hook(config, &messages, HookEvent::PreCompact);
 
-                    // Fire PreCompact hook
-                    if let Some(ref hm) = config.hook_manager {
-                        if hm.has_hooks_for_event(&HookEvent::PreCompact) {
-                            let base = HookInputBase {
-                                hook_event_name: HookEvent::PreCompact,
-                                session_id: config.session_id.clone(),
-                                agent_id: config.agent_id.clone(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                cwd: config.working_dir.clone(),
-                            };
-                            let context_history: Vec<serde_json::Value> = messages
-                                .iter()
-                                .filter_map(|m| serde_json::to_value(m).ok())
-                                .collect();
-                            let hook_input = HookInput::PreCompact(PreCompactInput {
-                                base,
-                                message_count: messages.len(),
-                                context_history,
-                            });
-                            let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
-                            let hm_clone = hm.clone();
-                            tokio::spawn(async move {
-                                let _ = super::hooks::execute_hooks(
-                                    &hm_clone,
-                                    &HookEvent::PreCompact,
-                                    &hook_input,
-                                    &super::hooks::ExecuteHooksOptions {
-                                        env: std::collections::HashMap::new(),
-                                        cancel: None,
-                                        client: client.as_ref(),
-                                        profile: profile.as_ref(),
-                                        messages: None,
-                                    },
-                                )
-                                .await;
-                            });
-                        }
-                    }
-
+                    // Reactive path: the API already rejected the request as
+                    // too large, so a summarization LLM call would likely fail
+                    // too. Use deterministic keep-recent truncation, but report
+                    // real before/after token metrics.
+                    let token_before = count_tokens(&messages, config.profile.context_length).use_tokens;
                     let did_compact = compact_messages(&mut messages);
+                    let usage_after = count_tokens(&messages, config.profile.context_length);
                     config
                         .event_bus
                         .emit(EngineEvent::CompactExec(CompactExecData {
@@ -321,56 +608,28 @@ pub async fn query(
                             } else {
                                 Some("compaction had no effect".into())
                             },
-                            token_before: 0,
-                            token_compact: 0,
-                            compact_rate: 0.0,
+                            token_before,
+                            token_compact: usage_after.use_tokens,
+                            compact_rate: if token_before > 0 {
+                                usage_after.use_tokens as f64 / token_before as f64
+                            } else {
+                                1.0
+                            },
                             summary: None,
                         }));
+                    spawn_compact_hook(config, &messages, HookEvent::PostCompact);
 
-                    // Fire PostCompact hook (non-blockable)
-                    if let Some(ref hm) = config.hook_manager {
-                        if hm.has_hooks_for_event(&HookEvent::PostCompact) {
-                            let base = HookInputBase {
-                                hook_event_name: HookEvent::PostCompact,
-                                session_id: config.session_id.clone(),
-                                agent_id: config.agent_id.clone(),
-                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                cwd: config.working_dir.clone(),
-                            };
-                            let context_history: Vec<serde_json::Value> = messages
-                                .iter()
-                                .filter_map(|m| serde_json::to_value(m).ok())
-                                .collect();
-                            let hook_input = HookInput::PreCompact(PreCompactInput {
-                                base,
-                                message_count: messages.len(),
-                                context_history,
-                            });
-                            let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
-                            let hm_clone = hm.clone();
-                            tokio::spawn(async move {
-                                let _ = super::hooks::execute_hooks(
-                                    &hm_clone,
-                                    &HookEvent::PostCompact,
-                                    &hook_input,
-                                    &super::hooks::ExecuteHooksOptions {
-                                        env: std::collections::HashMap::new(),
-                                        cancel: None,
-                                        client: client.as_ref(),
-                                        profile: profile.as_ref(),
-                                        messages: None,
-                                    },
-                                )
-                                .await;
-                            });
-                        }
-                    }
                     if did_compact {
                         info!(
                             agent_id = %config.agent_id,
                             new_msg_count = messages.len(),
                             "Auto-compact complete, retrying"
                         );
+                        if !config.is_subagent {
+                            config.event_bus.emit(EngineEvent::ConversationUsage(
+                                ConversationUsageData { usage: usage_after },
+                            ));
+                        }
                         compacted = true;
                         continue;
                     }
@@ -492,11 +751,11 @@ pub async fn query(
                 msgs.push(assistant_msg.clone());
                 msgs
             };
-            let _usage = estimate_usage(&updated);
+            let usage = count_tokens(&updated, config.profile.context_length);
             config
                 .event_bus
                 .emit(EngineEvent::ConversationUsage(ConversationUsageData {
-                    usage: _usage,
+                    usage,
                 }));
         }
 
@@ -617,28 +876,83 @@ pub(crate) fn extract_content(msg: &Message) -> (String, String, Vec<ContentBloc
 // Token estimation (rough)
 // ============================================================================
 
-fn estimate_usage(messages: &[Message]) -> UsageData {
+/// Sum of input + output tokens reported by the most recent assistant message
+/// that carries real API usage. Returns `None` if no message reported usage
+/// (e.g. local inference, or a fresh conversation). Mirrors TS `countTokens`.
+fn real_token_usage(messages: &[Message]) -> Option<(u64, u64)> {
+    messages.iter().rev().find_map(|m| match &m.usage {
+        Some(u) if !u.is_empty() => Some((u.input(), u.output())),
+        _ => None,
+    })
+}
+
+/// Rough char-based token estimate over all text-bearing content. Fallback for
+/// providers that don't report usage. ~4 chars ≈ 1 token.
+fn estimate_tokens_by_chars(messages: &[Message]) -> u64 {
     let total_chars: usize = messages
         .iter()
-        .map(|m| {
-            m.message
-                .content
-                .iter()
-                .map(|b| match b {
-                    ContentBlock::Text { text } => text.len(),
-                    _ => 0,
-                })
-                .sum::<usize>()
+        .flat_map(|m| m.message.content.iter())
+        .map(|b| match b {
+            ContentBlock::Text { text } => text.len(),
+            ContentBlock::Thinking { thinking } => thinking.len(),
+            ContentBlock::ToolResult { content, .. } => content.len(),
+            _ => 0,
         })
         .sum();
+    (total_chars as f64 / 4.0).ceil() as u64
+}
 
-    // Rough: 4 chars ≈ 1 token
-    let use_tokens = (total_chars as f64 / 4.0).ceil() as u64;
+/// Compute conversation token usage for the UI gauge.
+///
+/// Mirrors TS `getTokens`: prefer real API usage from the latest assistant
+/// message, and report `max_tokens` as the model's actual context window
+/// (not a hardcoded constant). Falls back to a char estimate when no usage
+/// was reported.
+fn count_tokens(messages: &[Message], context_length: u32) -> UsageData {
+    let max_tokens = if context_length > 0 {
+        context_length as u64
+    } else {
+        DEFAULT_CONTEXT_LENGTH
+    };
+
+    if let Some((input, output)) = real_token_usage(messages) {
+        return UsageData {
+            use_tokens: input + output,
+            max_tokens,
+            prompt_tokens: input,
+        };
+    }
+
+    let use_tokens = estimate_tokens_by_chars(messages);
     UsageData {
         use_tokens,
-        max_tokens: 200_000,
+        max_tokens,
         prompt_tokens: use_tokens,
     }
+}
+
+/// Current input-token count for compaction decisions: real prompt tokens when
+/// available, else the char-based estimate.
+fn current_input_tokens(messages: &[Message]) -> u64 {
+    match real_token_usage(messages) {
+        Some((input, _)) => input,
+        None => estimate_tokens_by_chars(messages),
+    }
+}
+
+/// Whether the conversation should be proactively compacted before the next
+/// LLM call. Mirrors TS `needsAutoCompact`.
+fn needs_auto_compact(messages: &[Message], context_length: u32) -> bool {
+    if messages.len() < 3 {
+        return false;
+    }
+    let limit = if context_length > 0 {
+        context_length as u64
+    } else {
+        DEFAULT_CONTEXT_LENGTH
+    };
+    let threshold = (limit as f64 * AUTO_COMPACT_THRESHOLD_RATIO) as u64;
+    current_input_tokens(messages) >= threshold
 }
 
 // ============================================================================
@@ -670,6 +984,7 @@ mod tests {
                 ],
             },
             uuid: "uuid-1".into(),
+            usage: None,
         };
 
         let (text, reasoning, tools) = extract_content(&msg);
@@ -692,6 +1007,7 @@ mod tests {
                 content: vec![],
             },
             uuid: "uuid-1".into(),
+            usage: None,
         };
         let (text, reasoning, tools) = extract_content(&msg);
         assert!(text.is_empty());
@@ -700,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn estimate_usage_counts_chars() {
+    fn count_tokens_falls_back_to_char_estimate() {
         let msgs = vec![Message {
             msg_type: "user".into(),
             message: MessagePayload {
@@ -710,9 +1026,70 @@ mod tests {
                 }],
             },
             uuid: "uuid-1".into(),
+            usage: None,
         }];
-        let usage = estimate_usage(&msgs);
-        // 13 chars / 4 ≈ 4 tokens
+        let usage = count_tokens(&msgs, 128_000);
+        // 13 chars / 4 ≈ 4 tokens, and max_tokens reflects the model context.
         assert!(usage.use_tokens >= 3);
+        assert_eq!(usage.max_tokens, 128_000);
+    }
+
+    #[test]
+    fn count_tokens_prefers_real_usage() {
+        let mut assistant = Message {
+            msg_type: "assistant".into(),
+            message: MessagePayload {
+                role: "assistant".into(),
+                content: vec![ContentBlock::Text {
+                    text: "short".into(),
+                }],
+            },
+            uuid: "a1".into(),
+            usage: Some(RawUsage {
+                input_tokens: Some(1000),
+                output_tokens: Some(200),
+                cache_read_input_tokens: Some(50),
+                ..Default::default()
+            }),
+        };
+        // Anthropic shape: input includes cache tokens.
+        let usage = count_tokens(std::slice::from_ref(&assistant), 200_000);
+        assert_eq!(usage.prompt_tokens, 1050);
+        assert_eq!(usage.use_tokens, 1250);
+        assert_eq!(usage.max_tokens, 200_000);
+
+        // OpenAI shape on a later message wins (most recent).
+        assistant.usage = Some(RawUsage {
+            prompt_tokens: Some(900),
+            completion_tokens: Some(100),
+            ..Default::default()
+        });
+        let usage = count_tokens(std::slice::from_ref(&assistant), 200_000);
+        assert_eq!(usage.prompt_tokens, 900);
+        assert_eq!(usage.use_tokens, 1000);
+    }
+
+    #[test]
+    fn needs_auto_compact_respects_threshold() {
+        let make = |input: u64| Message {
+            msg_type: "assistant".into(),
+            message: MessagePayload {
+                role: "assistant".into(),
+                content: vec![ContentBlock::Text { text: "x".into() }],
+            },
+            uuid: "a".into(),
+            usage: Some(RawUsage {
+                input_tokens: Some(input),
+                output_tokens: Some(1),
+                ..Default::default()
+            }),
+        };
+        // Need >= 3 messages and input >= 75% of context.
+        let below = vec![make(10), make(20), make(70_000)];
+        assert!(!needs_auto_compact(&below, 128_000));
+        let above = vec![make(10), make(20), make(100_000)];
+        assert!(needs_auto_compact(&above, 128_000));
+        // Too few messages never compacts.
+        assert!(!needs_auto_compact(&[make(200_000)], 128_000));
     }
 }

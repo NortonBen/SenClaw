@@ -53,7 +53,8 @@ pub use gnn_sage::{
     TrainConfig as SageTrainConfig, TrainReport as SageTrainReport, TrainingFixture as SageTrainingFixture,
 };
 pub use graph_store::{
-    CleanupReport, DecayLogRow, GraphStore, MergeReport, NodeWithDegree, SqliteGraphStore,
+    CleanupReport, DecayLogRow, GraphStore, InferenceReport, MergeReport, NodeWithDegree,
+    SqliteGraphStore,
 };
 pub use llm::{LlmClient, RawTriplet};
 pub use llm_anthropic::AnthropicLlm;

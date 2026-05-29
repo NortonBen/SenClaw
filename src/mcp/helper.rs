@@ -20,12 +20,17 @@ pub struct McpServerConfig {
 
 impl McpServerConfig {
     pub fn new(name: &str, server_path: &str) -> Self {
+        // Desktop app (senclaw-app) is a different binary that cannot dispatch
+        // `*-server` subcommands, so it sets SENCLAW_BIN to the bundled CLI.
+        let command = std::env::var("SENCLAW_BIN").ok().unwrap_or_else(|| {
+            std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "senclaw".to_owned())
+        });
         Self {
             name: name.to_owned(),
             transport: "stdio".to_owned(),
-            command: std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "senclaw".to_owned()),
+            command,
             args: vec![server_path.to_owned()],
             env: HashMap::new(),
         }

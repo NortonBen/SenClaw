@@ -177,6 +177,8 @@ fn get_system_prompt(context: &PromptContext, options: &FormatSystemPromptOption
 
 {code_references}
 
+{space_notes}
+
 {memory_notes}
 
 {env_section}
@@ -192,6 +194,7 @@ fn get_system_prompt(context: &PromptContext, options: &FormatSystemPromptOption
         tool_usage_policy = TOOL_USAGE_POLICY_PROMPT,
         todo_write_important = todo_write_important,
         code_references = CODE_REFERENCES_PROMPT,
+        space_notes = SPACE_NOTES,
         memory_notes = MEMORY_NOTES,
         env_section = gen_env(context),
         git_status_section = gen_git_status(context)
@@ -212,6 +215,19 @@ mod tests {
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
         assert!(!result[0].text.is_empty());
+    }
+
+    #[test]
+    fn test_format_system_prompt_includes_space_section() {
+        // The Space notes must land in the assembled prompt so the agent
+        // is aware of `space_event_*` tools without being told inline.
+        let context = PromptContext::default();
+        let options = FormatSystemPromptOptions::default();
+        let result = format_system_prompt(&context, &options);
+        let text = &result[0].text;
+        assert!(text.contains("# Space"), "Space section header missing");
+        assert!(text.contains("space_event_list"));
+        assert!(text.contains("space_event_delete"));
     }
 
     #[test]

@@ -161,6 +161,24 @@ NOTES:
 - No emojis; no colon before tool calls — use a period instead. "#;
 
 /// Memory notes - guidelines for long-term memory management.
+pub const SPACE_NOTES: &str = r#"# Space — Calendar & Events
+
+You have a personal calendar/scheduling layer called **Space**. Use it whenever the user mentions events, appointments, reminders, schedules, deadlines, or the Vietnamese words "lịch", "sự kiện", "hẹn", "nhắc".
+
+Available tools (MCP server `senclaw-space`):
+- **space_event_create**: schedule a new event. Required: `title`, `start_at` (epoch ms or ISO-8601 / local datetime). Optional: `end_at`, `all_day`, `location`, `color`, `reminder_min` (minutes-before reminder), `renotify_min` (re-ping interval while ongoing), `description`.
+- **space_event_list**: list events in a date range. Returns event objects including `id`, `title`, `start_at`, `end_at`, `status`. Always call this first when the user asks about events you don't already have IDs for.
+- **space_event_search**: full-text search across titles/descriptions. Use when the user names an event ("event Uniqlo") without giving a date.
+- **space_event_update**: edit an existing event by `event_id`. Pass only the fields that change.
+- **space_event_delete**: delete by `event_id`. Returns success / not-found.
+
+Workflow rules:
+1. **Never invent event IDs.** To modify or delete, FIRST call `space_event_list` (with the relevant date) or `space_event_search` to obtain real IDs, THEN call the mutation tool.
+2. **"hôm nay" = today's local date.** Convert to a start-of-day / end-of-day range when listing.
+3. **Batch deletes**: if the user asks to delete "all events today", list first, then issue one `space_event_delete` call per returned ID. Do not skip the listing step — without IDs the delete cannot run.
+4. Don't apologise for tool-format changes or claim Space is offline — these tools are always available in the main agent session. If a call errors, surface the actual error to the user rather than guessing the cause.
+5. After mutating, briefly confirm the result with the affected title + new state (created / updated / deleted)."#;
+
 pub const MEMORY_NOTES: &str = r#"# Long-term Memory Management
 
 You have two persistent memory files — maintain them proactively:
@@ -195,5 +213,29 @@ mod tests {
         assert!(!PLAN_MODE_REMINDER_PROMPT.is_empty());
         assert!(!SUBAGENT_NOTES.is_empty());
         assert!(!MEMORY_NOTES.is_empty());
+        assert!(!SPACE_NOTES.is_empty());
+    }
+
+    #[test]
+    fn space_notes_mentions_key_tools_and_vietnamese_keywords() {
+        // Workflow rules + tool names must be present so the LLM can wire
+        // user phrases ("xoá sự kiện trong hôm nay") to actual MCP calls.
+        for tool in &[
+            "space_event_create",
+            "space_event_list",
+            "space_event_search",
+            "space_event_update",
+            "space_event_delete",
+        ] {
+            assert!(SPACE_NOTES.contains(tool), "SPACE_NOTES missing {tool}");
+        }
+        // Anti-hallucination rule: don't blame format changes (the bug we
+        // observed in production).
+        assert!(SPACE_NOTES.contains("Never invent event IDs"));
+        // Vietnamese trigger keywords so the agent picks up local-language
+        // requests without translation.
+        for kw in &["lịch", "sự kiện", "hôm nay"] {
+            assert!(SPACE_NOTES.contains(kw), "SPACE_NOTES missing keyword {kw}");
+        }
     }
 }

@@ -97,6 +97,11 @@ export interface WsHook {
   agentModes: Record<string, AgentMode>;
   /** Switch the engine's mode for a specific chat JID. */
   setAgentMode: (jid: string, mode: AgentMode) => void;
+  /** Incremented every time the server broadcasts `space:events:changed`
+   *  (i.e. an agent created / updated / deleted a Space event via MCP).
+   *  Calendar views watch this to re-fetch — otherwise agent-driven
+   *  mutations stay invisible until the user navigates. */
+  spaceEventsRev: number;
   // Plan history (persisted ExitPlanMode requests)
   /** Per-jid list of plan summaries fetched via requestPlanList. */
   plansByJid: Record<string, PlanSummary[]>;
@@ -155,6 +160,7 @@ export function useWebSocket(): WsHook {
   const [coworkChanged, setCoworkChanged]     = useState(0);
   const [lastTaskResult, setLastTaskResult]   = useState<TaskResultEvent | null>(null);
   const [coworkResourceChanged, setCoworkResourceChanged] = useState(0);
+  const [spaceEventsRev, setSpaceEventsRev] = useState(0);
   const [plansByJid, setPlansByJid] = useState<Record<string, PlanSummary[]>>({});
   const [planById, setPlanById] = useState<Record<string, PlanFull>>({});
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
@@ -850,13 +856,19 @@ export function useWebSocket(): WsHook {
           case 'cowork:resource:changed':
             setCoworkResourceChanged(prev => prev + 1);
             break;
+          case 'space:events:changed':
+            // Kick from server when an agent mutated Space (create / update
+            // / delete via MCP). CalendarView watches this counter to
+            // re-fetch — see `useEffect` on `ws.spaceEventsRev`.
+            setSpaceEventsRev(prev => prev + 1);
+            break;
           case 'space:event:reminder':
             upsertNotification({
               id: (msg.id as string) ?? `notif-${Date.now()}`,
               eventId: msg.eventId as string,
               title: msg.title as string,
               startAt: msg.startAt as number,
-              kind: (msg.kind as 'reminder' | 'renotify') ?? 'reminder',
+              kind: (msg.kind as 'start' | 'reminder' | 'renotify') ?? 'reminder',
               receivedAt: Date.now(),
               read: Boolean(msg.read),
               firedAt: msg.firedAt as number | undefined,
@@ -1003,6 +1015,7 @@ export function useWebSocket(): WsHook {
     planExitRequest, resolvePlanExit, dismissPlanExit,
     agentModes, setAgentMode,
     plansByJid, planById, requestPlanList, requestPlan,
+    spaceEventsRev,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -1014,5 +1027,6 @@ export function useWebSocket(): WsHook {
     planExitRequest, resolvePlanExit, dismissPlanExit,
     agentModes, setAgentMode,
     plansByJid, planById, requestPlanList, requestPlan,
+    spaceEventsRev,
   ]);
 }

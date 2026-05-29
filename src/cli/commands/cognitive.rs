@@ -100,3 +100,34 @@ pub async fn train(
     eprintln!("[sage] weights → {}", path.display());
     Ok(())
 }
+
+/// `senclaw cognitive maintain` — run one maintenance sweep on demand.
+///
+/// Same routine the daemon's periodic ticker runs: cleanup junk, merge
+/// duplicate entities, and infer associative links. Safe to run while the
+/// daemon is up — SQLite WAL coordinates the writes. Prints a summary.
+pub async fn maintain() -> Result<()> {
+    let mut cfg = Config::from_env();
+    let gcp = cfg.paths.global_config_path.clone();
+    cfg.apply_persisted_overrides(&gcp);
+
+    let db = Arc::new(Db::open(&cfg).context("open senclaw db")?);
+    let graph: Arc<dyn GraphStore> = Arc::new(SqliteGraphStore::new(Arc::clone(&db)));
+
+    eprintln!("[maintain] running maintenance sweep…");
+    let report = crate::memory::cognitive::run_maintenance(&*graph)?;
+    eprintln!(
+        "[maintain] cleanup: {} envelope chunk(s), {} orphan entity(ies)",
+        report.cleanup.envelope_chunks_removed, report.cleanup.orphan_entities_removed,
+    );
+    eprintln!(
+        "[maintain] merge:   {} duplicate(s) across {} group(s), {} edge(s) redirected",
+        report.merge.entities_merged, report.merge.groups_merged, report.merge.edges_redirected,
+    );
+    eprintln!(
+        "[maintain] infer:   {} association(s) created from {} candidate pair(s)",
+        report.inference.associations_created, report.inference.candidates_examined,
+    );
+    eprintln!("[maintain] done in {} ms", report.duration_ms);
+    Ok(())
+}

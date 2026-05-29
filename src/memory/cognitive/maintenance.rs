@@ -1,9 +1,18 @@
-//! Periodic maintenance sweep — keeps the cognitive graph tidy.
+//! Periodic maintenance sweep — keeps the cognitive graph tidy *and* keeps
+//! it reasoning.
 //!
 //! Runs [`run_maintenance`] every `cfg.interval` hours. Each pass:
 //!   1. `cleanup_junk` — drop envelope-wrapped chunks + orphan entities.
 //!   2. `merge_duplicate_entities` — collapse entities sharing a normalised
 //!      name onto a canonical survivor and re-point their edges.
+//!   3. `infer_associative_edges` — the "suy luận liên kết thông tin" step:
+//!      link entities that co-occur in the same chunks but were never
+//!      directly connected by an extracted triplet. Pure graph reasoning,
+//!      no LLM call.
+//!
+//! Order matters: cleanup first (so we don't infer from junk), then merge
+//! (so co-occurrence is counted against canonical entities, not duplicates),
+//! then infer (over the cleaned, deduped graph).
 //!
 //! Cheap on small graphs (full-table scans of a few thousand rows finish
 //! sub-ms). On large graphs the cadence dominates — default 24 h.
@@ -17,7 +26,14 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::task::JoinHandle;
 
-use super::graph_store::{CleanupReport, GraphStore, MergeReport};
+use super::graph_store::{CleanupReport, GraphStore, InferenceReport, MergeReport};
+
+/// Default co-occurrence threshold for associative inference: two entities
+/// must be mentioned together by at least this many chunks before we link
+/// them. 2 keeps single-chunk coincidences out.
+const INFER_MIN_COOCCURRENCE: usize = 2;
+/// Cap on inferred edges per sweep so a dense graph can't explode.
+const INFER_MAX_PER_RUN: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct MaintenanceConfig {
@@ -29,6 +45,7 @@ pub struct MaintenanceConfig {
 pub struct MaintenanceReport {
     pub cleanup: CleanupReport,
     pub merge: MergeReport,
+    pub inference: InferenceReport,
     pub duration_ms: i64,
 }
 
@@ -36,9 +53,11 @@ pub fn run_maintenance(graph: &dyn GraphStore) -> Result<MaintenanceReport> {
     let started = std::time::Instant::now();
     let cleanup = graph.cleanup_junk()?;
     let merge = graph.merge_duplicate_entities()?;
+    let inference = graph.infer_associative_edges(INFER_MIN_COOCCURRENCE, INFER_MAX_PER_RUN)?;
     Ok(MaintenanceReport {
         cleanup,
         merge,
+        inference,
         duration_ms: started.elapsed().as_millis() as i64,
     })
 }
@@ -73,6 +92,7 @@ pub fn start_maintenance_ticker(
                     orphans = rep.cleanup.orphan_entities_removed,
                     groups_merged = rep.merge.groups_merged,
                     entities_merged = rep.merge.entities_merged,
+                    associations_inferred = rep.inference.associations_created,
                     duration_ms = rep.duration_ms,
                     "[cognitive] maintenance sweep complete"
                 ),
@@ -158,5 +178,62 @@ mod tests {
         assert_eq!(rep.merge.entities_merged, 0);
         // The edge survives untouched.
         assert_eq!(g.count_edges().unwrap(), 1);
+    }
+
+    #[test]
+    fn inference_links_co_mentioned_entities() {
+        let (_db, g) = store();
+        let now = Utc::now().timestamp();
+
+        // Two entities co-mentioned by TWO distinct chunks → co-occurrence 2,
+        // hits the default threshold. No direct edge between them exists.
+        let alice = DataPoint::entity("Alice", now);
+        let bob = DataPoint::entity("Bob", now);
+        let chunk1 = DataPoint::chunk("c1", Some("h1".into()), now);
+        let chunk2 = DataPoint::chunk("c2", Some("h2".into()), now);
+        for n in [&alice, &bob, &chunk1, &chunk2] {
+            g.upsert_node(n).unwrap();
+        }
+        for chunk in [&chunk1, &chunk2] {
+            g.upsert_edge(&RelationshipEdge::new(chunk.id, alice.id, "MENTIONS", now))
+                .unwrap();
+            g.upsert_edge(&RelationshipEdge::new(chunk.id, bob.id, "MENTIONS", now))
+                .unwrap();
+        }
+
+        let rep = run_maintenance(&*g).unwrap();
+        assert_eq!(rep.inference.associations_created, 1, "one ASSOCIATED_WITH expected");
+
+        // The inferred edge connects Alice and Bob (either direction).
+        let nbrs = g.neighbors(alice.id, 10).unwrap();
+        assert!(
+            nbrs.iter().any(|e| e.predicate == "ASSOCIATED_WITH"
+                && (e.dst == bob.id || e.src == bob.id)),
+            "expected inferred ASSOCIATED_WITH edge between Alice and Bob",
+        );
+
+        // Idempotent: a second sweep adds nothing (edge now exists).
+        let rep2 = run_maintenance(&*g).unwrap();
+        assert_eq!(rep2.inference.associations_created, 0);
+    }
+
+    #[test]
+    fn inference_skips_single_chunk_coincidence() {
+        let (_db, g) = store();
+        let now = Utc::now().timestamp();
+        // Co-mentioned by only ONE chunk → below threshold (2), no link.
+        let a = DataPoint::entity("Carol", now);
+        let b = DataPoint::entity("Dave", now);
+        let chunk = DataPoint::chunk("only", Some("h".into()), now);
+        for n in [&a, &b, &chunk] {
+            g.upsert_node(n).unwrap();
+        }
+        g.upsert_edge(&RelationshipEdge::new(chunk.id, a.id, "MENTIONS", now))
+            .unwrap();
+        g.upsert_edge(&RelationshipEdge::new(chunk.id, b.id, "MENTIONS", now))
+            .unwrap();
+
+        let rep = run_maintenance(&*g).unwrap();
+        assert_eq!(rep.inference.associations_created, 0);
     }
 }

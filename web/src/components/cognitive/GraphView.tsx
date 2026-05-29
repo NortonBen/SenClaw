@@ -32,6 +32,9 @@ export interface GraphEdge {
   strength: number;
   tier: number;
   ltp_status: number;
+  /** Edge derived by associative inference (co-occurrence), not LLM
+   * extraction. Rendered dashed so a guess reads differently from a fact. */
+  inferred?: boolean;
 }
 
 export interface SubgraphPayload {
@@ -284,7 +287,8 @@ export function GraphView({
               y2={b.y}
               stroke={TIER_COLORS[e.tier] ?? '#888'}
               strokeWidth={Math.max(0.5, Math.min(4, e.strength * 3))}
-              strokeOpacity={0.6}
+              strokeOpacity={e.inferred ? 0.4 : 0.6}
+              strokeDasharray={e.inferred ? '4 3' : undefined}
             />
           );
         })}

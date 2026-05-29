@@ -412,6 +412,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         ("reminder_sent_at", "INTEGER"),
         ("renotify_min", "INTEGER"),
         ("renotify_sent_at", "INTEGER"),
+        // start_sent_at: tracks the "event is starting now" notification so
+        // EVERY event pings at its start time, even without a reminder_min.
+        ("start_sent_at", "INTEGER"),
     ] {
         if !event_cols.iter().any(|c| c == col) {
             let _ = conn.execute(
@@ -478,6 +481,7 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
             reminder_sent_at INTEGER,
             renotify_min    INTEGER,
             renotify_sent_at INTEGER,
+            start_sent_at   INTEGER,
             created_at      INTEGER NOT NULL,
             updated_at      INTEGER NOT NULL,
             deleted_at      INTEGER

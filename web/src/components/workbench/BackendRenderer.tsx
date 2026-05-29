@@ -23,7 +23,7 @@ export function BackendRenderer({ artifact }: Props) {
         {artifact.process && (
           <div className="text-[10px] text-gray-500 mt-2">
             Status: <span className={`font-semibold ${
-              artifact.process.status === 'running' ? 'text-green-600'
+              artifact.process.status === 'ready' ? 'text-green-600'
                 : artifact.process.status === 'crashed' ? 'text-red-600' : 'text-gray-500'
             }`}>{artifact.process.status}</span>
           </div>

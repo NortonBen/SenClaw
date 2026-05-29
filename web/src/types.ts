@@ -494,8 +494,8 @@ export interface EventNotification {
   eventId: string;
   title: string;
   startAt: number;
-  /** "reminder" = pre-event alert, "renotify" = ongoing re-alert, "pending" = chưa phát */
-  kind: 'reminder' | 'renotify' | 'pending';
+  /** "start" = sự kiện bắt đầu, "reminder" = nhắc trước, "renotify" = nhắc lại khi đang diễn ra, "pending" = chưa phát */
+  kind: 'start' | 'reminder' | 'renotify' | 'pending';
   receivedAt: number;
   read: boolean;
   /** Thời điểm thông báo thực sự phát (epoch ms). Không có với pending. */

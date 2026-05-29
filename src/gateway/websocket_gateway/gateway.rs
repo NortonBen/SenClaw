@@ -44,6 +44,11 @@ pub trait WsGatewayApi: Send + Sync {
     async fn stop_agent(&self, _group_jid: &str) {}
     /// Switch agent mode (`"Agent" | "Plan"`) for a group's engine.
     fn set_agent_mode(&self, _group_jid: &str, _mode: &str) {}
+    /// Resolve a pending plan-exit approval. `selected` is one of
+    /// `startEditing` / `clearContextAndStart` / `cancelled`. Delivers the
+    /// choice to the waiting `ExitPlanMode` tool and (on approval) flips the
+    /// engine back to Agent mode.
+    fn resolve_plan_exit(&self, _group_jid: &str, _agent_id: &str, _selected: &str) {}
 
     /// Get current dispatch parents (for admin clients on subscribe).
     fn get_dispatch_parents(&self) -> serde_json::Value {

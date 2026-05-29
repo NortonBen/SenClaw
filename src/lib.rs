@@ -188,6 +188,27 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         self.agent_pool.set_agent_mode(group_jid, mode);
     }
 
+    fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
+        self.agent_pool.resolve_plan_exit(group_jid, agent_id, selected);
+        // Persist the approval outcome on the most recent pending plan for
+        // this chat so the Plan History panel reflects accepted/rejected
+        // state (the row was inserted as "pending" at request time).
+        let approval = match selected {
+            "startEditing" | "clearContextAndStart" => selected,
+            _ => "cancelled",
+        };
+        if let Ok(plans) = self.db.list_plans_for_chat(group_jid, Some(1)) {
+            if let Some(p) = plans.first() {
+                if p.approval == "pending" {
+                    let ts = chrono::Utc::now().to_rfc3339();
+                    if let Err(e) = self.db.update_plan_approval(&p.id, approval, &ts) {
+                        tracing::warn!(error = %e, plan_id = %p.id, "[Plan] update approval failed");
+                    }
+                }
+            }
+        }
+    }
+
     /// Snapshot of all dispatch parents — sent to admin clients on subscribe.
     fn get_dispatch_parents(&self) -> serde_json::Value {
         let bridge = self.agent_pool.dispatch_bridge_snapshot();
@@ -269,6 +290,59 @@ fn dispatch_parent_to_json(p: &agent::dispatch_bridge::DispatchParent) -> serde_
 struct WsAgentEventSink {
     gateway: Arc<gateway::websocket_gateway::WebSocketGateway>,
     db: Arc<db::Db>,
+}
+
+/// `true` when the tool name corresponds to a Space-calendar mutation
+/// (create/update/delete/set_reminder). Matches the MCP-prefixed names
+/// emitted by `senclaw-space` plus the bare tool names used in tests. Used
+/// to kick the frontend calendar so it re-fetches after an agent mutates
+/// events through the MCP — without this the UI keeps showing stale data
+/// while the row is already in the DB.
+fn is_space_mutation_tool(tool_name: &str) -> bool {
+    const MUTATIONS: &[&str] = &[
+        "event_create",
+        "event_update",
+        "event_delete",
+        "event_set_reminder",
+        "event_set_renotify",
+    ];
+    // The MCP routes through `mcp__<server>__<tool>` (TS) or
+    // `mcp__senclaw-space__<tool>` (Rust) — accept both.
+    if let Some(suffix) = tool_name.rsplit("__").next() {
+        if MUTATIONS.contains(&suffix) {
+            return true;
+        }
+    }
+    // Some adapters lowercase the server name — keep a broad check.
+    MUTATIONS.iter().any(|m| tool_name.ends_with(m))
+}
+
+#[cfg(test)]
+mod space_mutation_classifier_tests {
+    use super::is_space_mutation_tool;
+
+    #[test]
+    fn accepts_mcp_prefixed_create_and_delete() {
+        assert!(is_space_mutation_tool("mcp__senclaw-space__event_create"));
+        assert!(is_space_mutation_tool("mcp__senclaw-space__event_update"));
+        assert!(is_space_mutation_tool("mcp__senclaw-space__event_delete"));
+    }
+
+    #[test]
+    fn rejects_read_only_tools() {
+        // Listing / searching events MUST NOT trigger a refresh broadcast —
+        // it would loop the frontend (refresh → list → refresh → ...).
+        assert!(!is_space_mutation_tool("mcp__senclaw-space__event_list"));
+        assert!(!is_space_mutation_tool("mcp__senclaw-space__event_search"));
+        assert!(!is_space_mutation_tool("mcp__senclaw-space__event_get"));
+    }
+
+    #[test]
+    fn rejects_unrelated_tools() {
+        assert!(!is_space_mutation_tool("Read"));
+        assert!(!is_space_mutation_tool("Bash"));
+        assert!(!is_space_mutation_tool("mcp__senclaw-memory__add"));
+    }
 }
 
 /// Best-effort persistence of an `ExitPlanMode` plan request. Writes the
@@ -1578,6 +1652,21 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         &ts,
                     )
                     .await;
+
+                    // When an agent mutates Space (create/update/delete
+                    // events) via MCP, the calendar UI has no way to know
+                    // the DB just changed. Broadcast a small kick so the
+                    // CalendarView re-fetches via `/api/space/calendar/events`.
+                    // Without this, screenshots like "agent says event
+                    // created but calendar still empty" happen — the row IS
+                    // in the DB, the UI just never reloaded.
+                    if ev.ok && is_space_mutation_tool(&ev.tool_name) {
+                        gw.broadcast_to_all(&serde_json::json!({
+                            "type": "space:events:changed",
+                            "toolName": ev.tool_name,
+                        }))
+                        .await;
+                    }
                 });
             }));
         }

@@ -4,8 +4,11 @@ import type { GroupInfo, ChatMessage, ToolMessage, AgentState, UsageData, ImageA
 import type { AgentMode } from '../hooks/useWebSocket';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 import { ToolGroupCard } from './ToolGroupCard';
-import { Progress, Space, Typography } from 'antd';
+import { Progress, Space, Tooltip, Typography, Drawer, Badge } from 'antd';
+import { FileTextOutlined } from '@ant-design/icons';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
+import { PlanHistoryPanel } from './PlanHistoryPanel';
+import { useAppContext } from '../contexts/AppContext';
 
 const { Text } = Typography;
 
@@ -31,9 +34,12 @@ const PAGE_SIZE = 5;
 
 export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion, agentMode, onModeChange }: Props) {
   const { token } = theme.useToken();
+  const { ws } = useAppContext();
   const [input, setInput]           = useState('');
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [plansOpen, setPlansOpen]   = useState(false);
+  const planCount = (ws.plansByJid[group.jid] ?? []).length;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const bottomRef                   = useRef<HTMLDivElement>(null);
   const scrollRef                   = useRef<HTMLDivElement>(null);
@@ -266,49 +272,68 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           <p className="text-xs mt-0.5" style={{ color: token.colorTextSecondary }}>{group.folder}</p>
         </div>
         <div className="ml-auto flex items-center gap-6">
-          {/* Token usage indicator */}
-          {usage && (
-            <div className="flex items-center gap-3" style={{ minWidth: 120 }}>
-              <div className="flex-1">
-                <div className="flex justify-between items-center mb-1">
-                  <Text style={{ fontSize: '10px', color: token.colorTextTertiary, fontWeight: 500 }}>
-                    Tokens
-                  </Text>
-                  <Text style={{ fontSize: '10px', color: token.colorTextTertiary, fontWeight: 600 }}>
-                    {Math.round((usage.useTokens / usage.maxTokens) * 100)}%
-                  </Text>
+          {/* Token usage indicator with remaining-context countdown */}
+          {usage && usage.maxTokens > 0 && (() => {
+            const pct = Math.min(100, (usage.useTokens / usage.maxTokens) * 100);
+            const remaining = Math.max(0, usage.maxTokens - usage.useTokens);
+            const barColor =
+              pct >= 90 ? token.colorError : pct >= 70 ? token.colorWarning : token.colorPrimary;
+            return (
+              <Tooltip
+                title={`Đã dùng ${usage.useTokens.toLocaleString()} / ${usage.maxTokens.toLocaleString()} tokens — còn lại ${remaining.toLocaleString()}`}
+              >
+                <div className="flex items-center gap-3" style={{ minWidth: 140 }}>
+                  <div className="flex-1">
+                    <div className="flex justify-between items-center mb-1">
+                      <Text style={{ fontSize: '10px', color: token.colorTextTertiary, fontWeight: 500 }}>
+                        Context
+                      </Text>
+                      <Text style={{ fontSize: '10px', color: token.colorTextTertiary, fontWeight: 600 }}>
+                        {Math.round(pct)}%
+                      </Text>
+                    </div>
+                    <Progress
+                      percent={pct}
+                      showInfo={false}
+                      size={[100, 3]}
+                      strokeColor={barColor}
+                      trailColor={token.colorFillSecondary}
+                      style={{ margin: 0, display: 'block' }}
+                    />
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <Text style={{ fontSize: '11px', color: barColor, fontWeight: 700, lineHeight: 1 }}>
+                      {remaining.toLocaleString()}
+                    </Text>
+                    <Text style={{ fontSize: '9px', color: token.colorTextTertiary, lineHeight: 1.5 }}>
+                      còn lại
+                    </Text>
+                  </div>
                 </div>
-                <Progress
-                  percent={(usage.useTokens / usage.maxTokens) * 100}
-                  showInfo={false}
-                  size={[100, 3]}
-                  strokeColor={
-                    usage.useTokens > usage.maxTokens * 0.9 
-                      ? token.colorError 
-                      : usage.useTokens > usage.maxTokens * 0.7 
-                        ? token.colorWarning 
-                        : token.colorPrimary
-                  }
-                  trailColor={token.colorFillSecondary}
-                  style={{ margin: 0, display: 'block' }}
-                />
-              </div>
-              <div className="flex flex-col items-end">
-                <Text style={{ fontSize: '10px', color: token.colorTextSecondary, fontWeight: 600, lineHeight: 1 }}>
-                  {usage.useTokens.toLocaleString()}
-                </Text>
-                <Text style={{ fontSize: '9px', color: token.colorTextTertiary, lineHeight: 1.5 }}>
-                  / {usage.maxTokens.toLocaleString()}
-                </Text>
-              </div>
-            </div>
-          )}
+              </Tooltip>
+            );
+          })()}
 
           {/* Status indicator */}
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full transition-colors ${statusDotClass}`} />
             <span className="text-xs" style={{ color: token.colorTextSecondary }}>{statusText}</span>
           </div>
+          {/* Plan history — browse past plans this agent produced via ExitPlanMode */}
+          <Tooltip title="Plan history">
+            <button
+              onClick={() => setPlansOpen(true)}
+              className="w-7 h-7 rounded-full flex items-center justify-center transition-colors"
+              style={{ color: token.colorTextDescription }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = token.colorPrimary; e.currentTarget.style.background = `${token.colorPrimary}1a`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = token.colorTextDescription; e.currentTarget.style.background = 'transparent'; }}
+              aria-label="Plan history"
+            >
+              <Badge count={planCount} size="small" offset={[2, -2]} styles={{ indicator: { fontSize: 9 } }}>
+                <FileTextOutlined style={{ fontSize: 15 }} />
+              </Badge>
+            </button>
+          </Tooltip>
           {/* Stop / reset — always shown; in idle clears session context */}
           <button
             onClick={() => setShowStopConfirm(true)}
@@ -483,6 +508,24 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           </div>
         </div>
       )}
+
+      {/* Plan history drawer — persisted plans from ExitPlanMode, survives reload. */}
+      <Drawer
+        title="Plan history"
+        placement="right"
+        width={460}
+        open={plansOpen}
+        onClose={() => setPlansOpen(false)}
+        styles={{ body: { padding: 0 } }}
+      >
+        <PlanHistoryPanel
+          groupJid={group.jid}
+          plansByJid={ws.plansByJid}
+          planById={ws.planById}
+          requestPlanList={ws.requestPlanList}
+          requestPlan={ws.requestPlan}
+        />
+      </Drawer>
     </div>
   );
 }

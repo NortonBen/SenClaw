@@ -65,6 +65,49 @@ fn truncate_utf8_prefix(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Maximum number of `[handoff from X]` prefixes allowed in a task title
+/// before we refuse to fire any more handoff rules for that chain. Prevents
+/// the synthesizer ↔ critic ping-pong observed in `ws-research` where a
+/// circular handoff_rules config produced an infinite loop, exhausted the
+/// LLM endpoint, and accumulated `[handoff from A] [handoff from B] …`
+/// prefixes until the title was truncated mid-word.
+const MAX_HANDOFF_CHAIN: usize = 2;
+
+/// Count the `[handoff from <member>] ` prefixes at the start of a task
+/// title. Used to detect runaway handoff chains.
+fn count_handoff_prefixes(title: &str) -> usize {
+    let mut rest = title;
+    let mut n = 0;
+    while let Some(after_open) = rest.strip_prefix("[handoff from ") {
+        let Some(close_idx) = after_open.find(']') else {
+            break;
+        };
+        n += 1;
+        let after_close = &after_open[close_idx + 1..];
+        // Skip a single space between bracketed prefixes ("[..] foo" or "[..][..]").
+        rest = after_close.strip_prefix(' ').unwrap_or(after_close);
+    }
+    n
+}
+
+/// Strip every leading `[handoff from X] ` prefix so a re-handoff doesn't
+/// pile more brackets on top. The returned slice points into the original
+/// string, so no allocation.
+fn strip_handoff_prefixes(title: &str) -> &str {
+    let mut rest = title;
+    loop {
+        let after_open = match rest.strip_prefix("[handoff from ") {
+            Some(s) => s,
+            None => return rest,
+        };
+        let Some(close_idx) = after_open.find(']') else {
+            return rest;
+        };
+        let after_close = &after_open[close_idx + 1..];
+        rest = after_close.strip_prefix(' ').unwrap_or(after_close);
+    }
+}
+
 /// Validate task output against member's output format requirements.
 fn validate_output_format(
     output: &str,
@@ -486,6 +529,20 @@ impl CoworkManager {
             Err(_) => return,
         };
 
+        // Loop-guard: refuse to chain another handoff once the completed
+        // task's title already carries MAX_HANDOFF_CHAIN `[handoff from …]`
+        // prefixes. This is what makes the circular synthesizer ↔ critic
+        // config terminate instead of grinding the LLM into EMPTY_COMPLETION.
+        let chain_depth = count_handoff_prefixes(&completed_task.title);
+        if chain_depth >= MAX_HANDOFF_CHAIN {
+            tracing::warn!(
+                "[Cowork] Handoff chain depth {chain_depth} reached for task '{}' \
+                 (cap = {MAX_HANDOFF_CHAIN}); skipping all handoff rules on assignee {assignee_id}",
+                completed_task.title
+            );
+            return;
+        }
+
         let mut followup_tasks = Vec::new();
         for rule in &rules {
             let when = rule["when"].as_str().unwrap_or("");
@@ -496,6 +553,17 @@ impl CoworkManager {
                 Some(t) => t,
                 None => continue,
             };
+            // Ping-pong guard: if this rule would hand back to a member
+            // that already handed it to us, refuse. Detects the simplest
+            // A → B → A loop without needing full DAG traversal.
+            if completed_task.title.contains(&format!("[handoff from {to}]")) {
+                tracing::warn!(
+                    "[Cowork] Handoff rule → {to} skipped: target already appears \
+                     in handoff chain for task '{}'",
+                    completed_task.title
+                );
+                continue;
+            }
             // Optional gates (case-insensitive substring match on task result):
             // - `unless_result_contains`: skip rule if this text appears (e.g. workstream done).
             // - `only_if_result_contains`: run rule only if this text appears (e.g. explicit handoff).
@@ -521,10 +589,15 @@ impl CoworkManager {
                 tracing::warn!("[Cowork] Handoff target '{to}' not found in workspace {workspace_id}");
                 continue;
             }
+            // Strip nested `[handoff from …]` prefixes off the completed
+            // title before re-prefixing — otherwise titles grow without
+            // bound across long DAGs and get truncated mid-word, losing
+            // the original task content entirely.
+            let original_title = strip_handoff_prefixes(&completed_task.title);
             let task_title = format!(
                 "[handoff from {}] {}",
                 assignee_id,
-                truncate_utf8_prefix(&completed_task.title, 60)
+                truncate_utf8_prefix(original_title, 80)
             );
             let description = format!(
                 "Handoff from {assignee_id}.\n\nOriginal task: {}\n\nResult:\n{result_content}",
@@ -640,12 +713,29 @@ impl CoworkManager {
             Vec::new()
         };
 
-        let prompt = self::prompt::build_cowork_task_prompt(
+        // Fetch recent workspace chat + cross-member completed tasks so
+        // each agent turn sees prior conversation context. Bounds are
+        // applied inside `build_cowork_task_prompt_with_history`; we
+        // overfetch a bit here to give the builder room to filter.
+        let recent_messages = db
+            .list_cowork_messages(&workspace_id_owned, 16, None)
+            .unwrap_or_default();
+        let recent_completed: Vec<CoworkTask> = db
+            .list_cowork_tasks(&workspace_id_owned, None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.status == "done" && t.id != task.id)
+            .take(10)
+            .collect();
+
+        let prompt = self::prompt::build_cowork_task_prompt_with_history(
             task,
             member,
             &workspace,
             &board,
             &dependent_results,
+            &recent_messages,
+            &recent_completed,
         );
 
         // Use workspace working_dir if set, otherwise root_dir for code/folder operations
@@ -2845,7 +2935,7 @@ impl Default for CoworkManager {
 
 #[cfg(test)]
 mod truncate_tests {
-    use super::truncate_utf8_prefix;
+    use super::{count_handoff_prefixes, strip_handoff_prefixes, truncate_utf8_prefix};
 
     #[test]
     fn truncate_utf8_prefix_vietnamese_at_60_bytes() {
@@ -2854,5 +2944,41 @@ mod truncate_tests {
         let truncated = truncate_utf8_prefix(title, 60);
         assert!(truncated.len() <= 60);
         assert!(std::str::from_utf8(truncated.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn count_prefixes_returns_zero_for_plain_title() {
+        assert_eq!(count_handoff_prefixes("nghiên cứu thị trường"), 0);
+        assert_eq!(count_handoff_prefixes(""), 0);
+    }
+
+    #[test]
+    fn count_prefixes_handles_chains() {
+        let t = "[handoff from synthesizer] [handoff from critic] [handoff from synthesizer] original";
+        assert_eq!(count_handoff_prefixes(t), 3);
+    }
+
+    #[test]
+    fn count_prefixes_ignores_malformed() {
+        // No closing bracket → don't count partial.
+        assert_eq!(count_handoff_prefixes("[handoff from synthesizer "), 0);
+    }
+
+    #[test]
+    fn strip_returns_original_title() {
+        let t = "[handoff from synthesizer] [handoff from critic] original task";
+        assert_eq!(strip_handoff_prefixes(t), "original task");
+    }
+
+    #[test]
+    fn strip_idempotent_on_clean_title() {
+        let t = "nghiên cứu";
+        assert_eq!(strip_handoff_prefixes(t), "nghiên cứu");
+    }
+
+    #[test]
+    fn strip_handles_no_trailing_space_between_brackets() {
+        let t = "[handoff from a][handoff from b]X";
+        assert_eq!(strip_handoff_prefixes(t), "X");
     }
 }

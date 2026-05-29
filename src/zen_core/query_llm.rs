@@ -660,6 +660,12 @@ async fn query_openai(
         "stream": stream,
     });
 
+    // Ask the server to emit a final usage chunk so we can capture real token
+    // counts from streamed responses (no-op for providers that ignore it).
+    if stream {
+        body["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
+
     if let Some(ref t) = openai_tools {
         body["tools"] = serde_json::Value::Array(t.clone());
     }
@@ -702,6 +708,7 @@ async fn parse_openai_stream(
     let mut reasoning_buf = String::new();
     let mut tool_calls: Vec<Value> = Vec::new();
     let mut model_name = String::new();
+    let mut usage: Option<RawUsage> = None;
 
     while let Some(chunk_result) = stream.next().await {
         if cancel.is_cancelled() {
@@ -727,6 +734,12 @@ async fn parse_openai_stream(
 
             if model_name.is_empty() {
                 model_name = delta["model"].as_str().unwrap_or("").to_string();
+            }
+
+            // With `stream_options.include_usage`, the final chunk carries a
+            // top-level `usage` object (and an empty `choices` array).
+            if let Some(u) = RawUsage::from_json(&delta["usage"]) {
+                usage = Some(u);
             }
 
             if let Some(choices) = delta["choices"].as_array() {
@@ -780,7 +793,7 @@ async fn parse_openai_stream(
         }
     }
 
-    build_assistant_message(&text_buf, &reasoning_buf, &tool_calls)
+    build_assistant_message(&text_buf, &reasoning_buf, &tool_calls, usage)
 }
 
 fn parse_openai_non_stream(json: &Value) -> Result<Message> {
@@ -801,7 +814,8 @@ fn parse_openai_non_stream(json: &Value) -> Result<Message> {
         }
     }
 
-    build_assistant_message(&text, &reasoning, &tool_calls)
+    let usage = RawUsage::from_json(&json["usage"]);
+    build_assistant_message(&text, &reasoning, &tool_calls, usage)
 }
 
 // ============================================================================
@@ -962,6 +976,7 @@ async fn parse_anthropic_stream(
     let mut reasoning_buf = String::new();
     let mut tool_use_blocks: Vec<Value> = Vec::new();
     let mut current_tool_idx: Option<usize> = None;
+    let mut usage: Option<RawUsage> = None;
 
     while let Some(chunk_result) = stream.next().await {
         if cancel.is_cancelled() {
@@ -988,6 +1003,12 @@ async fn parse_anthropic_stream(
             let event_type = event["type"].as_str().unwrap_or("");
 
             match event_type {
+                "message_start" => {
+                    // Carries input/cache token counts (output is ~1 here).
+                    if let Some(u) = RawUsage::from_json(&event["message"]["usage"]) {
+                        usage.get_or_insert_with(RawUsage::default).merge(&u);
+                    }
+                }
                 "content_block_start" => {
                     if let Some(cb) = event.get("content_block") {
                         match cb["type"].as_str().unwrap_or("") {
@@ -1041,7 +1062,10 @@ async fn parse_anthropic_stream(
                     }
                 }
                 "message_delta" => {
-                    // Stop reason, usage, etc.
+                    // Carries the cumulative output_tokens (and stop_reason).
+                    if let Some(u) = RawUsage::from_json(&event["usage"]) {
+                        usage.get_or_insert_with(RawUsage::default).merge(&u);
+                    }
                 }
                 _ => {}
             }
@@ -1056,7 +1080,7 @@ async fn parse_anthropic_stream(
         }
     }
 
-    build_assistant_message_anthropic(&text_buf, &reasoning_buf, &tool_use_blocks)
+    build_assistant_message_anthropic(&text_buf, &reasoning_buf, &tool_use_blocks, usage)
 }
 
 fn parse_anthropic_non_stream(json: &Value) -> Result<Message> {
@@ -1085,14 +1109,20 @@ fn parse_anthropic_non_stream(json: &Value) -> Result<Message> {
         }
     }
 
-    build_assistant_message_anthropic(&text, &reasoning, &tool_use_blocks)
+    let usage = RawUsage::from_json(&json["usage"]);
+    build_assistant_message_anthropic(&text, &reasoning, &tool_use_blocks, usage)
 }
 
 // ============================================================================
 // Message construction helpers
 // ============================================================================
 
-fn build_assistant_message(text: &str, reasoning: &str, tool_calls: &[Value]) -> Result<Message> {
+fn build_assistant_message(
+    text: &str,
+    reasoning: &str,
+    tool_calls: &[Value],
+    usage: Option<RawUsage>,
+) -> Result<Message> {
     let mut content: Vec<ContentBlock> = Vec::new();
 
     if !reasoning.is_empty() {
@@ -1130,6 +1160,7 @@ fn build_assistant_message(text: &str, reasoning: &str, tool_calls: &[Value]) ->
             content,
         },
         uuid: uuid::Uuid::new_v4().to_string(),
+        usage,
     })
 }
 
@@ -1137,6 +1168,7 @@ fn build_assistant_message_anthropic(
     text: &str,
     reasoning: &str,
     tool_uses: &[Value],
+    usage: Option<RawUsage>,
 ) -> Result<Message> {
     let mut content: Vec<ContentBlock> = Vec::new();
 
@@ -1166,6 +1198,7 @@ fn build_assistant_message_anthropic(
             content,
         },
         uuid: uuid::Uuid::new_v4().to_string(),
+        usage,
     })
 }
 
@@ -1521,6 +1554,7 @@ mod tests {
                     }],
                 },
                 uuid: "a1".into(),
+                usage: None,
             },
             create_user_message(vec![ContentBlock::ToolResult {
                 tool_use_id: "call_1".into(),
@@ -1558,6 +1592,7 @@ mod tests {
                 ],
             },
             uuid: "a1".into(),
+            usage: None,
         }];
         let out = openai_messages_for_api(&msgs, "").unwrap();
         assert_eq!(out.len(), 1);

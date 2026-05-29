@@ -30,7 +30,7 @@ export function DockBadges(p: Props) {
 
   // ===== Workbench 信号 =====
   const wbCurrent = p.workbenchState?.current ?? null;
-  const wbHasRunning = p.workbenchState?.history.some(h => h.process?.status === 'running') ?? false;
+  const wbHasRunning = p.workbenchState?.history.some(h => h.process?.status === 'ready') ?? false;
 
   return (
     <div className="flex flex-col items-center gap-3 w-10 flex-shrink-0 border-l border-gray-100 py-3 bg-white">

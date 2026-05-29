@@ -419,7 +419,15 @@ pub(crate) async fn space_events_update(
             conn.execute("UPDATE space_events SET description=?1 WHERE id=?2", params![b.description, id])?;
         }
         if let Some(v) = b.start_at {
-            conn.execute("UPDATE space_events SET start_at=?1 WHERE id=?2", params![v, id])?;
+            // Moving start_at re-arms both the pre-event reminder and the
+            // start-time notification so the event pings again at its new
+            // time (otherwise a rescheduled event stays silent).
+            conn.execute(
+                "UPDATE space_events
+                 SET start_at=?1, reminder_sent_at=NULL, start_sent_at=NULL
+                 WHERE id=?2",
+                params![v, id],
+            )?;
         }
         if let Some(v) = b.end_at {
             conn.execute("UPDATE space_events SET end_at=?1 WHERE id=?2", params![v, id])?;
@@ -441,7 +449,7 @@ pub(crate) async fn space_events_update(
         }
         if b.reset_reminder.unwrap_or(false) {
             conn.execute(
-                "UPDATE space_events SET reminder_sent_at=NULL, renotify_sent_at=NULL WHERE id=?1",
+                "UPDATE space_events SET reminder_sent_at=NULL, renotify_sent_at=NULL, start_sent_at=NULL WHERE id=?1",
                 params![id],
             )?;
         }

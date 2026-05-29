@@ -154,7 +154,8 @@ export const CognitiveSettings: React.FC = () => {
       message.success(
         `Maintenance done — cleaned ${r.envelope_chunks_removed} chunks / ` +
           `${r.orphan_entities_removed} orphans, merged ${r.entities_merged} entities ` +
-          `across ${r.groups_merged} groups (${r.duration_ms} ms)`
+          `across ${r.groups_merged} groups, inferred ${r.associations_inferred ?? 0} ` +
+          `association(s) (${r.duration_ms} ms)`
       );
     } catch (err) {
       message.error(`Maintenance failed: ${(err as Error).message}`);
@@ -270,7 +271,7 @@ export const CognitiveSettings: React.FC = () => {
         <Form.Item
           name="maintenanceIntervalHours"
           label="Maintenance sweep interval (hours)"
-          tooltip="Cadence for the periodic janitor that drops envelope-wrapped chunks, removes orphan entities, and merges duplicate entities sharing a normalised name. 0 disables the sweep (you can still trigger it manually)."
+          tooltip="Cadence for the periodic janitor: drops envelope-wrapped chunks, removes orphan entities, merges duplicate entities sharing a normalised name, and infers associative links between entities that co-occur across chunks. 0 disables the sweep (you can still trigger it manually)."
           rules={[{ required: true, type: 'number', min: 0, max: 720 }]}
         >
           <InputNumber min={0} max={720} step={1} style={{ width: 200 }} addonAfter="h" />

@@ -202,6 +202,17 @@ pub trait CoreApi: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+    /// Deliver a plan-exit decision (`startEditing` / `clearContextAndStart`
+    /// / `cancelled`) to the suspended `ExitPlanMode` tool, and flip the
+    /// engine back to Agent mode on approval.
+    fn respond_to_plan_exit(
+        &self,
+        _jid: &str,
+        _agent_id: &str,
+        _selected: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
     /// Remove all event listeners registered for `jid`.
     fn off_all(&self, _jid: &str) {}
 

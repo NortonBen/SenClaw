@@ -13,6 +13,10 @@ import { CodePage } from './pages/CodePage';
 import { SpacePage } from './pages/SpacePage';
 import { CognitivePage } from './pages/CognitivePage';
 
+const SEARCH = new URLSearchParams(window.location.search);
+const EMBED = SEARCH.get('embed') === '1';
+const DESKTOP = SEARCH.get('app') === '1';
+
 export function App() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -25,6 +29,21 @@ export function App() {
     localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
+
+  // Desktop app (Tauri): native-feel tweaks — no rubber-band scroll, no
+  // browser right-click menu, no image/content dragging.
+  useEffect(() => {
+    if (!DESKTOP) return;
+    document.documentElement.classList.add('desktop-app');
+    const blockContextMenu = (e: MouseEvent) => e.preventDefault();
+    const blockDrag = (e: DragEvent) => e.preventDefault();
+    document.addEventListener('contextmenu', blockContextMenu);
+    document.addEventListener('dragstart', blockDrag);
+    return () => {
+      document.removeEventListener('contextmenu', blockContextMenu);
+      document.removeEventListener('dragstart', blockDrag);
+    };
+  }, []);
 
   const toggleTheme = () => setIsDarkMode(prev => !prev);
 
@@ -40,7 +59,7 @@ export function App() {
         },
       }}
     >
-      <AppContext.Provider value={{ ws, isDarkMode, toggleTheme }}>
+      <AppContext.Provider value={{ ws, isDarkMode, toggleTheme, embed: EMBED }}>
         <Routes>
           <Route index element={<ChatPage />} />
           <Route path="chats" element={<ChatPage />} />

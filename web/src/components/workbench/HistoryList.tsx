@@ -26,7 +26,7 @@ export function HistoryList({ items, currentId, onSelect, onClose }: Props) {
               title={item.title}
             >
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                status === 'running' ? 'bg-green-500 animate-pulse'
+                status === 'ready' ? 'bg-green-500 animate-pulse'
                   : status === 'crashed' ? 'bg-red-500'
                   : status === 'stopped' ? 'bg-gray-400'
                   : 'bg-[#5BBFE8]'

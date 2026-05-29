@@ -1026,6 +1026,79 @@ pub(crate) async fn handle_permission_response(
     state.api.resolve_permission(&request_id, &option_key);
 }
 
+/// List the most recent fired event notifications. Used by the Sidebar
+/// "history" tab so reload still surfaces reminders that fired while the
+/// user was offline.
+pub(crate) async fn handle_notifications_list(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    let limit = msg["limit"].as_u64().map(|v| v as u32).unwrap_or(100);
+    match state.db.list_event_notifications(Some(limit)) {
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows.iter().map(|n| serde_json::json!({
+                "id": n.id,
+                "eventId": n.event_id,
+                "title": n.title,
+                "startAt": n.start_at,
+                "kind": n.kind,
+                "firedAt": n.fired_at,
+                "delayedMs": n.delayed_ms,
+                "readAt": n.read_at,
+            })).collect();
+            send_json(sender, &serde_json::json!({
+                "type": "notifications:list",
+                "notifications": items,
+            }));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "[handle_notifications_list] db error");
+            send_json(sender, &serde_json::json!({"type": "error", "message": "list failed"}));
+        }
+    }
+}
+
+/// List space-events whose reminder will fire within `windowMin` minutes
+/// but hasn't been generated yet. Surfaced as the Sidebar "upcoming" tab —
+/// answers "what's about to ping me?" before the notifier loop wakes.
+pub(crate) async fn handle_notifications_pending(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await { return; }
+    // Default to 24h preview — covers the working day without scrolling.
+    let window_min = msg["windowMin"].as_i64().unwrap_or(24 * 60);
+    let window_ms = window_min * 60_000;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    match state.db.list_pending_event_reminders(now_ms, window_ms) {
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows.iter().map(|p| serde_json::json!({
+                "eventId": p.event_id,
+                "title": p.title,
+                "startAt": p.start_at,
+                "reminderMin": p.reminder_min,
+                "triggerAt": p.trigger_at,
+            })).collect();
+            send_json(sender, &serde_json::json!({
+                "type": "notifications:pending",
+                "windowMin": window_min,
+                "items": items,
+            }));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "[handle_notifications_pending] db error");
+            send_json(sender, &serde_json::json!({"type": "error", "message": "pending failed"}));
+        }
+    }
+}
+
 pub(crate) async fn handle_plan_list(
     clients: &Arc<Mutex<Vec<WsClient>>>,
     client_idx: usize,
@@ -1182,6 +1255,59 @@ pub(crate) async fn handle_question_response(
     state
         .api
         .resolve_ask_question(&request_id, answers, other_texts);
+}
+
+/// Handle the user's plan-exit decision from `PlanExitDialog`. Routes the
+/// choice to the suspended `ExitPlanMode` tool (which otherwise blocks
+/// forever) and broadcasts `plan:exit:response` so every connected client
+/// closes its modal.
+pub(crate) async fn handle_plan_exit_response(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
+    let agent_id = msg["agentId"].as_str().unwrap_or("main").to_string();
+    let selected = msg["selected"].as_str().unwrap_or("startEditing").to_string();
+    if group_jid.is_empty() {
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "groupJid required"}),
+        );
+        return;
+    }
+    // Deliver to the engine: unblocks ExitPlanMode + flips mode on approval.
+    state.api.resolve_plan_exit(&group_jid, &agent_id, &selected);
+    // Broadcast so all clients (the one that answered + others) dismiss the
+    // dialog. Frontend listens for `plan:exit:response`.
+    broadcast_to_all_inner(
+        clients,
+        &serde_json::json!({
+            "type": "plan:exit:response",
+            "groupJid": group_jid,
+            "agentId": agent_id,
+            "selected": selected,
+        }),
+    )
+    .await;
+    // On approval the engine flips back to Agent mode internally — mirror
+    // that to clients so the mode selector + read-only UI state update.
+    if matches!(selected.as_str(), "startEditing" | "clearContextAndStart") {
+        broadcast_to_all_inner(
+            clients,
+            &serde_json::json!({
+                "type": "agent:mode:changed",
+                "groupJid": group_jid,
+                "mode": "Agent",
+            }),
+        )
+        .await;
+    }
 }
 
 pub(crate) async fn handle_list_tasks(

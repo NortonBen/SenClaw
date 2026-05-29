@@ -118,12 +118,117 @@ pub struct ImageSource {
     pub data: String,
 }
 
+/// Raw token usage as reported by an LLM API response.
+///
+/// Holds both Anthropic (`input_tokens`/`output_tokens`/`cache_*`) and
+/// OpenAI (`prompt_tokens`/`completion_tokens`) shapes — only the fields the
+/// provider actually returns are populated. Use [`RawUsage::input`] /
+/// [`RawUsage::output`] for a provider-normalized count.
+///
+/// Port of the `usage` handling in TS `util/tokens.ts`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RawUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+}
+
+impl RawUsage {
+    /// Parse usage fields out of an arbitrary JSON object. Returns `None` if
+    /// the value is not an object or carries no recognized token field.
+    pub fn from_json(v: &serde_json::Value) -> Option<RawUsage> {
+        if !v.is_object() {
+            return None;
+        }
+        let get = |k: &str| v.get(k).and_then(|x| x.as_u64());
+        let u = RawUsage {
+            input_tokens: get("input_tokens"),
+            output_tokens: get("output_tokens"),
+            cache_creation_input_tokens: get("cache_creation_input_tokens"),
+            cache_read_input_tokens: get("cache_read_input_tokens"),
+            prompt_tokens: get("prompt_tokens"),
+            completion_tokens: get("completion_tokens"),
+        };
+        if u.input_tokens.is_none()
+            && u.output_tokens.is_none()
+            && u.cache_creation_input_tokens.is_none()
+            && u.cache_read_input_tokens.is_none()
+            && u.prompt_tokens.is_none()
+            && u.completion_tokens.is_none()
+        {
+            None
+        } else {
+            Some(u)
+        }
+    }
+
+    /// Merge fields from `other` into `self`, preferring non-`None` values from
+    /// `other`. Used to accumulate streamed usage (Anthropic splits input across
+    /// `message_start` and output across `message_delta`).
+    pub fn merge(&mut self, other: &RawUsage) {
+        if other.input_tokens.is_some() {
+            self.input_tokens = other.input_tokens;
+        }
+        if other.output_tokens.is_some() {
+            self.output_tokens = other.output_tokens;
+        }
+        if other.cache_creation_input_tokens.is_some() {
+            self.cache_creation_input_tokens = other.cache_creation_input_tokens;
+        }
+        if other.cache_read_input_tokens.is_some() {
+            self.cache_read_input_tokens = other.cache_read_input_tokens;
+        }
+        if other.prompt_tokens.is_some() {
+            self.prompt_tokens = other.prompt_tokens;
+        }
+        if other.completion_tokens.is_some() {
+            self.completion_tokens = other.completion_tokens;
+        }
+    }
+
+    /// Provider-normalized input (prompt) token count, including cache tokens.
+    pub fn input(&self) -> u64 {
+        if let Some(p) = self.prompt_tokens {
+            p
+        } else {
+            self.input_tokens.unwrap_or(0)
+                + self.cache_creation_input_tokens.unwrap_or(0)
+                + self.cache_read_input_tokens.unwrap_or(0)
+        }
+    }
+
+    /// Provider-normalized output (completion) token count.
+    pub fn output(&self) -> u64 {
+        self.completion_tokens.or(self.output_tokens).unwrap_or(0)
+    }
+
+    /// True when no real usage was reported (both directions zero).
+    pub fn is_empty(&self) -> bool {
+        self.input() == 0 && self.output() == 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     #[serde(rename = "type")]
     pub msg_type: String, // "user" | "assistant"
     pub message: MessagePayload,
     pub uuid: String,
+    /// Token usage reported by the API for this (assistant) message. `None`
+    /// for user messages and providers that don't report usage (e.g. local
+    /// inference). Never serialized into LLM request bodies — the adapters
+    /// build their own request payloads from `message.content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<RawUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -747,6 +852,7 @@ pub fn create_user_message(blocks: Vec<ContentBlock>) -> Message {
             content: blocks,
         },
         uuid: uuid::Uuid::new_v4().to_string(),
+        usage: None,
     }
 }
 

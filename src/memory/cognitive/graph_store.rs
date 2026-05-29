@@ -113,6 +113,27 @@ pub trait GraphStore: Send + Sync {
     ///   * Delete the duplicate nodes.
     /// Returns counts for the UI summary.
     fn merge_duplicate_entities(&self) -> Result<MergeReport>;
+
+    /// Associative inference — the "suy luận liên kết thông tin" step.
+    ///
+    /// Cognee enriches its graph by linking entities that the LLM connected
+    /// explicitly. We add a cheaper, LLM-free layer: entities that are
+    /// *co-mentioned* by the same chunk (both are `dst` of a `MENTIONS`
+    /// edge from the same chunk `src`) clearly relate to one another even
+    /// when no extracted triplet links them directly. For every such pair
+    /// with co-occurrence ≥ `min_cooccurrence` and **no** existing edge in
+    /// either direction, we materialise an `ASSOCIATED_WITH` edge whose
+    /// strength scales with how often the two co-occur.
+    ///
+    /// These inferred edges participate in spreading-activation retrieval
+    /// and tier decay exactly like extracted ones, so a weak guess that is
+    /// never reinforced simply decays away. `max_per_run` caps the strongest
+    /// candidates so a dense graph can't explode in one pass.
+    fn infer_associative_edges(
+        &self,
+        min_cooccurrence: usize,
+        max_per_run: usize,
+    ) -> Result<InferenceReport>;
 }
 
 /// Result of a [`GraphStore::cleanup_junk`] call. Returned to the HTTP
@@ -132,6 +153,15 @@ pub struct MergeReport {
     pub entities_merged: usize,
     /// Edges that survived redirection (re-pointed to canonical).
     pub edges_redirected: usize,
+}
+
+/// Result of a [`GraphStore::infer_associative_edges`] call.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct InferenceReport {
+    /// Co-occurring entity pairs examined as candidates.
+    pub candidates_examined: usize,
+    /// New `ASSOCIATED_WITH` edges materialised this pass.
+    pub associations_created: usize,
 }
 
 /// `DataPoint` paired with its incident-edge count. Returned by
@@ -794,6 +824,88 @@ impl GraphStore for SqliteGraphStore {
                 groups_merged,
                 entities_merged,
                 edges_redirected,
+            })
+        })
+    }
+
+    fn infer_associative_edges(
+        &self,
+        min_cooccurrence: usize,
+        max_per_run: usize,
+    ) -> Result<InferenceReport> {
+        self.db.with_cog_conn(|conn| {
+            let now = chrono::Utc::now().timestamp();
+            let min_cooc = min_cooccurrence.max(2) as i64;
+            let cap = max_per_run.max(1) as i64;
+
+            // Candidate co-occurring entity pairs: two entities reached by
+            // `MENTIONS` from the same chunk. `e1.dst < e2.dst` makes each
+            // unordered pair appear once (BLOB comparison is memcmp — stable
+            // and good enough for dedup). `cooc` = how many distinct chunks
+            // mention both. We only count it as a candidate when there is no
+            // edge already connecting them in either direction.
+            let candidates_examined: usize = conn.query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT e1.dst AS a, e2.dst AS b, COUNT(DISTINCT e1.src) AS cooc
+                     FROM cog_edges e1
+                     JOIN cog_edges e2
+                       ON e1.src = e2.src AND e1.dst < e2.dst
+                     WHERE e1.predicate = 'MENTIONS' AND e2.predicate = 'MENTIONS'
+                     GROUP BY a, b
+                     HAVING cooc >= ?1
+                   ) pairs
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM cog_edges x
+                     WHERE (x.src = pairs.a AND x.dst = pairs.b)
+                        OR (x.src = pairs.b AND x.dst = pairs.a)
+                   )",
+                rusqlite::params![min_cooc],
+                |r| r.get::<_, i64>(0),
+            )? as usize;
+
+            // Materialise the strongest candidates. Strength ramps with
+            // co-occurrence but stays modest (max 0.5) so an inferred guess
+            // never outranks an extracted fact; tier 0 (L1Working) means it
+            // decays unless retrieval reinforces it. `props_json.inferred`
+            // and the context string mark provenance for the UI / audits.
+            let associations_created = conn.execute(
+                "INSERT OR IGNORE INTO cog_edges
+                    (src, dst, predicate, props_json,
+                     valid_from, valid_to,
+                     strength, tier, activation_count, last_activated,
+                     ltp_status, ltp_detected_at,
+                     entity_confidence, endpoint_selectivity, forman_curvature,
+                     activation_timestamps,
+                     source_episode_id, context, created_at)
+                 SELECT a, b, 'ASSOCIATED_WITH', '{\"inferred\":true}',
+                        ?2, NULL,
+                        MIN(0.5, 0.15 + 0.05 * cooc), 0, 0, ?2,
+                        0, NULL,
+                        NULL, NULL, NULL,
+                        '[]',
+                        NULL, 'inferred:co-occurrence', ?2
+                 FROM (
+                     SELECT e1.dst AS a, e2.dst AS b, COUNT(DISTINCT e1.src) AS cooc
+                     FROM cog_edges e1
+                     JOIN cog_edges e2
+                       ON e1.src = e2.src AND e1.dst < e2.dst
+                     WHERE e1.predicate = 'MENTIONS' AND e2.predicate = 'MENTIONS'
+                     GROUP BY a, b
+                     HAVING cooc >= ?1
+                 ) pairs
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM cog_edges x
+                     WHERE (x.src = pairs.a AND x.dst = pairs.b)
+                        OR (x.src = pairs.b AND x.dst = pairs.a)
+                   )
+                 ORDER BY cooc DESC
+                 LIMIT ?3",
+                rusqlite::params![min_cooc, now, cap],
+            )?;
+
+            Ok(InferenceReport {
+                candidates_examined,
+                associations_created,
             })
         })
     }

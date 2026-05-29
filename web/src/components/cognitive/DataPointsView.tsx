@@ -130,14 +130,16 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
         (body.envelope_chunks_removed ?? 0) +
         (body.orphan_entities_removed ?? 0);
       const merged = body.entities_merged ?? 0;
-      if (cleaned === 0 && merged === 0) {
+      const inferred = body.associations_inferred ?? 0;
+      if (cleaned === 0 && merged === 0 && inferred === 0) {
         message.success('Nothing to clean — your Data memory is already tidy.');
       } else {
         message.success(
           `Removed ${body.envelope_chunks_removed} envelope chunk(s) + ` +
             `${body.orphan_entities_removed} orphan entity(ies). ` +
             `Merged ${merged} duplicate entity(ies) across ` +
-            `${body.groups_merged ?? 0} group(s).`,
+            `${body.groups_merged ?? 0} group(s). ` +
+            `Inferred ${inferred} associative link(s).`,
         );
       }
       fetchPage();

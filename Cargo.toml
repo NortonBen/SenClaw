@@ -1,3 +1,7 @@
+[workspace]
+members = ["src-tauri"]
+resolver = "2"
+
 [package]
 name = "senclaw"
 version = "0.1.1"

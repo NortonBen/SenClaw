@@ -11,6 +11,7 @@ import {
   MinusCircleOutlined,
 } from '@ant-design/icons';
 import type { SpaceEvent, UseSpaceHook } from '../../../hooks/useSpace';
+import { useAppContext } from '../../../contexts/AppContext';
 import dayjs, { Dayjs } from 'dayjs';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
@@ -303,6 +304,19 @@ export function CalendarView({ hook }: Props) {
   useEffect(() => {
     hook.loadEvents(rangeStart.valueOf(), rangeEnd.valueOf());
   }, [rangeStart.valueOf(), rangeEnd.valueOf()]);
+
+  // Reload when the backend signals a Space mutation from elsewhere
+  // (typically the chat agent calling `mcp__senclaw-space__event_create/
+  // update/delete`). Without this kick, agent-driven changes land in
+  // the DB but the calendar keeps showing the stale snapshot until the
+  // user manually navigates to a different week.
+  const { ws } = useAppContext();
+  useEffect(() => {
+    if (ws.spaceEventsRev > 0) {
+      hook.loadEvents(rangeStart.valueOf(), rangeEnd.valueOf());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws.spaceEventsRev]);
 
   useEffect(() => {
     if ((view === 'week' || view === 'day') && scrollRef.current) {

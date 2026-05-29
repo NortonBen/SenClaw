@@ -17,8 +17,8 @@ use crate::config::Config;
 use crate::mcp::helper::McpServerConfig;
 use crate::types::GroupBinding;
 use crate::zen_core::{
-    AskQuestionResponseData, EngineEvent, SessionState, ToolPermissionResponseData, ZenCore,
-    ZenCoreOptions, ZenEngine,
+    AskQuestionResponseData, EngineEvent, PlanExitResponseData, SessionState,
+    ToolPermissionResponseData, ZenCore, ZenCoreOptions, ZenEngine,
 };
 use tokio::sync::broadcast::error::RecvError;
 
@@ -553,6 +553,21 @@ impl CoreApi for ZenCoreApi {
             engine.respond_to_ask_question(AskQuestionResponseData {
                 agent_id: _agent_id.to_string(),
                 answers,
+            });
+        }
+        Ok(())
+    }
+
+    fn respond_to_plan_exit(
+        &self,
+        jid: &str,
+        agent_id: &str,
+        selected: &str,
+    ) -> Result<()> {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.respond_to_plan_exit(PlanExitResponseData {
+                agent_id: agent_id.to_string(),
+                selected: selected.to_string(),
             });
         }
         Ok(())

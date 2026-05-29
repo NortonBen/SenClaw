@@ -91,10 +91,20 @@ pub struct EdgeView {
     pub ltp_status: u8,
     pub activation_count: u32,
     pub last_activated: i64,
+    /// True for edges materialised by the associative-inference maintenance
+    /// step (co-occurrence reasoning) rather than LLM triplet extraction.
+    /// The UI styles these differently (dashed) so users can tell a derived
+    /// guess from an extracted fact.
+    pub inferred: bool,
 }
 
 impl From<RelationshipEdge> for EdgeView {
     fn from(e: RelationshipEdge) -> Self {
+        // Inference marks its edges two ways: predicate ASSOCIATED_WITH and
+        // props_json.inferred = true. Check both so the flag survives even
+        // if a future predicate reuses the label.
+        let inferred = e.predicate == "ASSOCIATED_WITH"
+            || e.props.get("inferred").and_then(|v| v.as_bool()).unwrap_or(false);
         Self {
             src: e.src.to_string(),
             dst: e.dst.to_string(),
@@ -104,6 +114,7 @@ impl From<RelationshipEdge> for EdgeView {
             ltp_status: e.ltp_status as u8,
             activation_count: e.activation_count,
             last_activated: e.last_activated,
+            inferred,
         }
     }
 }
@@ -705,6 +716,8 @@ pub(crate) async fn cognitive_maintenance(
         "groups_merged": report.merge.groups_merged,
         "entities_merged": report.merge.entities_merged,
         "edges_redirected": report.merge.edges_redirected,
+        "associations_inferred": report.inference.associations_created,
+        "association_candidates": report.inference.candidates_examined,
         "duration_ms": report.duration_ms,
     })))
 }

@@ -277,9 +277,20 @@ impl ZenEngine {
                 .collect()
         };
 
-        // Plan mode removes TodoWrite
+        // Plan mode is read-only: physically strip every mutating tool so
+        // the agent CANNOT edit files, run shell commands, or write todos —
+        // the system prompt asks nicely, this enforces. The only non-read-only
+        // tool kept is `ExitPlanMode`, which is how the agent requests approval
+        // to leave plan mode and begin executing. This closes the gap where an
+        // aggressive model (or prompt injection) ignores the prompt-level
+        // constraint and calls Edit/Write/Bash anyway.
         if is_plan {
-            filtered.retain(|t| t.name() != "TodoWrite");
+            // Tools allowed in plan mode despite `is_read_only() == false`:
+            // they're research/escape tools with no destructive local effect.
+            // WebFetch/WebSearch fetch external info (the "research" in
+            // "read-only research"); ExitPlanMode is the approval escape hatch.
+            const PLAN_ALLOWED: &[&str] = &["ExitPlanMode", "WebFetch", "WebSearch"];
+            filtered.retain(|t| t.is_read_only() || PLAN_ALLOWED.contains(&t.name()));
         }
 
         // Cowork agents use synthetic JIDs (`cowork:{workspace}:{member}`). Interactive
@@ -1197,9 +1208,31 @@ impl ZenCore for ZenEngine {
         self.response_registry.deliver_ask_question(response);
     }
 
-    fn respond_to_plan_exit(&self, _response: PlanExitResponseData) {
-        // Plan exit responses are handled via event bus
-        self.fire(EngineEvent::PlanExitResponse(_response));
+    fn respond_to_plan_exit(&self, response: PlanExitResponseData) {
+        // Deliver the user's choice to the suspended `ExitPlanMode` tool. The
+        // tool registered a waiter via `register_ask_question(agent_id)` and
+        // reads `answers["selected"]`, so we shape the response accordingly.
+        // Without this delivery the tool blocks forever and the agent hangs.
+        let mut answers = std::collections::HashMap::new();
+        answers.insert("selected".to_string(), response.selected.clone());
+        self.response_registry.deliver_ask_question(AskQuestionResponseData {
+            agent_id: response.agent_id.clone(),
+            answers,
+        });
+
+        // On approval, flip back to Agent mode so the agent can actually
+        // execute the plan (read-only tool filtering is lifted). On
+        // "cancelled" we stay in Plan mode — the user rejected, nothing to do.
+        match response.selected.as_str() {
+            "startEditing" | "clearContextAndStart" => {
+                self.update_agent_mode(AgentMode::Agent);
+            }
+            _ => {}
+        }
+
+        // Keep the event-bus emit so any observers (logging, future hooks)
+        // still see the resolution.
+        self.fire(EngineEvent::PlanExitResponse(response));
     }
 
     fn set_handlers(&self, handlers: ZenCoreHandlers) {
@@ -1356,9 +1389,29 @@ impl ZenEngine {
             format!("- Shell: {shell}"),
         ];
         if let Some(gs) = git_status {
-            lines.push(format!("- Git status:\n{gs}"));
+            lines.push(format!("- Git status:\n{}", Self::cap_git_status(&gs)));
         }
         lines.join("\n")
+    }
+
+    /// Bound the `git status` block injected into the system prompt. A dirty
+    /// monorepo (many modified/untracked files) can emit hundreds of lines that
+    /// are resent on every request for no benefit — the model only needs the
+    /// branch line and a representative sample. Keep the first
+    /// [`GIT_STATUS_MAX_LINES`] lines (the `--branch` header is always line 1)
+    /// and summarize the rest.
+    fn cap_git_status(gs: &str) -> String {
+        const GIT_STATUS_MAX_LINES: usize = 30;
+        let total = gs.lines().count();
+        if total <= GIT_STATUS_MAX_LINES {
+            return gs.to_string();
+        }
+        let kept: Vec<&str> = gs.lines().take(GIT_STATUS_MAX_LINES).collect();
+        format!(
+            "{}\n… {} more changed path(s) omitted (run `git status` for the full list)",
+            kept.join("\n"),
+            total - GIT_STATUS_MAX_LINES
+        )
     }
 
     /// Pre-match user prompt against installed skills' `when-to-use` triggers
@@ -1818,6 +1871,97 @@ mod tests {
     }
 
     #[test]
+    fn tools_for_main_agent_plan_mode_strips_write_tools_keeps_readonly() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-plan-enforce".into(),
+            agent_mode: AgentMode::Plan,
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let names: Vec<String> = engine
+            .tools_for_main_agent()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        let has = |n: &str| names.iter().any(|x| x == n);
+        // Mutating tools are physically stripped in plan mode.
+        for write_tool in ["Write", "Edit", "NotebookEdit", "Bash", "TodoWrite"] {
+            assert!(!has(write_tool), "plan mode must strip {write_tool}");
+        }
+        // Read-only research tools survive.
+        for ro in ["Read", "Grep", "Glob"] {
+            assert!(has(ro), "plan mode must keep {ro}");
+        }
+        // ExitPlanMode (non-read-only escape hatch) survives.
+        assert!(has("ExitPlanMode"), "plan mode must keep ExitPlanMode");
+    }
+
+    #[test]
+    fn agent_mode_keeps_write_tools() {
+        // Sanity: in Agent mode, write tools are present (the plan-mode
+        // strip is mode-gated, not global).
+        let opts = ZenCoreOptions {
+            instance_id: "test-agent-mode".into(),
+            agent_mode: AgentMode::Agent,
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let names: Vec<String> = engine
+            .tools_for_main_agent()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+        assert!(names.iter().any(|n| n == "Write"));
+        assert!(names.iter().any(|n| n == "Bash"));
+    }
+
+    #[test]
+    fn respond_to_plan_exit_unblocks_tool_and_flips_mode() {
+        // Engine starts in Plan mode. A waiter registered under the agent_id
+        // (as ExitPlanMode does) must receive the "selected" answer, and the
+        // mode must flip back to Agent on approval.
+        let opts = ZenCoreOptions {
+            instance_id: "test-plan-exit".into(),
+            agent_mode: AgentMode::Plan,
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let mut rx = engine.response_registry.register_ask_question("agent-x");
+
+        engine.respond_to_plan_exit(PlanExitResponseData {
+            agent_id: "agent-x".into(),
+            selected: "startEditing".into(),
+        });
+
+        // The waiter got the choice.
+        let answer = rx.try_recv().expect("plan-exit response delivered to waiter");
+        assert_eq!(answer.answers.get("selected").map(String::as_str), Some("startEditing"));
+        // Mode flipped back to Agent.
+        assert_eq!(engine.options.read().unwrap().agent_mode, AgentMode::Agent);
+    }
+
+    #[test]
+    fn respond_to_plan_exit_cancel_keeps_plan_mode() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-plan-cancel".into(),
+            agent_mode: AgentMode::Plan,
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let mut rx = engine.response_registry.register_ask_question("agent-y");
+
+        engine.respond_to_plan_exit(PlanExitResponseData {
+            agent_id: "agent-y".into(),
+            selected: "cancelled".into(),
+        });
+
+        let answer = rx.try_recv().expect("cancel still delivered");
+        assert_eq!(answer.answers.get("selected").map(String::as_str), Some("cancelled"));
+        // Cancel → stays in Plan mode.
+        assert_eq!(engine.options.read().unwrap().agent_mode, AgentMode::Plan);
+    }
+
+    #[test]
     fn tools_for_main_agent_cowork_drops_ask_tools() {
         let opts = ZenCoreOptions {
             instance_id: "cowork:ws1:alice".into(),
@@ -1898,6 +2042,24 @@ mod tests {
         assert!(names.contains(&"Read"));
         assert!(!names.contains(&"Task"));
         assert!(!names.contains(&"Write")); // not in use_tools
+    }
+
+    #[test]
+    fn cap_git_status_passes_short_through() {
+        let gs = "## main\n M a.rs\n M b.rs";
+        assert_eq!(ZenEngine::cap_git_status(gs), gs);
+    }
+
+    #[test]
+    fn cap_git_status_truncates_long() {
+        let mut s = String::from("## main");
+        for i in 0..100 {
+            s.push_str(&format!("\n M file{i}.rs"));
+        }
+        let out = ZenEngine::cap_git_status(&s);
+        assert_eq!(out.lines().count(), 31); // 30 kept + 1 summary line
+        assert!(out.contains("## main")); // branch header preserved
+        assert!(out.contains("71 more changed path(s) omitted"));
     }
 
     #[tokio::test]

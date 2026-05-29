@@ -11,8 +11,17 @@ interface Props {
 }
 
 export function AppLayout({ sidebar, children, status }: Props) {
-  const { ws, isDarkMode, toggleTheme } = useAppContext();
+  const { ws, isDarkMode, toggleTheme, embed } = useAppContext();
   const { token } = theme.useToken();
+
+  // Compact chat window (desktop app menu-bar): just the chat, no nav rail / console.
+  if (embed) {
+    return (
+      <Layout className="h-screen overflow-hidden" style={{ background: token.colorBgBase }}>
+        <Layout className="bg-transparent relative">{children}</Layout>
+      </Layout>
+    );
+  }
 
   return (
     <Layout className="h-screen overflow-hidden" style={{ background: token.colorBgBase }}>

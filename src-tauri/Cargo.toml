@@ -1,0 +1,27 @@
+[package]
+name = "senclaw-app"
+version = "0.1.1"
+edition = "2021"
+description = "SemaClaw desktop app (Tauri 2.0)"
+license = "MIT"
+authors = ["AIRC Sema Team"]
+repository = "https://github.com/midea-ai/SemaClaw"
+
+[[bin]]
+name = "senclaw-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Embeds the full SenClaw daemon (run_daemon, Config) in-process.
+senclaw = { path = ".." }
+
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+
+tokio = { version = "1", features = ["net", "time", "rt"] }
+dotenvy = "0.15"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

@@ -471,6 +471,19 @@ impl AgentPool {
         }
     }
 
+    /// Deliver a plan-exit decision to the suspended `ExitPlanMode` tool for
+    /// `group_jid`. On approval the engine also flips back to Agent mode.
+    pub fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
+        if let Err(e) = self
+            .core_api
+            .respond_to_plan_exit(group_jid, agent_id, selected)
+        {
+            tracing::warn!(
+                "[AgentPool] resolve_plan_exit failed for {group_jid}/{agent_id}: {e}"
+            );
+        }
+    }
+
     // ===== Dispatch coordination =====
 
     /// Temporarily switch a subagent's working dir to the admin's during a

@@ -80,6 +80,9 @@ enum Command {
         #[arg(long)]
         max_nodes: Option<usize>,
     },
+    /// Run one cognitive maintenance sweep on demand: cleanup junk, merge
+    /// duplicate entities, and infer associative links. Safe while running.
+    CognitiveMaintain,
 }
 
 #[tokio::main]
@@ -158,5 +161,6 @@ async fn main() -> Result<()> {
             neg_per_pos,
             max_nodes,
         } => senclaw::cli::commands::cognitive::train(epochs, lr, neg_per_pos, max_nodes).await,
+        Command::CognitiveMaintain => senclaw::cli::commands::cognitive::maintain().await,
     }
 }
