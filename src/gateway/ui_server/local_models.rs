@@ -669,7 +669,7 @@ pub const DEFAULT_TURBOQUANT_KV_TOTAL_BITS: u8 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalModelSettings {
-    /// TurboQuant KV total bit budget: **`3` = TQ3** (default remap), **`4` = TQ4**. **`2`** is accepted in JSON for compatibility but maps to [`DEFAULT_TURBOQUANT_KV_TOTAL_BITS`] (TQ3) at runtime.
+    /// TurboQuant KV total bit budget: **`3` = TQ3** (default remap), **`4` = TQ4**. **`2`** is accepted in JSON for compatibility but maps to [`DEFAULT_TURBOQUANT_KV_TOTAL_BITS`] (TQ3) at runtime. **`0`** disables TurboQuant (FP16 KV), same as `None` — the UI "Off" option sends `0`.
     #[serde(default)]
     pub kv_cache_bits: Option<u8>,
     /// Upper bound on prompt length after chat-template encoding. Older conversation is dropped
@@ -794,10 +794,10 @@ pub(crate) async fn local_models_settings_put(
     Json(settings): Json<LocalModelSettings>,
 ) -> Result<impl IntoResponse, AppError> {
     if let Some(bits) = settings.kv_cache_bits {
-        if !matches!(bits, 2 | 3 | 4) {
+        if !matches!(bits, 0 | 2 | 3 | 4) {
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
-                format!("kv_cache_bits must be 2, 3, or 4 (got {bits}); 2 is remapped to TQ3 at runtime when using turboquant"),
+                format!("kv_cache_bits must be 0, 2, 3, or 4 (got {bits}); 0 disables TurboQuant (FP16 KV), 2 is remapped to TQ3 at runtime when using turboquant"),
             ));
         }
     }

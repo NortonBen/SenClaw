@@ -15,6 +15,7 @@ use mlx_rs::{
         sum_axis,
         zeros_dtype,
     },
+    transforms::compile::compile,
     Array, Dtype,
 };
 
@@ -101,16 +102,62 @@ pub fn gated_delta_update(
 
     let mut ys = Vec::with_capacity(seq_len as usize);
     let mut state = state;
-    for t in 0..seq_len {
-        let q_t = q_use.index((.., t, .., ..));
-        let k_t = k_use.index((.., t, .., ..));
-        let v_t = v.index((.., t, .., ..));
-        let g_t = g.index((.., t, ..));
-        let beta_t = beta.index((.., t, ..));
-        let mask_t = mask.map(|m| m.index((.., t)));
-        let (y_t, s) = gated_delta_step(&q_t, &k_t, &v_t, &g_t, &beta_t, &state, mask_t.as_ref())?;
-        state = s;
-        ys.push(y_t);
+
+    // The recurrence is sequential, so prefill runs `seq_len` steps; each step is
+    // ~7 tiny ops. Dispatching them one-by-one is CPU-bound (the GPU starves —
+    // 100% CPU / ~60% GPU) and dominates Qwen3.5 prefill. `compile` fuses the
+    // step into a single kernel (≈7× fewer host dispatches), mirroring mlx-lm's
+    // `@mx.compile` on `_gated_delta_step_ops`. mlx caches the compiled graph by
+    // the closure's type, so it traces once and is reused across steps/layers.
+    // Only the no-mask path (prefill / decode for Qwen3.5) is compiled; the rare
+    // masked path falls back to the plain step.
+    if mask.is_none() {
+        let mut step = compile(
+            |inp: &[Array]| -> Result<Vec<Array>, Exception> {
+                let (q, k, v, g, beta, st) =
+                    (&inp[0], &inp[1], &inp[2], &inp[3], &inp[4], &inp[5]);
+                let decay = if g.shape().len() == 2 {
+                    g.index((.., .., NewAxis, NewAxis))
+                } else {
+                    g.index((.., .., .., NewAxis))
+                };
+                let mut s = st.multiply(&decay)?;
+                let kv_mem = sum_axis(&s.multiply(&k.index((.., .., NewAxis, ..)))?, -1, false)?;
+                let delta = v
+                    .subtract(&kv_mem)?
+                    .multiply(&beta.index((.., .., NewAxis)))?;
+                s = s.add(
+                    &k.index((.., .., NewAxis, ..))
+                        .multiply(&delta.index((.., .., .., NewAxis)))?,
+                )?;
+                let y = sum_axis(&s.multiply(&q.index((.., .., NewAxis, ..)))?, -1, false)?;
+                Ok(vec![y, s])
+            },
+            None,
+        );
+        for t in 0..seq_len {
+            let q_t = q_use.index((.., t, .., ..));
+            let k_t = k_use.index((.., t, .., ..));
+            let v_t = v.index((.., t, .., ..));
+            let g_t = g.index((.., t, ..));
+            let beta_t = beta.index((.., t, ..));
+            let out = step(&[q_t, k_t, v_t, g_t, beta_t, state.clone()])?;
+            ys.push(out[0].clone());
+            state = out[1].clone();
+        }
+    } else {
+        for t in 0..seq_len {
+            let q_t = q_use.index((.., t, .., ..));
+            let k_t = k_use.index((.., t, .., ..));
+            let v_t = v.index((.., t, .., ..));
+            let g_t = g.index((.., t, ..));
+            let beta_t = beta.index((.., t, ..));
+            let mask_t = mask.map(|m| m.index((.., t)));
+            let (y_t, s) =
+                gated_delta_step(&q_t, &k_t, &v_t, &g_t, &beta_t, &state, mask_t.as_ref())?;
+            state = s;
+            ys.push(y_t);
+        }
     }
     let y = stack_axis(&ys, 1)?;
     Ok((y, state))

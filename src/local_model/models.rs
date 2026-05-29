@@ -33,7 +33,7 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     },
     KnownModel {
         id: "mlx-community/Qwen3-4B-4bit",
-        label: "Qwen3 4B 4-bit (mlx-community)",
+        label: "Qwen3 4B 4-bit — recommended for tools/agents (GPU-bound prefill + prefix cache)",
         approx_size_gb: 2.3,
         context_length: 128_000,
         native_supported: true,
@@ -41,9 +41,14 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     },
 
     // ── Qwen3.5 hybrid (GatedDeltaNet + attention, OptiQ quant — MLX native) ─
+    // Best for short-context chat. The linear-attention layers run a sequential
+    // CPU-orchestrated scan (no Metal kernel in this mlx-rs), so prefill on long
+    // / tool-heavy prompts is much slower than the attention-only Qwen3 models
+    // and the prefix cache cannot reuse the SSM state — prefer Qwen3-4B for
+    // multi-turn agentic / tool use.
     KnownModel {
         id: "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
-        label: "Qwen3.5 0.8B OptiQ 4-bit (mlx-community)",
+        label: "Qwen3.5 0.8B OptiQ 4-bit — chat (slow prefill on long/tool prompts)",
         approx_size_gb: 0.6,
         context_length: 262_144,
         native_supported: true,
@@ -51,7 +56,7 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     },
     KnownModel {
         id: "mlx-community/Qwen3.5-4B-OptiQ-4bit",
-        label: "Qwen3.5 4B OptiQ 4-bit (mlx-community) — recommended",
+        label: "Qwen3.5 4B OptiQ 4-bit — chat (slow prefill on long/tool prompts)",
         approx_size_gb: 3.3,
         context_length: 262_144,
         native_supported: true,
