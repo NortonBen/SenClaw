@@ -229,6 +229,119 @@ async fn mem_mode(
     Ok(())
 }
 
+/// Strict-extension prefix-cache determinism A/B (mainly for Qwen3.5, whose
+/// recurrent SSM/conv state can only be reused via the no-trim append path).
+///
+/// Mirrors the agentic loop: turn 2's prompt is turn 1's prompt + an assistant
+/// tool-call turn + a tool result — a strict token-prefix extension (the
+/// Qwen3.5 template keeps in-request `<think>` reasoning). We run the extended
+/// prompt twice: the first run HITs the cached turn-1 state (prefill only the
+/// new suffix); the second run sees a full-length cache key (full prefill
+/// baseline). With greedy decoding (temperature **must be 0**), the two outputs
+/// must be byte-identical — that's the correctness gate proving the restored
+/// recurrent state aligns exactly with a from-scratch prefill.
+#[cfg(feature = "local-mlx")]
+async fn ext_determinism_mode(
+    engine: &senclaw::local_model::MlxNativeEngine,
+) -> anyhow::Result<()> {
+    use std::time::Instant;
+    use tokio::sync::mpsc;
+
+    // Long system body so turn 1 exceeds MIN_PREFIX_LEN (1024 tokens) and is
+    // worth caching (~4 chars/token → ~1800 tokens).
+    let filler =
+        "The quick brown fox jumps over the lazy dog near the quiet riverbank. ".repeat(120);
+    let system = format!("You are a meticulous assistant. Reference material:\n{filler}");
+    let user = "Using the lookup tool, find today's value, then summarize it in detail.";
+
+    let tools: Vec<serde_json::Value> = vec![serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a value by query.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"]
+            }
+        }
+    })];
+
+    let run = |msgs: Vec<serde_json::Value>| {
+        let eng = &engine;
+        let tls = tools.clone();
+        async move {
+            let (tx, mut rx) = mpsc::channel::<String>(64);
+            let start = Instant::now();
+            let mut full = String::new();
+            let gen = async move { eng.stream_openai_to_channel(&msgs, &tls, tx).await };
+            let drain = async {
+                while let Some(c) = rx.recv().await {
+                    full.push_str(&c);
+                }
+            };
+            let (res, ()) = tokio::join!(gen, drain);
+            res?;
+            anyhow::Ok((start.elapsed().as_secs_f64(), full))
+        }
+    };
+
+    let m1 = vec![
+        serde_json::json!({"role": "system", "content": system}),
+        serde_json::json!({"role": "user", "content": user}),
+    ];
+    let mut m2 = m1.clone();
+    m2.push(serde_json::json!({
+        "role": "assistant",
+        "content": "<think>\nThe user wants today's value. I'll call the lookup tool.\n</think>\n\n",
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{\"query\":\"today value\"}"}
+        }]
+    }));
+    m2.push(serde_json::json!({
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "Lookup result: the value is 1234.56 as of today. ".repeat(8)
+    }));
+
+    eprintln!("\n──────── strict-extension determinism (prefix cache) ────────");
+    eprintln!("  (requires temperature=0 settings — greedy decode)");
+    // 1) Fill cache with turn-1's boundary snapshot.
+    let _ = run(m1.clone()).await?;
+    // 2) Extended prompt → should HIT turn 1's boundary (prefill only the new
+    //    suffix from the restored recurrent + KV state).
+    let (t_hit, o_hit) = run(m2.clone()).await?;
+    // 3) Clear the cache, then run the SAME extended prompt → forced full
+    //    prefill from scratch = the determinism baseline.
+    engine.release_kv_cache();
+    let (t_full, o_full) = run(m2.clone()).await?;
+
+    eprintln!(
+        "  ext run 1 (cache HIT on turn 1): wall={t_hit:.2}s, {} chars",
+        o_hit.chars().count()
+    );
+    eprintln!(
+        "  ext run 2 (full prefill):        wall={t_full:.2}s, {} chars",
+        o_full.chars().count()
+    );
+    let identical = o_hit == o_full;
+    eprintln!(
+        "  determinism: {}",
+        if identical {
+            "HIT output == full-prefill output ✓"
+        } else {
+            "OUTPUTS DIFFER ✗"
+        }
+    );
+    if !identical {
+        eprintln!("--- HIT ---\n{o_hit}\n--- FULL ---\n{o_full}");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 #[cfg(feature = "local-mlx")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -270,6 +383,11 @@ async fn main() -> anyhow::Result<()> {
         if n > 0 {
             return mem_mode(&engine, n).await;
         }
+    }
+
+    // Strict-extension prefix-cache determinism A/B: `MLX_BENCH_EXT_DETERMINISM=1`.
+    if std::env::var("MLX_BENCH_EXT_DETERMINISM").is_ok() {
+        return ext_determinism_mode(&engine).await;
     }
 
     // `MLX_BENCH_PROMPT_TOKENS=1000` → synthesize a ~N-token document and ask for

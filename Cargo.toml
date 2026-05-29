@@ -212,3 +212,23 @@ local-mlx = [
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Optimize ALL dependencies even in the dev (debug) profile.
+#
+# The native MLX path (gated-delta sequential scan) is host-*dispatch*-bound:
+# the bottleneck is constructing the MLX op graph that feeds the GPU, not the
+# GPU kernels themselves. With unoptimized deps the mlx-rs / mlx-sys Rust glue
+# can't dispatch fast enough and the GPU starves (high CPU%, low GPU%). A debug
+# build was ~3.5–5× slower on Qwen3.5 prefill purely from this.
+#
+# Dependencies are compiled once and cached, so this does NOT slow iterative
+# rebuilds of the `senclaw` crate. For the hot loop in our own crate
+# (`src/local_model/mlx_lm/models/gated_delta.rs`) prefer `make run-release`;
+# this override recovers most of the gap for everyday `make run`.
+[profile.dev.package."*"]
+opt-level = 3
+# NOTE: optimizing the `senclaw` crate itself in dev (`[profile.dev.package.senclaw]
+# opt-level = 2`) was measured to give only partial MLX gains (warm prefill ~121
+# vs release's ~406 tok/s — release wins via the `lto=thin` + `codegen-units=1`
+# cross-crate inlining of the tiny per-op calls) while making every `make run`
+# rebuild ~2 min. Not worth it: use `make run-release` for native-MLX work.

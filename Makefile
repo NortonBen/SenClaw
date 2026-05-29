@@ -28,6 +28,12 @@ run-web:
 run:
 	cargo run --features local-mlx --features local-embed-metal --features local-embed
 
+# Release build of the daemon. Strongly preferred when using the native MLX
+# local models: the gated-delta scan is host-dispatch-bound, so an optimized
+# build is ~3.5-5x faster on prefill (and keeps the GPU fed) vs. `make run`.
+run-release:
+	cargo run --release --features local-mlx --features local-embed-metal --features local-embed
+
 build-extension:
 	cd senclaw-extension-chrome && npm run build
 

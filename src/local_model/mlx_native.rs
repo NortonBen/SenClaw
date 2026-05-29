@@ -1142,16 +1142,35 @@ fn generate_with_cache(
     //   Other arches use different suffix lengths — would need per-arch
     //   `gen_suffix_len` to extend.
     const QWEN3_GEN_SUFFIX_LEN: usize = 3;
-    // Qwen3.5 is intentionally excluded: its linear-attention layers carry a
-    // recurrent SSM/conv state (`Qwen35LinearCache`), not a sliceable KV buffer.
-    // Snapshotting + restoring that state across turns does not round-trip
-    // safely — a prefix-cache HIT (≥ MIN_PREFIX_LEN tokens) yields
-    // non-deterministic output. Only pure-attention arches (Qwen3, Llama) are
-    // safe to prefix-cache.
+    // Qwen3.5 (`Qwen35LinearCache`) uses a **strict-extension** prefix-cache
+    // path, NOT the trimmed one used by pure-attention arches. Its linear-attn
+    // layers carry a recurrent SSM/conv state with no per-token slice, so the
+    // trimmed path (store key = prompt[..len-gen_suffix], `trim_by` no-op on
+    // recurrent state) leaves the state 3 tokens AHEAD of the key → a HIT
+    // restores a misaligned state → non-deterministic output (the bug this
+    // path used to hit, hence the old exclusion).
+    //
+    // The fix: store Qwen3.5 with the FULL prompt as key and NO trim, so the
+    // recurrent state aligns exactly at `prompt.len()`. Within one agentic
+    // request the Qwen3.5 chat template keeps each assistant turn's `<think>`
+    // reasoning (`loop.index0 > ns.last_query_index`), so every tool turn's
+    // prompt is a strict extension of the previous → the full-length key is a
+    // prefix of next turn's prompt and HITs, skipping re-prefill of the shared
+    // body (the snapshot boundary is computed below in `recurrent_snap_at`).
+    //
+    // Determinism (verified by the strict-extension A/B in `examples/mlx_bench`,
+    // MLX_BENCH_EXT_DETERMINISM=1): Qwen3.5-**0.8B** restore is byte-identical
+    // to a from-scratch prefill. Qwen3.5-**4B**-OptiQ stays coherent and shares
+    // a long (~60-token) prefix but is NOT bit-identical — a tiny floating-point
+    // difference in the recurrent/mixed-bit-quant path eventually flips one close
+    // greedy argmax. This is inherent to KV/state reuse (no production engine
+    // guarantees bit-identity across a cache hit vs recompute); we accept it for
+    // the ~90%-of-prefill saving on multi-turn agentic Qwen3.5 (per user opt-in).
+    let recurrent_strict = matches!(&state.model, ModelKind::Qwen35(_));
     let prefix_cache_eligible = tq_bits.is_none()
         && matches!(
             &state.model,
-            ModelKind::Qwen3(_) | ModelKind::Llama(_)
+            ModelKind::Qwen3(_) | ModelKind::Llama(_) | ModelKind::Qwen35(_)
         );
     let mut prefill_start = 0usize;
     if prefix_cache_eligible {
@@ -1315,6 +1334,34 @@ fn generate_with_cache(
         ModelKind::Mamba2(_) | ModelKind::FalconMamba(_)
     );
 
+    // Recurrent arches (Qwen3.5): the SSM/conv state can't be trimmed, so the
+    // prefix cache must snapshot it at a CLEAN token boundary that the next turn
+    // reproduces byte-for-byte. The generation prompt
+    // (`<|im_start|>assistant\n<think>\n`) ends in a regular `\n` that BPE-merges
+    // with the reasoning text generated next turn, so a key ending there never
+    // re-matches (verified: it always missed). Instead we snapshot just before
+    // the FINAL `<|im_start|>` (the gen-prompt start): the preceding `\n` (after
+    // the last `<|im_end|>`) is always followed by the special `<|im_start|>`
+    // token, which never merges → the key is stable across turns. Within one
+    // agentic request each turn appends `[assistant tool-call][tool result]`, so
+    // this boundary is a strict prefix of the next turn's prompt → HIT, and only
+    // the newest turn's tokens are re-prefilled.
+    let recurrent_snap_at: Option<usize> = if recurrent_strict {
+        // `tokenizer` (the `&mut state.tokenizer` bound earlier for detokenize)
+        // is reborrowed immutably here — token_to_id takes `&self`.
+        tokenizer
+            .token_to_id("<|im_start|>")
+            .and_then(|im| prompt.iter().rposition(|&t| t == im))
+            .filter(|&b| {
+                b > prefill_start
+                    && b >= super::mlx_lm::prefix_cache::MIN_PREFIX_LEN
+                    && b < prompt.len()
+            })
+    } else {
+        None
+    };
+    let mut recurrent_snapshot: Option<Vec<Option<super::mlx_lm::cache::KvCache>>> = None;
+
     // Force chunked path when we restored from prefix cache — single-shot
     // would feed the entire `prompt_tokens` array (length N) into forward,
     // which would re-walk positions [0..prefill_start] that are already
@@ -1390,7 +1437,14 @@ fn generate_with_cache(
         let mut chunk_logits: Option<mlx_rs::Array> = None;
         let mut cursor = prefill_start;
         while cursor < prompt.len() {
-            let end = (cursor + PREFILL_CHUNK).min(prompt.len());
+            let mut end = (cursor + PREFILL_CHUNK).min(prompt.len());
+            // Break the chunk exactly at the recurrent snapshot boundary so the
+            // SSM/conv state can be captured aligned to the cache key.
+            if let Some(b) = recurrent_snap_at {
+                if cursor < b && b < end {
+                    end = b;
+                }
+            }
             let chunk_arr = Array::from(&prompt[cursor..end]).index(NewAxis);
             let is_last_chunk = end == prompt.len();
             // Final chunk: project LM head only on the last position →
@@ -1463,6 +1517,16 @@ fn generate_with_cache(
             // attends to them.
             eval_all_caches(&mut cache)
                 .map_err(|e| anyhow::anyhow!("prefill chunk cache eval failed: {e:?}"))?;
+            // Recurrent prefix-cache snapshot: capture the cache state aligned to
+            // the clean boundary (just before the gen prompt) once we reach it.
+            if let Some(b) = recurrent_snap_at {
+                if end == b && recurrent_snapshot.is_none() {
+                    recurrent_snapshot =
+                        super::mlx_lm::prefix_cache::PrefixCache::snapshot_layers_trimmed(
+                            &cache, 0,
+                        );
+                }
+            }
             if is_last_chunk {
                 chunk_logits = Some(out);
             } else {
@@ -1558,22 +1622,39 @@ fn generate_with_cache(
     // body. Skip when caching disabled (TQ active, non-Qwen arch) or when
     // the trimmed key would be below the minimum useful length.
     if prefix_cache_eligible {
-        let snapshot_key_len = prompt.len().saturating_sub(QWEN3_GEN_SUFFIX_LEN);
-        if snapshot_key_len >= super::mlx_lm::prefix_cache::MIN_PREFIX_LEN {
-            // Snapshot now (post-suffix prefill) and trim by gen_suffix so
-            // the cached KV state aligns with the trimmed key length.
-            let snap = super::mlx_lm::prefix_cache::PrefixCache::snapshot_layers_trimmed(
-                &cache,
-                QWEN3_GEN_SUFFIX_LEN,
-            );
-            if let Some(snap) = snap {
-                let key: Vec<u32> = prompt[..snapshot_key_len].to_vec();
-                state.prefix_cache.store(key, snap, snapshot_key_len);
+        if recurrent_strict {
+            // Recurrent arches (Qwen3.5): store the SSM/conv snapshot captured
+            // mid-prefill at the clean boundary (just before the gen prompt).
+            // Key = prompt up to that boundary; the state aligns exactly there
+            // (no trim possible for recurrent state — that misalignment was the
+            // old non-determinism bug).
+            if let (Some(snap), Some(at)) = (recurrent_snapshot.take(), recurrent_snap_at) {
+                let key: Vec<u32> = prompt[..at].to_vec();
+                state.prefix_cache.store(key, snap, at);
                 tracing::info!(
-                    "[local-mlx-native] prefix cache stored ({} tokens, entries now={})",
-                    snapshot_key_len,
+                    "[local-mlx-native] prefix cache stored ({} tokens, recurrent boundary, entries now={})",
+                    at,
                     state.prefix_cache.len(),
                 );
+            }
+        } else {
+            let snapshot_key_len = prompt.len().saturating_sub(QWEN3_GEN_SUFFIX_LEN);
+            if snapshot_key_len >= super::mlx_lm::prefix_cache::MIN_PREFIX_LEN {
+                // Snapshot now (post-suffix prefill) and trim by gen_suffix so
+                // the cached KV state aligns with the trimmed key length.
+                let snap = super::mlx_lm::prefix_cache::PrefixCache::snapshot_layers_trimmed(
+                    &cache,
+                    QWEN3_GEN_SUFFIX_LEN,
+                );
+                if let Some(snap) = snap {
+                    let key: Vec<u32> = prompt[..snapshot_key_len].to_vec();
+                    state.prefix_cache.store(key, snap, snapshot_key_len);
+                    tracing::info!(
+                        "[local-mlx-native] prefix cache stored ({} tokens, entries now={})",
+                        snapshot_key_len,
+                        state.prefix_cache.len(),
+                    );
+                }
             }
         }
     }
