@@ -158,6 +158,7 @@ fn stateless_rms_norm(x: &Array, eps: f32) -> Result<Array, Exception> {
     mlx_rs::fast::rms_norm(x, &ones, eps)
 }
 
+
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
 #[allow(non_snake_case)]
 pub struct GatedDeltaNet {
@@ -284,11 +285,15 @@ impl GatedDeltaNet {
             .index((.., .., split_b..self.conv_dim))
             .reshape(&[b_size, seq_len, self.num_v_heads, self.head_v_dim])?;
 
+        // RMS-norm THEN scale (mlx-lm `q = inv_scale**2 * rms_norm(q)`,
+        // `k = inv_scale * rms_norm(k)`). The previous code multiplied by the
+        // scale *before* rms_norm, which is scale-invariant and cancels — that
+        // left q,k at L2 = sqrt(head_dim) and the delta-rule state diverged to
+        // inf/NaN. Applying the scale after gives k unit-L2 and q at
+        // 1/sqrt(head_dim), exactly as the reference.
         let inv_scale = (self.head_k_dim as f32).sqrt().recip();
-        let q = q.multiply(&array!(inv_scale * inv_scale))?;
-        let q = stateless_rms_norm(&q, 1e-6)?;
-        let k = k.multiply(&array!(inv_scale))?;
-        let k = stateless_rms_norm(&k, 1e-6)?;
+        let q = stateless_rms_norm(&q, 1e-6)?.multiply(&array!(inv_scale * inv_scale))?;
+        let k = stateless_rms_norm(&k, 1e-6)?.multiply(&array!(inv_scale))?;
 
         let state_in = cache.ssm_state_or_init(b_size)?.clone();
         let (y, state_out) = gated_delta_update(

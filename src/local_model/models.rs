@@ -1,4 +1,8 @@
-//! Registry of curated local models supported by the Candle backend.
+//! Registry of curated local models offered by default in the system.
+//!
+//! Trimmed to the four checkpoints verified end-to-end on the native MLX
+//! backend (Apple Silicon): two Qwen3 transformers and two Qwen3.5 hybrid
+//! (GatedDeltaNet + attention, OptiQ-quantised) models.
 
 use std::path::Path;
 
@@ -18,7 +22,7 @@ pub struct KnownModel {
 }
 
 pub const KNOWN_MODELS: &[KnownModel] = &[
-    // ── Qwen3 (standard HF safetensors — candle compatible) ────────────────
+    // ── Qwen3 transformers (MLX native) ───────────────────────────────────
     KnownModel {
         id: "Qwen/Qwen3-0.6B",
         label: "Qwen3 0.6B",
@@ -28,63 +32,15 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         vision: false,
     },
     KnownModel {
-        id: "Qwen/Qwen3-1.7B",
-        label: "Qwen3 1.7B",
-        approx_size_gb: 3.4,
-        context_length: 32_768,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "Qwen/Qwen3-4B",
-        label: "Qwen3 4B — recommended",
-        approx_size_gb: 8.0,
-        context_length: 32_768,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "Qwen/Qwen3-8B",
-        label: "Qwen3 8B",
-        approx_size_gb: 16.0,
-        context_length: 32_768,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "Qwen/Qwen3-14B",
-        label: "Qwen3 14B",
-        approx_size_gb: 28.0,
-        context_length: 32_768,
+        id: "mlx-community/Qwen3-4B-4bit",
+        label: "Qwen3 4B 4-bit (mlx-community)",
+        approx_size_gb: 2.3,
+        context_length: 128_000,
         native_supported: true,
         vision: false,
     },
 
-    // ── Qwen3 bf16 (MLX-community) — BF16 safetensors, candle compatible ──
-    KnownModel {
-        id: "mlx-community/Qwen3-0.6B-bf16",
-        label: "Qwen3 0.6B (bf16, mlx-community)",
-        approx_size_gb: 1.2,
-        context_length: 128_000,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "mlx-community/Qwen3-1.7B-bf16",
-        label: "Qwen3 1.7B (bf16, mlx-community)",
-        approx_size_gb: 3.4,
-        context_length: 128_000,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "mlx-community/Qwen3-4B-bf16",
-        label: "Qwen3 4B (bf16, mlx-community)",
-        approx_size_gb: 8.0,
-        context_length: 128_000,
-        native_supported: true,
-        vision: false,
-    },
+    // ── Qwen3.5 hybrid (GatedDeltaNet + attention, OptiQ quant — MLX native) ─
     KnownModel {
         id: "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
         label: "Qwen3.5 0.8B OptiQ 4-bit (mlx-community)",
@@ -94,107 +50,11 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         vision: false,
     },
     KnownModel {
-        id: "mlx-community/Qwen3-8B-bf16",
-        label: "Qwen3 8B (bf16, mlx-community)",
-        approx_size_gb: 16.0,
-        context_length: 128_000,
+        id: "mlx-community/Qwen3.5-4B-OptiQ-4bit",
+        label: "Qwen3.5 4B OptiQ 4-bit (mlx-community) — recommended",
+        approx_size_gb: 3.3,
+        context_length: 262_144,
         native_supported: true,
-        vision: false,
-    },
-
-    // ── Gemma 3 / 4 (Google — model_type="gemma3") ────────────────────────
-    KnownModel {
-        id: "google/gemma-3-1b-it",
-        label: "Gemma 3 1B Instruct",
-        approx_size_gb: 2.0,
-        context_length: 32_768,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "google/gemma-3-4b-it",
-        label: "Gemma 3 4B Instruct",
-        approx_size_gb: 8.0,
-        context_length: 131_072,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "google/gemma-3-12b-it",
-        label: "Gemma 3 12B Instruct",
-        approx_size_gb: 24.0,
-        context_length: 131_072,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "google/gemma-4-9b-it",
-        label: "Gemma 4 9B Instruct",
-        approx_size_gb: 18.0,
-        context_length: 131_072,
-        native_supported: true,
-        vision: false,
-    },
-
-    // // ── Mamba 1 (SSM — state-spaces, backbone.* prefix in safetensors) ───
-    // KnownModel {
-    //     id: "state-spaces/mamba-2.8b",
-    //     label: "Mamba 1 2.8B (SSM)",
-    //     approx_size_gb: 5.6,
-    //     context_length: 2_048,
-    //     native_supported: true,
-    //     vision: false,
-    // },
-    // KnownModel {
-    //     id: "state-spaces/mamba-1.4b",
-    //     label: "Mamba 1 1.4B (SSM)",
-    //     approx_size_gb: 2.8,
-    //     context_length: 2_048,
-    //     native_supported: true,
-    //     vision: false,
-    // },
-
-    // // ── Mamba 2 (SSD — state-spaces, backbone.* prefix in safetensors) ───
-    // KnownModel {
-    //     id: "state-spaces/mamba2-2.7b",
-    //     label: "Mamba 2 2.7B (SSM/SSD)",
-    //     approx_size_gb: 5.4,
-    //     context_length: 4_096,
-    //     native_supported: true,
-    //     vision: false,
-    // },
-    // KnownModel {
-    //     id: "state-spaces/mamba2-1.3b",
-    //     label: "Mamba 2 1.3B (SSM/SSD)",
-    //     approx_size_gb: 2.6,
-    //     context_length: 4_096,
-    //     native_supported: true,
-    //     vision: false,
-    // },
-    // KnownModel {
-    //     id: "state-spaces/mamba2-370m",
-    //     label: "Mamba 2 370M (SSM/SSD)",
-    //     approx_size_gb: 0.74,
-    //     context_length: 4_096,
-    //     native_supported: true,
-    //     vision: false,
-    // },
-
-    // ── Qwen3 4-bit (MLX quantisation — NOT compatible with Candle loader) ─
-    KnownModel {
-        id: "mlx-community/Qwen3-4B-4bit",
-        label: "Qwen3 4B 4-bit (mlx-community) — not yet supported",
-        approx_size_gb: 2.3,
-        context_length: 128_000,
-        native_supported: false,
-        vision: false,
-    },
-    KnownModel {
-        id: "mlx-community/Qwen3-8B-4bit",
-        label: "Qwen3 8B 4-bit (mlx-community) — not yet supported",
-        approx_size_gb: 4.6,
-        context_length: 128_000,
-        native_supported: false,
         vision: false,
     },
 ];

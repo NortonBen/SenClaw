@@ -728,6 +728,15 @@ pub struct LocalModelSettings {
     /// Timer resets on each inference and on explicit **Load** in the UI.
     #[serde(default)]
     pub idle_unload_secs: Option<u32>,
+    /// **MLX native** memory-pressure guard: before a turn's prefill, if the
+    /// process RSS exceeds this many MiB, drop the prefix-cache KV (weights stay
+    /// loaded) and return MLX's pool to the OS. Trades the next turn's
+    /// prefix-cache hit for a bounded footprint. **`None`** / **`0`** = disabled
+    /// (the default — KV is only bounded by the prefix cache's own TTL / byte
+    /// budget). Set to your RAM budget for this process (must exceed the model
+    /// weight size, else KV is released every turn).
+    #[serde(default)]
+    pub kv_release_rss_mib: Option<u32>,
 }
 
 impl Default for LocalModelSettings {
@@ -744,6 +753,7 @@ impl Default for LocalModelSettings {
             mlx_kv_cache_bits: None,
             preferred_backend: None,
             idle_unload_secs: Some(DEFAULT_IDLE_UNLOAD_SECS),
+            kv_release_rss_mib: None,
         }
     }
 }

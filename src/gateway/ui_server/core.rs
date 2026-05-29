@@ -17,6 +17,7 @@ use crate::db::Db;
 use crate::mcp::manager::McpManager;
 use crate::wiki::manager::WikiManager;
 
+use super::chat::{chat_permission_respond, chat_plan_respond, chat_question_respond};
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::cowork::{
     cowork_board_get, cowork_board_update, cowork_documents_upload, cowork_files_download,
@@ -107,6 +108,25 @@ pub trait UiApi: Send + Sync {
     }
     /// Set admin permissions config.
     fn set_permissions_config(&self, _cfg: AdminPermissionsConfig) {}
+
+    /// Resolve a pending tool-permission request (mobile parity with the web
+    /// WS `permission:response`). No-op by default.
+    fn resolve_permission(&self, _request_id: &str, _option_key: &str) {}
+
+    /// Resolve a pending ask-question batch. `answers` is keyed by question
+    /// index → selected option index (or array for multi-select); `-1` means
+    /// the "Other" free-text in `other_texts`.
+    fn resolve_ask_question(
+        &self,
+        _request_id: &str,
+        _answers: &serde_json::Value,
+        _other_texts: Option<&serde_json::Value>,
+    ) {
+    }
+
+    /// Resolve a pending ExitPlanMode request. `selected` is
+    /// `startEditing` | `clearContextAndStart` | (anything else = cancelled).
+    fn resolve_plan_exit(&self, _group_jid: &str, _agent_id: &str, _selected: &str) {}
 }
 
 // ===== Shared state =====
@@ -367,6 +387,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/space/sync/apple-calendar", post(space_sync_apple_calendar))
         .route("/api/space/sync/apple-notes", post(space_sync_apple_notes))
         .route("/api/space/sync/gmail", post(space_sync_gmail))
+        // ── Chat interaction resolve (mobile parity with WS permission/question) ─
+        .route("/api/chat/permission/respond", post(chat_permission_respond))
+        .route("/api/chat/question/respond", post(chat_question_respond))
+        .route("/api/chat/plan/respond", post(chat_plan_respond))
         // ── Filesystem browser ───────────────────────────────────────────────
         .route("/api/fs/ls", get(fs_ls))
         // ── Code Engine API ──────────────────────────────────────────────────

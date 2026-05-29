@@ -48,6 +48,13 @@ fn code_chat_sender() -> tokio::sync::broadcast::Sender<String> {
         .clone()
 }
 
+/// Subscribe to `code:chat:update` broadcasts (raw JSON strings). Used by the
+/// relay bridge to forward live code-chat updates to mobile app channels so the
+/// mobile Code chat doesn't have to poll.
+pub fn subscribe_code_chat() -> tokio::sync::broadcast::Receiver<String> {
+    code_chat_sender().subscribe()
+}
+
 fn code_chat_group_lock(group_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = CODE_CHAT_GROUP_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let mut guard = locks.lock().unwrap();

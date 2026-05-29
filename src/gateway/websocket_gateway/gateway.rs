@@ -87,6 +87,11 @@ pub trait WsGatewayApi: Send + Sync {
 
 // ===== WebSocketGateway =====
 
+/// Sink invoked for every `broadcast` targeting an `app:*` JID, so chat events
+/// (tool executions, agent state, …) can be forwarded to mobile app channels
+/// over the relay. Args: `(chat_jid, message)`.
+pub type AppEventSink = Arc<dyn Fn(String, serde_json::Value) + Send + Sync>;
+
 pub struct WebSocketGateway {
     pub port: u16,
     pub(crate) token: Option<String>,
@@ -95,6 +100,8 @@ pub struct WebSocketGateway {
     /// Pending permission:request and question:request messages keyed by requestId.
     /// Stored so they can be replayed as a snapshot when an admin client (re)connects.
     pub(crate) pending_interactions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    /// Optional forwarder for `app:*` chat events → mobile relay clients.
+    pub(crate) app_event_sink: std::sync::RwLock<Option<AppEventSink>>,
 }
 
 impl WebSocketGateway {
@@ -105,7 +112,14 @@ impl WebSocketGateway {
             clients: Arc::new(Mutex::new(Vec::new())),
             last_known_states: Arc::new(Mutex::new(HashMap::new())),
             pending_interactions: Arc::new(Mutex::new(HashMap::new())),
+            app_event_sink: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Install the forwarder that mirrors `app:*` chat events to mobile relay
+    /// clients. Called once by daemon wiring after app channels are created.
+    pub fn set_app_event_sink(&self, sink: AppEventSink) {
+        *self.app_event_sink.write().unwrap() = Some(sink);
     }
 
     /// Build the axum route for WebSocket upgrade at `/ws`.
@@ -228,10 +242,23 @@ impl WebSocketGateway {
 
     pub(crate) async fn broadcast(&self, group_jid: &str, msg: &serde_json::Value) {
         let raw = msg.to_string();
-        let clients = self.clients.lock().await;
-        for client in clients.iter() {
-            if client.authenticated && client.subscriptions.contains(group_jid) {
-                let _ = client.sender.send(Message::Text(raw.clone().into()));
+        {
+            let clients = self.clients.lock().await;
+            for client in clients.iter() {
+                if client.authenticated && client.subscriptions.contains(group_jid) {
+                    let _ = client.sender.send(Message::Text(raw.clone().into()));
+                }
+            }
+        }
+        // Mirror to mobile relay clients for app-channel chats.
+        if group_jid.starts_with("app:") {
+            let sink = self
+                .app_event_sink
+                .read()
+                .ok()
+                .and_then(|g| g.as_ref().cloned());
+            if let Some(sink) = sink {
+                sink(group_jid.to_string(), msg.clone());
             }
         }
     }

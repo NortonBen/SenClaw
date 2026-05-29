@@ -2,11 +2,15 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/agent_model.dart';
+import '../models/api_models.dart';
 import '../services/relay_service.dart';
-import '../services/crypto_service.dart';
+import '../services/relay_manager.dart';
 import '../services/config_service.dart';
 import '../services/language_service.dart';
+import '../services/chat_api.dart';
 import '../services/logger_service.dart';
+import '../widgets/interaction_cards.dart';
+import '../widgets/markdown_text.dart';
 import 'welcome_screen.dart';
 import 'connection_qr_screen.dart';
 import 'agent_select_screen.dart';
@@ -17,7 +21,18 @@ class ChatMessage {
   final bool isHistory;
   final DateTime? timestamp;
   final Duration? latency;
-  final String role; // 'user', 'agent', 'other'
+  final String role; // 'user', 'agent', 'other', 'tool', 'permission', 'question'
+
+  // Tool-execution card fields (role == 'tool').
+  final String? toolName;
+  final String? toolSummary;
+  final bool toolOk;
+
+  // Interaction card fields (role == 'permission' | 'question').
+  final String? requestId;
+  final Map<String, dynamic>? interaction;
+  bool resolved;
+  String? resolvedText;
 
   ChatMessage(
     this.text,
@@ -26,6 +41,13 @@ class ChatMessage {
     this.timestamp,
     this.latency,
     String? role,
+    this.toolName,
+    this.toolSummary,
+    this.toolOk = true,
+    this.requestId,
+    this.interaction,
+    this.resolved = false,
+    this.resolvedText,
   }) : role = role ?? (isFromMe ? 'user' : 'agent');
 }
 
@@ -40,8 +62,10 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _agentListTimeout = Duration(seconds: 40);
 
   final _config = ConfigService();
+  final _relayManager = RelayManager();
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final List<StreamSubscription> _subs = [];
 
   RelayService? _relay;
   Timer? _loadTimeout;
@@ -51,6 +75,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   List<AgentInfo> _agents = [];
   AgentInfo? _selectedAgent;
+  String _agentState = '';
   bool _agentLoaded = false;
   bool _historyLoaded = false;
   int _currentPage = 1;
@@ -85,32 +110,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _initRelay() async {
-    final hub = await _config.hubUrl;
-    final relay = await _config.relayUrl;
-    final cid = await _config.channelId;
-    final token = await _config.accessToken;
-    final key = await _config.encryptionKey;
-
-    final url = (relay ?? hub)?.trim();
-    if (url == null ||
-        url.isEmpty ||
-        cid == null ||
-        token == null ||
-        key == null)
+    final started = await _relayManager.ensureStarted();
+    if (!started) {
+      if (!mounted) return;
+      setState(() {
+        _loadTimedOut = true;
+        _statusText =
+            'Thiếu dữ liệu ghép cặp — hãy quét lại mã QR để kết nối.';
+      });
       return;
+    }
 
-    final encKey = await CryptoService.deriveKey(key);
-    Log.i('[Chat] Khởi tạo relay — channel=$cid url=$url');
+    final relay = _relayManager.relay!;
+    _relay = relay;
+    Log.i('[Chat] Dùng relay chung từ RelayManager');
 
-    _relay = RelayService(
-      hubUrl: url,
-      channelId: cid,
-      senderId: 'mobile-app',
-      accessToken: token,
-      encryptionKey: encKey,
-    );
-
-    _relay!.incomingMessages.listen((text) {
+    _subs.add(relay.incomingMessages.listen((text) {
       if (!mounted) return;
       Log.d(
         '[Chat] Tin nhắn mới từ agent: "${text.length > 60 ? text.substring(0, 60) : text}…"',
@@ -134,17 +149,16 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
       _scrollToBottom();
-    });
+    }));
 
-    _relay!.typingUpdates.listen((typing) {
+    _subs.add(relay.typingUpdates.listen((typing) {
       if (!mounted) return;
       setState(() => _isTyping = typing);
-    });
+    }));
 
-    _relay!.agentListUpdates.listen(_onAgentList);
-    _relay!.historyUpdates.listen(_onHistory);
-
-    _relay!.start();
+    _subs.add(relay.agentListUpdates.listen(_onAgentList));
+    _subs.add(relay.historyUpdates.listen(_onHistory));
+    _subs.add(relay.apiEvents.listen(_onApiEvent));
 
     _scrollController.addListener(() {
       if (_scrollController.position.pixels >=
@@ -155,6 +169,14 @@ class _ChatScreenState extends State<ChatScreen> {
         _loadMoreHistory();
       }
     });
+
+    // The shared relay may have already received the agent list before this
+    // screen mounted — replay the cache; otherwise (re)request it.
+    if (_relayManager.agents.isNotEmpty) {
+      _onAgentList(_relayManager.agents);
+    } else {
+      _relayManager.requestAgentList();
+    }
 
     _loadTimeout = Timer(_agentListTimeout, () {
       if (!mounted || _agentLoaded) return;
@@ -252,6 +274,139 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Server-pushed agent activity (tool executions, live state) forwarded over
+  /// the relay as API_EVENT frames. agent:reply / incoming are NOT here — those
+  /// still arrive via the encrypted chat path.
+  void _onApiEvent(ApiEvent event) {
+    if (!mounted) return;
+    final data = event.data;
+    if (event.topic == 'tool:execution' && data is Map) {
+      final m = data.cast<String, dynamic>();
+      setState(() {
+        _messages.add(ChatMessage(
+          '',
+          false,
+          role: 'tool',
+          timestamp: DateTime.now(),
+          toolName: (m['toolName'] ?? 'tool').toString(),
+          toolSummary: (m['summary'] ?? m['title'] ?? '').toString(),
+          toolOk: m['ok'] as bool? ?? true,
+        ));
+      });
+      _scrollToBottom();
+    } else if (event.topic == 'agent:state' && data is Map) {
+      setState(() => _agentState = (data['state'] ?? '').toString());
+    } else if (event.topic == 'permission:request' && data is Map) {
+      final m = data.cast<String, dynamic>();
+      _addInteraction('permission', (m['requestId'] ?? '').toString(), m);
+    } else if (event.topic == 'question:request' && data is Map) {
+      final m = data.cast<String, dynamic>();
+      _addInteraction('question', (m['requestId'] ?? '').toString(), m);
+    } else if (event.topic == 'permission:resolved' && data is Map) {
+      _markResolved((data['requestId'] ?? '').toString(),
+          (data['optionLabel'] ?? data['optionKey'] ?? '').toString());
+    } else if (event.topic == 'question:resolved' && data is Map) {
+      _markResolved((data['requestId'] ?? '').toString(), null);
+    } else if (event.topic == 'plan:exit:request' && data is Map) {
+      final m = data.cast<String, dynamic>();
+      _addInteraction('plan', _planKey(m), m);
+    } else if (event.topic == 'plan:exit:response' && data is Map) {
+      _markResolved(
+        _planKey(data.cast<String, dynamic>()),
+        (data['selected'] ?? '').toString(),
+      );
+    }
+  }
+
+  // Plan events carry no requestId; key by group+agent so the response matches.
+  String _planKey(Map<String, dynamic> m) =>
+      '${m['groupJid'] ?? ''}|${m['agentId'] ?? 'main'}';
+
+  void _addInteraction(String role, String requestId, Map<String, dynamic> data) {
+    if (requestId.isEmpty) return;
+    // Avoid duplicate cards (snapshot replay / re-broadcast).
+    if (_messages.any((m) => m.requestId == requestId)) return;
+    setState(() {
+      _messages.add(ChatMessage(
+        '',
+        false,
+        role: role,
+        timestamp: DateTime.now(),
+        requestId: requestId,
+        interaction: data,
+      ));
+    });
+    _scrollToBottom();
+  }
+
+  void _markResolved(String requestId, String? label) {
+    if (requestId.isEmpty) return;
+    final idx = _messages.indexWhere((m) => m.requestId == requestId);
+    if (idx < 0) return;
+    setState(() {
+      _messages[idx].resolved = true;
+      if (label != null && label.isNotEmpty) {
+        _messages[idx].resolvedText = label;
+      }
+    });
+  }
+
+  Future<void> _respondPermission(
+      ChatMessage msg, String key, String label) async {
+    setState(() {
+      msg.resolved = true;
+      msg.resolvedText = label;
+    });
+    try {
+      await ChatApi().respondPermission(msg.requestId!, key);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi gửi phản hồi: $e')));
+      }
+    }
+  }
+
+  Future<void> _respondQuestion(
+      ChatMessage msg, Map<String, dynamic> answers) async {
+    setState(() => msg.resolved = true);
+    try {
+      await ChatApi().respondQuestion(msg.requestId!, answers);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi gửi trả lời: $e')));
+      }
+    }
+  }
+
+  Future<void> _respondPlan(ChatMessage msg, String selected) async {
+    final data = msg.interaction ?? const {};
+    final groupJid = (data['groupJid'] ?? '').toString();
+    final agentId = (data['agentId'] ?? 'main').toString();
+    setState(() {
+      msg.resolved = true;
+      msg.resolvedText = selected;
+    });
+    try {
+      await ChatApi().respondPlan(groupJid, agentId, selected);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi gửi lựa chọn: $e')));
+      }
+    }
+  }
+
+  bool get _agentBusy {
+    final s = _agentState.toLowerCase();
+    return s == 'processing' ||
+        s == 'thinking' ||
+        s == 'running' ||
+        s == 'working' ||
+        s == 'busy';
+  }
+
   void _loadMoreHistory() {
     if (_selectedAgent == null || !_hasMoreHistory || _isLoadingMore) return;
     Log.i('[Chat] Tải thêm trang lịch sử: ${_currentPage + 1}');
@@ -326,9 +481,17 @@ class _ChatScreenState extends State<ChatScreen> {
       _statusText = 'Đang kết nối lại…';
     });
     _loadTimeout?.cancel();
-    _relay?.dispose();
-    _relay = null;
-    _initRelay();
+    // The shared relay auto-reconnects; just re-request the agent list and
+    // restart the load-timeout watchdog.
+    _relayManager.requestAgentList();
+    _loadTimeout = Timer(_agentListTimeout, () {
+      if (!mounted || _agentLoaded) return;
+      setState(() {
+        _loadTimedOut = true;
+        _statusText =
+            'Vẫn chưa nhận được phản hồi — kiểm tra mạng và Senclaw daemon.';
+      });
+    });
   }
 
   void _scrollToBottom() {
@@ -385,6 +548,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
     if (ok == true) {
+      await _relayManager.shutdown();
       await _config.clearAll();
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(
@@ -865,7 +1029,8 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
-    final totalCount = _messages.length + (_isTyping ? 1 : 0);
+    final showBusy = _isTyping || _agentBusy;
+    final totalCount = _messages.length + (showBusy ? 1 : 0);
     // Sử dụng reverse: false để tin nhắn mới ở dưới cùng
     // Chúng ta đã sắp xếp danh sách _messages theo thứ tự thời gian tăng dần [cũ -> mới]
     return ListView.builder(
@@ -931,7 +1096,74 @@ class _ChatScreenState extends State<ChatScreen> {
     return '$dd/$mo $hh:$mm';
   }
 
+  Widget _buildToolCard(ChatMessage msg) {
+    final ok = msg.toolOk;
+    final color = ok ? Colors.cyanAccent : Colors.redAccent;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withOpacity(0.25)),
+        ),
+        child: Row(
+          children: [
+            Icon(ok ? Icons.build_circle_outlined : Icons.error_outline,
+                color: color, size: 16),
+            const SizedBox(width: 8),
+            Text(
+              msg.toolName ?? 'tool',
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'monospace',
+              ),
+            ),
+            if ((msg.toolSummary ?? '').isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  msg.toolSummary!,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBubble(ChatMessage msg) {
+    if (msg.role == 'tool') return _buildToolCard(msg);
+    if (msg.role == 'permission' && msg.interaction != null) {
+      return PermissionCard(
+        data: msg.interaction!,
+        resolved: msg.resolved,
+        resolvedText: msg.resolvedText,
+        onRespond: (key, label) => _respondPermission(msg, key, label),
+      );
+    }
+    if (msg.role == 'question' && msg.interaction != null) {
+      return QuestionCard(
+        data: msg.interaction!,
+        resolved: msg.resolved,
+        onSubmit: (answers) => _respondQuestion(msg, answers),
+      );
+    }
+    if (msg.role == 'plan' && msg.interaction != null) {
+      return PlanCard(
+        data: msg.interaction!,
+        resolved: msg.resolved,
+        resolvedText: msg.resolvedText,
+        onRespond: (selected) => _respondPlan(msg, selected),
+      );
+    }
     // role: 'user' -> RIGHT (phải)
     // role: 'agent' -> LEFT (trái)
     final isUser = msg.role == 'user';
@@ -972,13 +1204,18 @@ class _ChatScreenState extends State<ChatScreen> {
                       : Colors.white.withOpacity(0.06),
                 ),
               ),
-              child: Text(
-                msg.text,
-                style: TextStyle(
-                  color: msg.isHistory ? Colors.white60 : Colors.white,
-                  fontSize: 14,
-                ),
-              ),
+              child: isUser
+                  ? Text(
+                      msg.text,
+                      style: TextStyle(
+                        color: msg.isHistory ? Colors.white60 : Colors.white,
+                        fontSize: 14,
+                      ),
+                    )
+                  : MarkdownText(
+                      msg.text,
+                      color: msg.isHistory ? Colors.white60 : Colors.white,
+                    ),
             ),
             const SizedBox(height: 2),
             Padding(
@@ -1115,9 +1352,13 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _loadTimeout?.cancel();
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _subs.clear();
     _messageController.dispose();
     _scrollController.dispose();
-    _relay?.dispose();
+    // The relay is owned by RelayManager and shared across tabs — don't dispose.
     super.dispose();
   }
 }

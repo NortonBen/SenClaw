@@ -604,10 +604,11 @@ fn wire_app_channel_controls(
     gm: Arc<gateway::group_manager::GroupManager>,
     cfg: Arc<config::Config>,
     db_channel_id: i64,
+    api_bridge: Arc<gateway::ui_server::ApiBridgeState>,
 ) {
     use channels::app::{
-        CTRL_AGENT_LIST_REQ, CTRL_AGENT_LIST_RESP, CTRL_AGENT_SELECT, CTRL_HISTORY_REQ,
-        CTRL_HISTORY_RESP,
+        CTRL_AGENT_LIST_REQ, CTRL_AGENT_LIST_RESP, CTRL_AGENT_SELECT, CTRL_API_REQ, CTRL_API_RESP,
+        CTRL_HISTORY_REQ, CTRL_HISTORY_RESP,
     };
 
     let app_for_cb = Arc::clone(app);
@@ -617,6 +618,7 @@ fn wire_app_channel_controls(
         let db = Arc::clone(&db);
         let gm = Arc::clone(&gm);
         let cfg = Arc::clone(&cfg);
+        let api_bridge = Arc::clone(&api_bridge);
 
         match ctrl_type {
             // ── Agent list ──────────────────────────────────────────────────
@@ -771,6 +773,34 @@ fn wire_app_channel_controls(
                 });
             }
 
+            // ── REST tunnel — replay through the UI router ───────────────────
+            t if t == CTRL_API_REQ => {
+                tokio::spawn(async move {
+                    let req: gateway::ui_server::ApiRequest = match serde_json::from_str(&metadata)
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!(
+                                "[AppChannel] API_REQ parse error from {}: {e}",
+                                sender_id
+                            );
+                            return;
+                        }
+                    };
+                    tracing::info!(
+                        "[AppChannel] API_REQ {} {} (id={}) from {}",
+                        req.method, req.path, req.request_id, sender_id
+                    );
+                    let resp = gateway::ui_server::dispatch_api(api_bridge.as_ref(), req).await;
+                    let json = serde_json::to_string(&resp).unwrap_or_default();
+                    tracing::info!(
+                        "[AppChannel] API_RESP → {} (id={}, status={}, {} bytes)",
+                        sender_id, resp.request_id, resp.status, resp.body.len()
+                    );
+                    let _ = app.send_control(CTRL_API_RESP, json).await;
+                });
+            }
+
             _ => {
                 tracing::debug!("[AppChannel] Unhandled control type={} from {}", ctrl_type, sender_id);
             }
@@ -909,6 +939,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 3. Channel adapters =====
     let mut channels: Vec<Box<dyn channels::Channel>> = Vec::new();
+
+    // Lazily-populated handle that lets app-channel relay clients tunnel REST
+    // calls through the UI router. Filled in once `UiState` is built (step 7).
+    let api_bridge = Arc::new(gateway::ui_server::ApiBridgeState::new());
+
+    // App channels collected for the WS-gateway → relay event forwarder (step 8).
+    let mut app_channels: Vec<Arc<channels::app::AppChannel>> = Vec::new();
 
     // 3a. Telegram
     let tg = channels::telegram::TelegramChannel::new(cfg.telegram.bot_token.clone());
@@ -1099,6 +1136,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                     Arc::clone(&gm),
                                     Arc::new(cfg.clone()),
                                     ch_record.id,
+                                    Arc::clone(&api_bridge),
                                 );
                                 channels::app::AppChannel::connect_nonblocking(Arc::clone(
                                     &app_arc,
@@ -1107,6 +1145,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                     "[SenClaw] AppChannel from DB (id={}) registered (relay in background)",
                                     ch_record.id
                                 );
+                                app_channels.push(Arc::clone(&app_arc));
                                 channels.push(Box::new(Arc::clone(&app_arc)));
                             }
                         }
@@ -1508,6 +1547,69 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             gateway: Arc::clone(&gw),
             db: Arc::clone(&db),
         }));
+
+        // Forward `app:*` chat events (tool executions, agent state, …) to mobile
+        // relay clients as CTRL_API_EVENT frames. `agent:reply`/`incoming` are
+        // skipped — those already reach the app over the encrypted chat path.
+        if !app_channels.is_empty() {
+            use channels::app::CTRL_API_EVENT;
+            let app_chs = app_channels.clone();
+            gw.set_app_event_sink(Arc::new(move |chat_jid: String, msg: serde_json::Value| {
+                let topic = msg
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if topic.is_empty() || topic == "agent:reply" || topic == "incoming" {
+                    return;
+                }
+                for app in &app_chs {
+                    if app.owns_jid(&chat_jid) {
+                        let app = Arc::clone(app);
+                        let meta =
+                            serde_json::json!({ "topic": topic, "data": msg }).to_string();
+                        tokio::spawn(async move {
+                            let _ = app.send_control(CTRL_API_EVENT, meta).await;
+                        });
+                        break;
+                    }
+                }
+            }));
+            tracing::info!(
+                "[SenClaw] App-channel event forwarder wired ({} channel(s))",
+                app_channels.len()
+            );
+
+            // Forward live code-chat updates (the web's `/api/code/ws` push) to
+            // mobile app channels so the Code chat doesn't have to poll.
+            let code_app_chs = app_channels.clone();
+            let mut code_rx = gateway::ui_server::subscribe_code_chat();
+            tokio::spawn(async move {
+                use channels::app::CTRL_API_EVENT;
+                loop {
+                    match code_rx.recv().await {
+                        Ok(raw) => {
+                            let data: serde_json::Value =
+                                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+                            let meta = serde_json::json!({
+                                "topic": "code:chat:update",
+                                "data": data,
+                            })
+                            .to_string();
+                            for app in &code_app_chs {
+                                let app = Arc::clone(app);
+                                let meta = meta.clone();
+                                tokio::spawn(async move {
+                                    let _ = app.send_control(CTRL_API_EVENT, meta).await;
+                                });
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
 
         // Wire MessageRouter → WebSocket gateway for real-time incoming messages.
         message_router.set_ws_gateway(Arc::clone(&gw)).await;
@@ -2016,6 +2118,23 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                         skip_all_agents_permissions: config.skip_all_agents_permissions,
                     });
             }
+            fn resolve_permission(&self, request_id: &str, option_key: &str) {
+                let _ = self.agent_pool.resolve_permission(request_id, option_key);
+            }
+            fn resolve_ask_question(
+                &self,
+                request_id: &str,
+                answers: &serde_json::Value,
+                other_texts: Option<&serde_json::Value>,
+            ) {
+                let _ = self
+                    .agent_pool
+                    .resolve_ask_question_batch(request_id, answers, other_texts);
+            }
+            fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
+                self.agent_pool
+                    .resolve_plan_exit(group_jid, agent_id, selected);
+            }
         }
 
         let ui_state = Arc::new(gateway::ui_server::UiState {
@@ -2054,6 +2173,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });
+
+        // Make the same state reachable to app-channel relay clients (REST tunnel).
+        api_bridge.set(Arc::clone(&ui_state));
 
         let ui_router = gateway::ui_server::build_router(ui_state);
         let http_port = cfg.ui_server.port;

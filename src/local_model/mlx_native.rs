@@ -173,6 +173,29 @@ impl MlxNativeEngine {
         ensure_loaded_blocking(self)
     }
 
+    /// Release the prefix-cache KV (and push MLX's freed pool back to the OS)
+    /// **without** unloading the model weights. Cheap to call when the host is
+    /// under memory pressure (OS memory-pressure notification, another model
+    /// loading, etc.) — the next turn just pays a full prefill instead of a
+    /// cache hit. No-op when nothing is loaded. Contrast [`Self::unload`], which
+    /// drops the weights too.
+    pub fn release_kv_cache(&self) {
+        if let Ok(mut g) = self.loaded.lock() {
+            if let Some(loaded) = g.as_mut() {
+                let freed = loaded.prefix_cache.clear();
+                if freed > 0 {
+                    tracing::info!(
+                        "[local-mlx-native] release_kv_cache: dropped prefix-cache KV ({})",
+                        fmt_bytes(freed),
+                    );
+                }
+            }
+        }
+        unsafe {
+            mlx_sys::mlx_clear_cache();
+        }
+    }
+
     pub fn model_dir(&self) -> &Path {
         &self.model_dir
     }
@@ -1126,10 +1149,16 @@ fn generate_with_cache(
     //   Other arches use different suffix lengths — would need per-arch
     //   `gen_suffix_len` to extend.
     const QWEN3_GEN_SUFFIX_LEN: usize = 3;
+    // Qwen3.5 is intentionally excluded: its linear-attention layers carry a
+    // recurrent SSM/conv state (`Qwen35LinearCache`), not a sliceable KV buffer.
+    // Snapshotting + restoring that state across turns does not round-trip
+    // safely — a prefix-cache HIT (≥ MIN_PREFIX_LEN tokens) yields
+    // non-deterministic output. Only pure-attention arches (Qwen3, Llama) are
+    // safe to prefix-cache.
     let prefix_cache_eligible = tq_bits.is_none()
         && matches!(
             &state.model,
-            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_)
+            ModelKind::Qwen3(_) | ModelKind::Llama(_)
         );
     let mut prefill_start = 0usize;
     if prefix_cache_eligible {
@@ -1139,6 +1168,25 @@ fn generate_with_cache(
         // itself unloads (which can be 5–60 min depending on
         // `idle_unload_secs`).
         state.prefix_cache.evict_idle();
+        // Memory-pressure guard: if this process is already over the configured
+        // RSS budget, drop the prefix-cache KV now (weights stay loaded) and
+        // return MLX's pool to the OS. Trades this turn's potential cache hit
+        // for a bounded footprint. Disabled (None / 0) by default.
+        if let Some(limit) = gen_opt.kv_release_rss_mib.filter(|&m| m > 0) {
+            let rss = rss_mib();
+            if rss > limit as f64 {
+                let freed = state.prefix_cache.clear();
+                unsafe {
+                    mlx_sys::mlx_clear_cache();
+                }
+                tracing::info!(
+                    "[local-mlx-native] memory pressure: RSS {:.0} MiB > {} MiB budget → released prefix-cache KV ({})",
+                    rss,
+                    limit,
+                    fmt_bytes(freed),
+                );
+            }
+        }
         if let Some(hit) = state.prefix_cache.find_longest_match(&prompt) {
             // Need at least 1 new token to prefill for logits sampling. Full
             // match would require a 1-token re-forward edge case we don't

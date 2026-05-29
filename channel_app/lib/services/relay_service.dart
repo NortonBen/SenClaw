@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:fixnum/fixnum.dart';
 import 'package:web_socket_channel/io.dart';
 import '../models/agent_model.dart';
+import '../models/api_models.dart';
 import 'crypto_service.dart';
 import 'logger_service.dart';
 
@@ -19,6 +20,9 @@ class RelayControlType {
   static const int agentSelect = 8;
   static const int historyReq = 9;
   static const int historyResp = 10;
+  static const int apiReq = 11;
+  static const int apiResp = 12;
+  static const int apiEvent = 13;
 }
 
 class RelayService {
@@ -39,6 +43,19 @@ class RelayService {
 
   final _historyController = StreamController<List<HistoryMessage>>.broadcast();
   Stream<List<HistoryMessage>> get historyUpdates => _historyController.stream;
+
+  final _connectionController = StreamController<bool>.broadcast();
+  Stream<bool> get connectionUpdates => _connectionController.stream;
+
+  final _apiEventController = StreamController<ApiEvent>.broadcast();
+  Stream<ApiEvent> get apiEvents => _apiEventController.stream;
+
+  /// Pending REST tunnel calls, keyed by requestId.
+  final Map<String, Completer<ApiResponse>> _pendingApi = {};
+  int _apiSeq = 0;
+
+  /// Default timeout for a tunnelled REST call.
+  static const _apiTimeout = Duration(seconds: 30);
 
   final _outboundController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -99,6 +116,7 @@ class RelayService {
             _isConnected = true;
             _reconnectDelaySecs = 2; // reset backoff on success
             Log.i('RelayService: connected');
+            _connectionController.add(true);
             _startKeepAlive();
           }
 
@@ -208,8 +226,73 @@ class RelayService {
         } catch (e) {
           Log.e('HISTORY_RESP parse error: $e');
         }
+      case RelayControlType.apiResp:
+        try {
+          final resp = ApiResponse.fromJson(
+            jsonDecode(meta) as Map<String, dynamic>,
+          );
+          final completer = _pendingApi.remove(resp.requestId);
+          if (completer != null && !completer.isCompleted) {
+            completer.complete(resp);
+          } else {
+            Log.w('API_RESP for unknown/expired requestId=${resp.requestId}');
+          }
+        } catch (e) {
+          Log.e('API_RESP parse error: $e');
+        }
+      case RelayControlType.apiEvent:
+        try {
+          _apiEventController.add(
+            ApiEvent.fromJson(jsonDecode(meta) as Map<String, dynamic>),
+          );
+        } catch (e) {
+          Log.e('API_EVENT parse error: $e');
+        }
       default:
         Log.d('Control type=$type meta=$meta');
+    }
+  }
+
+  /// Tunnel a REST call over the relay control channel and await the result.
+  ///
+  /// [method] e.g. 'GET' | 'POST'; [path] includes the query string, e.g.
+  /// `/api/code/sessions?status=active`. [body] is JSON-encoded when provided.
+  Future<ApiResponse> apiRequest(
+    String method,
+    String path, {
+    Object? body,
+  }) async {
+    if (_isDisposed) {
+      throw const ApiException(0, 'relay disposed');
+    }
+    final requestId =
+        '${DateTime.now().millisecondsSinceEpoch}-${_apiSeq++}';
+    final completer = Completer<ApiResponse>();
+    _pendingApi[requestId] = completer;
+
+    final meta = jsonEncode({
+      'requestId': requestId,
+      'method': method.toUpperCase(),
+      'path': path,
+      if (body != null) 'body': jsonEncode(body),
+    });
+    _outboundController.add(_makeControl(RelayControlType.apiReq, meta));
+
+    return completer.future.timeout(
+      _apiTimeout,
+      onTimeout: () {
+        _pendingApi.remove(requestId);
+        throw ApiException(0, 'request timed out: $method $path');
+      },
+    );
+  }
+
+  void _failPendingApi(Object error) {
+    if (_pendingApi.isEmpty) return;
+    final pending = List.of(_pendingApi.values);
+    _pendingApi.clear();
+    for (final c in pending) {
+      if (!c.isCompleted) c.completeError(error);
     }
   }
 
@@ -275,6 +358,8 @@ class RelayService {
     _wsSubscription = null;
     _ws?.sink.close();
     _ws = null;
+    if (!_connectionController.isClosed) _connectionController.add(false);
+    _failPendingApi(const ApiException(0, 'relay disconnected'));
     if (!_isDisposed) _scheduleReconnect();
   }
 
@@ -297,12 +382,15 @@ class RelayService {
     _wsSubscription?.cancel();
     await _ws?.sink.close();
     _ws = null;
+    _failPendingApi(const ApiException(0, 'relay disposed'));
     await Future.wait([
       _incomingController.close(),
       _outboundController.close(),
       _typingController.close(),
       _agentListController.close(),
       _historyController.close(),
+      _connectionController.close(),
+      _apiEventController.close(),
     ]);
   }
 

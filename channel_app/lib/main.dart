@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'screens/pairing_screen.dart';
-import 'screens/chat_screen.dart';
+import 'screens/main_shell.dart';
 import 'screens/welcome_screen.dart';
 import 'services/language_service.dart';
 
@@ -65,6 +64,6 @@ class _InitializerState extends State<Initializer> {
     if (_isPaired == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return _isPaired! ? const ChatScreen() : const WelcomeScreen();
+    return _isPaired! ? const MainShell() : const WelcomeScreen();
   }
 }

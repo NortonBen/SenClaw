@@ -14,6 +14,9 @@
 //!   8  AGENT_SELECT    — app → server: bind sender to a specific agent folder
 //!   9  HISTORY_REQ     — app → server: request message history
 //!  10  HISTORY_RESP    — server → app: JSON array of stored messages
+//!  11  API_REQ         — app → server: tunnel a REST call over the relay
+//!  12  API_RESP        — server → app: REST result for an API_REQ
+//!  13  API_EVENT       — server → app: pushed event (server-initiated)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -36,6 +39,12 @@ pub const CTRL_AGENT_LIST_RESP: i32 = 7;
 pub const CTRL_AGENT_SELECT: i32 = 8;
 pub const CTRL_HISTORY_REQ: i32 = 9;
 pub const CTRL_HISTORY_RESP: i32 = 10;
+/// app → server: tunnel a REST call. metadata = `{requestId, method, path, body?}`
+pub const CTRL_API_REQ: i32 = 11;
+/// server → app: REST result. metadata = `{requestId, status, body}`
+pub const CTRL_API_RESP: i32 = 12;
+/// server → app: pushed event (no request). metadata = `{topic, data}`
+pub const CTRL_API_EVENT: i32 = 13;
 
 /// Called when the app sends a control frame that requires server handling.
 /// Arguments: (sender_id, control_type, metadata_json)

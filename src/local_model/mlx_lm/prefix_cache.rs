@@ -229,6 +229,18 @@ impl PrefixCache {
         self.entries.iter().map(entry_bytes).sum()
     }
 
+    /// Drop every cached snapshot, releasing all pinned KV `Array` handles.
+    /// Returns the (approximate) bytes freed. Used to reclaim KV on demand —
+    /// memory-pressure eviction or an explicit `release_kv_cache()` — while the
+    /// model weights stay loaded. The dropped `Array`s return their MLX buffers
+    /// to the pool; the caller should follow with `mlx_clear_cache()` to push
+    /// the freed pool back to the OS.
+    pub fn clear(&mut self) -> usize {
+        let freed = self.total_bytes();
+        self.entries.clear();
+        freed
+    }
+
     /// Snapshot all cache variants in `live` via [`KvCache::try_snapshot`].
     /// Returns `None` if any layer's cache cannot be cloned (e.g. TurboQuant
     /// in active state) — in that case the caller skips caching this turn.

@@ -7,6 +7,7 @@
 //! LLM config endpoints (`/api/llm-config/*`) are stubbed — they require the
 //! `sema-code-core` model manager which hasn't been ported yet.
 
+mod chat;
 mod code;
 mod cognitive;
 mod cognitive_config;
@@ -20,6 +21,7 @@ pub mod local_models;
 mod marketplace;
 mod mcp;
 mod quicknotes;
+pub mod relay_bridge;
 mod space;
 mod plugins;
 mod skills;
@@ -30,5 +32,7 @@ mod wiki;
 mod workbench;
 
 // Re-exports for external use
+pub use code::subscribe_code_chat;
 pub use core::{build_router, start_ui_server, AppError, UiApi, UiState};
+pub use relay_bridge::{dispatch as dispatch_api, ApiBridgeState, ApiRequest, ApiResponse};
 pub use types::AdminPermissionsConfig;
