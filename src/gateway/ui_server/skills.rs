@@ -37,6 +37,9 @@ pub(crate) async fn skills_list(State(s): State<Arc<UiState>>) -> Json<serde_jso
                 "source": sk.source,
                 "dir": sk.dir,
                 "disabled": disabled.contains(&sk.name),
+                "triggers": sk.metadata.triggers,
+                "allowedTools": sk.metadata.allowed_tools,
+                "eligible": sk.eligible,
             })
         })
         .collect();

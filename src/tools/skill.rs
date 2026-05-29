@@ -103,13 +103,48 @@ impl Tool for SkillTool {
 
         let allowed_tools = skill.metadata.allowed_tools.clone();
         let base_dir = skill.base_dir.clone();
+
+        // OpenClaw-style env injection: pull this skill's config entry from the
+        // global config.json and inject its `env` / `apiKey` into the process
+        // (only vars not already set). Scoped to the host process — see the
+        // sandbox caveat in `crate::skills::config`.
+        let cfg = crate::config::Config::from_env();
+        let skills_cfg =
+            crate::skills::config::SkillsRuntimeConfig::load(&cfg.paths.global_config_path);
+        if let Some(entry) = skills_cfg.entry(&skill.metadata.name) {
+            let injected =
+                crate::skills::config::inject_env(entry, skill.metadata.primary_env.as_deref());
+            if !injected.is_empty() {
+                tracing::info!(
+                    "[skill:{}] injected env vars: {}",
+                    skill.metadata.name,
+                    injected.join(", ")
+                );
+            }
+        }
+
         let result_for_assistant = gen_result_for_assistant(
             &skill.metadata.name,
             &content,
             &allowed_tools,
             &base_dir,
             args.as_deref(),
+            &skill.metadata.params,
         );
+
+        let params_json: Vec<Value> = skill
+            .metadata
+            .params
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "type": p.type_,
+                    "required": p.required,
+                    "description": p.description,
+                })
+            })
+            .collect();
 
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!({
@@ -119,6 +154,8 @@ impl Tool for SkillTool {
                 "baseDir": base_dir,
                 "skill": skill_name,
                 "args": args,
+                "triggers": skill.metadata.triggers,
+                "params": params_json,
             }),
             result_for_assistant,
         }])
@@ -187,11 +224,25 @@ fn gen_result_for_assistant(
     allowed_tools: &[String],
     base_dir: &str,
     args: Option<&str>,
+    params: &[crate::skills::SkillParam],
 ) -> String {
     let mut result = format!("# Skill Activated: {skill_name}\n\n");
     result.push_str(&format!("Base directory for this skill: {base_dir}\n\n"));
     if let Some(a) = args {
         result.push_str(&format!("Arguments: {a}\n\n"));
+    }
+    if !params.is_empty() {
+        result.push_str("Parameters this skill accepts:\n");
+        for p in params {
+            let req = if p.required { "required" } else { "optional" };
+            let desc = p
+                .description
+                .as_deref()
+                .map(|d| format!(" — {d}"))
+                .unwrap_or_default();
+            result.push_str(&format!("- `{}` ({}, {}){}\n", p.name, p.type_, req, desc));
+        }
+        result.push('\n');
     }
     result.push_str(skill_content);
     result.push('\n');

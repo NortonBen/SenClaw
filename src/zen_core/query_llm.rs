@@ -253,7 +253,7 @@ async fn query_local_candle_native(
             crate::local_model::thinking_parse::split_thinking_blocks(&text_buf);
         let (clean_text, tool_calls_from_text) =
             split_qwen_tool_calls_from_model_text(&visible);
-        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text)
+        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, None)
     }
 }
 
@@ -627,7 +627,7 @@ async fn query_local_mlx(
             crate::local_model::thinking_parse::split_thinking_blocks(&text_buf);
         let (clean_text, tool_calls_from_text) =
             split_qwen_tool_calls_from_model_text(&visible);
-        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text)
+        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, None)
     }
 }
 

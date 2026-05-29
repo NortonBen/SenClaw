@@ -27,6 +27,9 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // Positioner: lets us anchor the chat popover under the tray icon.
+            app.handle().plugin(tauri_plugin_positioner::init())?;
+
             configure_env(app);
             build_tray(app)?;
 
@@ -42,6 +45,17 @@ fn main() {
                         }
                     });
                 }
+            }
+
+            // OpenClaw-style popover: the chat window auto-hides when it loses
+            // focus (click anywhere else dismisses it).
+            if let Some(chat) = app.get_webview_window(CHAT_WINDOW) {
+                let c = chat.clone();
+                chat.on_window_event(move |event| {
+                    if let WindowEvent::Focused(false) = event {
+                        let _ = c.hide();
+                    }
+                });
             }
 
             // Spawn the embedded daemon, then reload the (hidden) windows once
@@ -114,31 +128,36 @@ fn configure_env(app: &tauri::App) {
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open_chat = MenuItemBuilder::with_id("open_chat", "Open Chat").build(app)?;
     let open_dash = MenuItemBuilder::with_id("open_dashboard", "Open Full Window").build(app)?;
+    let fullscreen =
+        MenuItemBuilder::with_id("toggle_fullscreen", "Toggle Fullscreen").build(app)?;
     let open_browser =
         MenuItemBuilder::with_id("open_browser", "Open in Browser").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&open_chat, &open_dash, &open_browser, &quit])
+        .items(&[&open_chat, &open_dash, &fullscreen, &open_browser, &quit])
         .build()?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "open_chat" => show_window(app, CHAT_WINDOW),
+            "open_chat" => popup_chat(app),
             "open_dashboard" => show_window(app, MAIN_WINDOW),
+            "toggle_fullscreen" => toggle_fullscreen(app),
             "open_browser" => open_in_browser_or_window(app),
             "quit" => app.exit(0),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
+            // Let the positioner record the tray rectangle for TrayCenter, etc.
+            tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             } = event
             {
-                toggle_chat(tray.app_handle());
+                popup_chat(tray.app_handle());
             }
         });
 
@@ -153,18 +172,31 @@ fn show_window(app: &tauri::AppHandle, label: &str) {
     if let Some(win) = app.get_webview_window(label) {
         let _ = win.show();
         let _ = win.unminimize();
+        // The full window opens maximized (fills the screen); the green
+        // traffic-light button still toggles native macOS fullscreen.
+        if label == MAIN_WINDOW {
+            let _ = win.maximize();
+        }
         let _ = win.set_focus();
     }
 }
 
-fn toggle_chat(app: &tauri::AppHandle) {
+fn toggle_fullscreen(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = win.show();
+        let on = win.is_fullscreen().unwrap_or(false);
+        let _ = win.set_fullscreen(!on);
+        let _ = win.set_focus();
+    }
+}
+
+/// Show the chat popover anchored under the menu-bar icon (OpenClaw-style).
+fn popup_chat(app: &tauri::AppHandle) {
+    use tauri_plugin_positioner::{Position, WindowExt};
     if let Some(win) = app.get_webview_window(CHAT_WINDOW) {
-        if win.is_visible().unwrap_or(false) {
-            let _ = win.hide();
-        } else {
-            let _ = win.show();
-            let _ = win.set_focus();
-        }
+        let _ = win.move_window(Position::TrayBottomCenter);
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 

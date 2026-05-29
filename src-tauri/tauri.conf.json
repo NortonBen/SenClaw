@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SemaClaw",
   "version": "0.1.1",
-  "identifier": "com.semaclaw.app",
+  "identifier": "com.semaclaw.desktop",
   "build": {
     "frontendDist": "../web/dist"
   },
@@ -18,7 +18,9 @@
         "minHeight": 480,
         "visible": false,
         "skipTaskbar": true,
-        "resizable": true
+        "resizable": true,
+        "decorations": false,
+        "alwaysOnTop": true
       },
       {
         "label": "main",
@@ -29,7 +31,10 @@
         "minWidth": 880,
         "minHeight": 560,
         "visible": false,
-        "resizable": true
+        "resizable": true,
+        "maximized": true,
+        "maximizable": true,
+        "fullscreen": false
       }
     ],
     "security": {

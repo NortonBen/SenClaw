@@ -323,6 +323,10 @@ export const LocalModelsSettings: React.FC = () => {
       return;
     }
     const j = await res.json();
+    if (j.existed) {
+      message.info(`Already in LLM Models: ${j.config.label}`);
+      return;
+    }
     message.success(
       j.active
         ? `Added as LLM profile and set active: ${j.config.label}`

@@ -51,6 +51,8 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
                             "dir": s.dir,
                             "filePath": s.file_path,
                             "disabled": disabled.contains(&s.name),
+                            "triggers": s.metadata.triggers,
+                            "eligible": s.eligible,
                         })
                     })
                     .collect();
@@ -91,9 +93,15 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
             }
         }
         SkillsCmd::Info { name } => {
-            let skills = load_all_local_skills(&config);
-            let skill = skills.iter().find(|s| s.name == name);
-            let Some(skill) = skill else {
+            // Scan ungated so we can report ineligible skills too (with reason).
+            let sources = get_source_defs(&config);
+            let mut found: Option<crate::skills::scan::SkillEntry> = None;
+            for def in &sources {
+                if let Some(s) = scan_source(def).into_iter().find(|s| s.name == name) {
+                    found = Some(s); // later (higher-priority) source wins
+                }
+            }
+            let Some(skill) = found else {
                 anyhow::bail!("Skill not found: {name}");
             };
             let disabled = read_disabled_skills();
@@ -102,6 +110,7 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
             } else {
                 "enabled"
             };
+            let m = &skill.metadata;
             println!("Name:        {}", skill.name);
             println!(
                 "Version:     {}",
@@ -109,9 +118,53 @@ pub async fn run(cmd: SkillsCmd) -> Result<()> {
             );
             println!("Source:      {}", skill.source);
             println!("Status:      {status}");
+            println!(
+                "Eligible:    {}",
+                match &skill.ineligible_reason {
+                    None => "yes".to_string(),
+                    Some(r) => format!("no ({r})"),
+                }
+            );
             println!("Directory:   {}", skill.dir.display());
             println!("File:        {}", skill.file_path.display());
             println!("Description: {}", skill.description);
+            if !m.triggers.is_empty() {
+                println!("Triggers:    {}", m.triggers.join(", "));
+            }
+            if !m.allowed_tools.is_empty() {
+                println!("Allowed-tools: {}", m.allowed_tools.join(", "));
+            }
+            if !m.os.is_empty() {
+                println!("OS:          {}", m.os.join(", "));
+            }
+            if !m.requires_env.is_empty() {
+                println!("Requires env: {}", m.requires_env.join(", "));
+            }
+            if !m.requires_bins.is_empty() {
+                println!("Requires bins: {}", m.requires_bins.join(", "));
+            }
+            if !m.requires_any_bins.is_empty() {
+                println!("Requires any-bins: {}", m.requires_any_bins.join(", "));
+            }
+            if let Some(pe) = &m.primary_env {
+                println!("Primary env: {pe}");
+            }
+            if !m.params.is_empty() {
+                println!("Params:");
+                for p in &m.params {
+                    let req = if p.required { "required" } else { "optional" };
+                    println!(
+                        "  - {} ({}, {}){}",
+                        p.name,
+                        p.type_,
+                        req,
+                        p.description
+                            .as_deref()
+                            .map(|d| format!(": {d}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
         }
         SkillsCmd::Check => {
             let sources = get_source_defs(&config);

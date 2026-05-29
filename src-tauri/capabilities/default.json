@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Core permissions for the chat and main windows",
   "windows": ["chat", "main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "positioner:default"]
 }

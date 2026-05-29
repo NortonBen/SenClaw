@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
+use crate::skills::metadata::{parse_skill_metadata, SkillMetadata};
 
 #[derive(Debug, Clone)]
 pub struct SkillEntry {
@@ -20,6 +21,12 @@ pub struct SkillEntry {
     pub dir: PathBuf,
     /// Absolute path to SKILL.md
     pub file_path: PathBuf,
+    /// Full parsed frontmatter (triggers, gating requirements, params, …).
+    pub metadata: SkillMetadata,
+    /// Whether the skill passes its load-time `os`/`requires` gates.
+    pub eligible: bool,
+    /// Human-readable reason the skill is ineligible (if any).
+    pub ineligible_reason: Option<String>,
 }
 
 pub struct SourceDef {
@@ -92,33 +99,12 @@ fn find_skill_md(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn parse_frontmatter(content: &str) -> HashMap<String, String> {
-    let mut result = HashMap::new();
-    if !content.starts_with("---") {
-        return result;
-    }
-    let end = content[3..].find("\n---");
-    let end = match end {
-        Some(i) => i,
-        None => return result,
-    };
-    let fm = &content[4..3 + end];
-    for line in fm.lines() {
-        if let Some(col) = line.find(':') {
-            let key = line[..col].trim().to_string();
-            let val = line[col + 1..]
-                .trim()
-                .trim_matches(|c| c == '"' || c == '\'')
-                .to_string();
-            if !key.is_empty() {
-                result.insert(key, val);
-            }
-        }
-    }
-    result
-}
-
 /// Scan a single source directory for skills.
+///
+/// Each entry carries its fully parsed [`SkillMetadata`] plus an `eligible`
+/// flag derived from the `os` / `requires` gates. Ineligible skills are still
+/// returned here (so the CLI can list them with a reason); the runtime
+/// loaders filter them out.
 pub fn scan_source(def: &SourceDef) -> Vec<SkillEntry> {
     if !def.dir.exists() {
         return Vec::new();
@@ -149,22 +135,23 @@ pub fn scan_source(def: &SourceDef) -> Vec<SkillEntry> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let fm = parse_frontmatter(&content);
-        if fm.get("name").is_none() && fm.get("description").is_none() {
+        let dir_name = name.to_string_lossy().to_string();
+        let meta = parse_skill_metadata(&content, &dir_name, "");
+        if meta.name.is_empty() && meta.description.is_empty() {
             continue;
         }
 
-        let entry_name = fm
-            .get("name")
-            .cloned()
-            .unwrap_or_else(|| name.to_string_lossy().to_string());
+        let ineligible_reason = meta.ineligible_reason();
         entries.push(SkillEntry {
-            name: entry_name,
-            description: fm.get("description").cloned().unwrap_or_default(),
-            version: fm.get("version").cloned(),
+            name: meta.name.clone(),
+            description: meta.description.clone(),
+            version: meta.version.clone(),
             source: def.source.clone(),
             dir: full_path,
             file_path: skill_md,
+            eligible: ineligible_reason.is_none(),
+            ineligible_reason,
+            metadata: meta,
         });
     }
 
@@ -181,9 +168,23 @@ pub fn load_all_local_skills(config: &Config) -> Vec<SkillEntry> {
             map.insert(entry.name.clone(), entry);
         }
     }
-    let mut entries: Vec<SkillEntry> = map.into_values().collect();
+    let mut entries: Vec<SkillEntry> = map.into_values().filter(gate).collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
+}
+
+/// Load-time gate (OpenClaw-style): drop skills that fail their `os` /
+/// `requires` checks, logging the reason so the omission isn't silent.
+fn gate(entry: &SkillEntry) -> bool {
+    if let Some(reason) = &entry.ineligible_reason {
+        tracing::info!(
+            "[skills] skipping ineligible skill '{}': {}",
+            entry.name,
+            reason
+        );
+        return false;
+    }
+    true
 }
 
 /// Scan all sources including marketplace, deduplicate by name (later sources override earlier ones),
@@ -199,7 +200,7 @@ pub fn load_all_skills_with_marketplace(
             map.insert(entry.name.clone(), entry);
         }
     }
-    let mut entries: Vec<SkillEntry> = map.into_values().collect();
+    let mut entries: Vec<SkillEntry> = map.into_values().filter(gate).collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
 }
@@ -209,21 +210,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_frontmatter_basic() {
-        let content = "---\nname: test-skill\ndescription: A test skill\n---\n\n# Body\n";
-        let fm = parse_frontmatter(content);
-        assert_eq!(fm.get("name").map(|s| s.as_str()), Some("test-skill"));
-        assert_eq!(
-            fm.get("description").map(|s| s.as_str()),
-            Some("A test skill")
-        );
-    }
-
-    #[test]
-    fn test_parse_frontmatter_no_fm() {
-        let content = "# No frontmatter\n\nJust content.";
-        let fm = parse_frontmatter(content);
-        assert!(fm.is_empty());
+    fn test_scan_parses_triggers_and_gating() {
+        let tmp = std::env::temp_dir().join(format!("test-skills-trig-{}", uuid::Uuid::new_v4()));
+        let skill_dir = tmp.join("weather");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: weather\ndescription: d\ntriggers: [weather, forecast]\nmetadata:\n  openclaw:\n    requires:\n      bins: [this-bin-does-not-exist-xyz]\n---\n\n# Weather\n",
+        )
+        .unwrap();
+        let def = SourceDef {
+            dir: tmp.clone(),
+            source: "test".to_string(),
+        };
+        let entries = scan_source(&def);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].metadata.triggers, vec!["weather", "forecast"]);
+        // Missing required binary → ineligible.
+        assert!(!entries[0].eligible);
+        assert!(entries[0].ineligible_reason.is_some());
+        fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

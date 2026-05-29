@@ -15,7 +15,7 @@
 //! Optional **`TurboQuantKeyValueCache`** when `kv_cache_bits` is set (`turboquant-rs` storage).
 //! RoPE uses **`ModelInput::rope_offset`** (caller `usize`), not cache-internal position.
 
-use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -575,31 +575,15 @@ fn mamba_stop_token_ids(
 /// Decoded token ids counted back from the current step (HF repetition penalty window).
 const MLX_REPEN_DECODE_WINDOW: usize = 128;
 
-fn mlx_recent_decode_push(buf: &mut Vec<u32>, tok: u32, window: usize) {
+fn mlx_recent_decode_push(buf: &mut VecDeque<u32>, tok: u32, window: usize) {
     if window == 0 {
         return;
     }
-    buf.push(tok);
-    if buf.len() > window {
-        let drop = buf.len() - window;
-        buf.drain(..drop);
-    }
-}
-
-/// Scale logits for tokens that already appeared recently (GPT-2 / HF convention).
-fn hf_repetition_penalty_row(logits: &mut [f32], recent: &[u32], penalty: f32) {
-    if penalty <= 1.0 {
-        return;
-    }
-    let n = logits.len();
-    let mut seen = HashSet::new();
-    for &tid in recent {
-        let i = tid as usize;
-        if i >= n || !seen.insert(tid) {
-            continue;
-        }
-        let v = logits[i];
-        logits[i] = if v > 0.0 { v / penalty } else { v * penalty };
+    buf.push_back(tok);
+    // O(1) amortized eviction (vs. `Vec::drain(..)` memmove of the whole
+    // window every token). The window is only ever overgrown by one push.
+    while buf.len() > window {
+        buf.pop_front();
     }
 }
 
@@ -607,61 +591,85 @@ fn sample_decode_token_id(
     last_logits: &mlx_rs::Array,
     temperature: f32,
     repetition_penalty: f32,
-    recent_decode_ids: &[u32],
+    recent_decode_ids: &VecDeque<u32>,
     forbidden_ids: &[u32],
 ) -> anyhow::Result<mlx_rs::Array> {
-    use mlx_rs::ops::flatten;
+    use mlx_rs::ops::which;
     use mlx_rs::{Array, Dtype};
 
     let mlx_sample = super::mlx_lm::models::qwen3::sample;
 
-    // Fast path: no penalty, no forbidden ids — sample directly.
-    if forbidden_ids.is_empty()
-        && (repetition_penalty <= 1.0 || recent_decode_ids.is_empty())
-    {
+    let apply_penalty = repetition_penalty > 1.0 && !recent_decode_ids.is_empty();
+    // Fast path: nothing to adjust — sample the raw logits directly.
+    if forbidden_ids.is_empty() && !apply_penalty {
         return mlx_sample(last_logits, temperature).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"));
     }
     if !forbidden_ids.is_empty() {
         tracing::debug!(
-            "[local-mlx-native] sample slow path with forbidden_ids={:?} (mask to -inf before sample)",
+            "[local-mlx-native] sample adjust path with forbidden_ids={:?} (mask to -inf on GPU)",
             forbidden_ids
         );
     }
 
-    let shape: Vec<i32> = last_logits.shape().to_vec();
-    // Quantized lm_head paths (Qwen3 4-bit, Gemma 4-bit, …) emit BF16/FP16
-    // logits. Cast to F32 once before reading the raw slice — `try_as_slice::<f32>`
-    // requires contiguous f32 memory and otherwise crashes the whole turn
-    // with `DtypeMismatch`.
-    let flat = flatten(last_logits, None, None).map_err(|e| anyhow::anyhow!("flatten logits: {e:?}"))?;
-    let flat_f32 = if flat.dtype() == Dtype::Float32 {
-        flat
+    // GPU-side logit adjustment. Everything below stays **lazy** so it folds into
+    // the single `eval` the decode loop already forces (via `.item()` / `eval`)
+    // — no host round-trip, no full-vocab copy. The previous CPU path cast to
+    // f32, pulled the whole ~152K-entry row to a `Vec`, mutated it, and re-eval'd
+    // twice per token. `last_logits` is `[1, vocab]`.
+    //
+    // Cast to f32 once: quantized lm_heads emit BF16/FP16, mixing those with f32
+    // scalar penalties is dtype-fragile, and f32 reproduces the old CPU path
+    // bit-for-bit on greedy argmax.
+    let mut logits = if last_logits.dtype() == Dtype::Float32 {
+        last_logits.clone()
     } else {
-        flat.as_dtype(Dtype::Float32).map_err(|e| anyhow::anyhow!("logits cast to f32: {e:?}"))?
+        last_logits
+            .as_dtype(Dtype::Float32)
+            .map_err(|e| anyhow::anyhow!("logits cast to f32: {e:?}"))?
     };
-    mlx_rs::transforms::eval(std::slice::from_ref(&flat_f32)).map_err(|e| anyhow::anyhow!("eval logits: {e:?}"))?;
-    let mut row = flat_f32
-        .try_as_slice::<f32>()
-        .map_err(|e| anyhow::anyhow!("logits not contiguous f32: {e:?}"))?
-        .to_vec();
-    hf_repetition_penalty_row(&mut row, recent_decode_ids, repetition_penalty);
-    // Mask forbidden token ids to -inf so they have zero probability mass.
-    // Used to forbid stop tokens (`<|im_end|>`, `<|endoftext|>`) while we are
-    // structurally inside `<tool_call>…</tool_call>`, guaranteeing the model
-    // closes the tool call before hitting EOS even if 4-bit precision biases
-    // it toward emitting a stop token mid-args.
-    let n = row.len();
-    for &tid in forbidden_ids {
-        let idx = tid as usize;
-        if idx < n {
-            row[idx] = f32::NEG_INFINITY;
-        }
+
+    // (a) HF repetition penalty: gather the logits of recently-emitted tokens,
+    // scale (>0 → /penalty, ≤0 → *penalty), scatter back. Gather-then-scatter is
+    // idempotent for duplicate ids (the same source value is written back), so
+    // no dedup is needed — matches the "apply once per unique id" convention.
+    if apply_penalty {
+        let ids: Vec<i32> = recent_decode_ids.iter().map(|&t| t as i32).collect();
+        let idx = Array::from_slice(&ids, &[1, ids.len() as i32]);
+        let vals = logits
+            .take_along_axis(&idx, -1)
+            .map_err(|e| anyhow::anyhow!("penalty gather: {e:?}"))?;
+        let p = Array::from_f32(repetition_penalty);
+        let positive = vals
+            .gt(Array::from_f32(0.0))
+            .map_err(|e| anyhow::anyhow!("penalty cmp: {e:?}"))?;
+        let scaled = which(
+            &positive,
+            &vals.divide(&p).map_err(|e| anyhow::anyhow!("penalty div: {e:?}"))?,
+            &vals.multiply(&p).map_err(|e| anyhow::anyhow!("penalty mul: {e:?}"))?,
+        )
+        .map_err(|e| anyhow::anyhow!("penalty select: {e:?}"))?;
+        logits = logits
+            .put_along_axis(&idx, &scaled, -1)
+            .map_err(|e| anyhow::anyhow!("penalty scatter: {e:?}"))?;
     }
-    let adj = Array::from_slice(row.as_slice(), &[row.len() as i32])
-        .reshape(shape.as_slice())
-        .map_err(|e| anyhow::anyhow!("reshape logits: {e:?}"))?;
-    mlx_rs::transforms::eval(std::slice::from_ref(&adj)).map_err(|e| anyhow::anyhow!("eval logits: {e:?}"))?;
-    mlx_sample(&adj, temperature).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"))
+
+    // (b) Forbidden-token mask: scatter -inf so those tokens carry zero
+    // probability mass. Keeps stop tokens (`<|im_end|>`, `<|endoftext|>`) out of
+    // `<tool_call>…</tool_call>` bodies even when 4-bit precision biases toward
+    // an early stop mid-args.
+    if !forbidden_ids.is_empty() {
+        let ids: Vec<i32> = forbidden_ids.iter().map(|&t| t as i32).collect();
+        let idx = Array::from_slice(&ids, &[1, ids.len() as i32]);
+        let neg = Array::from_slice(
+            &vec![f32::NEG_INFINITY; ids.len()],
+            &[1, ids.len() as i32],
+        );
+        logits = logits
+            .put_along_axis(&idx, &neg, -1)
+            .map_err(|e| anyhow::anyhow!("forbidden scatter: {e:?}"))?;
+    }
+
+    mlx_sample(&logits, temperature).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"))
 }
 
 /// Synchronous generation entry. Runs on a blocking worker, holding the
@@ -725,7 +733,7 @@ fn generate_with_cache(
 ) -> anyhow::Result<()> {
     use super::mlx_lm::cache::{eval_all_caches, DEFAULT_TQ_ACTIVATE_AT, KvCache};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
-    use mlx_rs::transforms::eval;
+    use mlx_rs::transforms::{async_eval, eval};
     use mlx_rs::Array;
 
     let mut guard = loaded
@@ -1208,7 +1216,7 @@ fn generate_with_cache(
             }
             _ => 1.0_f32,
         });
-    let mut recent_decode_ids: Vec<u32> = Vec::new();
+    let mut recent_decode_ids: VecDeque<u32> = VecDeque::new();
 
     // Structural tool-call enforcement state — Qwen3 family only. When we see
     // `<tool_call>` open (token 151657), we forbid stop tokens until the
@@ -1529,6 +1537,203 @@ fn generate_with_cache(
         mlx_sys::mlx_clear_cache();
     }
 
+    // One decode forward over a `[1, 1]` token array → logits. Shared by the
+    // async-lookahead path below; keeps the 8-arch dispatch in one place.
+    macro_rules! decode_forward {
+        ($inputs:expr) => {
+            match &mut state.model {
+                ModelKind::Qwen3(m) => m
+                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Qwen35(m) => m
+                    .forward($inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Llama(m) => m
+                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Gemma2(m) => m
+                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Gemma3(m) => m
+                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Mamba2(m) => m
+                    .forward($inputs, &mut cache, &scan)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::FalconMamba(m) => m
+                    .forward($inputs, &mut cache)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::BonsaiQ1(b) => b
+                    .gpu
+                    .forward_all_logits_native($inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+            }
+        };
+    }
+
+    // Drain the 20-token stream buffer: detokenize and push to the channel.
+    // `return`s the whole turn early if the receiver hung up. Shared verbatim
+    // between the async and synchronous decode paths.
+    macro_rules! flush_buffer {
+        () => {
+            if buffer.len() >= 20 {
+                eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+                if generated_count <= 20 {
+                    let (ma, mc, _) = mlx_mem_mib();
+                    tracing::info!(
+                        "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
+                        generated_count, rss_mib(), rss_mib() - rss_start, ma, mc
+                    );
+                }
+                let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
+                if generated_count <= 20 {
+                    let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
+                    tracing::info!(
+                        "[local-mlx-native] first {} token ids: {:?} → {:?}",
+                        slice.len(), slice, decoded_preview
+                    );
+                }
+                let text = tokenizer
+                    .decode(&slice, true)
+                    .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
+                if !text.is_empty() && tx.blocking_send(text).is_err() {
+                    mlx_release_after_turn();
+                    return Ok(());
+                }
+                // Periodic pool flush during long decode (≈ every 100 tokens) —
+                // reclaims per-step intermediates that aren't freed until an eval
+                // barrier. The sync (~10-20 ms) pays for itself on 1000+ tokens.
+                if generated_count > 0 && generated_count % 100 == 0 {
+                    unsafe { mlx_sys::mlx_clear_cache(); }
+                }
+            }
+        };
+    }
+
+    // Async-lookahead decode is used whenever no repetition penalty is active
+    // (the default for Qwen3/Llama transformer chat). It issues token N+1's
+    // forward and `async_eval`s it BEFORE pulling token N to the host, so the
+    // GPU runs the next step while we detokenize/commit the current one —
+    // hiding the per-token CPU↔GPU sync behind compute. Greedy output is
+    // bit-identical to the synchronous path (same logits, same argmax); the
+    // only lag is the tool-call stop-mask trailing by one token, corrected at
+    // tool-call boundaries via a re-sample. With a repetition penalty the
+    // window must reflect every emitted token, so we stay synchronous.
+    let pipeline_decode = decode_repetition_penalty <= 1.0;
+
+    if pipeline_decode && !hit_stop && max_tokens > 1 {
+        let forbidden_for = |inside: bool| -> &'static [u32] {
+            if qwen3_family && inside {
+                QWEN3_STOP_TOKENS_TO_MASK
+            } else {
+                &[]
+            }
+        };
+
+        // Bootstrap: forward token #1 → its successor, dispatched async.
+        let mut pending: Array = {
+            let inputs = next_token
+                .reshape(&[1, 1])
+                .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
+            let logits = decode_forward!(&inputs);
+            rope_offset += 1;
+            let src = logits.index((.., -1, ..));
+            let tok = sample_decode_token_id(
+                &src,
+                decode_temperature,
+                decode_repetition_penalty,
+                &recent_decode_ids,
+                forbidden_for(inside_tool_call),
+            )?;
+            async_eval(std::slice::from_ref(&tok))
+                .map_err(|e| anyhow::anyhow!("async_eval failed: {e:?}"))?;
+            tok
+        };
+
+        while generated_count < max_tokens {
+            let tok = pending;
+            // Do we need a token after committing `tok`? If not, skip its forward.
+            let need_more = generated_count + 1 < max_tokens;
+
+            // Issue the successor's forward NOW (before pulling `tok`) so the GPU
+            // overlaps it with the host-side commit below.
+            let mut cand: Option<(Array, Array)> = if need_more {
+                let inputs = tok
+                    .reshape(&[1, 1])
+                    .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
+                let logits = decode_forward!(&inputs);
+                rope_offset += 1;
+                let src = logits.index((.., -1, ..));
+                let ct = sample_decode_token_id(
+                    &src,
+                    decode_temperature,
+                    decode_repetition_penalty,
+                    &recent_decode_ids,
+                    forbidden_for(inside_tool_call),
+                )?;
+                async_eval(std::slice::from_ref(&ct))
+                    .map_err(|e| anyhow::anyhow!("async_eval failed: {e:?}"))?;
+                Some((ct, src))
+            } else {
+                None
+            };
+
+            // Pull the in-flight token — its GPU work overlapped with `cand`.
+            let token_id = tok.item::<u32>();
+            mlx_recent_decode_push(&mut recent_decode_ids, token_id, MLX_REPEN_DECODE_WINDOW);
+            let was_inside = inside_tool_call;
+            if qwen3_family {
+                if token_id == QWEN3_TOOL_CALL_OPEN {
+                    inside_tool_call = true;
+                    tracing::info!(
+                        "[local-mlx-native] tool_call OPEN at step {} (token 151657) — masking stops",
+                        generated_count
+                    );
+                } else if token_id == QWEN3_TOOL_CALL_CLOSE {
+                    inside_tool_call = false;
+                    tracing::info!(
+                        "[local-mlx-native] tool_call CLOSE at step {} (token 151658) — un-masking stops",
+                        generated_count
+                    );
+                }
+            }
+            // Stale-mask correction: `cand` was sampled before we knew `tok`
+            // flipped the tool-call state. Re-sample with the right mask (rare —
+            // only at `<tool_call>` boundaries, so the lost overlap is moot).
+            if qwen3_family && inside_tool_call != was_inside {
+                if let Some((ct, src)) = cand.as_mut() {
+                    *ct = sample_decode_token_id(
+                        src,
+                        decode_temperature,
+                        decode_repetition_penalty,
+                        &recent_decode_ids,
+                        forbidden_for(inside_tool_call),
+                    )?;
+                }
+            }
+
+            if is_stop(token_id) {
+                if was_inside {
+                    tracing::error!(
+                        "[local-mlx-native] STOP TOKEN {} emitted INSIDE <tool_call> at step {}. \
+                         Mask must have failed — verify forbidden_ids was non-empty for this step.",
+                        token_id,
+                        generated_count,
+                    );
+                }
+                hit_stop = true;
+                break; // discard `cand` — its forward is harmless wasted work
+            }
+            buffer.push(tok);
+            generated_count += 1;
+            flush_buffer!();
+
+            match cand {
+                Some((ct, _src)) => pending = ct,
+                None => break, // just committed the final requested token
+            }
+        }
+    } else if !pipeline_decode {
     for _step in 1..max_tokens {
         if hit_stop {
             break;
@@ -1699,6 +1904,7 @@ fn generate_with_cache(
             }
         }
     }
+    } // end synchronous (repetition-penalty) decode path
     // Flush any tokens still in the buffer regardless of whether we stopped
     // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
     // without flushing, which dropped up to the last 19 tokens (buffer flush

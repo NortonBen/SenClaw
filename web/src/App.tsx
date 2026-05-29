@@ -35,6 +35,7 @@ export function App() {
   useEffect(() => {
     if (!DESKTOP) return;
     document.documentElement.classList.add('desktop-app');
+    if (EMBED) document.documentElement.classList.add('embed-mode');
     const blockContextMenu = (e: MouseEvent) => e.preventDefault();
     const blockDrag = (e: DragEvent) => e.preventDefault();
     document.addEventListener('contextmenu', blockContextMenu);

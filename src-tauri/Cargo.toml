@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 senclaw = { path = ".." }
 
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# Anchor the chat popover under the menu-bar icon (OpenClaw-style).
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 
 tokio = { version = "1", features = ["net", "time", "rt"] }
 dotenvy = "0.15"

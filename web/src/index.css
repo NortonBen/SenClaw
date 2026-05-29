@@ -18,9 +18,21 @@ body {
   overscroll-behavior: none;
 }
 
-.desktop-app {
+.desktop-app,
+.desktop-app body {
   /* No page-level scroll bounce or accidental rubber-banding. */
   overflow: hidden;
+}
+
+/* Compact chat popover (menu-bar): hide scrollbars entirely for a clean,
+   native popover look — content still scrolls via wheel/trackpad. */
+.embed-mode ::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+.embed-mode * {
+  scrollbar-width: none;
 }
 
 /* Don't let UI chrome (sidebar, buttons, labels) be selected like a web page,

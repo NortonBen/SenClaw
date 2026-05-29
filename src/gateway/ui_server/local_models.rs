@@ -1260,6 +1260,26 @@ pub(crate) async fn local_models_use_as_llm(
         _ => mlx_available,
     };
 
+    let provider = if use_mlx { "local-mlx" } else { "local-candle" };
+
+    // Dedup: "Use in LLM" should add a model to the LLM profiles only once.
+    // If a profile for this exact (provider, model) pair already exists,
+    // return it instead of creating a duplicate.
+    let existing = load_llm_configs(&state.config.paths.global_config_path);
+    if let Some(found) = existing
+        .configs
+        .iter()
+        .find(|c| c.provider == provider && c.model_name == id)
+    {
+        let is_active = existing.active_id.as_deref() == Some(found.id.as_str());
+        return Ok(Json(json!({
+            "ok": true,
+            "config": found,
+            "active": is_active,
+            "existed": true,
+        })));
+    }
+
     let known: Option<&KnownModel> = KNOWN_MODELS.iter().find(|m| m.id == id);
     let label = if use_mlx {
         known
@@ -1290,7 +1310,7 @@ pub(crate) async fn local_models_use_as_llm(
         LlmConfig {
             id: cfg_id.clone(),
             label,
-            provider: "local-mlx".to_string(),
+            provider: provider.to_string(),
             base_url: String::new(), // filled in dynamically by the adapter
             api_key: String::new(),
             model_name: id.clone(),
@@ -1303,7 +1323,7 @@ pub(crate) async fn local_models_use_as_llm(
         LlmConfig {
             id: cfg_id.clone(),
             label,
-            provider: "local-candle".to_string(),
+            provider: provider.to_string(),
             base_url: String::new(),
             api_key: String::new(),
             model_name: id.clone(),
@@ -1322,7 +1342,9 @@ pub(crate) async fn local_models_use_as_llm(
         let _ = set_active_llm_config(&state.config.paths.global_config_path, Some(&cfg_id));
     }
 
-    Ok(Json(json!({ "ok": true, "config": cfg, "active": stored.configs.len() == 1 })))
+    Ok(Json(
+        json!({ "ok": true, "config": cfg, "active": stored.configs.len() == 1, "existed": false }),
+    ))
 }
 
 async fn run_download(
