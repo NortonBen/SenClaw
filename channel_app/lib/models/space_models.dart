@@ -84,6 +84,61 @@ class SpaceEvent {
   DateTime get end => DateTime.fromMillisecondsSinceEpoch(endAt);
 }
 
+class SpaceEmailAccount {
+  final String id;
+  final String label;
+  final String email;
+
+  const SpaceEmailAccount({
+    required this.id,
+    required this.label,
+    required this.email,
+  });
+
+  factory SpaceEmailAccount.fromJson(Map<String, dynamic> j) =>
+      SpaceEmailAccount(
+        id: (j['id'] ?? '').toString(),
+        label: (j['label'] ?? '').toString(),
+        email: (j['email'] ?? '').toString(),
+      );
+}
+
+class SpaceEmail {
+  final String id;
+  final String accountId;
+  final String? subject;
+  final String? from;
+  final int? date; // epoch ms
+  final String flags;
+  // detail-only
+  final String? to;
+  final String? bodyText;
+
+  const SpaceEmail({
+    required this.id,
+    required this.accountId,
+    this.subject,
+    this.from,
+    this.date,
+    this.flags = '',
+    this.to,
+    this.bodyText,
+  });
+
+  bool get unread => !flags.toLowerCase().contains('seen');
+
+  factory SpaceEmail.fromJson(Map<String, dynamic> j) => SpaceEmail(
+    id: (j['id'] ?? '').toString(),
+    accountId: (j['account_id'] ?? '').toString(),
+    subject: j['subject'] as String?,
+    from: j['from'] as String?,
+    date: (j['date'] as num?)?.toInt(),
+    flags: (j['flags'] ?? '').toString(),
+    to: j['to'] as String?,
+    bodyText: j['body_text'] as String?,
+  );
+}
+
 /// A scheduled task (cron/interval/once). The Rust `ScheduledTask` struct has
 /// NO serde rename, so keys are snake_case.
 class SpaceSchedule {

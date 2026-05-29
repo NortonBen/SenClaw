@@ -96,6 +96,24 @@ class CoworkApi {
         .toList();
   }
 
+  Future<List<CoworkFile>> listFiles(String wsId) async {
+    final obj = await _api.getObject('/api/cowork/workspaces/$wsId/files');
+    return ((obj['files'] as List?) ?? const [])
+        .map((e) => CoworkFile.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Returns (content, isBinary) for a single file.
+  Future<(String, bool)> fileContent(String wsId, String path) async {
+    final obj = await _api.getObject(
+      ApiClient.withQuery('/api/cowork/workspaces/$wsId/files', {'path': path}),
+    );
+    return (
+      (obj['content'] ?? '').toString(),
+      obj['isBinary'] as bool? ?? false,
+    );
+  }
+
   Future<List<CoworkBoardEntry>> getBoard(String wsId) async {
     final obj = await _api.getObject('/api/cowork/workspaces/$wsId/board');
     return ((obj['entries'] as List?) ?? const [])

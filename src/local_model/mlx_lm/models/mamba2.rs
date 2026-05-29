@@ -1323,6 +1323,27 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
         };
         SpecialTokens { bos, eos }
     }
+
+    fn stop_token_ids(
+        &self,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        // Config stop ids (`eos_token_id` when >0) plus Mistral/Mamba chat
+        // terminators resolved by name; default to id 2 (`</s>`) if none found.
+        let mut ids = self.args.stop_token_ids();
+        for id in crate::local_model::chat_template_openai::resolve_token_ids(
+            tokenizer,
+            &["</s>", "<|endoftext|>", "[/INST]"],
+        ) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        if ids.is_empty() {
+            ids.push(2);
+        }
+        ids
+    }
 }
 
 #[cfg(test)]

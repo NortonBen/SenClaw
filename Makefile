@@ -44,7 +44,7 @@ app-dev:
 # Full installer build: web UI + CLI sidecar + bundle.
 app-build:
 	cd web && npx vite build
-	cargo build --release --bin senclaw
+	cargo build --release --features local-mlx --features local-embed-metal --features local-embed --bin senclaw
 	mkdir -p src-tauri/binaries
 	cp target/release/senclaw src-tauri/binaries/senclaw
 	cargo tauri build

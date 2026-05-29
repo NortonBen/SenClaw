@@ -552,4 +552,28 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
     ) -> crate::local_model::chat_template_openai::SpecialTokens {
         crate::local_model::chat_template_openai::SpecialTokens::empty()
     }
+
+    fn stop_token_ids(
+        &self,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        // Config EOS (custom values like Nesso 128256 live here) plus the
+        // well-known Llama-3 chat terminators resolved by name (`<|eot_id|>`,
+        // `<|end_of_text|>`), with the canonical ids as a fallback.
+        let mut ids = vec![self.args.eos_token_id];
+        for id in crate::local_model::chat_template_openai::resolve_token_ids(
+            tokenizer,
+            &["<|eot_id|>", "<|end_of_text|>"],
+        ) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        for id in [128_009u32, 128_001] {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
 }

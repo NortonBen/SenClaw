@@ -15,6 +15,23 @@ const THINKING_TAG_PAIRS: &[(&str, &str)] = &[
 pub fn split_thinking_blocks(text: &str) -> (String, String) {
     let mut reasoning_parts: Vec<String> = Vec::new();
     let mut answer = text.to_string();
+
+    // Prefilled-open case: some chat templates (e.g. Qwen3.5 with
+    // `enable_thinking=true`) emit `<think>\n` as the assistant prompt prefix,
+    // so the *generation* starts INSIDE the think block and only ever produces
+    // the closing `</think>`. Without this, the reasoning text and a dangling
+    // `</think>` leak into the visible answer. If a `</think>` appears with no
+    // `<think>` before it, treat everything up to it as reasoning.
+    if let Some(c) = answer.find(THINK_CLOSE) {
+        if !answer[..c].contains(THINK_OPEN) {
+            let inner = answer[..c].trim();
+            if !inner.is_empty() {
+                reasoning_parts.push(inner.to_string());
+            }
+            answer = answer[c + THINK_CLOSE.len()..].to_string();
+        }
+    }
+
     for (open, close) in THINKING_TAG_PAIRS {
         if open.is_empty() {
             continue;
@@ -91,5 +108,15 @@ mod tests {
         let (r, a) = split_thinking_blocks(s);
         assert_eq!(r, "work");
         assert_eq!(a, "32");
+    }
+
+    #[test]
+    fn split_prefilled_open_dangling_close() {
+        // Qwen3.5 enable_thinking=true: template prefills `<think>\n`, so the
+        // generation has only the closing tag.
+        let s = "User said hi, I should ask questions.\n</think>\n\nHi! What are your questions?";
+        let (r, a) = split_thinking_blocks(s);
+        assert_eq!(r, "User said hi, I should ask questions.");
+        assert_eq!(a, "Hi! What are your questions?");
     }
 }

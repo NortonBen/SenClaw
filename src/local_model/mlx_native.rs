@@ -74,6 +74,26 @@ impl ModelKind {
             Self::BonsaiQ1(b) => b.resolve_special_tokens(template, tokenizer),
         }
     }
+
+    /// Per-arch dispatch into [`ChatTemplateModel::stop_token_ids`]. The
+    /// terminator set is config-specific and lives next to each model's `args`
+    /// (see the model files in `mlx_lm/models/`); this just routes to it.
+    fn stop_token_ids(
+        &self,
+        tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        use super::chat_template_openai::ChatTemplateModel;
+        match self {
+            Self::Qwen3(m) => m.stop_token_ids(tokenizer),
+            Self::Qwen35(m) => m.stop_token_ids(tokenizer),
+            Self::Llama(m) => m.stop_token_ids(tokenizer),
+            Self::Gemma2(m) => m.stop_token_ids(tokenizer),
+            Self::Gemma3(m) => m.stop_token_ids(tokenizer),
+            Self::Mamba2(m) => m.stop_token_ids(tokenizer),
+            Self::FalconMamba(m) => m.stop_token_ids(tokenizer),
+            Self::BonsaiQ1(b) => b.stop_token_ids(tokenizer),
+        }
+    }
 }
 
 /// Heavyweight cached state: model weights + tokenizer + (optional) rendered
@@ -571,30 +591,6 @@ fn load_mlx_chat_template(
     .map_err(|e| anyhow::anyhow!("load chat template: {e}"))
 }
 
-/// Collect stop token ids for Mamba / Falcon-Mamba generation.
-fn mamba_stop_token_ids(
-    config_stops: &[u32],
-    tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer,
-) -> Vec<u32> {
-    let mut stops: Vec<u32> = Vec::new();
-    for &id in config_stops {
-        if !stops.contains(&id) {
-            stops.push(id);
-        }
-    }
-    for special in ["</s>", "<|endoftext|>", "[/INST]"] {
-        if let Some(id) = tokenizer.token_to_id(special) {
-            if !stops.contains(&id) {
-                stops.push(id);
-            }
-        }
-    }
-    if stops.is_empty() {
-        stops.push(2);
-    }
-    stops
-}
-
 /// Decoded token ids counted back from the current step (HF repetition penalty window).
 const MLX_REPEN_DECODE_WINDOW: usize = 128;
 
@@ -702,17 +698,33 @@ fn preprocess_openai_messages_for_mlx(messages: &[serde_json::Value]) -> Vec<ser
     messages
         .iter()
         .map(|msg| {
-            let role = msg.get("role").and_then(|v| v.as_str());
-            if role != Some("assistant") {
+            if msg.get("role").and_then(|v| v.as_str()) != Some("assistant") {
                 return msg.clone();
             }
-            let Some(content) = msg.get("content").and_then(|c| c.as_str()) else {
-                return msg.clone();
-            };
-            let stripped = strip_thinking_blocks(content);
             let mut out = msg.clone();
-            if let Some(obj) = out.as_object_mut() {
+            let Some(obj) = out.as_object_mut() else {
+                return out;
+            };
+            // Strip any prior `<think>…</think>` from the assistant text.
+            if let Some(content) = obj.get("content").and_then(|c| c.as_str()) {
+                let stripped = strip_thinking_blocks(content);
                 obj.insert("content".into(), serde_json::Value::String(stripped));
+            }
+            // Normalize tool-call arguments from the OpenAI JSON-*string* form into
+            // a parsed object. Chat templates that re-render prior tool calls by
+            // iterating `tool_call.arguments|items` (Qwen3.5 / Hermes) fail with
+            // "cannot convert value into pairs" when arguments is a string.
+            if let Some(tcs) = obj.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                for tc in tcs.iter_mut() {
+                    let Some(func) = tc.get_mut("function").and_then(|f| f.as_object_mut()) else {
+                        continue;
+                    };
+                    if let Some(args_str) = func.get("arguments").and_then(|a| a.as_str()) {
+                        let parsed = serde_json::from_str::<serde_json::Value>(args_str)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        func.insert("arguments".into(), parsed);
+                    }
+                }
             }
             out
         })
@@ -929,6 +941,26 @@ fn generate_with_cache(
         &prompt[..prompt.len().min(8)],
         &prompt[prompt.len().saturating_sub(8)..]
     );
+
+    // Does the rendered prompt end INSIDE a `<think>` block? Some chat templates
+    // (Qwen3.5 with `enable_thinking=true`) prefill `<think>\n` as the assistant
+    // prefix, so the model generates the reasoning + (eventually) `</think>` but
+    // never the opening tag. We re-emit a synthetic `<think>\n` as the first
+    // stream chunk so the downstream reasoning/answer split sees a well-formed
+    // block — including the common case where a long chain-of-thought never
+    // closes within the token budget (otherwise the whole reasoning would leak
+    // into the visible answer). Template-agnostic: detected from the prompt tail.
+    let thinking_prefilled = {
+        let n = prompt.len();
+        let tail = tokenizer
+            .decode(&prompt[n.saturating_sub(16)..], false)
+            .unwrap_or_default();
+        match tail.rfind("<think>") {
+            Some(o) => tail.rfind("</think>").map_or(true, |c| c < o),
+            None => false,
+        }
+    };
+
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
     let configured_tq_bits = _kv_cache_bits.or(gen_opt.kv_cache_bits).filter(|b| *b > 0);
@@ -988,15 +1020,27 @@ fn generate_with_cache(
     let head_dim = state.head_dim;
     let n_kv_heads = state.n_kv_heads;
 
-    // Per-arch cache allocation + stop-token set.
-    let (mut cache, is_stop): (Vec<Option<KvCache>>, Box<dyn Fn(u32) -> bool>) = match &state.model {
+    // Generation terminators — each model derives its own set from its config
+    // (`eos_token_id(s)` and/or tokenizer-resolved named specials like
+    // `<|im_end|>`). See `ChatTemplateModel::stop_token_ids` in the per-model
+    // files under `mlx_lm/models/`. Empty = run to max_new_tokens.
+    let stop_ids: Vec<u32> = state.model.stop_token_ids(tokenizer);
+    tracing::info!(
+        "[local-mlx-native] stop token ids ({}): {:?}",
+        state.model.arch_name(),
+        stop_ids
+    );
+    let is_stop = move |t: u32| stop_ids.contains(&t);
+
+    // Per-arch KV / SSM cache allocation (TurboQuant only where wired).
+    let mut cache: Vec<Option<KvCache>> = match &state.model {
         ModelKind::Qwen3(_) => {
             if let Some(bits) = tq_bits {
                 tracing::info!(
                     "[local-mlx-native] TurboQuant KV: TQ{bits} (activate_at={tq_activate_at}, max_kv_window {max_kv_tokens})"
                 );
             }
-            let c = (0..n_layers)
+            (0..n_layers)
                 .map(|_| {
                     Some(if let Some(bits) = tq_bits {
                         KvCache::turboquant_with_max(
@@ -1006,14 +1050,7 @@ fn generate_with_cache(
                         KvCache::fp16_with_max(max_kv_tokens)
                     })
                 })
-                .collect();
-            // Qwen3 stop tokens.
-            const QWEN3_IM_END: u32 = 151645;
-            const QWEN3_ENDOFTEXT: u32 = 151643;
-            (
-                c,
-                Box::new(|t: u32| t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT),
-            )
+                .collect()
         }
         ModelKind::Qwen35(m) => {
             if tq_bits.is_some() {
@@ -1021,24 +1058,15 @@ fn generate_with_cache(
                     "[local-mlx-native] kv_cache_bits ignored for Qwen3.5 (TurboQuant KV not wired for full-attn layers)"
                 );
             }
-            let c = m.make_cache();
-            let cfg_eos = m.args.text_config.eos_token_id.unwrap_or(248_044);
-            const QWEN3_IM_END: u32 = 151645;
-            const QWEN3_ENDOFTEXT: u32 = 151643;
-            (
-                c,
-                Box::new(move |t: u32| {
-                    t == cfg_eos || t == QWEN3_IM_END || t == QWEN3_ENDOFTEXT
-                }),
-            )
+            m.make_cache()
         }
-        ModelKind::Llama(m) => {
+        ModelKind::Llama(_) => {
             if let Some(bits) = tq_bits {
                 tracing::info!(
                     "[local-mlx-native] TurboQuant KV: TQ{bits} (activate_at={tq_activate_at}, max_kv_window {max_kv_tokens})"
                 );
             }
-            let c = (0..n_layers)
+            (0..n_layers)
                 .map(|_| {
                     Some(if let Some(bits) = tq_bits {
                         KvCache::turboquant_with_max(
@@ -1048,34 +1076,17 @@ fn generate_with_cache(
                         KvCache::fp16_with_max(max_kv_tokens)
                     })
                 })
-                .collect();
-            // Llama stop tokens: config-driven EOS plus the well-known Llama-3
-            // chat terminators (<|eot_id|>=128009, <|end_of_text|>=128001) so
-            // base/Instruct/agentic variants all behave correctly without
-            // tokenizer round-trips. Custom EOS values (e.g. Nesso 128256)
-            // come from `args.eos_token_id`.
-            let cfg_eos = m.args.eos_token_id;
-            (
-                c,
-                Box::new(move |t: u32| t == cfg_eos || t == 128_001 || t == 128_009),
-            )
+                .collect()
         }
-        ModelKind::Gemma2(m) => {
+        ModelKind::Gemma2(_) => {
             if tq_bits.is_some() {
                 tracing::warn!(
                     "[local-mlx-native] kv_cache_bits ignored for Gemma-2 (TurboQuant KV path not wired for this architecture)"
                 );
             }
-            let c = (0..n_layers)
+            (0..n_layers)
                 .map(|_| Some(KvCache::fp16_with_max(max_kv_tokens)))
-                .collect();
-            let eos_ids: Vec<u32> = m.args.eos_token_ids.clone();
-            let predicate: Box<dyn Fn(u32) -> bool> = if eos_ids.is_empty() {
-                Box::new(|_| false)
-            } else {
-                Box::new(move |t: u32| eos_ids.contains(&t))
-            };
-            (c, predicate)
+                .collect()
         }
         ModelKind::Gemma3(m) => {
             if tq_bits.is_some() {
@@ -1084,14 +1095,7 @@ fn generate_with_cache(
                      not yet wired); hybrid layers use unified FP16 KV cap, sliding via mask only"
                 );
             }
-            let c = m.make_caches(max_kv_tokens);
-            let eos_ids: Vec<u32> = m.args.eos_token_ids.clone();
-            let predicate: Box<dyn Fn(u32) -> bool> = if eos_ids.is_empty() {
-                Box::new(|_| false)
-            } else {
-                Box::new(move |t: u32| eos_ids.contains(&t))
-            };
-            (c, predicate)
+            m.make_caches(max_kv_tokens)
         }
         ModelKind::Mamba2(m) => {
             if tq_bits.is_some() {
@@ -1099,9 +1103,7 @@ fn generate_with_cache(
                     "[local-mlx-native] kv_cache_bits ignored for Mamba-2 (fixed-size SSM state)"
                 );
             }
-            let c = m.make_cache();
-            let stops = mamba_stop_token_ids(&m.args.stop_token_ids(), tokenizer);
-            (c, Box::new(move |t: u32| stops.contains(&t)))
+            m.make_cache()
         }
         ModelKind::FalconMamba(m) => {
             if tq_bits.is_some() {
@@ -1109,26 +1111,17 @@ fn generate_with_cache(
                     "[local-mlx-native] kv_cache_bits ignored for Falcon-Mamba (fixed-size SSM state)"
                 );
             }
-            let c = m.make_cache();
-            let stops = mamba_stop_token_ids(&[], tokenizer);
-            (c, Box::new(move |t: u32| stops.contains(&t)))
+            m.make_cache()
         }
-        ModelKind::BonsaiQ1(b) => {
+        ModelKind::BonsaiQ1(_) => {
             if tq_bits.is_some() {
                 tracing::warn!(
                     "[local-mlx-native] kv_cache_bits ignored for Bonsai-Q1 (TurboQuant KV path not wired for this architecture)"
                 );
             }
-            let c = (0..n_layers)
+            (0..n_layers)
                 .map(|_| Some(KvCache::fp16_with_max(max_kv_tokens)))
-                .collect();
-            let eos_ids = b.eos_token_ids.clone();
-            let predicate: Box<dyn Fn(u32) -> bool> = if eos_ids.is_empty() {
-                Box::new(|_| false)
-            } else {
-                Box::new(move |t: u32| eos_ids.contains(&t))
-            };
-            (c, predicate)
+                .collect()
         }
     };
 
@@ -1535,6 +1528,14 @@ fn generate_with_cache(
     } else {
         buffer.push(next_token.clone());
         generated_count += 1;
+    }
+
+    // Stream the synthetic opening `<think>` first (template prefilled it into
+    // the prompt, so the model never emits it) — keeps the reasoning/answer
+    // split well-formed downstream. Sent before any generated text is flushed.
+    if thinking_prefilled && tx.blocking_send("<think>\n".to_string()).is_err() {
+        mlx_release_after_turn();
+        return Ok(());
     }
 
     {
@@ -2791,5 +2792,118 @@ mod tests {
         let eng = MlxNativeEngine::new(Path::new("/nonexistent/path"), "mlx-community/Qwen3-4B-bf16", None);
         let err = eng.ensure_installed().await.unwrap_err().to_string();
         assert!(err.contains("model directory not found"), "got: {err}");
+    }
+
+    #[test]
+    fn preprocess_parses_tool_call_arguments_to_object() {
+        // Qwen3.5's chat template iterates `tool_call.arguments|items`; if we feed
+        // back the OpenAI JSON-string form it crashes with "cannot convert value
+        // into pairs". Preprocessing must turn the string into an object.
+        let msgs = vec![serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "t0",
+                "type": "function",
+                "function": { "name": "ToolSearch", "arguments": "{\"query\":\"gold price\"}" }
+            }]
+        })];
+        let out = preprocess_openai_messages_for_mlx(&msgs);
+        let args = &out[0]["tool_calls"][0]["function"]["arguments"];
+        assert!(args.is_object(), "arguments not an object: {args:?}");
+        assert_eq!(args["query"], "gold price");
+    }
+
+    #[test]
+    fn preprocess_bad_tool_call_arguments_become_empty_object() {
+        let msgs = vec![serde_json::json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": { "name": "X", "arguments": "not json{{" }
+            }]
+        })];
+        let out = preprocess_openai_messages_for_mlx(&msgs);
+        assert!(out[0]["tool_calls"][0]["function"]["arguments"].is_object());
+    }
+
+    /// End-to-end against the REAL Qwen3.5 chat template: a prior assistant
+    /// tool-call message crashes the template when `arguments` is a JSON string
+    /// ("cannot convert value into pairs") and renders fine once preprocessed
+    /// into an object. Skips when the model weights aren't on disk.
+    #[test]
+    fn qwen35_tool_call_message_renders_only_after_preprocess() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::PathBuf::from(home)
+            .join(".senclaw/local-models/mlx-community__Qwen3.5-0.8B-OptiQ-4bit");
+        if !dir.join("tokenizer.json").exists() {
+            eprintln!("skip qwen35 template test: model not at {}", dir.display());
+            return;
+        }
+        let model_id = "Qwen/Qwen3.5-0.8B";
+        let template = load_mlx_chat_template(&dir, model_id)
+            .expect("load template")
+            .expect("qwen3.5 has a chat template");
+        let mut tok =
+            crate::local_model::mlx_lm_utils::tokenizer::Tokenizer::from_file(dir.join("tokenizer.json"))
+                .expect("load tokenizer");
+
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": "giá vàng?"}),
+            serde_json::json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "t0", "type": "function",
+                    "function": { "name": "ToolSearch", "arguments": "{\"query\":\"gold price\"}" }
+                }]
+            }),
+            serde_json::json!({"role": "tool", "tool_call_id": "t0", "content": "results"}),
+        ];
+
+        let render = |t: &mut crate::local_model::mlx_lm_utils::tokenizer::Tokenizer, m: &[serde_json::Value]| {
+            t.apply_chat_template_json_and_encode(
+                template.clone(), model_id, m, &[], Some(true), Some(false), Some(""), Some(""),
+            )
+        };
+
+        // Negative control: raw string-args message reproduces the crash.
+        assert!(render(&mut tok, &msgs).is_err(), "expected string-args render to fail (the bug)");
+
+        // After preprocess: arguments is an object → template renders.
+        let fixed = preprocess_openai_messages_for_mlx(&msgs);
+        assert!(
+            render(&mut tok, &fixed).is_ok(),
+            "render after preprocess should succeed"
+        );
+    }
+
+    /// Qwen3.5's chat-turn terminator `<|im_end|>` (248046) is DISTINCT from its
+    /// `text_config.eos_token_id` = `<|endoftext|>` (248044). Stopping only on the
+    /// config eos lets the model run past `<|im_end|>` into fake `<|im_start|>user`
+    /// turns (the "user user assistant" loop + 8192-token runaway). The stop set
+    /// must include the tokenizer-resolved `<|im_end|>`.
+    #[test]
+    fn qwen35_im_end_distinct_from_config_eos() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::PathBuf::from(home)
+            .join(".senclaw/local-models/mlx-community__Qwen3.5-0.8B-OptiQ-4bit");
+        if !dir.join("tokenizer.json").exists() {
+            eprintln!("skip qwen35 stop-token test: model not on disk");
+            return;
+        }
+        let tok =
+            crate::local_model::mlx_lm_utils::tokenizer::Tokenizer::from_file(dir.join("tokenizer.json"))
+                .expect("tokenizer");
+        let im_end = tok.token_to_id("<|im_end|>");
+        let endoftext = tok.token_to_id("<|endoftext|>");
+        assert_eq!(im_end, Some(248_046), "<|im_end|> must resolve to 248046");
+        assert_eq!(endoftext, Some(248_044), "<|endoftext|> must resolve to 248044");
+        assert_ne!(im_end, endoftext, "im_end must differ from endoftext");
+        // The config eos (the value our stop set previously relied on alone) is
+        // endoftext, NOT the chat terminator — proving why im_end must be added.
+        let cfg_eos = 248_044u32;
+        assert_eq!(endoftext, Some(cfg_eos));
+        assert_ne!(im_end, Some(cfg_eos), "stopping only on config eos would miss <|im_end|>");
     }
 }

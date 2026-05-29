@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../models/cowork_models.dart';
 import '../../services/cowork_api.dart';
 import '../../theme/app_colors.dart';
@@ -17,7 +18,7 @@ class CoworkWorkspaceScreen extends StatefulWidget {
 
 class _CoworkWorkspaceScreenState extends State<CoworkWorkspaceScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 4, vsync: this);
+  late final TabController _tabs = TabController(length: 5, vsync: this);
 
   @override
   void dispose() {
@@ -46,6 +47,7 @@ class _CoworkWorkspaceScreenState extends State<CoworkWorkspaceScreen>
             Tab(icon: Icon(Icons.dashboard_outlined), text: 'Board'),
             Tab(icon: Icon(Icons.forum_outlined), text: 'Chat'),
             Tab(icon: Icon(Icons.people_outline), text: 'Team'),
+            Tab(icon: Icon(Icons.folder_outlined), text: 'Files'),
           ],
         ),
       ),
@@ -58,6 +60,7 @@ class _CoworkWorkspaceScreenState extends State<CoworkWorkspaceScreen>
             _BoardTab(wsId: widget.workspace.id),
             _MessagesTab(wsId: widget.workspace.id),
             _TeamTab(wsId: widget.workspace.id),
+            _FilesTab(wsId: widget.workspace.id),
           ],
         ),
       ),
@@ -898,4 +901,225 @@ class _TeamTabState extends State<_TeamTab>
         'worker' => AppColors.cyan,
         _ => Colors.white54,
       };
+}
+
+// ─── Files ───────────────────────────────────────────────────────────────────
+
+class _FilesTab extends StatefulWidget {
+  final String wsId;
+  const _FilesTab({required this.wsId});
+
+  @override
+  State<_FilesTab> createState() => _FilesTabState();
+}
+
+class _FilesTabState extends State<_FilesTab>
+    with AutomaticKeepAliveClientMixin {
+  final _api = CoworkApi();
+  List<CoworkFile> _files = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final files = await _api.listFiles(widget.wsId);
+      // Directories first, then by path.
+      files.sort((a, b) {
+        if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
+        return a.path.compareTo(b.path);
+      });
+      if (!mounted) return;
+      setState(() {
+        _files = files;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _open(CoworkFile f) async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) => _CoworkFileViewer(wsId: widget.wsId, file: f),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (_loading) return const LoadingState(text: 'Đang tải tệp…');
+    if (_error != null) return ErrorState(message: _error!, onRetry: _load);
+    if (_files.isEmpty) {
+      return const EmptyState(
+        icon: Icons.folder_off_outlined,
+        message: 'Không có tệp trong workspace',
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      color: AppColors.accent,
+      backgroundColor: AppColors.surface,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        itemCount: _files.length,
+        itemBuilder: (ctx, i) => _row(_files[i]),
+      ),
+    );
+  }
+
+  Widget _row(CoworkFile f) {
+    return ListTile(
+      dense: true,
+      contentPadding:
+          EdgeInsets.only(left: 16.0 + f.depth * 14, right: 16),
+      leading: Icon(
+        f.isDir ? Icons.folder : Icons.insert_drive_file_outlined,
+        color: f.isDir ? const Color(0xFFFFB74D) : Colors.white38,
+        size: 18,
+      ),
+      title: Text(f.name,
+          style: TextStyle(
+              color: f.isDir ? Colors.white : Colors.white70, fontSize: 13)),
+      subtitle: f.isDir
+          ? null
+          : Text(_fmtSize(f.size),
+              style: const TextStyle(color: Colors.white24, fontSize: 11)),
+      onTap: f.isDir ? null : () => _open(f),
+    );
+  }
+
+  String _fmtSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+}
+
+class _CoworkFileViewer extends StatefulWidget {
+  final String wsId;
+  final CoworkFile file;
+  const _CoworkFileViewer({required this.wsId, required this.file});
+
+  @override
+  State<_CoworkFileViewer> createState() => _CoworkFileViewerState();
+}
+
+class _CoworkFileViewerState extends State<_CoworkFileViewer> {
+  final _api = CoworkApi();
+  String? _content;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final (content, _) = await _api.fileContent(widget.wsId, widget.file.path);
+      if (!mounted) return;
+      setState(() {
+        _content = content;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FractionallySizedBox(
+      heightFactor: 0.9,
+      child: Column(
+        children: [
+          const SizedBox(height: 10),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.description_outlined,
+                    color: AppColors.cyan, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(widget.file.path,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      overflow: TextOverflow.ellipsis),
+                ),
+                if (_content != null)
+                  IconButton(
+                    icon:
+                        const Icon(Icons.copy, color: Colors.white54, size: 18),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: _content!));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Đã sao chép')));
+                    },
+                  ),
+              ],
+            ),
+          ),
+          const Divider(color: AppColors.cardBorder, height: 1),
+          Expanded(
+            child: _loading
+                ? const LoadingState()
+                : _error != null
+                    ? ErrorState(message: _error!, onRetry: _load)
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.all(14),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: SelectableText(
+                            _content!.isEmpty ? '(tệp trống)' : _content!,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
 }

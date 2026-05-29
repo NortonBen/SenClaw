@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../models/api_models.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
+import '../../services/relay_manager.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/markdown_text.dart';
 import '../../widgets/states.dart';
@@ -95,7 +97,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
   bool _loading = true;
   bool _sending = false;
   String? _error;
-  Timer? _poll;
+  StreamSubscription? _eventSub;
 
   @override
   bool get wantKeepAlive => true;
@@ -108,7 +110,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
 
   @override
   void dispose() {
-    _poll?.cancel();
+    _eventSub?.cancel();
     _inputCtrl.dispose();
     _scroll.dispose();
     super.dispose();
@@ -129,7 +131,8 @@ class _CodeChatTabState extends State<_CodeChatTab>
         _loading = false;
       });
       _scrollToBottom();
-      _maybeStartPolling();
+      // Live updates pushed over the relay (no polling).
+      _eventSub ??= RelayManager().relay?.apiEvents.listen(_onCodeEvent);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -146,23 +149,23 @@ class _CodeChatTabState extends State<_CodeChatTab>
       final messages = await _api.groupMessages(group.id);
       if (!mounted) return;
       setState(() => _messages = messages);
-      _maybeStartPolling();
     } catch (_) {
       // transient; keep last good state
     }
   }
 
-  /// Poll while any message is queued/processing (no WS push over relay yet).
-  void _maybeStartPolling() {
-    final hasPending = _messages.any((m) => m.isPending);
-    if (hasPending) {
-      _poll ??= Timer.periodic(const Duration(seconds: 2), (_) {
-        _refreshMessages();
-      });
-    } else {
-      _poll?.cancel();
-      _poll = null;
-    }
+  /// Live `code:chat:update` pushed over the relay (replaces polling).
+  void _onCodeEvent(ApiEvent event) {
+    if (!mounted || event.topic != 'code:chat:update') return;
+    final data = event.data;
+    if (data is! Map) return;
+    final m = data.cast<String, dynamic>();
+    if ((m['group_id'] ?? '').toString() != _group?.id) return;
+    final msgs = ((m['messages'] as List?) ?? const [])
+        .map((e) => CodeChatMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+    setState(() => _messages = msgs);
+    _scrollToBottom();
   }
 
   Future<void> _send() async {

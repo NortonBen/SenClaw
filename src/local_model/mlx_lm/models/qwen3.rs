@@ -591,6 +591,23 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
     ) -> crate::local_model::chat_template_openai::SpecialTokens {
         crate::local_model::chat_template_openai::SpecialTokens::empty()
     }
+
+    fn stop_token_ids(
+        &self,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        // Qwen3 ChatML terminators, resolved by name so the ids match this
+        // checkpoint's vocab (`<|im_end|>`=151645, `<|endoftext|>`=151643 for
+        // the standard 151936 vocab). Fall back to those ids if lookup misses.
+        let mut ids = crate::local_model::chat_template_openai::resolve_token_ids(
+            tokenizer,
+            &["<|im_end|>", "<|endoftext|>"],
+        );
+        if ids.is_empty() {
+            ids = vec![151_645, 151_643];
+        }
+        ids
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

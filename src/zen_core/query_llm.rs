@@ -296,6 +296,42 @@ pub(crate) fn build_hf_style_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
 
 /// Strip Qwen / HF-style `<tool_call>…</tool_call>` segments and turn them into OpenAI-style
 /// `tool_calls` objects for [`build_assistant_message`].
+/// Parse one Qwen3.5 / Hermes-style XML function call body into the same
+/// `{"name", "arguments"}` shape the JSON path produces. Body looks like:
+/// `\n<function=NAME>\n<parameter=P1>\nval1\n</parameter>\n…\n</function>\n`.
+/// Parameter values are type-coerced (JSON number/bool/object/array, else string).
+fn parse_xml_tool_call(body: &str) -> Option<Value> {
+    const FN_OPEN: &str = "<function=";
+    const PARAM_OPEN: &str = "<parameter=";
+    const PARAM_CLOSE: &str = "</parameter>";
+
+    let fstart = body.find(FN_OPEN)? + FN_OPEN.len();
+    let fname_rel = body[fstart..].find('>')?;
+    let name = body[fstart..fstart + fname_rel].trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut args = serde_json::Map::new();
+    let mut rest = &body[fstart + fname_rel + 1..];
+    while let Some(ps) = rest.find(PARAM_OPEN) {
+        let after = &rest[ps + PARAM_OPEN.len()..];
+        let Some(name_rel) = after.find('>') else { break };
+        let pname = after[..name_rel].trim().to_string();
+        let val_region = &after[name_rel + 1..];
+        let Some(close) = val_region.find(PARAM_CLOSE) else { break };
+        let raw = val_region[..close].trim();
+        let val = serde_json::from_str::<Value>(raw)
+            .unwrap_or_else(|_| Value::String(raw.to_string()));
+        if !pname.is_empty() {
+            args.insert(pname, val);
+        }
+        rest = &val_region[close + PARAM_CLOSE.len()..];
+    }
+
+    Some(serde_json::json!({ "name": name, "arguments": Value::Object(args) }))
+}
+
 fn split_qwen_tool_calls_from_model_text(s: &str) -> (String, Vec<Value>) {
     const OPEN: &str = "<tool_call>";
     const CLOSE: &str = "</tool_call>";
@@ -325,19 +361,29 @@ fn split_qwen_tool_calls_from_model_text(s: &str) -> (String, Vec<Value>) {
             out.push_str(&rest[start..]);
             return (out, tool_calls);
         };
-        let json_str = after[..end_rel].trim();
+        let body = after[..end_rel].trim();
         rest = &after[end_rel + CLOSE.len()..];
 
-        let Ok(v) = serde_json::from_str::<Value>(json_str) else {
-            tracing::warn!(
-                "[llm] tool_call JSON parse failed (skipping). Body: {json_str:?}"
-            );
-            continue;
-        };
-
-        let items: Vec<Value> = match v {
-            Value::Array(a) => a,
-            one => vec![one],
+        // Two wire formats share the `<tool_call>…</tool_call>` envelope:
+        //  - Qwen3:   JSON  `{"name": ..., "arguments": {...}}`
+        //  - Qwen3.5: XML   `<function=NAME><parameter=P>val</parameter>…</function>`
+        let items: Vec<Value> = if body.contains("<function=") {
+            match parse_xml_tool_call(body) {
+                Some(v) => vec![v],
+                None => {
+                    tracing::warn!("[llm] tool_call XML parse failed (skipping). Body: {body:?}");
+                    continue;
+                }
+            }
+        } else {
+            let Ok(v) = serde_json::from_str::<Value>(body) else {
+                tracing::warn!("[llm] tool_call JSON parse failed (skipping). Body: {body:?}");
+                continue;
+            };
+            match v {
+                Value::Array(a) => a,
+                one => vec![one],
+            }
         };
 
         for item in items {
@@ -1535,6 +1581,70 @@ mod tests {
         assert_eq!(tc.len(), 1);
         assert_eq!(tc[0]["function"]["name"], "weather");
         assert!(tc[0]["function"]["arguments"].as_str().unwrap().contains("HN"));
+    }
+
+    // ── Qwen3.5 end-to-end pipeline: think + tool-call ────────────────────
+    // These mirror the exact production sequence in `query_local_mlx`:
+    //   (reasoning, visible) = split_thinking_blocks(raw)
+    //   (clean_text, tool_calls) = split_qwen_tool_calls_from_model_text(visible)
+    // using raw buffers in Qwen3.5's wire format (chat_template.jinja prefills
+    // `<think>\n`, so generation has a dangling `</think>`; tool calls are XML).
+
+    fn qwen35_pipeline(raw: &str) -> (String, String, Vec<Value>) {
+        let (reasoning, visible) =
+            crate::local_model::thinking_parse::split_thinking_blocks(raw);
+        let (clean, tcs) = split_qwen_tool_calls_from_model_text(&visible);
+        (reasoning, clean, tcs)
+    }
+
+    #[test]
+    fn qwen35_think_then_answer_pipeline() {
+        // enable_thinking=true → prefilled open, dangling close (the reported bug).
+        let raw = "User said hi, I should ask 1-4 related questions in a single turn.\n</think>\n\nHi! What are your questions?";
+        let (reasoning, clean, tcs) = qwen35_pipeline(raw);
+        assert_eq!(reasoning, "User said hi, I should ask 1-4 related questions in a single turn.");
+        assert_eq!(clean, "Hi! What are your questions?");
+        assert!(!clean.contains("</think>"), "stray closing tag leaked: {clean:?}");
+        assert!(tcs.is_empty());
+    }
+
+    #[test]
+    fn qwen35_unclosed_thinking_no_leak() {
+        // Common Qwen3.5 case: enable_thinking=true, the engine re-emits the
+        // synthetic `<think>\n`, and a long chain-of-thought never closes within
+        // the token budget. The reasoning must NOT leak into the visible answer.
+        let raw = "<think>\nStep 1: analyze. Step 2: still reasoning, never finished";
+        let (reasoning, clean, tcs) = qwen35_pipeline(raw);
+        assert!(reasoning.contains("Step 1: analyze"));
+        assert_eq!(clean, "", "unclosed reasoning leaked into answer: {clean:?}");
+        assert!(tcs.is_empty());
+    }
+
+    #[test]
+    fn qwen35_think_then_tool_call_pipeline() {
+        // Reasoning, then an XML tool call (no plain answer after).
+        let raw = "I should look up the weather for the user.\n</think>\n\n<tool_call>\n<function=get_weather>\n<parameter=city>\nHanoi\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
+        let (reasoning, clean, tcs) = qwen35_pipeline(raw);
+        assert_eq!(reasoning, "I should look up the weather for the user.");
+        assert!(!clean.contains("<tool_call>") && !clean.contains("</think>"), "tags leaked: {clean:?}");
+        assert_eq!(tcs.len(), 1, "tool call not parsed");
+        assert_eq!(tcs[0]["function"]["name"], "get_weather");
+        let args = tcs[0]["function"]["arguments"].as_str().unwrap();
+        assert!(args.contains("\"city\":\"Hanoi\""), "args: {args}");
+        assert!(args.contains("\"days\":3"), "days→number: {args}");
+    }
+
+    #[test]
+    fn split_qwen35_xml_tool_call() {
+        // Qwen3.5 / Hermes XML function-call wire format.
+        let raw = "Sure.\n<tool_call>\n<function=weather>\n<parameter=city>\nHN\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
+        let (text, tc) = split_qwen_tool_calls_from_model_text(raw);
+        assert_eq!(text.trim(), "Sure.");
+        assert_eq!(tc.len(), 1);
+        assert_eq!(tc[0]["function"]["name"], "weather");
+        let args = tc[0]["function"]["arguments"].as_str().unwrap();
+        assert!(args.contains("\"city\":\"HN\""), "args: {args}");
+        assert!(args.contains("\"days\":3"), "days should be coerced to number: {args}");
     }
 
     #[test]

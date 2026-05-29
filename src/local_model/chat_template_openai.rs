@@ -68,6 +68,30 @@ pub trait ChatTemplateModel {
     ///    token piece the BPE/SentencePiece encoder will produce when fed
     ///    back through `encode`.
     fn resolve_special_tokens(&self, template: &str, tokenizer: &Tokenizer) -> SpecialTokens;
+
+    /// Token ids that terminate generation for this model.
+    ///
+    /// Each model owns this because the terminator set is config-specific: it
+    /// comes from the model's own `args` (`eos_token_id` / `eos_token_ids`)
+    /// and/or named special tokens resolved through `tokenizer`
+    /// (`<|im_end|>`, `<|eot_id|>`, `</s>`, …) whose ids differ per vocabulary.
+    /// Returning an empty `Vec` means "no stop token" — decode then runs to
+    /// `max_new_tokens`. Prefer [`resolve_token_ids`] for the named-lookup part.
+    fn stop_token_ids(&self, tokenizer: &Tokenizer) -> Vec<u32>;
+}
+
+/// Resolve a list of named special tokens (e.g. `<|im_end|>`) to ids via the
+/// tokenizer, skipping misses and de-duplicating. Helper for `stop_token_ids`.
+pub fn resolve_token_ids(tokenizer: &Tokenizer, names: &[&str]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for name in names {
+        if let Some(id) = tokenizer.token_to_id(name) {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    out
 }
 
 // ── Loader ─────────────────────────────────────────────────────────────────
@@ -77,7 +101,9 @@ pub trait ChatTemplateModel {
 /// Probe order (matches HF transformers behaviour):
 /// 1. `tokenizer_config.json` → `chat_template` field.
 /// 2. `chat_template.jinja` (newer HF layout — Qwen 3, Llama 3.x).
-/// 3. `fallback(model_dir)` — caller supplies arch-specific fallbacks
+/// 3. `chat_template.json` → `chat_template` field (standalone template file
+///    shipped by some mlx-community / multimodal checkpoints, e.g. Qwen3-ASR).
+/// 4. `fallback(model_dir)` — caller supplies arch-specific fallbacks
 ///    (e.g. Mistral `[INST]` for Mamba-Codestral that ships no template).
 ///
 /// Returns `Ok(None)` when no template is found; callers may then fall back
@@ -100,6 +126,15 @@ where
         tracing::info!(
             "[local-mlx-native] loaded chat_template.jinja for {model_id}"
         );
+        return Ok(Some(t));
+    }
+    // Standalone `chat_template.json` (`{"chat_template": "…"}`) — same shape as
+    // the tokenizer_config field, so reuse the extractor. Used by some
+    // mlx-community / multimodal checkpoints (e.g. Qwen3-ASR) that ship the
+    // template separately rather than embedding it in tokenizer_config.json.
+    let json_path = model_dir.join("chat_template.json");
+    if let Some(t) = load_chat_template_from_tokenizer_config(&json_path)? {
+        tracing::info!("[local-mlx-native] loaded chat_template.json for {model_id}");
         return Ok(Some(t));
     }
     fallback(model_dir)
@@ -325,6 +360,30 @@ mod tests {
         })
         .unwrap();
         assert_eq!(t.as_deref(), Some("fallback-template"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_chat_template_from_dir_reads_standalone_json() {
+        // A checkpoint that ships only `chat_template.json` (no embedded
+        // tokenizer_config template, no `.jinja`) — e.g. Qwen3-ASR.
+        let tmp = std::env::temp_dir().join("chat_template_test_dir_json");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(
+            tmp.join("chat_template.json"),
+            r#"{"chat_template": "JSON-TPL {{ messages }}"}"#,
+        )
+        .unwrap();
+        let t = load_chat_template_from_dir(&tmp, "test-model", |_dir| {
+            Ok(Some("fallback-template".to_string()))
+        })
+        .unwrap();
+        assert_eq!(
+            t.as_deref(),
+            Some("JSON-TPL {{ messages }}"),
+            "chat_template.json must be read in preference to the fallback"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

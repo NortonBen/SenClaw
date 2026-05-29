@@ -19,7 +19,7 @@ use mlx_rs::{
         concatenate_axis, indexing::IndexOp, ones_dtype, sigmoid,
     },
     quantization::{MaybeQuantized, Quantizable},
-    transforms::eval,
+    transforms::{eval, eval_params},
     Array, Dtype,
 };
 use serde::Deserialize;
@@ -669,8 +669,12 @@ impl Model {
         }
     }
 
+    /// Force all weights to be materialized now. Called at load time so the
+    /// weights are resident after `warm_up` (rather than lazily realized on the
+    /// first forward — which otherwise makes RSS jump by the full weight size
+    /// on request #1 and stalls that request). `eval(&[])` was a no-op.
     pub fn eval(&self) -> Result<(), Exception> {
-        eval(&[])
+        eval_params(self.parameters())
     }
 }
 
@@ -1005,5 +1009,29 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
         _tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
     ) -> crate::local_model::chat_template_openai::SpecialTokens {
         crate::local_model::chat_template_openai::SpecialTokens::empty()
+    }
+
+    fn stop_token_ids(
+        &self,
+        tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        // CRITICAL: Qwen3.5's chat terminator `<|im_end|>` is token 248046, but
+        // `text_config.eos_token_id` is 248044 (`<|endoftext|>`). Resolving by
+        // name picks the right id for this 248320-token vocab; we also add the
+        // config eos. Stopping only on the config eos lets the model run past
+        // `<|im_end|>` into fake `<|im_start|>user…` turns (runaway loop).
+        let mut ids = crate::local_model::chat_template_openai::resolve_token_ids(
+            tokenizer,
+            &["<|im_end|>", "<|endoftext|>"],
+        );
+        if let Some(eos) = self.args.text_config.eos_token_id {
+            if !ids.contains(&eos) {
+                ids.push(eos);
+            }
+        }
+        if ids.is_empty() {
+            ids = vec![248_046, 248_044];
+        }
+        ids
     }
 }

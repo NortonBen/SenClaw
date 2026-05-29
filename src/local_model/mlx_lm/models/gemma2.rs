@@ -1185,6 +1185,15 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Gemma2Causa
         };
         SpecialTokens { bos, eos }
     }
+
+    fn stop_token_ids(
+        &self,
+        _tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        // Gemma-2 lists all terminators in config (`eos_token_id` folded into
+        // `eos_token_ids`, e.g. `<eos>`=1 and `<end_of_turn>`=107).
+        self.args.eos_token_ids.clone()
+    }
 }
 
 #[cfg(test)]

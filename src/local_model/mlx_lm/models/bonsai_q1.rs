@@ -879,6 +879,13 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for LoadedBonsa
         };
         SpecialTokens { bos, eos }
     }
+
+    fn stop_token_ids(
+        &self,
+        _tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+    ) -> Vec<u32> {
+        self.eos_token_ids.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------

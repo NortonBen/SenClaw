@@ -113,4 +113,45 @@ class SpaceApi {
   Future<void> cancelSchedule(String id, String groupFolder) =>
       _api.delete('/api/space/schedules/$id',
           body: {'group_folder': groupFolder});
+
+  // ── Email ──────────────────────────────────────────────────────────────
+  Future<List<SpaceEmailAccount>> listEmailAccounts() async {
+    final list = await _api.getList('/api/space/email/accounts');
+    return list
+        .map((e) => SpaceEmailAccount.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> addEmailAccount(Map<String, dynamic> account) =>
+      _api.post('/api/space/email/accounts', body: account);
+
+  Future<void> deleteEmailAccount(String id) =>
+      _api.delete('/api/space/email/accounts/$id');
+
+  Future<List<SpaceEmail>> inbox({String? accountId}) async {
+    final list = await _api.getList(
+      ApiClient.withQuery('/api/space/email/inbox', {'account_id': accountId}),
+    );
+    return list
+        .map((e) => SpaceEmail.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SpaceEmail> readEmail(String id) async {
+    final obj = await _api.getObject('/api/space/email/messages/$id');
+    return SpaceEmail.fromJson(obj);
+  }
+
+  Future<void> sendEmail({
+    required String to,
+    required String subject,
+    required String body,
+    String? accountId,
+  }) =>
+      _api.post('/api/space/email/send', body: {
+        'to': to,
+        'subject': subject,
+        'body': body,
+        if (accountId != null && accountId.isNotEmpty) 'account_id': accountId,
+      });
 }

@@ -113,6 +113,29 @@ class CoworkMessage {
   );
 }
 
+class CoworkFile {
+  final String name;
+  final String path; // relative to workspace root
+  final bool isDir;
+  final int size;
+
+  const CoworkFile({
+    required this.name,
+    required this.path,
+    required this.isDir,
+    this.size = 0,
+  });
+
+  factory CoworkFile.fromJson(Map<String, dynamic> j) => CoworkFile(
+    name: (j['name'] ?? '').toString(),
+    path: (j['path'] ?? '').toString(),
+    isDir: j['isDir'] as bool? ?? false,
+    size: (j['size'] as num?)?.toInt() ?? 0,
+  );
+
+  int get depth => path.split('/').where((s) => s.isNotEmpty).length - 1;
+}
+
 class CoworkMember {
   final String workspaceId;
   final String memberId;
