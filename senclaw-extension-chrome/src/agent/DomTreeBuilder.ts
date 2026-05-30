@@ -13,6 +13,8 @@ import {
   isInExpandedViewport,
   isInteractiveElement,
   isDistinctFromAncestor,
+  isScrollableContainer,
+  getScrollData,
   implicitRole,
 } from './InteractiveDetector';
 import { putInSelectorMap, resetSelectorMap, markUrl } from './SelectorMap';
@@ -40,6 +42,13 @@ export interface DomNode {
   viewportStatus: 'in' | 'above' | 'below';
   /** Optional frame path (e.g. "0/1" = top.frames[0].frames[1]) for nested same-origin frames. */
   framePath?: string;
+  /**
+   * Set when this element is an independently scrollable sub-container. The agent
+   * can scroll it in isolation by passing its highlightIndex as `container_index`.
+   */
+  scrollable?: boolean;
+  /** Remaining scroll distance (px) per side, present only when `scrollable`. */
+  scrollData?: { top: number; bottom: number; left: number; right: number };
   /** Child node ids (flat-map design — children are pointers, not nested objects). */
   children?: string[];
 }
@@ -98,9 +107,64 @@ const KEEP_ATTRS = new Set([
 
 const CAP_ATTR = 60;
 const CAP_TEXT = 200;
+/** Tighter cap applied only to the rendered LLM view (storage keeps CAP_ATTR). */
+const CAP_ATTR_OUT = 30;
 
 function cap(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+/**
+ * Render a node's attributes for the LLM, dropping redundancy the way page-agent's
+ * `flatTreeToString` does: no `role` duplicating the tag, no aria-label/placeholder/
+ * title that merely repeats the visible text, and no two attributes sharing the same
+ * (longer) value. Values are capped tight to keep the snapshot cheap.
+ */
+function compactAttrs(node: DomNode): string {
+  const attrs: Record<string, string> = {};
+  for (const [k, v] of Object.entries(node.attributes)) {
+    if (v) attrs[k] = v;
+  }
+
+  // role that just echoes the tag carries no signal.
+  if (attrs.role && attrs.role === node.tag) delete attrs.role;
+
+  // Attributes that merely repeat the element's own text are noise.
+  const text = node.text?.toLowerCase().trim();
+  if (text) {
+    for (const a of ['aria-label', 'placeholder', 'title']) {
+      if (attrs[a] && attrs[a].toLowerCase().trim() === text) delete attrs[a];
+    }
+  }
+
+  // Collapse duplicate values (only worth it for longer strings).
+  const seen = new Set<string>();
+  for (const k of Object.keys(attrs)) {
+    const v = attrs[k];
+    if (v.length > 5) {
+      if (seen.has(v)) {
+        delete attrs[k];
+        continue;
+      }
+      seen.add(v);
+    }
+  }
+
+  return Object.entries(attrs)
+    .map(([k, v]) => `${k}=${JSON.stringify(cap(v, CAP_ATTR_OUT))}`)
+    .join(' ');
+}
+
+/** Compact scroll affordance hint, e.g. `scroll=↓1200px` — only sides with room left. */
+function scrollHint(node: DomNode): string {
+  if (!node.scrollable || !node.scrollData) return '';
+  const d = node.scrollData;
+  const parts: string[] = [];
+  if (d.top > 0) parts.push(`↑${d.top}px`);
+  if (d.bottom > 0) parts.push(`↓${d.bottom}px`);
+  if (d.left > 0) parts.push(`←${d.left}px`);
+  if (d.right > 0) parts.push(`→${d.right}px`);
+  return parts.length ? ` scroll=${parts.join(',')}` : ' scroll=here';
 }
 
 function getAttrs(el: Element): Record<string, string> {
@@ -228,6 +292,11 @@ function walkElement(
     isInteractiveElement(el, style) &&
     isDistinctFromAncestor(el);
 
+  // A scrollable sub-container that isn't itself clickable still gets indexed so
+  // the agent can target it with a Scroll(container_index) action.
+  const scrollable =
+    visible && inExpandedViewport && isScrollableContainer(el, style);
+
   const id = String(state.nextId++);
   const node: DomNode = {
     id,
@@ -246,10 +315,14 @@ function walkElement(
     children: [],
   };
 
-  if (interactive) {
+  if (interactive || scrollable) {
     const highlightIndex = state.nextHighlight++;
     node.highlightIndex = highlightIndex;
-    node.text = getTextStopAtClickable(el);
+    if (interactive) node.text = getTextStopAtClickable(el);
+    if (scrollable) {
+      node.scrollable = true;
+      node.scrollData = getScrollData(el);
+    }
     const { isNew } = putInSelectorMap(highlightIndex, el as HTMLElement);
     if (isNew) node.isNew = true;
     state.interactive.push(node);
@@ -368,14 +441,13 @@ export function renderBrowserState(tree: DomTreeResult): {
   const lines: string[] = [];
   for (const node of tree.interactive) {
     if (node.viewportStatus !== 'in') continue;
-    const attrs = Object.entries(node.attributes)
-      .filter(([k, v]) => v && v !== node.tag && k !== 'role')
-      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-      .join(' ');
+    const attrs = compactAttrs(node);
     const prefix = node.isNew ? '*' : '';
     const attrPart = attrs ? ` ${attrs}` : '';
     const text = node.text ? node.text : '';
-    lines.push(`${prefix}[${node.highlightIndex}]<${node.tag}${attrPart}>${text}</${node.tag}>`);
+    lines.push(
+      `${prefix}[${node.highlightIndex}]<${node.tag}${attrPart}${scrollHint(node)}>${text}</${node.tag}>`,
+    );
   }
 
   const footerLines: string[] = [];

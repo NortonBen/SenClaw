@@ -558,8 +558,5 @@ async fn handle_extension_message(
         } => {
             tabs.heartbeat(tab_count).await;
         }
-        ExtensionMessage::UserInstruction { text } => {
-            tracing::info!("[BrowserBridge] Received user instruction: {}", text);
-        }
     }
 }

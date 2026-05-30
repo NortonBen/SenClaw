@@ -24,6 +24,10 @@ export interface ExtractedElement {
   is_new: boolean;
   viewport_status: 'in' | 'above' | 'below';
   frame_path?: string;
+  /** True when the element is an independently scrollable sub-container. */
+  scrollable?: boolean;
+  /** Remaining scroll distance (px) per side; present only when `scrollable`. */
+  scroll_data?: { top: number; bottom: number; left: number; right: number };
 }
 
 export interface BrowserState {
@@ -88,6 +92,8 @@ function toBrowserState(tree: DomTreeResult): BrowserState {
     is_new: !!n.isNew,
     viewport_status: n.viewportStatus,
     frame_path: n.framePath,
+    scrollable: n.scrollable,
+    scroll_data: n.scrollData,
   }));
 
   const formatted = renderBrowserState(tree);

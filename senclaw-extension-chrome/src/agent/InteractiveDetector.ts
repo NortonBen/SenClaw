@@ -149,6 +149,41 @@ export function isInExpandedViewport(rect: DOMRect, expansion: number): boolean 
   );
 }
 
+/**
+ * True if the element is an independently scrollable sub-container (not the page
+ * itself). page-agent surfaces these so the agent can scroll a modal / dropdown /
+ * pane in isolation via the `container_index` of a Scroll action — page-level
+ * scrolling is already conveyed by the viewport's pages_above / pages_below.
+ */
+export function isScrollableContainer(el: Element, style?: CSSStyleDeclaration): boolean {
+  if (el === document.body || el === document.documentElement) return false;
+  const html = el as HTMLElement;
+  // Ignore trivially small panes — they're rarely meaningful scroll targets.
+  if (html.clientHeight < 40 && html.clientWidth < 40) return false;
+
+  const cs = style ?? window.getComputedStyle(el);
+  const canY =
+    (cs.overflowY === 'auto' || cs.overflowY === 'scroll') &&
+    html.scrollHeight > html.clientHeight + 1;
+  const canX =
+    (cs.overflowX === 'auto' || cs.overflowX === 'scroll') &&
+    html.scrollWidth > html.clientWidth + 1;
+  return canY || canX;
+}
+
+/** Remaining scroll distance (px) on each side of a scrollable container. */
+export function getScrollData(
+  el: Element,
+): { top: number; bottom: number; left: number; right: number } {
+  const html = el as HTMLElement;
+  return {
+    top: Math.max(0, Math.round(html.scrollTop)),
+    bottom: Math.max(0, Math.round(html.scrollHeight - html.clientHeight - html.scrollTop)),
+    left: Math.max(0, Math.round(html.scrollLeft)),
+    right: Math.max(0, Math.round(html.scrollWidth - html.clientWidth - html.scrollLeft)),
+  };
+}
+
 /** Map a tag/attributes to an implicit ARIA role. */
 export function implicitRole(el: Element): string {
   const tag = el.tagName.toLowerCase();

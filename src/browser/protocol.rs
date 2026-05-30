@@ -74,6 +74,10 @@ pub enum DaemonMessage {
         tab_id: Option<TabId>,
         direction: String,
         amount: ScrollAmount,
+        /// Scroll the scrollable sub-container at this snapshot index instead of
+        /// the page itself (e.g. a modal or dropdown pane).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        container_index: Option<u32>,
     },
     Hover {
         request_id: RequestId,
@@ -289,8 +293,5 @@ pub enum ExtensionMessage {
     Heartbeat {
         tab_count: u16,
         active_tab_id: Option<TabId>,
-    },
-    UserInstruction {
-        text: String,
     },
 }

@@ -367,9 +367,5 @@ async fn handle_extension_message(
         } => {
             tabs.heartbeat(tab_count).await;
         }
-        ExtensionMessage::UserInstruction { text } => {
-            tracing::info!("[BrowserGateway] Received User Instruction: {text}");
-            // TODO: Route to an agent session
-        }
     }
 }

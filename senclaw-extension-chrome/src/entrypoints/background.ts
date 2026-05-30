@@ -135,7 +135,25 @@ async function setupBackground() {
   // Connect to daemon
   ws.connect();
 
-  // Keep service worker alive
+  // ===== Keep the MV3 service worker connection resilient =====
+  // Chrome suspends idle service workers (~30s). While the daemon WebSocket is
+  // up, the 15s heartbeat keeps the worker alive; if the worker was suspended
+  // anyway, a periodic alarm wakes it so we can re-establish the connection.
+  // ws.connect() is a no-op when the socket is already OPEN.
+  const KEEPALIVE_ALARM = 'senclaw-keepalive';
+  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === KEEPALIVE_ALARM) {
+      logActivity('Keepalive tick — ensuring daemon connection');
+      ws.connect();
+    }
+  });
+  // Reconnect immediately on browser start / extension reload instead of waiting
+  // for the first alarm tick.
+  chrome.runtime.onStartup.addListener(() => ws.connect());
+  chrome.runtime.onInstalled.addListener(() => ws.connect());
+
+  // A held port defers suspension while the side panel (or any view) is open.
   chrome.runtime.onConnect.addListener(() => {});
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -147,9 +165,6 @@ async function setupBackground() {
       sendResponse({ connected });
     } else if (_msg?.type === 'get-activity-logs') {
       sendResponse({ logs: activityLogs });
-    } else if (_msg?.type === 'send-chat') {
-      ws.send({ type: 'UserInstruction', text: _msg.text });
-      sendResponse({ status: 'ok' });
     }
   });
 }

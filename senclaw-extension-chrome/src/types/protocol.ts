@@ -23,6 +23,10 @@ export interface SnapshotElement {
   viewport_status: 'in' | 'above' | 'below';
   /** Frame path for nested iframes (undefined if in top frame). */
   frame_path?: string;
+  /** True when the element is an independently scrollable sub-container. */
+  scrollable?: boolean;
+  /** Remaining scroll distance (px) per side; present only when `scrollable`. */
+  scroll_data?: { top: number; bottom: number; left: number; right: number };
 }
 
 export interface BoundingBox {
@@ -138,7 +142,7 @@ export type DaemonMessage =
   | { type: 'Click'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number }
   | { type: 'Type'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; text: string; submit: boolean }
   | { type: 'SelectOption'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; option_text: string }
-  | { type: 'Scroll'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; direction: string; amount: ScrollAmount }
+  | { type: 'Scroll'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; direction: string; amount: ScrollAmount; container_index?: number }
   | { type: 'Hover'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number }
   | { type: 'PressKey'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; key: string }
   | { type: 'UploadFile'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; index: number; file_paths: string[] }
@@ -169,5 +173,4 @@ export type ExtensionMessage =
   | { type: 'CrawlResult'; job_id: JobId; agent_id: AgentId; page_result: CrawlPageResult }
   | { type: 'CrawlComplete'; job_id: JobId; agent_id: AgentId; total_pages: number; duration_ms: number }
   | { type: 'ScreenshotFrame'; tab_id: TabId; agent_id?: AgentId; data: string; format: string }
-  | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId }
-  | { type: 'UserInstruction'; text: string };
+  | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId };

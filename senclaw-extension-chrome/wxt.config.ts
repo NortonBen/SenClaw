@@ -21,6 +21,7 @@ export default defineConfig({
       'storage',
       'scripting',
       'sidePanel',
+      'alarms',
     ],
     host_permissions: [
       '<all_urls>',

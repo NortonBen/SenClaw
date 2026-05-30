@@ -85,6 +85,10 @@ struct ScrollParams {
     /// Pixels or pages (e.g. "300" or "0.5")
     #[serde(default)]
     amount: Option<String>,
+    /// Index of a scrollable sub-container (from the snapshot) to scroll instead
+    /// of the whole page — e.g. a modal, dropdown, or inner pane.
+    #[serde(default)]
+    container_index: Option<u32>,
 }
 
 fn default_direction() -> String {
@@ -769,7 +773,7 @@ impl McpBrowserServer {
     }
 
     #[rmcp::tool(
-        description = "Scroll the page. Direction: 'up' or 'down'. Amount: pixels (e.g. '300') or pages (e.g. '0.5')."
+        description = "Scroll the page. Direction: 'up' or 'down'. Amount: pixels (e.g. '300') or pages (e.g. '0.5'). Pass container_index (a scrollable element's snapshot index) to scroll an inner pane (modal/dropdown) instead of the page."
     )]
     async fn browser_scroll(
         &self,
@@ -784,6 +788,7 @@ impl McpBrowserServer {
                 tab_id: p.tab_id,
                 direction: p.direction,
                 amount,
+                container_index: p.container_index,
             })
             .await
         {

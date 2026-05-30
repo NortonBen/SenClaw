@@ -15,9 +15,6 @@ export function SidePanelApp(): React.ReactElement {
   const [wsPort, setWsPort] = useState(18789);
   const [log, setLog] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'logs' | 'chat'>('logs');
-  const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'agent', text: string }[]>([]);
 
   useEffect(() => {
     chrome.storage.local.get('ws_port').then((result) => {
@@ -84,14 +81,6 @@ export function SidePanelApp(): React.ReactElement {
   async function savePort(port: number): Promise<void> {
     setWsPort(port);
     chrome.storage.local.set({ ws_port: port });
-  };
-
-  const sendChatMessage = () => {
-    if (!chatInput.trim()) return;
-    const text = chatInput.trim();
-    setChatMessages(prev => [...prev, { role: 'user', text }]);
-    chrome.runtime.sendMessage({ type: 'send-chat', text });
-    setChatInput('');
   };
 
   const statusColor = connectionState === 'connected' ? '#a6e3a1'
@@ -175,96 +164,26 @@ export function SidePanelApp(): React.ReactElement {
       ),
     ),
 
-    // Tabs
+    // Activity Log
     React.createElement('div', {
       style: {
-        display: 'flex', borderBottom: '1px solid #45475a', marginBottom: '4px'
-      }
-    },
-      React.createElement('button', {
-        onClick: () => setActiveTab('logs'),
+        fontSize: '11px', fontWeight: 600, color: '#a6adc8',
+        borderBottom: '1px solid #45475a', paddingBottom: '6px',
+      },
+    }, 'Activity Log'),
+    React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' } },
+      React.createElement('div', {
         style: {
-          flex: 1, padding: '8px', background: 'none', border: 'none',
-          color: activeTab === 'logs' ? '#cdd6f4' : '#6c7086',
-          borderBottom: activeTab === 'logs' ? '2px solid #89b4fa' : 'none',
-          fontSize: '12px', fontWeight: activeTab === 'logs' ? 600 : 400,
-          cursor: 'pointer',
+          flex: 1, maxHeight: 'calc(100vh - 160px)', overflowY: 'auto', background: '#11111b',
+          padding: '6px 8px', borderRadius: '4px', fontSize: '10px',
+          fontFamily: 'monospace',
         },
-      }, 'Activity Log'),
-      React.createElement('button', {
-        onClick: () => setActiveTab('chat'),
-        style: {
-          flex: 1, padding: '8px', background: 'none', border: 'none',
-          color: activeTab === 'chat' ? '#cdd6f4' : '#6c7086',
-          borderBottom: activeTab === 'chat' ? '2px solid #89b4fa' : 'none',
-          fontSize: '12px', fontWeight: activeTab === 'chat' ? 600 : 400,
-          cursor: 'pointer',
-        },
-      }, 'Chat'),
-    ),
-
-    // Tab Content
-    activeTab === 'logs' ? (
-      React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column' } },
-        React.createElement('div', {
-          style: {
-            flex: 1, maxHeight: 'calc(100vh - 160px)', overflowY: 'auto', background: '#11111b',
-            padding: '6px 8px', borderRadius: '4px', fontSize: '10px',
-            fontFamily: 'monospace',
-          },
-        },
-          ...(log.length > 0
-            ? log.map((entry, i) => React.createElement('div', { key: i }, entry))
-            : [React.createElement('div', { key: 'empty', style: { color: '#6c7086' } }, 'Waiting for agent activity...')]
-          ),
+      },
+        ...(log.length > 0
+          ? log.map((entry, i) => React.createElement('div', { key: i }, entry))
+          : [React.createElement('div', { key: 'empty', style: { color: '#6c7086' } }, 'Waiting for agent activity...')]
         ),
-      )
-    ) : (
-      React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' } },
-        React.createElement('div', {
-          style: {
-            flex: 1, maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', background: '#11111b',
-            padding: '8px', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '8px',
-          },
-        },
-          chatMessages.length === 0 ? (
-            React.createElement('div', { style: { color: '#6c7086', fontSize: '12px', textAlign: 'center', marginTop: '20px' } },
-              'Start a conversation with the browser agent.',
-            )
-          ) : (
-            chatMessages.map((m, i) => React.createElement('div', {
-              key: i,
-              style: {
-                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                background: m.role === 'user' ? '#89b4fa' : '#313244',
-                color: m.role === 'user' ? '#11111b' : '#cdd6f4',
-                padding: '6px 10px', borderRadius: '8px', fontSize: '12px',
-                maxWidth: '85%', wordBreak: 'break-word',
-              },
-            }, m.text))
-          ),
-        ),
-        React.createElement('div', { style: { display: 'flex', gap: '6px' } },
-          React.createElement('input', {
-            value: chatInput,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setChatInput(e.target.value),
-            onKeyDown: (e: React.KeyboardEvent) => e.key === 'Enter' && sendChatMessage(),
-            placeholder: 'Type instruction...',
-            style: {
-              flex: 1, padding: '8px 12px', borderRadius: '4px',
-              border: '1px solid #45475a', background: '#313244', color: '#cdd6f4', fontSize: '12px',
-            },
-          }),
-          React.createElement('button', {
-            onClick: sendChatMessage,
-            style: {
-              padding: '0 12px', background: '#89b4fa', color: '#11111b',
-              border: 'none', borderRadius: '4px', fontWeight: 600, fontSize: '12px',
-              cursor: 'pointer',
-            },
-          }, 'Send'),
-        ),
-      )
+      ),
     ),
 
     // Footer
