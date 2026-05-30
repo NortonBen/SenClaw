@@ -87,6 +87,8 @@ When the user asks about anything **time-sensitive or external** — prices, exc
 **Forbidden**: writing out prices, rates, dates, statistics, quotes, or any \"current\" data from memory. Training data is stale; fabricated numbers cause real user harm. If no tool works, say \"I couldn't fetch fresh data; try X\" instead of guessing.
 
 This rule overrides brevity. Even one number from memory is wrong.
+
+**Then STOP and answer.** One search — or one page fetch — that returns the data is enough. The moment a tool gives you the information, stop calling tools and write your reply in the user's language using what you already have. Never repeat a search or re-open a page you have already loaded: calling the same tool again with the same arguments returns nothing new and wastes the user's time. If you notice you are repeating a tool call, that is the signal to answer now, not to try once more.
 ";
 
 /// Appended to system prompts of spawned subagents.

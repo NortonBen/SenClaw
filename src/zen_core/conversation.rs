@@ -391,6 +391,49 @@ pub struct QueryConfig {
     pub enable_cache: bool,
 }
 
+/// Absolute cap on LLM turns per user input — a backstop against runaway
+/// agentic loops (small models can call tools forever). Override with
+/// `SENCLAW_MAX_AGENT_TURNS`.
+fn max_agent_turns() -> usize {
+    std::env::var("SENCLAW_MAX_AGENT_TURNS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(30)
+}
+
+/// After this many *consecutive* turns that call the same tool(s) and produce
+/// no user-facing text, nudge the model to stop and answer. Override with
+/// `SENCLAW_STALL_TOOL_TURNS`. The hard stop is twice this value.
+fn stall_tool_turns() -> usize {
+    std::env::var("SENCLAW_STALL_TOOL_TURNS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(4)
+}
+
+/// Instruction injected when the agent is detected spinning on the same tool.
+const STALL_NUDGE: &str = "You have called the same tool several times in a row \
+without producing an answer. You already have enough information. Stop calling tools now \
+and write your final answer to the user, in the user's language, based on what you have gathered.";
+
+/// Sorted, deduped set of tool names in a batch — a coarse signature used to
+/// detect the model re-invoking the same tool turn after turn (args may vary
+/// slightly, e.g. a tweaked search query, so names alone are the stable signal).
+fn tool_names_sig(tool_uses: &[ContentBlock]) -> String {
+    let mut names: Vec<&str> = tool_uses
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names.join(",")
+}
+
 /// Run the conversation query loop. Returns the final message history.
 ///
 /// This is an async generator conceptually — each "turn" is a call to the LLM
@@ -404,10 +447,43 @@ pub async fn query(
 ) -> Result<Vec<Message>> {
     let mut compacted = false;
     let mut proactively_compacted = false;
+
+    // Loop-guard state (see `max_agent_turns` / `stall_tool_turns`).
+    let max_turns = max_agent_turns();
+    let stall_limit = stall_tool_turns();
+    let mut turn: usize = 0;
+    let mut last_sig: Option<String> = None;
+    let mut stall_streak: usize = 0;
+    let mut nudged = false;
+
     loop {
         // Check cancellation before each LLM call
         if cancel.is_cancelled() {
             info!("[{}] query loop cancelled before LLM call", config.agent_id);
+            return Ok(messages);
+        }
+
+        // Backstop: hard cap on turns per user input so a model that ignores
+        // every nudge still terminates instead of looping until the user pauses.
+        turn += 1;
+        if turn > max_turns {
+            warn!(
+                "[{}] agent loop limit reached ({} turns) — stopping",
+                config.agent_id, max_turns
+            );
+            config
+                .event_bus
+                .emit(EngineEvent::SessionError(SessionErrorData {
+                    error_type: "agent_loop_limit".to_string(),
+                    error: SessionErrorDetail {
+                        code: "AGENT_LOOP_LIMIT".to_string(),
+                        message: format!(
+                            "Stopped after {max_turns} tool-calling turns without a final answer \
+                             (likely a loop). Increase SENCLAW_MAX_AGENT_TURNS to allow more."
+                        ),
+                        details: None,
+                    },
+                }));
             return Ok(messages);
         }
 
@@ -834,11 +910,59 @@ pub async fn query(
             return Ok(messages);
         }
 
-        // 6. Check for control signal rebuild (mode switch)
-        // For now: no rebuild — just recurse
+        // 6. Stall detection: count consecutive turns that call the same
+        //    tool(s) and emit no user-facing text. A weak model can spin on
+        //    e.g. browser_search forever (observed: 6+ identical search turns,
+        //    context ballooning 7k→72k tokens). Nudge once, then hard-stop.
+        let sig = tool_names_sig(&tool_uses);
+        if text_content.trim().is_empty() && Some(&sig) == last_sig.as_ref() {
+            stall_streak += 1;
+        } else {
+            stall_streak = 0;
+        }
+        last_sig = Some(sig);
+
+        let hard_stop = stall_streak >= stall_limit * 2;
+        let should_nudge = !nudged && stall_streak >= stall_limit;
+
+        // 7. Recurse: append the assistant turn and the tool results.
         messages.push(assistant_msg);
         if !tool_results.is_empty() {
-            messages.push(create_user_message(tool_results));
+            let mut blocks = tool_results;
+            if should_nudge {
+                nudged = true;
+                info!(
+                    "[{}] tool-call stall detected ({} consecutive turns on '{}') — nudging to finalize",
+                    config.agent_id,
+                    stall_streak,
+                    last_sig.as_deref().unwrap_or("")
+                );
+                blocks.push(ContentBlock::Text {
+                    text: STALL_NUDGE.to_string(),
+                });
+            }
+            messages.push(create_user_message(blocks));
+        }
+
+        if hard_stop {
+            warn!(
+                "[{}] tool-call stall not resolved after nudge ({} consecutive turns) — stopping",
+                config.agent_id, stall_streak
+            );
+            config
+                .event_bus
+                .emit(EngineEvent::SessionError(SessionErrorData {
+                    error_type: "agent_loop_limit".to_string(),
+                    error: SessionErrorDetail {
+                        code: "AGENT_TOOL_STALL".to_string(),
+                        message: format!(
+                            "Stopped: the agent called the same tool {stall_streak} times in a row \
+                             without producing an answer."
+                        ),
+                        details: None,
+                    },
+                }));
+            return Ok(messages);
         }
 
         debug!(
@@ -963,6 +1087,43 @@ fn needs_auto_compact(messages: &[Message], context_length: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tool_use(name: &str, args: serde_json::Value) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: "x".into(),
+            name: name.into(),
+            input: args,
+        }
+    }
+
+    #[test]
+    fn tool_names_sig_is_stable_across_arg_changes() {
+        // Same tool, different args (e.g. a tweaked search query) → same sig,
+        // which is exactly what lets the stall detector catch a search loop.
+        let a = tool_names_sig(&[tool_use("search", serde_json::json!({"q": "gold"}))]);
+        let b = tool_names_sig(&[tool_use("search", serde_json::json!({"q": "gold price"}))]);
+        assert_eq!(a, b);
+        assert_eq!(a, "search");
+
+        // Order-independent and deduped.
+        let multi = tool_names_sig(&[
+            tool_use("b", serde_json::json!({})),
+            tool_use("a", serde_json::json!({})),
+            tool_use("a", serde_json::json!({})),
+        ]);
+        assert_eq!(multi, "a,b");
+
+        // Non-tool blocks ignored.
+        assert_eq!(tool_names_sig(&[ContentBlock::Text { text: "hi".into() }]), "");
+    }
+
+    #[test]
+    fn loop_guard_defaults_are_sane() {
+        std::env::remove_var("SENCLAW_MAX_AGENT_TURNS");
+        std::env::remove_var("SENCLAW_STALL_TOOL_TURNS");
+        assert_eq!(max_agent_turns(), 30);
+        assert_eq!(stall_tool_turns(), 4);
+    }
 
     #[test]
     fn extract_content_separates_text_and_tools() {

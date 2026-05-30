@@ -52,6 +52,21 @@ pub async fn query_llm(
         tools.len()
     );
 
+    // Persist the full request (system prompt + message history + tool list)
+    // to `~/.senclaw/llm_logs/` so prompts can be analyzed/optimized after the
+    // fact — e.g. diagnosing an agent stuck re-invoking a skill in a loop.
+    let tool_names: Vec<(String, String)> = tools
+        .iter()
+        .map(|t| (t.name().to_string(), t.description().to_string()))
+        .collect();
+    crate::util::llm_log::log_request(
+        &profile.model_name,
+        system_prompt,
+        messages,
+        &tool_names,
+        thinking,
+    );
+
     let result = match adapt {
         "anthropic" => {
             query_anthropic(
@@ -88,6 +103,7 @@ pub async fn query_llm(
     };
     match &result {
         Ok(msg) => {
+            crate::util::llm_log::log_response(msg);
             let blocks = msg.message.content.len();
             let tool_calls = msg
                 .message

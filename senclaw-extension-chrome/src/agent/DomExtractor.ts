@@ -127,12 +127,89 @@ export function buildSnapshot(): {
   };
 }
 
-export function extractText(selector?: string): { text: string; url: string } {
-  const container = selector ? document.querySelector(selector) : document.body;
-  return {
-    url: location.href,
-    text: container?.textContent?.trim() ?? '',
+// Tags whose text is never meaningful page copy. `textContent` would otherwise dump
+// CSS rules and inline JS straight into the result — many sites (e.g. Google) inject
+// <style>/<script> into <body>, and textContent serializes their text too.
+const TEXT_NOISE_TAGS = new Set([
+  // 'svg' is intentionally NOT here: SVG <text> is visible, rendered copy (innerText
+  // keeps it). Its <style>/<script>/<title> children are still dropped below.
+  'script', 'style', 'noscript', 'template', 'canvas',
+  'iframe', 'object', 'embed', 'audio', 'video', 'source', 'track',
+  'head', 'link', 'meta', 'title', 'base',
+]);
+
+// Block-level / separating tags: insert a line break around their text so the output
+// stays readable instead of collapsing into one run-on line.
+const TEXT_BLOCK_TAGS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'br', 'caption', 'dd', 'details',
+  'dialog', 'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer',
+  'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'li', 'main',
+  'nav', 'ol', 'option', 'p', 'pre', 'section', 'summary', 'table', 'tbody',
+  'td', 'tfoot', 'th', 'thead', 'tr', 'ul',
+]);
+
+/**
+ * Collect human-meaningful, visible text from a subtree: skip script/style/noscript
+ * and other non-content tags, skip hidden (display:none / visibility:hidden /
+ * aria-hidden) elements, and break lines at block boundaries. Used as the explicit
+ * fallback when `innerText` is unavailable (e.g. an SVG or detached root).
+ */
+function collectVisibleText(root: Element): string {
+  const out: string[] = [];
+
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = node.textContent;
+      if (t && /\S/.test(t)) out.push(t.replace(/\s+/g, ' '));
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const el = node as Element;
+    const tag = el.tagName.toLowerCase();
+    if (TEXT_NOISE_TAGS.has(tag)) return;
+    // Note: aria-hidden is NOT excluded — those elements are still visually rendered,
+    // so they count as on-screen text (this keeps the walker consistent with the
+    // innerText primary path).
+
+    try {
+      const cs = window.getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    } catch {
+      /* detached / cross-origin — keep walking */
+    }
+
+    const block = TEXT_BLOCK_TAGS.has(tag);
+    if (block) out.push('\n');
+    for (const child of Array.from(el.childNodes)) walk(child);
+    if (block) out.push('\n');
   };
+
+  walk(root);
+
+  return out
+    .join('')
+    .replace(/[^\S\n]+/g, ' ') // collapse spaces/tabs but keep newlines
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function extractText(selector?: string): { text: string; url: string } {
+  const root = (selector ? document.querySelector(selector) : document.body) as
+    | (Element & { innerText?: string })
+    | null;
+  if (!root) return { url: location.href, text: '' };
+
+  // innerText reflects only rendered, human-visible text: it natively excludes
+  // <script>/<style>/<noscript> (rendered as display:none) and hidden nodes, so CSS
+  // and inline JS never leak into the result the way textContent allowed.
+  const inner = typeof root.innerText === 'string' ? root.innerText : '';
+  const text = inner.trim()
+    ? inner.replace(/\n{3,}/g, '\n\n').trim()
+    : collectVisibleText(root);
+
+  return { url: location.href, text };
 }
 
 export function extractLinks(
