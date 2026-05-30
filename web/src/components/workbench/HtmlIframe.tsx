@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 
 interface Props {
-  /** HTML 文件内容（已通过 WS 后端代读拿到） */
+  /** HTML file content (already fetched from the backend). */
   srcdoc?: string;
-  /** 渲染来源路径，仅用于错误展示 */
+  /** Source path of the rendered file (display only, used in error states). */
   sourcePath?: string;
-  /** 加载错误信息 */
+  /** Load error message. */
   error?: string;
 }
 
@@ -15,6 +15,12 @@ interface Props {
  * under the same origin as semaclaw's webui, would load the webui inside
  * the iframe → nested chat UI).
  *
+ * Also inject a hash-anchor interception script: markdown-generated `#heading`
+ * anchors would otherwise be hijacked by `<base target="_blank">`, opening
+ * `<semaclaw-url>/#heading` (the semaclaw home page) in a new tab. The script
+ * makes pure `#xxx` anchors scroll within the iframe, while same-path+anchor
+ * links (e.g. `page#sec`) still open via _blank.
+ *
  * If a <head> exists, prepend the <base> there; otherwise wrap the doc in
  * a minimal <html><head>...<base>...</head><body>{doc}</body></html>.
  */
@@ -23,19 +29,21 @@ function withBaseTarget(html: string): string {
   // `<base href="...">` doesn't change link-target behavior, so we still inject.
   if (/<base\b[^>]*\btarget\s*=/i.test(html)) return html;
   const baseTag = '<base target="_blank">';
+  const hashScript = '<script>(function(){document.addEventListener("click",function(e){var n=e.target;while(n&&n.nodeType===1&&n.tagName!=="A"){n=n.parentElement;}if(!n||n.tagName!=="A")return;var h=n.getAttribute("href");if(!h||h.charAt(0)!=="#")return;e.preventDefault();var id=decodeURIComponent(h.slice(1));if(!id){window.scrollTo({top:0,behavior:"smooth"});return;}var t=document.getElementById(id);if(!t){try{t=document.querySelector(\'a[name="\'+(window.CSS&&CSS.escape?CSS.escape(id):id.replace(/["\\\\]/g,"\\\\$&"))+\'"]\');}catch(_){}}if(t&&t.scrollIntoView)t.scrollIntoView({behavior:"smooth",block:"start"});},true);})();</script>';
+  const inject = baseTag + hashScript;
   if (/<head\b[^>]*>/i.test(html)) {
-    return html.replace(/<head\b[^>]*>/i, (m) => `${m}${baseTag}`);
+    return html.replace(/<head\b[^>]*>/i, (m) => `${m}${inject}`);
   }
   if (/<html\b[^>]*>/i.test(html)) {
-    return html.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${baseTag}</head>`);
+    return html.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${inject}</head>`);
   }
-  return `<!doctype html><html><head>${baseTag}</head><body>${html}</body></html>`;
+  return `<!doctype html><html><head>${inject}</head><body>${html}</body></html>`;
 }
 
 export function HtmlIframe({ srcdoc, sourcePath, error }: Props) {
   const prepared = useMemo(() => (srcdoc == null ? undefined : withBaseTarget(srcdoc)), [srcdoc]);
   const [delayed, setDelayed] = useState<string | undefined>(prepared);
-  // 切换 artifact 时短暂卸载 iframe，避免 srcdoc 残留
+  // Briefly unmount the iframe when switching artifacts to avoid stale srcdoc.
   useEffect(() => {
     setDelayed(undefined);
     const t = setTimeout(() => setDelayed(prepared), 0);
@@ -43,11 +51,20 @@ export function HtmlIframe({ srcdoc, sourcePath, error }: Props) {
   }, [prepared]);
 
   if (error) {
+    const closed   = error === 'artifact_not_found';   // truly absent from the registry → the card can be removed
+    const dormant  = error === 'core_not_found' || error === 'engine_not_found'; // agent not running → send a message to start it
+    const isInfo   = closed || dormant;
+    const title = closed   ? 'This workbench was closed'
+                : dormant  ? 'Agent not running'
+                :            'Failed to load HTML';
+    const hint  = closed   ? 'Closed on another page or the service restarted; click ✕ in the top-right to remove this entry.'
+                : dormant  ? 'Send any message to the current agent to start it, then reopen this workbench.'
+                :            error;
     return (
-      <div className="p-4 text-sm text-red-500">
-        <div className="font-semibold mb-1">无法加载 HTML</div>
+      <div className={`p-4 text-sm ${isInfo ? 'text-gray-500' : 'text-red-500'}`}>
+        <div className="font-semibold mb-1">{title}</div>
         <div className="text-xs text-gray-500">{sourcePath}</div>
-        <div className="text-xs mt-1">{error}</div>
+        <div className="text-xs mt-1">{hint}</div>
       </div>
     );
   }

@@ -826,7 +826,13 @@ fn generate_with_cache(
     let budget = max_prompt_tokens
         .min(max_kv_usize.saturating_sub(decode_reserve))
         .max(512);
-    const MAX_FIT_ATTEMPTS: usize = 24;
+    // Each attempt drops one conversation turn OR shrinks the tool roster, then
+    // re-renders. Long agentic histories can hold many turns, so this must be
+    // high enough to drain the whole history AND still reach the tool-dropping
+    // phase — otherwise the loop exits over-budget and falls back to the
+    // structure-preserving splice. Renders are cheap (~tens of ms) and the loop
+    // exits as soon as it fits, so this only matters for pathological prompts.
+    const MAX_FIT_ATTEMPTS: usize = 128;
 
     let mut prompt: Vec<u32> = if let Some(template) = template_opt {
         let special = state
@@ -843,6 +849,17 @@ fn generate_with_cache(
         // 3. Else drop the oldest non-system / non-last-user message.
         // 4. Else (no more middle messages) halve the tools list from the end.
         // 5. Stop after MAX_FIT_ATTEMPTS or when nothing else can be trimmed.
+        // Fit-to-budget: re-render after each trim. Trim order preserves the
+        // most valuable context — sacrifice the oldest conversation turn first
+        // (keeps the full tool roster = capability), and only once no middle
+        // turns remain start dropping tools from the end. Crucially, message
+        // drops and tool drops draw from the SAME attempt budget below, so a
+        // long history can no longer starve the tool-dropping phase (the old
+        // bug: 24 attempts fully consumed dropping messages, leaving all tools
+        // in place and forcing a destructive head-truncation). The cap is just
+        // a non-convergence guard — `drop_oldest_openai_middle_message` always
+        // keeps the leading system block + the last user turn, so the system
+        // prompt and the current question survive every step.
         let mut attempts = 0usize;
         let mut tokens: Vec<u32> = loop {
             let encs = tokenizer
@@ -861,10 +878,12 @@ fn generate_with_cache(
             if tokens.len() <= budget || attempts >= MAX_FIT_ATTEMPTS {
                 break tokens;
             }
+            attempts += 1;
+            // 1. Sacrifice the oldest conversation turn (system + last user kept).
             if super::mlx_prompt::drop_oldest_openai_middle_message(&mut work_messages) {
-                attempts += 1;
                 continue;
             }
+            // 2. No droppable turns left — shrink the tool roster from the end.
             if !work_tools.is_empty() {
                 // Linear-scale estimate: tokens ≈ fixed_cost + per_tool × count.
                 // Project the new tool count that should land just under
@@ -886,9 +905,11 @@ fn generate_with_cache(
                     new_len,
                 );
                 work_tools.truncate(new_len);
-                attempts += 1;
                 continue;
             }
+            // 3. Only the system block + last user turn remain and it still
+            //    overflows — stop; the head+tail splice below preserves both
+            //    the system prompt and the generation tail.
             break tokens;
         };
 
@@ -903,14 +924,21 @@ fn generate_with_cache(
         );
 
         if tokens.len() > budget {
-            let drop = tokens.len() - budget;
+            // Last resort: even the system block + last user turn (no droppable
+            // middle, possibly no tools) overflow the window. Splice out the
+            // middle rather than draining the head — preserves the system prompt
+            // and the generation tail (see `splice_head_tail_to_budget`).
+            let before = tokens.len();
+            let overflow = before - budget;
+            tokens = super::mlx_prompt::splice_head_tail_to_budget(tokens, budget);
             tracing::warn!(
-                "[local-mlx-native] prompt still {} > budget {} after {} trim attempt(s); hard truncating head — chat structure may break",
-                tokens.len(),
+                "[local-mlx-native] prompt {} > budget {} after {} trim attempt(s); spliced out {} middle token(s) → {} (system prompt + generation tail preserved)",
+                before,
                 budget,
                 attempts,
+                overflow,
+                tokens.len(),
             );
-            tokens.drain(..drop);
         }
         tokens
     } else {

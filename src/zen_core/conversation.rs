@@ -776,6 +776,7 @@ pub async fn query(
             working_dir: &config.working_dir,
             agent_data_dir: &config.agent_data_dir,
             tools: &turn_tools,
+            tools_resolver: Some(config.tools.as_ref()),
             fire: &|event| config.event_bus.emit(event),
             permission_checker: config.permission_checker.as_ref(),
             event_bus: Some(&config.event_bus),

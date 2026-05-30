@@ -10,11 +10,20 @@ interface Props {
 
 export function MarkdownView({ content, error, sourcePath }: Props) {
   if (error) {
+    const closed   = error === 'artifact_not_found';   // truly absent from the registry → the card can be removed
+    const dormant  = error === 'core_not_found' || error === 'engine_not_found'; // agent not running → send a message to start it
+    const isInfo   = closed || dormant;
+    const title = closed   ? 'This workbench was closed'
+                : dormant  ? 'Agent not running'
+                :            'Failed to load Markdown';
+    const hint  = closed   ? 'Closed on another page or the service restarted; click ✕ in the top-right to remove this entry.'
+                : dormant  ? 'Send any message to the current agent to start it, then reopen this workbench.'
+                :            error;
     return (
-      <div className="p-4 text-sm text-red-500">
-        <div className="font-semibold mb-1">无法加载 Markdown</div>
+      <div className={`p-4 text-sm ${isInfo ? 'text-gray-500' : 'text-red-500'}`}>
+        <div className="font-semibold mb-1">{title}</div>
         <div className="text-xs text-gray-500">{sourcePath}</div>
-        <div className="text-xs mt-1">{error}</div>
+        <div className="text-xs mt-1">{hint}</div>
       </div>
     );
   }

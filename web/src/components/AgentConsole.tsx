@@ -47,9 +47,15 @@ interface AgentConsoleProps {
   groups: GroupInfo[];
   agentStates: Record<string, AgentState>;
   resolvePermission: (requestId: string, optionKey: string) => void;
+  /** When provided, the panel is controlled by the layout dock (mutex with
+   *  Workbench) and renders nothing while collapsed — the dock rail handles
+   *  the badge. When omitted, the console self-manages its own collapse. */
+  expanded?: boolean;
+  onExpand?: () => void;
+  onCollapse?: () => void;
 }
 
-export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission }: AgentConsoleProps) {
+export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission, expanded, onExpand, onCollapse }: AgentConsoleProps) {
   const { token } = theme.useToken();
   const activeParents = dispatchParents.filter(p => p.status === 'active');
   const queuedParents = dispatchParents.filter(p => p.status === 'queued');
@@ -61,10 +67,20 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
   const adminState: AgentState = adminJid ? (agentStates[adminJid] ?? 'idle') : 'idle';
   const adminPaused = adminState === 'paused';
 
-  // Start expanded if dispatch is already active on mount; otherwise collapsed
-  const [collapsed, setCollapsed] = useState(() => !dispatchParents.some(
+  // Controlled by the layout dock when `expanded` is provided; otherwise the
+  // console self-manages collapse (legacy/standalone usage).
+  const controlled = expanded !== undefined;
+  const [internalCollapsed, setInternalCollapsed] = useState(() => !dispatchParents.some(
     p => p.status === 'active' || p.status === 'queued'
   ));
+  const collapsed = controlled ? !expanded : internalCollapsed;
+  const setCollapsed = useCallback((v: boolean) => {
+    if (controlled) {
+      if (v) onCollapse?.(); else onExpand?.();
+    } else {
+      setInternalCollapsed(v);
+    }
+  }, [controlled, onCollapse, onExpand]);
   const [selectedTask, setSelectedTask] = useState<DispatchTask | null>(null);
   const [width, setWidth] = useState(loadWidth);
   const widthRef = useRef(width);
@@ -129,6 +145,9 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
   const hasTodos = Object.keys(agentTodos).length > 0;
 
   if (collapsed) {
+    // In controlled (dock) mode the rail is rendered by DockBadges, so the
+    // console contributes nothing while collapsed.
+    if (controlled) return null;
     const totalPending = pendingPermissions.length;
     return (
       <div

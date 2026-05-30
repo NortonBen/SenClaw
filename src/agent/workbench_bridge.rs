@@ -375,11 +375,14 @@ mod tests {
                 path: "out.html".into(),
                 content: None,
                 mime_type: None,
+                hash: None,
+                extension: None,
             }],
             url: None,
             process: None,
             usage: None,
-            root_dir: None,
+            agent_id: None,
+            instance_id: None,
             created_at: 0,
         };
         let notice = format_channel_notice(&a);
@@ -397,7 +400,8 @@ mod tests {
             url: Some("http://localhost:5173".into()),
             process: None,
             usage: None,
-            root_dir: None,
+            agent_id: None,
+            instance_id: None,
             created_at: 0,
         };
         let notice = format_channel_notice(&a);

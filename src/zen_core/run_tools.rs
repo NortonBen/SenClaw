@@ -81,6 +81,10 @@ pub struct RunContext<'a> {
     pub working_dir: &'a str,
     pub agent_data_dir: &'a str,
     pub tools: &'a [Arc<dyn Tool>],
+    /// Re-fetch the live tool list (includes ToolSearch discoveries). When
+    /// set, serial execution refreshes after `ToolSearch` so deferred tools
+    /// can be called in the same assistant turn.
+    pub tools_resolver: Option<&'a (dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync)>,
     /// Fire an engine event (provided by the engine for callback emission).
     pub fire: &'a (dyn Fn(EngineEvent) + Send + Sync),
     /// Permission checker instance.
@@ -154,6 +158,7 @@ async fn run_serially(
     ctx: &RunContext<'_>,
 ) -> Vec<ContentBlock> {
     let mut results = Vec::new();
+    let mut active_tools: Vec<Arc<dyn Tool>> = ctx.tools.to_vec();
     for tu in tool_uses {
         if cancel.is_cancelled() {
             // Generate stop messages for remaining tools
@@ -164,7 +169,30 @@ async fn run_serially(
             }
             break;
         }
-        results.extend(run_single_tool(tu, cancel, ctx).await);
+        let dynamic_ctx = RunContext {
+            agent_id: ctx.agent_id,
+            working_dir: ctx.working_dir,
+            agent_data_dir: ctx.agent_data_dir,
+            tools: &active_tools,
+            tools_resolver: ctx.tools_resolver,
+            fire: ctx.fire,
+            permission_checker: ctx.permission_checker,
+            event_bus: ctx.event_bus,
+            response_registry: ctx.response_registry,
+            hook_manager: ctx.hook_manager.clone(),
+            hook_client: ctx.hook_client.clone(),
+            hook_profile: ctx.hook_profile.clone(),
+            session_id: ctx.session_id.clone(),
+        };
+        results.extend(run_single_tool(tu, cancel, &dynamic_ctx).await);
+
+        if let ContentBlock::ToolUse { name, .. } = tu {
+            if name == "ToolSearch" {
+                if let Some(resolver) = ctx.tools_resolver {
+                    active_tools = resolver();
+                }
+            }
+        }
     }
     results
 }
@@ -183,9 +211,17 @@ async fn run_single_tool(
         _ => return vec![],
     };
 
-    // Find the tool
-    let tool = match ctx.tools.iter().find(|t| t.name() == tool_name) {
-        Some(t) => t.clone(),
+    // Find the tool — try active set, then refresh from resolver (ToolSearch
+    // may have loaded deferred tools earlier in this serial batch).
+    let tool = crate::tools::tool_search::resolve_tool_by_name(&tool_name, ctx.tools).or_else(|| {
+        ctx.tools_resolver.map(|resolver| {
+            let fresh = resolver();
+            crate::tools::tool_search::resolve_tool_by_name(&tool_name, &fresh)
+        })?
+    });
+
+    let tool = match tool {
+        Some(t) => t,
         None => {
             let error_msg = format!("Error: No such tool available: {tool_name}");
             (ctx.fire)(EngineEvent::ToolExecutionError(ToolExecutionErrorData {
@@ -773,6 +809,7 @@ mod tests {
             working_dir: "/tmp",
             agent_data_dir: "/tmp",
             tools,
+            tools_resolver: None,
             fire: &|_| {},
             permission_checker: checker,
             event_bus: None,

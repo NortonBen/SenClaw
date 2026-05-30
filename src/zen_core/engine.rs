@@ -105,6 +105,8 @@ impl ZenEngine {
 
         let workbench_service = Arc::new(crate::zen_core::workbench::WorkbenchService::new(
             event_bus.clone(),
+            instance_id.clone(),
+            options.working_dir.clone(),
         ));
 
         let engine = Arc::new(Self {
@@ -122,7 +124,7 @@ impl ZenEngine {
             mcp_manager,
             session_id: RwLock::new(None),
             hook_manager: Arc::new(HookManager::empty()),
-            workbench_service,
+            workbench_service: workbench_service.clone(),
             discovered_tools: Arc::new(Mutex::new(std::collections::HashSet::new())),
             self_weak: Mutex::new(std::sync::Weak::new()),
         });
@@ -130,7 +132,39 @@ impl ZenEngine {
 
         // Register engine-dependent tools
         engine.register_tool(Arc::new(TodoWriteTool::new(state)));
-        engine.register_tool(Arc::new(SkillTool::new(skill_registry)));
+        let engine_for_skill = Arc::downgrade(&engine);
+        let on_skill_load: crate::tools::skill::OnSkillLoadFn = Arc::new(move |skill_name| {
+            if skill_name != "agent-browser" {
+                return;
+            }
+            if let Some(e) = engine_for_skill.upgrade() {
+                const BROWSER_TOOLS: &[&str] = &[
+                    "mcp__browser__search",
+                    "mcp__browser__navigate",
+                    "mcp__browser__snapshot",
+                    "mcp__browser__click",
+                    "mcp__browser__type",
+                    "mcp__browser__extract_text",
+                    "mcp__browser__extract_structured",
+                    "mcp__browser__screenshot",
+                    "mcp__browser__fill_form",
+                    "mcp__browser__click_and_wait",
+                    "mcp__browser__wait",
+                    "mcp__browser__new_tab",
+                    "mcp__browser__close_tab",
+                ];
+                let mut set = e.discovered_tools.lock().unwrap();
+                for name in BROWSER_TOOLS {
+                    set.insert((*name).to_string());
+                    tracing::info!("[Skill] pre-discovered browser tool: {name}");
+                }
+            }
+        });
+        engine.register_tool(
+            Arc::new(SkillTool::new(skill_registry).with_on_load(on_skill_load)),
+        );
+        // LaunchUI — surfaces deliverables in the WebUI workbench panel.
+        engine.register_tool(Arc::new(crate::tools::LaunchUITool::new(workbench_service)));
 
         // Register static tools (no engine deps)
         engine.register_tools(crate::tools::all_tools());
@@ -1154,7 +1188,6 @@ impl ZenCore for ZenEngine {
                             } else {
                                 format!("mcp__{}__{}", server_name, ti.name)
                             };
-
                             Arc::new(McpRegistryBridgeTool {
                                 full_name,
                                 tool_name: ti.name,

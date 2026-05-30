@@ -32,6 +32,34 @@ pub fn drop_oldest_openai_middle_message(messages: &mut Vec<Value>) -> bool {
     true
 }
 
+/// Last-resort token-level fit, used only when even the system block + the
+/// final user turn (after all middle turns and tools have been dropped) still
+/// overflow the KV budget.
+///
+/// A plain head-truncation (`tokens.drain(..overflow)`) would delete the system
+/// prompt and the chat template's role / tool-schema framing — the model then
+/// loses its grounding and spirals (tool-less repetition, ignored skills,
+/// infinite fallback loops). Instead we keep the **head** (system prompt / tool
+/// schemas) AND the **tail** (most recent turn + assistant generation prompt),
+/// dropping tokens from the *middle*. Both the instructions and the current
+/// question survive.
+///
+/// Returns the input unchanged when already within budget; otherwise a vector
+/// of exactly `budget` tokens. ~40% of the budget is reserved for the tail so
+/// the current question + generation prompt are never cut.
+pub fn splice_head_tail_to_budget(tokens: Vec<u32>, budget: usize) -> Vec<u32> {
+    if budget == 0 || tokens.len() <= budget {
+        return tokens;
+    }
+    let tail_keep = (budget * 2 / 5).min(tokens.len());
+    let head_keep = budget.saturating_sub(tail_keep);
+    let tail_start = tokens.len() - tail_keep;
+    let mut spliced = Vec::with_capacity(head_keep + tail_keep);
+    spliced.extend_from_slice(&tokens[..head_keep]);
+    spliced.extend_from_slice(&tokens[tail_start..]);
+    spliced
+}
+
 /// User-assistant turns capped before templating; a leading `Role::System` is preserved with the first user turn when present.
 pub const MLX_MAX_HISTORY_TURNS: usize = 4;
 
@@ -81,6 +109,40 @@ pub fn trim_conversation_history<T>(convs: &mut Vec<Conversation<Role, T>>, max_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splice_noop_when_within_budget() {
+        let toks: Vec<u32> = (0..10).collect();
+        assert_eq!(splice_head_tail_to_budget(toks.clone(), 10), toks);
+        assert_eq!(splice_head_tail_to_budget(toks.clone(), 100), toks);
+    }
+
+    #[test]
+    fn splice_keeps_head_and_tail_exact_budget() {
+        // 0..100, budget 50 → tail_keep = 50*2/5 = 20, head_keep = 30.
+        let toks: Vec<u32> = (0..100).collect();
+        let out = splice_head_tail_to_budget(toks, 50);
+        assert_eq!(out.len(), 50, "spliced output is exactly budget");
+        // Head: first 30 tokens preserved (system prompt / tool framing).
+        assert_eq!(&out[..30], &(0..30).collect::<Vec<u32>>()[..]);
+        // Tail: last 20 tokens preserved (recent turn + generation prompt).
+        assert_eq!(&out[30..], &(80..100).collect::<Vec<u32>>()[..]);
+    }
+
+    #[test]
+    fn splice_preserves_first_and_last_token() {
+        let toks: Vec<u32> = (0..1000).collect();
+        let out = splice_head_tail_to_budget(toks, 200);
+        assert_eq!(out.len(), 200);
+        assert_eq!(*out.first().unwrap(), 0, "system-prompt head survives");
+        assert_eq!(*out.last().unwrap(), 999, "generation-tail survives");
+    }
+
+    #[test]
+    fn splice_zero_budget_is_noop() {
+        let toks: Vec<u32> = (0..10).collect();
+        assert_eq!(splice_head_tail_to_budget(toks.clone(), 0), toks);
+    }
 
     #[test]
     fn trim_keeps_last_n_user_turns() {

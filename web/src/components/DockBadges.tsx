@@ -14,7 +14,7 @@ interface Props {
 }
 
 export function DockBadges(p: Props) {
-  // ===== AgentConsole 信号 =====
+  // ===== AgentConsole signals =====
   const pendingPermissions = useMemo(() => {
     let n = 0;
     for (const msgs of Object.values(p.messages)) {
@@ -26,9 +26,9 @@ export function DockBadges(p: Props) {
   }, [p.messages]);
   const hasActivity = p.dispatchParents.some(d => d.status === 'active' || d.status === 'queued');
   const hasTodos = Object.keys(p.agentTodos).length > 0;
-  void p.groups; // 仅签名一致，留作日后定向跳转用
+  void p.groups; // signature parity only; reserved for future targeted navigation
 
-  // ===== Workbench 信号 =====
+  // ===== Workbench signals =====
   const wbCurrent = p.workbenchState?.current ?? null;
   const wbHasRunning = p.workbenchState?.history.some(h => h.process?.status === 'ready') ?? false;
 
@@ -60,7 +60,7 @@ interface BadgeButtonProps {
   title: string;
   icon: React.ReactNode;
   countBadge: number | null;
-  /** 状态点：'live' = 绿色脉冲；'info' = 蓝色静态 */
+  /** Status dot: 'live' = pulsing green; 'info' = static blue. */
   dot: 'live' | 'info' | null;
 }
 
@@ -92,10 +92,10 @@ function BadgeButton({ active, onClick, title, icon, countBadge, dot }: BadgeBut
   );
 }
 
-// ===== Icons（与 gear 同视觉重量：16x16 stroke 1.8） =====
+// ===== Icons (same visual weight as the gear: 16x16, stroke 1.8) =====
 
 function GearIcon() {
-  // 用现有 unicode gear 保持原视觉
+  // Reuse the existing unicode gear to keep the original look.
   return <span className="text-base leading-none select-none">⚙</span>;
 }
 

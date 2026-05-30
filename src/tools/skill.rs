@@ -11,13 +11,26 @@ use serde_json::Value;
 use crate::skills::SkillRegistry;
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolResultMessage};
 
+/// Called after a skill is successfully loaded — used to pre-discover deferred
+/// tools referenced by skill instructions (e.g. agent-browser MCP tools).
+pub type OnSkillLoadFn = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct SkillTool {
     registry: Arc<SkillRegistry>,
+    on_skill_load: Option<OnSkillLoadFn>,
 }
 
 impl SkillTool {
     pub fn new(registry: Arc<SkillRegistry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            on_skill_load: None,
+        }
+    }
+
+    pub fn with_on_load(mut self, cb: OnSkillLoadFn) -> Self {
+        self.on_skill_load = Some(cb);
+        self
     }
 }
 
@@ -91,6 +104,10 @@ impl Tool for SkillTool {
             Some(s) => s,
             None => bail!("Skill \"{skill_name}\" not found"),
         };
+
+        if let Some(ref cb) = self.on_skill_load {
+            cb(&skill.metadata.name);
+        }
 
         let mut content = skill.content.clone();
         if let Some(ref trimmed_args) = args {

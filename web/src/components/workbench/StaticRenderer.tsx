@@ -6,7 +6,7 @@ import { CopyPathButton } from './CopyPathButton';
 
 interface Props {
   artifact: WorkbenchArtifact;
-  /** 读文件代理（通过 WS 拉后端文件内容） */
+  /** Read-file proxy (fetches file content from the backend). */
   readFile: (path: string) => Promise<{ content?: string; error?: string }>;
 }
 
@@ -14,7 +14,7 @@ export function StaticRenderer({ artifact, readFile }: Props) {
   const files = artifact.files ?? [];
   const [activeIdx, setActiveIdx] = useState(0);
 
-  // artifact 切换时重置 tab
+  // Reset the active tab when the artifact changes.
   useEffect(() => {
     setActiveIdx(0);
   }, [artifact.id]);

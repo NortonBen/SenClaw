@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -21,6 +21,22 @@ function loadAcceptAll(): boolean {
 
 function saveAcceptAll(v: boolean) {
   try { localStorage.setItem(ACCEPT_ALL_KEY, String(v)); } catch {}
+}
+
+// ===== Workbench local persistence (survive page refresh of launched UI tabs) =====
+// Frontend-only: while the daemon is alive a refresh fully restores; after a
+// daemon restart, dead backend artifacts still show until the user closes them.
+const WORKBENCH_STORAGE_KEY = 'senclaw:workbench:v1';
+
+function loadWorkbench(): Record<string, WorkbenchState> {
+  try {
+    const raw = window.localStorage.getItem(WORKBENCH_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, WorkbenchState>) : {};
+  } catch { return {}; }
+}
+
+function saveWorkbench(state: Record<string, WorkbenchState>): void {
+  try { window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(state)); } catch {}
 }
 
 interface WsConfig {
@@ -111,6 +127,25 @@ export interface WsHook {
   requestPlanList: (jid: string) => void;
   /** Request the full markdown for a single plan by id. */
   requestPlan: (id: string) => void;
+  // ===== Workbench (LaunchUI) =====
+  /** jid → workbench panel state ({ current, history }). */
+  workbench: Record<string, WorkbenchState>;
+  /** Latest arrived (jid, artifactId) — drives the auto-foreground effect. */
+  workbenchLatest: { jid: string; artifactId: string; at: number } | null;
+  /** Currently-foregrounded chat jid (set by ChatPage); used by the dock. */
+  activeJid: string | null;
+  /** Set the active chat jid so the shared layout can show its workbench. */
+  setActiveJid: (jid: string | null) => void;
+  /** Tell the backend the user foregrounded an artifact (updates last_active). */
+  workbenchMarkViewed: (jid: string, artifactId: string) => void;
+  /** Close an artifact (drop from registry; kill service process). */
+  workbenchClose: (jid: string, artifactId: string) => void;
+  /** Read an artifact file's content (request/response → Promise). */
+  workbenchReadFile: (jid: string, artifactId: string, path: string) => Promise<{ content?: string; error?: string }>;
+  /** Tail the last N lines of a service artifact's log. */
+  workbenchFetchLogs: (jid: string, artifactId: string, tailLines?: number) => Promise<string>;
+  /** Promote a history artifact to current (frontend-only state swap). */
+  workbenchSetCurrent: (jid: string, artifactId: string) => void;
 }
 
 export interface PlanSummary {
@@ -171,6 +206,12 @@ export function useWebSocket(): WsHook {
   const [notifications, setNotifications]     = useState<EventNotification[]>([]);
   const [planExitRequest, setPlanExitRequest] = useState<PlanExitRequest | null>(null);
   const [agentModes, setAgentModes] = useState<Record<string, AgentMode>>({});
+  const [workbench, setWorkbench]             = useState<Record<string, WorkbenchState>>(loadWorkbench);
+  const [workbenchLatest, setWorkbenchLatest] = useState<{ jid: string; artifactId: string; at: number } | null>(null);
+  const [activeJid, setActiveJid]             = useState<string | null>(null);
+
+  // Mirror workbench state to localStorage so a refresh restores launched tabs.
+  useEffect(() => { saveWorkbench(workbench); }, [workbench]);
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -772,6 +813,47 @@ export function useWebSocket(): WsHook {
             });
             break;
           }
+          case 'workbench:new': {
+            const wbJid = msg.groupJid as string;
+            const artifact = msg.artifact as WorkbenchArtifact;
+            setWorkbench(prev => {
+              const cur = prev[wbJid] ?? { current: null, history: [] };
+              const newHistory = cur.current
+                ? [cur.current, ...cur.history.filter(a => a.id !== cur.current!.id)]
+                : cur.history;
+              return {
+                ...prev,
+                [wbJid]: { current: artifact, history: newHistory.filter(a => a.id !== artifact.id) },
+              };
+            });
+            setWorkbenchLatest({ jid: wbJid, artifactId: artifact.id, at: Date.now() });
+            break;
+          }
+          case 'workbench:service_ready':
+          case 'workbench:service_crashed':
+          case 'workbench:service_stopped': {
+            const wbJid = msg.groupJid as string;
+            const aid = msg.artifactId as string;
+            const statusUpdate = (a: WorkbenchArtifact): WorkbenchArtifact => {
+              if (a.id !== aid || !a.process) return a;
+              const status = msg.type === 'workbench:service_ready' ? 'ready'
+                : msg.type === 'workbench:service_crashed' ? 'crashed'
+                : 'stopped';
+              return { ...a, process: { ...a.process, status } };
+            };
+            setWorkbench(prev => {
+              const cur = prev[wbJid];
+              if (!cur) return prev;
+              return {
+                ...prev,
+                [wbJid]: {
+                  current: cur.current ? statusUpdate(cur.current) : null,
+                  history: cur.history.map(statusUpdate),
+                },
+              };
+            });
+            break;
+          }
           case 'agent:todos': {
             const todoJid = msg.agentJid as string;
             const todosArr = ((msg.todos as AgentTodosEntry['todos']) ?? []);
@@ -1004,6 +1086,87 @@ export function useWebSocket(): WsHook {
     rawSend({ type: 'agent:mode', groupJid: jid, mode });
   }, [rawSend]);
 
+  // ===== Workbench reverse-ops (HTTP REST → Rust /api/workbench/...) =====
+  // Unlike the old all-WS bridge, the Rust backend exposes these as REST
+  // endpoints on the UI-server origin; WS is used only for push events.
+  const wbUrl = (jid: string, id: string, action: string) =>
+    `/api/workbench/${encodeURIComponent(jid)}/${encodeURIComponent(id)}/${action}`;
+
+  const workbenchMarkViewed = useCallback((jid: string, artifactId: string) => {
+    void fetch(wbUrl(jid, artifactId, 'mark-viewed'), { method: 'POST' }).catch(() => {});
+  }, []);
+
+  const workbenchClose = useCallback((jid: string, artifactId: string) => {
+    void fetch(wbUrl(jid, artifactId, 'close'), { method: 'POST' }).catch(() => {});
+    // Remove locally immediately.
+    setWorkbench(prev => {
+      const cur = prev[jid];
+      if (!cur) return prev;
+      const isCurrent = cur.current?.id === artifactId;
+      return {
+        ...prev,
+        [jid]: {
+          current: isCurrent ? null : cur.current,
+          history: cur.history.filter(a => a.id !== artifactId),
+        },
+      };
+    });
+  }, []);
+
+  const workbenchReadFile = useCallback(async (jid: string, artifactId: string, path: string): Promise<{ content?: string; error?: string }> => {
+    try {
+      const res = await fetch(`${wbUrl(jid, artifactId, 'read-file')}?path=${encodeURIComponent(path)}`);
+      const data = await res.json() as { content?: string; error?: string };
+      // If the artifact is truly gone (closed elsewhere / daemon restart),
+      // prune local state. NOTE: engine_not_found is transient (agent not yet
+      // running) — do NOT prune on it.
+      if (data.error === 'artifact_not_found') {
+        setWorkbench(prev => {
+          const cur = prev[jid];
+          if (!cur) return prev;
+          const inState = cur.current?.id === artifactId || cur.history.some(a => a.id === artifactId);
+          if (!inState) return prev;
+          const isCurrent = cur.current?.id === artifactId;
+          return {
+            ...prev,
+            [jid]: {
+              current: isCurrent ? null : cur.current,
+              history: cur.history.filter(a => a.id !== artifactId),
+            },
+          };
+        });
+      }
+      return data;
+    } catch {
+      return { error: 'request_failed' };
+    }
+  }, []);
+
+  const workbenchFetchLogs = useCallback(async (jid: string, artifactId: string, tailLines: number = 200): Promise<string> => {
+    try {
+      const res = await fetch(`${wbUrl(jid, artifactId, 'logs')}?tail=${tailLines}`);
+      const data = await res.json() as { logs?: string };
+      return data.logs ?? '';
+    } catch {
+      return '';
+    }
+  }, []);
+
+  const workbenchSetCurrent = useCallback((jid: string, artifactId: string) => {
+    // Promote a history artifact to current; old current goes to history top.
+    setWorkbench(prev => {
+      const cur = prev[jid];
+      if (!cur) return prev;
+      if (cur.current?.id === artifactId) return prev;
+      const target = cur.history.find(a => a.id === artifactId);
+      if (!target) return prev;
+      const newHistory = cur.current
+        ? [cur.current, ...cur.history.filter(a => a.id !== artifactId)]
+        : cur.history.filter(a => a.id !== artifactId);
+      return { ...prev, [jid]: { current: target, history: newHistory } };
+    });
+  }, []);
+
   return useMemo(() => ({
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -1016,6 +1179,8 @@ export function useWebSocket(): WsHook {
     agentModes, setAgentMode,
     plansByJid, planById, requestPlanList, requestPlan,
     spaceEventsRev,
+    workbench, workbenchLatest, activeJid, setActiveJid,
+    workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -1028,5 +1193,7 @@ export function useWebSocket(): WsHook {
     agentModes, setAgentMode,
     plansByJid, planById, requestPlanList, requestPlan,
     spaceEventsRev,
+    workbench, workbenchLatest, activeJid, setActiveJid,
+    workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
   ]);
 }

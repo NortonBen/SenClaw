@@ -28,6 +28,12 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatchParents, ws.groups.length]);
 
+  // Publish the selected chat to the shared layout so its workbench dock
+  // (mutex with AgentConsole) shows this group's artifacts.
+  useEffect(() => {
+    ws.setActiveJid(selectedJid);
+  }, [selectedJid, ws.setActiveJid]);
+
   const handleSelect = (jid: string) => {
     setSelectedJid(jid);
     if (!ws.subscribed.has(jid)) ws.subscribe(jid);

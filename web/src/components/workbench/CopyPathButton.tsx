@@ -13,7 +13,7 @@ export function CopyPathButton({ path, label }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // 退化：选中文本
+      // Fallback: select the text.
       const ta = document.createElement('textarea');
       ta.value = path;
       document.body.appendChild(ta);
