@@ -21,10 +21,45 @@ use rmcp::ServiceExt;
 
 // ===== MCP param types =====
 
+// Tab ids are strings internally (`TabId = String`), but they wrap Chrome's
+// integer tab ids (e.g. "1526693519"). LLMs routinely re-emit an all-digit
+// string value as a JSON *number* in the next tool call, which a strict
+// `String` deserializer rejects ("invalid type: integer, expected a string").
+// These lenient deserializers accept a string OR a number and coerce to the
+// canonical string form, so a model echoing the id back either way works.
+fn de_string_or_number<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(serde::de::Error::custom(format!(
+            "expected string or number, got {other}"
+        ))),
+    }
+}
+
+fn de_opt_string_or_number<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    match Option::<serde_json::Value>::deserialize(d)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "expected string or number, got {other}"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct NavigateParams {
     url: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
 }
 
@@ -36,30 +71,32 @@ struct NewTabParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct CloseTabParams {
+    #[serde(deserialize_with = "de_string_or_number")]
     tab_id: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct SwitchTabParams {
+    #[serde(deserialize_with = "de_string_or_number")]
     tab_id: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct TabActionParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ClickParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     index: u32,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct TypeParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     index: u32,
     text: String,
@@ -69,7 +106,7 @@ struct TypeParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct SelectOptionParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     index: u32,
     option_text: String,
@@ -77,7 +114,7 @@ struct SelectOptionParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ScrollParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     /// "down" or "up"
     #[serde(default = "default_direction")]
@@ -97,21 +134,21 @@ fn default_direction() -> String {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct HoverParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     index: u32,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct PressKeyParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     key: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct UploadFileParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     index: u32,
     file_paths: Vec<String>,
@@ -119,14 +156,14 @@ struct UploadFileParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ExecuteJsParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     script: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct WaitParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     /// Wait type: "time", "text", "text_gone", "navigation"
     #[serde(rename = "type")]
@@ -151,7 +188,7 @@ fn default_timeout() -> u32 {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct SnapshotParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     #[serde(default)]
     depth: Option<u8>,
@@ -186,7 +223,7 @@ struct SnapshotParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ScreenshotParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     #[serde(default)]
     full_page: bool,
@@ -204,7 +241,7 @@ fn default_format() -> String {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ExtractTextParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     #[serde(default)]
     selector: Option<String>,
@@ -212,7 +249,7 @@ struct ExtractTextParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ExtractLinksParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     #[serde(default)]
     selector: Option<String>,
@@ -220,7 +257,7 @@ struct ExtractLinksParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ExtractTableParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     #[serde(default)]
     selector: Option<String>,
@@ -228,7 +265,7 @@ struct ExtractTableParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ExtractStructuredParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     schema: serde_json::Value,
     #[serde(default)]
@@ -308,7 +345,7 @@ struct CrawlStatusParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct FillFormParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     fields: Vec<FormField>,
     #[serde(default)]
@@ -317,7 +354,7 @@ struct FillFormParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ClickAndWaitParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
     index: u32,
     #[serde(default = "default_timeout")]
@@ -326,7 +363,7 @@ struct ClickAndWaitParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct StopTaskParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
 }
 
@@ -1403,4 +1440,68 @@ pub async fn run_stdio_server() -> Result<()> {
     service.waiting().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // LLMs frequently re-emit an all-digit tab id (Chrome's integer ids stored
+    // as strings, e.g. "1526693519") as a JSON *number*. The lenient
+    // deserializers must accept that without the old hard failure:
+    // "invalid type: integer `1526693519`, expected a string".
+
+    #[test]
+    fn extract_structured_accepts_numeric_tab_id() {
+        // This is the exact shape that failed in production.
+        let json = serde_json::json!({
+            "tab_id": 1526693519i64,
+            "schema": { "type": "array" }
+        });
+        let p: ExtractStructuredParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.tab_id.as_deref(), Some("1526693519"));
+    }
+
+    #[test]
+    fn extract_structured_accepts_string_tab_id() {
+        let json = serde_json::json!({
+            "tab_id": "1526693519",
+            "schema": { "type": "array" }
+        });
+        let p: ExtractStructuredParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.tab_id.as_deref(), Some("1526693519"));
+    }
+
+    #[test]
+    fn optional_tab_id_absent_is_none() {
+        let json = serde_json::json!({ "schema": { "type": "array" } });
+        let p: ExtractStructuredParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.tab_id, None);
+    }
+
+    #[test]
+    fn optional_tab_id_null_is_none() {
+        let json = serde_json::json!({ "tab_id": null, "schema": {} });
+        let p: ExtractStructuredParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.tab_id, None);
+    }
+
+    #[test]
+    fn required_tab_id_accepts_number_and_string() {
+        // CloseTabParams.tab_id is a required String.
+        let from_num: CloseTabParams =
+            serde_json::from_value(serde_json::json!({ "tab_id": 42 })).unwrap();
+        assert_eq!(from_num.tab_id, "42");
+        let from_str: CloseTabParams =
+            serde_json::from_value(serde_json::json!({ "tab_id": "tab-7" })).unwrap();
+        assert_eq!(from_str.tab_id, "tab-7");
+    }
+
+    #[test]
+    fn navigate_accepts_numeric_tab_id_with_url() {
+        let json = serde_json::json!({ "url": "https://example.com", "tab_id": 99 });
+        let p: NavigateParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.url, "https://example.com");
+        assert_eq!(p.tab_id.as_deref(), Some("99"));
+    }
 }

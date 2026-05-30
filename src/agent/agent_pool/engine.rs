@@ -155,10 +155,22 @@ impl ZenCoreApi {
             bridge.bind_engine(engine.clone(), jid, bot_token);
         }
         engines.insert(jid.to_string(), engine.clone());
+        drop(engines);
+        // Subscribe the event-bus forwarder exactly ONCE per engine — here, at
+        // creation. Previously this lived in `create_session`, which AgentPool
+        // calls more than once for the same jid (bind_group + stop_agent). Each
+        // call spawned ANOTHER subscriber on the SAME cached engine's event bus,
+        // so every think / skill / reply event was forwarded twice and the Web
+        // UI rendered everything twice. Tying the bridge to engine creation makes
+        // it 1:1 with the engine: a reused engine never double-bridges, and a
+        // destroyed + recreated engine (the old loop sees `Closed` and exits)
+        // re-bridges cleanly.
+        self.bridge_events(jid, &engine);
         engine
     }
 
     /// Subscribe to the engine's EventBus and forward events to handlers.
+    /// Called exactly once per engine, from `ensure_engine` at creation time.
     fn bridge_events(&self, jid: &str, engine: &Arc<ZenEngine>) {
         let jid = jid.to_string();
         let handlers_map = Arc::clone(&self.handlers);
@@ -401,8 +413,11 @@ impl CoreApi for ZenCoreApi {
     }
 
     fn create_session(&self, jid: &str) -> Result<()> {
+        // Do NOT bridge events here — `ensure_engine` already subscribes the
+        // forwarder exactly once per engine. AgentPool calls create_session
+        // more than once per jid (bind_group + stop_agent), so bridging here
+        // would spawn a duplicate subscriber and double every emitted event.
         let engine = self.ensure_engine(jid);
-        self.bridge_events(jid, &engine);
         engine.create_session(None)?;
         Ok(())
     }

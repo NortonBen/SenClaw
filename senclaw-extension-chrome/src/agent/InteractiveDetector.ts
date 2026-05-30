@@ -8,6 +8,8 @@
 //
 // The expensive checks (computed style, event listeners) are gated by a cheap candidate filter.
 
+import { cachedRect, cachedStyle } from './LayoutCache';
+
 const INTERACTIVE_TAGS = new Set([
   'a', 'button', 'input', 'select', 'textarea',
   'details', 'summary', 'label', 'option',
@@ -21,8 +23,21 @@ const INTERACTIVE_ROLES = new Set([
   'treeitem', 'gridcell', 'columnheader', 'rowheader',
 ]);
 
+// Cursors that signal an actionable element (page-agent's full set: drag handles,
+// resizers, zoom, context menus, etc. — not just `pointer`).
 const INTERACTIVE_CURSORS = new Set([
-  'pointer', 'move', 'text', 'grab', 'grabbing', 'cell', 'copy',
+  'pointer', 'move', 'text', 'grab', 'grabbing', 'cell', 'copy', 'alias',
+  'all-scroll', 'col-resize', 'row-resize', 'context-menu', 'crosshair',
+  'zoom-in', 'zoom-out', 'help', 'vertical-text',
+  'e-resize', 'w-resize', 'n-resize', 's-resize',
+  'ne-resize', 'nw-resize', 'se-resize', 'sw-resize',
+  'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize',
+]);
+
+// Cursors that explicitly say "you can't act on me right now" — these veto an
+// otherwise-interactive element (disabled buttons, busy controls).
+const NON_INTERACTIVE_CURSORS = new Set([
+  'not-allowed', 'no-drop', 'wait', 'progress',
 ]);
 
 // Tags that React/Vue commonly delegate events from but are NOT themselves interactive.
@@ -48,12 +63,20 @@ export function isInteractiveCandidate(el: Element): boolean {
   const tabIndex = el.getAttribute('tabindex');
   if (tabIndex && tabIndex !== '-1') return true;
 
+  // Common framework "clickable" hints — dropdown toggles / popup triggers that
+  // carry no semantic tag or role.
+  if (el.getAttribute('aria-haspopup') === 'true') return true;
+  if (el.getAttribute('data-toggle') === 'dropdown') return true;
+  if (el.classList?.contains('dropdown-toggle')) return true;
+
   return false;
 }
 
 /** Is the element disabled / inert / readonly? */
 export function isElementDisabled(el: Element): boolean {
   if ((el as HTMLButtonElement).disabled) return true;
+  if ((el as HTMLInputElement).readOnly) return true;
+  if ((el as HTMLElement).inert) return true;
   if (el.hasAttribute('inert')) return true;
   if (el.getAttribute('aria-disabled') === 'true') return true;
   return false;
@@ -74,14 +97,24 @@ export function isInteractiveElement(
   if (isFrameworkRoot(el)) return false;
   if (isElementDisabled(el)) return false;
 
-  if (isInteractiveCandidate(el)) return true;
+  const cs = style ?? cachedStyle(el);
 
-  const cs = style ?? window.getComputedStyle(el);
+  if (isInteractiveCandidate(el)) {
+    // A semantic/role-interactive element showing a disabled-style cursor is not
+    // actually actionable (page-agent applies the same veto).
+    if (NON_INTERACTIVE_CURSORS.has(cs.cursor)) return false;
+    return true;
+  }
+
   if (INTERACTIVE_CURSORS.has(cs.cursor)) return true;
 
-  // Inline event listener probe (only works in some contexts; cheap when not present)
-  // chrome.devtools.getEventListeners would be more thorough but isn't available in content scripts.
-  if ((el as any).onclick != null) return true;
+  // Inline mouse-event handler attributes / properties. getEventListeners() would be
+  // more thorough but isn't available in content scripts, so we probe the on* surface.
+  for (const attr of ['onclick', 'onmousedown', 'onmouseup', 'ondblclick'] as const) {
+    if (el.hasAttribute(attr) || typeof (el as unknown as Record<string, unknown>)[attr] === 'function') {
+      return true;
+    }
+  }
 
   return false;
 }
@@ -119,11 +152,53 @@ export function isDistinctFromAncestor(el: Element): boolean {
 
 /** True if element occupies any space on the page. */
 export function isElementVisible(el: Element, rect?: DOMRect): boolean {
-  const r = rect ?? el.getBoundingClientRect();
+  const r = rect ?? cachedRect(el);
   if (r.width <= 0 || r.height <= 0) return false;
-  const cs = window.getComputedStyle(el);
+  const cs = cachedStyle(el);
   if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') return false;
   return true;
+}
+
+/**
+ * Occlusion test — is `el` the top-most element at (a sample of) its own box, i.e.
+ * not covered by a modal / overlay / sticky bar? Ported from page-agent's
+ * `isTopElement`: sample the centre plus two opposite corners and accept if any of
+ * them hit `el` (or a descendant). `rect` must be the element's *local* viewport rect.
+ *
+ * - `viewportExpansion === -1` disables the check (full-page mode), matching page-agent.
+ * - Same-origin iframe content is addressed in its own document, so it's treated as top.
+ */
+export function isTopElement(el: Element, rect: DOMRect, viewportExpansion: number): boolean {
+  if (viewportExpansion === -1) return true;
+  if (el.ownerDocument !== document) return true;
+  if (rect.width <= 0 || rect.height <= 0) return false;
+
+  const root = el.getRootNode();
+  const inShadow = root instanceof ShadowRoot;
+  const boundary: Node = inShadow ? root : document.documentElement;
+  const margin = 5;
+  const points = [
+    { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+    { x: rect.left + margin, y: rect.top + margin },
+    { x: rect.right - margin, y: rect.bottom - margin },
+  ];
+
+  return points.some(({ x, y }) => {
+    let hit: Element | null;
+    try {
+      hit = inShadow
+        ? ((root as ShadowRoot).elementFromPoint(x, y) as Element | null)
+        : document.elementFromPoint(x, y);
+    } catch {
+      return true; // hit-test failed — don't over-filter
+    }
+    let cur: Element | null = hit;
+    while (cur && cur !== boundary) {
+      if (cur === el) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  });
 }
 
 /**
@@ -161,7 +236,7 @@ export function isScrollableContainer(el: Element, style?: CSSStyleDeclaration):
   // Ignore trivially small panes — they're rarely meaningful scroll targets.
   if (html.clientHeight < 40 && html.clientWidth < 40) return false;
 
-  const cs = style ?? window.getComputedStyle(el);
+  const cs = style ?? cachedStyle(el);
   const canY =
     (cs.overflowY === 'auto' || cs.overflowY === 'scroll') &&
     html.scrollHeight > html.clientHeight + 1;

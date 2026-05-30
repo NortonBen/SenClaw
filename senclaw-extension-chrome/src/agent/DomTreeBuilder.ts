@@ -14,10 +14,12 @@ import {
   isInteractiveElement,
   isDistinctFromAncestor,
   isScrollableContainer,
+  isTopElement,
   getScrollData,
   implicitRole,
 } from './InteractiveDetector';
 import { putInSelectorMap, resetSelectorMap, markUrl } from './SelectorMap';
+import { resetLayoutCache, cachedRect, cachedStyle } from './LayoutCache';
 
 export interface DomNode {
   id: string;
@@ -248,8 +250,10 @@ function walkElement(
 ): string | null {
   if (state.interactive.length >= state.opts.maxInteractive) return null;
 
-  // Skip own overlay / framework-tagged nodes
+  // Skip own overlay / framework-tagged nodes, and anything explicitly hidden from
+  // assistive tech — page-agent prunes the whole aria-hidden subtree.
   if (el.hasAttribute?.('data-senclaw-ignore')) return null;
+  if (el.getAttribute('aria-hidden') === 'true') return null;
 
   // SCRIPT/STYLE/NOSCRIPT etc — no value to LLM
   const tag = el.tagName.toLowerCase();
@@ -257,36 +261,38 @@ function walkElement(
     return null;
   }
 
-  let rect: DOMRect;
+  let localRect: DOMRect;
   try {
-    rect = el.getBoundingClientRect();
+    localRect = cachedRect(el);
   } catch {
     return null;
   }
-  // Apply iframe offset so coordinates are relative to top frame's viewport
+  // Apply iframe offset so coordinates are relative to top frame's viewport. The
+  // un-offset `localRect` is kept for the occlusion hit-test (same document).
+  let rect = localRect;
   if (frameOffsetX || frameOffsetY) {
     rect = new DOMRect(
-      rect.x + frameOffsetX,
-      rect.y + frameOffsetY,
-      rect.width,
-      rect.height,
+      localRect.x + frameOffsetX,
+      localRect.y + frameOffsetY,
+      localRect.width,
+      localRect.height,
     );
   }
 
   const visible = isElementVisible(el, rect);
   const inExpandedViewport = isInExpandedViewport(rect, state.opts.viewportExpansion);
 
-  // Pre-fetch computed style once
+  // Pre-fetch computed style once (cached for the rest of this build pass).
   let style: CSSStyleDeclaration | undefined;
   if (visible) {
     try {
-      style = window.getComputedStyle(el);
+      style = cachedStyle(el);
     } catch {
       /* cross-origin issue, skip */
     }
   }
 
-  const interactive =
+  const maybeInteractive =
     visible &&
     inExpandedViewport &&
     isInteractiveElement(el, style) &&
@@ -294,8 +300,21 @@ function walkElement(
 
   // A scrollable sub-container that isn't itself clickable still gets indexed so
   // the agent can target it with a Scroll(container_index) action.
-  const scrollable =
+  const maybeScrollable =
     visible && inExpandedViewport && isScrollableContainer(el, style);
+
+  // Occlusion gate (page-agent: visible && (isTopElement || ARIA menu container)).
+  // Only run the hit-test for elements that would otherwise be addressed, so we pay
+  // for elementFromPoint on the few candidates instead of every visible node.
+  let interactive = false;
+  let scrollable = false;
+  if (maybeInteractive || maybeScrollable) {
+    const role = el.getAttribute('role');
+    const isMenuContainer = role === 'menu' || role === 'menubar' || role === 'listbox';
+    const onTop = isMenuContainer || isTopElement(el, localRect, state.opts.viewportExpansion);
+    interactive = maybeInteractive && onTop;
+    scrollable = maybeScrollable && onTop;
+  }
 
   const id = String(state.nextId++);
   const node: DomNode = {
@@ -386,6 +405,8 @@ export function buildDomTree(opts: Partial<BuildOptions> = {}): DomTreeResult {
   // Reset selectorMap on URL change so isNew detection makes sense.
   resetSelectorMap();
   markUrl(location.href);
+  // Fresh layout-read cache for this pass (memoizes rect/style across all checks).
+  resetLayoutCache();
 
   const state: WalkState = {
     nodes: {},

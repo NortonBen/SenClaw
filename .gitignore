@@ -63,4 +63,5 @@ test_prompt.sh
 .cursor/
 .claude/
 .vscode/
-workbench/.artifacts.app:ch_20d27e6fb350e8cc:user:mobile-app.json
+workbench/
+skills/agent-browser/*.html
