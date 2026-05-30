@@ -434,6 +434,26 @@ fn tool_names_sig(tool_uses: &[ContentBlock]) -> String {
     names.join(",")
 }
 
+/// Exact signature of one tool call: name + canonical JSON args. Used to catch
+/// a model re-issuing an *identical* call (same query, same URL) that can only
+/// return what it already has.
+fn tool_call_sig(block: &ContentBlock) -> Option<String> {
+    if let ContentBlock::ToolUse { name, input, .. } = block {
+        Some(format!(
+            "{name}\u{1}{}",
+            serde_json::to_string(input).unwrap_or_default()
+        ))
+    } else {
+        None
+    }
+}
+
+/// Synthetic tool result returned in place of re-executing an identical call.
+const DUPLICATE_CALL_NOTE: &str = "Duplicate call: you already called this tool with these exact \
+arguments earlier in this conversation and received a result above. Re-running it returns nothing \
+new. Use the information you already have to write your final answer to the user now. If you truly \
+need different information, change the arguments — do not repeat the identical call.";
+
 /// Run the conversation query loop. Returns the final message history.
 ///
 /// This is an async generator conceptually — each "turn" is a call to the LLM
@@ -455,6 +475,9 @@ pub async fn query(
     let mut last_sig: Option<String> = None;
     let mut stall_streak: usize = 0;
     let mut nudged = false;
+    // Exact (name+args) tool-call signatures already executed this user input,
+    // so identical re-issues can be short-circuited instead of re-run.
+    let mut seen_tool_sigs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         // Check cancellation before each LLM call
@@ -863,7 +886,46 @@ pub async fn query(
             session_id: config.session_id.clone(),
         };
 
-        let tool_results = run_tools::run_tools(&tool_uses, cancel, &ctx).await;
+        // Intercept exact-duplicate tool calls. A weak model often re-issues
+        // the same call (identical search query, identical Skill load) without
+        // ever using the result. Execute only fresh calls; for duplicates,
+        // synthesize a result telling the model the data is already available.
+        let mut fresh: Vec<ContentBlock> = Vec::new();
+        let mut dup_ids: Vec<String> = Vec::new();
+        for tu in &tool_uses {
+            let id = match tu {
+                ContentBlock::ToolUse { id, .. } => id.clone(),
+                _ => continue,
+            };
+            match tool_call_sig(tu) {
+                Some(sig) if seen_tool_sigs.contains(&sig) => dup_ids.push(id),
+                Some(sig) => {
+                    seen_tool_sigs.insert(sig);
+                    fresh.push(tu.clone());
+                }
+                None => fresh.push(tu.clone()),
+            }
+        }
+
+        let mut tool_results = if fresh.is_empty() {
+            Vec::new()
+        } else {
+            run_tools::run_tools(&fresh, cancel, &ctx).await
+        };
+        if !dup_ids.is_empty() {
+            info!(
+                "[{}] intercepted {} duplicate tool call(s) — returning 'already have this' note",
+                config.agent_id,
+                dup_ids.len()
+            );
+            for id in &dup_ids {
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: DUPLICATE_CALL_NOTE.to_string(),
+                    is_error: false,
+                });
+            }
+        }
 
         // Checkpoint 2: after tool execution, before recursion
         if cancel.is_cancelled() {
@@ -907,6 +969,25 @@ pub async fn query(
                     agent_id: config.agent_id.to_string(),
                     content: INTERRUPT_MESSAGE.to_string(),
                 }));
+            return Ok(messages);
+        }
+
+        // 5b. Answer-and-stop: the model produced a real answer this turn AND
+        //     every tool call it made was an intercepted duplicate (nothing
+        //     fresh ran). There is no work left — deliver the answer instead of
+        //     looping and re-generating it. Observed with weak models that emit
+        //     the full answer plus a redundant tool call on every turn, so the
+        //     "no tool calls → done" exit never triggers.
+        if fresh.is_empty() && !dup_ids.is_empty() && !text_content.trim().is_empty() {
+            info!(
+                "[{}] answer present and all {} tool call(s) were duplicates — completing",
+                config.agent_id,
+                tool_uses.len()
+            );
+            messages.push(assistant_msg);
+            if !tool_results.is_empty() {
+                messages.push(create_user_message(tool_results));
+            }
             return Ok(messages);
         }
 
@@ -1115,6 +1196,19 @@ mod tests {
 
         // Non-tool blocks ignored.
         assert_eq!(tool_names_sig(&[ContentBlock::Text { text: "hi".into() }]), "");
+    }
+
+    #[test]
+    fn tool_call_sig_distinguishes_args_not_just_name() {
+        let a = tool_call_sig(&tool_use("search", serde_json::json!({"q": "gold"})));
+        let a2 = tool_use("search", serde_json::json!({"q": "gold"}));
+        let b = tool_call_sig(&tool_use("search", serde_json::json!({"q": "silver"})));
+        // Identical name+args → identical signature (caught as duplicate).
+        assert_eq!(a, tool_call_sig(&a2));
+        // Different args → different signature (allowed through).
+        assert_ne!(a, b);
+        // Non-tool block → no signature.
+        assert!(tool_call_sig(&ContentBlock::Text { text: "x".into() }).is_none());
     }
 
     #[test]
