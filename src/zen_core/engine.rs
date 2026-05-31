@@ -940,6 +940,18 @@ impl ZenCore for ZenEngine {
             if let Some(hint) = self.build_skill_match_reminder(&prompt) {
                 blocks.push(ContentBlock::Text { text: hint });
             }
+            // Per-turn language lock. Small models (e.g. Qwen) default to
+            // reasoning in Chinese/English regardless of the user's language;
+            // naming the detected language in a reminder right next to the
+            // prompt steers both the thinking block and the reply. Re-evaluated
+            // every turn so a language switch mid-conversation is honoured.
+            if let Some(lang) = detect_user_language(&prompt) {
+                blocks.push(ContentBlock::Text {
+                    text: format!(
+                        "<system-reminder>\nReply in {lang}, and do your reasoning (the thinking block) in {lang} too — match the user's language. Do not reason or answer in English or Chinese when the user wrote {lang}.\n</system-reminder>"
+                    ),
+                });
+            }
             blocks.push(ContentBlock::Text {
                 text: prompt.clone(),
             });
@@ -1738,6 +1750,38 @@ impl Tool for McpRegistryBridgeTool {
     }
 }
 
+/// Best-effort detection of the user's language from a message, returning a
+/// human-readable name to lock into a per-turn reminder. Returns `None` when
+/// the script is ambiguous (plain ASCII) — the system prompt's generic
+/// "user's language" rule covers that case.
+///
+/// Scoped to the languages this deployment actually serves (Vietnamese,
+/// Chinese, English); not a general language identifier.
+fn detect_user_language(text: &str) -> Option<&'static str> {
+    let mut has_cjk = false;
+    let mut has_viet = false;
+    for c in text.chars() {
+        let u = c as u32;
+        if (0x4E00..=0x9FFF).contains(&u) || (0x3400..=0x4DBF).contains(&u) {
+            has_cjk = true;
+        } else if (0x1EA0..=0x1EFF).contains(&u)        // Latin Extended Additional — almost all Vietnamese
+            || matches!(u, 0x0110 | 0x0111             // Đ đ
+                          | 0x01A0 | 0x01A1            // Ơ ơ
+                          | 0x01AF | 0x01B0            // Ư ư
+                          | 0x0102 | 0x0103)           // Ă ă
+        {
+            has_viet = true;
+        }
+    }
+    if has_viet {
+        Some("Vietnamese")
+    } else if has_cjk {
+        Some("Chinese")
+    } else {
+        None
+    }
+}
+
 /// Extract substrings inside straight or curly double-quotes. Used by skill
 /// pre-match to give high weight to explicit example triggers like
 /// `e.g. "tìm giá vàng hôm nay"` in `when-to-use` descriptions.
@@ -1769,6 +1813,15 @@ fn extract_quoted_phrases(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detect_user_language_covers_vi_zh_en() {
+        assert_eq!(detect_user_language("tìm kiếm giá vàng hôm nay"), Some("Vietnamese"));
+        assert_eq!(detect_user_language("đổi mật khẩu giúp tôi"), Some("Vietnamese"));
+        assert_eq!(detect_user_language("今天黄金价格"), Some("Chinese"));
+        // Plain ASCII is ambiguous → defer to the system prompt's generic rule.
+        assert_eq!(detect_user_language("what is the gold price today"), None);
+    }
 
     #[test]
     fn extract_quoted_phrases_straight_quotes() {

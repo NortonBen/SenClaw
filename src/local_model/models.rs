@@ -65,6 +65,18 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         native_supported: true,
         vision: false,
     },
+
+    // ── Gemma 4 (PLE + cross-layer KV sharing, MLX native, text-only path) ─
+    // `gemma4_text` backbone of `Gemma4ForConditionalGeneration`; vision/audio
+    // towers are skipped. Per-Layer Embeddings give the "effective" 2B params.
+    KnownModel {
+        id: "mlx-community/gemma-4-e2b-it-4bit",
+        label: "Gemma 4 E2B-it 4-bit — text-only (vision/audio towers skipped)",
+        approx_size_gb: 3.6,
+        context_length: 131_072,
+        native_supported: true,
+        vision: false,
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static KnownModel> {

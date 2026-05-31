@@ -35,6 +35,7 @@ enum ModelKind {
     Llama(super::mlx_lm::models::llama::Model),
     Gemma2(super::mlx_lm::models::gemma2::Gemma2CausalLM),
     Gemma3(super::mlx_lm::models::gemma3::Model),
+    Gemma4(super::mlx_lm::models::gemma4::Model),
     Mamba2(super::mlx_lm::models::mamba2::Model),
     FalconMamba(super::mlx_lm::models::falcon_mamba::Model),
     BonsaiQ1(super::mlx_lm::models::bonsai_q1::LoadedBonsaiQ1),
@@ -48,6 +49,7 @@ impl ModelKind {
             Self::Llama(_) => "llama",
             Self::Gemma2(_) => "gemma2",
             Self::Gemma3(_) => "gemma3",
+            Self::Gemma4(_) => "gemma4",
             Self::Mamba2(_) => "mamba2",
             Self::FalconMamba(_) => "falcon_mamba",
             Self::BonsaiQ1(_) => "bonsai_q1",
@@ -69,6 +71,7 @@ impl ModelKind {
             Self::Llama(m) => m.resolve_special_tokens(template, tokenizer),
             Self::Gemma2(m) => m.resolve_special_tokens(template, tokenizer),
             Self::Gemma3(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::Gemma4(m) => m.resolve_special_tokens(template, tokenizer),
             Self::Mamba2(m) => m.resolve_special_tokens(template, tokenizer),
             Self::FalconMamba(m) => m.resolve_special_tokens(template, tokenizer),
             Self::BonsaiQ1(b) => b.resolve_special_tokens(template, tokenizer),
@@ -89,6 +92,7 @@ impl ModelKind {
             Self::Llama(m) => m.stop_token_ids(tokenizer),
             Self::Gemma2(m) => m.stop_token_ids(tokenizer),
             Self::Gemma3(m) => m.stop_token_ids(tokenizer),
+            Self::Gemma4(m) => m.stop_token_ids(tokenizer),
             Self::Mamba2(m) => m.stop_token_ids(tokenizer),
             Self::FalconMamba(m) => m.stop_token_ids(tokenizer),
             Self::BonsaiQ1(b) => b.stop_token_ids(tokenizer),
@@ -393,6 +397,14 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
             let hd = m.args.head_dim;
             let kvh = m.args.num_key_value_heads;
             (ModelKind::Gemma3(m), n, hd, kvh)
+        }
+        Arch::Gemma4 => {
+            let m = load_gemma4_any(model_dir)
+                .map_err(|e| anyhow::anyhow!("load_gemma4 failed: {e:?}"))?;
+            let n = m.args.num_hidden_layers as usize;
+            let hd = m.args.head_dim;
+            let kvh = m.args.num_key_value_heads;
+            (ModelKind::Gemma4(m), n, hd, kvh)
         }
         Arch::Mamba2 => {
             let m = load_mamba2_any(model_dir)
@@ -1125,6 +1137,15 @@ fn generate_with_cache(
             }
             m.make_caches(max_kv_tokens)
         }
+        ModelKind::Gemma4(m) => {
+            if tq_bits.is_some() {
+                tracing::warn!(
+                    "[local-mlx-native] kv_cache_bits ignored for Gemma-4 (TurboQuant path \
+                     not wired); non-shared layers use FP16 KV, KV-shared layers reuse them"
+                );
+            }
+            m.make_caches(max_kv_tokens)
+        }
         ModelKind::Mamba2(m) => {
             if tq_bits.is_some() {
                 tracing::warn!(
@@ -1277,7 +1298,7 @@ fn generate_with_cache(
         .temperature
         .map(|t| t.clamp(0.0_f32, 4.0_f32))
         .unwrap_or_else(|| match &state.model {
-            ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::BonsaiQ1(_) => 0.65_f32,
+            ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::Gemma4(_) | ModelKind::BonsaiQ1(_) => 0.65_f32,
             ModelKind::Qwen3(_) | ModelKind::Qwen35(_) => {
                 if gen_opt.enable_thinking.unwrap_or(false) {
                     0.6_f32
@@ -1296,7 +1317,7 @@ fn generate_with_cache(
         .repetition_penalty
         .map(|p| p.clamp(1.0_f32, 2.0_f32))
         .unwrap_or_else(|| match &state.model {
-            ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::BonsaiQ1(_) => 1.15_f32,
+            ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::Gemma4(_) | ModelKind::BonsaiQ1(_) => 1.15_f32,
             ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_)
                 if decode_temperature == 0.0_f32 =>
             {
@@ -1441,6 +1462,9 @@ fn generate_with_cache(
                 m.forward(input)
                     .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
             }
+            ModelKind::Gemma4(m) => m
+                .forward(&prompt_tokens, &mut cache, rope_offset)
+                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
             ModelKind::Mamba2(m) => m
                 .forward(&prompt_tokens, &mut cache, &scan)
                 .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
@@ -1533,6 +1557,9 @@ fn generate_with_cache(
                     m.forward(input)
                         .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
                 }
+                ModelKind::Gemma4(m) => m
+                    .forward(&chunk_arr, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?,
                 ModelKind::BonsaiQ1(b) => b
                     .gpu
                     .forward_all_logits_native(&chunk_arr, &mut cache, rope_offset)
@@ -1714,6 +1741,9 @@ fn generate_with_cache(
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Gemma3(m) => m
                     .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Gemma4(m) => m
+                    .forward($inputs, &mut cache, rope_offset)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Mamba2(m) => m
                     .forward($inputs, &mut cache, &scan)
@@ -1943,6 +1973,9 @@ fn generate_with_cache(
                 m.forward(decode_input)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
             }
+            ModelKind::Gemma4(m) => m
+                .forward(&inputs, &mut cache, rope_offset)
+                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
             ModelKind::Mamba2(m) => m
                 .forward(&inputs, &mut cache, &scan)
                 .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
@@ -2112,6 +2145,7 @@ enum Arch {
     Llama,
     Gemma2,
     Gemma3,
+    Gemma4,
     Mamba2,
     FalconMamba,
     BonsaiQ1,
@@ -2373,6 +2407,273 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
         .eval()
         .map_err(|e| anyhow::anyhow!("eval after load failed: {e:?}"))?;
     Ok(model)
+}
+
+/// Load a Gemma-4 [`Model`]. Mirrors [`load_gemma3_any`] (post-load
+/// `nn::quantize` + safetensors key remap, `language_model.` prefix strip) with
+/// two extra `QuantizedEmbedding` workarounds: Gemma-4 carries **two** embedding
+/// tables — the usual `embed_tokens` and the Per-Layer-Embedding table
+/// `embed_tokens_per_layer` — both of which mlx-rs 0.25.3 leaves without
+/// `#[param]`-visible `inner/scales/biases` after quantization.
+fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::gemma4::Model> {
+    use super::mlx_lm::models::gemma4::{get_gemma4_model_args, Model, WeightMap};
+    use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
+    use std::collections::HashSet;
+
+    let args = get_gemma4_model_args(model_dir)
+        .map_err(|e| anyhow::anyhow!("read gemma4 args failed: {e:?}"))?;
+    let first_kv_shared = args.first_kv_shared();
+    let model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
+
+    let cfg_path = model_dir.join("config.json");
+    let raw = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
+    let cfg: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let quant = cfg
+        .get("quantization")
+        .or_else(|| cfg.get("quantization_config"))
+        .and_then(|q| {
+            let g = q.get("group_size")?.as_i64()? as i32;
+            let b = q.get("bits")?.as_i64()? as i32;
+            Some((g, b))
+        });
+
+    let mut model = if let Some((group_size, bits)) = quant {
+        tracing::info!(
+            "[local-mlx-native] quantizing Gemma-4 layers: group_size={group_size}, bits={bits}"
+        );
+        let m = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
+            .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
+        m.eval()
+            .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
+        m
+    } else {
+        model
+    };
+    let is_quant = quant.is_some();
+
+    let mut shard_files: Vec<std::path::PathBuf> = Vec::new();
+    let weights_index = model_dir.join("model.safetensors.index.json");
+    if weights_index.exists() {
+        let json = std::fs::read_to_string(&weights_index)
+            .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
+        let map: WeightMap = serde_json::from_str(&json)
+            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let files: HashSet<&String> = map.weight_map.values().collect();
+        for f in files {
+            shard_files.push(model_dir.join(f));
+        }
+    } else {
+        let single = model_dir.join("model.safetensors");
+        if !single.exists() {
+            anyhow::bail!(
+                "no model.safetensors.index.json or model.safetensors in {}",
+                model_dir.display()
+            );
+        }
+        shard_files.push(single);
+    }
+
+    // `language_model.model.X` → `model.X`; `language_model.lm_head.X` → `lm_head.X`.
+    let strip = |key: &str| -> String {
+        key.strip_prefix("language_model.").unwrap_or(key).to_string()
+    };
+
+    let mut total_loaded = 0usize;
+    let mut total_missed = 0usize;
+    let mut total_skipped_mm = 0usize;
+    let mut unmatched_samples: Vec<String> = Vec::new();
+
+    // Vision/audio tower weights are intentionally skipped on the text-only
+    // path — account for them separately so they don't drown the warning that
+    // surfaces a *real* unmatched text-backbone key.
+    let is_multimodal_key = |k: &str| {
+        k.starts_with("vision_tower.")
+            || k.starts_with("audio_tower.")
+            || k.starts_with("embed_vision.")
+            || k.starts_with("embed_audio.")
+            || k.starts_with("multi_modal_projector.")
+    };
+
+    // KV-shared layers (idx ≥ first_kv_shared) reuse earlier layers' K/V at
+    // runtime, so their own `k_proj`/`v_proj`/`k_norm` weights — which the
+    // checkpoint may still carry — are vestigial. The reference `sanitize()`
+    // drops them; we simply don't allocate slots for them, so treat them as
+    // intentionally-skipped rather than "unmatched".
+    let is_vestigial_shared_kv = |k: &str| -> bool {
+        let Some(rest) = k.strip_prefix("model.layers.") else {
+            return false;
+        };
+        let Some((idx_str, tail)) = rest.split_once('.') else {
+            return false;
+        };
+        let Ok(idx) = idx_str.parse::<i32>() else {
+            return false;
+        };
+        idx >= first_kv_shared
+            && (tail.starts_with("self_attn.k_proj")
+                || tail.starts_with("self_attn.v_proj")
+                || tail.starts_with("self_attn.k_norm"))
+    };
+
+    // QuantizedEmbedding captures (applied after the shard loop).
+    let mut embed_weight: Option<mlx_rs::Array> = None;
+    let mut embed_scales: Option<mlx_rs::Array> = None;
+    let mut embed_biases: Option<mlx_rs::Array> = None;
+    let mut ple_weight: Option<mlx_rs::Array> = None;
+    let mut ple_scales: Option<mlx_rs::Array> = None;
+    let mut ple_biases: Option<mlx_rs::Array> = None;
+
+    let mut unfilled_slots: HashSet<String> = {
+        let snap = model.parameters_mut().flatten();
+        snap.keys().map(|k| k.to_string()).collect()
+    };
+    for shard in &shard_files {
+        let loaded = mlx_rs::Array::load_safetensors(shard)
+            .map_err(|e| anyhow::anyhow!("read shard {}: {e:?}", shard.display()))?;
+        let mut params = model.parameters_mut().flatten();
+        for (raw_key, value) in loaded {
+            let key = strip(raw_key.as_str());
+            match key.as_str() {
+                "model.embed_tokens.weight" => {
+                    embed_weight = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens.scales" => {
+                    embed_scales = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens.biases" => {
+                    embed_biases = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens_per_layer.weight" => {
+                    ple_weight = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens_per_layer.scales" => {
+                    ple_scales = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens_per_layer.biases" => {
+                    ple_biases = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(slot) = params.get_mut(key.as_str()) {
+                **slot = value;
+                total_loaded += 1;
+                unfilled_slots.remove(&key);
+                continue;
+            }
+            if is_quant {
+                if let Some(stripped) = key.strip_suffix(".weight") {
+                    let remapped = format!("{stripped}.inner.weight");
+                    if let Some(slot) = params.get_mut(remapped.as_str()) {
+                        **slot = value;
+                        total_loaded += 1;
+                        unfilled_slots.remove(&remapped);
+                        continue;
+                    }
+                }
+                if let Some(stripped) = key.strip_suffix(".bias") {
+                    let remapped = format!("{stripped}.inner.bias");
+                    if let Some(slot) = params.get_mut(remapped.as_str()) {
+                        **slot = value;
+                        total_loaded += 1;
+                        unfilled_slots.remove(&remapped);
+                        continue;
+                    }
+                }
+            }
+            if is_multimodal_key(&key) || is_vestigial_shared_kv(&key) {
+                total_skipped_mm += 1;
+                continue;
+            }
+            total_missed += 1;
+            if unmatched_samples.len() < 5 {
+                unmatched_samples.push(key);
+            }
+        }
+    }
+
+    apply_quantized_embedding(
+        &mut model.model.embed_tokens,
+        embed_weight,
+        embed_scales,
+        embed_biases,
+    );
+    if let Some(eple) = model.model.embed_tokens_per_layer.as_mut() {
+        apply_quantized_embedding(eple, ple_weight, ple_scales, ple_biases);
+    }
+
+    tracing::info!(
+        "[local-mlx-native] gemma4 safetensor load: {total_loaded} matched, {total_missed} unmatched, \
+         {total_skipped_mm} vision/audio weights skipped (text-only path; quantized={is_quant})"
+    );
+    if !unmatched_samples.is_empty() {
+        tracing::warn!(
+            "[local-mlx-native] gemma4 unmatched key samples: {}",
+            unmatched_samples.join(", ")
+        );
+    }
+    if !unfilled_slots.is_empty() {
+        let mut samples: Vec<&String> = unfilled_slots.iter().collect();
+        samples.sort();
+        let preview: Vec<&str> = samples.iter().take(8).map(|s| s.as_str()).collect();
+        tracing::warn!(
+            "[local-mlx-native] gemma4 {} parameter slot(s) NOT populated — first few: {}",
+            unfilled_slots.len(),
+            preview.join(", ")
+        );
+    }
+    if total_loaded == 0 {
+        anyhow::bail!("no safetensor keys matched the Gemma-4 parameter tree");
+    }
+
+    model
+        .eval()
+        .map_err(|e| anyhow::anyhow!("eval after load failed: {e:?}"))?;
+    Ok(model)
+}
+
+/// Apply captured `QuantizedEmbedding` weight/scales/biases (mlx-rs 0.25.3 leaves
+/// the inner fields unannotated, so `parameters_mut()` misses them).
+fn apply_quantized_embedding(
+    embed: &mut mlx_rs::quantization::MaybeQuantized<mlx_rs::nn::Embedding>,
+    weight: Option<mlx_rs::Array>,
+    scales: Option<mlx_rs::Array>,
+    biases: Option<mlx_rs::Array>,
+) {
+    if weight.is_none() && scales.is_none() && biases.is_none() {
+        return;
+    }
+    match embed {
+        mlx_rs::quantization::MaybeQuantized::Quantized(q) => {
+            if let Some(w) = weight {
+                q.inner.weight.value = w;
+            }
+            if let Some(s) = scales {
+                q.scales.value = s;
+            }
+            if let Some(b) = biases {
+                q.biases.value = b;
+            }
+        }
+        mlx_rs::quantization::MaybeQuantized::Original(e) => {
+            if let Some(w) = weight {
+                e.weight.value = w;
+            }
+        }
+    }
 }
 
 /// Load a Mamba-2 [`Model`]. Weight-population uses `load_safetensors` (no
@@ -2842,6 +3143,12 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
                 if mt == "gemma3" || mt.starts_with("gemma3") {
                     return Ok(Arch::Gemma3);
                 }
+                // Gemma-4 (`gemma4` multimodal wrapper / `gemma4_text` text-only).
+                // Distinct arch from Gemma-3: PLE, cross-layer KV sharing,
+                // proportional/partial RoPE — see `gemma4.rs`.
+                if mt == "gemma4" || mt.starts_with("gemma4") {
+                    return Ok(Arch::Gemma4);
+                }
                 // Llama covers `llama`, `llama-3`, `llama3`, Nesso, etc.
                 if mt == "llama" || mt.starts_with("llama") {
                     return Ok(Arch::Llama);
@@ -2877,6 +3184,9 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
     if lower.contains("gemma2") || lower.contains("gemma-2") {
         return Ok(Arch::Gemma2);
     }
+    if lower.contains("gemma-4") || lower.contains("gemma4") {
+        return Ok(Arch::Gemma4);
+    }
     if lower.contains("gemma-3") || lower.contains("gemma3") {
         return Ok(Arch::Gemma3);
     }
@@ -2887,7 +3197,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
         return Ok(Arch::BonsaiQ1);
     }
     anyhow::bail!(
-        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, mamba2, mamba, falcon_mamba, bonsai / bonsai_q1.",
+        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, gemma4, mamba2, mamba, falcon_mamba, bonsai / bonsai_q1.",
         model_id
     )
 }
