@@ -46,7 +46,7 @@
 use std::path::Path;
 
 use minijinja::Environment;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -610,11 +610,9 @@ impl LocalStreamParser {
         if body_clean.is_empty() {
             return;
         }
-        if name == "thought" || name.is_empty() {
-            out.push(ParserEvent::Reasoning(body_clean));
-        } else {
-            // Other channels (e.g. "answer") → visible.
-            out.push(ParserEvent::Visible(body_clean));
+        match route_channel(&name) {
+            ChannelRouting::Reasoning => out.push(ParserEvent::Reasoning(body_clean)),
+            ChannelRouting::Visible => out.push(ParserEvent::Visible(body_clean)),
         }
     }
 
@@ -634,23 +632,28 @@ impl LocalStreamParser {
         if body_clean.is_empty() {
             return;
         }
-        let is_thought = name == "thought" || name.is_empty();
-        if !is_thought {
-            // Non-thought channels go straight to visible (current convention).
-            out.push(ParserEvent::Visible(body_clean));
-            return;
-        }
-        if let Some((reasoning, answer)) = split_unclosed_thought_body(&body_clean) {
-            tracing::debug!(
-                "[stream-parser] unclosed thought channel split into \
-                 reasoning ({} chars) + visible ({} chars)",
-                reasoning.len(),
-                answer.len(),
-            );
-            out.push(ParserEvent::Reasoning(reasoning));
-            out.push(ParserEvent::Visible(answer));
-        } else {
-            out.push(ParserEvent::Reasoning(body_clean));
+        // Only the reasoning-routed channels (`thought`/`thinking`/unknown)
+        // get the smart-split treatment — that's where Gemma-4's "forgot to
+        // close before answering" quirk shows up. A channel that's already
+        // routed to Visible (`answer`) is emitted as-is, no split needed.
+        match route_channel(&name) {
+            ChannelRouting::Visible => {
+                out.push(ParserEvent::Visible(body_clean));
+            }
+            ChannelRouting::Reasoning => {
+                if let Some((reasoning, answer)) = split_unclosed_thought_body(&body_clean) {
+                    tracing::debug!(
+                        "[stream-parser] unclosed thought channel split into \
+                         reasoning ({} chars) + visible ({} chars)",
+                        reasoning.len(),
+                        answer.len(),
+                    );
+                    out.push(ParserEvent::Reasoning(reasoning));
+                    out.push(ParserEvent::Visible(answer));
+                } else {
+                    out.push(ParserEvent::Reasoning(body_clean));
+                }
+            }
         }
     }
 
@@ -737,193 +740,56 @@ fn split_channel_name(content: &str) -> (String, String) {
     }
 }
 
-// ── Tool-call body parsing ──────────────────────────────────────────────────
+/// Where the body of a channel block should be emitted — `Reasoning`
+/// (collapsible `<think>` widget in the UI) or `Visible` (user-facing answer).
+///
+/// Gemma-4's templates use named channels (`<|channel>NAME\n…<channel|>`) to
+/// distinguish kinds of model output. The model is mostly trained on `thought`
+/// (chain-of-thought) and `answer` (final user-facing reply), but the format
+/// is open-ended — other names like `analysis` / `plan` / `critique` could
+/// appear in custom templates. Default-to-`Reasoning` is the safer choice
+/// here: an unrecognised channel is almost certainly model-internal content,
+/// and routing it to Reasoning keeps it tucked into the collapsible widget
+/// rather than dumping potentially noisy meta-content into the visible body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelRouting {
+    Reasoning,
+    Visible,
+}
+
+fn route_channel(name: &str) -> ChannelRouting {
+    match name.trim().to_ascii_lowercase().as_str() {
+        // Explicit user-facing answer channel.
+        "answer" | "response" | "reply" | "final" => ChannelRouting::Visible,
+        // `thought` / `thinking` — Gemma-4 thinking channel. Also the empty
+        // case (channel opened with no name preceded by `\n`) and any other
+        // unrecognised meta-channel default to Reasoning so we never leak
+        // model internals into the visible body unintentionally.
+        _ => ChannelRouting::Reasoning,
+    }
+}
+
+// ── Tool-call body dispatch ─────────────────────────────────────────────────
+//
+// Generic orchestration only. The actual format-specific parsers live in each
+// model's own file (divide-and-conquer):
+//
+//   • Gemma-4 harmony  → [`super::mlx_lm::models::gemma4::parser::parse_tool_call_body`]
+//   • Qwen JSON/XML    → [`super::mlx_lm::models::qwen_common::parse_tool_call_body`]
+//
+// Adding a new model dialect: implement its body parser in the model file's
+// own `parser` submodule, add a `ToolCallFormat` variant here, and route it
+// in `parse_tool_call_body` below.
 
 fn parse_tool_call_body(body: &str, format: ToolCallFormat, idx: usize) -> Option<Value> {
     match format {
-        ToolCallFormat::Gemma4Compact => parse_gemma4_tool_call_body(body, idx),
-        ToolCallFormat::QwenJsonOrXml => parse_qwen_tool_call_body(body, idx),
-    }
-}
-
-pub(crate) fn parse_gemma4_tool_call_body(body: &str, idx: usize) -> Option<Value> {
-    let body = body.trim();
-    let body = body.strip_prefix("call:").unwrap_or(body).trim();
-    let brace = body.find('{')?;
-    let name = body[..brace].trim();
-    if name.is_empty() {
-        return None;
-    }
-    let (args_val, _) = parse_gemma4_value(body[brace..].trim());
-    let arguments = serde_json::to_string(&args_val).unwrap_or_else(|_| "{}".to_string());
-    Some(serde_json::json!({
-        "id": format!("local_tool_{idx}"),
-        "type": "function",
-        "function": { "name": name, "arguments": arguments }
-    }))
-}
-
-pub(crate) fn parse_gemma4_value(s: &str) -> (Value, &str) {
-    const Q: &str = "<|\"|>";
-    let s = s.trim_start();
-
-    if let Some(r) = s.strip_prefix(Q) {
-        return match r.find(Q) {
-            Some(end) => (Value::String(r[..end].to_string()), &r[end + Q.len()..]),
-            None => (Value::String(r.to_string()), ""),
-        };
-    }
-
-    if let Some(r) = s.strip_prefix('{') {
-        let mut obj = Map::new();
-        let mut rest = r;
-        loop {
-            rest = rest.trim_start();
-            if let Some(a) = rest.strip_prefix('}') {
-                return (Value::Object(obj), a);
-            }
-            let Some(colon) = rest.find(':') else {
-                return (Value::Object(obj), rest);
-            };
-            let key = rest[..colon]
-                .trim()
-                .trim_start_matches(Q)
-                .trim_end_matches(Q)
-                .trim()
-                .to_string();
-            let (val, after) = parse_gemma4_value(&rest[colon + 1..]);
-            obj.insert(key, val);
-            rest = after.trim_start();
-            if let Some(a) = rest.strip_prefix(',') {
-                rest = a;
-            } else if let Some(a) = rest.strip_prefix('}') {
-                return (Value::Object(obj), a);
-            } else {
-                return (Value::Object(obj), rest);
-            }
+        ToolCallFormat::Gemma4Compact => {
+            super::mlx_lm::models::gemma4::parser::parse_tool_call_body(body, idx)
+        }
+        ToolCallFormat::QwenJsonOrXml => {
+            super::mlx_lm::models::qwen_common::parse_tool_call_body(body, idx)
         }
     }
-
-    if let Some(r) = s.strip_prefix('[') {
-        let mut arr = Vec::new();
-        let mut rest = r;
-        loop {
-            rest = rest.trim_start();
-            if let Some(a) = rest.strip_prefix(']') {
-                return (Value::Array(arr), a);
-            }
-            let (val, after) = parse_gemma4_value(rest);
-            arr.push(val);
-            rest = after.trim_start();
-            if let Some(a) = rest.strip_prefix(',') {
-                rest = a;
-            } else if let Some(a) = rest.strip_prefix(']') {
-                return (Value::Array(arr), a);
-            } else {
-                return (Value::Array(arr), rest);
-            }
-        }
-    }
-
-    let end = s.find([',', '}', ']']).unwrap_or(s.len());
-    let raw = s[..end].trim();
-    let val = if raw == "true" {
-        Value::Bool(true)
-    } else if raw == "false" {
-        Value::Bool(false)
-    } else if raw == "null" {
-        Value::Null
-    } else if let Ok(i) = raw.parse::<i64>() {
-        Value::from(i)
-    } else if let Ok(f) = raw.parse::<f64>() {
-        Value::from(f)
-    } else {
-        Value::String(raw.to_string())
-    };
-    (val, &s[end..])
-}
-
-pub(crate) fn parse_qwen_tool_call_body(body: &str, idx: usize) -> Option<Value> {
-    let body = body.trim();
-    let parsed: Option<Value> = serde_json::from_str(body).ok();
-    let parsed = parsed.or_else(|| parse_xml_tool_call_body(body))?;
-
-    let items: Vec<Value> = if let Some(arr) = parsed
-        .as_object()
-        .and_then(|o| o.get("tool_calls"))
-        .and_then(|v| v.as_array())
-    {
-        arr.clone()
-    } else {
-        match parsed {
-            Value::Array(a) => a,
-            one => vec![one],
-        }
-    };
-
-    for item in items {
-        let Some(name) = item.get("name").and_then(|x| x.as_str()) else {
-            continue;
-        };
-        if name.is_empty() {
-            continue;
-        }
-        let args = item
-            .get("arguments")
-            .cloned()
-            .unwrap_or(Value::Object(Default::default()));
-        let args_str = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
-        return Some(serde_json::json!({
-            "id": format!("local_tool_{idx}"),
-            "type": "function",
-            "function": { "name": name, "arguments": args_str }
-        }));
-    }
-    None
-}
-
-fn parse_xml_tool_call_body(body: &str) -> Option<Value> {
-    const FN_OPEN: &str = "<function=";
-    const PARAM_OPEN: &str = "<parameter=";
-    const PARAM_CLOSE: &str = "</parameter>";
-
-    let fstart = body.find(FN_OPEN)? + FN_OPEN.len();
-    let rest = &body[fstart..];
-    let gt = rest.find('>')?;
-    let name = rest[..gt].trim().to_string();
-    if name.is_empty() {
-        return None;
-    }
-    let mut cursor = &rest[gt + 1..];
-
-    let mut args = Map::new();
-    while let Some(p_open) = cursor.find(PARAM_OPEN) {
-        let after = &cursor[p_open + PARAM_OPEN.len()..];
-        let Some(k_end) = after.find('>') else { break };
-        let key = after[..k_end].trim().to_string();
-        let body_start = &after[k_end + 1..];
-        let Some(p_close) = body_start.find(PARAM_CLOSE) else {
-            break;
-        };
-        let raw = body_start[..p_close].trim();
-        let val: Value = if let Ok(v) = serde_json::from_str::<Value>(raw) {
-            v
-        } else if raw == "true" {
-            Value::Bool(true)
-        } else if raw == "false" {
-            Value::Bool(false)
-        } else if let Ok(i) = raw.parse::<i64>() {
-            Value::from(i)
-        } else if let Ok(f) = raw.parse::<f64>() {
-            Value::from(f)
-        } else {
-            Value::String(raw.to_string())
-        };
-        args.insert(key, val);
-        cursor = &body_start[p_close + PARAM_CLOSE.len()..];
-    }
-
-    Some(serde_json::json!({ "name": name, "arguments": Value::Object(args) }))
 }
 
 // ── Convenience: collapse events back to (visible, reasoning, tool_calls) ──
@@ -1392,6 +1258,157 @@ mod tests {
         let args: Value =
             serde_json::from_str(tcs[0]["function"]["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(args["x"], 1);
+    }
+
+    // ── Gemma-4 design contract ────────────────────────────────────────────
+    //
+    // Canonical contract for the Gemma-4 stream parser: every input maps to a
+    // well-defined sequence of `ParserEvent`s. The four primitives:
+    //
+    //   • Visible(s)     — user-facing answer text
+    //   • Reasoning(s)   — model's thinking (`<|channel>thought\n…<channel|>`)
+    //   • ToolCall(v)    — `<|tool_call>call:NAME{…}<tool_call|>`
+    //   • (none)         — input had no recognised content
+    //
+    // These tests pin down the contract for the eight canonical scenarios
+    // observed in production logs. If any test below fails, the parser has
+    // silently changed its behaviour and downstream code (`build_assistant_message`,
+    // `merge_assistant_reasoning_for_web_ui`, the web UI) may break.
+
+    /// Plain answer with no markers — pure visible text.
+    #[test]
+    fn gemma4_contract_plain_answer_only() {
+        let (vis, reas, tcs) =
+            parse_complete("Chào bạn, giá vàng hôm nay là 75 triệu.", LocalDialect::Gemma4);
+        assert_eq!(vis, "Chào bạn, giá vàng hôm nay là 75 triệu.");
+        assert!(reas.is_empty());
+        assert!(tcs.is_empty());
+    }
+
+    /// Thinking only (well-formed thought channel) — pure reasoning.
+    #[test]
+    fn gemma4_contract_thought_channel_only() {
+        let (vis, reas, tcs) = parse_complete(
+            "<|channel>thought\nLet me consider the request.<channel|>",
+            LocalDialect::Gemma4,
+        );
+        assert!(vis.is_empty());
+        assert_eq!(reas, "Let me consider the request.");
+        assert!(tcs.is_empty());
+    }
+
+    /// Explicit `answer` channel routes to Visible (not Reasoning).
+    #[test]
+    fn gemma4_contract_answer_channel_routes_to_visible() {
+        let (vis, reas, _) = parse_complete(
+            "<|channel>answer\nThe gold price is 75 million.<channel|>",
+            LocalDialect::Gemma4,
+        );
+        assert_eq!(vis, "The gold price is 75 million.");
+        assert!(reas.is_empty(), "answer channel must not go to reasoning");
+    }
+
+    /// Unknown channel name defaults to Reasoning (safer than leaking
+    /// model-internal meta-content into the visible body).
+    #[test]
+    fn gemma4_contract_unknown_channel_defaults_to_reasoning() {
+        let (vis, reas, _) = parse_complete(
+            "<|channel>analysis\nInternal meta-content.<channel|>",
+            LocalDialect::Gemma4,
+        );
+        assert!(vis.is_empty(), "unknown channels must not reach visible");
+        assert_eq!(reas, "Internal meta-content.");
+    }
+
+    /// Standalone tool call (no surrounding thought).
+    #[test]
+    fn gemma4_contract_tool_call_only() {
+        let (vis, reas, tcs) = parse_complete(
+            "<|tool_call>call:search{q:<|\"|>gold price<|\"|>}<tool_call|>",
+            LocalDialect::Gemma4,
+        );
+        assert!(vis.is_empty());
+        assert!(reas.is_empty());
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0]["function"]["name"], "search");
+        let args: Value =
+            serde_json::from_str(tcs[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["q"], "gold price");
+    }
+
+    /// Well-formed think → tool_call: intermediate-turn shape — reasoning +
+    /// tool call, no visible answer. Matches `text_len=0 reasoning_len=N
+    /// tool_calls=1` log line.
+    #[test]
+    fn gemma4_contract_think_then_tool_call_no_answer() {
+        let (vis, reas, tcs) = parse_complete(
+            "<|channel>thought\nI should search the web.<channel|>\
+             <|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>",
+            LocalDialect::Gemma4,
+        );
+        assert!(vis.is_empty(), "intermediate turn has no visible body");
+        assert_eq!(reas, "I should search the web.");
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0]["function"]["name"], "Skill");
+    }
+
+    /// Well-formed think → answer: final-turn shape — reasoning + visible.
+    /// Matches `text_len=N reasoning_len=N tool_calls=0` log line.
+    #[test]
+    fn gemma4_contract_think_then_answer_final_turn() {
+        let (vis, reas, tcs) = parse_complete(
+            "<|channel>thought\nReady to answer.<channel|>\
+             Giá vàng hôm nay là 75 triệu đồng mỗi lượng.",
+            LocalDialect::Gemma4,
+        );
+        assert_eq!(vis, "Giá vàng hôm nay là 75 triệu đồng mỗi lượng.");
+        assert_eq!(reas, "Ready to answer.");
+        assert!(tcs.is_empty(), "final turn — no more tool calls");
+    }
+
+    /// Malformed: model emitted tool call BEFORE closing the channel.
+    /// Parser must extract it as a distinct ToolCall event (not swallow it
+    /// into the reasoning body).
+    #[test]
+    fn gemma4_contract_malformed_tool_call_inside_unclosed_channel() {
+        let (vis, reas, tcs) = parse_complete(
+            "<|channel>thought\nI will invoke the skill.\
+             <|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>",
+            LocalDialect::Gemma4,
+        );
+        assert!(vis.is_empty());
+        assert!(reas.contains("I will invoke the skill"));
+        assert!(
+            !reas.contains("<|tool_call>") && !reas.contains("call:Skill"),
+            "tool call must NOT leak into reasoning: {reas:?}"
+        );
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0]["function"]["name"], "Skill");
+    }
+
+    /// Malformed: model emitted long reasoning + answer in one block (no
+    /// `<channel|>` close before the answer). Parser's smart-split heuristic
+    /// must extract the trailing answer paragraph as Visible.
+    #[test]
+    fn gemma4_contract_malformed_unclosed_channel_split_at_trailing_answer() {
+        let raw = "<|channel>thought\n\
+                   The user asked for gold price. I analyzed the search results \
+                   and found relevant data from multiple Vietnamese sources.\n\
+                   \n\
+                   Giá vàng hôm nay theo các nguồn tham khảo từ các trang web \
+                   uy tín dao động trong khoảng 75 triệu đồng mỗi lượng. \
+                   Bạn nên kiểm tra trực tiếp để xem giá chính xác.";
+        let (vis, reas, _) = parse_complete(raw, LocalDialect::Gemma4);
+        assert!(reas.contains("analyzed the search results"));
+        assert!(
+            vis.contains("Giá vàng hôm nay"),
+            "trailing answer must reach visible: {vis:?}"
+        );
+        // Critical: the answer must NOT also remain in reasoning (no double-emit).
+        assert!(
+            !reas.contains("Giá vàng hôm nay"),
+            "answer must NOT be duplicated in reasoning: {reas:?}"
+        );
     }
 
     #[test]

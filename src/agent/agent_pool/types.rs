@@ -67,6 +67,12 @@ pub struct MessageCompleteData {
     pub agent_id: String,
     pub reasoning: String,
     pub content: String,
+    /// True when the turn produced one or more tool calls (intermediate turn —
+    /// no user-facing answer expected; the tool runs next, then a follow-up
+    /// turn produces the real answer). Used by `pool::merge_assistant_reasoning_for_web_ui`
+    /// to decide whether to surface reasoning as the body (final turn) or keep
+    /// it collapsed under `<think>` (intermediate turn).
+    pub has_tool_calls: bool,
 }
 
 /// `state:update` event payload.

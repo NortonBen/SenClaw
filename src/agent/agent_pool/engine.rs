@@ -196,6 +196,7 @@ impl ZenCoreApi {
                                         agent_id: data.agent_id,
                                         reasoning: data.reasoning,
                                         content: data.content,
+                                        has_tool_calls: data.has_tool_calls,
                                     });
                                 }
                             }

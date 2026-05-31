@@ -40,23 +40,45 @@ use crate::util::local_time::local_iso_string_now;
 /// For Web UI only: fold structured `reasoning` + `content` into one string so the client
 /// renders a single bubble (`extractLeadingReasoningBlocks` + collapsible). Non-`web:` JIDs
 /// still receive plain `content` via [`AgentPool::broadcast_reply_now`].
-fn merge_assistant_reasoning_for_web_ui(reasoning: &str, content: &str) -> String {
+fn merge_assistant_reasoning_for_web_ui(
+    reasoning: &str,
+    content: &str,
+    has_tool_calls: bool,
+) -> String {
     let r = reasoning.trim();
     if r.is_empty() {
         return content.to_string();
     }
     let c = content.trim();
 
-    // Safety net: when reasoning has content but visible body is empty, the
-    // model almost certainly left its answer locked inside an unclosed
-    // reasoning block (Gemma-4 sometimes transitions from `<|channel>thought\n
-    // …` straight to its answer without ever emitting `<channel|>`). Surface
-    // the reasoning as the body so the user always sees something — the
-    // collapsible `<think>` affordance is sacrificed in this edge case but
-    // "no body visible" is worse UX. The stream parser's
-    // `emit_unclosed_channel` heuristic handles most cases upstream; this is
-    // the final fallback when no paragraph break was usable for the split.
+    // Empty visible body — two very different cases, distinguished by whether
+    // the model also produced a tool call this turn:
+    //
+    // - **Intermediate turn** (`has_tool_calls = true`): the model is just
+    //   thinking about which tool to use; there's no user-facing answer yet
+    //   (the next turn will produce it). Wrap reasoning in `<think>` so the
+    //   UI shows the collapsible thinking widget alone — body stays empty,
+    //   and the tool-execution chip rendered after it tells the user "work
+    //   in progress." Surfacing the raw reasoning as the body here would
+    //   dump ~1000 chars of "I will now invoke X" thinking on the user
+    //   between every tool turn — confusing.
+    //
+    // - **Final turn** (`has_tool_calls = false`) but body still empty: the
+    //   model almost certainly left its answer locked inside an unclosed
+    //   `<|channel>thought\n…` block (Gemma-4 quirk — sometimes transitions
+    //   straight from thinking to answer without sending `<channel|>`). The
+    //   stream parser's `emit_unclosed_channel` smart-split handles most
+    //   cases upstream; for the rest, surfacing the reasoning as the body
+    //   here means the user always sees *something* (collapsible affordance
+    //   sacrificed in this rare edge case — preferable to a blank message).
     if c.is_empty() {
+        if has_tool_calls {
+            return format!(
+                "{open}\n{r}\n{close}",
+                open = concat!("<", "think", ">"),
+                close = concat!("</", "think", ">"),
+            );
+        }
         return r.to_string();
     }
 
@@ -2307,7 +2329,11 @@ impl AgentPool {
                             .insert(jid.clone(), data.content.clone());
                     }
                     let reply_text = if jid.starts_with("web:") {
-                        merge_assistant_reasoning_for_web_ui(&data.reasoning, &data.content)
+                        merge_assistant_reasoning_for_web_ui(
+                            &data.reasoning,
+                            &data.content,
+                            data.has_tool_calls,
+                        )
                     } else {
                         data.content.clone()
                     };
@@ -3018,11 +3044,14 @@ mod merge_reasoning_tests {
     /// Gemma-4: parser extracted `<|channel>thought\n…<channel|>` content into
     /// reasoning; visible content has no `<think>`. The merge must wrap the
     /// reasoning so the web UI renders a collapsible thinking block.
+    // Convention for the rest of this module: `_final` = end-of-conversation
+    // turn (no tool_calls); `_intermediate` = thinking-then-tool turn.
+
     #[test]
     fn wraps_gemma4_reasoning_into_think_block() {
         let reasoning = "The user wants gold price. I will search.";
         let content = "Here is the answer.";
-        let out = merge_assistant_reasoning_for_web_ui(reasoning, content);
+        let out = merge_assistant_reasoning_for_web_ui(reasoning, content, false);
         assert!(out.starts_with("<think>\n"), "expected leading <think>, got: {out:?}");
         assert!(out.contains("</think>"), "expected closing </think>: {out:?}");
         assert!(out.contains(reasoning), "reasoning lost: {out:?}");
@@ -3036,6 +3065,7 @@ mod merge_reasoning_tests {
         let out = merge_assistant_reasoning_for_web_ui(
             "outer reasoning",
             "<think>inner</think>\n\nThe answer.",
+            false,
         );
         assert_eq!(out, "<think>inner</think>\n\nThe answer.");
     }
@@ -3047,7 +3077,7 @@ mod merge_reasoning_tests {
     #[test]
     fn wraps_when_think_appears_only_mid_content() {
         let content = "To enable thinking, use the <think> tag in your prompt.";
-        let out = merge_assistant_reasoning_for_web_ui("model reasoning", content);
+        let out = merge_assistant_reasoning_for_web_ui("model reasoning", content, false);
         assert!(
             out.starts_with("<think>\nmodel reasoning\n</think>"),
             "incidental <think in body must not block wrapping: {out:?}"
@@ -3057,7 +3087,7 @@ mod merge_reasoning_tests {
 
     #[test]
     fn empty_reasoning_passes_content_through() {
-        let out = merge_assistant_reasoning_for_web_ui("", "Just an answer.");
+        let out = merge_assistant_reasoning_for_web_ui("", "Just an answer.", false);
         assert_eq!(out, "Just an answer.");
     }
 
@@ -3075,25 +3105,47 @@ mod merge_reasoning_tests {
         // Sanity: trigger the prefix-check path (long enough that the bug fires).
         assert!(content.len() > 64);
         // Must NOT panic; reasoning gets wrapped, content preserved.
-        let out = merge_assistant_reasoning_for_web_ui("thinking about prices", content);
+        let out = merge_assistant_reasoning_for_web_ui("thinking about prices", content, false);
         assert!(out.starts_with("<think>\n"), "expected wrap, got: {out:?}");
         assert!(out.contains("Giá vàng hôm nay"), "content lost: {out:?}");
     }
 
-    /// Fallback: when reasoning has content but visible body is empty (the
-    /// parser couldn't split an unclosed channel), surface the reasoning AS
-    /// the body so the user always sees something. The think-collapsible
-    /// affordance is lost here, but "blank message" is worse UX than "shown
-    /// as plain text".
+    /// FINAL turn (no tool calls) but body still empty — model's answer is
+    /// presumably trapped inside an unclosed channel. Show the reasoning as
+    /// the body so the user sees *something*.
     #[test]
-    fn empty_content_with_reasoning_surfaces_reasoning_as_body() {
+    fn empty_content_no_tool_calls_surfaces_reasoning_as_body() {
         let out = merge_assistant_reasoning_for_web_ui(
             "All the thinking and the answer got stuck in one block.",
             "",
+            false, // ← FINAL turn
         );
         // No <think> wrap — direct content so the user sees it.
         assert!(!out.starts_with("<think>"), "expected raw body, got: {out:?}");
         assert!(out.contains("All the thinking"));
+    }
+
+    /// INTERMEDIATE turn (model emits thinking + tool_call, no user-facing
+    /// answer yet). The empty body is EXPECTED — the next turn will produce
+    /// the answer after the tool runs. Wrap reasoning into `<think>` so the
+    /// UI shows ONLY the collapsible widget (body stays empty). Without this
+    /// fix, the Layer 2 fallback would dump ~1000 chars of "I will invoke X"
+    /// thinking on the user between every tool turn.
+    #[test]
+    fn empty_content_with_tool_calls_keeps_reasoning_collapsed() {
+        let reasoning = "The user wants today's gold price. I should invoke the \
+                         agent-browser skill to search the web.";
+        let out = merge_assistant_reasoning_for_web_ui(reasoning, "", true);
+        assert!(out.starts_with("<think>\n"), "expected <think> wrap: {out:?}");
+        assert!(out.contains("</think>"), "expected closing </think>");
+        assert!(out.contains(reasoning), "reasoning lost: {out:?}");
+        // No body after </think> — the tool-execution chip rendered next in the
+        // UI tells the user what's happening. Don't dump the raw reasoning.
+        let after_close = out.split("</think>").nth(1).unwrap_or("");
+        assert!(
+            after_close.trim().is_empty(),
+            "intermediate turn must not have body after </think>, got: {after_close:?}"
+        );
     }
 }
 

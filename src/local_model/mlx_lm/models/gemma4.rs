@@ -1042,6 +1042,185 @@ pub fn get_gemma4_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, E
 }
 
 // -----------------------------------------------------------------------------
+// Output-stream parser — Gemma-4 harmony tool-call body
+// -----------------------------------------------------------------------------
+
+/// Parser primitives for Gemma-4's harmony output dialect — colocated with
+/// the model so all Gemma-4-specific format knowledge (tool-call body
+/// grammar, `<|"|>` string wrapper, argument serialization) lives in one
+/// place. The generic state machine in
+/// [`crate::local_model::stream_parser`] dispatches to these via the
+/// `ToolCallFormat::Gemma4Compact` discriminant.
+///
+/// Wire format (from the chat template):
+///
+/// ```text
+///   <|tool_call>call:NAME{key:val,key:val,…}<tool_call|>
+/// ```
+///
+/// Argument values:
+/// - strings: `<|"|>some string<|"|>`
+/// - bare scalars: `true`, `false`, `null`, integers, floats
+/// - nested objects: `{key:val,…}` (keys unquoted under `escape_keys=False`)
+/// - arrays: `[val,val,…]`
+pub mod parser {
+    use serde_json::{Map, Value};
+
+    /// Quote wrapper for string values — `<|"|>foo<|"|>` → `foo`.
+    pub const QUOTE: &str = "<|\"|>";
+
+    /// Parse `call:NAME{args}` body into the OpenAI-shape tool_call object
+    /// (`{id, type:"function", function:{name, arguments:String}}`).
+    pub fn parse_tool_call_body(body: &str, idx: usize) -> Option<Value> {
+        let body = body.trim();
+        let body = body.strip_prefix("call:").unwrap_or(body).trim();
+        let brace = body.find('{')?;
+        let name = body[..brace].trim();
+        if name.is_empty() {
+            return None;
+        }
+        let (args_val, _) = parse_value(body[brace..].trim());
+        let arguments = serde_json::to_string(&args_val).unwrap_or_else(|_| "{}".to_string());
+        Some(serde_json::json!({
+            "id": format!("local_tool_{idx}"),
+            "type": "function",
+            "function": { "name": name, "arguments": arguments }
+        }))
+    }
+
+    /// Recursive-descent parser for one argument value. Returns the parsed
+    /// `Value` and the unconsumed remainder. Handles strings (quote-wrapped),
+    /// objects, arrays, and scalars (bool / int / float / null / fallback string).
+    pub fn parse_value(s: &str) -> (Value, &str) {
+        let s = s.trim_start();
+
+        if let Some(r) = s.strip_prefix(QUOTE) {
+            return match r.find(QUOTE) {
+                Some(end) => (Value::String(r[..end].to_string()), &r[end + QUOTE.len()..]),
+                None => (Value::String(r.to_string()), ""),
+            };
+        }
+
+        if let Some(r) = s.strip_prefix('{') {
+            let mut obj = Map::new();
+            let mut rest = r;
+            loop {
+                rest = rest.trim_start();
+                if let Some(a) = rest.strip_prefix('}') {
+                    return (Value::Object(obj), a);
+                }
+                let Some(colon) = rest.find(':') else {
+                    return (Value::Object(obj), rest);
+                };
+                let key = rest[..colon]
+                    .trim()
+                    .trim_start_matches(QUOTE)
+                    .trim_end_matches(QUOTE)
+                    .trim()
+                    .to_string();
+                let (val, after) = parse_value(&rest[colon + 1..]);
+                obj.insert(key, val);
+                rest = after.trim_start();
+                if let Some(a) = rest.strip_prefix(',') {
+                    rest = a;
+                } else if let Some(a) = rest.strip_prefix('}') {
+                    return (Value::Object(obj), a);
+                } else {
+                    return (Value::Object(obj), rest);
+                }
+            }
+        }
+
+        if let Some(r) = s.strip_prefix('[') {
+            let mut arr = Vec::new();
+            let mut rest = r;
+            loop {
+                rest = rest.trim_start();
+                if let Some(a) = rest.strip_prefix(']') {
+                    return (Value::Array(arr), a);
+                }
+                let (val, after) = parse_value(rest);
+                arr.push(val);
+                rest = after.trim_start();
+                if let Some(a) = rest.strip_prefix(',') {
+                    rest = a;
+                } else if let Some(a) = rest.strip_prefix(']') {
+                    return (Value::Array(arr), a);
+                } else {
+                    return (Value::Array(arr), rest);
+                }
+            }
+        }
+
+        let end = s.find([',', '}', ']']).unwrap_or(s.len());
+        let raw = s[..end].trim();
+        let val = if raw == "true" {
+            Value::Bool(true)
+        } else if raw == "false" {
+            Value::Bool(false)
+        } else if raw == "null" {
+            Value::Null
+        } else if let Ok(i) = raw.parse::<i64>() {
+            Value::from(i)
+        } else if let Ok(f) = raw.parse::<f64>() {
+            Value::from(f)
+        } else {
+            Value::String(raw.to_string())
+        };
+        (val, &s[end..])
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_simple_tool_call_with_string_arg() {
+            let tc = parse_tool_call_body("call:Skill{skill:<|\"|>agent-browser<|\"|>}", 0).unwrap();
+            assert_eq!(tc["function"]["name"], "Skill");
+            let args: Value =
+                serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["skill"], "agent-browser");
+        }
+
+        #[test]
+        fn parses_mixed_typed_args() {
+            let tc = parse_tool_call_body(
+                "call:search{q:<|\"|>vàng<|\"|>,limit:5,fresh:true}",
+                7,
+            )
+            .unwrap();
+            assert_eq!(tc["id"], "local_tool_7");
+            let args: Value =
+                serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["q"], "vàng");
+            assert_eq!(args["limit"], 5);
+            assert_eq!(args["fresh"], true);
+        }
+
+        #[test]
+        fn parses_nested_object_and_array_args() {
+            let tc = parse_tool_call_body(
+                "call:f{a:{b:1,c:[2,3]},d:<|\"|>x<|\"|>}",
+                0,
+            )
+            .unwrap();
+            let args: Value =
+                serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["a"]["b"], 1);
+            assert_eq!(args["a"]["c"], serde_json::json!([2, 3]));
+            assert_eq!(args["d"], "x");
+        }
+
+        #[test]
+        fn returns_none_for_empty_or_nameless_body() {
+            assert!(parse_tool_call_body("", 0).is_none());
+            assert!(parse_tool_call_body("call:{x:1}", 0).is_none());
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Chat template integration
 // -----------------------------------------------------------------------------
 
