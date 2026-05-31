@@ -1003,6 +1003,17 @@ pub fn load_qwen35_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
 /// Qwen3.5 reuses ChatML markers (`<|im_start|>` / `<|im_end|>`); no
 /// `bos_token` / `eos_token` injection needed.
 impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    /// Qwen 3.5 (GatedDeltaNet hybrid): same `<think>` / `<tool_call>` outer
+    /// envelope as Qwen 3, but tool-call bodies are typically the Hermes-style
+    /// `<function=NAME><parameter=K>v</parameter>…</function>` XML rather than
+    /// the JSON form Qwen 3 prefers. The parser's `QwenJsonOrXml` mode handles
+    /// both, so we share the Qwen preset — but this method is declared
+    /// separately so Qwen 3.5 can diverge (e.g. add an arch-specific marker)
+    /// without touching Qwen 3.
+    fn markers(&self) -> crate::local_model::stream_parser::MarkerSet {
+        crate::local_model::stream_parser::MarkerSet::qwen()
+    }
+
     fn resolve_special_tokens(
         &self,
         _template: &str,

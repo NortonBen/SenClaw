@@ -14,7 +14,7 @@
 /// # Tool calling
 /// Tools are injected via the Jinja2 chat template (passed as `Vec<Value>` in
 /// OpenAI format). The model outputs `<tool_call>JSON</tool_call>` tags which
-/// are parsed by `split_qwen_tool_calls_from_model_text` in `query_llm.rs`.
+/// are parsed by `stream_parser::parse_complete` in `local_model/stream_parser.rs`.
 ///
 /// # Vision
 /// Text-only models do not process images.  Any `image_url` content parts are

@@ -77,6 +77,14 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         native_supported: true,
         vision: false,
     },
+    KnownModel {
+        id: "mlx-community/gemma-4-e2b-it-OptiQ-4bit",
+        label: "Gemma 4 E2B-it OptiQ 4-bit — mixed 4/8-bit (higher quality, ~10% slower)",
+        approx_size_gb: 4.0,
+        context_length: 131_072,
+        native_supported: true,
+        vision: false,
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static KnownModel> {

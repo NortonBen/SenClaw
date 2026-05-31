@@ -45,7 +45,10 @@
 //! As in `gemma3`, this means single-token decode attends to the full cache
 //! rather than a strict window; accepted as a known approximation.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use mlx_rs::{
     array,
@@ -59,7 +62,7 @@ use mlx_rs::{
         indexing::IndexOp,
         ones, power,
     },
-    quantization::MaybeQuantized,
+    quantization::{MaybeQuantized, Quantizable as _},
     Array,
 };
 use serde::Deserialize;
@@ -688,11 +691,16 @@ pub struct Gemma4TextModel {
     #[quantizable]
     #[param]
     pub embed_tokens_per_layer: Option<MaybeQuantized<nn::Embedding>>,
-    /// NOT quantized in the mlx-community checkpoint (stored bf16) — keep it a
-    /// plain `Linear` so `nn::quantize` skips it, else `quantized_matmul` sees a
-    /// bf16 weight where it expects uint32.
+    /// Quantization for this module differs by checkpoint flavour:
+    /// - regular `gemma-4-*-it-4bit`: stored bf16 (NOT quantized) — keep
+    ///   `MaybeQuantized::Original` and skip in the per-module quantize loop.
+    /// - `gemma-4-*-OptiQ-4bit`: stored 8-bit per OptiQ's per-module overrides.
+    ///
+    /// The loader inspects `model.safetensors.index.json` and only quantizes
+    /// the slots that ship `.scales` weights, so both layouts load correctly.
+    #[quantizable]
     #[param]
-    pub per_layer_model_projection: Option<nn::Linear>,
+    pub per_layer_model_projection: Option<MaybeQuantized<nn::Linear>>,
     #[param]
     pub per_layer_projection_norm: Option<nn::RmsNorm>,
     #[quantizable]
@@ -715,11 +723,11 @@ impl Gemma4TextModel {
                     args.vocab_size_per_layer_input,
                     args.num_hidden_layers * hpl,
                 )?)),
-                Some(
+                Some(MaybeQuantized::Original(
                     nn::LinearBuilder::new(args.hidden_size, args.num_hidden_layers * hpl)
                         .bias(false)
                         .build()?,
-                ),
+                )),
                 Some(nn::RmsNormBuilder::new(hpl).eps(args.rms_norm_eps).build()?),
             )
         } else {
@@ -1038,6 +1046,14 @@ pub fn get_gemma4_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, E
 // -----------------------------------------------------------------------------
 
 impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    /// Gemma-4 harmony output: thinking is emitted in a `<|channel>thought\n…
+    /// <channel|>` channel; tool calls in `<|tool_call>call:NAME{key:val,…}
+    /// <tool_call|>` with `<|"|>`-wrapped string args. Authoritative for this
+    /// arch — the engine uses these markers directly, no template scan needed.
+    fn markers(&self) -> crate::local_model::stream_parser::MarkerSet {
+        crate::local_model::stream_parser::MarkerSet::gemma4()
+    }
+
     fn resolve_special_tokens(
         &self,
         template: &str,
@@ -1074,6 +1090,185 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
     ) -> Vec<u32> {
         self.args.eos_token_ids.clone()
     }
+}
+
+// -----------------------------------------------------------------------------
+// Per-module quantization (handles both uniform 4-bit and OptiQ mixed-bit)
+// -----------------------------------------------------------------------------
+
+/// Top-level `config.json::quantization` defaults plus the per-module override
+/// map (OptiQ checkpoints). Top-level `{bits, group_size}` apply when a slot
+/// is quantized in storage but absent from the per-module overrides.
+pub struct QuantPlan {
+    pub default: (i32, i32), // (group_size, bits)
+    pub overrides: HashMap<String, (i32, i32)>,
+    /// Module paths (HF full form, e.g. `language_model.model.embed_tokens`)
+    /// that ship `.scales` in safetensors — only those get quantized; modules
+    /// without `.scales` stay as plain `nn::Linear` / `nn::Embedding`.
+    pub quantized_paths: HashSet<String>,
+}
+
+impl QuantPlan {
+    /// Build the plan from `config.json` + the safetensors weight-map keys.
+    /// Caller supplies the keys verbatim (with the `language_model.` prefix
+    /// they have on disk) so we can detect which modules are actually stored
+    /// quantized — the OptiQ config alone isn't sufficient because a slot can
+    /// be quantized via the top-level default with no per-module entry.
+    pub fn from_config_and_index<'a>(
+        cfg: &serde_json::Value,
+        weight_keys: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let q = cfg
+            .get("quantization")
+            .or_else(|| cfg.get("quantization_config"));
+
+        let default = match q {
+            Some(qv) => (
+                qv.get("group_size")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(64) as i32,
+                qv.get("bits").and_then(|v| v.as_i64()).unwrap_or(4) as i32,
+            ),
+            None => (64, 4),
+        };
+
+        let mut overrides: HashMap<String, (i32, i32)> = HashMap::new();
+        if let Some(qobj) = q.and_then(|v| v.as_object()) {
+            for (k, v) in qobj {
+                if matches!(k.as_str(), "group_size" | "bits" | "mode") {
+                    continue;
+                }
+                let Some(obj) = v.as_object() else { continue };
+                let bits = obj
+                    .get("bits")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(default.1 as i64) as i32;
+                let gs = obj
+                    .get("group_size")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(default.0 as i64) as i32;
+                overrides.insert(k.clone(), (gs, bits));
+            }
+        }
+
+        // Scan weight keys for `.scales` suffix — that's the runtime signal
+        // "this module is stored quantized." More reliable than relying on the
+        // OptiQ override list alone (regular 4-bit checkpoints quantize most
+        // modules via the top-level default without any per-module entries).
+        let mut quantized_paths: HashSet<String> = HashSet::new();
+        for k in weight_keys {
+            if let Some(base) = k.strip_suffix(".scales") {
+                quantized_paths.insert(base.to_string());
+            }
+        }
+
+        Self {
+            default,
+            overrides,
+            quantized_paths,
+        }
+    }
+
+    /// Bits/group for `path` (HF full form) — None means "leave unquantized".
+    pub fn lookup(&self, path: &str) -> Option<(i32, i32)> {
+        if !self.quantized_paths.contains(path) {
+            return None;
+        }
+        Some(*self.overrides.get(path).unwrap_or(&self.default))
+    }
+}
+
+fn quantize_maybe_linear(
+    slot: &mut MaybeQuantized<nn::Linear>,
+    path: &str,
+    plan: &QuantPlan,
+) -> Result<(), Exception> {
+    if slot.is_quantized() {
+        return Ok(());
+    }
+    let Some((gs, bits)) = plan.lookup(path) else {
+        return Ok(()); // stored bf16 — leave as Original
+    };
+    let placeholder = nn::LinearBuilder::new(1, 1).bias(false).build()?;
+    match std::mem::replace(slot, MaybeQuantized::Original(placeholder)) {
+        MaybeQuantized::Original(linear) => {
+            *slot = MaybeQuantized::Quantized(linear.try_into_quantized(gs, bits)?);
+        }
+        MaybeQuantized::Quantized(q) => *slot = MaybeQuantized::Quantized(q),
+    }
+    Ok(())
+}
+
+fn quantize_maybe_embedding(
+    slot: &mut MaybeQuantized<nn::Embedding>,
+    path: &str,
+    plan: &QuantPlan,
+) -> Result<(), Exception> {
+    if slot.is_quantized() {
+        return Ok(());
+    }
+    let Some((gs, bits)) = plan.lookup(path) else {
+        return Ok(());
+    };
+    let placeholder = nn::Embedding::new(1, 1)?;
+    match std::mem::replace(slot, MaybeQuantized::Original(placeholder)) {
+        MaybeQuantized::Original(embed) => {
+            *slot = MaybeQuantized::Quantized(embed.try_into_quantized(gs, bits)?);
+        }
+        MaybeQuantized::Quantized(q) => *slot = MaybeQuantized::Quantized(q),
+    }
+    Ok(())
+}
+
+/// Walk every Quantizable slot in the model and apply per-module quantization
+/// per the [`QuantPlan`]. Replaces the old uniform `nn::quantize(model, …)`
+/// path so we correctly handle both uniform 4-bit (`gemma-4-*-it-4bit`) and
+/// OptiQ mixed-bit (`gemma-4-*-it-OptiQ-4bit`) checkpoints.
+pub fn apply_per_module_quantization(model: &mut Model, plan: &QuantPlan) -> Result<(), Exception> {
+    // Top-level embeddings + per-layer model projection
+    quantize_maybe_embedding(
+        &mut model.model.embed_tokens,
+        "language_model.model.embed_tokens",
+        plan,
+    )?;
+    if let Some(eple) = model.model.embed_tokens_per_layer.as_mut() {
+        quantize_maybe_embedding(eple, "language_model.model.embed_tokens_per_layer", plan)?;
+    }
+    if let Some(plmp) = model.model.per_layer_model_projection.as_mut() {
+        quantize_maybe_linear(plmp, "language_model.model.per_layer_model_projection", plan)?;
+    }
+
+    // Per-layer modules
+    for (i, layer) in model.model.layers.iter_mut().enumerate() {
+        let lp = format!("language_model.model.layers.{i}");
+        // Attention (k/v/k_norm absent on KV-shared layers — see Attention::new)
+        quantize_maybe_linear(&mut layer.self_attn.q_proj, &format!("{lp}.self_attn.q_proj"), plan)?;
+        if let Some(k) = layer.self_attn.k_proj.as_mut() {
+            quantize_maybe_linear(k, &format!("{lp}.self_attn.k_proj"), plan)?;
+        }
+        if let Some(v) = layer.self_attn.v_proj.as_mut() {
+            quantize_maybe_linear(v, &format!("{lp}.self_attn.v_proj"), plan)?;
+        }
+        quantize_maybe_linear(&mut layer.self_attn.o_proj, &format!("{lp}.self_attn.o_proj"), plan)?;
+        // MLP
+        quantize_maybe_linear(&mut layer.mlp.gate_proj, &format!("{lp}.mlp.gate_proj"), plan)?;
+        quantize_maybe_linear(&mut layer.mlp.up_proj, &format!("{lp}.mlp.up_proj"), plan)?;
+        quantize_maybe_linear(&mut layer.mlp.down_proj, &format!("{lp}.mlp.down_proj"), plan)?;
+        // PLE projections (per-layer-input gate + output projection)
+        if let Some(g) = layer.per_layer_input_gate.as_mut() {
+            quantize_maybe_linear(g, &format!("{lp}.per_layer_input_gate"), plan)?;
+        }
+        if let Some(p) = layer.per_layer_projection.as_mut() {
+            quantize_maybe_linear(p, &format!("{lp}.per_layer_projection"), plan)?;
+        }
+    }
+
+    // Optional lm_head (when tie_word_embeddings = false)
+    if let Some(lm_head) = model.lm_head.as_mut() {
+        quantize_maybe_linear(lm_head, "language_model.lm_head", plan)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1176,6 +1371,72 @@ mod tests {
         assert_eq!(args.rope_for("sliding_attention").rope_theta, Some(10_000.0));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `QuantPlan` must correctly resolve both flavours of Gemma-4
+    /// quantization: uniform `gemma-4-*-it-4bit` (top-level `bits` only, no
+    /// per-module overrides — every module quantized via the default) and
+    /// OptiQ `gemma-4-*-it-OptiQ-4bit` (most modules overridden to 8-bit,
+    /// including `per_layer_model_projection` which is bf16 in regular 4-bit).
+    /// A module is considered quantized iff it has `.scales` weights in the
+    /// safetensors index.
+    #[test]
+    fn quant_plan_resolves_regular_vs_optiq() {
+        // ── Regular 4-bit checkpoint ─────────────────────────────────────
+        let regular_cfg = serde_json::json!({
+            "quantization": { "bits": 4, "group_size": 64, "mode": "affine" }
+        });
+        // Realistic key list — q_proj has scales (quantized), per_layer_model_projection has only weight (bf16).
+        let regular_keys = vec![
+            "language_model.model.layers.0.self_attn.q_proj.weight",
+            "language_model.model.layers.0.self_attn.q_proj.scales",
+            "language_model.model.layers.0.self_attn.q_proj.biases",
+            "language_model.model.per_layer_model_projection.weight",
+        ];
+        let plan_reg = QuantPlan::from_config_and_index(&regular_cfg, regular_keys.into_iter());
+        assert_eq!(plan_reg.default, (64, 4));
+        assert_eq!(plan_reg.overrides.len(), 0, "regular has no per-module overrides");
+        assert_eq!(
+            plan_reg.lookup("language_model.model.layers.0.self_attn.q_proj"),
+            Some((64, 4)),
+            "quantized at top-level default"
+        );
+        assert_eq!(
+            plan_reg.lookup("language_model.model.per_layer_model_projection"),
+            None,
+            "bf16-stored module must NOT be quantized in regular 4-bit"
+        );
+
+        // ── OptiQ checkpoint ─────────────────────────────────────────────
+        let optiq_cfg = serde_json::json!({
+            "quantization": {
+                "bits": 4, "group_size": 64, "mode": "affine",
+                "language_model.model.layers.0.self_attn.q_proj": { "bits": 8, "group_size": 64 },
+                "language_model.model.per_layer_model_projection": { "bits": 8, "group_size": 64 },
+            }
+        });
+        // In OptiQ, per_layer_model_projection ALSO has scales (it's quantized).
+        let optiq_keys = vec![
+            "language_model.model.layers.0.self_attn.q_proj.weight",
+            "language_model.model.layers.0.self_attn.q_proj.scales",
+            "language_model.model.layers.0.self_attn.q_proj.biases",
+            "language_model.model.per_layer_model_projection.weight",
+            "language_model.model.per_layer_model_projection.scales",
+            "language_model.model.per_layer_model_projection.biases",
+        ];
+        let plan_optiq = QuantPlan::from_config_and_index(&optiq_cfg, optiq_keys.into_iter());
+        assert_eq!(plan_optiq.default, (64, 4));
+        assert_eq!(plan_optiq.overrides.len(), 2, "two per-module overrides");
+        assert_eq!(
+            plan_optiq.lookup("language_model.model.layers.0.self_attn.q_proj"),
+            Some((64, 8)),
+            "OptiQ 8-bit override applied"
+        );
+        assert_eq!(
+            plan_optiq.lookup("language_model.model.per_layer_model_projection"),
+            Some((64, 8)),
+            "OptiQ quantizes per_layer_model_projection at 8-bit (unlike regular 4-bit)"
+        );
     }
 
     /// KV-shared layers (idx ≥ 15) reuse the most recent earlier same-type

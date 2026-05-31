@@ -46,12 +46,44 @@ fn merge_assistant_reasoning_for_web_ui(reasoning: &str, content: &str) -> Strin
         return content.to_string();
     }
     let c = content.trim();
-    let sniff = if c.len() > 4096 { &c[..4096] } else { c };
-    let lower = sniff.to_ascii_lowercase();
-    if lower.contains(concat!("<", "think"))
-        || lower.contains(concat!("redacted_", "reasoning"))
-        || lower.contains(concat!("redacted_", "thinking"))
-    {
+
+    // Safety net: when reasoning has content but visible body is empty, the
+    // model almost certainly left its answer locked inside an unclosed
+    // reasoning block (Gemma-4 sometimes transitions from `<|channel>thought\n
+    // …` straight to its answer without ever emitting `<channel|>`). Surface
+    // the reasoning as the body so the user always sees something — the
+    // collapsible `<think>` affordance is sacrificed in this edge case but
+    // "no body visible" is worse UX. The stream parser's
+    // `emit_unclosed_channel` heuristic handles most cases upstream; this is
+    // the final fallback when no paragraph break was usable for the split.
+    if c.is_empty() {
+        return r.to_string();
+    }
+
+    // Skip wrapping ONLY when the content already opens with a recognised
+    // leading reasoning block (matches the UI's `extractLeadingReasoningBlocks`
+    // regex shape: `^<think>` / `^<redacted_reasoning>` / `^<redacted_thinking>`).
+    // The previous loose check (`contains "<think"` anywhere in the first 4 KB)
+    // mis-fired whenever visible content mentioned `<think` incidentally — most
+    // notably for Gemma-4 where the parser extracts `<|channel>thought…<channel|>`
+    // into the reasoning field, and a code example containing "<think>" in the
+    // visible body could then suppress the wrap, leaving the thinking
+    // invisible in the UI. Anchoring the check at the start matches what the
+    // UI regex actually parses.
+    let trimmed = c.trim_start();
+    // `chars().take(N)` instead of byte slicing — `trimmed[..N]` panics when N
+    // lands mid-codepoint (Vietnamese `đ`, etc.). 32 chars is plenty to detect
+    // the longest prefix we test for (`<redacted_reasoning>` = 20 chars).
+    let lower_head = trimmed
+        .chars()
+        .take(32)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let already_wrapped = lower_head.starts_with(concat!("<", "think", ">"))
+        || lower_head.starts_with(concat!("<", "think", " "))
+        || lower_head.starts_with(concat!("<", "redacted_", "reasoning", ">"))
+        || lower_head.starts_with(concat!("<", "redacted_", "thinking", ">"));
+    if already_wrapped {
         return content.to_string();
     }
     format!(
@@ -2976,6 +3008,92 @@ async fn cognitive_reflect(text: String, group_folder: String) {
         Err(e) => {
             tracing::warn!(error = %e, "[reflection] cognify failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod merge_reasoning_tests {
+    use super::merge_assistant_reasoning_for_web_ui;
+
+    /// Gemma-4: parser extracted `<|channel>thought\n…<channel|>` content into
+    /// reasoning; visible content has no `<think>`. The merge must wrap the
+    /// reasoning so the web UI renders a collapsible thinking block.
+    #[test]
+    fn wraps_gemma4_reasoning_into_think_block() {
+        let reasoning = "The user wants gold price. I will search.";
+        let content = "Here is the answer.";
+        let out = merge_assistant_reasoning_for_web_ui(reasoning, content);
+        assert!(out.starts_with("<think>\n"), "expected leading <think>, got: {out:?}");
+        assert!(out.contains("</think>"), "expected closing </think>: {out:?}");
+        assert!(out.contains(reasoning), "reasoning lost: {out:?}");
+        assert!(out.contains(content), "content lost: {out:?}");
+    }
+
+    /// When the model itself already wrote a leading `<think>…</think>` block
+    /// (Qwen with raw text streaming), don't double-wrap.
+    #[test]
+    fn does_not_double_wrap_when_content_already_has_leading_think() {
+        let out = merge_assistant_reasoning_for_web_ui(
+            "outer reasoning",
+            "<think>inner</think>\n\nThe answer.",
+        );
+        assert_eq!(out, "<think>inner</think>\n\nThe answer.");
+    }
+
+    /// Regression: previously, ANY occurrence of `<think` in the first 4 KB
+    /// suppressed wrapping — including code examples in the visible answer.
+    /// That left Gemma-4 thinking invisible. The new guard only skips on a
+    /// LEADING block, so reasoning still wraps when `<think>` appears mid-body.
+    #[test]
+    fn wraps_when_think_appears_only_mid_content() {
+        let content = "To enable thinking, use the <think> tag in your prompt.";
+        let out = merge_assistant_reasoning_for_web_ui("model reasoning", content);
+        assert!(
+            out.starts_with("<think>\nmodel reasoning\n</think>"),
+            "incidental <think in body must not block wrapping: {out:?}"
+        );
+        assert!(out.ends_with(content));
+    }
+
+    #[test]
+    fn empty_reasoning_passes_content_through() {
+        let out = merge_assistant_reasoning_for_web_ui("", "Just an answer.");
+        assert_eq!(out, "Just an answer.");
+    }
+
+    /// Regression for daemon panic at `pool.rs:62` — `byte index 64 is not a
+    /// char boundary; it is inside 'đ'`. Vietnamese (and any multi-byte UTF-8)
+    /// content with `đ`/`ă`/`ơ` straddling the prefix-check boundary used to
+    /// panic the entire merge function → assistant message never broadcast →
+    /// UI froze with raw harmony markers from the previous turn.
+    #[test]
+    fn does_not_panic_on_multibyte_utf8_at_prefix_boundary() {
+        // Vietnamese content where `đ` (2 bytes) straddles byte 64 — same shape
+        // as the real-session crash payload `**Giá vàng hôm nay:**\n\n...`.
+        let content = "**Giá vàng hôm nay:**\n\nDưới đây là một số mức giá tham khảo: \
+                       Vàng SJC giao dịch khoảng 75 triệu đồng mỗi lượng.";
+        // Sanity: trigger the prefix-check path (long enough that the bug fires).
+        assert!(content.len() > 64);
+        // Must NOT panic; reasoning gets wrapped, content preserved.
+        let out = merge_assistant_reasoning_for_web_ui("thinking about prices", content);
+        assert!(out.starts_with("<think>\n"), "expected wrap, got: {out:?}");
+        assert!(out.contains("Giá vàng hôm nay"), "content lost: {out:?}");
+    }
+
+    /// Fallback: when reasoning has content but visible body is empty (the
+    /// parser couldn't split an unclosed channel), surface the reasoning AS
+    /// the body so the user always sees something. The think-collapsible
+    /// affordance is lost here, but "blank message" is worse UX than "shown
+    /// as plain text".
+    #[test]
+    fn empty_content_with_reasoning_surfaces_reasoning_as_body() {
+        let out = merge_assistant_reasoning_for_web_ui(
+            "All the thinking and the answer got stuck in one block.",
+            "",
+        );
+        // No <think> wrap — direct content so the user sees it.
+        assert!(!out.starts_with("<think>"), "expected raw body, got: {out:?}");
+        assert!(out.contains("All the thinking"));
     }
 }
 

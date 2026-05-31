@@ -1,5 +1,49 @@
 //! Local LLM inference — Candle (cross-platform) and MLX native (Apple Silicon) backends.
 //!
+//! ## Unified per-model interface
+//!
+//! All local models — regardless of arch (Qwen, Llama, Gemma-3/4, Mamba, …) —
+//! plug into the same interface, driven by per-model config files:
+//!
+//! ```text
+//!     ~/.senclaw/local-models/<safe-id>/
+//!         ├── tokenizer_config.json          ─┐
+//!         ├── chat_template.jinja  (or .json) ┼─► ParserConfig::from_model_dir()
+//!         ├── tokenizer.json                  │           │
+//!         ├── config.json                     │           │
+//!         └── model.safetensors[.index.json] ─┘           │
+//!                                                          ▼
+//!                                       ┌───────────────────────────┐
+//!                                       │   ParserConfig            │
+//!                                       │   • chat_template         │
+//!                                       │   • bos_token / eos_token │
+//!                                       │   • MarkerSet (per-arch)  │
+//!                                       └───────────────────────────┘
+//!                                            │              │
+//!                              ┌─────────────┘              └─────────────┐
+//!                              ▼                                          ▼
+//!                       INPUT (rendering)                       OUTPUT (parsing)
+//!                       render_chat() → prompt           LocalStreamParser → events
+//!                                                                │
+//!                                                                ▼
+//!                                          ParserEvent::{Visible, Reasoning, ToolCall}
+//!                                                  (single OpenAI-compatible shape)
+//!
+//! Adding a new local model: ship the standard HuggingFace files. Marker
+//! discovery is automatic: explicit named role-tokens (`soc_token`,
+//! `stc_token`, …) → chat_template scan → dialect preset fallback. No code
+//! changes needed for the parser interface.
+//!
+//! Entry points the rest of the codebase uses:
+//! - [`MlxNativeEngine::stream_events_to_channel`] — canonical event stream
+//!   (markers stripped, OpenAI-shape tool_calls).
+//! - [`MlxNativeEngine::parser_config`] — engine's loaded config for callers
+//!   that want to drive the parser themselves (`stream_openai_to_channel` +
+//!   `pipe_text_stream_to_events`).
+//! - [`stream_parser::ParserConfig::from_model_dir`] — for tools, examples,
+//!   and tests that need to inspect a model's interface without spinning up
+//!   the engine.
+//!
 //! ## Backends
 //!
 //! | Backend | Feature flag | Device | Typical decode (M4 Pro, 0.6B) |
@@ -23,6 +67,7 @@
 
 pub mod models;
 pub mod runtime;
+pub mod stream_parser;
 pub mod thinking_parse;
 #[cfg(feature = "local-mlx")]
 pub mod chat_template_openai;

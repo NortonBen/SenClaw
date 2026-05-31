@@ -584,6 +584,13 @@ pub fn get_qwen3_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, Er
 /// `{{ tools | tojson }}` inside the system block — handled by the shared
 /// renderer with no extra special tokens needed.
 impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
+    /// Qwen 3: `<think>…</think>` for reasoning, `<tool_call>{json}</tool_call>`
+    /// for tool calls (JSON body; XML `<function=…><parameter=…>` is accepted
+    /// as a fallback by the parser).
+    fn markers(&self) -> crate::local_model::stream_parser::MarkerSet {
+        crate::local_model::stream_parser::MarkerSet::qwen()
+    }
+
     fn resolve_special_tokens(
         &self,
         _template: &str,

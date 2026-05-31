@@ -78,6 +78,26 @@ impl ModelKind {
         }
     }
 
+    /// Per-arch dispatch into [`ChatTemplateModel::markers`] — what dialect
+    /// the loaded model emits. Each MLX model in `mlx_lm/models/<arch>` owns
+    /// its own `MarkerSet` (Gemma-4 harmony, Qwen 3 think/tool_call, etc.);
+    /// `ModelKind` just routes the call. Default (`MarkerSet::empty()`) for
+    /// archs that haven't declared a structured dialect — plain-text output.
+    fn markers(&self) -> super::stream_parser::MarkerSet {
+        use super::chat_template_openai::ChatTemplateModel;
+        match self {
+            Self::Qwen3(m) => m.markers(),
+            Self::Qwen35(m) => m.markers(),
+            Self::Llama(m) => m.markers(),
+            Self::Gemma2(m) => m.markers(),
+            Self::Gemma3(m) => m.markers(),
+            Self::Gemma4(m) => m.markers(),
+            Self::Mamba2(m) => m.markers(),
+            Self::FalconMamba(m) => m.markers(),
+            Self::BonsaiQ1(b) => b.markers(),
+        }
+    }
+
     /// Per-arch dispatch into [`ChatTemplateModel::stop_token_ids`]. The
     /// terminator set is config-specific and lives next to each model's `args`
     /// (see the model files in `mlx_lm/models/`); this just routes to it.
@@ -109,6 +129,12 @@ struct Loaded {
     /// `None` for base models that ship no `chat_template` (e.g. Mamba-2 base).
     /// Generation falls back to plain concatenation in that case.
     chat_template: Option<String>,
+    /// Per-model parser config loaded from `tokenizer_config.json` — markers
+    /// (channel / tool_call / think / quote), bos/eos, etc. The OUTPUT-stream
+    /// parser in `query_llm.rs` reads this verbatim so the canonical
+    /// `(visible, reasoning, tool_calls)` shape doesn't depend on hardcoded
+    /// dialects; new local models just ship their `tokenizer_config.json`.
+    parser_config: super::stream_parser::ParserConfig,
     n_layers: usize,
     /// Attention-only dims; `0` for SSM-only models (Mamba-2 leaves them unused).
     head_dim: i32,
@@ -229,6 +255,20 @@ impl MlxNativeEngine {
     }
 
     /// Settings fingerprint for registry reload (see `local_models/settings.json` `kv_cache_bits`).
+    /// Get the parser config for the currently-loaded model. Loads weights if
+    /// not yet loaded (parser config is built during the same one-shot load
+    /// that populates `Loaded`). Used by `query_llm::query_local_mlx` so the
+    /// output-stream parser uses the model's own `tokenizer_config.json`
+    /// markers — not a model-id-derived guess.
+    pub fn parser_config(&self) -> anyhow::Result<super::stream_parser::ParserConfig> {
+        self.warm_up()?;
+        let guard = self.loaded.lock().unwrap();
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("model not loaded"))?;
+        Ok(state.parser_config.clone())
+    }
+
     pub fn kv_cache_bits(&self) -> Option<u8> {
         self.kv_cache_bits
     }
@@ -299,6 +339,37 @@ impl LocalModelRuntime for MlxNativeEngine {
 }
 
 impl MlxNativeEngine {
+    /// Canonical event-stream entry point. The engine generates as usual, but
+    /// the raw token stream is piped through the model's own
+    /// [`stream_parser::LocalStreamParser`] (built from the loaded
+    /// [`stream_parser::ParserConfig`]) before reaching `event_tx` — so
+    /// callers receive [`stream_parser::ParserEvent::{Visible, Reasoning,
+    /// ToolCall}`] regardless of which model produced the output (Qwen
+    /// `<think>`/`<tool_call>`, Gemma-4 `<|channel>`/`<|tool_call>`, …).
+    ///
+    /// This is the recommended interface for new consumers — adding a new
+    /// local-model arch only requires its `tokenizer_config.json` (parser
+    /// auto-discovers markers); no consumer-side changes.
+    ///
+    /// Backward compat: [`stream_openai_to_channel`] still streams raw text
+    /// for callers that want to do their own parsing.
+    pub async fn stream_events_to_channel(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        event_tx: mpsc::Sender<super::stream_parser::ParserEvent>,
+    ) -> anyhow::Result<()> {
+        let config = self.parser_config()?;
+        let (raw_tx, raw_rx) = mpsc::channel::<String>(64);
+        let parser = super::stream_parser::LocalStreamParser::new(config.markers.clone());
+
+        let gen_fut = self.stream_openai_to_channel(messages, tools, raw_tx);
+        let pipe_fut = super::stream_parser::pipe_text_stream_to_events(raw_rx, parser, event_tx);
+
+        let ((), gen_res) = tokio::join!(pipe_fut, gen_fut);
+        gen_res
+    }
+
     /// Public native-stream entry point used by `query_llm.rs` (OpenAI-shaped messages + tools).
     pub async fn stream_openai_to_channel(
         &self,
@@ -345,7 +416,17 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     let tokenizer_file = model_dir.join("tokenizer.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
-    let chat_template = load_mlx_chat_template(model_dir, model_id)?;
+
+    // Single source of truth for both input rendering and output parsing:
+    // ParserConfig loads `tokenizer_config.json` + the chat template (probing
+    // `tokenizer_config.json::chat_template` → `chat_template.jinja` →
+    // `chat_template.json` in that order). The engine then uses the same
+    // template string for chat rendering (via `apply_chat_template_*`) and the
+    // same MarkerSet for output-stream normalisation — no double load, no
+    // chance of input and output drifting apart for new models.
+    let mut parser_config = super::stream_parser::ParserConfig::from_model_dir(model_dir, model_id)
+        .map_err(|e| anyhow::anyhow!("ParserConfig::from_model_dir failed: {e}"))?;
+    let chat_template = parser_config.chat_template.clone();
 
     let (model, n_layers, head_dim, n_kv_heads) = match arch {
         Arch::Qwen3 => {
@@ -436,10 +517,37 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
         "[local-mlx-native] cached state ready for {model_id} (arch={}, {n_layers} layers, head_dim={head_dim}, kv_heads={n_kv_heads})",
         model.arch_name(),
     );
+    // The loaded model is the authoritative source for its own dialect — each
+    // `mlx_lm::models::<arch>` declares its `MarkerSet` via `ChatTemplateModel`.
+    // If the model returns non-empty markers, prefer them over file-based
+    // detection (they're the code-level source of truth; the file path is a
+    // best-guess fallback for archs that haven't implemented `markers()` yet).
+    let model_markers = model.markers();
+    if !model_markers.is_empty() {
+        if model_markers != parser_config.markers {
+            tracing::info!(
+                "[local-mlx-native] using {} model's own markers (overriding file-detected set)",
+                model.arch_name()
+            );
+        }
+        parser_config.markers = model_markers;
+    }
+
+    tracing::info!(
+        "[local-mlx-native] parser_config for {model_id}: arch={} channel={} tool_call={} think={} quote={} format={:?}",
+        model.arch_name(),
+        parser_config.markers.channel.is_some(),
+        parser_config.markers.tool_call.is_some(),
+        parser_config.markers.think.is_some(),
+        parser_config.markers.quote.is_some(),
+        parser_config.markers.tool_call_format,
+    );
+
     Ok(Loaded {
         model,
         tokenizer,
         chat_template,
+        parser_config,
         n_layers,
         head_dim,
         n_kv_heads,
@@ -855,6 +963,22 @@ fn generate_with_cache(
         let mut work_messages: Vec<serde_json::Value> = messages.clone();
         let mut work_tools: Vec<serde_json::Value> = tools.to_vec();
 
+        // Tool-definition shape differs by template. The MLX path feeds
+        // HF-flattened tools (`{name, description, parameters}`) which the
+        // Qwen/Llama templates index directly (`tool.name`). Gemma-4's template
+        // indexes the OpenAI-nested form (`tool['function']['name']`) and raises
+        // an UndefinedError on a flattened tool — so wrap each flattened tool
+        // back into `{type:"function", function:{…}}` for Gemma-4. Idempotent:
+        // tools that already carry a `function` key are left untouched.
+        if matches!(state.model, ModelKind::Gemma4(_)) {
+            for t in work_tools.iter_mut() {
+                if t.get("function").is_none() {
+                    let inner = t.clone();
+                    *t = serde_json::json!({ "type": "function", "function": inner });
+                }
+            }
+        }
+
         // Fit-to-budget loop:
         // 1. Render with current (messages, tools).
         // 2. If under budget — done.
@@ -1216,10 +1340,17 @@ fn generate_with_cache(
     // guarantees bit-identity across a cache hit vs recompute); we accept it for
     // the ~90%-of-prefill saving on multi-turn agentic Qwen3.5 (per user opt-in).
     let recurrent_strict = matches!(&state.model, ModelKind::Qwen35(_));
+    // Gemma-4's assistant generation prompt `<|turn>model\n` is also 3 tokens
+    // (105, "model", "\n"), the same length as Qwen3's `<|im_start|>assistant\n`,
+    // so the same `QWEN3_GEN_SUFFIX_LEN` snapshot-trim path applies. Pure-
+    // attention arch (no recurrent state), so the trimmed-replay path is sound.
     let prefix_cache_eligible = tq_bits.is_none()
         && matches!(
             &state.model,
-            ModelKind::Qwen3(_) | ModelKind::Llama(_) | ModelKind::Qwen35(_)
+            ModelKind::Qwen3(_)
+                | ModelKind::Llama(_)
+                | ModelKind::Qwen35(_)
+                | ModelKind::Gemma4(_)
         );
     let mut prefill_start = 0usize;
     if prefix_cache_eligible {
@@ -1759,6 +1890,13 @@ fn generate_with_cache(
         };
     }
 
+    // Gemma-4 emits harmony-style structural tokens — `<|channel>…<channel|>`
+    // (thinking) and `<|tool_call>call:NAME{…}<tool_call|>` (tool calls, with
+    // `<|"|>`-wrapped string args). The downstream parser needs those markers,
+    // so DON'T strip specials when detokenizing Gemma-4. Every other arch
+    // strips them (`<think>`/`<tool_call>` are plain tokens there).
+    let decode_skip_special = !matches!(state.model, ModelKind::Gemma4(_));
+
     // Drain the 20-token stream buffer: detokenize and push to the channel.
     // `return`s the whole turn early if the receiver hung up. Shared verbatim
     // between the async and synchronous decode paths.
@@ -1782,7 +1920,7 @@ fn generate_with_cache(
                     );
                 }
                 let text = tokenizer
-                    .decode(&slice, true)
+                    .decode(&slice, decode_skip_special)
                     .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
                 if !text.is_empty() && tx.blocking_send(text).is_err() {
                     mlx_release_after_turn();
@@ -2072,7 +2210,7 @@ fn generate_with_cache(
                 );
             }
             let text = tokenizer
-                .decode(&slice, true)
+                .decode(&slice, decode_skip_special)
                 .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
             if !text.is_empty() && tx.blocking_send(text).is_err() {
                 mlx_release_after_turn();
@@ -2107,7 +2245,7 @@ fn generate_with_cache(
         eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
         let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
         let text = tokenizer
-            .decode(&slice, true)
+            .decode(&slice, decode_skip_special)
             .map_err(|e| anyhow::anyhow!("final decode failed: {e:?}"))?;
         if !text.is_empty() {
             let _ = tx.blocking_send(text);
@@ -2416,45 +2554,74 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
 /// `embed_tokens_per_layer` — both of which mlx-rs 0.25.3 leaves without
 /// `#[param]`-visible `inner/scales/biases` after quantization.
 fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::gemma4::Model> {
-    use super::mlx_lm::models::gemma4::{get_gemma4_model_args, Model, WeightMap};
+    use super::mlx_lm::models::gemma4::{
+        apply_per_module_quantization, get_gemma4_model_args, Model, QuantPlan, WeightMap,
+    };
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
     let args = get_gemma4_model_args(model_dir)
         .map_err(|e| anyhow::anyhow!("read gemma4 args failed: {e:?}"))?;
     let first_kv_shared = args.first_kv_shared();
-    let model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
+    let mut model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
 
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
     let cfg: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
-    let quant = cfg
-        .get("quantization")
-        .or_else(|| cfg.get("quantization_config"))
-        .and_then(|q| {
-            let g = q.get("group_size")?.as_i64()? as i32;
-            let b = q.get("bits")?.as_i64()? as i32;
-            Some((g, b))
-        });
 
-    let mut model = if let Some((group_size, bits)) = quant {
-        tracing::info!(
-            "[local-mlx-native] quantizing Gemma-4 layers: group_size={group_size}, bits={bits}"
-        );
-        let m = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
-            .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
-        m.eval()
-            .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
-        m
+    // Per-module quantization plan — handles both uniform 4-bit
+    // (`gemma-4-*-it-4bit`) and OptiQ mixed-bit (`gemma-4-*-it-OptiQ-4bit`).
+    // We scan `model.safetensors.index.json` so quantization is driven by
+    // what's actually stored quantized (i.e. has `.scales`) rather than only
+    // by the OptiQ override list — works whether the checkpoint relies on the
+    // top-level default or declares per-module overrides.
+    let weights_index = model_dir.join("model.safetensors.index.json");
+    let index_keys_owned: Vec<String> = if weights_index.exists() {
+        let json = std::fs::read_to_string(&weights_index)
+            .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
+        let map: WeightMap = serde_json::from_str(&json)
+            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        map.weight_map.keys().cloned().collect()
     } else {
-        model
+        // Single-file safetensors — peek at its key list.
+        let single = model_dir.join("model.safetensors");
+        if !single.exists() {
+            anyhow::bail!(
+                "no model.safetensors.index.json or model.safetensors in {}",
+                model_dir.display()
+            );
+        }
+        let loaded = mlx_rs::Array::load_safetensors(&single)
+            .map_err(|e| anyhow::anyhow!("read safetensors keys: {e:?}"))?;
+        loaded.keys().map(|k| k.as_str().to_string()).collect()
     };
-    let is_quant = quant.is_some();
+
+    let plan = QuantPlan::from_config_and_index(
+        &cfg,
+        index_keys_owned.iter().map(|s| s.as_str()),
+    );
+    let is_quant = !plan.quantized_paths.is_empty();
+    if is_quant {
+        let override_count = plan.overrides.len();
+        let mode = if override_count > 0 { "OptiQ mixed-bit" } else { "uniform" };
+        tracing::info!(
+            "[local-mlx-native] quantizing Gemma-4 ({}): default={}-bit/group{}, {} per-module overrides, {} quantized modules",
+            mode,
+            plan.default.1,
+            plan.default.0,
+            override_count,
+            plan.quantized_paths.len(),
+        );
+        apply_per_module_quantization(&mut model, &plan)
+            .map_err(|e| anyhow::anyhow!("per-module quantize failed: {e:?}"))?;
+        model
+            .eval()
+            .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
+    }
 
     let mut shard_files: Vec<std::path::PathBuf> = Vec::new();
-    let weights_index = model_dir.join("model.safetensors.index.json");
     if weights_index.exists() {
         let json = std::fs::read_to_string(&weights_index)
             .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
