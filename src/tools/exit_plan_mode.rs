@@ -97,11 +97,13 @@ impl Tool for ExitPlanModeTool {
         };
 
         if selected.as_str() == "clearContextAndStart" {
-            bus.emit(EngineEvent::PlanImplement(crate::zen_core::PlanImplementData {
-                plan_file_path: plan_file_path.clone(),
-                plan_content: plan_content.clone(),
-            }));
-            
+            bus.emit(EngineEvent::PlanImplement(
+                crate::zen_core::PlanImplementData {
+                    plan_file_path: plan_file_path.clone(),
+                    plan_content: plan_content.clone(),
+                },
+            ));
+
             Ok(vec![ToolOutput::ClearContextAndStart {
                 plan_file_path,
                 plan_content,

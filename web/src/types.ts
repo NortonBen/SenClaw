@@ -390,7 +390,7 @@ export type RuleMatcherType =
   | 'tool_category'
   | 'always';
 
-export type ToolCategory = 'file_edit' | 'bash' | 'skill' | 'mcp' | 'all';
+export type ToolCategory = 'file_edit' | 'bash' | 'skill' | 'agent' | 'mcp' | 'all';
 
 export interface RuleMatcher {
   type: RuleMatcherType;
@@ -541,4 +541,3 @@ export interface WorkbenchState {
   /** History excludes current. */
   history: WorkbenchArtifact[];
 }
-

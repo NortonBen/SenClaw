@@ -8,7 +8,7 @@ use crate::types::InlineButton;
 use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
 use super::types::{
     AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission, PermissionOption,
-    PermissionPayload, RuleAction, RuleMatcherType, ToolAutoAcceptRule,
+    PermissionPayload, RuleAction, RuleMatcher, RuleMatcherType, ToolAutoAcceptRule, ToolCategory,
 };
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
@@ -44,7 +44,7 @@ impl PermissionBridge {
             pending_ask_questions: Mutex::new(HashMap::new()),
             max_content_length: max_content_length.unwrap_or(200),
             api,
-            tool_rules: Mutex::new(Vec::new()),
+            tool_rules: Mutex::new(default_tool_rules()),
             accept_all: Mutex::new(false),
             on_activity: Mutex::new(None),
             on_permission_request: Mutex::new(None),
@@ -153,7 +153,17 @@ impl PermissionBridge {
                     .map(|re| re.is_match(tool_name))
                     .unwrap_or(false)
             }
-            RuleMatcherType::ToolCategory => false, // not applicable for MCP tools
+            RuleMatcherType::ToolCategory => match rule.matcher.category {
+                Some(ToolCategory::All) => true,
+                Some(ToolCategory::Bash) => tool_name == "Bash",
+                Some(ToolCategory::FileEdit) => {
+                    matches!(tool_name, "Edit" | "Write" | "NotebookEdit")
+                }
+                Some(ToolCategory::Skill) => tool_name == "Skill",
+                Some(ToolCategory::Agent) => tool_name == "Task",
+                Some(ToolCategory::Mcp) => tool_name.starts_with("mcp__"),
+                None => false,
+            },
         }
     }
 
@@ -635,6 +645,39 @@ impl PermissionBridge {
 
         Some(format!("✅ Selected: {question_label}"))
     }
+}
+
+fn default_tool_rules() -> Vec<ToolAutoAcceptRule> {
+    vec![
+        ToolAutoAcceptRule {
+            id: "tool-category-skill".to_string(),
+            matcher: RuleMatcher {
+                matcher_type: RuleMatcherType::ToolCategory,
+                pattern: None,
+                tool_name: None,
+                server: None,
+                tool: None,
+                category: Some(ToolCategory::Skill),
+            },
+            action: RuleAction::AutoAccept,
+            enabled: true,
+            description: Some("Auto accept Skill invocations".to_string()),
+        },
+        ToolAutoAcceptRule {
+            id: "tool-category-agent".to_string(),
+            matcher: RuleMatcher {
+                matcher_type: RuleMatcherType::ToolCategory,
+                pattern: None,
+                tool_name: None,
+                server: None,
+                tool: None,
+                category: Some(ToolCategory::Agent),
+            },
+            action: RuleAction::AutoAccept,
+            enabled: true,
+            description: Some("Auto accept subagent Task invocations".to_string()),
+        },
+    ]
 }
 
 fn glob_match(pattern: &str, text: &str) -> bool {

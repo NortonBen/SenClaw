@@ -28,6 +28,17 @@ pub enum RuleMatcherType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCategory {
+    FileEdit,
+    Bash,
+    Skill,
+    Agent,
+    Mcp,
+    All,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleMatcher {
     #[serde(rename = "type")]
     pub matcher_type: RuleMatcherType,
@@ -35,6 +46,7 @@ pub struct RuleMatcher {
     pub tool_name: Option<String>,
     pub server: Option<String>,
     pub tool: Option<String>,
+    pub category: Option<ToolCategory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

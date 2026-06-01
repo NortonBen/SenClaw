@@ -72,8 +72,7 @@ pub struct ZenEngine {
     /// `tools_for_main_agent` includes these even when `should_defer() == true`,
     /// so the model can actually call what ToolSearch promised. Reset on
     /// `dispose()` / new session.
-    pub(crate) discovered_tools:
-        Arc<Mutex<std::collections::HashSet<String>>>,
+    pub(crate) discovered_tools: Arc<Mutex<std::collections::HashSet<String>>>,
 
     /// Weak self-reference set during construction. Lets `&self` methods hand
     /// out closures that re-fetch live engine state without holding a strong
@@ -160,9 +159,9 @@ impl ZenEngine {
                 }
             }
         });
-        engine.register_tool(
-            Arc::new(SkillTool::new(skill_registry).with_on_load(on_skill_load)),
-        );
+        engine.register_tool(Arc::new(
+            SkillTool::new(skill_registry).with_on_load(on_skill_load),
+        ));
         // LaunchUI — surfaces deliverables in the WebUI workbench panel.
         engine.register_tool(Arc::new(crate::tools::LaunchUITool::new(workbench_service)));
 
@@ -183,10 +182,7 @@ impl ZenEngine {
         let register_discovered: crate::tools::tool_search::RegisterDiscoveredFn =
             Arc::new(move |name: &str| {
                 if let Some(e) = engine_for_discovery.upgrade() {
-                    e.discovered_tools
-                        .lock()
-                        .unwrap()
-                        .insert(name.to_string());
+                    e.discovered_tools.lock().unwrap().insert(name.to_string());
                     tracing::info!("[ToolSearch] discovered tool: {name}");
                 }
             });
@@ -198,9 +194,9 @@ impl ZenEngine {
         // `ExitPlanMode` (which requests approval). Both are `always_load`
         // builtins so the model doesn't need ToolSearch to find them.
         let engine_for_plan = Arc::downgrade(&engine);
-        engine.register_tool(Arc::new(
-            crate::tools::EnterPlanModeTool::for_engine(engine_for_plan),
-        ));
+        engine.register_tool(Arc::new(crate::tools::EnterPlanModeTool::for_engine(
+            engine_for_plan,
+        )));
 
         // Register TaskTool last so it knows about all other tools.
         // Pass a resolver closure (vs a snapshot) so spawned subagents inherit
@@ -344,9 +340,7 @@ impl ZenEngine {
         //     so subsequent turns can actually invoke it. Mirrors claude-code's
         //     "lazy load" UX without breaking the dispatch lookup.
         let discovered = self.discovered_tools.lock().unwrap().clone();
-        filtered.retain(|t| {
-            t.always_load() || !t.should_defer() || discovered.contains(t.name())
-        });
+        filtered.retain(|t| t.always_load() || !t.should_defer() || discovered.contains(t.name()));
 
         // Layer 6 — stable sort for prompt-cache stability.
         filtered.sort_by(|a, b| a.name().cmp(b.name()));
@@ -858,7 +852,7 @@ impl ZenCore for ZenEngine {
         // Build deferred-tools reminder so the LLM knows ToolSearch can load
         // specialized tools on demand.
         let deferred_reminder = self.build_deferred_tools_reminder();
-        
+
         let plan_mode_reminder = if opts.agent_mode == AgentMode::Plan {
             let plans_dir = std::path::Path::new(&opts.agent_data_dir)
                 .join(".sema")
@@ -937,10 +931,9 @@ impl ZenCore for ZenEngine {
             let mut blocks = Vec::<ContentBlock>::new();
             if messages.is_empty() {
                 let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
-                if let Some(ctx) = Self::collect_first_turn_context(
-                    &opts.working_dir,
-                    include_project_doc,
-                ) {
+                if let Some(ctx) =
+                    Self::collect_first_turn_context(&opts.working_dir, include_project_doc)
+                {
                     blocks.push(ContentBlock::Text { text: ctx });
                 }
             }
@@ -1274,10 +1267,11 @@ impl ZenCore for ZenEngine {
         // Without this delivery the tool blocks forever and the agent hangs.
         let mut answers = std::collections::HashMap::new();
         answers.insert("selected".to_string(), response.selected.clone());
-        self.response_registry.deliver_ask_question(AskQuestionResponseData {
-            agent_id: response.agent_id.clone(),
-            answers,
-        });
+        self.response_registry
+            .deliver_ask_question(AskQuestionResponseData {
+                agent_id: response.agent_id.clone(),
+                answers,
+            });
 
         // On approval, flip back to Agent mode so the agent can actually
         // execute the plan (read-only tool filtering is lifted). On
@@ -1501,11 +1495,15 @@ impl ZenEngine {
         let names = self.skill_registry.names();
         let mut best: Option<(u32, String, String)> = None;
         for n in &names {
-            let Some(skill) = self.skill_registry.find(n) else { continue };
+            let Some(skill) = self.skill_registry.find(n) else {
+                continue;
+            };
             if skill.metadata.disable_model_invocation {
                 continue;
             }
-            let Some(when) = skill.metadata.when_to_use.as_deref() else { continue };
+            let Some(when) = skill.metadata.when_to_use.as_deref() else {
+                continue;
+            };
             let when_lower = when.to_lowercase();
 
             // Score = exact quoted-trigger substring hits (heavy) + word overlap.
@@ -1525,7 +1523,11 @@ impl ZenEngine {
             }
             if score >= 15 {
                 if best.as_ref().map(|(s, _, _)| score > *s).unwrap_or(true) {
-                    best = Some((score, skill.metadata.name.clone(), skill.metadata.description.clone()));
+                    best = Some((
+                        score,
+                        skill.metadata.name.clone(),
+                        skill.metadata.description.clone(),
+                    ));
                 }
             }
         }
@@ -1568,10 +1570,7 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
     ///
     /// Reads `SENCLAW.md` first, then falls back to `CLAUDE.md` for backward
     /// compatibility with existing repos that haven't renamed yet.
-    fn collect_first_turn_context(
-        working_dir: &str,
-        include_project_doc: bool,
-    ) -> Option<String> {
+    fn collect_first_turn_context(working_dir: &str, include_project_doc: bool) -> Option<String> {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let mut parts: Vec<String> = vec![format!("Today's date is {date}.")];
 
@@ -1608,7 +1607,10 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
 
         if parts.len() == 1 && parts[0].contains("date") {
             // Only date — still inject so the model knows the day.
-            return Some(format!("<system-reminder>\n{}\n</system-reminder>\n\n", parts[0]));
+            return Some(format!(
+                "<system-reminder>\n{}\n</system-reminder>\n\n",
+                parts[0]
+            ));
         }
 
         Some(format!(
@@ -1747,13 +1749,7 @@ impl Tool for McpRegistryBridgeTool {
 
     fn search_hint(&self) -> String {
         // `server_name — tool_name — first sentence of description`
-        let first_sentence = self
-            .desc
-            .split('.')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let first_sentence = self.desc.split('.').next().unwrap_or("").trim().to_string();
         let server_display = self
             .server_name
             .strip_prefix("senclaw-")
@@ -1787,7 +1783,8 @@ fn detect_user_language(text: &str) -> Option<&'static str> {
             || matches!(u, 0x0110 | 0x0111             // Đ đ
                           | 0x01A0 | 0x01A1            // Ơ ơ
                           | 0x01AF | 0x01B0            // Ư ư
-                          | 0x0102 | 0x0103)           // Ă ă
+                          | 0x0102 | 0x0103)
+        // Ă ă
         {
             has_viet = true;
         }
@@ -1835,8 +1832,14 @@ mod tests {
 
     #[test]
     fn detect_user_language_covers_vi_zh_en() {
-        assert_eq!(detect_user_language("tìm kiếm giá vàng hôm nay"), Some("Vietnamese"));
-        assert_eq!(detect_user_language("đổi mật khẩu giúp tôi"), Some("Vietnamese"));
+        assert_eq!(
+            detect_user_language("tìm kiếm giá vàng hôm nay"),
+            Some("Vietnamese")
+        );
+        assert_eq!(
+            detect_user_language("đổi mật khẩu giúp tôi"),
+            Some("Vietnamese")
+        );
         assert_eq!(detect_user_language("今天黄金价格"), Some("Chinese"));
         // Plain ASCII is ambiguous → defer to the system prompt's generic rule.
         assert_eq!(detect_user_language("what is the gold price today"), None);
@@ -2039,8 +2042,13 @@ mod tests {
         });
 
         // The waiter got the choice.
-        let answer = rx.try_recv().expect("plan-exit response delivered to waiter");
-        assert_eq!(answer.answers.get("selected").map(String::as_str), Some("startEditing"));
+        let answer = rx
+            .try_recv()
+            .expect("plan-exit response delivered to waiter");
+        assert_eq!(
+            answer.answers.get("selected").map(String::as_str),
+            Some("startEditing")
+        );
         // Mode flipped back to Agent.
         assert_eq!(engine.options.read().unwrap().agent_mode, AgentMode::Agent);
     }
@@ -2061,7 +2069,10 @@ mod tests {
         });
 
         let answer = rx.try_recv().expect("cancel still delivered");
-        assert_eq!(answer.answers.get("selected").map(String::as_str), Some("cancelled"));
+        assert_eq!(
+            answer.answers.get("selected").map(String::as_str),
+            Some("cancelled")
+        );
         // Cancel → stays in Plan mode.
         assert_eq!(engine.options.read().unwrap().agent_mode, AgentMode::Plan);
     }
@@ -2108,7 +2119,10 @@ mod tests {
         let tools = engine.tools_for_subagent(Some(&allowed));
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert_eq!(
-            names.iter().filter(|n| **n == "Read" || **n == "Glob").count(),
+            names
+                .iter()
+                .filter(|n| **n == "Read" || **n == "Glob")
+                .count(),
             2
         );
         assert!(!names.contains(&"Bash"));

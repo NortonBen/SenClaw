@@ -41,7 +41,17 @@ function ruleLabel(rule: ToolAutoAcceptRule): string {
     case 'tool_exact':  return `Tool: ${m.tool_name}`;
     case 'mcp_server':  return m.tool ? `MCP: ${m.server} › ${m.tool}` : `MCP: ${m.server}/*`;
     case 'mcp_glob':    return `MCP: ${m.pattern}`;
-    case 'tool_category': return `Category: ${m.category}`;
+    case 'tool_category': {
+      const labels: Record<string, string> = {
+        file_edit: 'File Edit',
+        bash: 'Bash',
+        skill: 'Skill',
+        agent: 'Agent',
+        mcp: 'MCP',
+        all: 'Tất cả',
+      };
+      return `Category: ${m.category ? labels[m.category] ?? m.category : 'Unknown'}`;
+    }
     case 'always':      return 'Tất cả tool';
     default:            return 'Unknown';
   }
@@ -177,6 +187,7 @@ function AddRuleForm({ onAdd, onCancel, token }: AddRuleFormProps) {
           <Option value="bash">Bash</Option>
           <Option value="file_edit">File Edit</Option>
           <Option value="skill">Skill</Option>
+          <Option value="agent">Agent</Option>
           <Option value="mcp">MCP</Option>
           <Option value="all">Tất cả</Option>
         </Select>

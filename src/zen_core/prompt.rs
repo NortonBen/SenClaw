@@ -67,7 +67,8 @@ Notes:
 
 /// Build the auto-memory prompt for a persistent memory directory.
 pub fn auto_memory_prompt(memory_dir: &str) -> String {
-    format!("# Auto Memory
+    format!(
+        "# Auto Memory
 
 Your persistent memory directory: `{memory_dir}`. Contents survive across conversations.
 
@@ -84,7 +85,8 @@ Your persistent memory directory: `{memory_dir}`. Contents survive across conver
 - Use `Write` / `Edit` to create or update files in `{memory_dir}`
 - Keep `MEMORY.md` as a concise index (≤200 lines); link to topic files for details
 - Update or remove stale memories — never let incorrect info persist
-- When the user asks to forget something, remove it immediately")
+- When the user asks to forget something, remove it immediately"
+    )
 }
 
 /// Instruction passed to the compactor when summarising the conversation.
@@ -150,14 +152,14 @@ Do NOT write the plan anywhere else.
 /// background-job control + plan/todo/picker tools are main-agent-only.
 /// This cuts ~9 tool definitions per subagent turn — substantial token saving.
 pub const SUBAGENT_EXCLUDED_TOOLS: &[&str] = &[
-    "Task",          // SubAgent — no nested subagents
-    "PeekBgJob",     // background jobs are main-agent context
+    "Task",      // SubAgent — no nested subagents
+    "PeekBgJob", // background jobs are main-agent context
     "StopBgJob",
     "AskUserQuestion", // PickOption — subagents shouldn't pause for input
     "AskUser",
-    "ExitPlanMode",  // PlanToAgent — plan mode is a main-agent flow
-    "TodoWrite",     // CreateTodo / ListTodos / GetTodo / UpdateTodo (gộp)
-    "ToolSearch",    // Subagents have narrow scope set by parent — no defer-discovery needed
+    "ExitPlanMode", // PlanToAgent — plan mode is a main-agent flow
+    "TodoWrite",    // CreateTodo / ListTodos / GetTodo / UpdateTodo (gộp)
+    "ToolSearch",   // Subagents have narrow scope set by parent — no defer-discovery needed
 ];
 
 /// Filter a tool list down to those allowed for subagents.
@@ -209,10 +211,7 @@ pub fn render_deferred_tools_reminder(deferred: &[DeferredToolHint<'_>]) -> Opti
         if let Some(rest) = t.name.strip_prefix("mcp__") {
             // server name is the part before the next `__`
             let server = rest.split("__").next().unwrap_or(rest);
-            groups
-                .entry(server.to_string())
-                .or_default()
-                .push(t);
+            groups.entry(server.to_string()).or_default().push(t);
         } else {
             ungrouped.push(t);
         }
@@ -407,7 +406,12 @@ mod tests {
 
     #[test]
     fn compression_prompt_lists_sections() {
-        for section in ["Intent evolution", "Technical context", "Artifacts", "Errors"] {
+        for section in [
+            "Intent evolution",
+            "Technical context",
+            "Artifacts",
+            "Errors",
+        ] {
             assert!(COMPRESSION_PROMPT.contains(section), "missing: {section}");
         }
     }
@@ -427,7 +431,10 @@ mod tests {
     #[test]
     fn filter_tools_for_subagent_drops_excluded() {
         let names = vec!["Bash", "Task", "Read", "ExitPlanMode", "Glob"];
-        let kept: Vec<&str> = filter_tools_for_subagent(&names, |s| s).into_iter().copied().collect();
+        let kept: Vec<&str> = filter_tools_for_subagent(&names, |s| s)
+            .into_iter()
+            .copied()
+            .collect();
         assert_eq!(kept, vec!["Bash", "Read", "Glob"]);
     }
 

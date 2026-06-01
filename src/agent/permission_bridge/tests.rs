@@ -12,6 +12,21 @@ fn stub_api() -> Arc<dyn PermissionBridgeApi> {
     Arc::new(StubApi)
 }
 
+#[derive(Default)]
+struct RecordingApi {
+    responses: Mutex<Vec<(String, String, String)>>,
+}
+
+impl PermissionBridgeApi for RecordingApi {
+    fn respond_to_tool_permission(&self, group_jid: &str, tool_name: &str, selected: &str) {
+        self.responses.lock().unwrap().push((
+            group_jid.to_string(),
+            tool_name.to_string(),
+            selected.to_string(),
+        ));
+    }
+}
+
 #[test]
 fn test_short_id_is_8_hex_chars() {
     let id = short_id();
@@ -121,6 +136,45 @@ fn test_resolve_permission_first_responder_wins() {
 
     // Second resolution on same ID should fail (already consumed)
     assert!(!bridge.resolve_permission(&request_id, "refuse"));
+}
+
+#[test]
+fn test_default_rules_auto_accept_skill_and_task() {
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+    let options: HashMap<String, String> = [
+        ("allow".into(), "Allow".into()),
+        ("refuse".into(), "Refuse".into()),
+    ]
+    .into();
+
+    bridge.handle_permission_request(
+        "Skill",
+        "Load skill?",
+        &serde_json::json!({"skill": "agent-browser"}),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+    bridge.handle_permission_request(
+        "Task",
+        "Launch agent?",
+        &serde_json::json!({"subagent_type": "general-purpose"}),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+
+    let responses = api.responses.lock().unwrap().clone();
+    assert_eq!(
+        responses,
+        vec![
+            ("group-1".into(), "Skill".into(), "allow".into()),
+            ("group-1".into(), "Task".into(), "allow".into()),
+        ]
+    );
 }
 
 #[test]

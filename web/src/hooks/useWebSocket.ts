@@ -165,7 +165,7 @@ export interface PlanFull extends PlanSummary {
 
 export type AgentMode = 'Agent' | 'Plan';
 
-export type PlanExitOption = 'startEditing' | 'clearContextAndStart' | 'cancelled';
+export type PlanExitOption = 'startEditing' | 'clearContextAndStart';
 
 export interface PlanExitRequest {
   /** Group/agent JID that originated the request. */
@@ -1077,17 +1077,8 @@ export function useWebSocket(): WsHook {
   }, [planExitRequest, rawSend]);
 
   const dismissPlanExit = useCallback(() => {
-    const req = planExitRequest;
-    if (req) {
-      rawSend({
-        type: 'plan:exit:response',
-        groupJid: req.groupJid,
-        agentId: req.agentId,
-        selected: 'cancelled',
-      });
-    }
     setPlanExitRequest(null);
-  }, [planExitRequest, rawSend]);
+  }, []);
 
   const setAgentMode = useCallback((jid: string, mode: AgentMode) => {
     // Optimistic UI update — the server echoes `agent:mode:changed` to confirm.
