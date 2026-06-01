@@ -31,6 +31,14 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         native_supported: true,
         vision: false,
     },
+    KnownModel {
+        id: "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+        label: "Qwen2.5 0.5B Instruct 4-bit — fast and lightweight chat model",
+        approx_size_gb: 0.4,
+        context_length: 32_768,
+        native_supported: true,
+        vision: false,
+    },
 
     // ── Qwen3.5 hybrid (GatedDeltaNet + attention, OptiQ quant — MLX native) ─
     // The linear-attention layers run a sequential CPU-orchestrated scan (no

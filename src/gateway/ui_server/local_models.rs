@@ -598,7 +598,7 @@ pub(crate) async fn local_models_list(
         };
         entries.push(ModelEntry {
             label: format!("{} (custom)", id),
-            native_supported: id.to_lowercase().contains("qwen3"),
+            native_supported: id.to_lowercase().contains("qwen3") || id.to_lowercase().contains("qwen2"),
             installed,
             on_disk_path: dir.to_string_lossy().to_string(),
             download: download_snapshot.get(&id).cloned(),

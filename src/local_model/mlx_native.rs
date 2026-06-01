@@ -3339,7 +3339,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
                 if mt.contains("qwen3_5") {
                     return Ok(Arch::Qwen35);
                 }
-                if mt.contains("qwen3") {
+                if mt.contains("qwen3") || mt.contains("qwen2") {
                     return Ok(Arch::Qwen3);
                 }
                 if mt == "gemma2" || mt.starts_with("gemma2") {
@@ -3386,7 +3386,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
     if lower.contains("qwen3.5") || lower.contains("qwen3_5") {
         return Ok(Arch::Qwen35);
     }
-    if lower.contains("qwen3") {
+    if lower.contains("qwen3") || lower.contains("qwen2") {
         return Ok(Arch::Qwen3);
     }
     if lower.contains("gemma2") || lower.contains("gemma-2") {

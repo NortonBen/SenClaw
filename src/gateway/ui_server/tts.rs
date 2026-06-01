@@ -620,161 +620,91 @@ fn synthesize_blocking(
     if model_id == "macos-speech" {
         #[cfg(target_os = "macos")]
         {
-        // Build a unique temp output path.
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default();
-        let tmp = std::env::temp_dir().join(format!(
-            "senclaw-tts-{}-{nonce}.wav",
-            std::process::id()
-        ));
+            // Build a unique temp output path.
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            let tmp = std::env::temp_dir().join(format!(
+                "senclaw-tts-{}-{nonce}.wav",
+                std::process::id()
+            ));
 
-        // Select native macOS voice.
-        let effective_voice = voice.unwrap_or_else(|| {
-            if language == "vi" {
-                "Linh"
-            } else {
-                "Samantha"
+            // Select native macOS voice.
+            let effective_voice = voice.unwrap_or_else(|| {
+                if language == "vi" {
+                    "Linh"
+                } else {
+                    "Samantha"
+                }
+            });
+
+            // Speech rate for `say` baseline is around 175 words per minute.
+            let rate = (175.0 * speed) as u32;
+
+            let mut cmd = std::process::Command::new("/usr/bin/say");
+            cmd.args([
+                "-o",
+                &tmp.to_string_lossy(),
+                "--file-format=WAVE",
+                "--data-format=LEI16",
+                "-v",
+                effective_voice,
+                "-r",
+                &rate.to_string(),
+                text,
+            ]);
+
+            let output = cmd.output().map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to execute macOS say utility: {e}"),
+                )
+            })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("macOS say synthesis failed: {}", stderr.trim()),
+                ));
             }
-        });
 
-        // Speech rate for `say` baseline is around 175 words per minute.
-        let rate = (175.0 * speed) as u32;
+            // Read output WAV.
+            let wav = std::fs::read(&tmp).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read synthesized WAV file: {e}"),
+                )
+            })?;
+            let _ = std::fs::remove_file(&tmp);
 
-        let mut cmd = std::process::Command::new("/usr/bin/say");
-        cmd.args([
-            "-o",
-            &tmp.to_string_lossy(),
-            "--file-format=WAVE",
-            "--data-format=LEI16",
-            "-v",
-            effective_voice,
-            "-r",
-            &rate.to_string(),
-            text,
-        ]);
+            if wav.is_empty() {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "macOS say produced an empty WAV file".into(),
+                ));
+            }
 
-        let output = cmd.output().map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to execute macOS say utility: {e}"),
-            )
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("macOS say synthesis failed: {}", stderr.trim()),
-            ));
+            return Ok(wav);
         }
 
-        // Read output WAV.
-        let wav = std::fs::read(&tmp).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read synthesized WAV file: {e}"),
-            )
-        })?;
-        let _ = std::fs::remove_file(&tmp);
-
-        if wav.is_empty() {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "macOS say produced an empty WAV file".into(),
-            ));
-        }
-
-        return Ok(wav);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        if model_id == "macos-speech" {
+        #[cfg(not(target_os = "macos"))]
+        {
             return Err((
                 StatusCode::NOT_IMPLEMENTED,
                 "Native system speech synthesis is currently only supported on macOS.".into(),
             ));
         }
     }
-    }
 
-    // Python MLX fallback for Custom/ZipVoice models
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let tmp_path = std::env::temp_dir().join(format!("senclaw-tts-{}-{nonce}", std::process::id()));
-    
-    let path_str = model_path
-        .expect("Model path missing")
-        .to_string_lossy()
-        .to_string();
-
-    let script = format!(
-        r#"
-import sys
-import os
-try:
-    from mlx_audio.tts.utils import load_model
-    from mlx_audio.tts.generate import generate_audio
-except ImportError:
-    print("Error: mlx-audio is not installed. Please run `pip install mlx-audio`", file=sys.stderr)
-    sys.exit(1)
-
-model_path = sys.argv[1]
-text = sys.argv[2]
-file_prefix = sys.argv[3]
-
-try:
-    model = load_model(model_path)
-    generate_audio(
-        model=model,
-        text=text,
-        file_prefix=file_prefix
+    // Call our pure-Rust MLX implementation for ZipVoice (Phase 1 placeholder)
+    crate::memory::cognitive::tts_mlx::synthesize(
+        model_id,
+        model_path,
+        text,
+        language,
+        voice,
+        speed,
     )
-except Exception as e:
-    print(f"Error during synthesis: {{e}}", file=sys.stderr)
-    sys.exit(1)
-"#
-    );
-
-    let mut cmd = std::process::Command::new("python3");
-    cmd.args(["-c", &script, &path_str, text, &tmp_path.to_string_lossy()]);
-
-    let output = cmd.output().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to execute python3: {e}"),
-        )
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Python synthesis failed: {}", stderr.trim()),
-        ));
-    }
-
-    // mlx_audio appends `.wav` to the `file_prefix`
-    let expected_wav = tmp_path.with_extension("wav");
-    
-    let wav = std::fs::read(&expected_wav).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read synthesized WAV file {:?}: {}", expected_wav, e),
-        )
-    })?;
-    let _ = std::fs::remove_file(&expected_wav);
-
-    if wav.is_empty() {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Python mlx_audio produced an empty WAV file".into(),
-        ));
-    }
-
-    Ok(wav)
 }

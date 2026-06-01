@@ -42,6 +42,7 @@ pub mod system;
 pub mod tiers;
 pub mod triplet;
 pub mod vector_store;
+pub mod tts_mlx;
 
 pub use cognify::{sanitize_for_cognify, CognifyOptions, CognifyPipeline, CognifyReport};
 pub use data_point::{DataPoint, ExtractionState, NodeKind};

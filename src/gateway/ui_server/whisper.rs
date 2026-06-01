@@ -676,7 +676,11 @@ async fn transcribe_impl(
     let engine = get_or_create_engine(&dir);
     let tmp_for_task = tmp.clone();
     let (text, stats) = tokio::task::spawn_blocking(move || {
-        engine.transcribe_file_timed(&tmp_for_task, language.as_deref())
+        let res = engine.transcribe_file_timed(&tmp_for_task, language.as_deref());
+        // Unload the model immediately after transcription to free ~2GB RAM.
+        // It will be lazily reloaded on the next request.
+        engine.unload();
+        res
     })
     .await
     .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

@@ -349,6 +349,17 @@ impl WhisperEngine {
         }
     }
 
+    /// Unloads the model from memory and clears the MLX cache.
+    /// The next transcription will automatically reload the model.
+    pub fn unload(&self) {
+        let mut guard = self.loaded.lock().unwrap();
+        *guard = None;
+        #[cfg(feature = "local-mlx-whisper")]
+        unsafe {
+            mlx_sys::mlx_clear_cache();
+        }
+    }
+
     fn ensure_loaded(&self) -> Result<()> {
         let mut guard = self.loaded.lock().unwrap();
         if guard.is_none() {
@@ -547,6 +558,13 @@ impl WhisperEngine {
             )?;
             // Drop encoder output now that decode is done for this window.
             drop(feats);
+            
+            // Clear cache immediately to return Metal VRAM to the OS
+            #[cfg(feature = "local-mlx-whisper")]
+            unsafe {
+                mlx_sys::mlx_clear_cache();
+            }
+
             let chunk_decode_ms = t_dec.elapsed().as_secs_f64() * 1000.0;
             stats.decode_ms += chunk_decode_ms;
             stats.tokens += tokens;
