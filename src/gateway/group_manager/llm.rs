@@ -7,7 +7,7 @@ use anyhow::Result;
 use super::config::{load_global_config, save_global_config};
 use super::types::{
     AdminPermissions, AdminPermissionsSection, EmbeddingConfig, LlmConfig, LlmConfigResult,
-    WhisperSettings,
+    TtsSettings, WhisperSettings,
 };
 
 // ===== Admin permissions config =====
@@ -137,5 +137,19 @@ pub fn load_whisper_settings(config_path: &Path) -> WhisperSettings {
 pub fn save_whisper_settings(config_path: &Path, s: &WhisperSettings) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.whisper_config = Some(s.clone());
+    save_global_config(config_path, &cfg)
+}
+
+// ===== TTS settings =====
+
+pub fn load_tts_settings(config_path: &Path) -> TtsSettings {
+    load_global_config(config_path)
+        .tts_config
+        .unwrap_or_default()
+}
+
+pub fn save_tts_settings(config_path: &Path, s: &TtsSettings) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.tts_config = Some(s.clone());
     save_global_config(config_path, &cfg)
 }

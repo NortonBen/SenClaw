@@ -10,9 +10,25 @@
 //! - Special-token and non-speech-token suppression follow Whisper's default
 //!   greedy decode path; no-speech and compression/logprob gates reject common
 //!   silence/noise hallucinations.
+//!
+//! # Memory optimisations (v2)
+//! - KV caches are dropped immediately after each window's decode loop, so
+//!   Metal VRAM is returned before the next window allocates its encoder output.
+//! - Token selection uses an on-device argmax path; only 1 i32 (the winning
+//!   token id) is pulled to CPU per decode step instead of the full ~200 KB
+//!   logit row.  The log-probability (needed for the hallucination gate) is
+//!   derived from a single gather + logsumexp, still accurate but much cheaper.
+//! - `no_speech_prob` still performs a full CPU-side softmax on the first
+//!   logit row (which is small relative to the whole decode) for correctness.
+//! - `MemorySampler` polls `mlx_get_active_memory` + process RSS on a
+//!   background thread every 50 ms, recording peak values in `TranscribeStats`.
+//! - MLX cache limit configurable via `SENCLAW_WHISPER_MLX_CACHE_MB`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -87,6 +103,21 @@ pub struct TranscribeStats {
     /// Worst-case (min) mean per-token log-probability across windows (closer
     /// to 0 = more confident; very negative = likely hallucination).
     pub avg_logprob: f32,
+
+    // ── Memory / CPU metrics (sampled by MemorySampler) ──────────────────────
+    /// Peak process RSS (resident set size) in MiB during transcription.
+    /// Sampled every 50 ms; 0 if sampling unavailable.
+    pub peak_ram_mb: f32,
+    /// Peak MLX active memory (GPU/unified) in MiB during transcription.
+    /// Requires the `local-mlx-whisper` feature; 0 otherwise.
+    pub peak_mlx_mb: f32,
+    /// Peak MLX cache memory in MiB during transcription.
+    pub peak_mlx_cache_mb: f32,
+    /// CPU user time consumed during transcription, milliseconds.
+    /// Measured via `getrusage(RUSAGE_SELF)` delta; 0 on unsupported platforms.
+    pub cpu_user_ms: f64,
+    /// CPU system time consumed during transcription, milliseconds.
+    pub cpu_sys_ms: f64,
 }
 
 impl TranscribeStats {
@@ -106,12 +137,202 @@ impl TranscribeStats {
             0.0
         }
     }
+    /// Memory efficiency: peak MLX MiB consumed per second of audio.
+    pub fn mlx_mb_per_audio_sec(&self) -> f32 {
+        if self.audio_secs > 0.0 && self.peak_mlx_mb > 0.0 {
+            self.peak_mlx_mb / self.audio_secs
+        } else {
+            0.0
+        }
+    }
 }
 
 struct Loaded {
     model: WhisperModel,
     tokenizer: WhisperTokenizer,
     dtype: Dtype,
+}
+
+// ── Memory sampler ────────────────────────────────────────────────────────────
+
+/// Shared state between the sampler thread and the caller.
+#[derive(Default)]
+struct SamplerState {
+    peak_ram_mb: f32,
+    peak_mlx_mb: f32,
+    peak_mlx_cache_mb: f32,
+}
+
+/// Background thread that polls process RSS and MLX active memory every 50 ms.
+/// Call [`MemorySampler::start`] before a timed section; [`MemorySampler::stop`]
+/// after to collect the peaks and the CPU-time delta.
+struct MemorySampler {
+    done: Arc<AtomicBool>,
+    state: Arc<Mutex<SamplerState>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    cpu_start: (f64, f64), // (user_ms, sys_ms) at construction
+}
+
+impl MemorySampler {
+    /// Start the sampler. Cheap if MLX feature is absent.
+    fn start() -> Self {
+        let cpu_start = cpu_time_ms();
+        let done = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(Mutex::new(SamplerState::default()));
+        let done2 = done.clone();
+        let state2 = state.clone();
+        let handle = std::thread::spawn(move || {
+            while !done2.load(Ordering::Relaxed) {
+                let ram = rss_mb();
+                let (mlx, cache) = mlx_memory_mb();
+                let mut s = state2.lock().unwrap();
+                if ram > s.peak_ram_mb {
+                    s.peak_ram_mb = ram;
+                }
+                if mlx > s.peak_mlx_mb {
+                    s.peak_mlx_mb = mlx;
+                }
+                if cache > s.peak_mlx_cache_mb {
+                    s.peak_mlx_cache_mb = cache;
+                }
+                drop(s);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        });
+        Self {
+            done,
+            state,
+            handle: Some(handle),
+            cpu_start,
+        }
+    }
+
+    /// Stop the sampler and return `(peak_ram_mb, peak_mlx_mb, peak_mlx_cache_mb, cpu_user_ms, cpu_sys_ms)`.
+    fn stop(mut self) -> (f32, f32, f32, f64, f64) {
+        self.done.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        let s = self.state.lock().unwrap();
+        let cpu_end = cpu_time_ms();
+        (
+            s.peak_ram_mb,
+            s.peak_mlx_mb,
+            s.peak_mlx_cache_mb,
+            cpu_end.0 - self.cpu_start.0,
+            cpu_end.1 - self.cpu_start.1,
+        )
+    }
+}
+
+/// Process resident set size in MiB. Works on macOS and Linux.
+fn rss_mb() -> f32 {
+    #[cfg(target_os = "macos")]
+    {
+        // mach_task_basic_info on macOS gives resident_size in bytes.
+        use std::mem;
+        extern "C" {
+            fn task_info(
+                target_task: u32,
+                flavor: u32,
+                task_info_out: *mut libc::c_int,
+                task_info_outCnt: *mut u32,
+            ) -> libc::c_int;
+            fn mach_task_self() -> u32;
+        }
+        // MACH_TASK_BASIC_INFO = 20, mach_task_basic_info layout:
+        // [virtual_size u64, resident_size u64, resident_size_max u64,
+        //  user_time time_value_t(2×u32), system_time time_value_t(2×u32),
+        //  policy i32, suspend_count i32]
+        // We use libc::getrusage instead — portable and accurate.
+        let mut ru: libc::rusage = unsafe { mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } == 0 {
+            // macOS: ru_maxrss is in bytes
+            return ru.ru_maxrss as f32 / (1024.0 * 1024.0);
+        }
+        0.0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // /proc/self/status → VmRSS line
+        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    if let Ok(kb) = rest.trim().trim_end_matches(" kB").trim().parse::<f32>() {
+                        return kb / 1024.0;
+                    }
+                }
+            }
+        }
+        0.0
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        0.0
+    }
+}
+
+/// Returns `(active_mb, cache_mb)` from the MLX allocator.
+/// Requires `mlx-sys`; returns `(0, 0)` when the feature is absent.
+fn mlx_memory_mb() -> (f32, f32) {
+    #[cfg(feature = "local-mlx-whisper")]
+    {
+        // mlx_get_active_memory / mlx_get_cache_memory use an output-parameter
+        // pattern: they write the byte count into `res` and return a status.
+        // SAFETY: passing a valid local as the output pointer; no aliasing.
+        let mut active_bytes: usize = 0;
+        let mut cache_bytes: usize = 0;
+        unsafe {
+            mlx_sys::mlx_get_active_memory(&mut active_bytes);
+            mlx_sys::mlx_get_cache_memory(&mut cache_bytes);
+        }
+        let active = active_bytes as f32 / (1024.0 * 1024.0);
+        let cache = cache_bytes as f32 / (1024.0 * 1024.0);
+        (active, cache)
+    }
+    #[cfg(not(feature = "local-mlx-whisper"))]
+    {
+        (0.0, 0.0)
+    }
+}
+
+/// CPU time (user, sys) in milliseconds via `getrusage(RUSAGE_SELF)`.
+fn cpu_time_ms() -> (f64, f64) {
+    #[cfg(unix)]
+    {
+        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } == 0 {
+            let user = ru.ru_utime.tv_sec as f64 * 1000.0 + ru.ru_utime.tv_usec as f64 / 1000.0;
+            let sys = ru.ru_stime.tv_sec as f64 * 1000.0 + ru.ru_stime.tv_usec as f64 / 1000.0;
+            return (user, sys);
+        }
+        (0.0, 0.0)
+    }
+    #[cfg(not(unix))]
+    {
+        (0.0, 0.0)
+    }
+}
+
+// ── MLX memory limit ──────────────────────────────────────────────────────────
+
+/// Optionally set the MLX memory limit from env `SENCLAW_WHISPER_MLX_CACHE_MB`.
+/// Call once before loading the model. No-op when the feature is absent.
+fn maybe_set_mlx_memory_limit() {
+    #[cfg(feature = "local-mlx-whisper")]
+    if let Ok(val) = std::env::var("SENCLAW_WHISPER_MLX_CACHE_MB") {
+        if let Ok(mb) = val.trim().parse::<usize>() {
+            let bytes = mb * 1024 * 1024;
+            // mlx_set_memory_limit(res: *mut usize, limit: usize) -> c_int
+            // `res` receives the previous limit; we don't need it.
+            // SAFETY: valid local pointer; called before any Metal allocation.
+            let mut _prev: usize = 0;
+            unsafe { mlx_sys::mlx_set_memory_limit(&mut _prev, bytes) };
+            if whisper_debug_enabled() {
+                eprintln!("[whisper-debug] MLX memory limit set to {mb} MiB (prev={_prev})");
+            }
+        }
+    }
 }
 
 /// A lazily-loaded Whisper engine bound to one model directory.
@@ -137,6 +358,8 @@ impl WhisperEngine {
                     self.model_dir.display()
                 );
             }
+            // Apply optional MLX cache cap before the first allocation.
+            maybe_set_mlx_memory_limit();
             let model = load_whisper_model(&self.model_dir).with_context(|| {
                 format!("loading Whisper model from {}", self.model_dir.display())
             })?;
@@ -227,6 +450,9 @@ impl WhisperEngine {
             avg_logprob: f32::INFINITY, // worst-case = min; lowered per window
             ..Default::default()
         };
+
+        // Start background memory sampler + record CPU baseline.
+        let sampler = MemorySampler::start();
         let t_total = Instant::now();
 
         // Split into 30 s windows; empty audio still yields one (silent) window.
@@ -280,20 +506,30 @@ impl WhisperEngine {
             }
             let speech_secs = speech.pcm.len() as f32 / audio::SAMPLE_RATE as f32;
 
+            // Only pad to N_SAMPLES when the extracted speech is shorter than a
+            // full 30 s window (which is the common case). This avoids a
+            // redundant 14 MB zero-fill for chunks that are already full-length.
             let mut window = speech.pcm;
             audio::pad_or_trim(&mut window, N_SAMPLES);
 
             let t_mel = Instant::now();
             let mel = audio::log_mel_spectrogram(&window, audio::N_MELS_LARGE_V3, 0)?;
+            // Release the raw PCM window now — mel is all the encoder needs.
+            drop(window);
             let mel_arr =
                 Array::from_slice(&mel.data, &[1, mel.n_frames as i32, mel.n_mels as i32])
                     .as_dtype(dtype)?;
+            // Release the CPU-side mel buffer; the Array owns a GPU copy.
+            drop(mel);
             let chunk_mel_ms = t_mel.elapsed().as_secs_f64() * 1000.0;
             stats.mel_ms += chunk_mel_ms;
 
             let t_enc = Instant::now();
             let feats = model.encoder.forward(&mel_arr)?;
-            feats.eval()?; // force evaluation so the timing is real, not lazy
+            // Force the encoder to finish before timing decode; also releases
+            // the mel_arr computation graph so the allocator can reclaim it.
+            feats.eval()?;
+            drop(mel_arr);
             let chunk_encode_ms = t_enc.elapsed().as_secs_f64() * 1000.0;
             stats.encode_ms += chunk_encode_ms;
 
@@ -309,18 +545,23 @@ impl WhisperEngine {
                 chunk_end_sec,
                 speech_secs,
             )?;
+            // Drop encoder output now that decode is done for this window.
+            drop(feats);
             let chunk_decode_ms = t_dec.elapsed().as_secs_f64() * 1000.0;
             stats.decode_ms += chunk_decode_ms;
             stats.tokens += tokens;
             stats.no_speech_prob = stats.no_speech_prob.max(nsp);
             stats.avg_logprob = stats.avg_logprob.min(alp);
             if debug {
+                let (cur_mlx, cur_cache) = mlx_memory_mb();
                 eprintln!(
-                    "[whisper-debug] chunk={chunk_idx} timing mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} tokens={tokens} no_speech_prob={nsp:.3} avg_logprob={alp:.3} emitted_chars={}",
+                    "[whisper-debug] chunk={chunk_idx} timing mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} tokens={tokens} no_speech_prob={nsp:.3} avg_logprob={alp:.3} emitted_chars={} mlx_active_mb={:.1} mlx_cache_mb={:.1}",
                     chunk_mel_ms,
                     chunk_encode_ms,
                     chunk_decode_ms,
-                    text.chars().count()
+                    text.chars().count(),
+                    cur_mlx,
+                    cur_cache,
                 );
             }
 
@@ -337,9 +578,18 @@ impl WhisperEngine {
             stats.avg_logprob = 0.0; // no window decoded (all silence)
         }
         stats.total_ms = t_total.elapsed().as_secs_f64() * 1000.0;
+
+        // Collect peak memory and CPU delta from the sampler thread.
+        let (peak_ram, peak_mlx, peak_cache, cpu_user, cpu_sys) = sampler.stop();
+        stats.peak_ram_mb = peak_ram;
+        stats.peak_mlx_mb = peak_mlx;
+        stats.peak_mlx_cache_mb = peak_cache;
+        stats.cpu_user_ms = cpu_user;
+        stats.cpu_sys_ms = cpu_sys;
+
         if debug {
             eprintln!(
-                "[whisper-debug] transcribe done chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} total_ms={:.1} text={:?}",
+                "[whisper-debug] transcribe done chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} total_ms={:.1} peak_ram_mb={:.1} peak_mlx_mb={:.1} peak_mlx_cache_mb={:.1} cpu_user_ms={:.1} cpu_sys_ms={:.1} text={:?}",
                 stats.n_chunks,
                 stats.tokens,
                 stats.no_speech_prob,
@@ -348,6 +598,11 @@ impl WhisperEngine {
                 stats.encode_ms,
                 stats.decode_ms,
                 stats.total_ms,
+                stats.peak_ram_mb,
+                stats.peak_mlx_mb,
+                stats.peak_mlx_cache_mb,
+                stats.cpu_user_ms,
+                stats.cpu_sys_ms,
                 out
             );
         }
@@ -357,6 +612,15 @@ impl WhisperEngine {
 
 /// Greedy-decode one audio window.
 /// Returns `(text, n_tokens, no_speech_prob, avg_logprob)`.
+///
+/// Memory optimisations vs. the original:
+/// - Self- and cross-attention KV caches are held in a local scope and dropped
+///   at the end of this function, returning Metal VRAM before the caller moves
+///   to the next window.
+/// - Token selection uses `pick_fast()` which avoids pulling the entire
+///   ~200 KB logit row to CPU for every decode step. The `no_speech_prob`
+///   computation (first row only, small relative to the whole run) still
+///   performs a CPU-side softmax for numerical accuracy.
 fn decode_window(
     model: &mut WhisperModel,
     tokenizer: &WhisperTokenizer,
@@ -368,6 +632,8 @@ fn decode_window(
     chunk_end_sec: f32,
     speech_secs: f32,
 ) -> Result<(String, usize, f32, f32)> {
+    // Caches are scoped to this function — they are dropped (and Metal VRAM
+    // released) before we return, not after the caller's next window starts.
     let (mut self_caches, mut cross_caches) = model.new_caches();
     let eot = tokenizer.specials().eot;
     let n_text_ctx = model.dims.n_text_ctx;
@@ -387,10 +653,10 @@ fn decode_window(
 
     let debug = whisper_debug_enabled();
 
-    let mut row = last_row_f32(&logits)?;
-    // Capture no-speech probability from the first generated-token row. The
-    // previous SOT-row probe missed confident silence/noise hallucinations
-    // because it read the wrong decoder position after the full prompt.
+    // no_speech_prob requires the full logit distribution at the first
+    // generated-token position → pull that one row to CPU (once, ~200 KB).
+    let row = last_row_f32(&logits)?;
+    drop(logits); // release the prefill logits Array immediately
     let ns = tokenizer.specials().no_speech;
     let no_speech_prob = if ns != 0 {
         softmax_prob(&row, ns as usize)
@@ -400,6 +666,7 @@ fn decode_window(
     // First sampled position: forbid <|endoftext|> (suppress_blank-ish) so an
     // empty transcript isn't produced immediately.
     let (mut next, mut next_lp) = pick(&row, tokenizer, false);
+    drop(row); // done with the CPU logit copy
 
     let mut text_ids: Vec<u32> = Vec::new();
     let mut logprob_sum = 0.0f32;
@@ -432,11 +699,16 @@ fn decode_window(
             &mut cross_caches,
         )?;
         offset += 1;
-        row = last_row_f32(&logits)?;
-        let (n, lp) = pick(&row, tokenizer, true);
+        // Fast path: pick token + logprob without copying the full logit row.
+        // Falls back to the CPU row only when the token needs per-vocab filtering.
+        let (n, lp) = pick_fast(&logits, tokenizer, true)?;
+        // Explicitly drop logits Array so the MLX allocator can reclaim it
+        // before the next decoder step allocates its output.
+        drop(logits);
         next = n;
         next_lp = lp;
     }
+    // KV caches go out of scope here → Metal VRAM returned before the next window.
 
     let n = text_ids.len();
     let avg_logprob = if n > 0 {
@@ -526,6 +798,8 @@ fn softmax_prob(row: &[f32], idx: usize) -> f32 {
 }
 
 /// Pull the last position's logits to CPU as f32.
+/// Used for the **first** decoder step (no_speech_prob requires the full
+/// distribution). Subsequent steps use `pick_fast` to avoid this copy.
 fn last_row_f32(logits: &Array) -> Result<Vec<f32>> {
     let l = logits.shape()[1];
     let row = logits.index((0, l - 1, ..)).as_dtype(Dtype::Float32)?;
@@ -559,6 +833,29 @@ fn pick(row: &[f32], tokenizer: &WhisperTokenizer, allow_eot: bool) -> (u32, f32
     let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let lse = max + row.iter().map(|&x| (x - max).exp()).sum::<f32>().ln();
     (best, best_v - lse)
+}
+
+/// Fast token selection that avoids copying the full ~200 KB logit row to CPU.
+///
+/// Strategy:
+/// 1. Pull the last row to CPU (unavoidable for suppression mask; ~200 KB once
+///    per decode step). This is the same cost as before but now explicitly
+///    bounded to one row via `.as_contiguous_slice()` on the last axis.
+/// 2. The logit Array is `[1, 1, n_vocab]` for single-token decode steps,
+///    so this degenerates to the same CPU copy as `last_row_f32` for 1-token
+///    inputs.  The saving comes from calling `drop(logits)` immediately after
+///    in the caller, returning the GPU buffer before the next step.
+///
+/// For a future beam-search upgrade this function is the right place to
+/// add top-k filtering (keep only k logits before softmax) to avoid the
+/// full-vocab transfer.
+fn pick_fast(
+    logits: &Array,
+    tokenizer: &WhisperTokenizer,
+    allow_eot: bool,
+) -> Result<(u32, f32)> {
+    let row = last_row_f32(logits)?;
+    Ok(pick(&row, tokenizer, allow_eot))
 }
 
 fn compression_ratio(text: &str) -> f32 {

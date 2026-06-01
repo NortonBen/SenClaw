@@ -84,6 +84,9 @@ pub struct PathsConfig {
     pub local_models_dir: PathBuf,
     /// Whisper ASR model storage, separate from LLM/local-model storage.
     pub whisper_models_dir: PathBuf,
+    /// TTS (Text-to-Speech) model storage — separate from LLM and Whisper storage.
+    /// Default: `~/.senclaw/tts-models`. Override with `SENCLAW_TTS_MODELS_DIR`.
+    pub tts_models_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,6 +384,10 @@ impl Config {
                 whisper_models_dir: env_path(
                     "SENCLAW_WHISPER_MODELS_DIR",
                     senclaw_home.join("whisper-models"),
+                ),
+                tts_models_dir: env_path(
+                    "SENCLAW_TTS_MODELS_DIR",
+                    senclaw_home.join("tts-models"),
                 ),
             },
             memory: MemoryConfig {

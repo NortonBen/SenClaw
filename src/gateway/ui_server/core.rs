@@ -41,6 +41,10 @@ use super::whisper::{
     whisper_cancel, whisper_delete, whisper_download, whisper_models_list, whisper_settings_get,
     whisper_settings_put, whisper_status, whisper_transcribe,
 };
+use super::tts::{
+    tts_cancel, tts_delete, tts_download, tts_models_list, tts_settings_get, tts_settings_put,
+    tts_status, tts_synthesize,
+};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test, llm_config_update,
@@ -270,6 +274,17 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/whisper/models/:id/cancel", post(whisper_cancel))
         .route("/api/whisper/models/:id", delete(whisper_delete))
         .route("/api/whisper/transcribe", post(whisper_transcribe))
+        // TTS (Text-to-Speech) model management + synthesis
+        .route("/api/tts/models", get(tts_models_list))
+        .route(
+            "/api/tts/settings",
+            get(tts_settings_get).put(tts_settings_put),
+        )
+        .route("/api/tts/models/:id/download", post(tts_download))
+        .route("/api/tts/models/:id/status", get(tts_status))
+        .route("/api/tts/models/:id/cancel", post(tts_cancel))
+        .route("/api/tts/models/:id", delete(tts_delete))
+        .route("/api/tts/synthesize", post(tts_synthesize))
         // Embedding provider config
         .route(
             "/api/embedding-config",

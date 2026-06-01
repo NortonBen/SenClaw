@@ -30,6 +30,7 @@ mod skills;
 mod spa;
 mod subagents;
 pub mod types;
+mod tts;
 mod whisper;
 mod wiki;
 mod workbench;

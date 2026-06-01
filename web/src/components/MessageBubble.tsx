@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { theme, Typography } from 'antd';
 import { BulbFilled } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
@@ -42,6 +42,30 @@ function SaveIcon() {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
       <polyline points="7 10 12 15 17 10"/>
       <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="6" y="6" width="12" height="12" />
+    </svg>
+  );
+}
+
+function LoadingIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
     </svg>
   );
 }
@@ -187,6 +211,8 @@ function ImageAttachments({ attachments }: { attachments: ImageAttachment[] }) {
 function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: string; timestamp: string; isDarkMode: boolean; attachments?: ImageAttachment[] }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [playState, setPlayState] = useState<'idle' | 'playing' | 'loading' | 'error'>('idle');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const { token } = theme.useToken();
   const { reasoning, body } = extractLeadingReasoningBlocks(text);
 
@@ -213,6 +239,55 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: strin
       setTimeout(() => setSaveState('idle'), 2000);
     }
   };
+
+  const handlePlay = async () => {
+    if (playState === 'playing') {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setPlayState('idle');
+      return;
+    }
+    if (playState === 'loading' || !body) return;
+
+    setPlayState('loading');
+    try {
+      const res = await fetch('/api/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: body }),
+      });
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setPlayState('idle');
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+      };
+      audio.onerror = () => {
+        setPlayState('error');
+        setTimeout(() => setPlayState('idle'), 2000);
+      };
+      audio.play();
+      setPlayState('playing');
+    } catch {
+      setPlayState('error');
+      setTimeout(() => setPlayState('idle'), 2000);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="max-w-[85%] group">
@@ -263,6 +338,22 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: strin
             }}
           >
             {saveState === 'saved' ? <CheckIcon /> : <SaveIcon />}
+          </button>
+          <button
+            onClick={handlePlay}
+            title={playState === 'error' ? 'TTS failed' : playState === 'playing' ? 'Stop TTS' : 'Play TTS'}
+            className="p-1 rounded transition-colors"
+            style={{
+              color: playState === 'playing' ? token.colorPrimary :
+                     playState === 'error' ? token.colorError :
+                     playState === 'loading' ? token.colorTextDisabled :
+                     token.colorTextDescription,
+              cursor: playState === 'loading' ? 'not-allowed' : 'pointer'
+            }}
+          >
+            {playState === 'playing' ? <StopIcon /> : 
+             playState === 'loading' ? <LoadingIcon /> : 
+             <PlayIcon />}
           </button>
         </div>
       </div>

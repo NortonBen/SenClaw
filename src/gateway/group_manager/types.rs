@@ -74,6 +74,23 @@ pub struct WhisperSettings {
     pub language: Option<String>,
 }
 
+/// TTS (Text-to-Speech) UI settings: selected model, voice preset, speed, language.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TtsSettings {
+    /// HuggingFace model id of the selected TTS model.
+    #[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Voice preset (model-specific string, e.g. speaker id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    /// Playback speed multiplier (0.5– 2.0). `None` = model default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
+    /// Language code: `"vi"` | `"en"`. `None` = model default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Provider: "openai" | "openrouter" | "ollama" | "local" | "none"
@@ -211,6 +228,12 @@ pub(super) struct GlobalConfig {
         rename = "whisperConfig"
     )]
     pub(super) whisper_config: Option<WhisperSettings>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "ttsConfig"
+    )]
+    pub(super) tts_config: Option<TtsSettings>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
