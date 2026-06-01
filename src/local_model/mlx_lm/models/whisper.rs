@@ -23,10 +23,11 @@ use std::path::Path;
 use mlx_rs::{
     builder::Builder,
     error::Exception,
-    macros::ModuleParameters,
-    module::{Module, ModuleParametersExt, Param},
+    macros::{ModuleParameters, Quantizable},
+    module::{Module, ModuleParameters, Param},
     nn,
     ops::{self, concatenate_axis, indexing::IndexOp, softmax_axis},
+    quantization::MaybeQuantized,
     Array, Dtype,
 };
 use serde::Deserialize;
@@ -46,6 +47,15 @@ pub struct ModelDimensions {
     pub n_text_state: i32,
     pub n_text_head: i32,
     pub n_text_layer: i32,
+    #[serde(default)]
+    pub quantization: Option<QuantizationConfig>,
+}
+
+/// MLX quantization parameters from `config.json`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuantizationConfig {
+    pub group_size: i32,
+    pub bits: i32,
 }
 
 /// Per-layer KV cache slot. Self-attention grows it by concat; cross-attention
@@ -64,29 +74,35 @@ impl KvCache {
 
 // ── Attention ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct MultiHeadAttention {
     pub n_head: i32,
     pub scale: f32,
+    #[quantizable]
     #[param]
-    pub query: nn::Linear,
+    pub query: MaybeQuantized<nn::Linear>,
+    #[quantizable]
     #[param]
-    pub key: nn::Linear,
+    pub key: MaybeQuantized<nn::Linear>,
+    #[quantizable]
     #[param]
-    pub value: nn::Linear,
+    pub value: MaybeQuantized<nn::Linear>,
+    #[quantizable]
     #[param]
-    pub out: nn::Linear,
+    pub out: MaybeQuantized<nn::Linear>,
 }
 
 impl MultiHeadAttention {
     fn new(n_state: i32, n_head: i32) -> Result<Self, Exception> {
-        let query = nn::LinearBuilder::new(n_state, n_state).build()?;
+        let query = MaybeQuantized::Original(nn::LinearBuilder::new(n_state, n_state).build()?);
         // Whisper's key projection has NO bias.
-        let key = nn::LinearBuilder::new(n_state, n_state)
-            .bias(false)
-            .build()?;
-        let value = nn::LinearBuilder::new(n_state, n_state).build()?;
-        let out = nn::LinearBuilder::new(n_state, n_state).build()?;
+        let key = MaybeQuantized::Original(
+            nn::LinearBuilder::new(n_state, n_state)
+                .bias(false)
+                .build()?,
+        );
+        let value = MaybeQuantized::Original(nn::LinearBuilder::new(n_state, n_state).build()?);
+        let out = MaybeQuantized::Original(nn::LinearBuilder::new(n_state, n_state).build()?);
         let scale = ((n_state / n_head) as f32).powf(-0.25);
         Ok(Self {
             n_head,
@@ -191,16 +207,19 @@ impl MultiHeadAttention {
 
 // ── Residual blocks (separate encoder/decoder types) ─────────────────────────
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct EncoderBlock {
+    #[quantizable]
     #[param]
     pub attn: MultiHeadAttention,
     #[param]
     pub attn_ln: nn::LayerNorm,
+    #[quantizable]
     #[param]
-    pub mlp1: nn::Linear,
+    pub mlp1: MaybeQuantized<nn::Linear>,
+    #[quantizable]
     #[param]
-    pub mlp2: nn::Linear,
+    pub mlp2: MaybeQuantized<nn::Linear>,
     #[param]
     pub mlp_ln: nn::LayerNorm,
 }
@@ -210,8 +229,8 @@ impl EncoderBlock {
         Ok(Self {
             attn: MultiHeadAttention::new(n_state, n_head)?,
             attn_ln: nn::LayerNormBuilder::new(n_state).build()?,
-            mlp1: nn::LinearBuilder::new(n_state, n_state * 4).build()?,
-            mlp2: nn::LinearBuilder::new(n_state * 4, n_state).build()?,
+            mlp1: MaybeQuantized::Original(nn::LinearBuilder::new(n_state, n_state * 4).build()?),
+            mlp2: MaybeQuantized::Original(nn::LinearBuilder::new(n_state * 4, n_state).build()?),
             mlp_ln: nn::LayerNormBuilder::new(n_state).build()?,
         })
     }
@@ -226,20 +245,24 @@ impl EncoderBlock {
     }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct DecoderBlock {
+    #[quantizable]
     #[param]
     pub attn: MultiHeadAttention,
     #[param]
     pub attn_ln: nn::LayerNorm,
+    #[quantizable]
     #[param]
     pub cross_attn: MultiHeadAttention,
     #[param]
     pub cross_attn_ln: nn::LayerNorm,
+    #[quantizable]
     #[param]
-    pub mlp1: nn::Linear,
+    pub mlp1: MaybeQuantized<nn::Linear>,
+    #[quantizable]
     #[param]
-    pub mlp2: nn::Linear,
+    pub mlp2: MaybeQuantized<nn::Linear>,
     #[param]
     pub mlp_ln: nn::LayerNorm,
 }
@@ -251,8 +274,8 @@ impl DecoderBlock {
             attn_ln: nn::LayerNormBuilder::new(n_state).build()?,
             cross_attn: MultiHeadAttention::new(n_state, n_head)?,
             cross_attn_ln: nn::LayerNormBuilder::new(n_state).build()?,
-            mlp1: nn::LinearBuilder::new(n_state, n_state * 4).build()?,
-            mlp2: nn::LinearBuilder::new(n_state * 4, n_state).build()?,
+            mlp1: MaybeQuantized::Original(nn::LinearBuilder::new(n_state, n_state * 4).build()?),
+            mlp2: MaybeQuantized::Original(nn::LinearBuilder::new(n_state * 4, n_state).build()?),
             mlp_ln: nn::LayerNormBuilder::new(n_state).build()?,
         })
     }
@@ -283,12 +306,13 @@ impl DecoderBlock {
 
 // ── Encoder / Decoder ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct AudioEncoder {
     #[param]
     pub conv1: nn::Conv1d,
     #[param]
     pub conv2: nn::Conv1d,
+    #[quantizable]
     #[param]
     pub blocks: Vec<EncoderBlock>,
     #[param]
@@ -333,13 +357,15 @@ impl AudioEncoder {
     }
 }
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct TextDecoder {
+    #[quantizable]
     #[param]
-    pub token_embedding: nn::Embedding,
+    pub token_embedding: MaybeQuantized<nn::Embedding>,
     /// Learned positional embedding `[n_text_ctx, n_state]`.
     #[param]
     pub positional_embedding: Param<Array>,
+    #[quantizable]
     #[param]
     pub blocks: Vec<DecoderBlock>,
     #[param]
@@ -349,7 +375,7 @@ pub struct TextDecoder {
 impl TextDecoder {
     fn new(dims: &ModelDimensions) -> Result<Self, Exception> {
         let n_state = dims.n_text_state;
-        let token_embedding = nn::Embedding::new(dims.n_vocab, n_state)?;
+        let token_embedding = MaybeQuantized::Original(nn::Embedding::new(dims.n_vocab, n_state)?);
         let positional_embedding =
             Param::new(mlx_rs::ops::zeros::<f32>(&[dims.n_text_ctx, n_state])?);
         let blocks = (0..dims.n_text_layer)
@@ -389,16 +415,21 @@ impl TextDecoder {
         }
         x = self.ln.forward(&x)?;
         // Tied output projection.
-        self.token_embedding.as_linear(&x)
+        match &mut self.token_embedding {
+            MaybeQuantized::Original(embed) => embed.as_linear(&x),
+            MaybeQuantized::Quantized(embed) => embed.as_linear(&x),
+        }
     }
 }
 
 // ── Top-level model ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, ModuleParameters)]
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct WhisperModel {
+    #[quantizable]
     #[param]
     pub encoder: AudioEncoder,
+    #[quantizable]
     #[param]
     pub decoder: TextDecoder,
     pub dims: ModelDimensions,
@@ -471,13 +502,52 @@ pub fn get_whisper_dims(model_dir: impl AsRef<Path>) -> Result<ModelDimensions, 
     Ok(serde_json::from_reader(file)?)
 }
 
+fn remap_quantized_key(key: &str) -> Option<String> {
+    if let Some(stripped) = key.strip_suffix(".weight") {
+        return Some(format!("{stripped}.inner.weight"));
+    }
+    if let Some(stripped) = key.strip_suffix(".bias") {
+        return Some(format!("{stripped}.inner.bias"));
+    }
+    if key.ends_with(".scales") || key.ends_with(".biases") {
+        return Some(key.to_string());
+    }
+    None
+}
+
 /// Load Whisper from a model dir containing `config.json` and a single
 /// safetensors file (`weights.safetensors` for mlx-community, `model.safetensors`
 /// as a fallback). Whisper checkpoints are not sharded.
 pub fn load_whisper_model(model_dir: impl AsRef<Path>) -> Result<WhisperModel, Error> {
     let model_dir = model_dir.as_ref();
     let dims = get_whisper_dims(model_dir)?;
+    let quantization = dims.quantization.clone();
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        eprintln!("[whisper-debug] load dims quantization={quantization:?}");
+    }
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        eprintln!("[whisper-debug] build dense model start");
+    }
     let mut model = WhisperModel::new(dims)?;
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        eprintln!("[whisper-debug] build dense model done");
+    }
+    if let Some(q) = quantization.as_ref() {
+        if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+            eprintln!(
+                "[whisper-debug] quantize model start group_size={} bits={}",
+                q.group_size, q.bits
+            );
+        }
+        model = nn::quantize(model, Some(q.group_size), Some(q.bits))?;
+        if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+            eprintln!("[whisper-debug] quantize model done");
+        }
+    }
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        eprintln!("[whisper-debug] load base model built");
+    }
+    let is_quantized = quantization.is_some();
 
     let weights = {
         let primary = model_dir.join("weights.safetensors");
@@ -487,7 +557,107 @@ pub fn load_whisper_model(model_dir: impl AsRef<Path>) -> Result<WhisperModel, E
             model_dir.join("model.safetensors")
         }
     };
-    model.load_safetensors(&weights)?;
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        eprintln!(
+            "[whisper-debug] load safetensors path={}",
+            weights.display()
+        );
+    }
+    let loaded = Array::load_safetensors(&weights)?;
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        eprintln!("[whisper-debug] load safetensors decoded");
+    }
+    let mut params = model.parameters_mut().flatten();
+    if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
+        let mut sample = params
+            .iter()
+            .take(12)
+            .map(|(k, v)| format!("{k}:{:?}", v.shape()))
+            .collect::<Vec<_>>();
+        sample.sort();
+        eprintln!("[whisper-debug] param tree sample={}", sample.join(", "));
+    }
+    let mut token_embedding_weight: Option<Array> = None;
+    let mut token_embedding_scales: Option<Array> = None;
+    let mut token_embedding_biases: Option<Array> = None;
+    let mut total_loaded = 0usize;
+    let mut total_missed = 0usize;
+    let mut unmatched_samples: Vec<String> = Vec::new();
+
+    for (key, value) in loaded {
+        match key.as_str() {
+            "decoder.token_embedding.weight" => {
+                token_embedding_weight = Some(value);
+                total_loaded += 1;
+                continue;
+            }
+            "decoder.token_embedding.scales" => {
+                token_embedding_scales = Some(value);
+                total_loaded += 1;
+                continue;
+            }
+            "decoder.token_embedding.biases" => {
+                token_embedding_biases = Some(value);
+                total_loaded += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(slot) = params.get_mut(key.as_str()) {
+            **slot = value;
+            total_loaded += 1;
+            continue;
+        }
+        if is_quantized {
+            if let Some(remapped) = remap_quantized_key(&key) {
+                if let Some(slot) = params.get_mut(remapped.as_str()) {
+                    **slot = value;
+                    total_loaded += 1;
+                    continue;
+                }
+            }
+        }
+        total_missed += 1;
+        if unmatched_samples.len() < 8 {
+            unmatched_samples.push(key);
+        }
+    }
+
+    if token_embedding_weight.is_some()
+        || token_embedding_scales.is_some()
+        || token_embedding_biases.is_some()
+    {
+        match &mut model.decoder.token_embedding {
+            MaybeQuantized::Quantized(q) => {
+                if let Some(w) = token_embedding_weight {
+                    q.inner.weight.value = w;
+                }
+                if let Some(s) = token_embedding_scales {
+                    q.scales.value = s;
+                }
+                if let Some(b) = token_embedding_biases {
+                    q.biases.value = b;
+                }
+            }
+            MaybeQuantized::Original(e) => {
+                if let Some(w) = token_embedding_weight {
+                    e.weight.value = w;
+                }
+            }
+        }
+    }
+
+    if total_loaded == 0 {
+        return Err(
+            Exception::custom("no safetensor keys matched the Whisper parameter tree").into(),
+        );
+    }
+    if !unmatched_samples.is_empty() {
+        tracing::warn!(
+            "[whisper] safetensor load missed {total_missed} key(s), sample: {}",
+            unmatched_samples.join(", ")
+        );
+    }
     Ok(model)
 }
 
@@ -502,7 +672,7 @@ mod tests {
     }
 
     /// Loads the real downloaded checkpoint and exercises both forward passes.
-    /// Run with: `SENCLAW_WHISPER_DIR=~/.senclaw/local-models/mlx-community__whisper-large-v3-turbo \
+    /// Run with: `SENCLAW_WHISPER_DIR=~/.senclaw/whisper-models/mlx-community__whisper-large-v3-turbo \
     ///   cargo test --features local-mlx -- --ignored --test-threads=1 load_real_model`
     #[test]
     #[ignore = "requires a downloaded checkpoint via SENCLAW_WHISPER_DIR"]

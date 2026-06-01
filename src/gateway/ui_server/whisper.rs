@@ -52,13 +52,22 @@ struct CatalogEntry {
     default_language: &'static str,
 }
 
-static CATALOG: &[CatalogEntry] = &[CatalogEntry {
-    id: "mlx-community/whisper-large-v3-turbo",
-    label: "Whisper large-v3-turbo (MLX, 128-mel, fast multilingual)",
-    approx_size_gb: 1.6,
-    tokenizer_repo: "openai/whisper-large-v3-turbo",
-    default_language: "vi",
-}];
+static CATALOG: &[CatalogEntry] = &[
+    CatalogEntry {
+        id: "mlx-community/whisper-large-v3-turbo",
+        label: "Whisper large-v3-turbo (MLX, 128-mel, fast multilingual)",
+        approx_size_gb: 1.6,
+        tokenizer_repo: "openai/whisper-large-v3-turbo",
+        default_language: "vi",
+    },
+    CatalogEntry {
+        id: "mlx-community/whisper-large-v3-turbo-4bit",
+        label: "Whisper large-v3-turbo 4-bit (MLX, smaller/faster download)",
+        approx_size_gb: 0.46,
+        tokenizer_repo: "openai/whisper-large-v3-turbo",
+        default_language: "vi",
+    },
+];
 
 fn catalog_get(id: &str) -> Option<&'static CatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)
@@ -77,12 +86,50 @@ fn unsafe_dirname(name: &str) -> Option<String> {
 }
 
 fn model_dir(state: &UiState, id: &str) -> PathBuf {
+    state.config.paths.whisper_models_dir.join(safe_dirname(id))
+}
+
+fn legacy_model_dir(state: &UiState, id: &str) -> PathBuf {
     state.config.paths.local_models_dir.join(safe_dirname(id))
 }
 
-/// A Whisper dir is "installed" once config + weights + tokenizer are present.
+fn installed_model_dir(state: &UiState, id: &str) -> PathBuf {
+    let dir = model_dir(state, id);
+    if is_installed(&dir) {
+        return dir;
+    }
+    let legacy = legacy_model_dir(state, id);
+    if is_installed(&legacy) {
+        legacy
+    } else {
+        dir
+    }
+}
+
+fn is_whisper_model_dir(dir: &PathBuf) -> bool {
+    let Ok(file) = std::fs::File::open(dir.join("config.json")) else {
+        return false;
+    };
+    let Ok(cfg) = serde_json::from_reader::<_, serde_json::Value>(file) else {
+        return false;
+    };
+    [
+        "n_mels",
+        "n_audio_ctx",
+        "n_audio_state",
+        "n_audio_layer",
+        "n_text_ctx",
+        "n_text_state",
+        "n_text_layer",
+        "n_vocab",
+    ]
+    .iter()
+    .all(|k| cfg.get(*k).and_then(|v| v.as_i64()).is_some())
+}
+
+/// A Whisper dir is "installed" once Whisper config + weights + tokenizer are present.
 fn is_installed(dir: &PathBuf) -> bool {
-    dir.join("config.json").exists()
+    is_whisper_model_dir(dir)
         && (dir.join("weights.safetensors").exists() || dir.join("model.safetensors").exists())
         && dir.join("tokenizer.json").exists()
 }
@@ -129,7 +176,7 @@ pub(crate) async fn whisper_models_list(
     let downloads = DOWNLOADS.lock().unwrap();
     let mut models = Vec::new();
     for e in CATALOG {
-        let dir = model_dir(&state, e.id);
+        let dir = installed_model_dir(&state, e.id);
         let download = downloads.get(e.id).map(|h| h.state.lock().unwrap().clone());
         models.push(json!({
             "id": e.id,
@@ -141,33 +188,41 @@ pub(crate) async fn whisper_models_list(
             "download": download,
         }));
     }
-    if let Ok(entries) = std::fs::read_dir(&state.config.paths.local_models_dir) {
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let Some(id) = unsafe_dirname(&name) else {
-                continue;
-            };
-            if catalog_get(&id).is_some() {
-                continue;
-            }
-            let dir = entry.path();
-            let download = downloads.get(&id).map(|h| h.state.lock().unwrap().clone());
-            if is_installed(&dir) || download.is_some() {
-                models.push(json!({
-                    "id": id,
-                    "label": format!("Whisper custom ({id})"),
-                    "approx_size_gb": 0.0,
-                    "default_language": "vi",
-                    "installed": is_installed(&dir),
-                    "on_disk_path": dir.to_string_lossy(),
-                    "download": download,
-                }));
+    for root in [
+        &state.config.paths.whisper_models_dir,
+        &state.config.paths.local_models_dir,
+    ] {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if !file_type.is_dir() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                let Some(id) = unsafe_dirname(&name) else {
+                    continue;
+                };
+                if catalog_get(&id).is_some() || models.iter().any(|m| m["id"] == id) {
+                    continue;
+                }
+                let dir = entry.path();
+                let download = downloads.get(&id).map(|h| h.state.lock().unwrap().clone());
+                let allow_legacy = root == &state.config.paths.whisper_models_dir
+                    || is_whisper_model_dir(&dir)
+                    || download.is_some();
+                if allow_legacy && (is_installed(&dir) || download.is_some()) {
+                    models.push(json!({
+                        "id": id,
+                        "label": format!("Whisper custom ({id})"),
+                        "approx_size_gb": 0.0,
+                        "default_language": "vi",
+                        "installed": is_installed(&dir),
+                        "on_disk_path": dir.to_string_lossy(),
+                        "download": download,
+                    }));
+                }
             }
         }
     }
@@ -175,7 +230,7 @@ pub(crate) async fn whisper_models_list(
         if catalog_get(id).is_some() || models.iter().any(|m| m["id"] == *id) {
             continue;
         }
-        let dir = model_dir(&state, id);
+        let dir = installed_model_dir(&state, id);
         models.push(json!({
             "id": id,
             "label": format!("Whisper custom ({id})"),
@@ -344,9 +399,16 @@ pub(crate) async fn whisper_delete(
             .await
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
+    let legacy = legacy_model_dir(&state, &id);
+    if legacy.exists() {
+        tokio::fs::remove_dir_all(&legacy)
+            .await
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
     DOWNLOADS.lock().unwrap().remove(&id);
     // Drop any cached engine bound to this dir.
     drop_engine(&dir);
+    drop_engine(&legacy);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -423,7 +485,7 @@ pub(crate) async fn whisper_transcribe(
             CATALOG
                 .iter()
                 .map(|e| e.id.to_string())
-                .find(|id| is_installed(&model_dir(&state, id)))
+                .find(|id| is_installed(&installed_model_dir(&state, id)))
         })
         .ok_or_else(|| {
             AppError(
@@ -431,7 +493,7 @@ pub(crate) async fn whisper_transcribe(
                 "no Whisper model selected or installed".into(),
             )
         })?;
-    let dir = model_dir(&state, &model_id);
+    let dir = installed_model_dir(&state, &model_id);
     if !is_installed(&dir) {
         return Err(AppError(
             StatusCode::BAD_REQUEST,

@@ -82,6 +82,8 @@ pub struct PathsConfig {
     pub marketplace_clones_dir: PathBuf,
     /// Local model storage (MLX weights, tokenizers, configs).
     pub local_models_dir: PathBuf,
+    /// Whisper ASR model storage, separate from LLM/local-model storage.
+    pub whisper_models_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +378,10 @@ impl Config {
                     "SENCLAW_LOCAL_MODELS_DIR",
                     senclaw_home.join("local-models"),
                 ),
+                whisper_models_dir: env_path(
+                    "SENCLAW_WHISPER_MODELS_DIR",
+                    senclaw_home.join("whisper-models"),
+                ),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(
@@ -459,13 +465,10 @@ impl Config {
     /// Settings page silently writes a file the daemon never reads.
     pub fn apply_persisted_overrides(&mut self, global_config_path: &std::path::Path) {
         // Embedding provider + per-provider credentials.
-        if let Some(ec) =
-            crate::gateway::group_manager::load_embedding_config(global_config_path)
-        {
+        if let Some(ec) = crate::gateway::group_manager::load_embedding_config(global_config_path) {
             // Provider — only override when the user actually picked one.
             let parsed = EmbeddingProvider::parse(&ec.provider);
-            if parsed != EmbeddingProvider::None
-                || !ec.provider.is_empty() && ec.provider != "none"
+            if parsed != EmbeddingProvider::None || !ec.provider.is_empty() && ec.provider != "none"
             {
                 self.memory.embedding_provider = parsed;
             }
@@ -488,9 +491,7 @@ impl Config {
                     EmbeddingProvider::Openrouter => {
                         self.memory.openrouter_base_url = ec.base_url.clone()
                     }
-                    EmbeddingProvider::Ollama => {
-                        self.memory.ollama_base_url = ec.base_url.clone()
-                    }
+                    EmbeddingProvider::Ollama => self.memory.ollama_base_url = ec.base_url.clone(),
                     _ => {}
                 }
             }
@@ -500,9 +501,7 @@ impl Config {
                     EmbeddingProvider::Openrouter => {
                         self.memory.openrouter_model = ec.model_name.clone()
                     }
-                    EmbeddingProvider::Ollama => {
-                        self.memory.ollama_model = ec.model_name.clone()
-                    }
+                    EmbeddingProvider::Ollama => self.memory.ollama_model = ec.model_name.clone(),
                     EmbeddingProvider::Local => self.memory.local_model = ec.model_name.clone(),
                     _ => {}
                 }
@@ -519,9 +518,7 @@ impl Config {
 
         // Cognitive governance knobs. Same precedence as embedding: env
         // wins when explicitly set; UI fills in everything else.
-        if let Some(cc) =
-            crate::gateway::group_manager::load_cognitive_config(global_config_path)
-        {
+        if let Some(cc) = crate::gateway::group_manager::load_cognitive_config(global_config_path) {
             if let Some(v) = cc.enabled {
                 self.cognitive.enabled = v;
             }

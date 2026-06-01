@@ -45,7 +45,7 @@ Use **`mcp__browser__search`** — returns ranked SERP results without opening a
 
 ```
 mcp__browser__search {
-  "query": "giá bạc hôm nay vnđ",
+  "query": "dsdsd,
   "engine": "google",            // or "bing"; default "google"
   "num_results": 10,             // default 10
   "language": "vi"               // optional

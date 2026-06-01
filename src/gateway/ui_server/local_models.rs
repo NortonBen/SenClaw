@@ -33,11 +33,11 @@ use tokio_util::sync::CancellationToken;
 use crate::gateway::group_manager::{
     load_llm_configs, save_llm_config, set_active_llm_config, LlmConfig,
 };
+#[cfg(feature = "local-mlx")]
+use crate::local_model::MlxNativeEngine;
 use crate::local_model::{read_model_context_length_from_dir, KnownModel, KNOWN_MODELS};
 #[cfg(feature = "local-candle")]
 use crate::local_model::{CandleEngine, LocalModelRuntime};
-#[cfg(feature = "local-mlx")]
-use crate::local_model::MlxNativeEngine;
 
 use super::core::{AppError, UiState};
 
@@ -254,7 +254,11 @@ pub fn get_or_create_mlx_engine(id: &str, model_dir: &std::path::Path) -> Arc<Ml
 #[cfg(feature = "local-mlx")]
 pub fn get_mlx_engine(id: &str) -> Option<Arc<MlxNativeEngine>> {
     let cid = canonical_local_model_id(id);
-    MLX_ENGINES.lock().unwrap().get(&cid).map(|s| s.engine.clone())
+    MLX_ENGINES
+        .lock()
+        .unwrap()
+        .get(&cid)
+        .map(|s| s.engine.clone())
 }
 
 /// Periodic task: unload in-memory weights when [`LocalModelSettings::idle_unload_secs`] elapses since last activity.
@@ -268,7 +272,9 @@ pub fn spawn_idle_unload_worker(models_root: PathBuf) {
         loop {
             ticker.tick().await;
             let settings = load_settings_blocking(&models_root);
-            let secs = settings.idle_unload_secs.unwrap_or(DEFAULT_IDLE_UNLOAD_SECS);
+            let secs = settings
+                .idle_unload_secs
+                .unwrap_or(DEFAULT_IDLE_UNLOAD_SECS);
             if secs == 0 {
                 continue;
             }
@@ -347,7 +353,11 @@ fn loaded_ids() -> Vec<String> {
     #[cfg(feature = "local-candle")]
     {
         let map = LOADED_ENGINES.lock().unwrap();
-        ids.extend(map.iter().filter(|(_, slot)| slot.engine.is_loaded()).map(|(k, _)| k.clone()));
+        ids.extend(
+            map.iter()
+                .filter(|(_, slot)| slot.engine.is_loaded())
+                .map(|(k, _)| k.clone()),
+        );
     }
     #[cfg(not(feature = "local-candle"))]
     {
@@ -423,10 +433,7 @@ pub fn canonical_local_model_id(id: &str) -> String {
 /// Return the cached engine for `id`, or create and cache a new one.
 /// Weights are loaded lazily on the first `generate_stream` call.
 #[cfg(feature = "local-candle")]
-pub fn get_or_create_loaded_engine(
-    id: &str,
-    model_dir: &std::path::Path,
-) -> Arc<CandleEngine> {
+pub fn get_or_create_loaded_engine(id: &str, model_dir: &std::path::Path) -> Arc<CandleEngine> {
     let cid = canonical_local_model_id(id);
     let mut map = LOADED_ENGINES.lock().unwrap();
     if let Some(existing) = map.get(&cid) {
@@ -451,6 +458,27 @@ fn model_dir(state: &UiState, model_id: &str) -> PathBuf {
 
 fn is_installed(dir: &PathBuf) -> bool {
     dir.join("tokenizer.json").exists() && dir.join("config.json").exists()
+}
+
+fn is_whisper_model_dir(dir: &PathBuf) -> bool {
+    let Ok(file) = std::fs::File::open(dir.join("config.json")) else {
+        return false;
+    };
+    let Ok(cfg) = serde_json::from_reader::<_, serde_json::Value>(file) else {
+        return false;
+    };
+    [
+        "n_mels",
+        "n_audio_ctx",
+        "n_audio_state",
+        "n_audio_layer",
+        "n_text_ctx",
+        "n_text_state",
+        "n_text_layer",
+        "n_vocab",
+    ]
+    .iter()
+    .all(|k| cfg.get(*k).and_then(|v| v.as_i64()).is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -531,13 +559,20 @@ pub(crate) async fn local_models_list(
 
     if let Ok(mut rd) = tokio::fs::read_dir(&state.config.paths.local_models_dir).await {
         while let Ok(Some(ent)) = rd.next_entry().await {
-            let Ok(ft) = ent.file_type().await else { continue };
+            let Ok(ft) = ent.file_type().await else {
+                continue;
+            };
             if !ft.is_dir() {
                 continue;
             }
             let name = ent.file_name().to_string_lossy().into_owned();
-            let Some(id) = dirname_to_id(&name) else { continue };
+            let Some(id) = dirname_to_id(&name) else {
+                continue;
+            };
             if known.contains(id.as_str()) {
+                continue;
+            }
+            if is_whisper_model_dir(&ent.path()) {
                 continue;
             }
             discovered.insert(id);
@@ -551,6 +586,9 @@ pub(crate) async fn local_models_list(
 
     for id in discovered {
         let dir = model_dir(&state, &id);
+        if is_whisper_model_dir(&dir) {
+            continue;
+        }
         let loaded = is_loaded(&id);
         let installed = is_installed(&dir);
         let context_length = if installed {
@@ -763,11 +801,7 @@ fn default_enable_thinking() -> Option<bool> {
 }
 
 fn settings_path(state: &UiState) -> PathBuf {
-    state
-        .config
-        .paths
-        .local_models_dir
-        .join("settings.json")
+    state.config.paths.local_models_dir.join("settings.json")
 }
 
 pub fn load_settings_blocking(dir: &std::path::Path) -> LocalModelSettings {
@@ -907,9 +941,7 @@ fn normalize_hf_id(raw: &str) -> Result<String, String> {
         .trim_end_matches('/');
     let parts: Vec<&str> = stripped.split('/').collect();
     if parts.len() < 2 {
-        return Err(format!(
-            "expected `org/repo` form, got `{s}`"
-        ));
+        return Err(format!("expected `org/repo` form, got `{s}`"));
     }
     let org = parts[0];
     let repo = parts[1];
@@ -931,8 +963,7 @@ pub(crate) async fn local_models_download(
     body: Option<Json<DownloadBody>>,
 ) -> Result<impl IntoResponse, AppError> {
     // Accept any normalized `org/repo` (custom or registry).
-    let id = normalize_hf_id(&id)
-        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e))?;
+    let id = normalize_hf_id(&id).map_err(|e| AppError(StatusCode::BAD_REQUEST, e))?;
 
     // Bail if a download for this model is already running.
     {
@@ -998,9 +1029,7 @@ pub(crate) async fn local_models_status(
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let downloads = DOWNLOADS.lock().unwrap();
-    let progress = downloads
-        .get(&id)
-        .map(|h| h.state.lock().unwrap().clone());
+    let progress = downloads.get(&id).map(|h| h.state.lock().unwrap().clone());
     Ok(Json(json!({ "id": id, "download": progress })))
 }
 
@@ -1183,7 +1212,8 @@ pub(crate) async fn local_models_load_mlx(
         let _ = (state, id);
         return Err(AppError(
             StatusCode::NOT_IMPLEMENTED,
-            "local-mlx feature not enabled — rebuild with `cargo build --features local-mlx`".to_string(),
+            "local-mlx feature not enabled — rebuild with `cargo build --features local-mlx`"
+                .to_string(),
         ));
     }
 
@@ -1201,7 +1231,12 @@ pub(crate) async fn local_models_load_mlx(
         // warm_up() is synchronous (blocks while loading weights); run on blocking thread.
         tokio::task::spawn_blocking(move || engine.warm_up())
             .await
-            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("task panic: {e}")))?
+            .map_err(|e| {
+                AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("task panic: {e}"),
+                )
+            })?
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if let Some(slot) = MLX_ENGINES.lock().unwrap().get(&cid) {
             slot.touch();
