@@ -1215,6 +1215,18 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     }
     tracing::info!("[SenClaw] MCP manager initialized");
 
+    // Auto-launch + auto-register MCP servers declared by installed Space Apps
+    // (manifest `mcp.autoRegister`). Lifecycle is tied to the daemon.
+    let space_mcp_launcher =
+        Arc::new(gateway::ui_server::space_mcp::SpaceMcpLauncher::new());
+    {
+        let apps_dir = cfg.paths.workspace_dir.join("space-apps");
+        let base_url = format!("http://127.0.0.1:{}", cfg.ui_server.port);
+        space_mcp_launcher
+            .autoregister_installed(&db, &mcp_manager, &apps_dir, &base_url)
+            .await;
+    }
+
     // ===== 4. GroupQueue + AgentPool =====
     let group_queue = agent::group_queue::GroupQueue::new(cfg.agent.max_concurrent);
     // Keep a typed Arc<ZenCoreApi> so we can wire late dependencies (workbench bridge).
@@ -2170,6 +2182,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     })
             ))),
             workbench_bridge: Some(Arc::clone(&workbench_bridge)),
+            space_mcp_launcher: Some(Arc::clone(&space_mcp_launcher)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });
@@ -2210,6 +2223,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             }
         }
     }
+
+    // Stop any MCP server processes launched for Space Apps
+    space_mcp_launcher.shutdown().await;
 
     // Drop ws_gateway to close all client connections
     drop(ws_gateway);

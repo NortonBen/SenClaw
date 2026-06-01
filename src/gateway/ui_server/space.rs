@@ -3,16 +3,22 @@
 //! Routes are registered in `core.rs` under the `/api/space/*` prefix.
 //! All DB access goes through `Db::with_conn` on the SQLite pool.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{Path as AxumPath, Query, State},
-    http::StatusCode,
-    response::Json,
+    http::{header, StatusCode},
+    response::{Json, Response},
 };
+use axum_extra::extract::Multipart;
+use base64::Engine as _;
 use chrono::Utc;
 use rusqlite::params;
+use rusqlite::types::Value as SqlValue;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::core::{AppError, UiState};
@@ -30,6 +36,88 @@ fn now_ms() -> i64 {
 
 fn internal(e: impl std::fmt::Display) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+fn valid_space_app_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn space_apps_dir(s: &UiState) -> PathBuf {
+    s.config.paths.workspace_dir.join("space-apps")
+}
+
+fn space_app_dir(s: &UiState, id: &str) -> Result<PathBuf, AppError> {
+    if !valid_space_app_id(id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    Ok(space_apps_dir(s).join(id))
+}
+
+fn json_to_sql_value(v: &serde_json::Value) -> SqlValue {
+    match v {
+        serde_json::Value::Null => SqlValue::Null,
+        serde_json::Value::Bool(b) => SqlValue::Integer(if *b { 1 } else { 0 }),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                SqlValue::Integer(i)
+            } else {
+                SqlValue::Real(n.as_f64().unwrap_or_default())
+            }
+        }
+        serde_json::Value::String(s) => SqlValue::Text(s.clone()),
+        _ => SqlValue::Text(v.to_string()),
+    }
+}
+
+fn sql_value_to_json(v: SqlValue) -> serde_json::Value {
+    match v {
+        SqlValue::Null => serde_json::Value::Null,
+        SqlValue::Integer(i) => serde_json::Value::Number(i.into()),
+        SqlValue::Real(f) => serde_json::json!(f),
+        SqlValue::Text(s) => serde_json::Value::String(s),
+        SqlValue::Blob(b) => serde_json::json!({
+            "type": "blob",
+            "base64": base64::engine::general_purpose::STANDARD.encode(b),
+        }),
+    }
+}
+
+fn read_space_app_manifest_from_zip(zip_bytes: &[u8]) -> Result<serde_json::Value, AppError> {
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(internal)?;
+    for name in ["senclaw-manifest.json", "senclaw-app.json"] {
+        if let Ok(mut file) = archive.by_name(name) {
+            let mut raw = String::new();
+            std::io::Read::read_to_string(&mut file, &mut raw).map_err(internal)?;
+            return serde_json::from_str(&raw)
+                .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid {name}: {e}")));
+        }
+    }
+    Err(AppError(
+        StatusCode::BAD_REQUEST,
+        "Zip must contain senclaw-manifest.json or senclaw-app.json at archive root".into(),
+    ))
+}
+
+fn content_type_for(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
 }
 
 // ─── Notes ───────────────────────────────────────────────────────────────────
@@ -672,6 +760,19 @@ pub(crate) async fn space_email_accounts_create(
     State(s): State<Arc<UiState>>,
     Json(b): Json<EmailAccountCreateBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if b.label.trim().is_empty()
+        || b.email.trim().is_empty()
+        || b.imap_host.trim().is_empty()
+        || b.smtp_host.trim().is_empty()
+        || b.username.trim().is_empty()
+        || b.password.is_empty()
+    {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Missing required email account fields".into()));
+    }
+    if !(1..=65_535).contains(&b.imap_port) || !(1..=65_535).contains(&b.smtp_port) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid email port".into()));
+    }
+
     let db = db(&s)?;
     let id = Uuid::new_v4().to_string();
     let now = now_ms();
@@ -695,7 +796,17 @@ pub(crate) async fn space_email_accounts_create(
     })
     .map_err(internal)?;
 
-    Ok(Json(serde_json::json!({ "id": id, "label": b.label, "email": b.email })))
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "label": b.label,
+        "email": b.email,
+        "imap_host": b.imap_host,
+        "imap_port": b.imap_port,
+        "smtp_host": b.smtp_host,
+        "smtp_port": b.smtp_port,
+        "use_tls": b.use_tls,
+        "created_at": now,
+    })))
 }
 
 pub(crate) async fn space_email_accounts_delete(
@@ -704,7 +815,8 @@ pub(crate) async fn space_email_accounts_delete(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db(&s)?;
     db.with_conn(|conn| {
-        conn.execute("DELETE FROM space_email_accounts WHERE id=?1", params![id])?;
+        conn.execute("DELETE FROM space_email_accounts WHERE id=?1", params![&id])?;
+        conn.execute("DELETE FROM space_email_cache WHERE account_id=?1", params![&id])?;
         Ok(())
     })
     .map_err(internal)?;
@@ -862,6 +974,9 @@ pub(crate) async fn space_apps_register(
         .as_str()
         .unwrap_or(&Uuid::new_v4().to_string())
         .to_string();
+    if !valid_space_app_id(&app_id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
 
     let now = now_ms();
     let manifest_str = serde_json::to_string(&manifest_json).unwrap_or_default();
@@ -877,9 +992,216 @@ pub(crate) async fn space_apps_register(
     })
     .map_err(internal)?;
 
+    // Auto-register the app's declared MCP server (launch + register) if any.
+    try_autoregister_app_mcp(&s, &app_id, &manifest_json).await;
+
     Ok(Json(serde_json::json!({
         "id": app_id,
         "manifest": manifest_json,
+        "enabled": true,
+        "installed_at": now,
+    })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AppRegisterLocalBody {
+    /// Absolute path to a Space App directory containing senclaw-manifest.json.
+    path: String,
+}
+
+/// Register a Space App from a local directory (for "server" apps the daemon
+/// runs in place via `runtime.start`). Reads the manifest, records the local
+/// path, then installs skills + launches + auto-registers the MCP.
+pub(crate) async fn space_apps_register_local(
+    State(s): State<Arc<UiState>>,
+    Json(b): Json<AppRegisterLocalBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let dir = PathBuf::from(b.path.trim());
+    if !dir.is_dir() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Path is not a directory".into()));
+    }
+    let manifest_path = ["senclaw-manifest.json", "senclaw-app.json"]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            AppError(StatusCode::BAD_REQUEST, "No senclaw-manifest.json in directory".into())
+        })?;
+    let raw = tokio::fs::read_to_string(&manifest_path).await.map_err(internal)?;
+    let mut manifest: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid manifest: {e}")))?;
+
+    let app_id = manifest["id"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| valid_space_app_id(s))
+        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "Manifest missing valid id".into()))?;
+
+    let canonical = dir.canonicalize().unwrap_or(dir);
+    manifest["install"] = serde_json::json!({
+        "type": "local",
+        "localPath": canonical.to_string_lossy(),
+    });
+
+    let now = now_ms();
+    let manifest_str = serde_json::to_string(&manifest).unwrap_or_default();
+    let db = db(&s)?;
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT OR REPLACE INTO space_apps (id, manifest, enabled, installed_at, last_seen_at)
+             VALUES (?1, ?2, 1, ?3, ?3)",
+            params![app_id, manifest_str, now],
+        )?;
+        Ok(())
+    })
+    .map_err(internal)?;
+
+    try_autoregister_app_mcp(&s, &app_id, &manifest).await;
+
+    // Re-read the manifest (run_and_register may have stamped runtime.url/port).
+    let stored: Option<serde_json::Value> = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&app_id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?;
+
+    Ok(Json(serde_json::json!({
+        "id": app_id,
+        "manifest": stored.unwrap_or(manifest),
+        "enabled": true,
+        "installed_at": now,
+    })))
+}
+
+pub(crate) async fn space_apps_install_zip(
+    State(s): State<Arc<UiState>>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut zip_bytes: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid upload: {e}")))?
+    {
+        let is_zip = field
+            .file_name()
+            .map(|name| name.to_ascii_lowercase().ends_with(".zip"))
+            .unwrap_or(false);
+        if field.name() == Some("file") || is_zip {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Read upload failed: {e}")))?;
+            zip_bytes = Some(bytes.to_vec());
+            break;
+        }
+    }
+
+    let zip_bytes = zip_bytes.ok_or_else(|| {
+        AppError(
+            StatusCode::BAD_REQUEST,
+            "Upload a zip file in multipart field `file`".into(),
+        )
+    })?;
+    if zip_bytes.len() > 50 * 1024 * 1024 {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Zip file too large (max 50MB)".into()));
+    }
+
+    let mut manifest = read_space_app_manifest_from_zip(&zip_bytes)?;
+    let app_id = manifest["id"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| valid_space_app_id(s))
+        .unwrap_or_else(|| format!("space-app-{}", Uuid::new_v4()));
+    manifest["id"] = serde_json::Value::String(app_id.clone());
+
+    let root = space_apps_dir(&s);
+    let target = root.join(&app_id);
+    if target.exists() {
+        tokio::fs::remove_dir_all(&target).await.map_err(internal)?;
+    }
+    crate::clawhub::lockfile::extract_zip_to_dir(&zip_bytes, &target).map_err(internal)?;
+
+    // "server" apps ship a runnable program started by `runtime.start` — any
+    // runtime (Node, a native/Rust binary, Python, a static-file server, …). We
+    // validate the declared `runtime.entrypoint` exists if given, else that the
+    // archive is non-empty. Static apps ship a built index.html.
+    let is_server = manifest
+        .get("runtime")
+        .and_then(|r| r.get("kind"))
+        .and_then(|k| k.as_str())
+        == Some("server");
+    if is_server {
+        let entrypoint = manifest
+            .get("runtime")
+            .and_then(|r| r.get("entrypoint"))
+            .and_then(|e| e.as_str());
+        let valid = match entrypoint {
+            Some(ep) => target.join(ep).is_file(),
+            None => std::fs::read_dir(&target)
+                .map(|mut it| it.next().is_some())
+                .unwrap_or(false),
+        };
+        if !valid {
+            let _ = tokio::fs::remove_dir_all(&target).await;
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "Server Space App zip must contain its runtime.entrypoint (or be non-empty).".into(),
+            ));
+        }
+    } else if !target.join("index.html").is_file() {
+        let _ = tokio::fs::remove_dir_all(&target).await;
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Space App zip must contain a built index.html at archive root. Run the app build and zip the build output directory.".into(),
+        ));
+    }
+
+    if manifest.get("integration").is_none() {
+        manifest["integration"] = if is_server {
+            serde_json::json!({ "type": "iframe", "url": "/" })
+        } else {
+            serde_json::json!({
+                "type": "iframe",
+                "url": format!("/api/space/apps/{app_id}/static/index.html"),
+            })
+        };
+    }
+    manifest["install"] = serde_json::json!({
+        "type": "zip",
+        "localPath": target.to_string_lossy(),
+    });
+    if manifest.get("bridge").is_none() {
+        manifest["bridge"] = serde_json::json!({
+            "postMessage": true,
+            "capabilities": ["space.rest"],
+        });
+    }
+
+    let now = now_ms();
+    let manifest_str = serde_json::to_string(&manifest).unwrap_or_default();
+    let db = db(&s)?;
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT OR REPLACE INTO space_apps (id, manifest, enabled, installed_at, last_seen_at)
+             VALUES (?1, ?2, 1, ?3, ?3)",
+            params![app_id, manifest_str, now],
+        )?;
+        Ok(())
+    })
+    .map_err(internal)?;
+
+    // Auto-register the app's declared MCP server (launch + register) if any.
+    try_autoregister_app_mcp(&s, &app_id, &manifest).await;
+
+    Ok(Json(serde_json::json!({
+        "id": app_id,
+        "manifest": manifest,
         "enabled": true,
         "installed_at": now,
     })))
@@ -890,6 +1212,46 @@ pub(crate) async fn space_apps_delete(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db(&s)?;
+    let manifest: Option<serde_json::Value> = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?;
+
+    if let Some(path) = manifest
+        .as_ref()
+        .and_then(|m| m["install"]["localPath"].as_str())
+        .map(PathBuf::from)
+    {
+        let root = space_apps_dir(&s);
+        let canonical_root = root.canonicalize().unwrap_or(root);
+        let canonical_path = path.canonicalize().unwrap_or(path);
+        if canonical_path.starts_with(&canonical_root) {
+            let _ = tokio::fs::remove_dir_all(canonical_path).await;
+        }
+    }
+
+    // Remove the app's bundled skills, stop its server process, and unregister
+    // its MCP server.
+    super::space_skills::remove_app_skills(&s.config, &id);
+    if let Some(launcher) = s.space_mcp_launcher.as_ref() {
+        launcher.stop_app(&id).await;
+    }
+    if let (Some(mgr), Some(name)) = (
+        s.mcp_manager.as_ref(),
+        manifest
+            .as_ref()
+            .and_then(|m| m["mcp"]["name"].as_str())
+            .map(str::to_string),
+    ) {
+        let _ = mgr.remove(&name, crate::mcp::config::McpScopeType::Project).await;
+    }
+
     db.with_conn(|conn| {
         conn.execute("DELETE FROM space_apps WHERE id=?1", params![id])?;
         Ok(())
@@ -897,6 +1259,401 @@ pub(crate) async fn space_apps_delete(
     .map_err(internal)?;
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+pub(crate) async fn space_apps_static(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, req_path)): AxumPath<(String, String)>,
+) -> Result<Response, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    if req_path.contains("..") || req_path.contains('\\') {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app path".into()));
+    }
+    let root = space_apps_dir(&s).join(&id);
+    let rel = if req_path.trim().is_empty() {
+        "index.html"
+    } else {
+        req_path.trim_start_matches('/')
+    };
+    let path = root.join(rel);
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "App not found".into()))?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "File not found".into()))?;
+    if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
+        return Err(AppError(StatusCode::NOT_FOUND, "File not found".into()));
+    }
+    let bytes = tokio::fs::read(&canonical_path).await.map_err(internal)?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type_for(&canonical_path))
+        .body(Body::from(bytes))
+        .unwrap())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SpaceAppBridgeBody {
+    action: String,
+    payload: Option<serde_json::Value>,
+}
+
+pub(crate) async fn space_apps_bridge(
+    AxumPath(id): AxumPath<String>,
+    Json(b): Json<SpaceAppBridgeBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    match b.action.as_str() {
+        "capabilities" => Ok(Json(serde_json::json!({
+            "appId": id,
+            "capabilities": ["llm.request", "mcp.call", "space.rest"],
+            "status": "available",
+            "note": "Bridge contract is available. Direct LLM/MCP execution is intentionally gated and will be wired through approved backend handlers.",
+        }))),
+        "llm.request" | "mcp.call" => Ok(Json(serde_json::json!({
+            "appId": id,
+            "action": b.action,
+            "payload": b.payload,
+            "status": "pending",
+            "message": "This bridge action is declared for Space Apps but execution is not enabled yet.",
+        }))),
+        _ => Err(AppError(StatusCode::BAD_REQUEST, "Unknown bridge action".into())),
+    }
+}
+
+pub(crate) async fn space_app_env(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let app_dir = space_app_dir(&s, &id)?;
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "apiBase": "/api/space/apps",
+        "coreBase": "/api",
+        "staticBase": format!("/api/space/apps/{id}/static"),
+        "appDir": app_dir.to_string_lossy(),
+        "sqlite": {
+            "endpoint": format!("/api/space/apps/{id}/sqlite/query"),
+        },
+        "config": {
+            "endpoint": format!("/api/space/apps/{id}/config"),
+        },
+        "mcp": {
+            "registerEndpoint": format!("/api/space/apps/{id}/mcp/register"),
+        },
+    })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AppConfigSetBody {
+    value: serde_json::Value,
+}
+
+pub(crate) async fn space_app_config_list(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(&s)?;
+    let values = db
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT key, value, updated_at FROM space_app_config WHERE app_id=?1 ORDER BY key",
+            )?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(params![&id], |row| {
+                    let raw: String = row.get(1)?;
+                    Ok(serde_json::json!({
+                        "key": row.get::<_, String>(0)?,
+                        "value": serde_json::from_str::<serde_json::Value>(&raw).unwrap_or(serde_json::Value::String(raw)),
+                        "updated_at": row.get::<_, i64>(2)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .map_err(internal)?;
+    Ok(Json(serde_json::json!({ "appId": id, "items": values })))
+}
+
+pub(crate) async fn space_app_config_get(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, key)): AxumPath<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(&s)?;
+    let value = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT value FROM space_app_config WHERE app_id=?1 AND key=?2",
+                params![&id, &key],
+                |row| row.get(0),
+            );
+            Ok(raw.ok())
+        })
+        .map_err(internal)?;
+    match value {
+        Some(raw) => Ok(Json(serde_json::json!({
+            "key": key,
+            "value": serde_json::from_str::<serde_json::Value>(&raw).unwrap_or(serde_json::Value::String(raw)),
+        }))),
+        None => Err(AppError(StatusCode::NOT_FOUND, "Config key not found".into())),
+    }
+}
+
+pub(crate) async fn space_app_config_set(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, key)): AxumPath<(String, String)>,
+    Json(b): Json<AppConfigSetBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    if key.trim().is_empty() || key.len() > 120 {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid config key".into()));
+    }
+    let raw = serde_json::to_string(&b.value).map_err(internal)?;
+    let now = now_ms();
+    let db = db(&s)?;
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO space_app_config (app_id, key, value, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(app_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            params![&id, &key, raw, now],
+        )?;
+        Ok(())
+    })
+    .map_err(internal)?;
+    Ok(Json(serde_json::json!({ "key": key, "value": b.value, "updated_at": now })))
+}
+
+pub(crate) async fn space_app_config_delete(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, key)): AxumPath<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(&s)?;
+    db.with_conn(|conn| {
+        conn.execute(
+            "DELETE FROM space_app_config WHERE app_id=?1 AND key=?2",
+            params![&id, &key],
+        )?;
+        Ok(())
+    })
+    .map_err(internal)?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SpaceAppSqliteQueryBody {
+    sql: String,
+    params: Option<Vec<serde_json::Value>>,
+}
+
+pub(crate) async fn space_app_sqlite_query(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(b): Json<SpaceAppSqliteQueryBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let app_dir = space_app_dir(&s, &id)?;
+    tokio::fs::create_dir_all(&app_dir).await.map_err(internal)?;
+    let db_path = app_dir.join("app.sqlite");
+    let sql = b.sql.trim().to_string();
+    if sql.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "SQL is required".into()));
+    }
+    if sql.contains('\0') {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid SQL".into()));
+    }
+    let params_json = b.params.unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+        let values: Vec<SqlValue> = params_json.iter().map(json_to_sql_value).collect();
+        let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        let verb = sql
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(verb.as_str(), "select" | "with" | "pragma") {
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let column_names: Vec<String> = stmt
+                .column_names()
+                .into_iter()
+                .map(ToString::to_string)
+                .collect();
+            let rows = stmt
+                .query_map(&refs[..], |row| {
+                    let mut obj = serde_json::Map::new();
+                    for (idx, name) in column_names.iter().enumerate() {
+                        let value: SqlValue = row.get(idx)?;
+                        obj.insert(name.clone(), sql_value_to_json(value));
+                    }
+                    Ok(serde_json::Value::Object(obj))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "rows": rows }))
+        } else {
+            let changed = conn.execute(&sql, &refs[..]).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({
+                "rowsAffected": changed,
+                "lastInsertRowId": conn.last_insert_rowid(),
+            }))
+        }
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| AppError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SpaceAppMcpRegisterBody {
+    name: Option<String>,
+    transport: String,
+    description: Option<String>,
+    url: Option<String>,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+    headers: Option<HashMap<String, String>>,
+    use_tools: Option<Vec<String>>,
+    enabled: Option<bool>,
+}
+
+pub(crate) async fn space_app_mcp_register(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(b): Json<SpaceAppMcpRegisterBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let mgr = s
+        .mcp_manager
+        .as_ref()
+        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "MCP manager not initialized".into()))?;
+    let transport = match b.transport.as_str() {
+        "stdio" => crate::mcp::config::McpTransportType::Stdio,
+        "sse" => crate::mcp::config::McpTransportType::Sse,
+        "http" => crate::mcp::config::McpTransportType::Http,
+        _ => return Err(AppError(StatusCode::BAD_REQUEST, "Invalid MCP transport".into())),
+    };
+    let name = b.name.unwrap_or_else(|| format!("space-app-{id}"));
+    let mut env = b.env.unwrap_or_default();
+    env.insert("SENCLAW_SPACE_APP_ID".into(), id.clone());
+    env.insert("SENCLAW_SPACE_API_BASE".into(), "/api/space/apps".into());
+    let config = crate::mcp::config::ExternalMcpServerConfig {
+        name,
+        transport,
+        description: b.description,
+        enabled: b.enabled.unwrap_or(true),
+        use_tools: b.use_tools,
+        command: b.command,
+        args: b.args.unwrap_or_default(),
+        env,
+        url: b.url,
+        headers: b.headers.unwrap_or_default(),
+    };
+    let info = mgr
+        .add_or_update(config, crate::mcp::config::McpScopeType::Project)
+        .await
+        .map_err(internal)?;
+    Ok(Json(serde_json::to_value(info).unwrap_or_default()))
+}
+
+/// App detail: the manifest's declared `mcp` block plus the live MCP server
+/// info (status + tools) for the detail page.
+pub(crate) async fn space_app_mcp_info(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(&s)?;
+    let manifest: Option<serde_json::Value> = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?;
+
+    let declared = manifest.as_ref().and_then(|m| m.get("mcp")).cloned();
+
+    let server = match (
+        declared
+            .as_ref()
+            .and_then(|m| m.get("name"))
+            .and_then(|v| v.as_str()),
+        s.mcp_manager.as_ref(),
+    ) {
+        (Some(name), Some(mgr)) => {
+            let info = mgr.get_server_info(name).await;
+            Some(serde_json::to_value(info).unwrap_or_default())
+        }
+        _ => None,
+    };
+
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "declared": declared,
+        "server": server,
+    })))
+}
+
+/// Best-effort: after install, install the app's bundled skills, then launch
+/// its server runtime (if any) and auto-register its declared MCP.
+async fn try_autoregister_app_mcp(s: &UiState, app_id: &str, manifest: &serde_json::Value) {
+    // Resolve where the app's files live (explicit localPath wins).
+    let app_dir = manifest
+        .get("install")
+        .and_then(|i| i.get("localPath"))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .or_else(|| space_app_dir(s, app_id).ok())
+        .unwrap_or_default();
+
+    // Install bundled skills (read-only, tied to the app).
+    super::space_skills::install_app_skills(&s.config, app_id, &app_dir, manifest);
+
+    let (Some(launcher), Some(mgr), Some(db)) = (
+        s.space_mcp_launcher.as_ref(),
+        s.mcp_manager.as_ref(),
+        s.db.as_deref(),
+    ) else {
+        return;
+    };
+    let base_url = format!("http://127.0.0.1:{}", s.config.ui_server.port);
+    match launcher
+        .run_and_register(db, mgr, app_id, &app_dir, manifest, &base_url)
+        .await
+    {
+        Ok(Some(name)) => {
+            tracing::info!("[space-mcp] auto-registered '{name}' on install of '{app_id}'")
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("[space-mcp] install auto-register for '{app_id}' failed: {e}"),
+    }
 }
 
 // ─── Reminder (set reminder on existing event) ────────────────────────────────
@@ -980,4 +1737,79 @@ pub(crate) async fn space_sync_gmail(
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let r = srv.sync_gmail(b.token, b.days.unwrap_or(7));
     Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct GoogleWorkspaceSyncBody {
+    token: String,
+    days: Option<u32>,
+    services: Option<Vec<String>>,
+}
+
+pub(crate) async fn space_sync_google_workspace(
+    State(s): State<Arc<UiState>>,
+    Json(b): Json<GoogleWorkspaceSyncBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let token = b.token.trim().to_string();
+    if token.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Google access token required".into()));
+    }
+
+    let services = b.services.unwrap_or_else(|| {
+        vec![
+            "gmail".to_string(),
+            "calendar".to_string(),
+            "notes".to_string(),
+        ]
+    });
+    let days = b.days.unwrap_or(7);
+    let db_arc = s
+        .db
+        .clone()
+        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
+
+    let mut results = serde_json::Map::new();
+    for service in services {
+        match service.as_str() {
+            "gmail" => {
+                let r = srv.sync_gmail(token.clone(), days);
+                results.insert(
+                    "gmail".to_string(),
+                    serde_json::from_str(&r.content).unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
+                );
+            }
+            "calendar" => {
+                let r = srv.sync_google_calendar(token.clone(), days);
+                results.insert(
+                    "calendar".to_string(),
+                    serde_json::from_str(&r.content).unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
+                );
+            }
+            "notes" => {
+                results.insert(
+                    "notes".to_string(),
+                    serde_json::json!({
+                        "status": "pending",
+                        "message": "Google Workspace notes sync is not implemented yet. The connector reserves this slot for Keep/Drive-based notes import.",
+                    }),
+                );
+            }
+            other => {
+                results.insert(
+                    other.to_string(),
+                    serde_json::json!({
+                        "status": "skipped",
+                        "message": "Unknown Google Workspace service",
+                    }),
+                );
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "completed",
+        "days": days,
+        "results": results,
+    })))
 }

@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::clawhub::client::{download_skill_zip, get_skill_meta, search_skills, DEFAULT_REGISTRY};
 use crate::clawhub::lockfile::{
-    extract_zip_to_dir, read_lockfile, write_lockfile, write_skill_origin,
+    extract_zip_to_dir, read_lockfile, read_skill_origin, write_lockfile, write_skill_origin,
 };
 use crate::clawhub::signal::emit_skills_refresh;
 use crate::skills::disabled::{
@@ -195,6 +195,69 @@ pub(crate) async fn skills_install(
     ))
 }
 
+// ===== DELETE /api/skills/{name} =====
+
+pub(crate) async fn skills_uninstall(
+    State(s): State<Arc<UiState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let skills = load_all_local_skills(&s.config);
+    let skill = skills
+        .iter()
+        .find(|sk| sk.name == name)
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Skill not found".into()))?;
+
+    if skill.source != "clawhub-managed" {
+        return Err(AppError(
+            StatusCode::FORBIDDEN,
+            "Only ClaWHub-managed skills can be uninstalled".into(),
+        ));
+    }
+
+    let managed_dir = &s.config.paths.managed_skills_dir;
+    let canonical_managed = managed_dir
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::INTERNAL_SERVER_ERROR, "Managed skills dir missing".into()))?;
+    let canonical_skill = skill
+        .dir
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "Skill directory not found".into()))?;
+    if !canonical_skill.starts_with(&canonical_managed) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid skill path".into()));
+    }
+
+    let origin = read_skill_origin(&skill.dir);
+    let slug = origin
+        .as_ref()
+        .map(|o| o.slug.clone())
+        .or_else(|| {
+            skill
+                .dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "Invalid skill directory".into()))?;
+
+    tokio::fs::remove_dir_all(&skill.dir)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut lock = read_lockfile(managed_dir);
+    lock.skills.remove(&slug);
+    lock.skills.remove(&name);
+    let _ = write_lockfile(managed_dir, &lock);
+
+    enable_skill(&name);
+
+    if let Some(ref api) = s.agent_api {
+        api.reload_all_skills();
+    }
+    let _ = emit_skills_refresh(&s.config);
+
+    Ok(Json(serde_json::json!({ "ok": true, "name": name, "slug": slug })))
+}
+
 // ===== /api/skills/{name}/readme =====
 
 pub(crate) async fn skills_readme(
@@ -224,6 +287,14 @@ pub(crate) async fn skills_readme_save(
         .iter()
         .find(|sk| sk.name == name)
         .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Not found".into()))?;
+    // Skills installed by a Space App are read-only — edit the app instead.
+    if skill.source.starts_with("app:") {
+        return Err(AppError(
+            StatusCode::FORBIDDEN,
+            "This skill was installed by a Space App and cannot be edited. Update the app instead."
+                .into(),
+        ));
+    }
     fs::write(&skill.file_path, &body)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true })))

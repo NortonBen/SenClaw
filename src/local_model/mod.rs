@@ -72,6 +72,17 @@ pub mod thinking_parse;
 #[cfg(feature = "local-mlx")]
 pub mod chat_template_openai;
 
+// ── Whisper ASR audio front-end (pure-Rust, CPU; feature `whisper-audio`) ──
+#[cfg(feature = "whisper-audio")]
+pub mod audio;
+
+// ── Gemma-4 vision input front-end (image decode → CHW float32) ──────────
+// Bundled into `local-mlx`: an image preprocessor without the MLX model that
+// consumes it would be dead code. Cross-platform pure-Rust math (no native
+// deps); tests run as part of the regular `--features local-mlx` suite.
+#[cfg(feature = "local-mlx")]
+pub mod image_input;
+
 pub use models::{read_model_context_length_from_dir, KnownModel, KNOWN_MODELS};
 pub use runtime::{
     ChatMessage, LocalModelRuntime, Role, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
@@ -89,6 +100,12 @@ pub mod mlx_prompt;
 
 #[cfg(feature = "local-mlx")]
 pub use mlx_native::MlxNativeEngine;
+
+// ── Native Whisper ASR driver (Apple Silicon; feature `local-mlx-whisper`) ──
+#[cfg(feature = "local-mlx-whisper")]
+pub mod whisper_transcribe;
+#[cfg(feature = "local-mlx-whisper")]
+pub use whisper_transcribe::WhisperEngine;
 
 // ── Shared tokenizer / chat-template stack (candle) ───────────────────────
 #[cfg(feature = "local-candle")]

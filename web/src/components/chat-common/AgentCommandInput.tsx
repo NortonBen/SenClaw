@@ -8,6 +8,8 @@ const { Text } = Typography;
 export interface AgentCommandItem {
   key: string;
   desc?: string;
+  kind?: 'command' | 'file' | 'skill' | 'agent' | 'subagent' | 'mcp-server' | 'mcp-tool';
+  insertText?: string;
 }
 
 type TriggerKind = '/' | '@' | '#';
@@ -35,6 +37,31 @@ export interface AgentCommandInputProps {
   onFileSelect?: (files: File[]) => void;
 }
 
+interface SubagentApiItem {
+  name?: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+interface McpToolApiItem {
+  name?: string;
+  description?: string | null;
+}
+
+interface McpServerApiItem {
+  name?: string;
+  description?: string | null;
+  enabled?: boolean;
+  builtin?: boolean;
+  status?: string;
+  use_tools?: string[] | null;
+  tools?: McpToolApiItem[] | null;
+}
+
+function mcpToolName(serverName: string, toolName: string): string {
+  return toolName.startsWith('mcp__') ? toolName : `mcp__${serverName}__${toolName}`;
+}
+
 export function AgentCommandInput({
   value,
   disabled,
@@ -54,6 +81,8 @@ export function AgentCommandInput({
   const { token } = theme.useToken();
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [skills, setSkills] = React.useState<AgentCommandItem[]>([]);
+  const [agentMentions, setAgentMentions] = React.useState<AgentCommandItem[]>([]);
+  const [mcpMentions, setMcpMentions] = React.useState<AgentCommandItem[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const guardedSubmit = useGuardedChatSubmit(onSubmit);
   const { onCompositionStart, onCompositionEnd, shouldBlockEnterSubmit } = useChatCompositionGuard();
@@ -79,6 +108,7 @@ export function AgentCommandInput({
         if (cancelled) return;
         const items: AgentCommandItem[] = (data.skills ?? []).map((s: { name?: string; description?: string }) => ({
           key: String(s.name ?? ''),
+          kind: 'skill',
           desc: typeof s.description === 'string' ? s.description : undefined,
         }));
         setSkills(items.filter(i => i.key));
@@ -86,6 +116,71 @@ export function AgentCommandInput({
       .catch(() => {
         if (!cancelled) setSkills([]);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetch('/api/subagents')
+        .then(r => (r.ok ? r.json() : { subagents: [] }))
+        .catch(() => ({ subagents: [] })),
+      fetch('/api/mcp-servers')
+        .then(r => (r.ok ? r.json() : { servers: [] }))
+        .catch(() => ({ servers: [] })),
+    ]).then(([agentsData, mcpData]) => {
+      if (cancelled) return;
+
+      const builtInAgents: AgentCommandItem[] = [
+        {
+          key: 'agent:general-purpose',
+          insertText: 'agent:general-purpose',
+          kind: 'agent',
+          desc: 'Built-in Task subagent for research, code search, and multi-step work.',
+        },
+      ];
+
+      const subagents: AgentCommandItem[] = (agentsData.subagents ?? [])
+        .filter((a: SubagentApiItem) => a?.name && !a.disabled)
+        .map((a: SubagentApiItem) => ({
+          key: `subagent:${a.name}`,
+          insertText: `subagent:${a.name}`,
+          kind: 'subagent' as const,
+          desc: a.description || 'Virtual subagent persona.',
+        }));
+
+      const mcpItems: AgentCommandItem[] = [];
+      for (const server of (mcpData.servers ?? []) as McpServerApiItem[]) {
+        const serverName = String(server.name ?? '').trim();
+        if (!serverName) continue;
+        const enabled = server.enabled !== false;
+        if (!server.builtin && (!enabled || server.status !== 'connected')) continue;
+        const status = server.status ? ` · ${server.status}` : '';
+        mcpItems.push({
+          key: `mcp:${serverName}`,
+          insertText: `mcp:${serverName}`,
+          kind: 'mcp-server',
+          desc: `${enabled ? 'MCP server' : 'Disabled MCP server'}${status}${server.description ? ` · ${server.description}` : ''}`,
+        });
+        for (const tool of server.tools ?? []) {
+          const toolName = String(tool.name ?? '').trim();
+          if (!toolName) continue;
+          if (server.use_tools && !server.use_tools.includes(toolName)) continue;
+          const fullName = mcpToolName(serverName, toolName);
+          mcpItems.push({
+            key: fullName,
+            insertText: fullName,
+            kind: 'mcp-tool',
+            desc: tool.description || `MCP tool from ${serverName}.`,
+          });
+        }
+      }
+
+      setAgentMentions([...builtInAgents, ...subagents]);
+      setMcpMentions(mcpItems);
+    });
     return () => {
       cancelled = true;
     };
@@ -103,12 +198,19 @@ export function AgentCommandInput({
       triggerState.trigger === '/'
         ? commands
         : triggerState.trigger === '@'
-          ? mentionItems
+          ? [...agentMentions, ...mcpMentions, ...mentionItems]
           : skills;
     return source
-      .filter(i => i.key.toLowerCase().includes(triggerState.query))
+      .filter(i => {
+        const query = triggerState.query;
+        return (
+          i.key.toLowerCase().includes(query) ||
+          (i.desc ?? '').toLowerCase().includes(query) ||
+          (i.kind ?? '').toLowerCase().includes(query)
+        );
+      })
       .slice(0, 14);
-  }, [triggerState, commands, mentionItems, skills]);
+  }, [triggerState, commands, mentionItems, skills, agentMentions, mcpMentions]);
 
   React.useEffect(() => {
     setActiveIndex(0);
@@ -116,12 +218,22 @@ export function AgentCommandInput({
 
   const applySuggestion = (item: AgentCommandItem) => {
     if (!triggerState) return;
-    const replaced = value.replace(/([/@#])[^\s]*$/, `${triggerState.trigger}${item.key} `);
+    const replacement = item.insertText ?? item.key;
+    const replaced = value.replace(/([/@#])[^\s]*$/, `${triggerState.trigger}${replacement} `);
     onChange(replaced);
     setActiveIndex(0);
   };
 
-  const titleByTrigger = triggerState?.trigger === '/' ? 'Command' : triggerState?.trigger === '@' ? 'File/Folder' : 'Skill';
+  const titleByTrigger = triggerState?.trigger === '/' ? 'Command' : triggerState?.trigger === '@' ? 'Mention' : 'Skill';
+  const labelByKind: Record<NonNullable<AgentCommandItem['kind']>, string> = {
+    command: 'Command',
+    file: 'File',
+    skill: 'Skill',
+    agent: 'Agent',
+    subagent: 'Subagent',
+    'mcp-server': 'MCP',
+    'mcp-tool': 'MCP tool',
+  };
 
   const defaultButtonDisabled = !value.trim() || !!disabled || !!sending;
   const buttonDisabled = actionButtonDisabled !== undefined ? actionButtonDisabled : defaultButtonDisabled;
@@ -169,7 +281,28 @@ export function AgentCommandInput({
                       fontWeight: 500,
                     }}
                   >
-                    {item.key}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      {item.kind && (
+                        <span
+                          style={{
+                            flex: '0 0 auto',
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                            borderRadius: 4,
+                            color: token.colorTextTertiary,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            lineHeight: '16px',
+                            padding: '0 5px',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          {labelByKind[item.kind]}
+                        </span>
+                      )}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {item.key}
+                      </span>
+                    </div>
                   </div>
                 );
               })
@@ -182,6 +315,13 @@ export function AgentCommandInput({
                 <div style={{ marginTop: 2, marginBottom: 10 }}>
                   <Text strong style={{ fontSize: 18 }}>{suggestions[activeIndex].key}</Text>
                 </div>
+                {suggestions[activeIndex].kind && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                      {labelByKind[suggestions[activeIndex].kind!]}
+                    </Text>
+                  </div>
+                )}
                 <Text style={{ fontSize: 14, color: token.colorTextSecondary }}>
                   {suggestions[activeIndex].desc ?? 'Khong co mo ta'}
                 </Text>

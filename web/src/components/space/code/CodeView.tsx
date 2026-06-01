@@ -511,11 +511,12 @@ export function CodeView({
 
   const previewLines = previewContent.split('\n');
   const mentionItems = React.useMemo(() => {
-    const out: Array<{ key: string; desc?: string }> = [];
+    const out: Array<{ key: string; desc?: string; kind: 'file' }> = [];
     const walk = (nodes: FileNode[]) => {
       for (const node of nodes) {
         out.push({
           key: node.path,
+          kind: 'file',
           desc: node.type === 'dir' ? 'Folder trong workspace' : 'File trong workspace',
         });
         if (node.children?.length) walk(node.children);

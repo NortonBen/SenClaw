@@ -13,21 +13,29 @@ const { Text } = Typography;
 
 export type SpaceSection = 'notes' | 'calendar' | 'email' | 'apps' | 'schedules';
 
+export interface SpaceSidebarApp {
+  id: string;
+  name: string;
+  icon?: string;
+}
+
 interface NavItem {
-  key: SpaceSection;
+  key: SpaceSection | `app:${string}`;
   icon: React.ReactNode;
   label: string;
   badge?: number;
+  nested?: boolean;
 }
 
 interface Props {
-  activeSection: SpaceSection;
-  onSelect: (s: SpaceSection) => void;
+  activeSection: SpaceSection | `app:${string}`;
+  onSelect: (s: SpaceSection | `app:${string}`) => void;
   todaySummary: TodaySummary | null;
   unreadEmails?: number;
+  apps?: SpaceSidebarApp[];
 }
 
-export function SpaceSidebar({ activeSection, onSelect, todaySummary, unreadEmails = 0 }: Props) {
+export function SpaceSidebar({ activeSection, onSelect, todaySummary, unreadEmails = 0, apps = [] }: Props) {
   const { token } = theme.useToken();
 
   const navItems: NavItem[] = [
@@ -41,6 +49,12 @@ export function SpaceSidebar({ activeSection, onSelect, todaySummary, unreadEmai
     { key: 'email', icon: <MailOutlined />, label: 'Email', badge: unreadEmails },
     { key: 'schedules', icon: <ClockCircleOutlined />, label: 'Định kỳ' },
     { key: 'apps', icon: <AppstoreOutlined />, label: 'Apps' },
+    ...apps.map(app => ({
+      key: `app:${app.id}` as `app:${string}`,
+      icon: <span>{app.icon ?? '▣'}</span>,
+      label: app.name,
+      nested: true,
+    })),
   ];
 
   return (
@@ -87,6 +101,7 @@ export function SpaceSidebar({ activeSection, onSelect, todaySummary, unreadEmai
                 cursor: 'pointer',
                 border: 'none',
                 outline: 'none',
+                paddingLeft: item.nested ? 32 : 16,
               }}
             >
               <span style={{ fontSize: 16 }}>{item.icon}</span>

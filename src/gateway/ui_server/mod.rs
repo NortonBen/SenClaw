@@ -23,11 +23,14 @@ mod mcp;
 mod quicknotes;
 pub mod relay_bridge;
 mod space;
+pub mod space_mcp;
+mod space_skills;
 mod plugins;
 mod skills;
 mod spa;
 mod subagents;
 pub mod types;
+mod whisper;
 mod wiki;
 mod workbench;
 

@@ -45,6 +45,7 @@
 
 use std::path::Path;
 
+#[cfg(feature = "local-mlx")]
 use minijinja::Environment;
 use serde_json::Value;
 
@@ -782,13 +783,26 @@ fn route_channel(name: &str) -> ChannelRouting {
 // in `parse_tool_call_body` below.
 
 fn parse_tool_call_body(body: &str, format: ToolCallFormat, idx: usize) -> Option<Value> {
-    match format {
-        ToolCallFormat::Gemma4Compact => {
-            super::mlx_lm::models::gemma4::parser::parse_tool_call_body(body, idx)
+    // The per-model parser bodies live under `mlx_lm::models::*`, which is
+    // only compiled when the `local-mlx` feature is enabled (those models
+    // depend on `mlx-rs`). Without the feature there's no MLX model that can
+    // be the source of these tokens — return None so the state machine emits
+    // nothing for a tool-call body.
+    #[cfg(feature = "local-mlx")]
+    {
+        match format {
+            ToolCallFormat::Gemma4Compact => {
+                super::mlx_lm::models::gemma4::parser::parse_tool_call_body(body, idx)
+            }
+            ToolCallFormat::QwenJsonOrXml => {
+                super::mlx_lm::models::qwen_common::parse_tool_call_body(body, idx)
+            }
         }
-        ToolCallFormat::QwenJsonOrXml => {
-            super::mlx_lm::models::qwen_common::parse_tool_call_body(body, idx)
-        }
+    }
+    #[cfg(not(feature = "local-mlx"))]
+    {
+        let _ = (body, format, idx);
+        None
     }
 }
 

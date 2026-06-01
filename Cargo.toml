@@ -159,6 +159,19 @@ mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features
 mlx-sys = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", package = "mlx-sys", optional = true }
 turboquant-rs = { version = "0.4.1", optional = true }
 
+# Whisper-family ASR audio front-end (pure-Rust, CPU). Decode any common
+# container/codec → mono f32 → resample 16 kHz → log-mel spectrogram.
+# Enable via the `whisper-audio` feature (no MLX/Metal required, fully testable).
+symphonia = { version = "0.5", optional = true, features = ["mp3", "aac", "isomp4", "alac", "flac", "wav", "ogg", "vorbis", "pcm", "adpcm"] }
+rubato = { version = "0.15", optional = true }
+realfft = { version = "3.5", optional = true }
+
+# Image preprocessing for Gemma-4 vision input (decode → RGB → 224×224
+# BICUBIC resize → rescale [0,1] → CHW float32). Pulled in by the
+# `local-mlx` feature — there's no reason to load images in a build that
+# can't run the Gemma-4 model that consumes them.
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4.5"
@@ -206,7 +219,26 @@ local-mlx = [
     "dep:minijinja-contrib",
     "dep:half",
     "dep:safetensors",
+    # Gemma-4 vision input: image decoding + preprocessing always available
+    # whenever the MLX model layer is. Vision tower (Phase 2) lives in the
+    # same module tree under `mlx_lm/models/gemma4_vision.rs`.
+    "dep:image",
 ]
+
+# Pure-Rust audio front-end for Whisper ASR (decode + resample + log-mel).
+# Standalone & cross-platform so the preprocessing math is unit-testable
+# without compiling the MLX stack: cargo test --features whisper-audio
+whisper-audio = ["dep:symphonia", "dep:rubato", "dep:realfft"]
+
+# Full native Whisper ASR on Apple Silicon: audio front-end + MLX encoder/decoder.
+# Build: cargo build --features local-mlx-whisper
+local-mlx-whisper = ["local-mlx", "whisper-audio"]
+
+# NOTE — Gemma-4 vision input does NOT have its own feature flag. Image
+# decoding (the `image` crate) and the vision-side modules
+# (`mlx_lm::models::gemma4_vision`) are bundled into `local-mlx` so a build
+# that supports the Gemma-4 model also supports its image input. This keeps
+# the feature surface to just {default, local-mlx} for the user.
 
 [profile.release]
 lto = "thin"

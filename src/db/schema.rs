@@ -526,6 +526,14 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
             installed_at INTEGER NOT NULL,
             last_seen_at INTEGER
         );
+
+        CREATE TABLE IF NOT EXISTS space_app_config (
+            app_id      TEXT NOT NULL,
+            key         TEXT NOT NULL,
+            value       TEXT NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            PRIMARY KEY (app_id, key)
+        );
         "#,
     )?;
     Ok(())

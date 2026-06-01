@@ -486,7 +486,11 @@ impl McpTransport for HttpTransport {
             .client
             .post(&self.url)
             .body(body)
-            .header("Content-Type", "application/json");
+            // Streamable HTTP spec requires the client to advertise both media
+            // types; strict servers (e.g. the MCP TS SDK) reject the request
+            // with HTTP 406 otherwise.
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream");
 
         if let Some(sid) = &self.session_id {
             req_builder = req_builder.header("Mcp-Session-Id", sid);

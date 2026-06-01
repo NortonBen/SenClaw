@@ -11,6 +11,9 @@ import {
   DatabaseOutlined,
   CloudDownloadOutlined,
   ExperimentOutlined,
+  AudioOutlined,
+  MailOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -24,6 +27,9 @@ import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
 import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
 import { LocalModelsSettings } from '../components/settings/LocalModelsSettings';
 import { CognitiveSettings } from '../components/settings/CognitiveSettings';
+import { WhisperSettings } from '../components/settings/WhisperSettings';
+import { EmailSettings } from '../components/settings/EmailSettings';
+import { SpaceAppsSettings } from '../components/settings/SpaceAppsSettings';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -37,6 +43,9 @@ type SettingsSection =
   | 'llm'
   | 'embedding'
   | 'local-models'
+  | 'whisper'
+  | 'space-email'
+  | 'space-apps'
   | 'cognitive';
 
 export const SettingsPage: React.FC = () => {
@@ -60,6 +69,9 @@ export const SettingsPage: React.FC = () => {
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
+      { key: 'whisper', icon: <AudioOutlined />, label: 'Whisper ASR' },
+      { key: 'space-email', icon: <MailOutlined />, label: 'Space Email' },
+      { key: 'space-apps', icon: <AppstoreOutlined />, label: 'Space Apps' },
       { key: 'cognitive', icon: <ExperimentOutlined />, label: 'Cognitive' },
     ],
     []
@@ -110,6 +122,12 @@ export const SettingsPage: React.FC = () => {
         return <EmbeddingSettings />;
       case 'local-models':
         return <LocalModelsSettings />;
+      case 'whisper':
+        return <WhisperSettings />;
+      case 'space-email':
+        return <EmailSettings />;
+      case 'space-apps':
+        return <SpaceAppsSettings />;
       case 'cognitive':
         return <CognitiveSettings />;
       default:

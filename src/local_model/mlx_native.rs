@@ -2652,15 +2652,22 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     let mut total_skipped_mm = 0usize;
     let mut unmatched_samples: Vec<String> = Vec::new();
 
-    // Vision/audio tower weights are intentionally skipped on the text-only
-    // path — account for them separately so they don't drown the warning that
-    // surfaces a *real* unmatched text-backbone key.
+    // Account for vision/audio tower weights as intentionally-skipped so they
+    // don't drown the warning that surfaces a *real* unmatched text-backbone
+    // key. `embed_vision.*` is NOT in this list — those 3 keys are routed
+    // into the `Model::embed_vision` slot by the per-module quantization +
+    // weight-load loop (Phase 1 of vision support — see `gemma4_vision.rs`).
+    // The vision tower itself remains skipped until Phase 2 ports it; audio
+    // stays skipped indefinitely (out of scope on the text-only inference
+    // path).
     let is_multimodal_key = |k: &str| {
-        k.starts_with("vision_tower.")
-            || k.starts_with("audio_tower.")
-            || k.starts_with("embed_vision.")
-            || k.starts_with("embed_audio.")
-            || k.starts_with("multi_modal_projector.")
+        const SKIP_PREFIXES: &[&str] = &[
+            "vision_tower.",
+            "audio_tower.",
+            "embed_audio.",
+            "multi_modal_projector.",
+        ];
+        SKIP_PREFIXES.iter().any(|p| k.starts_with(p))
     };
 
     // KV-shared layers (idx ≥ first_kv_shared) reuse earlier layers' K/V at

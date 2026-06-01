@@ -99,6 +99,16 @@ fn find_skill_md(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// If a skill directory was installed by a Space App it carries a
+/// `.senclaw-app.json` marker; return `app:<app_id>` so the source label marks
+/// it read-only and tied to that app.
+fn app_marker_source(dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(dir.join(".senclaw-app.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let app_id = v.get("app_id").and_then(|x| x.as_str())?;
+    Some(format!("app:{app_id}"))
+}
+
 /// Scan a single source directory for skills.
 ///
 /// Each entry carries its fully parsed [`SkillMetadata`] plus an `eligible`
@@ -142,11 +152,12 @@ pub fn scan_source(def: &SourceDef) -> Vec<SkillEntry> {
         }
 
         let ineligible_reason = meta.ineligible_reason();
+        let source = app_marker_source(&full_path).unwrap_or_else(|| def.source.clone());
         entries.push(SkillEntry {
             name: meta.name.clone(),
             description: meta.description.clone(),
             version: meta.version.clone(),
-            source: def.source.clone(),
+            source,
             dir: full_path,
             file_path: skill_md,
             eligible: ineligible_reason.is_none(),
@@ -230,6 +241,68 @@ mod tests {
         assert!(!entries[0].eligible);
         assert!(entries[0].ineligible_reason.is_some());
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The repo's `<project>/skills/` directory is the runtime fallback for
+    /// `bundled_skills_dir` (see `config.rs`). This test scans it via the same
+    /// code path the daemon uses and asserts every bundled skill is parsed
+    /// successfully — frontmatter present, no parse errors, eligible to run.
+    /// Anchored on the new `web-research` skill so adding it doesn't silently
+    /// regress (e.g. broken YAML, missing `when-to-use`).
+    #[test]
+    fn bundled_skills_dir_contains_web_research_and_all_parse() {
+        let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
+        assert!(
+            bundled.exists(),
+            "project skills dir missing: {}",
+            bundled.display()
+        );
+        let def = SourceDef {
+            dir: bundled,
+            source: "bundled".to_string(),
+        };
+        let entries = scan_source(&def);
+
+        // Every shipped skill must have a non-empty name + description (catches
+        // accidental commits of broken YAML frontmatter).
+        for e in &entries {
+            assert!(
+                !e.name.is_empty(),
+                "bundled skill with empty name at {}",
+                e.file_path.display()
+            );
+            assert!(
+                !e.description.is_empty(),
+                "bundled skill '{}' missing description",
+                e.name
+            );
+        }
+
+        // The new web-research skill must be discovered.
+        let web_research = entries
+            .iter()
+            .find(|e| e.name == "web-research")
+            .unwrap_or_else(|| panic!(
+                "web-research skill not found among {} bundled entries: {:?}",
+                entries.len(),
+                entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+            ));
+        assert!(
+            web_research.description.contains("research"),
+            "web-research description should mention research: {:?}",
+            web_research.description
+        );
+        assert!(
+            web_research.eligible,
+            "web-research should be eligible by default (reason: {:?})",
+            web_research.ineligible_reason
+        );
+
+        // Sanity: agent-browser still present (web-research composes it).
+        assert!(
+            entries.iter().any(|e| e.name == "agent-browser"),
+            "agent-browser missing — web-research composes it; missing this would break docs"
+        );
     }
 
     #[test]

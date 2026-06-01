@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Input, Button, Tag, Empty, Spin, Typography, theme, Drawer,
-  Tooltip, Divider, Alert,
+  Input, Button, Empty, Spin, Typography, theme,
+  Tooltip, Divider, Alert, Select, message,
 } from 'antd';
 import {
-  SearchOutlined, ReloadOutlined, EditOutlined, MailOutlined,
-  StarOutlined, PaperClipOutlined,
+  ReloadOutlined, EditOutlined, MailOutlined,
 } from '@ant-design/icons';
 import type { SpaceEmail, SpaceEmailDetail, UseSpaceHook } from '../../../hooks/useSpace';
 import { ComposeModal } from './ComposeModal';
@@ -45,14 +44,26 @@ export function InboxView({ hook }: Props) {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
   const [replyTo, setReplyTo] = useState<{ to: string; subject: string } | undefined>();
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>();
 
   useEffect(() => {
-    hook.loadEmails();
+    hook.loadEmailAccounts();
+    hook.loadEmails(selectedAccountId);
   }, []);
 
   useEffect(() => {
     setDisplayList(hook.emails ?? []);
   }, [hook.emails]);
+
+  useEffect(() => {
+    if (hook.emailAccounts.length > 0 && !selectedAccountId) {
+      setSelectedAccountId(hook.emailAccounts[0].id);
+    }
+  }, [hook.emailAccounts, selectedAccountId]);
+
+  useEffect(() => {
+    hook.loadEmails(selectedAccountId);
+  }, [selectedAccountId]);
 
   const handleSearch = async (q: string) => {
     if (!q.trim()) { setDisplayList(hook.emails); return; }
@@ -81,14 +92,20 @@ export function InboxView({ hook }: Props) {
   };
 
   const handleSend = async (to: string, subject: string, body: string) => {
-    await fetch('/api/space/email/send', {
+    const res = await fetch('/api/space/email/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to, subject, body }),
+      body: JSON.stringify({ to, subject, body, account_id: selectedAccountId }),
     });
+    if (!res.ok) throw new Error(await res.text());
+    const result = await res.json() as { note?: string };
+    if (result.note) {
+      message.info(result.note);
+    }
+    await hook.loadEmails(selectedAccountId);
   };
 
-  const noAccounts = !hook.emailsLoading && (hook.emails ?? []).length === 0;
+  const noAccounts = !hook.emailAccountsLoading && hook.emailAccounts.length === 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -106,12 +123,22 @@ export function InboxView({ hook }: Props) {
           onSearch={handleSearch}
           className="flex-1"
         />
+        <Select
+          size="small"
+          placeholder="Account"
+          value={selectedAccountId}
+          loading={hook.emailAccountsLoading}
+          style={{ width: 190 }}
+          options={hook.emailAccounts.map(a => ({ value: a.id, label: a.label || a.email }))}
+          onChange={setSelectedAccountId}
+          disabled={hook.emailAccounts.length === 0}
+        />
         <Tooltip title="Làm mới">
           <Button
             size="small"
             icon={<ReloadOutlined />}
             loading={hook.emailsLoading}
-            onClick={() => hook.loadEmails()}
+            onClick={() => hook.loadEmails(selectedAccountId)}
           />
         </Tooltip>
         <Button
@@ -130,7 +157,7 @@ export function InboxView({ hook }: Props) {
           type="info"
           className="m-4"
           title="Chưa cấu hình tài khoản email"
-          description="Vào Settings → Space → Email để thêm tài khoản IMAP/SMTP."
+          description="Vào Settings → Space Email để thêm tài khoản IMAP/SMTP."
           showIcon
         />
       )}

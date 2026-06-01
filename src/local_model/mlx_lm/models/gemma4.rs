@@ -927,7 +927,22 @@ pub struct Model {
     #[quantizable]
     #[param]
     pub lm_head: Option<MaybeQuantized<nn::Linear>>,
+
+    /// Vision-side projection from the (Phase 2) vision tower's hidden space
+    /// into the text decoder's embedding space. Always present when the
+    /// Gemma-4 model is loadable so the safetensors loader can land the
+    /// `embed_vision.embedding_projection.{weight,scales,biases}` keys (3
+    /// keys in the e2b 4-bit checkpoint). Phase 1 loads it; Phase 3 wires it
+    /// into `forward_with_images`.
+    #[quantizable]
+    #[param]
+    pub embed_vision: Option<super::gemma4_vision::MultimodalEmbedder>,
 }
+
+/// Vision-tower hidden size for the Gemma-4 E2B / E4B checkpoints.
+/// Hard-coded for Phase 1; Phase 2 will parse this from
+/// `config.json::vision_config.hidden_size` when porting the vision tower.
+const PHASE1_VISION_HIDDEN_SIZE: i32 = 768;
 
 impl Model {
     pub fn new(args: ModelArgs) -> Result<Self, Exception> {
@@ -941,10 +956,18 @@ impl Model {
         } else {
             None
         };
+
+        let embed_vision = Some(super::gemma4_vision::MultimodalEmbedder::new(
+            PHASE1_VISION_HIDDEN_SIZE,
+            args.hidden_size,
+            args.rms_norm_eps,
+        )?);
+
         Ok(Self {
             args,
             model,
             lm_head,
+            embed_vision,
         })
     }
 
@@ -1445,6 +1468,17 @@ pub fn apply_per_module_quantization(model: &mut Model, plan: &QuantPlan) -> Res
     // Optional lm_head (when tie_word_embeddings = false)
     if let Some(lm_head) = model.lm_head.as_mut() {
         quantize_maybe_linear(lm_head, "language_model.lm_head", plan)?;
+    }
+
+    // Vision-side projection (Phase 1 of vision support). The checkpoint
+    // stores this UNDER the multimodal wrapper, so the path has NO
+    // `language_model.` prefix — quantization plan keys must match exactly.
+    if let Some(ev) = model.embed_vision.as_mut() {
+        quantize_maybe_linear(
+            &mut ev.embedding_projection,
+            "embed_vision.embedding_projection",
+            plan,
+        )?;
     }
 
     Ok(())

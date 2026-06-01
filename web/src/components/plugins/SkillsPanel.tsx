@@ -9,8 +9,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { theme, Button, Input, Switch, Tag, Typography, Spin, Space, Tooltip, Tabs, message, Card, Flex } from 'antd';
-import { SearchOutlined, ReloadOutlined, ArrowLeftOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined, DownloadOutlined } from '@ant-design/icons';
+import { theme, Button, Input, Switch, Tag, Typography, Spin, Space, Tabs, message, Card, Flex, Popconfirm, Tooltip } from 'antd';
+import { SearchOutlined, ReloadOutlined, ArrowLeftOutlined, EditOutlined, ThunderboltOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import 'highlight.js/styles/github.css';
 
 const { Text, Title, Paragraph } = Typography;
@@ -81,6 +81,14 @@ function groupBySource(skills: LocalSkill[]) {
 // ─── Small components ────────────────────────────────────────────────────────
 
 function SourceBadge({ source, className = '' }: { source: string; className?: string }) {
+  // Skills installed by a Space App carry source "app:<app_id>".
+  if (source.startsWith('app:')) {
+    return (
+      <Tag color="geekblue" className={className}>
+        App: {source.slice(4)}
+      </Tag>
+    );
+  }
   return (
     <Tag color={SOURCE_COLOR[source] ?? 'default'} className={className}>
       {SOURCE_LABEL[source] ?? source}
@@ -151,10 +159,11 @@ function SkillCard({ skill, onClick }: { skill: LocalSkill; onClick: () => void 
 
 // ─── Detail view ──────────────────────────────────────────────────────────────
 
-function SkillDetail({ skill, onBack, onToggleDisabled }: {
+function SkillDetail({ skill, onBack, onToggleDisabled, onDelete }: {
   skill: LocalSkill;
   onBack: () => void;
   onToggleDisabled: (name: string, disabled: boolean) => void;
+  onDelete?: (name: string) => Promise<void>;
 }) {
   const { token } = theme.useToken();
   const [editing, setEditing] = useState(false);
@@ -225,6 +234,10 @@ function SkillDetail({ skill, onBack, onToggleDisabled }: {
                 Save
               </Button>
             </>
+          ) : skill.source.startsWith('app:') ? (
+            <Tooltip title="Cài bởi Space App — sửa trong app, không sửa ở đây">
+              <Tag color="geekblue">read-only</Tag>
+            </Tooltip>
           ) : (
             <Button
               size="small"
@@ -239,6 +252,19 @@ function SkillDetail({ skill, onBack, onToggleDisabled }: {
             onChange={() => onToggleDisabled(skill.name, skill.disabled)}
             size="small"
           />
+          {skill.source === 'clawhub-managed' && onDelete && (
+            <Popconfirm
+              title={`Uninstall ${skill.name}?`}
+              description="This removes the ClaWHub skill from local managed skills."
+              okText="Uninstall"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => onDelete(skill.name)}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                Uninstall
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       </Flex>
 
@@ -395,6 +421,18 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
     }
   };
 
+  const handleDelete = async (name: string) => {
+    try {
+      await apiFetch(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      message.success(`Skill ${name} uninstalled`);
+      setSelectedSkill(null);
+      onRefreshSkills();
+      onReloadSuccess();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Failed to uninstall skill');
+    }
+  };
+
   // Detail view
   if (selectedSkill) {
     return (
@@ -402,6 +440,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
         skill={selectedSkill}
         onBack={handleBack}
         onToggleDisabled={handleToggleDisabled}
+        onDelete={handleDelete}
       />
     );
   }
@@ -571,6 +610,7 @@ function BrowseTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
 function ManageTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: LocalSkill[]; onRefreshSkills: () => void; onReloadSuccess: () => void }) {
   const { token } = theme.useToken();
   const [toggling, setToggling] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const handleToggle = async (name: string, currentlyDisabled: boolean) => {
     setToggling(name);
@@ -581,6 +621,20 @@ function ManageTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
       onReloadSuccess();
     } catch { /* ignore */ } finally {
       setToggling(null);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    setDeleting(name);
+    try {
+      await apiFetch(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      message.success(`Skill ${name} uninstalled`);
+      onRefreshSkills();
+      onReloadSuccess();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Failed to uninstall skill');
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -666,9 +720,26 @@ function ManageTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
                   <Switch
                     checked={!skill.disabled}
                     onChange={() => handleToggle(skill.name, skill.disabled)}
-                    disabled={toggling === skill.name}
+                    disabled={toggling === skill.name || deleting === skill.name}
                     size="small"
                   />
+                  {skill.source === 'clawhub-managed' && (
+                    <Popconfirm
+                      title={`Uninstall ${skill.name}?`}
+                      description="This removes the ClaWHub skill from local managed skills."
+                      okText="Uninstall"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => handleDelete(skill.name)}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        loading={deleting === skill.name}
+                      />
+                    </Popconfirm>
+                  )}
                 </div>
               ))}
             </Card>

@@ -14,4 +14,8 @@ pub enum Error {
 
     #[error(transparent)]
     Encode(#[from] tokenizers::tokenizer::Error),
+
+    /// Generic message (e.g. a Whisper tokenizer missing a required special token).
+    #[error("{0}")]
+    Custom(String),
 }

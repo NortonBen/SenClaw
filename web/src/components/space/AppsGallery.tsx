@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Card, Button, Tag, Empty, Modal, Form, Input, Typography, theme,
-  Tooltip, Popconfirm, Alert,
+  Tooltip, Popconfirm, Alert, message, Upload,
 } from 'antd';
-import { PlusOutlined, DeleteOutlined, AppstoreOutlined, LinkOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined, DeleteOutlined, AppstoreOutlined, LinkOutlined, InfoCircleOutlined,
+} from '@ant-design/icons';
+import { SpaceAppDetailModal } from './SpaceAppDetailModal';
 
-const { Text, Paragraph } = Typography;
+const { Paragraph } = Typography;
 
 interface SpaceApp {
   id: string;
@@ -14,21 +17,47 @@ interface SpaceApp {
   icon?: string;
   integration: { type: 'iframe' | 'esm'; url: string };
   enabled: boolean;
+  manifest?: any;
 }
 
-// Hardcoded sample apps — real data will come from /api/space/apps
 const DEMO_APPS: SpaceApp[] = [];
+
+function normalizeApp(row: { id: string; manifest: any; enabled: boolean }): SpaceApp {
+  return {
+    id: row.id,
+    name: row.manifest?.name ?? row.id,
+    description: row.manifest?.description,
+    icon: row.manifest?.icon,
+    integration: row.manifest?.integration ?? { type: 'iframe', url: row.manifest?.url ?? '#' },
+    enabled: row.enabled,
+    manifest: row.manifest,
+  };
+}
 
 interface Props {
   groupFolder: string;
+  onAppsChanged?: () => void;
+  onOpenApp?: (appId: string) => void;
 }
 
-export function AppsGallery({ groupFolder }: Props) {
+export function AppsGallery({ groupFolder, onAppsChanged, onOpenApp }: Props) {
   const { token } = theme.useToken();
   const [apps, setApps] = useState<SpaceApp[]>(DEMO_APPS);
   const [showRegister, setShowRegister] = useState(false);
   const [registering, setRegistering] = useState(false);
+  const [installingZip, setInstallingZip] = useState(false);
+  const [detailApp, setDetailApp] = useState<SpaceApp | null>(null);
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    fetch('/api/space/apps')
+      .then(r => r.ok ? r.json() : [])
+      .then((rows: Array<{ id: string; manifest: any; enabled: boolean }>) => {
+        const loaded = rows.map(normalizeApp);
+        setApps(loaded);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleRegister = async () => {
     try {
@@ -40,10 +69,12 @@ export function AppsGallery({ groupFolder }: Props) {
         body: JSON.stringify({ manifest_url: vals.manifest_url }),
       });
       if (res.ok) {
-        const app = await res.json() as SpaceApp;
-        setApps(prev => [...prev, app]);
+        const row = await res.json() as { id: string; manifest: any; enabled: boolean };
+        const app = normalizeApp(row);
+        setApps(prev => [...prev.filter(a => a.id !== app.id), app]);
         setShowRegister(false);
         form.resetFields();
+        onAppsChanged?.();
       }
     } catch {
       // validation error
@@ -54,7 +85,32 @@ export function AppsGallery({ groupFolder }: Props) {
 
   const handleRemove = (id: string) => {
     setApps(prev => prev.filter(a => a.id !== id));
-    fetch(`/api/space/apps/${id}`, { method: 'DELETE' }).catch(() => {});
+    fetch(`/api/space/apps/${id}`, { method: 'DELETE' })
+      .then(() => onAppsChanged?.())
+      .catch(() => {});
+  };
+
+  const installZip = async (file: File) => {
+    setInstallingZip(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/space/apps/install-zip', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const row = await res.json() as { id: string; manifest: any; enabled: boolean };
+      const app = normalizeApp(row);
+      setApps(prev => [...prev.filter(a => a.id !== app.id), app]);
+      onAppsChanged?.();
+      message.success(`${app.name} installed`);
+      onOpenApp?.(app.id);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Install zip failed');
+    } finally {
+      setInstallingZip(false);
+    }
   };
 
   return (
@@ -75,6 +131,18 @@ export function AppsGallery({ groupFolder }: Props) {
         >
           Đăng ký App
         </Button>
+        <Upload
+          accept=".zip"
+          showUploadList={false}
+          beforeUpload={file => {
+            installZip(file);
+            return false;
+          }}
+        >
+          <Button size="small" loading={installingZip}>
+            Cài từ ZIP
+          </Button>
+        </Upload>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
@@ -82,8 +150,8 @@ export function AppsGallery({ groupFolder }: Props) {
           type="info"
           showIcon
           className="mb-4"
-          title="Micro-Frontend Platform (Phase 4)"
-          description="Tích hợp NestJS apps, React modules hoặc bất kỳ web app nào vào Space qua iframe hoặc ESM remote. Mỗi app có thể expose MCP tools để agent sử dụng."
+          title="Space Apps"
+          description="Kết nối dịch vụ năng suất như Google Workspace hoặc nhúng micro-frontend app qua manifest."
         />
 
         {apps.length === 0 && (
@@ -131,17 +199,26 @@ export function AppsGallery({ groupFolder }: Props) {
                 <Tag color={app.integration.type === 'iframe' ? 'blue' : 'purple'}>
                   {app.integration.type}
                 </Tag>
-                <Tooltip title={app.integration.url}>
+                <div className="flex items-center">
                   <Button
                     type="link"
                     size="small"
-                    icon={<LinkOutlined />}
-                    href={app.integration.url}
-                    target="_blank"
+                    icon={<InfoCircleOutlined />}
+                    onClick={() => setDetailApp(app)}
                   >
-                    Mở
+                    Chi tiết
                   </Button>
-                </Tooltip>
+                  <Tooltip title={app.integration.url}>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<LinkOutlined />}
+                      onClick={() => onOpenApp?.(app.id)}
+                    >
+                      Mở
+                    </Button>
+                  </Tooltip>
+                </div>
               </div>
             </Card>
           ))}
@@ -178,6 +255,12 @@ export function AppsGallery({ groupFolder }: Props) {
           </Form.Item>
         </Form>
       </Modal>
+
+      <SpaceAppDetailModal
+        app={detailApp}
+        open={!!detailApp}
+        onClose={() => setDetailApp(null)}
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Layout, theme } from 'antd';
 import { AppLayout } from '../components/AppLayout';
 import { SpaceSidebar, type SpaceSection } from '../components/space/SpaceSidebar';
@@ -8,6 +9,7 @@ import { CalendarView } from '../components/space/calendar/CalendarView';
 import { InboxView } from '../components/space/email/InboxView';
 import { SchedulesList } from '../components/space/schedules/SchedulesList';
 import { AppsGallery } from '../components/space/AppsGallery';
+import { SpaceAppFrame, type SpaceAppRuntime } from '../components/space/SpaceAppFrame';
 import { useSpace } from '../hooks/useSpace';
 import { useAppContext } from '../contexts/AppContext';
 import type { SpaceNote } from '../hooks/useSpace';
@@ -18,8 +20,19 @@ export function SpacePage() {
   const { ws } = useAppContext();
   const { token } = theme.useToken();
   const space = useSpace();
+  const location = useLocation();
+  const navigate = useNavigate();
 
-  const [section, setSection] = useState<SpaceSection>('notes');
+  const [section, setSection] = useState<SpaceSection | `app:${string}`>('notes');
+  const [spaceApps, setSpaceApps] = useState<SpaceAppRuntime[]>([]);
+
+  // Deep-link: /space/app/<id> opens that app's frame.
+  useEffect(() => {
+    const m = location.pathname.match(/\/space\/app\/([^/]+)/);
+    if (m) setSection(`app:${decodeURIComponent(m[1])}`);
+  }, [location.pathname]);
+
+  const openApp = (appId: string) => navigate(`/space/app/${encodeURIComponent(appId)}`);
 
   // Notes state
   const [selectedNote, setSelectedNote] = useState<SpaceNote | null>(null);
@@ -33,7 +46,34 @@ export function SpacePage() {
 
   useEffect(() => {
     space.loadTodaySummary();
+    loadSpaceApps();
   }, []);
+
+  const loadSpaceApps = async () => {
+    try {
+      const rows = await fetch('/api/space/apps').then(r => r.ok ? r.json() : []);
+      const apps = (rows as Array<{ id: string; manifest: any; enabled: boolean }>).map(row => {
+        const integ = row.manifest?.integration ?? { type: 'iframe', url: row.manifest?.url ?? '#' };
+        // Server apps run on their own port; the daemon stamps runtime.url —
+        // compose the absolute iframe URL from it.
+        const runtimeUrl: string | undefined = row.manifest?.runtime?.url;
+        const url = runtimeUrl
+          ? `${runtimeUrl.replace(/\/$/, '')}${integ.url ?? '/'}`
+          : integ.url;
+        return {
+          id: row.id,
+          name: row.manifest?.name ?? row.id,
+          description: row.manifest?.description,
+          icon: row.manifest?.icon,
+          integration: { type: integ.type ?? 'iframe', url },
+          enabled: row.enabled,
+        };
+      });
+      setSpaceApps(apps);
+    } catch {
+      setSpaceApps([]);
+    }
+  };
 
   const handleNewNote = () => {
     setSelectedNote(null);
@@ -66,8 +106,11 @@ export function SpacePage() {
       onSelect={s => {
         setSection(s);
         if (s !== 'notes') setNoteView('list');
+        // Leaving an app frame returns to the section view URL.
+        if (location.pathname.startsWith('/space/app/')) navigate('/space');
       }}
       todaySummary={space.todaySummary}
+      apps={spaceApps.map(app => ({ id: app.id, name: app.name, icon: app.icon }))}
     />
   );
 
@@ -113,6 +156,10 @@ export function SpacePage() {
     </div>
   );
 
+  const selectedApp = section.startsWith('app:')
+    ? spaceApps.find(app => app.id === section.slice(4))
+    : null;
+
   const contentMap: Record<SpaceSection, React.ReactNode> = {
     notes: NotesPanel,
     calendar: <CalendarView hook={space} />,
@@ -124,7 +171,18 @@ export function SpacePage() {
         chatJid={chatJid}
       />
     ),
-    apps: <AppsGallery groupFolder={groupFolder} />,
+    apps: (
+      <AppsGallery
+        groupFolder={groupFolder}
+        onAppsChanged={loadSpaceApps}
+        onOpenApp={openApp}
+      />
+    ),
+  };
+
+  const renderSelectedApp = () => {
+    if (!selectedApp) return null;
+    return <SpaceAppFrame app={selectedApp} />;
   };
 
   return (
@@ -133,7 +191,7 @@ export function SpacePage() {
         className="h-full overflow-hidden"
         style={{ background: token.colorBgContainer }}
       >
-        {contentMap[section]}
+        {selectedApp ? renderSelectedApp() : contentMap[section as SpaceSection]}
       </Content>
     </AppLayout>
   );

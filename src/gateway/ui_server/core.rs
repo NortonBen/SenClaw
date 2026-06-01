@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum::{
+    extract::DefaultBodyLimit,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, patch, post},
@@ -36,6 +37,10 @@ use super::local_models::{
     local_models_settings_get, local_models_settings_put, local_models_status,
     local_models_unload, local_models_unload_all, local_models_use_as_llm,
 };
+use super::whisper::{
+    whisper_cancel, whisper_delete, whisper_download, whisper_models_list, whisper_settings_get,
+    whisper_settings_put, whisper_status, whisper_transcribe,
+};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test, llm_config_update,
@@ -55,7 +60,11 @@ use super::code::{
 };
 use super::quicknotes::quicknotes_save;
 use super::space::{
-    space_apps_delete, space_apps_list, space_apps_register,
+    space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
+    space_app_env, space_app_mcp_info, space_app_mcp_register, space_app_sqlite_query,
+    space_apps_bridge,
+    space_apps_delete, space_apps_install_zip, space_apps_list, space_apps_register,
+    space_apps_register_local, space_apps_static,
     space_email_accounts_create, space_email_accounts_delete, space_email_accounts_list,
     space_email_draft, space_email_inbox, space_email_read, space_email_search, space_email_send,
     space_events_create, space_events_delete, space_events_list, space_events_search,
@@ -63,11 +72,11 @@ use super::space::{
     space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
     space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_list,
     space_sync_apple_calendar, space_sync_apple_notes, space_sync_gmail,
-    space_sync_google_calendar, space_today_summary,
+    space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
 };
 use super::skills::{
     skills_install, skills_list, skills_readme, skills_readme_save, skills_remote_search,
-    skills_toggle,
+    skills_toggle, skills_uninstall,
 };
 use super::plugins::{
     plugins_list, plugins_remote_search, plugins_install, plugins_get,
@@ -142,6 +151,7 @@ pub struct UiState {
     pub mcp_manager: Option<Arc<McpManager>>,
     pub marketplace_manager: Option<Arc<Mutex<crate::marketplace::manager::MarketplaceManager>>>,
     pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
+    pub space_mcp_launcher: Option<Arc<super::space_mcp::SpaceMcpLauncher>>,
     pub ws_port: u16,
     pub ws_token: String,
 }
@@ -183,6 +193,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/skills", get(skills_list))
         .route("/api/skills/remote-search", get(skills_remote_search))
         .route("/api/skills/install", post(skills_install))
+        .route("/api/skills/:name", delete(skills_uninstall))
         .route(
             "/api/skills/:name/readme",
             get(skills_readme).put(skills_readme_save),
@@ -248,6 +259,17 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/local-models/unload-all", post(local_models_unload_all))
         .route("/api/local-models/loaded", get(local_models_loaded_list))
         .route("/api/local-models/:id/use-as-llm", post(local_models_use_as_llm))
+        // Whisper ASR management + transcription
+        .route("/api/whisper/models", get(whisper_models_list))
+        .route(
+            "/api/whisper/settings",
+            get(whisper_settings_get).put(whisper_settings_put),
+        )
+        .route("/api/whisper/models/:id/download", post(whisper_download))
+        .route("/api/whisper/models/:id/status", get(whisper_status))
+        .route("/api/whisper/models/:id/cancel", post(whisper_cancel))
+        .route("/api/whisper/models/:id", delete(whisper_delete))
+        .route("/api/whisper/transcribe", post(whisper_transcribe))
         // Embedding provider config
         .route(
             "/api/embedding-config",
@@ -381,9 +403,28 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         // Apps
         .route("/api/space/apps", get(space_apps_list))
         .route("/api/space/apps/register", post(space_apps_register))
+        .route("/api/space/apps/register-local", post(space_apps_register_local))
+        .route(
+            "/api/space/apps/install-zip",
+            // Server-app ZIPs (Next.js standalone) are tens of MB — raise the
+            // default 2 MB body limit to the handler's 50 MB cap (+slack).
+            post(space_apps_install_zip).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
+        .route("/api/space/apps/:id/env", get(space_app_env))
+        .route("/api/space/apps/:id/config", get(space_app_config_list))
+        .route(
+            "/api/space/apps/:id/config/:key",
+            get(space_app_config_get).put(space_app_config_set).delete(space_app_config_delete),
+        )
+        .route("/api/space/apps/:id/sqlite/query", post(space_app_sqlite_query))
+        .route("/api/space/apps/:id/mcp", get(space_app_mcp_info))
+        .route("/api/space/apps/:id/mcp/register", post(space_app_mcp_register))
+        .route("/api/space/apps/:id/bridge", post(space_apps_bridge))
+        .route("/api/space/apps/:id/static/*path", get(space_apps_static))
         .route("/api/space/apps/:id", delete(space_apps_delete))
         // External sync
         .route("/api/space/sync/google-calendar", post(space_sync_google_calendar))
+        .route("/api/space/sync/google-workspace", post(space_sync_google_workspace))
         .route("/api/space/sync/apple-calendar", post(space_sync_apple_calendar))
         .route("/api/space/sync/apple-notes", post(space_sync_apple_notes))
         .route("/api/space/sync/gmail", post(space_sync_gmail))

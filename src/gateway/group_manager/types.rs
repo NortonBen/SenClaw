@@ -65,6 +65,15 @@ pub struct TelegramBotConfig {
     pub name: Option<String>,
 }
 
+/// Whisper ASR UI settings: selected model (HF repo id) + default language.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WhisperSettings {
+    #[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Provider: "openai" | "openrouter" | "ollama" | "local" | "none"
@@ -196,6 +205,12 @@ pub(super) struct GlobalConfig {
         rename = "embeddingConfig"
     )]
     pub(super) embedding_config: Option<EmbeddingConfig>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "whisperConfig"
+    )]
+    pub(super) whisper_config: Option<WhisperSettings>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

@@ -61,7 +61,7 @@ export function ComposeModal({ open, onClose, onSend, initialTo = '', initialSub
     setSending(true);
     try {
       await onSend(draft.to, draft.subject, draft.body);
-      message.success(`Đã gửi email đến ${draft.to}`);
+      message.success(`Email đã được xử lý cho ${draft.to}`);
       form.resetFields();
       setDraft(null);
       setConfirmed(false);

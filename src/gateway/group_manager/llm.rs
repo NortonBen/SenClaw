@@ -7,6 +7,7 @@ use anyhow::Result;
 use super::config::{load_global_config, save_global_config};
 use super::types::{
     AdminPermissions, AdminPermissionsSection, EmbeddingConfig, LlmConfig, LlmConfigResult,
+    WhisperSettings,
 };
 
 // ===== Admin permissions config =====
@@ -124,5 +125,17 @@ pub fn save_cognitive_config(
 pub fn save_embedding_config(config_path: &Path, c: &EmbeddingConfig) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.embedding_config = Some(c.clone());
+    save_global_config(config_path, &cfg)
+}
+
+// ===== Whisper ASR settings =====
+
+pub fn load_whisper_settings(config_path: &Path) -> WhisperSettings {
+    load_global_config(config_path).whisper_config.unwrap_or_default()
+}
+
+pub fn save_whisper_settings(config_path: &Path, s: &WhisperSettings) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.whisper_config = Some(s.clone());
     save_global_config(config_path, &cfg)
 }

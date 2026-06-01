@@ -32,7 +32,7 @@ run:
 # local models: the gated-delta scan is host-dispatch-bound, so an optimized
 # build is ~3.5-5x faster on prefill (and keeps the GPU fed) vs. `make run`.
 run-release:
-	cargo run --release --features local-mlx --features local-embed-metal --features local-embed
+	cargo run --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper
 
 build-extension:
 	cd senclaw-extension-chrome && npm run build
@@ -50,7 +50,7 @@ app-dev:
 # Full installer build: web UI + CLI sidecar + bundle.
 app-build:
 	cd web && npx vite build
-	cargo build --release --features local-mlx --features local-embed-metal --features local-embed --bin senclaw
+	cargo build --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --bin senclaw
 	mkdir -p src-tauri/binaries
 	cp target/release/senclaw src-tauri/binaries/senclaw
 	cargo tauri build

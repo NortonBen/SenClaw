@@ -43,6 +43,30 @@ export interface SpaceEmailDetail extends SpaceEmail {
   body_text: string | null;
 }
 
+export interface SpaceEmailAccount {
+  id: string;
+  label: string;
+  email: string;
+  imap_host: string;
+  imap_port: number;
+  smtp_host: string;
+  smtp_port: number;
+  use_tls: boolean;
+  created_at: number;
+}
+
+export interface SpaceEmailAccountCreate {
+  label: string;
+  email: string;
+  imap_host: string;
+  imap_port: number;
+  smtp_host: string;
+  smtp_port: number;
+  username: string;
+  password: string;
+  use_tls: boolean;
+}
+
 export interface SpaceSchedule {
   id: string;
   prompt: string;
@@ -85,9 +109,14 @@ export interface UseSpaceHook {
   // Email
   emails: SpaceEmail[];
   emailsLoading: boolean;
+  emailAccounts: SpaceEmailAccount[];
+  emailAccountsLoading: boolean;
   loadEmails: (accountId?: string) => Promise<void>;
   readEmail: (id: string) => Promise<SpaceEmailDetail | null>;
   searchEmails: (q: string) => Promise<SpaceEmail[]>;
+  loadEmailAccounts: () => Promise<void>;
+  createEmailAccount: (payload: SpaceEmailAccountCreate) => Promise<SpaceEmailAccount | null>;
+  deleteEmailAccount: (id: string) => Promise<void>;
 
   // Schedules
   schedules: SpaceSchedule[];
@@ -110,6 +139,8 @@ export function useSpace(): UseSpaceHook {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [emails, setEmails] = useState<SpaceEmail[]>([]);
   const [emailsLoading, setEmailsLoading] = useState(false);
+  const [emailAccounts, setEmailAccounts] = useState<SpaceEmailAccount[]>([]);
+  const [emailAccountsLoading, setEmailAccountsLoading] = useState(false);
   const [schedules, setSchedules] = useState<SpaceSchedule[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(false);
   const [todaySummary, setTodaySummary] = useState<TodaySummary | null>(null);
@@ -243,6 +274,39 @@ export function useSpace(): UseSpaceHook {
     }
   }, []);
 
+  const loadEmailAccounts = useCallback(async () => {
+    setEmailAccountsLoading(true);
+    try {
+      const data = await apiFetch<SpaceEmailAccount[]>('/api/space/email/accounts');
+      setEmailAccounts(Array.isArray(data) ? data : []);
+    } catch {
+      setEmailAccounts([]);
+    } finally {
+      setEmailAccountsLoading(false);
+    }
+  }, []);
+
+  const createEmailAccount = useCallback(async (payload: SpaceEmailAccountCreate): Promise<SpaceEmailAccount | null> => {
+    try {
+      const data = await apiFetch<SpaceEmailAccount>('/api/space/email/accounts', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      await loadEmailAccounts();
+      return data;
+    } catch {
+      return null;
+    }
+  }, [loadEmailAccounts]);
+
+  const deleteEmailAccount = useCallback(async (id: string) => {
+    try {
+      await apiFetch(`/api/space/email/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setEmailAccounts(prev => prev.filter(a => a.id !== id));
+      setEmails(prev => prev.filter(e => e.account_id !== id));
+    } catch {}
+  }, []);
+
   // ── Schedules ──────────────────────────────────────────────────────────────
 
   const loadSchedules = useCallback(async (groupFolder: string) => {
@@ -280,12 +344,14 @@ export function useSpace(): UseSpaceHook {
   // Load today summary on mount
   useEffect(() => {
     loadTodaySummary();
-  }, [loadTodaySummary]);
+    loadEmailAccounts();
+  }, [loadTodaySummary, loadEmailAccounts]);
 
   return {
     notes, notesLoading, loadNotes, createNote, updateNote, deleteNote, searchNotes,
     events, eventsLoading, loadEvents, createEvent, updateEvent, deleteEvent, todaySummary, loadTodaySummary,
-    emails, emailsLoading, loadEmails, readEmail, searchEmails,
+    emails, emailsLoading, emailAccounts, emailAccountsLoading,
+    loadEmails, readEmail, searchEmails, loadEmailAccounts, createEmailAccount, deleteEmailAccount,
     schedules, schedulesLoading, loadSchedules, createSchedule, cancelSchedule,
   };
 }

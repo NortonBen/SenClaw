@@ -3,6 +3,9 @@ node_modules/
 
 # Build output
 dist/
+examples/*/out/
+examples/*/.next/
+examples/*/*.zip
 *.tsbuildinfo
 coverage/
 
