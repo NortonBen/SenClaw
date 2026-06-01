@@ -135,7 +135,11 @@ impl Tool for PersonaUpdateTool {
             Err(_) => format!("# {}\n\n", ctx.agent_id),
         };
 
-        let patch = SoulPatch { section: section.to_string(), action, content: content.clone() };
+        let patch = SoulPatch {
+            section: section.to_string(),
+            action,
+            content: content.clone(),
+        };
         let next = apply_patch(&existing, &patch).context("apply patch")?;
 
         if next == existing {
@@ -177,7 +181,10 @@ impl Tool for PersonaUpdateTool {
             "path": soul_path.to_string_lossy(),
         });
         let summary = format!("SOUL.md updated · {section} · {action_str}");
-        Ok(vec![ToolOutput::Result { data, result_for_assistant: summary }])
+        Ok(vec![ToolOutput::Result {
+            data,
+            result_for_assistant: summary,
+        }])
     }
 
     fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {

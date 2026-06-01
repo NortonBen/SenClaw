@@ -163,8 +163,12 @@ fn format_result(data: &Value) -> String {
         "[PeekBgJob] task_id={} task_type={} status={} retrieval={}\n- output:\n{}",
         data.get("taskId").and_then(|v| v.as_str()).unwrap_or(""),
         data.get("taskType").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("taskStatus").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("retrievalStatus").and_then(|v| v.as_str()).unwrap_or(""),
+        data.get("taskStatus")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        data.get("retrievalStatus")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
         data.get("output").and_then(|v| v.as_str()).unwrap_or(""),
     )
 }

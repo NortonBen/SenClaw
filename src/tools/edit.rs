@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use similar::{ChangeTag, TextDiff};
 use serde_json::Value;
+use similar::{ChangeTag, TextDiff};
 
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};
 
@@ -225,7 +225,7 @@ fn make_unified_diff(old: &str, new: &str, file_path: &str) -> String {
                 let prefix = match change.tag() {
                     ChangeTag::Delete => "-",
                     ChangeTag::Insert => "+",
-                    ChangeTag::Equal  => " ",
+                    ChangeTag::Equal => " ",
                 };
                 out.push_str(prefix);
                 out.push_str(change.value());

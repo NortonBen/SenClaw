@@ -66,7 +66,8 @@ impl Tool for ExitPlanModeTool {
             _ => {
                 return Ok(vec![ToolOutput::Result {
                     data: serde_json::json!({"error": "no_event_bus"}),
-                    result_for_assistant: "Plan-mode approval is unavailable in this context.".to_string(),
+                    result_for_assistant: "Plan-mode approval is unavailable in this context."
+                        .to_string(),
                 }]);
             }
         };
@@ -96,6 +97,11 @@ impl Tool for ExitPlanModeTool {
         };
 
         if selected.as_str() == "clearContextAndStart" {
+            bus.emit(EngineEvent::PlanImplement(crate::zen_core::PlanImplementData {
+                plan_file_path: plan_file_path.clone(),
+                plan_content: plan_content.clone(),
+            }));
+            
             Ok(vec![ToolOutput::ClearContextAndStart {
                 plan_file_path,
                 plan_content,
@@ -103,7 +109,7 @@ impl Tool for ExitPlanModeTool {
         } else {
             let result_text = match selected.as_str() {
                 "cancelled" => "Plan approval was cancelled.".to_string(),
-                _ => "Plan approved. Begin implementation.".to_string(),
+                _ => format!("The plan has been confirmed. Begin implementation whenever ready — update your task list first if applicable.\n\nPlan saved at: {}\n\n## Approved Plan:\n{}\n\n## Plan Mode Exited\n\nEditing, tool use, and all other actions are now available. The plan file remains at {} for reference.", plan_file_path, plan_content, plan_file_path),
             };
 
             Ok(vec![ToolOutput::Result {

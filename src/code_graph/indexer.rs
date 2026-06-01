@@ -21,25 +21,26 @@ use super::types::{IndexStats, Language};
 // Extensions we index
 const INDEXED_EXTENSIONS: &[&str] = &[
     // Rust / C family
-    "rs", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs",
-    // JVM
-    "java", "scala", "sc",
-    // Go
-    "go",
-    // Web / scripting
-    "ts", "tsx", "js", "jsx", "mjs", "cjs",
-    "py", "pyi", "rb", "rake", "gemspec", "php",
-    "sh", "bash", "zsh",
-    // Functional
-    "hs", "lhs", "ml", "mli", "agda",
-    // Other
+    "rs", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs", // JVM
+    "java", "scala", "sc", // Go
+    "go", // Web / scripting
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "pyi", "rb", "rake", "gemspec", "php", "sh",
+    "bash", "zsh", // Functional
+    "hs", "lhs", "ml", "mli", "agda", // Other
     "jl", "v", "sv", "svh",
 ];
 
 // Directories we always skip
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", ".git", "target", "dist", "build",
-    "__pycache__", ".venv", "venv", ".senclaw-code",
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".senclaw-code",
 ];
 
 // Max file size to parse (512 KB)
@@ -52,7 +53,10 @@ pub struct CodeGraphIndexer {
 
 impl CodeGraphIndexer {
     pub fn new(db: Arc<Db>, workspace_root: impl Into<PathBuf>) -> Result<Self> {
-        let idx = Self { db, workspace_root: workspace_root.into() };
+        let idx = Self {
+            db,
+            workspace_root: workspace_root.into(),
+        };
         // Ensure schema is applied
         idx.db.with_conn(|conn| apply_code_graph_schema(conn))?;
         Ok(idx)
@@ -61,7 +65,11 @@ impl CodeGraphIndexer {
     /// Index full workspace. With `incremental=true` skips files whose mtime hasn't changed.
     pub fn index_workspace(&self, project_id: &str, incremental: bool) -> Result<IndexStats> {
         let files = self.discover_files()?;
-        info!("[CodeGraph] discovered {} candidate files in {}", files.len(), self.workspace_root.display());
+        info!(
+            "[CodeGraph] discovered {} candidate files in {}",
+            files.len(),
+            self.workspace_root.display()
+        );
 
         let mut stats = IndexStats {
             files_indexed: 0,
@@ -71,7 +79,8 @@ impl CodeGraphIndexer {
         };
 
         for file_path in &files {
-            let rel = file_path.strip_prefix(&self.workspace_root)
+            let rel = file_path
+                .strip_prefix(&self.workspace_root)
                 .unwrap_or(file_path)
                 .to_string_lossy()
                 .to_string();
@@ -105,7 +114,13 @@ impl CodeGraphIndexer {
                             "INSERT OR REPLACE INTO cg_index_state \
                              (project_id, file_path, mtime_secs, symbol_count, edge_count) \
                              VALUES (?1,?2,?3,?4,?5)",
-                            rusqlite::params![project_id, rel, mtime as i64, syms as i64, edges as i64],
+                            rusqlite::params![
+                                project_id,
+                                rel,
+                                mtime as i64,
+                                syms as i64,
+                                edges as i64
+                            ],
                         )?;
                         Ok(())
                     })?;
@@ -120,16 +135,21 @@ impl CodeGraphIndexer {
         // Phase 3: resolve cross-file edges (fill to_sym_id where possible)
         self.resolve_edges(project_id)?;
 
-        info!("[CodeGraph] indexed {} files ({} skipped), {} symbols, {} edges",
-            stats.files_indexed, stats.files_skipped, stats.symbols, stats.edges);
+        info!(
+            "[CodeGraph] indexed {} files ({} skipped), {} symbols, {} edges",
+            stats.files_indexed, stats.files_skipped, stats.symbols, stats.edges
+        );
         Ok(stats)
     }
 
     /// Index a single file, replacing its symbols/edges.
-    fn index_file(&self, project_id: &str, abs_path: &Path, rel_path: &str) -> Result<(usize, usize)> {
-        let ext = abs_path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+    fn index_file(
+        &self,
+        project_id: &str,
+        abs_path: &Path,
+        rel_path: &str,
+    ) -> Result<(usize, usize)> {
+        let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let lang = Language::from_extension(ext);
         if lang == Language::Unknown {
             return Ok((0, 0));
@@ -137,7 +157,10 @@ impl CodeGraphIndexer {
 
         let meta = std::fs::metadata(abs_path)?;
         if meta.len() > MAX_FILE_BYTES {
-            debug!("[CodeGraph] skip large file {rel_path} ({} KB)", meta.len() / 1024);
+            debug!(
+                "[CodeGraph] skip large file {rel_path} ({} KB)",
+                meta.len() / 1024
+            );
             return Ok((0, 0));
         }
 
@@ -226,12 +249,12 @@ impl CodeGraphIndexer {
     }
 
     fn walk_dir(&self, dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             if path.is_dir() {
                 if !SKIP_DIRS.contains(&name) {

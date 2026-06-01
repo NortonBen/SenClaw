@@ -131,9 +131,8 @@ impl VectorStore for SqliteVectorStore {
                            WHERE embedding MATCH ?1
                            ORDER BY distance
                            LIMIT ?2";
-                let hits: rusqlite::Result<Vec<VectorHit>> = conn
-                    .prepare(sql)
-                    .and_then(|mut stmt| {
+                let hits: rusqlite::Result<Vec<VectorHit>> =
+                    conn.prepare(sql).and_then(|mut stmt| {
                         stmt.query_map(params![q_blob, k as i64], |row| {
                             let id_blob: Vec<u8> = row.get(0)?;
                             let dist: f64 = row.get(1)?;
@@ -157,9 +156,8 @@ impl VectorStore for SqliteVectorStore {
                 // fall through to BLOB scan on error
             }
             // Brute-force fallback
-            let mut stmt = conn.prepare(
-                "SELECT id, embedding FROM cog_nodes WHERE embedding IS NOT NULL",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT id, embedding FROM cog_nodes WHERE embedding IS NOT NULL")?;
             let mut heap: Vec<VectorHit> = stmt
                 .query_map([], |row| {
                     let id_blob: Vec<u8> = row.get(0)?;
@@ -178,7 +176,11 @@ impl VectorStore for SqliteVectorStore {
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            heap.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+            heap.sort_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             heap.truncate(k);
             Ok(heap)
         })

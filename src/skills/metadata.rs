@@ -162,12 +162,11 @@ pub fn parse_skill_metadata(
         ..Default::default()
     };
 
-    let root = match extract_frontmatter(content)
-        .and_then(|fm| serde_yaml::from_str::<Yaml>(fm).ok())
-    {
-        Some(v) if v.is_mapping() => v,
-        _ => return meta,
-    };
+    let root =
+        match extract_frontmatter(content).and_then(|fm| serde_yaml::from_str::<Yaml>(fm).ok()) {
+            Some(v) if v.is_mapping() => v,
+            _ => return meta,
+        };
 
     if let Some(s) = root.get("name").and_then(yaml_str) {
         meta.name = s;
@@ -180,10 +179,13 @@ pub fn parse_skill_metadata(
     }
     meta.when_to_use = get_any(&root, &["when-to-use", "when_to_use"]).and_then(yaml_str);
     meta.model = root.get("model").and_then(yaml_str);
-    meta.max_thinking_tokens = get_any(&root, &["max-thinking-tokens", "max_thinking_tokens"])
-        .and_then(yaml_u32);
-    if let Some(b) = get_any(&root, &["disable-model-invocation", "disable_model_invocation"])
-        .and_then(yaml_bool)
+    meta.max_thinking_tokens =
+        get_any(&root, &["max-thinking-tokens", "max_thinking_tokens"]).and_then(yaml_u32);
+    if let Some(b) = get_any(
+        &root,
+        &["disable-model-invocation", "disable_model_invocation"],
+    )
+    .and_then(yaml_bool)
     {
         meta.disable_model_invocation = b;
     }
@@ -245,7 +247,9 @@ fn get_any<'a>(v: &'a Yaml, keys: &[&str]) -> Option<&'a Yaml> {
 }
 
 fn yaml_str(v: &Yaml) -> Option<String> {
-    v.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    v.as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn yaml_u32(v: &Yaml) -> Option<u32> {
@@ -292,7 +296,10 @@ fn parse_params(v: Option<&Yaml>) -> Vec<SkillParam> {
             let name = item.get("name").and_then(yaml_str)?;
             Some(SkillParam {
                 name,
-                type_: item.get("type").and_then(yaml_str).unwrap_or_else(|| "string".into()),
+                type_: item
+                    .get("type")
+                    .and_then(yaml_str)
+                    .unwrap_or_else(|| "string".into()),
                 required: item.get("required").and_then(yaml_bool).unwrap_or(false),
                 description: item.get("description").and_then(yaml_str),
             })
@@ -426,7 +433,10 @@ mod tests {
         assert_eq!(meta.params.len(), 2);
         assert_eq!(meta.params[0].name, "city");
         assert!(meta.params[0].required);
-        assert_eq!(meta.params[0].description.as_deref(), Some("The city to query"));
+        assert_eq!(
+            meta.params[0].description.as_deref(),
+            Some("The city to query")
+        );
         assert_eq!(meta.params[1].type_, "string");
         assert!(!meta.params[1].required);
     }

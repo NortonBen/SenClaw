@@ -133,11 +133,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let local_path = temp_dir.path().join("test-repo");
 
-        let result = clone_fresh(
-            "https://github.com/midea-ai/SemaClaw",
-            "main",
-            &local_path,
-        );
+        let result = clone_fresh("https://github.com/midea-ai/SemaClaw", "main", &local_path);
 
         assert!(result.is_ok());
         assert!(local_path.join(".git").exists());

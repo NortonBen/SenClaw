@@ -52,9 +52,17 @@ pub fn upsert_plugin(db: &Db, p: &InstalledPlugin) -> Result<()> {
                 config_json=excluded.config_json,
                 manifest_json=excluded.manifest_json",
             params![
-                p.slug, p.display_name, p.summary, p.version, p.plugin_type,
-                p.registry, p.enabled as i32, p.installed_at, p.updated_at,
-                p.config_json, p.manifest_json,
+                p.slug,
+                p.display_name,
+                p.summary,
+                p.version,
+                p.plugin_type,
+                p.registry,
+                p.enabled as i32,
+                p.installed_at,
+                p.updated_at,
+                p.config_json,
+                p.manifest_json,
             ],
         )?;
         Ok(())
@@ -69,21 +77,23 @@ pub fn list_plugins(db: &Db) -> Result<Vec<InstalledPlugin>> {
              FROM installed_plugins
              ORDER BY installed_at DESC",
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(InstalledPlugin {
-                slug:          r.get(0)?,
-                display_name:  r.get(1)?,
-                summary:       r.get(2)?,
-                version:       r.get(3)?,
-                plugin_type:   r.get(4)?,
-                registry:      r.get(5)?,
-                enabled:       r.get::<_, i32>(6)? != 0,
-                installed_at:  r.get(7)?,
-                updated_at:    r.get(8)?,
-                config_json:   r.get(9)?,
-                manifest_json: r.get(10)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(InstalledPlugin {
+                    slug: r.get(0)?,
+                    display_name: r.get(1)?,
+                    summary: r.get(2)?,
+                    version: r.get(3)?,
+                    plugin_type: r.get(4)?,
+                    registry: r.get(5)?,
+                    enabled: r.get::<_, i32>(6)? != 0,
+                    installed_at: r.get(7)?,
+                    updated_at: r.get(8)?,
+                    config_json: r.get(9)?,
+                    manifest_json: r.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })
 }
@@ -95,19 +105,21 @@ pub fn get_plugin(db: &Db, slug: &str) -> Result<Option<InstalledPlugin>> {
                     enabled, installed_at, updated_at, config_json, manifest_json
              FROM installed_plugins WHERE slug = ?1",
             params![slug],
-            |r| Ok(InstalledPlugin {
-                slug:          r.get(0)?,
-                display_name:  r.get(1)?,
-                summary:       r.get(2)?,
-                version:       r.get(3)?,
-                plugin_type:   r.get(4)?,
-                registry:      r.get(5)?,
-                enabled:       r.get::<_, i32>(6)? != 0,
-                installed_at:  r.get(7)?,
-                updated_at:    r.get(8)?,
-                config_json:   r.get(9)?,
-                manifest_json: r.get(10)?,
-            }),
+            |r| {
+                Ok(InstalledPlugin {
+                    slug: r.get(0)?,
+                    display_name: r.get(1)?,
+                    summary: r.get(2)?,
+                    version: r.get(3)?,
+                    plugin_type: r.get(4)?,
+                    registry: r.get(5)?,
+                    enabled: r.get::<_, i32>(6)? != 0,
+                    installed_at: r.get(7)?,
+                    updated_at: r.get(8)?,
+                    config_json: r.get(9)?,
+                    manifest_json: r.get(10)?,
+                })
+            },
         )
         .optional()
         .map_err(anyhow::Error::from)
@@ -116,7 +128,10 @@ pub fn get_plugin(db: &Db, slug: &str) -> Result<Option<InstalledPlugin>> {
 
 pub fn delete_plugin(db: &Db, slug: &str) -> Result<()> {
     db.with_conn(|conn| {
-        conn.execute("DELETE FROM installed_plugins WHERE slug = ?1", params![slug])?;
+        conn.execute(
+            "DELETE FROM installed_plugins WHERE slug = ?1",
+            params![slug],
+        )?;
         Ok(())
     })
 }
@@ -155,7 +170,15 @@ pub fn upsert_runtime(db: &Db, rt: &PluginRuntime) -> Result<()> {
                 status=excluded.status, pid=excluded.pid, port=excluded.port,
                 started_at=excluded.started_at, error_msg=excluded.error_msg,
                 last_ping=excluded.last_ping",
-            params![rt.slug, rt.status, rt.pid, rt.port, rt.started_at, rt.error_msg, rt.last_ping],
+            params![
+                rt.slug,
+                rt.status,
+                rt.pid,
+                rt.port,
+                rt.started_at,
+                rt.error_msg,
+                rt.last_ping
+            ],
         )?;
         Ok(())
     })
@@ -167,15 +190,17 @@ pub fn get_runtime(db: &Db, slug: &str) -> Result<Option<PluginRuntime>> {
             "SELECT slug, status, pid, port, started_at, error_msg, last_ping
              FROM plugin_runtime WHERE slug = ?1",
             params![slug],
-            |r| Ok(PluginRuntime {
-                slug:       r.get(0)?,
-                status:     r.get(1)?,
-                pid:        r.get(2)?,
-                port:       r.get(3)?,
-                started_at: r.get(4)?,
-                error_msg:  r.get(5)?,
-                last_ping:  r.get(6)?,
-            }),
+            |r| {
+                Ok(PluginRuntime {
+                    slug: r.get(0)?,
+                    status: r.get(1)?,
+                    pid: r.get(2)?,
+                    port: r.get(3)?,
+                    started_at: r.get(4)?,
+                    error_msg: r.get(5)?,
+                    last_ping: r.get(6)?,
+                })
+            },
         )
         .optional()
         .map_err(anyhow::Error::from)

@@ -85,11 +85,11 @@ impl Tool for WebFetchTool {
 
         let resp = match client
             .get(&url)
+            .header("User-Agent", "SenClaw/1.0")
             .header(
-                "User-Agent",
-                "SenClaw/1.0",
+                "Accept",
+                "text/html,text/markdown,text/plain,application/json;q=0.9,*/*;q=0.5",
             )
-            .header("Accept", "text/html,text/markdown,text/plain,application/json;q=0.9,*/*;q=0.5")
             .send()
             .await
         {
@@ -133,7 +133,11 @@ impl Tool for WebFetchTool {
         };
 
         let final_text = if text.len() > MAX_RETURN_LEN {
-            format!("{}\n\n…[truncated, total {} bytes]", &text[..MAX_RETURN_LEN], bytes_len)
+            format!(
+                "{}\n\n…[truncated, total {} bytes]",
+                &text[..MAX_RETURN_LEN],
+                bytes_len
+            )
         } else if truncated {
             format!("{}\n\n…[body truncated at {} bytes]", text, MAX_BODY_BYTES)
         } else {
@@ -173,7 +177,10 @@ impl Tool for WebFetchTool {
     fn get_display_title(&self, input: &Value) -> String {
         let url = input.get("url").and_then(|v| v.as_str()).unwrap_or("");
         match reqwest::Url::parse(url) {
-            Ok(u) => u.host_str().map(|s| s.to_string()).unwrap_or_else(|| "WebFetch".to_string()),
+            Ok(u) => u
+                .host_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "WebFetch".to_string()),
             Err(_) => "WebFetch".to_string(),
         }
     }

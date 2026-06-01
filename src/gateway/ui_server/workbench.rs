@@ -16,11 +16,15 @@ use serde::Deserialize;
 
 use super::core::{AppError, UiState};
 
-fn bridge(state: &Arc<UiState>) -> Result<Arc<crate::agent::workbench_bridge::WorkbenchBridge>, AppError> {
-    state
-        .workbench_bridge
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "workbench_bridge_unset".into()))
+fn bridge(
+    state: &Arc<UiState>,
+) -> Result<Arc<crate::agent::workbench_bridge::WorkbenchBridge>, AppError> {
+    state.workbench_bridge.clone().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "workbench_bridge_unset".into(),
+        )
+    })
 }
 
 pub(crate) async fn workbench_mark_viewed(

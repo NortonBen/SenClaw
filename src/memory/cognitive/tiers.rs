@@ -62,7 +62,7 @@ impl EdgeTier {
     /// Max edge age (seconds) before forced prune, unless LTP-protected.
     pub fn max_age_secs(self) -> Option<i64> {
         match self {
-            Self::L1Working => Some(60 * 60 * 24), // 1 day
+            Self::L1Working => Some(60 * 60 * 24),       // 1 day
             Self::L2Episodic => Some(60 * 60 * 24 * 30), // 30 days
             Self::L3Semantic => Some(60 * 60 * 24 * 90), // 90 days
         }
@@ -94,8 +94,12 @@ mod tests {
     #[test]
     fn ordering_of_thresholds() {
         // promotion thresholds are strictly increasing
-        assert!(EdgeTier::L1Working.promotion_threshold() < EdgeTier::L2Episodic.promotion_threshold());
-        assert!(EdgeTier::L2Episodic.promotion_threshold() < EdgeTier::L3Semantic.promotion_threshold());
+        assert!(
+            EdgeTier::L1Working.promotion_threshold() < EdgeTier::L2Episodic.promotion_threshold()
+        );
+        assert!(
+            EdgeTier::L2Episodic.promotion_threshold() < EdgeTier::L3Semantic.promotion_threshold()
+        );
         // L1 decays faster than L2 faster than L3
         assert!(EdgeTier::L1Working.decay_rate() > EdgeTier::L2Episodic.decay_rate());
         assert!(EdgeTier::L2Episodic.decay_rate() > EdgeTier::L3Semantic.decay_rate());
@@ -103,7 +107,11 @@ mod tests {
 
     #[test]
     fn roundtrip_u8() {
-        for t in [EdgeTier::L1Working, EdgeTier::L2Episodic, EdgeTier::L3Semantic] {
+        for t in [
+            EdgeTier::L1Working,
+            EdgeTier::L2Episodic,
+            EdgeTier::L3Semantic,
+        ] {
             assert_eq!(EdgeTier::from_u8(t as u8), t);
         }
     }

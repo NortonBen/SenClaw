@@ -366,14 +366,12 @@ impl McpSpaceServer {
             .content
     }
 
-    #[rmcp::tool(
-        description = "Tìm kiếm sự kiện theo từ khóa và/hoặc ngày. \
+    #[rmcp::tool(description = "Tìm kiếm sự kiện theo từ khóa và/hoặc ngày. \
                        Search events by keyword (title/description/location) and/or date. \
                        `date` accepts natural language: 'today', 'tomorrow', 'yesterday', \
                        'hôm nay', 'ngày mai', or ISO format 'YYYY-MM-DD'. \
                        `query` filters by keyword within the matched date range. \
-                       Examples: {date:'today'}, {query:'họp'}, {query:'react', date:'2026-05-10'}."
-    )]
+                       Examples: {date:'today'}, {query:'họp'}, {query:'react', date:'2026-05-10'}.")]
     fn space_event_search(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -474,7 +472,15 @@ impl McpSpaceServer {
             .map(|dt| dt.timestamp_millis())
             .unwrap_or(today_end);
 
-        let day_names_vi = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
+        let day_names_vi = [
+            "Chủ nhật",
+            "Thứ hai",
+            "Thứ ba",
+            "Thứ tư",
+            "Thứ năm",
+            "Thứ sáu",
+            "Thứ bảy",
+        ];
         let dow_vi = day_names_vi[now.weekday().num_days_from_sunday() as usize];
         let tz_offset = now.offset().local_minus_utc() / 3600;
         let tz_sign = if tz_offset >= 0 { "+" } else { "" };
@@ -993,7 +999,9 @@ impl SpaceServer {
             Ok(())
         });
         match result {
-            Ok(_) => ToolResult::ok(serde_json::json!({ "success": true, "id": event_id }).to_string()),
+            Ok(_) => {
+                ToolResult::ok(serde_json::json!({ "success": true, "id": event_id }).to_string())
+            }
             Err(e) => ToolResult::err(format!("Update event failed: {e}")),
         }
     }
@@ -1501,10 +1509,12 @@ fn resolve_date(s: &str) -> Option<(i64, i64)> {
         }
     };
 
-    let start = Local.from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
+    let start = Local
+        .from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
         .single()?
         .timestamp_millis();
-    let end = Local.from_local_datetime(&date.and_hms_opt(23, 59, 59)?)
+    let end = Local
+        .from_local_datetime(&date.and_hms_opt(23, 59, 59)?)
         .single()?
         .timestamp_millis();
     Some((start, end))

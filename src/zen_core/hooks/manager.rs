@@ -261,7 +261,8 @@ mod tests {
             tool_input: serde_json::json!({"command": "ls"}),
         });
         assert_eq!(
-            mgr.get_matching_hooks(&HookEvent::PrePermission, &input).len(),
+            mgr.get_matching_hooks(&HookEvent::PrePermission, &input)
+                .len(),
             1
         );
     }
@@ -287,7 +288,8 @@ mod tests {
             tool_output: serde_json::json!({"content": "abc"}),
         });
         assert_eq!(
-            mgr.get_matching_hooks(&HookEvent::OutputFilter, &input).len(),
+            mgr.get_matching_hooks(&HookEvent::OutputFilter, &input)
+                .len(),
             1
         );
         assert!(mgr.has_hooks_for_event(&HookEvent::OutputFilter));

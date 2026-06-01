@@ -138,7 +138,11 @@ impl MlxStaticEmbedder {
             let (tok_path, weights_path) = require_files(&model_dir)?;
             let inner = imp::Inner::load(&tok_path, &weights_path)?;
             let dims = inner.dims as u32;
-            return Ok(Self { model_name: _model_name, inner, dims });
+            return Ok(Self {
+                model_name: _model_name,
+                inner,
+                dims,
+            });
         }
 
         #[cfg(not(feature = "cognitive-mlx-embed"))]
@@ -169,8 +173,7 @@ impl crate::memory::embedding::EmbeddingProvider for MlxStaticEmbedder {
         {
             let texts: Vec<String> = texts.to_vec();
             let inner = self.inner.clone();
-            let out =
-                tokio::task::spawn_blocking(move || inner.embed_batch(&texts)).await??;
+            let out = tokio::task::spawn_blocking(move || inner.embed_batch(&texts)).await??;
             return Ok(out);
         }
         #[cfg(not(feature = "cognitive-mlx-embed"))]
@@ -218,11 +221,11 @@ mod imp {
 
     impl Inner {
         pub fn load(tokenizer_path: &Path, weights_path: &Path) -> Result<Self> {
-            let tokenizer = Tokenizer::from_file(tokenizer_path)
-                .map_err(|e| anyhow!("load tokenizer: {e}"))?;
+            let tokenizer =
+                Tokenizer::from_file(tokenizer_path).map_err(|e| anyhow!("load tokenizer: {e}"))?;
 
-            let bytes = std::fs::read(weights_path)
-                .map_err(|e| anyhow!("read safetensors: {e}"))?;
+            let bytes =
+                std::fs::read(weights_path).map_err(|e| anyhow!("read safetensors: {e}"))?;
             let st = safetensors::SafeTensors::deserialize(&bytes)
                 .map_err(|e| anyhow!("parse safetensors: {e}"))?;
 
@@ -338,7 +341,10 @@ mod tests {
     #[test]
     fn mean_pool_skips_masked_positions() {
         // 3 tokens, dim 2, last token masked out
-        let hidden = vec![1.0, 0.0, /* row 0 */ 0.0, 2.0, /* row 1 */ 100.0, 100.0 /* row 2: masked */];
+        let hidden = vec![
+            1.0, 0.0, /* row 0 */ 0.0, 2.0, /* row 1 */ 100.0,
+            100.0, /* row 2: masked */
+        ];
         let mask = [1, 1, 0];
         let pooled = mean_pool_masked(&hidden, &mask, 2);
         assert!((pooled[0] - 0.5).abs() < 1e-6, "got {:?}", pooled);

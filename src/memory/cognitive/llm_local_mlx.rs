@@ -46,7 +46,10 @@ impl LocalMlxLlm {
             let canonical = canonical_local_model_id(model_name);
             let safe = canonical.replace('/', "__");
             let model_dir = cfg.paths.local_models_dir.join(safe);
-            Ok(Self { canonical_id: canonical, model_dir })
+            Ok(Self {
+                canonical_id: canonical,
+                model_dir,
+            })
         }
 
         #[cfg(not(feature = "local-mlx"))]
@@ -90,9 +93,10 @@ impl LlmClient for LocalMlxLlm {
 
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
             let engine_for_gen = engine.clone();
-            let gen_handle = tokio::spawn(async move {
-                engine_for_gen.generate_stream(messages, vec![], tx).await
-            });
+            let gen_handle =
+                tokio::spawn(
+                    async move { engine_for_gen.generate_stream(messages, vec![], tx).await },
+                );
 
             // Drain the stream into a single string. No tools here, so we
             // don't need the qwen-tool-call splitter — just concatenate

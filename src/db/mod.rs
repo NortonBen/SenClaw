@@ -30,14 +30,14 @@ mod helpers;
 mod rows;
 mod schema;
 
+mod agent_todos;
 mod agents;
 mod bindings;
 mod channels;
-mod embedding;
-mod groups;
-mod agent_todos;
 mod chat_events;
+mod embedding;
 pub(crate) mod event_notifications;
+mod groups;
 mod messages;
 pub mod plans;
 mod router_state;
@@ -77,7 +77,11 @@ impl Db {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        Self::open_at(&config.paths.db_path, &config.paths.cognitive_db_path, config)
+        Self::open_at(
+            &config.paths.db_path,
+            &config.paths.cognitive_db_path,
+            config,
+        )
     }
 
     /// Open a DB at explicit paths — used by tests + when callers want to

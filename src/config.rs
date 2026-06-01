@@ -385,10 +385,7 @@ impl Config {
                     "SENCLAW_WHISPER_MODELS_DIR",
                     senclaw_home.join("whisper-models"),
                 ),
-                tts_models_dir: env_path(
-                    "SENCLAW_TTS_MODELS_DIR",
-                    senclaw_home.join("tts-models"),
-                ),
+                tts_models_dir: env_path("SENCLAW_TTS_MODELS_DIR", senclaw_home.join("tts-models")),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(

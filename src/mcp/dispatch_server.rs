@@ -218,9 +218,11 @@ impl DispatchServer {
 
         // Persistent agent from daemon-synced dispatch state
         let lower = trimmed.to_lowercase();
-        if let Some(a) = state.agents.iter().find(|a| {
-            a.name.to_lowercase() == lower || a.id.to_lowercase() == lower
-        }) {
+        if let Some(a) = state
+            .agents
+            .iter()
+            .find(|a| a.name.to_lowercase() == lower || a.id.to_lowercase() == lower)
+        {
             return Some(ResolvedAgent {
                 id: a.id.clone(),
                 jid: a.jid.clone(),
@@ -314,9 +316,7 @@ impl DispatchServer {
                 }
             }
             let Some(label) = pick else {
-                return Err(
-                    "Dependency cycle or unsatisfiable dependsOn — fix the DAG".to_string(),
-                );
+                return Err("Dependency cycle or unsatisfiable dependsOn — fix the DAG".to_string());
             };
             remaining.remove(&label);
             order.push(label);
@@ -399,7 +399,8 @@ impl DispatchServer {
         let timeout = timeout_seconds.unwrap_or(900);
 
         // Fill and validate labels
-        let mut normalized: Vec<(String, String, String, Vec<String>, Vec<ChecklistItemInput>)> = Vec::new();
+        let mut normalized: Vec<(String, String, String, Vec<String>, Vec<ChecklistItemInput>)> =
+            Vec::new();
         let mut errors: Vec<String> = Vec::new();
         let mut label_set = HashSet::new();
 
@@ -460,15 +461,27 @@ impl DispatchServer {
         let mut is_queued = false;
 
         self.modify_state(|s| {
-            use crate::agent::dispatch_bridge::types::ChecklistItem;
             use crate::agent::dispatch_bridge::generate_checklist_from_prompt;
-            
+            use crate::agent::dispatch_bridge::types::ChecklistItem;
+
             // Resolve agents
-            let mut resolved: Vec<(ResolvedAgent, String, String, Vec<String>, Vec<ChecklistItemInput>)> = Vec::new();
+            let mut resolved: Vec<(
+                ResolvedAgent,
+                String,
+                String,
+                Vec<String>,
+                Vec<ChecklistItemInput>,
+            )> = Vec::new();
             for (label, agent_name, prompt, deps, checklist) in &normalized {
                 match self.resolve_agent(s, agent_name) {
                     Some(agent) => {
-                        resolved.push((agent, label.clone(), prompt.clone(), deps.clone(), checklist.clone()));
+                        resolved.push((
+                            agent,
+                            label.clone(),
+                            prompt.clone(),
+                            deps.clone(),
+                            checklist.clone(),
+                        ));
                     }
                     None => {
                         errors.push(format!(
@@ -513,15 +526,18 @@ impl DispatchServer {
                         let checklist: Vec<ChecklistItem> = if checklist_inputs.is_empty() {
                             generate_checklist_from_prompt(prompt)
                         } else {
-                            checklist_inputs.iter().map(|ci| ChecklistItem {
-                                id: ci.id.clone(),
-                                description: ci.description.clone(),
-                                status: "pending".to_string(),
-                                depends_on: ci.depends_on.clone(),
-                                verification_note: None,
-                            }).collect()
+                            checklist_inputs
+                                .iter()
+                                .map(|ci| ChecklistItem {
+                                    id: ci.id.clone(),
+                                    description: ci.description.clone(),
+                                    status: "pending".to_string(),
+                                    depends_on: ci.depends_on.clone(),
+                                    verification_note: None,
+                                })
+                                .collect()
                         };
-                        
+
                         DispatchTask {
                             id: Self::next_id(s, 'd'),
                             label: label.clone(),
@@ -690,10 +706,7 @@ impl DispatchServer {
             let Some(p) = state.parents.iter().find(|p| p.id == parent_id) else {
                 return ToolResult::err(format!("Parent not found: {parent_id}"));
             };
-            p.tasks
-                .iter()
-                .find(|t| t.label == task_label)
-                .cloned()
+            p.tasks.iter().find(|t| t.label == task_label).cloned()
         };
 
         let start_task = match start_task {
@@ -831,10 +844,10 @@ impl DispatchServer {
         items: &[ChecklistItemInput],
     ) -> ToolResult {
         use crate::agent::dispatch_bridge::types::ChecklistItem;
-        
+
         let mut found = false;
         let _error = String::new();
-        
+
         self.modify_state(|state| {
             for parent in &mut state.parents {
                 if parent.id != parent_id {
@@ -858,14 +871,14 @@ impl DispatchServer {
                 }
             }
         });
-        
+
         if !found {
             return ToolResult::err(format!(
                 "Task not found: parent_id={}, task_label={}",
                 parent_id, task_label
             ));
         }
-        
+
         ToolResult::ok(format!(
             "Added {} checklist item(s) to task '{}' in parent '{}'",
             items.len(),
@@ -876,14 +889,14 @@ impl DispatchServer {
 
     pub fn verify_task_checklist(&self, parent_id: &str, task_label: &str) -> ToolResult {
         use crate::agent::dispatch_bridge::verify_task_checklist;
-        
+
         let state = self.read_state();
         let task = state
             .parents
             .iter()
             .find(|p| p.id == parent_id)
             .and_then(|p| p.tasks.iter().find(|t| t.label == task_label));
-        
+
         let task = match task {
             Some(t) => t,
             None => {
@@ -893,19 +906,16 @@ impl DispatchServer {
                 ))
             }
         };
-        
+
         let verification = verify_task_checklist(task);
-        
-        let mut report = format!(
-            "### Verification Report for Task '{}'\n\n",
-            task_label
-        );
+
+        let mut report = format!("### Verification Report for Task '{}'\n\n", task_label);
         report.push_str(&format!("**Verified:** {}\n\n", verification.verified));
-        
+
         if let Some(note) = &verification.note {
             report.push_str(&format!("**Note:** {}\n\n", note));
         }
-        
+
         if !verification.missing_items.is_empty() {
             report.push_str("**Missing Items:**\n");
             for item in &verification.missing_items {
@@ -913,7 +923,7 @@ impl DispatchServer {
             }
             report.push('\n');
         }
-        
+
         if !verification.failed_items.is_empty() {
             report.push_str("**Failed Items:**\n");
             for item in &verification.failed_items {
@@ -921,7 +931,7 @@ impl DispatchServer {
             }
             report.push('\n');
         }
-        
+
         if !verification.warnings.is_empty() {
             report.push_str("**Warnings:**\n");
             for warning in &verification.warnings {
@@ -929,13 +939,13 @@ impl DispatchServer {
             }
             report.push('\n');
         }
-        
+
         if verification.verified {
             report.push_str("✅ All checklist items verified successfully.");
         } else {
             report.push_str("❌ Verification failed - see missing/failed items above.");
         }
-        
+
         ToolResult::ok(report)
     }
 
@@ -946,7 +956,7 @@ impl DispatchServer {
             .iter()
             .find(|p| p.id == parent_id)
             .and_then(|p| p.tasks.iter().find(|t| t.label == task_label));
-        
+
         let task = match task {
             Some(t) => t,
             None => {
@@ -956,21 +966,22 @@ impl DispatchServer {
                 ))
             }
         };
-        
+
         if task.file_changes.is_empty() {
             return ToolResult::ok(format!(
                 "No file changes tracked for task '{}'.\n\nNote: File tracking requires FileTracker integration.",
                 task_label
             ));
         }
-        
+
         let mut report = format!("### File Changes for Task '{}'\n\n", task_label);
         report.push_str(&format!("Total changes: {}\n\n", task.file_changes.len()));
-        
+
         for change in &task.file_changes {
             report.push_str(&format!(
                 "- **{}**: {} ({})\n",
-                change.path, change.change_type,
+                change.path,
+                change.change_type,
                 change.summary.as_deref().unwrap_or("no summary")
             ));
             if let Some(lines_added) = change.lines_added {
@@ -980,7 +991,7 @@ impl DispatchServer {
                 report.push_str(&format!("  - Lines removed: {}\n", lines_removed));
             }
         }
-        
+
         ToolResult::ok(report)
     }
 
@@ -999,10 +1010,10 @@ impl DispatchServer {
                 valid_statuses.join(", ")
             ));
         }
-        
+
         let mut found = false;
         let mut item_found = false;
-        
+
         self.modify_state(|state| {
             for parent in &mut state.parents {
                 if parent.id != parent_id {
@@ -1023,21 +1034,18 @@ impl DispatchServer {
                 }
             }
         });
-        
+
         if !found {
             return ToolResult::err(format!(
                 "Task not found: parent_id={}, task_label={}",
                 parent_id, task_label
             ));
         }
-        
+
         if !item_found {
-            return ToolResult::err(format!(
-                "Checklist item not found: item_id={}",
-                item_id
-            ));
+            return ToolResult::err(format!("Checklist item not found: item_id={}", item_id));
         }
-        
+
         ToolResult::ok(format!(
             "Updated checklist item '{}' status to '{}' in task '{}'",
             item_id, status, task_label
@@ -1439,7 +1447,9 @@ mod tests {
             channel: String::new(),
         });
 
-        let r = server.resolve_agent(&state, "code-agent").expect("cowork member");
+        let r = server
+            .resolve_agent(&state, "code-agent")
+            .expect("cowork member");
         assert_eq!(r.jid, "cowork:ws-todo:code-agent");
         assert!(!r.is_virtual);
 

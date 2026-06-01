@@ -100,8 +100,13 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.upsert_agent_todos("agent:1", "Alpha", r#"[{"id":"t1","label":"x"}]"#, "2026-05-19T10:00:00Z")
-            .unwrap();
+        db.upsert_agent_todos(
+            "agent:1",
+            "Alpha",
+            r#"[{"id":"t1","label":"x"}]"#,
+            "2026-05-19T10:00:00Z",
+        )
+        .unwrap();
         let got = db.get_agent_todos("agent:1").unwrap().expect("row");
         assert_eq!(got.agent_jid, "agent:1");
         assert_eq!(got.agent_name, "Alpha");
@@ -113,8 +118,10 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.upsert_agent_todos("agent:1", "Alpha", "[]", "2026-05-19T10:00:00Z").unwrap();
-        db.upsert_agent_todos("agent:1", "Alpha-renamed", "[1,2]", "2026-05-19T10:00:05Z").unwrap();
+        db.upsert_agent_todos("agent:1", "Alpha", "[]", "2026-05-19T10:00:00Z")
+            .unwrap();
+        db.upsert_agent_todos("agent:1", "Alpha-renamed", "[1,2]", "2026-05-19T10:00:05Z")
+            .unwrap();
 
         let got = db.get_agent_todos("agent:1").unwrap().expect("row");
         assert_eq!(got.agent_name, "Alpha-renamed");
@@ -127,9 +134,12 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.upsert_agent_todos("agent:1", "A", "[]", "2026-05-19T10:00:00Z").unwrap();
-        db.upsert_agent_todos("agent:2", "B", "[]", "2026-05-19T10:00:01Z").unwrap();
-        db.upsert_agent_todos("agent:3", "C", "[]", "2026-05-19T10:00:02Z").unwrap();
+        db.upsert_agent_todos("agent:1", "A", "[]", "2026-05-19T10:00:00Z")
+            .unwrap();
+        db.upsert_agent_todos("agent:2", "B", "[]", "2026-05-19T10:00:01Z")
+            .unwrap();
+        db.upsert_agent_todos("agent:3", "C", "[]", "2026-05-19T10:00:02Z")
+            .unwrap();
 
         let all = db.get_all_agent_todos().unwrap();
         assert_eq!(all.len(), 3);

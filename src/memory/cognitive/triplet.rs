@@ -74,7 +74,9 @@ impl RelationshipEdge {
     pub fn effective_strength(&self, now: i64) -> f32 {
         let elapsed = (now - self.last_activated).max(0) as f32;
         let raw_decay = self.tier.decay_rate() * elapsed;
-        let protection = self.ltp_status.effective_protection(self.endpoint_selectivity);
+        let protection = self
+            .ltp_status
+            .effective_protection(self.endpoint_selectivity);
         let net = raw_decay / protection;
         (self.strength - net).max(0.0)
     }
@@ -121,7 +123,12 @@ impl RelationshipEdge {
         self.strength = effective;
 
         // Zombie cleanup: LTP-protected but actually dead → strip protection.
-        if effective <= LTP_PRUNE_FLOOR && matches!(self.ltp_status, LtpStatus::Full | LtpStatus::Weekly | LtpStatus::Burst) {
+        if effective <= LTP_PRUNE_FLOOR
+            && matches!(
+                self.ltp_status,
+                LtpStatus::Full | LtpStatus::Weekly | LtpStatus::Burst
+            )
+        {
             self.ltp_status = LtpStatus::None;
             self.ltp_detected_at = None;
         }

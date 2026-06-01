@@ -60,7 +60,14 @@ impl PermissionBridge {
     pub fn add_rule(&self, rule: ToolAutoAcceptRule) {
         let mut rules = self.tool_rules.lock().unwrap();
         rules.retain(|r| r.id != rule.id); // replace if same id
-        tracing::info!("[PermissionBridge] add_rule id={} server={:?} tool={:?} action={:?} enabled={}", rule.id, rule.matcher.server, rule.matcher.tool, rule.action, rule.enabled);
+        tracing::info!(
+            "[PermissionBridge] add_rule id={} server={:?} tool={:?} action={:?} enabled={}",
+            rule.id,
+            rule.matcher.server,
+            rule.matcher.tool,
+            rule.action,
+            rule.enabled
+        );
         rules.push(rule);
     }
 
@@ -89,21 +96,31 @@ impl PermissionBridge {
             return true;
         }
         let rules = self.tool_rules.lock().unwrap();
-        rules.iter().any(|r| r.enabled && Self::rule_matches(r, tool_name) && matches!(r.action, RuleAction::AutoAccept | RuleAction::AutoAcceptAndAllow))
+        rules.iter().any(|r| {
+            r.enabled
+                && Self::rule_matches(r, tool_name)
+                && matches!(
+                    r.action,
+                    RuleAction::AutoAccept | RuleAction::AutoAcceptAndAllow
+                )
+        })
     }
 
     fn rule_matches(rule: &ToolAutoAcceptRule, tool_name: &str) -> bool {
         match rule.matcher.matcher_type {
             RuleMatcherType::Always => true,
-            RuleMatcherType::ToolExact => {
-                rule.matcher.tool_name.as_deref() == Some(tool_name)
-            }
+            RuleMatcherType::ToolExact => rule.matcher.tool_name.as_deref() == Some(tool_name),
             RuleMatcherType::McpServer => {
-                let Some(server) = rule.matcher.server.as_deref() else { return false };
+                let Some(server) = rule.matcher.server.as_deref() else {
+                    return false;
+                };
                 // sema-core tool name format: mcp__{server_normalized}__{tool}
                 // Normalize: "senclaw-browser" → try "senclaw_browser" and also strip "senclaw-" → "browser"
                 let normalized = server.replace('-', "_");
-                let without_prefix = server.strip_prefix("senclaw-").unwrap_or(server).replace('-', "_");
+                let without_prefix = server
+                    .strip_prefix("senclaw-")
+                    .unwrap_or(server)
+                    .replace('-', "_");
                 let prefix_full = format!("mcp__{normalized}__");
                 let prefix_short = format!("mcp__{without_prefix}__");
                 let prefix = if tool_name.starts_with(&prefix_full) {
@@ -123,12 +140,18 @@ impl PermissionBridge {
                 }
             }
             RuleMatcherType::McpGlob | RuleMatcherType::BashGlob => {
-                let Some(pattern) = rule.matcher.pattern.as_deref() else { return false };
+                let Some(pattern) = rule.matcher.pattern.as_deref() else {
+                    return false;
+                };
                 glob_match(pattern, tool_name)
             }
             RuleMatcherType::BashRegex => {
-                let Some(pattern) = rule.matcher.pattern.as_deref() else { return false };
-                regex::Regex::new(pattern).map(|re| re.is_match(tool_name)).unwrap_or(false)
+                let Some(pattern) = rule.matcher.pattern.as_deref() else {
+                    return false;
+                };
+                regex::Regex::new(pattern)
+                    .map(|re| re.is_match(tool_name))
+                    .unwrap_or(false)
             }
             RuleMatcherType::ToolCategory => false, // not applicable for MCP tools
         }
@@ -326,10 +349,9 @@ impl PermissionBridge {
         let accept_all = *self.accept_all.lock().unwrap();
         tracing::info!("[PermissionBridge] permission request tool={tool_name} accept_all={accept_all} rules={rule_count}");
         if self.should_auto_accept(tool_name) {
-            tracing::info!(
-                "[PermissionBridge] auto-accepting tool={tool_name} group={group_jid}"
-            );
-            self.api.respond_to_tool_permission(group_jid, tool_name, "allow");
+            tracing::info!("[PermissionBridge] auto-accepting tool={tool_name} group={group_jid}");
+            self.api
+                .respond_to_tool_permission(group_jid, tool_name, "allow");
             self.fire_activity(chat_jid);
             return;
         }
@@ -626,7 +648,9 @@ fn glob_dp(p: &[char], t: &[char]) -> bool {
     let mut dp = vec![vec![false; n + 1]; m + 1];
     dp[0][0] = true;
     for i in 1..=m {
-        if p[i - 1] == '*' { dp[i][0] = dp[i - 1][0]; }
+        if p[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
     }
     for i in 1..=m {
         for j in 1..=n {

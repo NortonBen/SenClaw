@@ -614,7 +614,8 @@ pub async fn query(
                             error_message: msg.clone(),
                             error_type: Some("LLM_TIMEOUT".to_string()),
                         });
-                        let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+                        let (client, profile) =
+                            (config.hook_client.clone(), config.hook_profile.clone());
                         let hm_clone = hm.clone();
                         tokio::spawn(async move {
                             let _ = super::hooks::execute_hooks(
@@ -659,7 +660,8 @@ pub async fn query(
                                 error_message: error_data.error.message.clone(),
                                 error_type: Some(error_data.error.code.clone()),
                             });
-                            let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+                            let (client, profile) =
+                                (config.hook_client.clone(), config.hook_profile.clone());
                             let hm_clone = hm.clone();
                             tokio::spawn(async move {
                                 let _ = super::hooks::execute_hooks(
@@ -696,7 +698,8 @@ pub async fn query(
                     // too large, so a summarization LLM call would likely fail
                     // too. Use deterministic keep-recent truncation, but report
                     // real before/after token metrics.
-                    let token_before = count_tokens(&messages, config.profile.context_length).use_tokens;
+                    let token_before =
+                        count_tokens(&messages, config.profile.context_length).use_tokens;
                     let did_compact = compact_messages(&mut messages);
                     let usage_after = count_tokens(&messages, config.profile.context_length);
                     config
@@ -916,14 +919,21 @@ pub async fn query(
         // Check for control signals (e.g. clearContextAndStart)
         let mut clear_context_payload = None;
         for b in &tool_results {
-            if let ContentBlock::ControlSignal { signal_type, payload } = b {
+            if let ContentBlock::ControlSignal {
+                signal_type,
+                payload,
+            } = b
+            {
                 if signal_type == "ClearContextAndStart" {
                     clear_context_payload = Some(payload.clone());
                 }
             }
         }
         if let Some(payload) = clear_context_payload {
-            let plan_content = payload.get("plan_content").and_then(|v| v.as_str()).unwrap_or("");
+            let plan_content = payload
+                .get("plan_content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             info!(
                 "[{}] received ClearContextAndStart control signal — clearing history",
                 config.agent_id
@@ -1222,7 +1232,10 @@ mod tests {
         assert_eq!(multi, "a,b");
 
         // Non-tool blocks ignored.
-        assert_eq!(tool_names_sig(&[ContentBlock::Text { text: "hi".into() }]), "");
+        assert_eq!(
+            tool_names_sig(&[ContentBlock::Text { text: "hi".into() }]),
+            ""
+        );
     }
 
     #[test]

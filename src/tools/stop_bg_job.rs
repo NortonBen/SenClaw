@@ -94,7 +94,10 @@ impl Tool for StopBgJobTool {
 
     fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
         let job_id = data.get("taskId").and_then(|v| v.as_str()).unwrap_or("");
-        let stopped = data.get("stopped").and_then(|v| v.as_bool()).unwrap_or(false);
+        let stopped = data
+            .get("stopped")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let command = data.get("command").and_then(|v| v.as_str()).unwrap_or("");
         let msg = data.get("message").and_then(|v| v.as_str()).unwrap_or("");
         ToolResultMessage {
@@ -131,7 +134,9 @@ fn format_result(data: &Value) -> String {
         "[StopBgJob] task_id={} task_type={} stopped={}\n- command: {}\n- message: {}",
         data.get("taskId").and_then(|v| v.as_str()).unwrap_or(""),
         data.get("taskType").and_then(|v| v.as_str()).unwrap_or(""),
-        data.get("stopped").and_then(|v| v.as_bool()).unwrap_or(false),
+        data.get("stopped")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         data.get("command").and_then(|v| v.as_str()).unwrap_or(""),
         data.get("message").and_then(|v| v.as_str()).unwrap_or(""),
     )

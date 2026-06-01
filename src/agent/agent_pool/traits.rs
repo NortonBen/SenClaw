@@ -205,12 +205,7 @@ pub trait CoreApi: Send + Sync {
     /// Deliver a plan-exit decision (`startEditing` / `clearContextAndStart`
     /// / `cancelled`) to the suspended `ExitPlanMode` tool, and flip the
     /// engine back to Agent mode on approval.
-    fn respond_to_plan_exit(
-        &self,
-        _jid: &str,
-        _agent_id: &str,
-        _selected: &str,
-    ) -> Result<()> {
+    fn respond_to_plan_exit(&self, _jid: &str, _agent_id: &str, _selected: &str) -> Result<()> {
         Ok(())
     }
     /// Remove all event listeners registered for `jid`.
@@ -221,7 +216,6 @@ pub trait CoreApi: Send + Sync {
     fn get_tool_infos(&self, _jid: &str) -> Vec<AgentToolInfo> {
         Vec::new()
     }
-
 }
 
 /// Per-agent collection of registered event handlers, stored in [`ZenCoreApi`].

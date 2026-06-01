@@ -27,7 +27,9 @@ struct ReindexParams {
     #[serde(default = "default_true")]
     incremental: bool,
 }
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SymbolParams {
@@ -46,7 +48,9 @@ struct ImpactParams {
     #[serde(default = "default_depth")]
     depth: u32,
 }
-fn default_depth() -> u32 { 3 }
+fn default_depth() -> u32 {
+    3
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct TraceParams {
@@ -56,7 +60,9 @@ struct TraceParams {
     #[serde(default = "default_trace_depth")]
     max_depth: u32,
 }
-fn default_trace_depth() -> u32 { 5 }
+fn default_trace_depth() -> u32 {
+    5
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SearchParams {
@@ -66,7 +72,9 @@ struct SearchParams {
     #[serde(default = "default_limit")]
     limit: u32,
 }
-fn default_limit() -> u32 { 20 }
+fn default_limit() -> u32 {
+    20
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SkeletonParams {
@@ -83,14 +91,16 @@ struct FileDepsParams {
     #[serde(default = "default_direction")]
     direction: String,
 }
-fn default_direction() -> String { "both".to_string() }
+fn default_direction() -> String {
+    "both".to_string()
+}
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
 struct McpCodeGraphServer {
-    db:           Arc<Db>,
-    project_id:   String,
-    workspace:    String,
+    db: Arc<Db>,
+    project_id: String,
+    workspace: String,
 }
 
 impl McpCodeGraphServer {
@@ -107,9 +117,14 @@ use rmcp::handler::server::wrapper::Parameters;
 
 #[rmcp::tool_router(server_handler)]
 impl McpCodeGraphServer {
-    #[rmcp::tool(description = "Index codebase thành knowledge graph. incremental=true chỉ reindex file thay đổi.")]
+    #[rmcp::tool(
+        description = "Index codebase thành knowledge graph. incremental=true chỉ reindex file thay đổi."
+    )]
     fn graph_reindex(&self, Parameters(p): Parameters<ReindexParams>) -> String {
-        match self.indexer().and_then(|idx| idx.index_workspace(&self.project_id, p.incremental)) {
+        match self
+            .indexer()
+            .and_then(|idx| idx.index_workspace(&self.project_id, p.incremental))
+        {
             Ok(s) => format!(
                 "✅ Knowledge graph updated\n\
                  • Files indexed: {}\n\
@@ -129,9 +144,16 @@ impl McpCodeGraphServer {
             Err(e) => format!("❌ {e}"),
             Ok(callers) if callers.is_empty() => format!("No callers found for `{}`.", p.name),
             Ok(callers) => {
-                let mut out = format!("**{}** is called from {} location(s):\n\n", p.name, callers.len());
+                let mut out = format!(
+                    "**{}** is called from {} location(s):\n\n",
+                    p.name,
+                    callers.len()
+                );
                 for c in &callers {
-                    out.push_str(&format!("  • `{}` ({}:{}) — {}\n", c.caller_name, c.caller_file, c.at_line, c.caller_kind));
+                    out.push_str(&format!(
+                        "  • `{}` ({}:{}) — {}\n",
+                        c.caller_name, c.caller_file, c.at_line, c.caller_kind
+                    ));
                 }
                 out
             }
@@ -143,35 +165,55 @@ impl McpCodeGraphServer {
         let q = self.query();
         match q.find_callees(&self.project_id, &p.name) {
             Err(e) => format!("❌ {e}"),
-            Ok(callees) if callees.is_empty() => format!("`{}` does not call any tracked symbols.", p.name),
+            Ok(callees) if callees.is_empty() => {
+                format!("`{}` does not call any tracked symbols.", p.name)
+            }
             Ok(callees) => {
                 let mut out = format!("**{}** calls {} symbol(s):\n\n", p.name, callees.len());
                 for c in &callees {
-                    out.push_str(&format!("  • `{}` ({}:{})\n", c.caller_name, c.caller_file, c.at_line));
+                    out.push_str(&format!(
+                        "  • `{}` ({}:{})\n",
+                        c.caller_name, c.caller_file, c.at_line
+                    ));
                 }
                 out
             }
         }
     }
 
-    #[rmcp::tool(description = "Blast radius analysis: sửa symbol_name sẽ ảnh hưởng đến những symbol/file nào?")]
+    #[rmcp::tool(
+        description = "Blast radius analysis: sửa symbol_name sẽ ảnh hưởng đến những symbol/file nào?"
+    )]
     fn graph_impact(&self, Parameters(p): Parameters<ImpactParams>) -> String {
         let q = self.query();
         match q.impact_analysis(&self.project_id, &p.name, p.depth) {
             Err(e) => format!("❌ {e}"),
-            Ok(nodes) if nodes.is_empty() => format!("No dependents found for `{}` (depth={}). Safe to modify.", p.name, p.depth),
+            Ok(nodes) if nodes.is_empty() => format!(
+                "No dependents found for `{}` (depth={}). Safe to modify.",
+                p.name, p.depth
+            ),
             Ok(nodes) => {
-                let files: std::collections::HashSet<&str> = nodes.iter().map(|n| n.file.as_str()).collect();
-                let mut out = format!(
+                let files: std::collections::HashSet<&str> =
+                    nodes.iter().map(|n| n.file.as_str()).collect();
+                let mut out =
+                    format!(
                     "⚠️  Modifying **{}** may impact **{}** symbol(s) across **{}** file(s):\n\n",
                     p.name, nodes.len(), files.len()
                 );
-                let mut by_depth: std::collections::BTreeMap<u32, Vec<&crate::code_graph::ImpactNode>> = Default::default();
-                for node in &nodes { by_depth.entry(node.depth).or_default().push(node); }
+                let mut by_depth: std::collections::BTreeMap<
+                    u32,
+                    Vec<&crate::code_graph::ImpactNode>,
+                > = Default::default();
+                for node in &nodes {
+                    by_depth.entry(node.depth).or_default().push(node);
+                }
                 for (depth, items) in &by_depth {
                     out.push_str(&format!("**Depth {depth}:**\n"));
                     for item in items {
-                        out.push_str(&format!("  • `{}` ({}:{}) — {}\n", item.name, item.file, item.depth, item.via));
+                        out.push_str(&format!(
+                            "  • `{}` ({}:{}) — {}\n",
+                            item.name, item.file, item.depth, item.via
+                        ));
                     }
                 }
                 out
@@ -179,7 +221,9 @@ impl McpCodeGraphServer {
         }
     }
 
-    #[rmcp::tool(description = "Context đầy đủ cho symbol: signature, callers, callees, skeleton file.")]
+    #[rmcp::tool(
+        description = "Context đầy đủ cho symbol: signature, callers, callees, skeleton file."
+    )]
     fn graph_symbol_context(&self, Parameters(p): Parameters<SymbolParams>) -> String {
         let q = self.query();
         let symbols = match q.find_symbol(&self.project_id, &p.name, p.file_hint.as_deref()) {
@@ -187,24 +231,39 @@ impl McpCodeGraphServer {
             Err(e) => return format!("❌ {e}"),
         };
         if symbols.is_empty() {
-            return format!("Symbol `{}` not found in index. Run graph_reindex first.", p.name);
+            return format!(
+                "Symbol `{}` not found in index. Run graph_reindex first.",
+                p.name
+            );
         }
         let sym = &symbols[0];
-        let callers = q.find_callers(&self.project_id, &p.name).unwrap_or_default();
-        let callees = q.find_callees(&self.project_id, &p.name).unwrap_or_default();
-        let skeleton = q.file_skeleton(&self.project_id, &sym.file_path).unwrap_or_default();
+        let callers = q
+            .find_callers(&self.project_id, &p.name)
+            .unwrap_or_default();
+        let callees = q
+            .find_callees(&self.project_id, &p.name)
+            .unwrap_or_default();
+        let skeleton = q
+            .file_skeleton(&self.project_id, &sym.file_path)
+            .unwrap_or_default();
 
         let mut out = format!(
             "## `{}` ({})\n\n**File:** `{}` L{}-L{}\n**Kind:** {}\n**Signature:** `{}`\n\n",
-            sym.name, sym.language.as_str(),
-            sym.file_path, sym.start_line, sym.end_line,
+            sym.name,
+            sym.language.as_str(),
+            sym.file_path,
+            sym.start_line,
+            sym.end_line,
             sym.kind.as_str(),
             sym.signature.as_deref().unwrap_or(&sym.name)
         );
         if !callers.is_empty() {
             out.push_str(&format!("**Called by ({}):**\n", callers.len()));
             for c in callers.iter().take(10) {
-                out.push_str(&format!("  • `{}` @ {}:{}\n", c.caller_name, c.caller_file, c.at_line));
+                out.push_str(&format!(
+                    "  • `{}` @ {}:{}\n",
+                    c.caller_name, c.caller_file, c.at_line
+                ));
             }
             out.push('\n');
         }
@@ -217,23 +276,35 @@ impl McpCodeGraphServer {
         }
         if !skeleton.is_empty() {
             out.push_str(&format!("**File skeleton ({}):**\n```\n", sym.file_path));
-            for s in &skeleton { out.push_str(&format!("{s}\n")); }
+            for s in &skeleton {
+                out.push_str(&format!("{s}\n"));
+            }
             out.push_str("```\n");
         }
         out
     }
 
-    #[rmcp::tool(description = "Trace execution flow từ entry point, DFS theo CALLS relationships.")]
+    #[rmcp::tool(
+        description = "Trace execution flow từ entry point, DFS theo CALLS relationships."
+    )]
     fn graph_trace_flow(&self, Parameters(p): Parameters<TraceParams>) -> String {
         let q = self.query();
         match q.trace_call_tree(&self.project_id, &p.entry, p.max_depth) {
             Err(e) => format!("❌ {e}"),
-            Ok(nodes) if nodes.is_empty() => format!("`{}` makes no tracked function calls.", p.entry),
+            Ok(nodes) if nodes.is_empty() => {
+                format!("`{}` makes no tracked function calls.", p.entry)
+            }
             Ok(nodes) => {
-                let mut out = format!("**Call tree from `{}`** (depth ≤ {}):\n\n```\n{}\n", p.entry, p.max_depth, p.entry);
+                let mut out = format!(
+                    "**Call tree from `{}`** (depth ≤ {}):\n\n```\n{}\n",
+                    p.entry, p.max_depth, p.entry
+                );
                 for node in &nodes {
                     let indent = "  ".repeat(node.depth as usize);
-                    out.push_str(&format!("{indent}└─ {} ({}) @ {}\n", node.name, node.kind, node.file));
+                    out.push_str(&format!(
+                        "{indent}└─ {} ({}) @ {}\n",
+                        node.name, node.kind, node.file
+                    ));
                 }
                 out.push_str("```\n");
                 out
@@ -241,34 +312,51 @@ impl McpCodeGraphServer {
         }
     }
 
-    #[rmcp::tool(description = "Full-text search symbols (functions, classes, structs) theo tên hoặc signature.")]
+    #[rmcp::tool(
+        description = "Full-text search symbols (functions, classes, structs) theo tên hoặc signature."
+    )]
     fn graph_search(&self, Parameters(p): Parameters<SearchParams>) -> String {
         let q = self.query();
         match q.search_symbols(&self.project_id, &p.query, p.limit) {
             Err(e) => format!("❌ {e}"),
             Ok(results) if results.is_empty() => format!("No symbols matching `{}`.", p.query),
             Ok(results) => {
-                let mut out = format!("Found **{}** symbol(s) matching `{}`:\n\n", results.len(), p.query);
+                let mut out = format!(
+                    "Found **{}** symbol(s) matching `{}`:\n\n",
+                    results.len(),
+                    p.query
+                );
                 for sym in &results {
-                    out.push_str(&format!("  • `{}` [{}] @ {}:L{}\n    {}\n",
-                        sym.name, sym.kind.as_str(), sym.file_path, sym.start_line,
-                        sym.signature.as_deref().unwrap_or("")));
+                    out.push_str(&format!(
+                        "  • `{}` [{}] @ {}:L{}\n    {}\n",
+                        sym.name,
+                        sym.kind.as_str(),
+                        sym.file_path,
+                        sym.start_line,
+                        sym.signature.as_deref().unwrap_or("")
+                    ));
                 }
                 out
             }
         }
     }
 
-    #[rmcp::tool(description = "Skeleton của file hoặc project: chỉ signatures, không body. Token-efficient context.")]
+    #[rmcp::tool(
+        description = "Skeleton của file hoặc project: chỉ signatures, không body. Token-efficient context."
+    )]
     fn graph_skeleton(&self, Parameters(p): Parameters<SkeletonParams>) -> String {
         let q = self.query();
         if let Some(file) = &p.file_path {
             match q.file_skeleton(&self.project_id, file) {
                 Err(e) => format!("❌ {e}"),
-                Ok(s) if s.is_empty() => format!("No indexed symbols for `{file}`. Run graph_reindex first."),
+                Ok(s) if s.is_empty() => {
+                    format!("No indexed symbols for `{file}`. Run graph_reindex first.")
+                }
                 Ok(s) => {
                     let mut out = format!("**Skeleton: `{file}`**\n```\n");
-                    for line in &s { out.push_str(&format!("{line}\n")); }
+                    for line in &s {
+                        out.push_str(&format!("{line}\n"));
+                    }
                     out.push_str("```");
                     out
                 }
@@ -279,10 +367,16 @@ impl McpCodeGraphServer {
                 Ok(p) if p.is_empty() => "No index found. Run graph_reindex first.".to_string(),
                 Ok(project) => {
                     let total: usize = project.iter().map(|(_, v)| v.len()).sum();
-                    let mut out = format!("**Project skeleton** ({} files, {} symbols)\n\n", project.len(), total);
+                    let mut out = format!(
+                        "**Project skeleton** ({} files, {} symbols)\n\n",
+                        project.len(),
+                        total
+                    );
                     for (file, syms) in &project {
                         out.push_str(&format!("### `{file}`\n```\n"));
-                        for s in syms { out.push_str(&format!("{s}\n")); }
+                        for s in syms {
+                            out.push_str(&format!("{s}\n"));
+                        }
                         out.push_str("```\n\n");
                     }
                     out
@@ -291,7 +385,9 @@ impl McpCodeGraphServer {
         }
     }
 
-    #[rmcp::tool(description = "Tìm dependencies của file: file này import gì, ai import file này.")]
+    #[rmcp::tool(
+        description = "Tìm dependencies của file: file này import gì, ai import file này."
+    )]
     fn graph_file_deps(&self, Parameters(p): Parameters<FileDepsParams>) -> String {
         let q = self.query();
         let mut out = format!("**Dependencies for `{}`:**\n\n", p.file_path);
@@ -302,7 +398,9 @@ impl McpCodeGraphServer {
                 Ok(deps) if deps.is_empty() => out.push_str("**Imports:** (none)\n"),
                 Ok(deps) => {
                     out.push_str(&format!("**Imports ({}):**\n", deps.len()));
-                    for d in &deps { out.push_str(&format!("  • `{d}`\n")); }
+                    for d in &deps {
+                        out.push_str(&format!("  • `{d}`\n"));
+                    }
                 }
             }
             out.push('\n');
@@ -314,7 +412,9 @@ impl McpCodeGraphServer {
                 Ok(rdeps) if rdeps.is_empty() => out.push_str("**Imported by:** (none)\n"),
                 Ok(rdeps) => {
                     out.push_str(&format!("**Imported by ({}):**\n", rdeps.len()));
-                    for d in &rdeps { out.push_str(&format!("  • `{d}`\n")); }
+                    for d in &rdeps {
+                        out.push_str(&format!("  • `{d}`\n"));
+                    }
                 }
             }
         }
@@ -333,15 +433,19 @@ pub async fn run_code_graph_server() -> Result<()> {
         .try_init()
         .ok();
 
-    let db_path    = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
+    let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
     let project_id = std::env::var("SENCLAW_PROJECT_ID").context("SENCLAW_PROJECT_ID not set")?;
-    let workspace  = std::env::var("SENCLAW_WORKSPACE").context("SENCLAW_WORKSPACE not set")?;
+    let workspace = std::env::var("SENCLAW_WORKSPACE").context("SENCLAW_WORKSPACE not set")?;
 
     let mut config = crate::config::Config::from_env();
     config.paths.db_path = std::path::PathBuf::from(&db_path);
     let db = Arc::new(Db::open(&config).context("open code-graph DB")?);
 
-    let server = McpCodeGraphServer { db, project_id, workspace };
+    let server = McpCodeGraphServer {
+        db,
+        project_id,
+        workspace,
+    };
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())

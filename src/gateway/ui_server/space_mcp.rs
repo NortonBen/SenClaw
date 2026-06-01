@@ -73,7 +73,9 @@ impl SpaceMcpLauncher {
         let apps: Vec<(String, Value)> = match db.with_conn(|conn| {
             let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps WHERE enabled = 1")?;
             let rows = stmt
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
                 .filter_map(|r| r.ok())
                 .filter_map(|(id, m)| serde_json::from_str::<Value>(&m).ok().map(|v| (id, v)))
                 .collect::<Vec<_>>();
@@ -141,7 +143,11 @@ impl SpaceMcpLauncher {
             Some(v) if v.is_object() => v.clone(),
             _ => return Ok(None),
         };
-        if !mcp.get("autoRegister").and_then(Value::as_bool).unwrap_or(false) {
+        if !mcp
+            .get("autoRegister")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             return Ok(None);
         }
         let name = mcp
@@ -331,7 +337,10 @@ fn build_mcp_config(
     base_url: &str,
     origin: Option<&str>,
 ) -> Result<ExternalMcpServerConfig> {
-    let transport_str = mcp.get("transport").and_then(Value::as_str).unwrap_or("http");
+    let transport_str = mcp
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or("http");
     let transport = match transport_str {
         "stdio" => McpTransportType::Stdio,
         "sse" => McpTransportType::Sse,

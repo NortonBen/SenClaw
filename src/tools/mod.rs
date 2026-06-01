@@ -33,9 +33,7 @@ use crate::zen_core::Tool;
 pub use ask_user::AskUserTool;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
-pub use cognitive::{
-    CogAddTool, CogForgetTool, CogRecallTool, CogSearchTool, CogStatsTool,
-};
+pub use cognitive::{CogAddTool, CogForgetTool, CogRecallTool, CogSearchTool, CogStatsTool};
 pub use edit::EditTool;
 pub use enter_plan_mode::{EnterPlanFn, EnterPlanModeTool};
 pub use exit_plan_mode::ExitPlanModeTool;

@@ -143,7 +143,7 @@ pub(crate) async fn llm_config_update(
 
     // Load existing configs
     let stored = load_llm_configs(&s.config.paths.global_config_path);
-    
+
     // Find the config to update
     let mut cfg = stored
         .configs
@@ -175,11 +175,8 @@ pub(crate) async fn llm_config_set_active(
             Ok(Json(serde_json::json!({ "activeQuickId": body.id })))
         }
         "cognitive" => {
-            set_active_cognitive_llm_config(
-                &s.config.paths.global_config_path,
-                body.id.as_deref(),
-            )
-            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            set_active_cognitive_llm_config(&s.config.paths.global_config_path, body.id.as_deref())
+                .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             Ok(Json(serde_json::json!({ "activeCognitiveId": body.id })))
         }
         _ => {

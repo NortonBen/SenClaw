@@ -180,7 +180,11 @@ impl McpClient {
             }
             Err(_) => {
                 // Timeout
-                bail!("MCP request timeout after {:?} (method: {})", timeout, method);
+                bail!(
+                    "MCP request timeout after {:?} (method: {})",
+                    timeout,
+                    method
+                );
             }
         }
 
@@ -314,7 +318,8 @@ impl SharedMcpRegistry {
             let mut reg = self.inner.lock().unwrap();
             reg.kill(name);
         }
-        let (client, tools) = McpRegistry::spawn_client(name, command, args, env, request_timeout).await?;
+        let (client, tools) =
+            McpRegistry::spawn_client(name, command, args, env, request_timeout).await?;
         let mut reg = self.inner.lock().unwrap();
         reg.clients.insert(name.to_string(), client);
         Ok(tools)
@@ -338,7 +343,11 @@ impl SharedMcpRegistry {
 
         for (name, client) in reg.clients.iter_mut() {
             if !client.is_alive() {
-                warn!("[MCP] Health check: server '{}' (pid: {:?}) is dead, removing", name, client.pid());
+                warn!(
+                    "[MCP] Health check: server '{}' (pid: {:?}) is dead, removing",
+                    name,
+                    client.pid()
+                );
                 dead_servers.push(name.clone());
             }
         }
@@ -360,7 +369,9 @@ impl SharedMcpRegistry {
     /// Get server health status.
     pub fn get_server_status(&self, server_name: &str) -> Option<bool> {
         let mut reg = self.inner.lock().unwrap();
-        reg.clients.get_mut(server_name).map(|client| client.is_alive())
+        reg.clients
+            .get_mut(server_name)
+            .map(|client| client.is_alive())
     }
 
     /// Call a tool on a specific MCP server by server name and short tool name.

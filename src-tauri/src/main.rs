@@ -1,6 +1,9 @@
 // SemaClaw desktop app — Tauri 2.0 shell that embeds the SenClaw daemon
 // in-process and exposes a compact chat window from the menu bar / tray.
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use std::time::Duration;
 
@@ -96,7 +99,11 @@ fn configure_env(app: &tauri::App) {
     let resource_dir = app.path().resource_dir().ok();
 
     if std::env::var_os("SENCLAW_BIN").is_none() {
-        let bin_name = if cfg!(windows) { "senclaw.exe" } else { "senclaw" };
+        let bin_name = if cfg!(windows) {
+            "senclaw.exe"
+        } else {
+            "senclaw"
+        };
         let mut candidates = Vec::new();
         if let Some(res) = &resource_dir {
             candidates.push(res.join("binaries").join(bin_name));
@@ -130,8 +137,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open_dash = MenuItemBuilder::with_id("open_dashboard", "Open Full Window").build(app)?;
     let fullscreen =
         MenuItemBuilder::with_id("toggle_fullscreen", "Toggle Fullscreen").build(app)?;
-    let open_browser =
-        MenuItemBuilder::with_id("open_browser", "Open in Browser").build(app)?;
+    let open_browser = MenuItemBuilder::with_id("open_browser", "Open in Browser").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&open_chat, &open_dash, &fullscreen, &open_browser, &quit])

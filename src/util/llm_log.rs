@@ -59,7 +59,10 @@ fn append_line(payload: &Value) {
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let file = dir.join(format!("{}.log", crate::util::local_time::local_date_string_now()));
+    let file = dir.join(format!(
+        "{}.log",
+        crate::util::local_time::local_date_string_now()
+    ));
     let line = format!("[{}]{}\n", time_str(), payload);
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&file) {
         let _ = f.write_all(line.as_bytes());
@@ -162,7 +165,9 @@ mod tests {
         log_response(&msg(
             "assistant",
             vec![
-                ContentBlock::Thinking { thinking: "pondering".into() },
+                ContentBlock::Thinking {
+                    thinking: "pondering".into(),
+                },
                 ContentBlock::ToolUse {
                     id: "1".into(),
                     name: "Bash".into(),
@@ -171,7 +176,10 @@ mod tests {
             ],
         ));
 
-        let file = dir.join(format!("{}.log", crate::util::local_time::local_date_string_now()));
+        let file = dir.join(format!(
+            "{}.log",
+            crate::util::local_time::local_date_string_now()
+        ));
         let body = fs::read_to_string(&file).expect("log file written");
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 2, "one request + one response line");

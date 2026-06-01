@@ -292,8 +292,13 @@ mod tests {
     #[test]
     fn add_bullet_is_idempotent() {
         let src = "## Guidelines\n\n- Be concise\n";
-        let out1 = apply_patch(src, &p("guidelines", PatchAction::AddBullet, "be concise")).unwrap();
-        let out2 = apply_patch(&out1, &p("guidelines", PatchAction::AddBullet, "Be Concise")).unwrap();
+        let out1 =
+            apply_patch(src, &p("guidelines", PatchAction::AddBullet, "be concise")).unwrap();
+        let out2 = apply_patch(
+            &out1,
+            &p("guidelines", PatchAction::AddBullet, "Be Concise"),
+        )
+        .unwrap();
         assert_eq!(out1, out2, "duplicate bullet must not append again");
     }
 
@@ -302,7 +307,11 @@ mod tests {
         let src = "# Agent\n\n## Identity\n\nYou are helpful.\n";
         let out = apply_patch(
             src,
-            &p("Style", PatchAction::AddBullet, "Prefer plain text over emoji"),
+            &p(
+                "Style",
+                PatchAction::AddBullet,
+                "Prefer plain text over emoji",
+            ),
         )
         .unwrap();
         assert!(out.contains("## Style"));
@@ -316,7 +325,11 @@ mod tests {
         let src = "## Identity\n\nold body line 1\nold body line 2\n\n## Guidelines\n\n- one\n";
         let out = apply_patch(
             src,
-            &p("Identity", PatchAction::ReplaceSection, "fresh identity statement"),
+            &p(
+                "Identity",
+                PatchAction::ReplaceSection,
+                "fresh identity statement",
+            ),
         )
         .unwrap();
         assert!(out.contains("fresh identity statement"));
@@ -329,7 +342,11 @@ mod tests {
     #[test]
     fn remove_bullet_drops_the_line() {
         let src = "## Guidelines\n\n- keep this\n- drop this\n- and keep this\n";
-        let out = apply_patch(src, &p("guidelines", PatchAction::RemoveBullet, "drop this")).unwrap();
+        let out = apply_patch(
+            src,
+            &p("guidelines", PatchAction::RemoveBullet, "drop this"),
+        )
+        .unwrap();
         assert!(out.contains("- keep this"));
         assert!(out.contains("- and keep this"));
         assert!(!out.contains("drop this"));
@@ -349,7 +366,8 @@ mod tests {
     fn append_line_dedupes() {
         let src = "## Notes\n\nFirst line.\n";
         let out1 = apply_patch(src, &p("Notes", PatchAction::AppendLine, "Second line.")).unwrap();
-        let out2 = apply_patch(&out1, &p("Notes", PatchAction::AppendLine, "Second line.")).unwrap();
+        let out2 =
+            apply_patch(&out1, &p("Notes", PatchAction::AppendLine, "Second line.")).unwrap();
         assert_eq!(out1, out2);
     }
 

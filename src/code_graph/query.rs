@@ -20,7 +20,12 @@ impl GraphQuery {
 
     // ─── Find symbol ─────────────────────────────────────────────────────────
 
-    pub fn find_symbol(&self, project_id: &str, name: &str, file_hint: Option<&str>) -> Result<Vec<CodeNode>> {
+    pub fn find_symbol(
+        &self,
+        project_id: &str,
+        name: &str,
+        file_hint: Option<&str>,
+    ) -> Result<Vec<CodeNode>> {
         self.db.with_conn(|conn| {
             if let Some(file) = file_hint {
                 let mut stmt = conn.prepare(
@@ -52,17 +57,18 @@ impl GraphQuery {
                  FROM cg_edges e
                  LEFT JOIN cg_symbols s ON s.id = e.from_sym_id
                  WHERE e.project_id=?1 AND e.to_name=?2 AND e.kind='calls'
-                 ORDER BY e.from_file, e.at_line"
+                 ORDER BY e.from_file, e.at_line",
             )?;
-            let rows = stmt.query_map(params![project_id, symbol_name], |row| {
-                Ok(CallerInfo {
-                    caller_name: row.get(0)?,
-                    caller_file: row.get(1)?,
-                    caller_kind: row.get(2)?,
-                    at_line: row.get::<_, i64>(3)? as u32,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows = stmt
+                .query_map(params![project_id, symbol_name], |row| {
+                    Ok(CallerInfo {
+                        caller_name: row.get(0)?,
+                        caller_file: row.get(1)?,
+                        caller_kind: row.get(2)?,
+                        at_line: row.get::<_, i64>(3)? as u32,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
     }
@@ -77,17 +83,18 @@ impl GraphQuery {
                  FROM cg_edges e
                  LEFT JOIN cg_symbols s ON s.id = e.to_sym_id
                  WHERE e.project_id=?1 AND e.from_name=?2 AND e.kind='calls'
-                 ORDER BY e.at_line"
+                 ORDER BY e.at_line",
             )?;
-            let rows = stmt.query_map(params![project_id, symbol_name], |row| {
-                Ok(CallerInfo {
-                    caller_name: row.get(0)?,
-                    caller_file: row.get(1)?,
-                    caller_kind: row.get(2)?,
-                    at_line: row.get::<_, i64>(3)? as u32,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows = stmt
+                .query_map(params![project_id, symbol_name], |row| {
+                    Ok(CallerInfo {
+                        caller_name: row.get(0)?,
+                        caller_file: row.get(1)?,
+                        caller_kind: row.get(2)?,
+                        at_line: row.get::<_, i64>(3)? as u32,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
     }
@@ -96,12 +103,24 @@ impl GraphQuery {
 
     /// Blast radius: những symbol nào bị ảnh hưởng nếu `symbol_name` thay đổi interface?
     /// Traverses CALLS + IMPORTS edges ngược lại (ai phụ thuộc vào symbol này).
-    pub fn impact_analysis(&self, project_id: &str, symbol_name: &str, max_depth: u32) -> Result<Vec<ImpactNode>> {
+    pub fn impact_analysis(
+        &self,
+        project_id: &str,
+        symbol_name: &str,
+        max_depth: u32,
+    ) -> Result<Vec<ImpactNode>> {
         let mut visited: HashSet<String> = HashSet::new();
         let mut result: Vec<ImpactNode> = Vec::new();
         visited.insert(symbol_name.to_string());
 
-        self.bfs_impact(project_id, symbol_name, 1, max_depth, &mut visited, &mut result)?;
+        self.bfs_impact(
+            project_id,
+            symbol_name,
+            1,
+            max_depth,
+            &mut visited,
+            &mut result,
+        )?;
         Ok(result)
     }
 
@@ -114,7 +133,9 @@ impl GraphQuery {
         visited: &mut HashSet<String>,
         result: &mut Vec<ImpactNode>,
     ) -> Result<()> {
-        if depth > max_depth { return Ok(()); }
+        if depth > max_depth {
+            return Ok(());
+        }
 
         let callers = self.find_callers(project_id, target)?;
         for caller in callers {
@@ -126,7 +147,14 @@ impl GraphQuery {
                     depth,
                     via: format!("calls {target}"),
                 });
-                self.bfs_impact(project_id, &caller.caller_name, depth + 1, max_depth, visited, result)?;
+                self.bfs_impact(
+                    project_id,
+                    &caller.caller_name,
+                    depth + 1,
+                    max_depth,
+                    visited,
+                    result,
+                )?;
             }
         }
 
@@ -153,17 +181,18 @@ impl GraphQuery {
             let mut stmt = conn.prepare(
                 "SELECT e.from_name, e.from_file, 'import', e.at_line
                  FROM cg_edges e
-                 WHERE e.project_id=?1 AND e.to_name LIKE ?2 AND e.kind='imports'"
+                 WHERE e.project_id=?1 AND e.to_name LIKE ?2 AND e.kind='imports'",
             )?;
-            let rows = stmt.query_map(params![project_id, format!("%{target_name}%")], |row| {
-                Ok(CallerInfo {
-                    caller_name: row.get(0)?,
-                    caller_file: row.get(1)?,
-                    caller_kind: row.get(2)?,
-                    at_line: row.get::<_, i64>(3)? as u32,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows = stmt
+                .query_map(params![project_id, format!("%{target_name}%")], |row| {
+                    Ok(CallerInfo {
+                        caller_name: row.get(0)?,
+                        caller_file: row.get(1)?,
+                        caller_kind: row.get(2)?,
+                        at_line: row.get::<_, i64>(3)? as u32,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
     }
@@ -192,7 +221,9 @@ impl GraphQuery {
         visited: &mut HashSet<String>,
         result: &mut Vec<ImpactNode>,
     ) -> Result<()> {
-        if depth >= max_depth { return Ok(()); }
+        if depth >= max_depth {
+            return Ok(());
+        }
 
         let callees = self.find_callees(project_id, from)?;
         for callee in callees {
@@ -204,7 +235,14 @@ impl GraphQuery {
                     depth: depth + 1,
                     via: format!("called by {from}"),
                 });
-                self.dfs_trace(project_id, &callee.caller_name, depth + 1, max_depth, visited, result)?;
+                self.dfs_trace(
+                    project_id,
+                    &callee.caller_name,
+                    depth + 1,
+                    max_depth,
+                    visited,
+                    result,
+                )?;
             }
         }
         Ok(())
@@ -216,9 +254,10 @@ impl GraphQuery {
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT to_name FROM cg_edges
-                 WHERE project_id=?1 AND from_file=?2 AND kind='imports'"
+                 WHERE project_id=?1 AND from_file=?2 AND kind='imports'",
             )?;
-            let rows = stmt.query_map(params![project_id, file_path], |row| row.get(0))?
+            let rows = stmt
+                .query_map(params![project_id, file_path], |row| row.get(0))?
                 .collect::<rusqlite::Result<Vec<String>>>()?;
             Ok(rows)
         })
@@ -228,9 +267,10 @@ impl GraphQuery {
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT from_file FROM cg_edges
-                 WHERE project_id=?1 AND to_file=?2 AND kind='imports'"
+                 WHERE project_id=?1 AND to_file=?2 AND kind='imports'",
             )?;
-            let rows = stmt.query_map(params![project_id, file_path], |row| row.get(0))?
+            let rows = stmt
+                .query_map(params![project_id, file_path], |row| row.get(0))?
                 .collect::<rusqlite::Result<Vec<String>>>()?;
             Ok(rows)
         })
@@ -238,7 +278,12 @@ impl GraphQuery {
 
     // ─── Full-text search ─────────────────────────────────────────────────────
 
-    pub fn search_symbols(&self, project_id: &str, query: &str, limit: u32) -> Result<Vec<CodeNode>> {
+    pub fn search_symbols(
+        &self,
+        project_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<CodeNode>> {
         self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT s.id, s.project_id, s.file_path, s.name, s.kind, s.signature, s.start_line, s.end_line, s.language
@@ -262,16 +307,17 @@ impl GraphQuery {
             let mut stmt = conn.prepare(
                 "SELECT kind, name, signature, start_line FROM cg_symbols
                  WHERE project_id=?1 AND file_path=?2
-                 ORDER BY start_line"
+                 ORDER BY start_line",
             )?;
-            let rows = stmt.query_map(params![project_id, file_path], |row| {
-                let kind: String = row.get(0)?;
-                let name: String = row.get(1)?;
-                let sig: Option<String> = row.get(2)?;
-                let line: i64 = row.get(3)?;
-                Ok(format!("L{line} [{kind}] {}", sig.unwrap_or(name)))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows = stmt
+                .query_map(params![project_id, file_path], |row| {
+                    let kind: String = row.get(0)?;
+                    let name: String = row.get(1)?;
+                    let sig: Option<String> = row.get(2)?;
+                    let line: i64 = row.get(3)?;
+                    Ok(format!("L{line} [{kind}] {}", sig.unwrap_or(name)))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
     }
@@ -282,7 +328,7 @@ impl GraphQuery {
             let mut stmt = conn.prepare(
                 "SELECT file_path, kind, name, signature, start_line FROM cg_symbols
                  WHERE project_id=?1
-                 ORDER BY file_path, start_line"
+                 ORDER BY file_path, start_line",
             )?;
             let mut map: std::collections::BTreeMap<String, Vec<String>> = Default::default();
             stmt.query_map(params![project_id], |row| {
@@ -295,7 +341,9 @@ impl GraphQuery {
             })?
             .filter_map(|r| r.ok())
             .for_each(|(file, kind, sig, line)| {
-                map.entry(file).or_default().push(format!("L{line} [{kind}] {sig}"));
+                map.entry(file)
+                    .or_default()
+                    .push(format!("L{line} [{kind}] {sig}"));
             });
             Ok(map.into_iter().collect())
         })
@@ -307,13 +355,19 @@ impl GraphQuery {
         self.db.with_conn(|conn| {
             let symbols: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM cg_symbols WHERE project_id=?1",
-                params![project_id], |r| r.get(0))?;
+                params![project_id],
+                |r| r.get(0),
+            )?;
             let edges: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM cg_edges WHERE project_id=?1",
-                params![project_id], |r| r.get(0))?;
+                params![project_id],
+                |r| r.get(0),
+            )?;
             let files: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM cg_index_state WHERE project_id=?1",
-                params![project_id], |r| r.get(0))?;
+                params![project_id],
+                |r| r.get(0),
+            )?;
             Ok((files, symbols, edges))
         })
     }
@@ -323,23 +377,23 @@ impl GraphQuery {
 
 fn map_symbol(row: &rusqlite::Row) -> rusqlite::Result<CodeNode> {
     Ok(CodeNode {
-        id:         row.get(0)?,
+        id: row.get(0)?,
         project_id: row.get(1)?,
-        file_path:  row.get(2)?,
-        name:       row.get(3)?,
-        kind:       NodeKind::from_str(&row.get::<_, String>(4)?),
-        signature:  row.get(5)?,
+        file_path: row.get(2)?,
+        name: row.get(3)?,
+        kind: NodeKind::from_str(&row.get::<_, String>(4)?),
+        signature: row.get(5)?,
         doc_comment: None,
         start_line: row.get::<_, i64>(6)? as u32,
-        end_line:   row.get::<_, i64>(7)? as u32,
-        language:   {
+        end_line: row.get::<_, i64>(7)? as u32,
+        language: {
             let s: String = row.get(8)?;
             match s.as_str() {
-                "rust"       => super::types::Language::Rust,
+                "rust" => super::types::Language::Rust,
                 "typescript" => super::types::Language::TypeScript,
                 "javascript" => super::types::Language::JavaScript,
-                "python"     => super::types::Language::Python,
-                _            => super::types::Language::Unknown,
+                "python" => super::types::Language::Python,
+                _ => super::types::Language::Unknown,
             }
         },
     })

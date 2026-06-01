@@ -90,7 +90,11 @@ impl PersonaRegistry {
     /// * `project_dir` - Optional project-level personas directory
     ///
     /// Priority order: project_dir > user_dir > dir > built-in
-    pub fn with_dirs(dir: PathBuf, user_dir: Option<PathBuf>, project_dir: Option<PathBuf>) -> Self {
+    pub fn with_dirs(
+        dir: PathBuf,
+        user_dir: Option<PathBuf>,
+        project_dir: Option<PathBuf>,
+    ) -> Self {
         let mut reg = Self {
             dir,
             personas: HashMap::new(),
@@ -225,7 +229,10 @@ impl PersonaRegistry {
             if user_dir.is_dir() {
                 self.load_from_dir(&user_dir, PersonaLocation::User);
             } else {
-                tracing::debug!("[PersonaRegistry] User directory not found: {}", user_dir.display());
+                tracing::debug!(
+                    "[PersonaRegistry] User directory not found: {}",
+                    user_dir.display()
+                );
             }
         }
 
@@ -234,7 +241,10 @@ impl PersonaRegistry {
             if project_dir.is_dir() {
                 self.load_from_dir(&project_dir, PersonaLocation::Project);
             } else {
-                tracing::debug!("[PersonaRegistry] Project directory not found: {}", project_dir.display());
+                tracing::debug!(
+                    "[PersonaRegistry] Project directory not found: {}",
+                    project_dir.display()
+                );
             }
         }
 
@@ -273,7 +283,10 @@ impl PersonaRegistry {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!("[PersonaRegistry] Failed to read dir {}: {e}", dir.display());
+                tracing::warn!(
+                    "[PersonaRegistry] Failed to read dir {}: {e}",
+                    dir.display()
+                );
                 return;
             }
         };
@@ -331,7 +344,8 @@ impl PersonaRegistry {
                         }
 
                         // Handle name conflicts
-                        if self.personas.contains_key(&key) && current_priority == existing_priority {
+                        if self.personas.contains_key(&key) && current_priority == existing_priority
+                        {
                             let file_base =
                                 file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                             if self.personas.contains_key(file_base) {
@@ -395,7 +409,10 @@ impl PersonaRegistry {
 
 // ===== File parsing =====
 
-fn parse_file(file_path: &Path, location: PersonaLocation) -> Result<Option<PersonaConfig>, anyhow::Error> {
+fn parse_file(
+    file_path: &Path,
+    location: PersonaLocation,
+) -> Result<Option<PersonaConfig>, anyhow::Error> {
     let raw = fs::read_to_string(file_path)?;
     let lines: Vec<&str> = raw.lines().collect();
 
@@ -522,7 +539,9 @@ You are an expert programmer. Write clean, idiomatic code.
 ";
         fs::write(&file_path, content).unwrap();
 
-        let persona = parse_file(&file_path, PersonaLocation::Project).unwrap().unwrap();
+        let persona = parse_file(&file_path, PersonaLocation::Project)
+            .unwrap()
+            .unwrap();
         assert_eq!(persona.name, "Coder");
         assert_eq!(persona.description, "Writes and reviews code");
         assert_eq!(
@@ -551,7 +570,9 @@ Be helpful.
         )
         .unwrap();
 
-        let persona = parse_file(&file_path, PersonaLocation::User).unwrap().unwrap();
+        let persona = parse_file(&file_path, PersonaLocation::User)
+            .unwrap()
+            .unwrap();
         assert_eq!(persona.name, "helper");
         assert_eq!(persona.description, "A helpful assistant");
         assert_eq!(persona.tools.unwrap(), vec!["Read"]);
@@ -575,7 +596,9 @@ No description here.
         )
         .unwrap();
 
-        assert!(parse_file(&file_path, PersonaLocation::Project).unwrap().is_none());
+        assert!(parse_file(&file_path, PersonaLocation::Project)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -584,7 +607,9 @@ No description here.
         let file_path = dir.path().join("plain.md");
         fs::write(&file_path, "Just plain text, no frontmatter.").unwrap();
 
-        assert!(parse_file(&file_path, PersonaLocation::Project).unwrap().is_none());
+        assert!(parse_file(&file_path, PersonaLocation::Project)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -603,7 +628,9 @@ Hello world.
         )
         .unwrap();
 
-        let persona = parse_file(&file_path, PersonaLocation::Project).unwrap().unwrap();
+        let persona = parse_file(&file_path, PersonaLocation::Project)
+            .unwrap()
+            .unwrap();
         assert_eq!(persona.name, "minimal");
         assert_eq!(persona.max_concurrent, 5);
         assert!(persona.tools.is_none());
@@ -630,7 +657,9 @@ description: Verbose
         )
         .unwrap();
 
-        let persona = parse_file(&file_path, PersonaLocation::Project).unwrap().unwrap();
+        let persona = parse_file(&file_path, PersonaLocation::Project)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             persona.system_prompt.chars().count(),
             MAX_SYSTEM_PROMPT_LENGTH

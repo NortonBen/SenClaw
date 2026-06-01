@@ -33,14 +33,19 @@ pub use bridge::{
 };
 pub use dag::is_ready;
 pub use file_tracker::FileTracker;
-pub use report::{generate_actionable_next_steps, generate_parent_verification_report, generate_task_verification_report};
+pub use report::{
+    generate_actionable_next_steps, generate_parent_verification_report,
+    generate_task_verification_report,
+};
 pub use resume::build_dispatch_resume_hint;
 pub use traits::{DispatchBridgeApi, NoopDispatchBridge};
 pub use types::{
     AdminActivityCallback, ChecklistItem, DispatchAgent, DispatchParent, DispatchState,
     DispatchTask, DispatchTaskStatus, FileChange, VerificationResult,
 };
-pub use verification::{generate_checklist_from_prompt, verify_parent_checklist, verify_task_checklist};
+pub use verification::{
+    generate_checklist_from_prompt, verify_parent_checklist, verify_task_checklist,
+};
 
 // pub(crate) items re-exported for intra-crate use.
 pub(crate) use locks::{modify_state_file, read_state_file};

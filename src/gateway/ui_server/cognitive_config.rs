@@ -38,11 +38,8 @@ pub(crate) struct CognitiveConfigBody {
 /// GET /api/cognitive-config — returns the persisted UI form values plus
 /// the *effective* values currently in use by the live daemon, so the
 /// UI can show "saved=400 / effective=400 (restart required to apply)".
-pub(crate) async fn cognitive_config_get(
-    State(s): State<Arc<UiState>>,
-) -> Json<serde_json::Value> {
-    let stored = load_cognitive_config(&s.config.paths.global_config_path)
-        .unwrap_or_default();
+pub(crate) async fn cognitive_config_get(State(s): State<Arc<UiState>>) -> Json<serde_json::Value> {
+    let stored = load_cognitive_config(&s.config.paths.global_config_path).unwrap_or_default();
     Json(serde_json::json!({
         "saved": {
             "enabled": stored.enabled,

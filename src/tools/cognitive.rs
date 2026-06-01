@@ -23,9 +23,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::memory::cognitive::{
-    self, CognifyOptions, NodeSet, SearchQuery, SearchType,
-};
+use crate::memory::cognitive::{self, CognifyOptions, NodeSet, SearchQuery, SearchType};
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolResultMessage};
 
 // =====================================================================
@@ -130,7 +128,10 @@ impl Tool for CogAddTool {
         for t in &tags {
             sets.push(NodeSet::group(ctx.agent_id, t));
         }
-        let opts = CognifyOptions { node_sets: sets, ..Default::default() };
+        let opts = CognifyOptions {
+            node_sets: sets,
+            ..Default::default()
+        };
 
         let report = sys.cognify(text, "tool:cog_add", &opts).await?;
         let data = serde_json::json!({
@@ -170,8 +171,12 @@ impl Tool for CogAddTool {
             title: "Cognitive · add".into(),
             summary: format!(
                 "+{} edges, +{} entities",
-                data.get("edges_added").and_then(|v| v.as_u64()).unwrap_or(0),
-                data.get("entities_added").and_then(|v| v.as_u64()).unwrap_or(0),
+                data.get("edges_added")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                data.get("entities_added")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
             ),
             content: data.clone(),
         }
@@ -246,7 +251,10 @@ impl Tool for CogSearchTool {
         if query.is_empty() {
             anyhow::bail!("`query` must not be empty");
         }
-        let mode = input.get("mode").and_then(|v| v.as_str()).unwrap_or("graph");
+        let mode = input
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("graph");
         let limit = input
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -293,10 +301,7 @@ impl Tool for CogSearchTool {
             .and_then(|v| v.as_array())
             .map(|a| a.len())
             .unwrap_or(0);
-        let q = input
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let q = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
         ToolResultMessage {
             title: "Cognitive · search".into(),
             summary: format!("{hits_n} hit(s) for \"{q}\""),
@@ -405,7 +410,10 @@ impl Tool for CogRecallTool {
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let q = input.get("query").and_then(|v| v.as_str()).unwrap_or("(empty)");
+        let q = input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(empty)");
         let trimmed: String = q.chars().take(40).collect();
         format!("CogRecall · {trimmed}")
     }
@@ -450,8 +458,7 @@ impl Tool for CogForgetTool {
             .get("node_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing `node_id`"))?;
-        let id = uuid::Uuid::parse_str(id_str)
-            .map_err(|e| anyhow::anyhow!("invalid uuid: {e}"))?;
+        let id = uuid::Uuid::parse_str(id_str).map_err(|e| anyhow::anyhow!("invalid uuid: {e}"))?;
         sys.graph.delete_node(id)?;
         let _ = sys.vector.delete(id);
         Ok(vec![assistant_result(
@@ -536,7 +543,9 @@ impl Tool for CogStatsTool {
             title: "Cognitive · stats".into(),
             summary: format!(
                 "{} nodes, {} edges",
-                data.get("nodes_total").and_then(|v| v.as_u64()).unwrap_or(0),
+                data.get("nodes_total")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
                 data.get("edges").and_then(|v| v.as_u64()).unwrap_or(0),
             ),
             content: data.clone(),
@@ -613,9 +622,7 @@ mod tests {
         // error variant is acceptable; we just need a non-panic Err.
         let tool = CogForgetTool;
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let res = rt.block_on(
-            tool.call(serde_json::json!({ "node_id": "not-a-uuid" }), &ctx()),
-        );
+        let res = rt.block_on(tool.call(serde_json::json!({ "node_id": "not-a-uuid" }), &ctx()));
         assert!(res.is_err());
         let msg = format!("{:?}", res.unwrap_err()).to_lowercase();
         assert!(

@@ -180,10 +180,8 @@ pub fn create_embedding_provider(
         // Falls back to candle `LocalProvider` otherwise.
         #[cfg(feature = "cognitive-mlx-embed")]
         {
-            let want_mlx = std::env::var("SENCLAW_LOCAL_EMBED_BACKEND")
-                .ok()
-                .as_deref()
-                == Some("mlx");
+            let want_mlx =
+                std::env::var("SENCLAW_LOCAL_EMBED_BACKEND").ok().as_deref() == Some("mlx");
             if want_mlx {
                 let name = model.clone().unwrap_or_else(|| "bge-small-en-v1.5".into());
                 match super::cognitive::MlxStaticEmbedder::new(name, model_path.clone()) {

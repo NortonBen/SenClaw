@@ -34,7 +34,10 @@ impl LocalCandleLlm {
             let canonical = canonical_local_model_id(model_name);
             let safe = canonical.replace('/', "__");
             let model_dir = cfg.paths.local_models_dir.join(safe);
-            Ok(Self { canonical_id: canonical, model_dir })
+            Ok(Self {
+                canonical_id: canonical,
+                model_dir,
+            })
         }
         #[cfg(not(feature = "local-candle"))]
         {
@@ -68,9 +71,10 @@ impl LlmClient for LocalCandleLlm {
 
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
             let engine_for_gen = engine.clone();
-            let gen_handle = tokio::spawn(async move {
-                engine_for_gen.generate_stream(messages, vec![], tx).await
-            });
+            let gen_handle =
+                tokio::spawn(
+                    async move { engine_for_gen.generate_stream(messages, vec![], tx).await },
+                );
 
             // Same output cap as the MLX adapter — see
             // `llm_local_mlx::output_char_cap` for rationale.
@@ -100,9 +104,7 @@ impl LlmClient for LocalCandleLlm {
         #[cfg(not(feature = "local-candle"))]
         {
             let _ = (system, user);
-            anyhow::bail!(
-                "local-candle-native adapter requires the `local-candle` cargo feature."
-            )
+            anyhow::bail!("local-candle-native adapter requires the `local-candle` cargo feature.")
         }
     }
 }

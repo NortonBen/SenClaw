@@ -130,58 +130,82 @@ impl McpCognitiveServer {
 
 #[rmcp::tool_router(server_handler)]
 impl McpCognitiveServer {
-    #[rmcp::tool(description = "Ingest text into cognitive memory as a chunk node. Skips LLM triplet extraction.")]
+    #[rmcp::tool(
+        description = "Ingest text into cognitive memory as a chunk node. Skips LLM triplet extraction."
+    )]
     async fn cog_add(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<AddParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AddParams,
+        >,
     ) -> String {
         match self.open_system() {
-            Ok(sys) => CognitiveServer::new(sys, self.group_folder.clone())
-                .cog_add(&p.text, p.source.as_deref(), &p.tags)
-                .await
-                .content,
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_add(&p.text, p.source.as_deref(), &p.tags)
+                    .await
+                    .content
+            }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
         }
     }
 
-    #[rmcp::tool(description = "Full cognify pipeline: chunk → LLM triplet extraction → upsert graph. Idempotent.")]
+    #[rmcp::tool(
+        description = "Full cognify pipeline: chunk → LLM triplet extraction → upsert graph. Idempotent."
+    )]
     async fn cog_cognify(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CognifyParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CognifyParams,
+        >,
     ) -> String {
         match self.open_system() {
-            Ok(sys) => CognitiveServer::new(sys, self.group_folder.clone())
-                .cog_cognify(&p.text, p.source.as_deref(), &p.tags)
-                .await
-                .content,
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_cognify(&p.text, p.source.as_deref(), &p.tags)
+                    .await
+                    .content
+            }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
         }
     }
 
-    #[rmcp::tool(description = "Search cognitive memory. mode: chunks | triplet | graph | spreading")]
+    #[rmcp::tool(
+        description = "Search cognitive memory. mode: chunks | triplet | graph | spreading"
+    )]
     async fn cog_search(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SearchParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SearchParams,
+        >,
     ) -> String {
         match self.open_system() {
-            Ok(sys) => CognitiveServer::new(sys, self.group_folder.clone())
-                .cog_search(&p.query, p.mode.as_deref(), p.limit, p.hops)
-                .await
-                .content,
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_search(&p.query, p.mode.as_deref(), p.limit, p.hops)
+                    .await
+                    .content
+            }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
         }
     }
 
-    #[rmcp::tool(description = "Recall memories via spreading activation (with Hebbian write-back).")]
+    #[rmcp::tool(
+        description = "Recall memories via spreading activation (with Hebbian write-back)."
+    )]
     async fn cog_recall(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<RecallParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RecallParams,
+        >,
     ) -> String {
         match self.open_system() {
-            Ok(sys) => CognitiveServer::new(sys, self.group_folder.clone())
-                .cog_recall(&p.query, p.limit, p.hops)
-                .await
-                .content,
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_recall(&p.query, p.limit, p.hops)
+                    .await
+                    .content
+            }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
         }
     }
@@ -189,12 +213,16 @@ impl McpCognitiveServer {
     #[rmcp::tool(description = "Delete a node and its edges from cognitive memory.")]
     async fn cog_forget(
         &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ForgetParams>,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ForgetParams,
+        >,
     ) -> String {
         match self.open_system() {
-            Ok(sys) => CognitiveServer::new(sys, self.group_folder.clone())
-                .cog_forget(&p.node_id)
-                .content,
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_forget(&p.node_id)
+                    .content
+            }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
         }
     }
@@ -202,9 +230,11 @@ impl McpCognitiveServer {
     #[rmcp::tool(description = "Return counts of nodes/edges in cognitive memory.")]
     fn cog_memory_stats(&self) -> String {
         match self.open_system() {
-            Ok(sys) => CognitiveServer::new(sys, self.group_folder.clone())
-                .cog_memory_stats()
-                .content,
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_memory_stats()
+                    .content
+            }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
         }
     }
@@ -224,7 +254,11 @@ pub async fn run_stdio_server() -> Result<()> {
     let group_folder = std::env::var("SENCLAW_GROUP_FOLDER").unwrap_or_default();
     let llm_disabled = std::env::var("SENCLAW_COG_LLM_DISABLED").ok().as_deref() == Some("1");
 
-    let server = McpCognitiveServer { db_path, group_folder, llm_disabled };
+    let server = McpCognitiveServer {
+        db_path,
+        group_folder,
+        llm_disabled,
+    };
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -263,12 +297,7 @@ impl CognitiveServer {
         sets
     }
 
-    pub async fn cog_add(
-        &self,
-        text: &str,
-        source: Option<&str>,
-        tags: &[String],
-    ) -> ToolResult {
+    pub async fn cog_add(&self, text: &str, source: Option<&str>, tags: &[String]) -> ToolResult {
         // `cog_add` is the agent's "remember this" entry point. Originally we
         // shipped a chunk-only fast path here so it'd work even without an
         // LLM, but that turned out to be the wrong default: callers expect
@@ -412,16 +441,27 @@ mod tests {
         struct FakeEmbedder;
         #[async_trait]
         impl EmbeddingProvider for FakeEmbedder {
-            fn name(&self) -> &str { "fake" }
-            fn model(&self) -> &str { "fake-model" }
-            fn dimensions(&self) -> u32 { 8 }
+            fn name(&self) -> &str {
+                "fake"
+            }
+            fn model(&self) -> &str {
+                "fake-model"
+            }
+            fn dimensions(&self) -> u32 {
+                8
+            }
             async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-                Ok(texts.iter().map(|t| {
-                    let mut v = vec![0.0f32; 8];
-                    for (i, b) in t.bytes().enumerate() { v[i % 8] += b as f32; }
-                    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
-                    v.iter().map(|x| x / n).collect()
-                }).collect())
+                Ok(texts
+                    .iter()
+                    .map(|t| {
+                        let mut v = vec![0.0f32; 8];
+                        for (i, b) in t.bytes().enumerate() {
+                            v[i % 8] += b as f32;
+                        }
+                        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+                        v.iter().map(|x| x / n).collect()
+                    })
+                    .collect())
             }
         }
 
@@ -436,9 +476,13 @@ mod tests {
     #[tokio::test]
     async fn cog_add_then_search() {
         let srv = build_server(vec![]);
-        let r = srv.cog_add("the compiler runs on the machine", None, &[]).await;
+        let r = srv
+            .cog_add("the compiler runs on the machine", None, &[])
+            .await;
         assert!(!r.is_error, "{}", r.content);
-        let s = srv.cog_search("compiler", Some("chunks"), Some(5), None).await;
+        let s = srv
+            .cog_search("compiler", Some("chunks"), Some(5), None)
+            .await;
         assert!(!s.is_error);
         assert!(s.content.contains("compiler"), "got: {}", s.content);
     }
@@ -448,15 +492,23 @@ mod tests {
         let srv = build_server(vec![]);
         let r1 = srv.cog_add("identical payload", None, &[]).await;
         let r2 = srv.cog_add("identical payload", None, &[]).await;
-        assert!(r2.content.contains("deduped"), "second add should dedupe, got: {}", r2.content);
+        assert!(
+            r2.content.contains("deduped"),
+            "second add should dedupe, got: {}",
+            r2.content
+        );
         let _ = r1;
     }
 
     #[tokio::test]
     async fn cog_cognify_then_recall_writes_back() {
-        let canned = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#.to_string();
+        let canned =
+            r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+                .to_string();
         let srv = build_server(vec![canned]);
-        let c = srv.cog_cognify("Ada invented the compiler.", None, &[]).await;
+        let c = srv
+            .cog_cognify("Ada invented the compiler.", None, &[])
+            .await;
         assert!(!c.is_error, "{}", c.content);
         assert!(c.content.contains("entities_added"));
 

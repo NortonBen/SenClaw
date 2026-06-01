@@ -19,12 +19,7 @@ pub struct StoredToolRule {
 
 impl super::Db {
     /// Insert or replace a rule by ID.
-    pub fn upsert_tool_rule(
-        &self,
-        id: &str,
-        rule_json: &str,
-        updated_at: &str,
-    ) -> Result<()> {
+    pub fn upsert_tool_rule(&self, id: &str, rule_json: &str, updated_at: &str) -> Result<()> {
         self.with_conn(|c| {
             c.execute(
                 r#"
@@ -41,12 +36,7 @@ impl super::Db {
     }
 
     pub fn delete_tool_rule(&self, id: &str) -> Result<usize> {
-        self.with_conn(|c| {
-            Ok(c.execute(
-                "DELETE FROM tool_rules WHERE id = ?1",
-                params![id],
-            )?)
-        })
+        self.with_conn(|c| Ok(c.execute("DELETE FROM tool_rules WHERE id = ?1", params![id])?))
     }
 
     pub fn list_tool_rules(&self) -> Result<Vec<StoredToolRule>> {
@@ -69,19 +59,18 @@ impl super::Db {
 
     pub fn get_tool_rule(&self, id: &str) -> Result<Option<StoredToolRule>> {
         self.with_conn(|c| {
-            Ok(c
-                .query_row(
-                    "SELECT id, rule_json, updated_at FROM tool_rules WHERE id = ?1",
-                    params![id],
-                    |r| {
-                        Ok(StoredToolRule {
-                            id: r.get(0)?,
-                            rule_json: r.get(1)?,
-                            updated_at: r.get(2)?,
-                        })
-                    },
-                )
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT id, rule_json, updated_at FROM tool_rules WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(StoredToolRule {
+                        id: r.get(0)?,
+                        rule_json: r.get(1)?,
+                        updated_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
         })
     }
 }
@@ -96,8 +85,18 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.upsert_tool_rule("rule-a", r#"{"id":"rule-a","action":"auto_accept"}"#, "2026-05-19T10:00:00Z").unwrap();
-        db.upsert_tool_rule("rule-b", r#"{"id":"rule-b","action":"auto_deny"}"#, "2026-05-19T10:00:01Z").unwrap();
+        db.upsert_tool_rule(
+            "rule-a",
+            r#"{"id":"rule-a","action":"auto_accept"}"#,
+            "2026-05-19T10:00:00Z",
+        )
+        .unwrap();
+        db.upsert_tool_rule(
+            "rule-b",
+            r#"{"id":"rule-b","action":"auto_deny"}"#,
+            "2026-05-19T10:00:01Z",
+        )
+        .unwrap();
 
         let all = db.list_tool_rules().unwrap();
         assert_eq!(all.len(), 2);
@@ -105,7 +104,12 @@ mod tests {
         assert_eq!(all[1].id, "rule-b");
 
         // Upsert overwrites
-        db.upsert_tool_rule("rule-a", r#"{"id":"rule-a","action":"auto_deny"}"#, "2026-05-19T10:00:02Z").unwrap();
+        db.upsert_tool_rule(
+            "rule-a",
+            r#"{"id":"rule-a","action":"auto_deny"}"#,
+            "2026-05-19T10:00:02Z",
+        )
+        .unwrap();
         let got = db.get_tool_rule("rule-a").unwrap().unwrap();
         assert!(got.rule_json.contains(r#""action":"auto_deny""#));
         assert_eq!(got.updated_at, "2026-05-19T10:00:02Z");

@@ -160,8 +160,11 @@ impl GraphScorer for LightGcnScorer {
         }
 
         let n = candidates.len();
-        let id_to_idx: HashMap<Uuid, usize> =
-            candidates.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
+        let id_to_idx: HashMap<Uuid, usize> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id, i))
+            .collect();
 
         // Collect the induced subgraph between candidates. We deliberately
         // stay within the candidate set: re-ranking should respect the
@@ -330,7 +333,10 @@ mod tests {
             .map(|v| cosine_sim(&query, v))
             .collect::<Vec<_>>();
         assert!(raw[0] > raw[1] && raw[0] > raw[2]);
-        assert!((raw[1] - raw[2]).abs() < 1e-5, "B and C tie before propagation");
+        assert!(
+            (raw[1] - raw[2]).abs() < 1e-5,
+            "B and C tie before propagation"
+        );
 
         let scored = scorer.score(&query, &candidates, &embs).unwrap();
         // After propagation, B (1-hop from A) should outscore C (2-hop).

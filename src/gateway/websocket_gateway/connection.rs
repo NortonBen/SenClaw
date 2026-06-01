@@ -165,7 +165,8 @@ async fn handle_message(
             super::handlers::handle_tool_accept_all(clients, client_idx, &sender, state, msg).await
         }
         "plan:exit:response" => {
-            super::handlers::handle_plan_exit_response(clients, client_idx, &sender, state, msg).await
+            super::handlers::handle_plan_exit_response(clients, client_idx, &sender, state, msg)
+                .await
         }
         "plan:list" => {
             super::handlers::handle_plan_list(clients, client_idx, &sender, state, msg).await
@@ -174,13 +175,16 @@ async fn handle_message(
             super::handlers::handle_plan_get(clients, client_idx, &sender, state, msg).await
         }
         "notifications:list" => {
-            super::handlers::handle_notifications_list(clients, client_idx, &sender, state, msg).await
+            super::handlers::handle_notifications_list(clients, client_idx, &sender, state, msg)
+                .await
         }
         "notifications:pending" => {
-            super::handlers::handle_notifications_pending(clients, client_idx, &sender, state, msg).await
+            super::handlers::handle_notifications_pending(clients, client_idx, &sender, state, msg)
+                .await
         }
         "notification:read" => {
-            super::handlers::handle_notification_read(clients, client_idx, &sender, state, msg).await
+            super::handlers::handle_notification_read(clients, client_idx, &sender, state, msg)
+                .await
         }
         "question:response" => {
             super::handlers::handle_question_response(clients, client_idx, &sender, state, msg)

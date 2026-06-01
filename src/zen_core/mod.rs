@@ -42,7 +42,8 @@ use serde::{Deserialize, Serialize};
 pub use config_manager::{with_conf_manager, ConfigManager, ProjectConfig, ProjectConfigPatch};
 pub use context::{
     get_agent_data_dir, get_engine_store, get_event_bus, get_hook_manager, get_mcp_manager,
-    get_model_profile, get_state_manager, get_working_dir, run_with_engine, CoreConfig, EngineStore,
+    get_model_profile, get_state_manager, get_working_dir, run_with_engine, CoreConfig,
+    EngineStore,
 };
 pub use engine::ZenEngine;
 pub use events::{EngineEvent, EventBus, ResponseRegistry};
@@ -104,9 +105,7 @@ pub enum ContentBlock {
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
     #[serde(rename = "image")]
-    Image {
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
     #[serde(rename = "control_signal")]
     ControlSignal {
         signal_type: String,
@@ -881,7 +880,10 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<Message> {
         .iter()
         .map(|m| {
             let mut new_m = m.clone();
-            new_m.message.content.retain(|b| !matches!(b, ContentBlock::ControlSignal { .. }));
+            new_m
+                .message
+                .content
+                .retain(|b| !matches!(b, ContentBlock::ControlSignal { .. }));
             new_m
         })
         .collect()

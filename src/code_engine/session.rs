@@ -121,7 +121,13 @@ impl CodeSession {
             .status()
             .context("git add")?;
         std::process::Command::new("git")
-            .args(["commit", "-q", "--allow-empty", "-m", &format!("checkpoint: {msg}")])
+            .args([
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("checkpoint: {msg}"),
+            ])
             .current_dir(&self.workspace)
             .status()
             .context("git commit")?;
@@ -165,7 +171,9 @@ pub(super) fn normalize_path(p: &Path) -> PathBuf {
     for component in p.components() {
         use std::path::Component::*;
         match component {
-            ParentDir => { out.pop(); }
+            ParentDir => {
+                out.pop();
+            }
             CurDir => {}
             c => out.push(c),
         }

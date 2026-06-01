@@ -303,8 +303,7 @@ pub(crate) async fn tts_download(
 
     let weights_repo = id.clone();
     tokio::spawn(async move {
-        let result =
-            run_tts_download(&weights_repo, &dir, progress.clone(), cancel).await;
+        let result = run_tts_download(&weights_repo, &dir, progress.clone(), cancel).await;
         let mut s = progress.lock().unwrap();
         match result {
             Ok(()) if s.status != DownloadStatus::Cancelled => s.status = DownloadStatus::Done,
@@ -481,7 +480,10 @@ pub(crate) async fn tts_synthesize(
     let response = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static("audio/wav"))
-        .header("Content-Disposition", HeaderValue::from_static("inline; filename=\"speech.wav\""))
+        .header(
+            "Content-Disposition",
+            HeaderValue::from_static("inline; filename=\"speech.wav\""),
+        )
         .header("Content-Length", wav_bytes.len().to_string())
         .body(Body::from(wav_bytes))
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -625,19 +627,12 @@ fn synthesize_blocking(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or_default();
-            let tmp = std::env::temp_dir().join(format!(
-                "senclaw-tts-{}-{nonce}.wav",
-                std::process::id()
-            ));
+            let tmp = std::env::temp_dir()
+                .join(format!("senclaw-tts-{}-{nonce}.wav", std::process::id()));
 
             // Select native macOS voice.
-            let effective_voice = voice.unwrap_or_else(|| {
-                if language == "vi" {
-                    "Linh"
-                } else {
-                    "Samantha"
-                }
-            });
+            let effective_voice =
+                voice.unwrap_or_else(|| if language == "vi" { "Linh" } else { "Samantha" });
 
             // Speech rate for `say` baseline is around 175 words per minute.
             let rate = (175.0 * speed) as u32;
@@ -700,11 +695,6 @@ fn synthesize_blocking(
 
     // Call our pure-Rust MLX implementation for ZipVoice (Phase 1 placeholder)
     crate::memory::cognitive::tts_mlx::synthesize(
-        model_id,
-        model_path,
-        text,
-        language,
-        voice,
-        speed,
+        model_id, model_path, text, language, voice, speed,
     )
 }

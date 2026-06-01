@@ -145,9 +145,12 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.insert_plan(&make("p1", "tg:a", "2026-05-19T10:00:00Z")).unwrap();
-        db.insert_plan(&make("p2", "tg:a", "2026-05-19T10:00:01Z")).unwrap();
-        db.insert_plan(&make("p3", "tg:b", "2026-05-19T10:00:02Z")).unwrap();
+        db.insert_plan(&make("p1", "tg:a", "2026-05-19T10:00:00Z"))
+            .unwrap();
+        db.insert_plan(&make("p2", "tg:a", "2026-05-19T10:00:01Z"))
+            .unwrap();
+        db.insert_plan(&make("p3", "tg:b", "2026-05-19T10:00:02Z"))
+            .unwrap();
 
         let got = db.get_plan("p2").unwrap().unwrap();
         assert_eq!(got.chat_jid, "tg:a");
@@ -163,7 +166,9 @@ mod tests {
         assert_eq!(b[0].id, "p3");
 
         // Update approval
-        let n = db.update_plan_approval("p1", "startEditing", "2026-05-19T10:01:00Z").unwrap();
+        let n = db
+            .update_plan_approval("p1", "startEditing", "2026-05-19T10:01:00Z")
+            .unwrap();
         assert_eq!(n, 1);
         let p1 = db.get_plan("p1").unwrap().unwrap();
         assert_eq!(p1.approval, "startEditing");

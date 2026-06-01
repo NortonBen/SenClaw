@@ -858,11 +858,25 @@ impl ZenCore for ZenEngine {
         // Build deferred-tools reminder so the LLM knows ToolSearch can load
         // specialized tools on demand.
         let deferred_reminder = self.build_deferred_tools_reminder();
+        
+        let plan_mode_reminder = if opts.agent_mode == AgentMode::Plan {
+            let plans_dir = std::path::Path::new(&opts.agent_data_dir)
+                .join(".sema")
+                .join("plans")
+                .join("") // ensure trailing slash
+                .to_string_lossy()
+                .to_string();
+            Some(crate::zen_core::prompt::plan_mode_reminder(&plans_dir))
+        } else {
+            None
+        };
+
         let system_prompt = Self::assemble_system_prompt(
             &opts.system_prompt,
             &opts.working_dir,
             skills_reminder.as_deref(),
             deferred_reminder.as_deref(),
+            plan_mode_reminder.as_deref(),
         );
 
         // Resolve profile from active UI config first, env fallback second.
@@ -1271,9 +1285,6 @@ impl ZenCore for ZenEngine {
         match response.selected.as_str() {
             "startEditing" | "clearContextAndStart" => {
                 self.update_agent_mode(AgentMode::Agent);
-                self.fire(EngineEvent::PlanImplement(crate::zen_core::PlanImplementData {
-                    agent_id: response.agent_id.clone(),
-                }));
             }
             _ => {}
         }
@@ -1341,6 +1352,7 @@ impl ZenEngine {
         working_dir: &str,
         skills_reminder: Option<&str>,
         deferred_reminder: Option<&str>,
+        plan_mode_reminder: Option<&str>,
     ) -> String {
         // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
         // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
@@ -1358,6 +1370,10 @@ impl ZenEngine {
             out.push_str(reminder);
         }
         if let Some(reminder) = deferred_reminder {
+            out.push_str("\n\n");
+            out.push_str(reminder);
+        }
+        if let Some(reminder) = plan_mode_reminder {
             out.push_str("\n\n");
             out.push_str(reminder);
         }

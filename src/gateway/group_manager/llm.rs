@@ -107,9 +107,7 @@ pub fn load_embedding_config(config_path: &Path) -> Option<EmbeddingConfig> {
     load_global_config(config_path).embedding_config
 }
 
-pub fn load_cognitive_config(
-    config_path: &Path,
-) -> Option<super::types::PersistedCognitiveConfig> {
+pub fn load_cognitive_config(config_path: &Path) -> Option<super::types::PersistedCognitiveConfig> {
     load_global_config(config_path).cognitive_config
 }
 
@@ -131,7 +129,9 @@ pub fn save_embedding_config(config_path: &Path, c: &EmbeddingConfig) -> Result<
 // ===== Whisper ASR settings =====
 
 pub fn load_whisper_settings(config_path: &Path) -> WhisperSettings {
-    load_global_config(config_path).whisper_config.unwrap_or_default()
+    load_global_config(config_path)
+        .whisper_config
+        .unwrap_or_default()
 }
 
 pub fn save_whisper_settings(config_path: &Path, s: &WhisperSettings) -> Result<()> {

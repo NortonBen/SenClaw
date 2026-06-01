@@ -56,15 +56,31 @@ pub struct NodeSet {
 
 impl NodeSet {
     pub fn group(jid: impl Into<String>, tag: impl Into<String>) -> Self {
-        Self { scope_kind: ScopeKind::Group, scope_id: jid.into(), tag: tag.into() }
+        Self {
+            scope_kind: ScopeKind::Group,
+            scope_id: jid.into(),
+            tag: tag.into(),
+        }
     }
     pub fn persona(slug: impl Into<String>, tag: impl Into<String>) -> Self {
-        Self { scope_kind: ScopeKind::Persona, scope_id: slug.into(), tag: tag.into() }
+        Self {
+            scope_kind: ScopeKind::Persona,
+            scope_id: slug.into(),
+            tag: tag.into(),
+        }
     }
     pub fn cowork(workspace_id: impl Into<String>, tag: impl Into<String>) -> Self {
-        Self { scope_kind: ScopeKind::Cowork, scope_id: workspace_id.into(), tag: tag.into() }
+        Self {
+            scope_kind: ScopeKind::Cowork,
+            scope_id: workspace_id.into(),
+            tag: tag.into(),
+        }
     }
     pub fn global(tag: impl Into<String>) -> Self {
-        Self { scope_kind: ScopeKind::Global, scope_id: String::new(), tag: tag.into() }
+        Self {
+            scope_kind: ScopeKind::Global,
+            scope_id: String::new(),
+            tag: tag.into(),
+        }
     }
 }

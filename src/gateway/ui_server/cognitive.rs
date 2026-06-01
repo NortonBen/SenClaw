@@ -104,7 +104,10 @@ impl From<RelationshipEdge> for EdgeView {
         // props_json.inferred = true. Check both so the flag survives even
         // if a future predicate reuses the label.
         let inferred = e.predicate == "ASSOCIATED_WITH"
-            || e.props.get("inferred").and_then(|v| v.as_bool()).unwrap_or(false);
+            || e.props
+                .get("inferred")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
         Self {
             src: e.src.to_string(),
             dst: e.dst.to_string(),
@@ -317,7 +320,10 @@ pub(crate) async fn cognitive_top_nodes(
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let views: Vec<TopNodeView> = rows
         .into_iter()
-        .map(|r| TopNodeView { node: r.node.into(), degree: r.degree })
+        .map(|r| TopNodeView {
+            node: r.node.into(),
+            degree: r.degree,
+        })
         .collect();
     Ok(Json(serde_json::json!({ "nodes": views })))
 }
@@ -438,7 +444,11 @@ pub(crate) async fn cognitive_sample(
         .collect();
     let nodes: Vec<NodeView> = visited.into_values().map(NodeView::from).collect();
 
-    Ok(Json(SubgraphResponse { nodes, edges, truncated }))
+    Ok(Json(SubgraphResponse {
+        nodes,
+        edges,
+        truncated,
+    }))
 }
 
 // =====================================================================
@@ -550,7 +560,11 @@ pub(crate) async fn cognitive_subgraph(
         .collect();
     let nodes: Vec<NodeView> = visited.into_values().map(NodeView::from).collect();
 
-    Ok(Json(SubgraphResponse { nodes, edges, truncated }))
+    Ok(Json(SubgraphResponse {
+        nodes,
+        edges,
+        truncated,
+    }))
 }
 
 // =====================================================================
@@ -760,12 +774,7 @@ mod tests {
 
     #[test]
     fn edge_view_carries_dynamics() {
-        let mut e = RelationshipEdge::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            "knows",
-            10,
-        );
+        let mut e = RelationshipEdge::new(Uuid::new_v4(), Uuid::new_v4(), "knows", 10);
         e.strength = 0.42;
         e.activation_count = 7;
         let v: EdgeView = e.into();

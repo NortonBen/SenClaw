@@ -210,7 +210,11 @@ pub struct WorkbenchService {
 impl WorkbenchService {
     /// Construct a registry bound to `instance_id` + `working_dir` and hydrate
     /// it from the on-disk manifest (if present).
-    pub fn new(event_bus: EventBus, instance_id: impl Into<String>, working_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        event_bus: EventBus,
+        instance_id: impl Into<String>,
+        working_dir: impl Into<PathBuf>,
+    ) -> Self {
         let svc = Self {
             event_bus,
             instance_id: instance_id.into(),
@@ -431,11 +435,12 @@ impl WorkbenchService {
 
     pub fn notify_service_ready(&self, artifact_id: &str) {
         self.set_process_status(artifact_id, "ready");
-        self.event_bus
-            .emit(EngineEvent::WorkbenchServiceReady(WorkbenchServiceReadyData {
+        self.event_bus.emit(EngineEvent::WorkbenchServiceReady(
+            WorkbenchServiceReadyData {
                 artifact_id: artifact_id.to_string(),
                 ready: true,
-            }));
+            },
+        ));
     }
 
     pub fn notify_service_crashed(&self, artifact_id: &str, last_log_lines: String) {
@@ -487,10 +492,11 @@ impl WorkbenchService {
             previous
         };
         self.flush_to_disk();
-        self.event_bus.emit(EngineEvent::WorkbenchNew(WorkbenchNewData {
-            artifact,
-            replaces_id: previous,
-        }));
+        self.event_bus
+            .emit(EngineEvent::WorkbenchNew(WorkbenchNewData {
+                artifact,
+                replaces_id: previous,
+            }));
     }
 
     fn set_process_status(&self, artifact_id: &str, status: &str) {
@@ -604,7 +610,10 @@ impl WorkbenchService {
                     // Drop "transient display links" living under the fallback
                     // dir; physical-file GC is a separate concern.
                     let in_fallback = !it.files.is_empty()
-                        && it.files.iter().any(|f| f.path.starts_with(&fallback_prefix));
+                        && it
+                            .files
+                            .iter()
+                            .any(|f| f.path.starts_with(&fallback_prefix));
                     if in_fallback {
                         continue;
                     }
@@ -722,7 +731,10 @@ mod tests {
         assert_eq!(a.files[0].extension.as_deref(), Some("md"));
         assert!(a.files[0].hash.as_ref().unwrap().len() == 64);
         assert_eq!(a.agent_id.as_deref(), Some("agent-1"));
-        assert!(matches!(rx.try_recv().unwrap(), EngineEvent::WorkbenchNew(_)));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineEvent::WorkbenchNew(_)
+        ));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -742,7 +754,11 @@ mod tests {
         let dir = tmp_dir();
         let svc = svc_in(&dir);
         let err = svc
-            .create_static(&[dir.join("ghost.md").to_string_lossy().to_string()], None, "a")
+            .create_static(
+                &[dir.join("ghost.md").to_string_lossy().to_string()],
+                None,
+                "a",
+            )
             .unwrap_err();
         assert!(err.starts_with("path_not_found"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
@@ -787,10 +803,7 @@ mod tests {
             svc.read_file(&a.id, "/etc/passwd").unwrap_err(),
             "path_not_in_artifact"
         );
-        assert_eq!(
-            svc.read_file("nope", &f).unwrap_err(),
-            "artifact_not_found"
-        );
+        assert_eq!(svc.read_file("nope", &f).unwrap_err(), "artifact_not_found");
         std::fs::remove_dir_all(&dir).ok();
     }
 

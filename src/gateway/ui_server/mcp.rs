@@ -14,7 +14,6 @@ use crate::mcp::manager::McpManager;
 
 use super::core::{AppError, UiState};
 
-
 // ===== MCP helper =====
 
 /// Helper to get McpManager from state.

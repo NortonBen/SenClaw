@@ -65,12 +65,12 @@
 //! plus Qwen3/chat-template code vendored in `mlx_lm` / `mlx_lm_utils` is gated behind the `local-mlx`
 //! feature so default builds remain cross-platform.
 
+#[cfg(feature = "local-mlx")]
+pub mod chat_template_openai;
 pub mod models;
 pub mod runtime;
 pub mod stream_parser;
 pub mod thinking_parse;
-#[cfg(feature = "local-mlx")]
-pub mod chat_template_openai;
 
 // ── Whisper ASR audio front-end (pure-Rust, CPU; feature `whisper-audio`) ──
 #[cfg(feature = "whisper-audio")]
@@ -113,8 +113,8 @@ pub mod tokenizer_utils;
 
 // ── Candle inference backend ───────────────────────────────────────────────
 #[cfg(feature = "local-candle")]
-pub mod candle_models;
-#[cfg(feature = "local-candle")]
 pub mod candle_engine;
+#[cfg(feature = "local-candle")]
+pub mod candle_models;
 #[cfg(feature = "local-candle")]
 pub use candle_engine::CandleEngine;

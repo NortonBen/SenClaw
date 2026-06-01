@@ -64,10 +64,7 @@ pub fn insert_event_notification_conn(
 }
 
 impl super::Db {
-    pub fn insert_event_notification(
-        &self,
-        notif: &StoredEventNotification,
-    ) -> Result<()> {
+    pub fn insert_event_notification(&self, notif: &StoredEventNotification) -> Result<()> {
         self.with_conn(|c| insert_event_notification_conn(c, notif))
     }
 
@@ -112,10 +109,7 @@ impl super::Db {
         })
     }
 
-    pub fn get_event_notification(
-        &self,
-        id: &str,
-    ) -> Result<Option<StoredEventNotification>> {
+    pub fn get_event_notification(&self, id: &str) -> Result<Option<StoredEventNotification>> {
         self.with_conn(|c| {
             Ok(c.query_row(
                 "SELECT id, event_id, title, start_at, kind, fired_at, delayed_ms, read_at
@@ -202,9 +196,12 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.insert_event_notification(&make("n1", "e1", 1_000, 0)).unwrap();
-        db.insert_event_notification(&make("n2", "e2", 2_000, 0)).unwrap();
-        db.insert_event_notification(&make("n3", "e3", 3_000, 5_000)).unwrap();
+        db.insert_event_notification(&make("n1", "e1", 1_000, 0))
+            .unwrap();
+        db.insert_event_notification(&make("n2", "e2", 2_000, 0))
+            .unwrap();
+        db.insert_event_notification(&make("n3", "e3", 3_000, 5_000))
+            .unwrap();
 
         let rows = db.list_event_notifications(None).unwrap();
         assert_eq!(rows.len(), 3);
@@ -222,7 +219,8 @@ mod tests {
         let cfg = Config::from_env();
         let db = Db::open_in_memory(&cfg).expect("open db");
 
-        db.insert_event_notification(&make("n1", "e1", 1_000, 0)).unwrap();
+        db.insert_event_notification(&make("n1", "e1", 1_000, 0))
+            .unwrap();
         assert_eq!(db.mark_event_notification_read("n1", 9_000).unwrap(), 1);
         let got = db.get_event_notification("n1").unwrap().unwrap();
         assert_eq!(got.read_at, Some(9_000));
@@ -236,15 +234,52 @@ mod tests {
 
         db.with_conn(|conn| {
             // (a) due in 3 min, reminder 5 min → trigger 2 min ago → IN window
-            insert_event(conn, "e-a", "Within window", now + 3 * 60_000, now + 30 * 60_000, Some(5), None, false);
+            insert_event(
+                conn,
+                "e-a",
+                "Within window",
+                now + 3 * 60_000,
+                now + 30 * 60_000,
+                Some(5),
+                None,
+                false,
+            );
             // (b) due in 60 min, reminder 5 min → trigger in 55 min → OUTSIDE 10-min window
-            insert_event(conn, "e-b", "Far future", now + 60 * 60_000, now + 90 * 60_000, Some(5), None, false);
+            insert_event(
+                conn,
+                "e-b",
+                "Far future",
+                now + 60 * 60_000,
+                now + 90 * 60_000,
+                Some(5),
+                None,
+                false,
+            );
             // (c) reminder already sent → should NOT appear
-            insert_event(conn, "e-c", "Already sent", now + 3 * 60_000, now + 30 * 60_000, Some(5), None, true);
+            insert_event(
+                conn,
+                "e-c",
+                "Already sent",
+                now + 3 * 60_000,
+                now + 30 * 60_000,
+                Some(5),
+                None,
+                true,
+            );
             // (d) no reminder_min set → should NOT appear
-            insert_event(conn, "e-d", "No reminder", now + 3 * 60_000, now + 30 * 60_000, None, None, false);
+            insert_event(
+                conn,
+                "e-d",
+                "No reminder",
+                now + 3 * 60_000,
+                now + 30 * 60_000,
+                None,
+                None,
+                false,
+            );
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         let pending = db.list_pending_event_reminders(now, 10 * 60_000).unwrap();
         let ids: Vec<&str> = pending.iter().map(|p| p.event_id.as_str()).collect();

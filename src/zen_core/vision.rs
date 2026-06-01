@@ -2,9 +2,9 @@
 //!
 //! Port of TS `util/vision.ts`.
 
+use super::ModelProfile;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use super::ModelProfile;
 
 /// Vision patterns for model name matching.
 static VISION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {

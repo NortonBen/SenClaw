@@ -32,13 +32,12 @@ pub async fn train(
     cfg.apply_persisted_overrides(&gcp);
 
     let db = Arc::new(Db::open(&cfg).context("open senclaw db")?);
-    let provider_box =
-        create_embedding_provider(&cfg, Arc::clone(&db)).ok_or_else(|| {
-            anyhow::anyhow!(
-                "No embedding provider configured. Pick one in Settings → Embedding \
+    let provider_box = create_embedding_provider(&cfg, Arc::clone(&db)).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No embedding provider configured. Pick one in Settings → Embedding \
                  (or set SENCLAW_EMBEDDING_PROVIDER) before training."
-            )
-        })?;
+        )
+    })?;
     let provider: Arc<dyn EmbeddingProvider> = Arc::from(provider_box);
     let graph: Arc<dyn GraphStore> = Arc::new(SqliteGraphStore::new(Arc::clone(&db)));
 

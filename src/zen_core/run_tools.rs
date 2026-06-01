@@ -32,9 +32,7 @@ pub enum PrePermissionDecision {
 /// Map an `AggregatedHookResult` from a PrePermission hook chain into a
 /// concrete decision. Deny wins over Allow when both signals are present
 /// in the same chain (safer default for ambiguous configs).
-pub fn classify_pre_permission(
-    res: &super::hooks::AggregatedHookResult,
-) -> PrePermissionDecision {
+pub fn classify_pre_permission(res: &super::hooks::AggregatedHookResult) -> PrePermissionDecision {
     if res.blocked || res.abort {
         return PrePermissionDecision::Deny;
     }
@@ -213,12 +211,13 @@ async fn run_single_tool(
 
     // Find the tool — try active set, then refresh from resolver (ToolSearch
     // may have loaded deferred tools earlier in this serial batch).
-    let tool = crate::tools::tool_search::resolve_tool_by_name(&tool_name, ctx.tools).or_else(|| {
-        ctx.tools_resolver.map(|resolver| {
-            let fresh = resolver();
-            crate::tools::tool_search::resolve_tool_by_name(&tool_name, &fresh)
-        })?
-    });
+    let tool =
+        crate::tools::tool_search::resolve_tool_by_name(&tool_name, ctx.tools).or_else(|| {
+            ctx.tools_resolver.map(|resolver| {
+                let fresh = resolver();
+                crate::tools::tool_search::resolve_tool_by_name(&tool_name, &fresh)
+            })?
+        });
 
     let tool = match tool {
         Some(t) => t,
@@ -355,53 +354,54 @@ async fn run_single_tool(
         // and grants the tool; blocked/`decision: "reject"` denies the
         // tool without bothering the user; otherwise we fall through to
         // the normal permission flow.
-        let pre_perm_decision: PrePermissionDecision =
-            if let Some(ref hm) = ctx.hook_manager {
-                if hm.has_hooks_for_event(&HookEvent::PrePermission) {
-                    let base = HookInputBase {
-                        hook_event_name: HookEvent::PrePermission,
-                        session_id: ctx.session_id.clone(),
-                        agent_id: ctx.agent_id.to_string(),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        cwd: ctx.working_dir.to_string(),
-                    };
-                    let input_for_hook = HookInput::PrePermission(PrePermissionInput {
-                        base,
-                        tool_name: tool_name.clone(),
-                        tool_input: input.clone(),
-                    });
-                    let res = zen_hooks::execute_hooks(
-                        hm,
-                        &HookEvent::PrePermission,
-                        &input_for_hook,
-                        &ExecuteHooksOptions {
-                            client: ctx.hook_client.as_ref(),
-                            profile: ctx.hook_profile.as_ref(),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-                    classify_pre_permission(&res)
-                } else {
-                    PrePermissionDecision::Passthrough
-                }
+        let pre_perm_decision: PrePermissionDecision = if let Some(ref hm) = ctx.hook_manager {
+            if hm.has_hooks_for_event(&HookEvent::PrePermission) {
+                let base = HookInputBase {
+                    hook_event_name: HookEvent::PrePermission,
+                    session_id: ctx.session_id.clone(),
+                    agent_id: ctx.agent_id.to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    cwd: ctx.working_dir.to_string(),
+                };
+                let input_for_hook = HookInput::PrePermission(PrePermissionInput {
+                    base,
+                    tool_name: tool_name.clone(),
+                    tool_input: input.clone(),
+                });
+                let res = zen_hooks::execute_hooks(
+                    hm,
+                    &HookEvent::PrePermission,
+                    &input_for_hook,
+                    &ExecuteHooksOptions {
+                        client: ctx.hook_client.as_ref(),
+                        profile: ctx.hook_profile.as_ref(),
+                        ..Default::default()
+                    },
+                )
+                .await;
+                classify_pre_permission(&res)
             } else {
                 PrePermissionDecision::Passthrough
-            };
+            }
+        } else {
+            PrePermissionDecision::Passthrough
+        };
 
         // Short-circuit on allow/deny; otherwise continue to the user prompt.
         let permission_result: Result<bool> = match pre_perm_decision {
             PrePermissionDecision::Allow => {
                 tracing::info!(
                     "[RunTools] PrePermission hook allowed tool={} id={}",
-                    tool_name, tool_id
+                    tool_name,
+                    tool_id
                 );
                 Ok(true)
             }
             PrePermissionDecision::Deny => {
                 tracing::warn!(
                     "[RunTools] PrePermission hook denied tool={} id={}",
-                    tool_name, tool_id
+                    tool_name,
+                    tool_id
                 );
                 Ok(false)
             }
@@ -547,9 +547,8 @@ async fn run_single_tool(
                                     if let Some(s) = new_out.as_str() {
                                         result_for_assistant = s.to_string();
                                     } else {
-                                        result_for_assistant =
-                                            serde_json::to_string(&new_out)
-                                                .unwrap_or(result_for_assistant);
+                                        result_for_assistant = serde_json::to_string(&new_out)
+                                            .unwrap_or(result_for_assistant);
                                     }
                                     data = new_out;
                                 }
@@ -704,7 +703,10 @@ mod tests {
 
     #[test]
     fn classify_pre_permission_no_signals_is_passthrough() {
-        assert_eq!(classify_pre_permission(&empty_aggr()), PrePermissionDecision::Passthrough);
+        assert_eq!(
+            classify_pre_permission(&empty_aggr()),
+            PrePermissionDecision::Passthrough
+        );
     }
 
     #[test]

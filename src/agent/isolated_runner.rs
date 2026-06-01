@@ -20,7 +20,7 @@ use anyhow::Result;
 use tokio::time::timeout as tokio_timeout;
 
 use crate::zen_core::{
-    AgentMode, EngineEvent, MessageCompleteData, McpServerConfig, SessionState, StateUpdateData,
+    AgentMode, EngineEvent, McpServerConfig, MessageCompleteData, SessionState, StateUpdateData,
     ZenCore, ZenCoreOptions, ZenEngine, MAIN_AGENT_ID,
 };
 

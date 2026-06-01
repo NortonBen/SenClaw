@@ -41,8 +41,7 @@ pub type AbortAgentCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
 /// `(task_id, new_status, task_label, parent_goal, result_text)` — used by
 /// CoworkManager to keep CoworkTask status in sync with DispatchTask lifecycle.
 /// `result_text` is `Some` only when `new_status == "done"`.
-pub type TaskLifecycleCallback =
-    Arc<dyn Fn(&str, &str, &str, &str, Option<String>) + Send + Sync>;
+pub type TaskLifecycleCallback = Arc<dyn Fn(&str, &str, &str, &str, Option<String>) + Send + Sync>;
 
 /// Polling cadence for the scheduler tick (timeouts + ready-task launch).
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
@@ -579,7 +578,13 @@ impl DispatchBridge {
                 }
             }
         });
-        self.fire_task_lifecycle(task_id, "done", &task_label, &parent_goal, Some(text.to_string()));
+        self.fire_task_lifecycle(
+            task_id,
+            "done",
+            &task_label,
+            &parent_goal,
+            Some(text.to_string()),
+        );
         tracing::info!(
             "[DispatchBridge] Task {task_id} done{}",
             if let Some(j) = &jid {

@@ -384,7 +384,10 @@ fn format_snapshot_response(
     //     total_interactive, capped, text_content_summary, compressed_html? }
     // Older content scripts return just the legacy shape — handle gracefully.
     let url = data.get("url").cloned().unwrap_or(serde_json::Value::Null);
-    let title = data.get("title").cloned().unwrap_or(serde_json::Value::Null);
+    let title = data
+        .get("title")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let viewport = data
         .get("viewport")
         .cloned()
@@ -447,7 +450,10 @@ fn format_snapshot_response(
                 };
                 lines.push(format!("[{idx}]<{tag}{role_part}>{text}</{tag}>"));
             }
-            out.insert("formatted".into(), serde_json::Value::String(lines.join("\n")));
+            out.insert(
+                "formatted".into(),
+                serde_json::Value::String(lines.join("\n")),
+            );
         }
     }
 

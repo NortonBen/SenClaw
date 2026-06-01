@@ -6,14 +6,14 @@ use super::types::{DispatchParent, DispatchTask, VerificationResult};
 pub fn generate_task_verification_report(task: &DispatchTask) -> String {
     let mut report = format!("### Verification Report: Task '{}'\n\n", task.label);
     report.push_str(&format!("**Status:** {}\n\n", task.status.label()));
-    
+
     if let Some(ref verification) = task.verification_result {
         report.push_str(&format!("**Verified:** {}\n\n", verification.verified));
-        
+
         if let Some(note) = &verification.note {
             report.push_str(&format!("**Note:** {}\n\n", note));
         }
-        
+
         if !verification.missing_items.is_empty() {
             report.push_str("## Missing Items\n\n");
             for item in &verification.missing_items {
@@ -21,7 +21,7 @@ pub fn generate_task_verification_report(task: &DispatchTask) -> String {
             }
             report.push('\n');
         }
-        
+
         if !verification.failed_items.is_empty() {
             report.push_str("## Failed Items\n\n");
             for item in &verification.failed_items {
@@ -29,7 +29,7 @@ pub fn generate_task_verification_report(task: &DispatchTask) -> String {
             }
             report.push('\n');
         }
-        
+
         if !verification.warnings.is_empty() {
             report.push_str("## Warnings\n\n");
             for warning in &verification.warnings {
@@ -37,45 +37,64 @@ pub fn generate_task_verification_report(task: &DispatchTask) -> String {
             }
             report.push('\n');
         }
-        
+
         if verification.verified {
             report.push_str("## Summary\n\n✅ All checklist items verified successfully.\n\n");
         } else {
             report.push_str("## Summary\n\n❌ Verification failed. Please review the missing and failed items above.\n\n");
-            
+
             report.push_str("## Recommended Actions\n\n");
             if !verification.missing_items.is_empty() {
                 report.push_str("- Mark missing checklist items as completed if they were done\n");
-                report.push_str("- Update checklist dependencies if items were completed out of order\n");
+                report.push_str(
+                    "- Update checklist dependencies if items were completed out of order\n",
+                );
             }
             if !verification.failed_items.is_empty() {
-                report.push_str("- Review failed items and ensure they are reflected in task output\n");
-                report.push_str("- Add missing content to task result or update checklist descriptions\n");
+                report.push_str(
+                    "- Review failed items and ensure they are reflected in task output\n",
+                );
+                report.push_str(
+                    "- Add missing content to task result or update checklist descriptions\n",
+                );
             }
-            report.push_str("- Use `update_checklist_status` to manually adjust item statuses if needed\n\n");
+            report.push_str(
+                "- Use `update_checklist_status` to manually adjust item statuses if needed\n\n",
+            );
         }
     } else {
-        report.push_str("**Note:** No verification result available. Verification may not have run yet.\n\n");
+        report.push_str(
+            "**Note:** No verification result available. Verification may not have run yet.\n\n",
+        );
     }
-    
+
     // Add checklist status
     if !task.checklist.is_empty() {
         report.push_str("## Checklist Status\n\n");
-        let completed = task.checklist.iter().filter(|i| i.status == "completed").count();
-        let pending = task.checklist.iter().filter(|i| i.status == "pending").count();
-        let failed = task.checklist.iter().filter(|i| i.status == "failed").count();
-        
-        report.push_str(&format!(
-            "- Total items: {}\n",
-            task.checklist.len()
-        ));
+        let completed = task
+            .checklist
+            .iter()
+            .filter(|i| i.status == "completed")
+            .count();
+        let pending = task
+            .checklist
+            .iter()
+            .filter(|i| i.status == "pending")
+            .count();
+        let failed = task
+            .checklist
+            .iter()
+            .filter(|i| i.status == "failed")
+            .count();
+
+        report.push_str(&format!("- Total items: {}\n", task.checklist.len()));
         report.push_str(&format!("- ✅ Completed: {}\n", completed));
         report.push_str(&format!("- ⏳ Pending: {}\n", pending));
         if failed > 0 {
             report.push_str(&format!("- ❌ Failed: {}\n", failed));
         }
         report.push('\n');
-        
+
         report.push_str("### Items\n\n");
         for item in &task.checklist {
             let icon = match item.status.as_str() {
@@ -83,19 +102,22 @@ pub fn generate_task_verification_report(task: &DispatchTask) -> String {
                 "failed" => "❌",
                 _ => "⏳",
             };
-            report.push_str(&format!("{} {} - {}\n", icon, item.description, item.status));
+            report.push_str(&format!(
+                "{} {} - {}\n",
+                icon, item.description, item.status
+            ));
             if let Some(note) = &item.verification_note {
                 report.push_str(&format!("  *Note: {}*\n", note));
             }
         }
         report.push('\n');
     }
-    
+
     // Add file changes
     if !task.file_changes.is_empty() {
         report.push_str("## File Changes\n\n");
         report.push_str(&format!("Total changes: {}\n\n", task.file_changes.len()));
-        
+
         for change in &task.file_changes {
             let icon = match change.change_type.as_str() {
                 "created" => "➕",
@@ -119,7 +141,7 @@ pub fn generate_task_verification_report(task: &DispatchTask) -> String {
         }
         report.push('\n');
     }
-    
+
     report
 }
 
@@ -128,18 +150,18 @@ pub fn generate_parent_verification_report(parent: &DispatchParent) -> String {
     let mut report = format!("### Verification Report: Parent '{}'\n\n", parent.id);
     report.push_str(&format!("**Goal:** {}\n\n", parent.goal));
     report.push_str(&format!("**Status:** {}\n\n", parent.status));
-    
+
     if let Some(ref completed_at) = parent.completed_at {
         report.push_str(&format!("**Completed at:** {}\n\n", completed_at));
     }
-    
+
     // Overall verification
     let all_verifications: Vec<&VerificationResult> = parent
         .tasks
         .iter()
         .filter_map(|t| t.verification_result.as_ref())
         .collect();
-    
+
     if !all_verifications.is_empty() {
         let verified_count = all_verifications.iter().filter(|v| v.verified).count();
         report.push_str(&format!(
@@ -147,14 +169,14 @@ pub fn generate_parent_verification_report(parent: &DispatchParent) -> String {
             verified_count,
             all_verifications.len()
         ));
-        
+
         if verified_count == all_verifications.len() {
             report.push_str("✅ All tasks verified successfully.\n\n");
         } else {
             report.push_str("⚠️ Some tasks failed verification. See task details below.\n\n");
         }
     }
-    
+
     // Task summaries
     report.push_str("## Task Summary\n\n");
     for task in &parent.tasks {
@@ -164,64 +186,79 @@ pub fn generate_parent_verification_report(parent: &DispatchParent) -> String {
             "timeout" => "⏰",
             _ => "⏳",
         };
-        
+
         let verification_icon = if let Some(ref v) = task.verification_result {
-            if v.verified { "✅" } else { "❌" }
+            if v.verified {
+                "✅"
+            } else {
+                "❌"
+            }
         } else {
             "❓"
         };
-        
+
         let checklist_status = if task.checklist.is_empty() {
             "No checklist".to_string()
         } else {
-            let completed = task.checklist.iter().filter(|i| i.status == "completed").count();
+            let completed = task
+                .checklist
+                .iter()
+                .filter(|i| i.status == "completed")
+                .count();
             format!("{}/{} completed", completed, task.checklist.len())
         };
-        
+
         report.push_str(&format!(
             "{} **{}** (status: {}, verification: {}, checklist: {})\n",
-            status_icon, task.label, task.status.label(), verification_icon, checklist_status
+            status_icon,
+            task.label,
+            task.status.label(),
+            verification_icon,
+            checklist_status
         ));
-        
+
         if !task.file_changes.is_empty() {
             report.push_str(&format!("  - File changes: {}\n", task.file_changes.len()));
         }
     }
     report.push('\n');
-    
+
     // Detailed task reports
     report.push_str("## Detailed Task Reports\n\n");
     for task in &parent.tasks {
         report.push_str(&generate_task_verification_report(task));
         report.push_str("---\n\n");
     }
-    
+
     report
 }
 
 /// Generate a summary of actionable next steps based on verification results.
 pub fn generate_actionable_next_steps(parent: &DispatchParent) -> String {
     let mut steps = Vec::new();
-    
+
     for task in &parent.tasks {
         if let Some(ref verification) = task.verification_result {
             if !verification.verified {
                 steps.push(format!(
                     "Task '{}': {}",
                     task.label,
-                    verification.note.as_deref().unwrap_or("verification failed")
+                    verification
+                        .note
+                        .as_deref()
+                        .unwrap_or("verification failed")
                 ));
-                
+
                 for item in &verification.missing_items {
                     steps.push(format!("  - Complete: {}", item));
                 }
-                
+
                 for item in &verification.failed_items {
                     steps.push(format!("  - Fix: {}", item));
                 }
             }
         }
-        
+
         // Check for pending checklist items in completed tasks
         if task.status.label() == "done" {
             let pending: Vec<&str> = task
@@ -230,7 +267,7 @@ pub fn generate_actionable_next_steps(parent: &DispatchParent) -> String {
                 .filter(|i| i.status == "pending")
                 .map(|i| i.description.as_str())
                 .collect();
-            
+
             if !pending.is_empty() {
                 steps.push(format!(
                     "Task '{}' has {} pending checklist items despite being done:",
@@ -243,7 +280,7 @@ pub fn generate_actionable_next_steps(parent: &DispatchParent) -> String {
             }
         }
     }
-    
+
     if steps.is_empty() {
         "✅ All tasks verified successfully. No action needed.".to_string()
     } else {
@@ -278,15 +315,13 @@ mod tests {
             completed_at: None,
             is_virtual: false,
             persona_name: None,
-            checklist: vec![
-                ChecklistItem {
-                    id: "item-1".to_string(),
-                    description: "Complete task".to_string(),
-                    status: "completed".to_string(),
-                    depends_on: Vec::new(),
-                    verification_note: None,
-                },
-            ],
+            checklist: vec![ChecklistItem {
+                id: "item-1".to_string(),
+                description: "Complete task".to_string(),
+                status: "completed".to_string(),
+                depends_on: Vec::new(),
+                verification_note: None,
+            }],
             file_changes: Vec::new(),
             verification_result: None,
         };

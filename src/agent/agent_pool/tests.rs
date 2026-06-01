@@ -4,8 +4,8 @@ use crate::types::GroupBinding;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::{AgentPool, PermissionsConfig, ZenCoreApi};
 use super::workspace::WorkspaceStateFile;
+use super::{AgentPool, PermissionsConfig, ZenCoreApi};
 
 fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
     GroupBinding {

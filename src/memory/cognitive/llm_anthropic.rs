@@ -118,7 +118,10 @@ impl LlmClient for AnthropicLlm {
             model: &self.model,
             max_tokens: self.max_tokens,
             system,
-            messages: vec![UserTurn { role: "user", content: user }],
+            messages: vec![UserTurn {
+                role: "user",
+                content: user,
+            }],
         };
 
         let resp = self
@@ -137,8 +140,8 @@ impl LlmClient for AnthropicLlm {
         if !status.is_success() {
             anyhow::bail!("Anthropic API {status}: {text}");
         }
-        let parsed: MessagesResponse = serde_json::from_str(&text)
-            .with_context(|| format!("parse anthropic JSON: {text}"))?;
+        let parsed: MessagesResponse =
+            serde_json::from_str(&text).with_context(|| format!("parse anthropic JSON: {text}"))?;
         Ok(collect_text(&parsed.content))
     }
 }
@@ -162,9 +165,18 @@ mod tests {
     #[test]
     fn collect_text_joins_all_text_blocks() {
         let blocks = vec![
-            ContentBlock { kind: "text".into(), text: "part one ".into() },
-            ContentBlock { kind: "thinking".into(), text: "ignored".into() },
-            ContentBlock { kind: "text".into(), text: "part two".into() },
+            ContentBlock {
+                kind: "text".into(),
+                text: "part one ".into(),
+            },
+            ContentBlock {
+                kind: "thinking".into(),
+                text: "ignored".into(),
+            },
+            ContentBlock {
+                kind: "text".into(),
+                text: "part two".into(),
+            },
         ];
         assert_eq!(collect_text(&blocks), "part one part two");
     }

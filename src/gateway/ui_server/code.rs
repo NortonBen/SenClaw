@@ -1,12 +1,15 @@
 //! REST handlers for the Code Engine feature.
 //! Routes registered under /api/code/* and /api/fs/* in core.rs.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::collections::HashMap;
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path as AxumPath, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path as AxumPath, Query, State,
+    },
     http::StatusCode,
     response::Json,
 };
@@ -17,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::core::{AppError, UiState};
-use crate::code_engine::session::CodeSession;
 use crate::code_engine::parse_prompt;
+use crate::code_engine::session::CodeSession;
 use crate::types::{AgentApi, GroupBinding};
 
 fn db(s: &UiState) -> Result<&crate::db::Db, AppError> {
@@ -35,8 +38,9 @@ fn internal(e: impl std::fmt::Display) -> AppError {
 }
 
 static CODE_CHAT_BROADCAST: OnceLock<tokio::sync::broadcast::Sender<String>> = OnceLock::new();
-static CODE_CHAT_GROUP_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
+static CODE_CHAT_GROUP_LOCKS: OnceLock<
+    std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
 const CODE_CHAT_DUPLICATE_WINDOW_MS: i64 = 1200;
 
 fn code_chat_sender() -> tokio::sync::broadcast::Sender<String> {
@@ -133,18 +137,18 @@ pub(crate) struct CodeWsQuery {
 
 /// List subdirectories of a given path (defaults to home dir).
 /// Used by the frontend folder-picker dialog.
-pub(crate) async fn fs_ls(
-    Query(q): Query<FsLsQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
+pub(crate) async fn fs_ls(Query(q): Query<FsLsQuery>) -> Result<Json<serde_json::Value>, AppError> {
     let base = if let Some(p) = q.path.filter(|s| !s.is_empty()) {
         std::path::PathBuf::from(p)
     } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/"))
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
     };
 
     if !base.exists() || !base.is_dir() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "path is not a directory".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "path is not a directory".into(),
+        ));
     }
 
     let canonical = base.canonicalize().map_err(internal)?;
@@ -154,16 +158,23 @@ pub(crate) async fn fs_ls(
         .flatten()
         .filter_map(|e| {
             let p = e.path();
-            if !p.is_dir() { return None; }
+            if !p.is_dir() {
+                return None;
+            }
             let name = p.file_name()?.to_string_lossy().into_owned();
-            if name.starts_with('.') { return None; }
+            if name.starts_with('.') {
+                return None;
+            }
             let full = p.to_string_lossy().into_owned();
             Some(serde_json::json!({ "name": name, "path": full }))
         })
         .collect();
 
     dirs.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
 
     // Build parent path (None if already at root)
@@ -191,19 +202,20 @@ pub(crate) async fn code_sessions_list(
                  ORDER BY updated_at DESC
                  LIMIT 100",
             )?;
-            let rows = stmt.query_map(params![status_filter], |row| {
-                Ok(CodeSessionRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    workspace: row.get(2)?,
-                    language: row.get(3)?,
-                    status: row.get(4)?,
-                    git_enabled: row.get::<_, i32>(5)? != 0,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+            let rows = stmt
+                .query_map(params![status_filter], |row| {
+                    Ok(CodeSessionRow {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        workspace: row.get(2)?,
+                        language: row.get(3)?,
+                        status: row.get(4)?,
+                        git_enabled: row.get::<_, i32>(5)? != 0,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .map_err(internal)?;
@@ -218,7 +230,10 @@ pub(crate) async fn code_sessions_create(
         return Err(AppError(StatusCode::BAD_REQUEST, "name is required".into()));
     }
     if body.workspace.trim().is_empty() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "workspace is required".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "workspace is required".into(),
+        ));
     }
 
     let id = Uuid::new_v4().to_string();
@@ -300,7 +315,10 @@ pub(crate) async fn code_sessions_archive(
         })
         .map_err(internal)?;
     if n == 0 {
-        return Err(AppError(StatusCode::NOT_FOUND, "session not found or already archived".into()));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            "session not found or already archived".into(),
+        ));
     }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -324,11 +342,14 @@ pub(crate) async fn code_sessions_files(
         })
         .map_err(internal)?;
 
-    let workspace = workspace.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "session not found".into()))?;
+    let workspace =
+        workspace.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "session not found".into()))?;
 
     // Walk the workspace and return the tree (depth 4)
     let tree = walk_dir_tree(&workspace, 4);
-    Ok(Json(serde_json::json!({ "workspace": workspace, "tree": tree })))
+    Ok(Json(
+        serde_json::json!({ "workspace": workspace, "tree": tree }),
+    ))
 }
 
 pub(crate) async fn code_sessions_file_content(
@@ -369,7 +390,10 @@ pub(crate) async fn code_sessions_file_content(
         ));
     }
     if !file_canon.is_file() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "path is not a file".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "path is not a file".into(),
+        ));
     }
 
     let bytes = std::fs::read(&file_canon).map_err(internal)?;
@@ -404,7 +428,8 @@ pub(crate) async fn code_sessions_git_log(
         })
         .map_err(internal)?;
 
-    let (workspace, git_enabled) = row.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "session not found".into()))?;
+    let (workspace, git_enabled) =
+        row.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "session not found".into()))?;
 
     if git_enabled == 0 {
         return Ok(Json(serde_json::json!({ "log": [] })));
@@ -449,10 +474,14 @@ pub(crate) async fn code_sessions_rollback(
         })
         .map_err(internal)?;
 
-    let (workspace, git_enabled) = row.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "session not found".into()))?;
+    let (workspace, git_enabled) =
+        row.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "session not found".into()))?;
 
     if git_enabled == 0 {
-        return Err(AppError(StatusCode::BAD_REQUEST, "git not enabled for this session".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "git not enabled for this session".into(),
+        ));
     }
 
     let steps = body.steps.unwrap_or(1).min(50);
@@ -464,7 +493,10 @@ pub(crate) async fn code_sessions_rollback(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("git reset failed: {stderr}")));
+        return Err(AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("git reset failed: {stderr}"),
+        ));
     }
 
     db.with_conn(|conn| {
@@ -496,11 +528,17 @@ pub(crate) async fn code_sessions_chat(
             id,
             body.group_id.trim()
         );
-        return Err(AppError(StatusCode::BAD_REQUEST, "prompt is required".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "prompt is required".into(),
+        ));
     }
     if body.group_id.trim().is_empty() {
         tracing::warn!("[CodeChat] reject_missing_group_id session_id={}", id);
-        return Err(AppError(StatusCode::BAD_REQUEST, "group_id is required".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "group_id is required".into(),
+        ));
     }
 
     let db = db(&s)?;
@@ -589,7 +627,8 @@ pub(crate) async fn code_sessions_chat(
             body.group_id.trim(),
             CODE_CHAT_DUPLICATE_WINDOW_MS
         );
-        let messages = code_chat_group_messages_inner(db, body.group_id.trim()).map_err(internal)?;
+        let messages =
+            code_chat_group_messages_inner(db, body.group_id.trim()).map_err(internal)?;
         let queued_preview: Vec<serde_json::Value> = messages
             .iter()
             .filter(|m| m["status"] == "queued")
@@ -847,7 +886,10 @@ pub(crate) async fn code_chat_group_stop_current(
 
         if let Some(msg_id) = queued_id {
             db.with_conn(|conn| {
-                conn.execute("DELETE FROM code_chat_messages WHERE id=?1", params![msg_id])?;
+                conn.execute(
+                    "DELETE FROM code_chat_messages WHERE id=?1",
+                    params![msg_id],
+                )?;
                 Ok(())
             })
             .map_err(internal)?;
@@ -928,7 +970,10 @@ async fn process_group_queue(
         })?;
         let Some((msg_id, role, content, prev_status)) = next else {
             if stats.processed == 0 {
-                tracing::info!("[CodeChat] processor_idle group_id={} no_pending_messages", group_id);
+                tracing::info!(
+                    "[CodeChat] processor_idle group_id={} no_pending_messages",
+                    group_id
+                );
             }
             break;
         };
@@ -991,9 +1036,7 @@ async fn process_group_queue(
                     format!("turn: {first_line}")
                 };
                 if let Err(e) = s.checkpoint(&checkpoint_msg) {
-                    tracing::warn!(
-                        "[CodeChat] git checkpoint failed group_id={group_id}: {e}"
-                    );
+                    tracing::warn!("[CodeChat] git checkpoint failed group_id={group_id}: {e}");
                 }
             }
 
@@ -1001,11 +1044,9 @@ async fn process_group_queue(
                 // Build per-session spec via CodeAgentSpec — encapsulates JID,
                 // GroupBinding (tools + paths + folder), and system prompt.
                 let spec = match session.as_ref() {
-                    Some(s) => crate::code_engine::CodeAgentSpec::for_session(
-                        s,
-                        session_name,
-                        group_id,
-                    ),
+                    Some(s) => {
+                        crate::code_engine::CodeAgentSpec::for_session(s, session_name, group_id)
+                    }
                     None => crate::code_engine::CodeAgentSpec::for_session(
                         &crate::code_engine::CodeSession {
                             session_id: session_id.to_string(),
@@ -1135,10 +1176,7 @@ fn build_code_group_binding(jid: &str, session_id: &str, session_name: &str) -> 
     }
 }
 
-fn latest_group_message_rowid(
-    db: &crate::db::Db,
-    chat_jid: &str,
- ) -> Option<i64> {
+fn latest_group_message_rowid(db: &crate::db::Db, chat_jid: &str) -> Option<i64> {
     db.with_conn(|conn| {
         conn.query_row(
             "SELECT COALESCE(MAX(rowid), 0)
@@ -1219,10 +1257,7 @@ fn code_chat_group_messages_inner(
     })
 }
 
-fn broadcast_code_chat_update(
-    db: &crate::db::Db,
-    group_id: &str,
-) -> Result<(), anyhow::Error> {
+fn broadcast_code_chat_update(db: &crate::db::Db, group_id: &str) -> Result<(), anyhow::Error> {
     let messages = code_chat_group_messages_inner(db, group_id)?;
     let queued_preview: Vec<serde_json::Value> = messages
         .iter()
@@ -1230,12 +1265,15 @@ fn broadcast_code_chat_update(
         .take(5)
         .cloned()
         .collect();
-    let _ = code_chat_sender().send(serde_json::json!({
-        "type": "code:chat:update",
-        "group_id": group_id,
-        "messages": messages,
-        "queued_preview": queued_preview,
-    }).to_string());
+    let _ = code_chat_sender().send(
+        serde_json::json!({
+            "type": "code:chat:update",
+            "group_id": group_id,
+            "messages": messages,
+            "queued_preview": queued_preview,
+        })
+        .to_string(),
+    );
     Ok(())
 }
 
@@ -1251,7 +1289,12 @@ struct FileNode {
 }
 
 fn walk_dir_tree(dir: &str, max_depth: u32) -> Vec<FileNode> {
-    walk_path(std::path::Path::new(dir), std::path::Path::new(dir), 0, max_depth)
+    walk_path(
+        std::path::Path::new(dir),
+        std::path::Path::new(dir),
+        0,
+        max_depth,
+    )
 }
 
 fn walk_path(
@@ -1263,21 +1306,38 @@ fn walk_path(
     if depth > max_depth {
         return vec![];
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
     let mut nodes: Vec<FileNode> = entries
         .flatten()
         .filter_map(|e| {
             let path = e.path();
             let name = path.file_name()?.to_string_lossy().into_owned();
-            if name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target" | "dist" | "build" | "__pycache__") {
+            if name.starts_with('.')
+                || matches!(
+                    name.as_str(),
+                    "node_modules" | "target" | "dist" | "build" | "__pycache__"
+                )
+            {
                 return None;
             }
             let rel = path.strip_prefix(root).ok()?.to_string_lossy().into_owned();
             if path.is_dir() {
                 let children = walk_path(&path, root, depth + 1, max_depth);
-                Some(FileNode { name, path: rel, kind: "dir", children: Some(children) })
+                Some(FileNode {
+                    name,
+                    path: rel,
+                    kind: "dir",
+                    children: Some(children),
+                })
             } else {
-                Some(FileNode { name, path: rel, kind: "file", children: None })
+                Some(FileNode {
+                    name,
+                    path: rel,
+                    kind: "file",
+                    children: None,
+                })
             }
         })
         .collect();

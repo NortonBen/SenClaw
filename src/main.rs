@@ -106,10 +106,10 @@ async fn main() -> Result<()> {
                 | Command::WikiServer
                 | Command::BrowserServer
                 | Command::SpaceServer
-        | Command::CodeGraphServer
-        | Command::CodeServer
-        | Command::LithoServer
-        | Command::CognitiveServer
+                | Command::CodeGraphServer
+                | Command::CodeServer
+                | Command::LithoServer
+                | Command::CognitiveServer
         )
     );
 

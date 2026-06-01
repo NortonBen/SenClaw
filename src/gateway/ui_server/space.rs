@@ -160,10 +160,8 @@ pub(crate) async fn space_notes_list(
                         id: row.get(0)?,
                         title: row.get(1)?,
                         body: row.get(2)?,
-                        tags: serde_json::from_str(
-                            &row.get::<_, String>(3).unwrap_or_default(),
-                        )
-                        .unwrap_or_default(),
+                        tags: serde_json::from_str(&row.get::<_, String>(3).unwrap_or_default())
+                            .unwrap_or_default(),
                         folder_id: row.get(4)?,
                         pinned: row.get::<_, i32>(5)? != 0,
                         created_at: row.get(6)?,
@@ -371,10 +369,9 @@ pub(crate) async fn space_events_search(
     State(s): State<Arc<UiState>>,
     Query(q): Query<EventSearchQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.event_search(q.q, q.date, q.from, q.to, q.limit);
@@ -447,10 +444,9 @@ pub(crate) async fn space_events_create(
     State(s): State<Arc<UiState>>,
     Json(b): Json<EventCreateBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let space_srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = space_srv.event_create(
@@ -471,8 +467,7 @@ pub(crate) async fn space_events_create(
         return Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, result.content));
     }
 
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -570,16 +565,14 @@ pub(crate) async fn space_events_delete(
 pub(crate) async fn space_today_summary(
     State(s): State<Arc<UiState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let space_srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = space_srv.today_summary();
 
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -596,16 +589,14 @@ pub(crate) async fn space_email_inbox(
     State(s): State<Arc<UiState>>,
     Query(q): Query<EmailInboxQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.email_inbox(q.account_id, q.limit);
 
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -613,18 +604,16 @@ pub(crate) async fn space_email_read(
     State(s): State<Arc<UiState>>,
     AxumPath(msg_id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.email_read(msg_id);
     if result.is_error {
         return Err(AppError(StatusCode::NOT_FOUND, result.content));
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -640,15 +629,13 @@ pub(crate) async fn space_email_search(
     State(s): State<Arc<UiState>>,
     Query(q): Query<EmailSearchQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.email_search(q.q, q.account_id, q.limit);
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -664,18 +651,16 @@ pub(crate) async fn space_email_send(
     State(s): State<Arc<UiState>>,
     Json(b): Json<EmailSendBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.email_compose(b.to, b.subject, b.body, b.account_id);
     if result.is_error {
         return Err(AppError(StatusCode::BAD_GATEWAY, result.content));
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -694,11 +679,10 @@ pub(crate) async fn space_email_draft(
     // Minimal template-based draft — replace with actual agent call when
     // the agent loop integration is ready (Phase 3).
     let subject = format!("Re: {}", b.prompt.chars().take(60).collect::<String>());
-    let body = format!(
-        "Kính gửi,\n\n{}\n\nTrân trọng,\n[Tên của bạn]",
-        b.prompt
-    );
-    Ok(Json(serde_json::json!({ "subject": subject, "body": body })))
+    let body = format!("Kính gửi,\n\n{}\n\nTrân trọng,\n[Tên của bạn]", b.prompt);
+    Ok(Json(
+        serde_json::json!({ "subject": subject, "body": body }),
+    ))
 }
 
 // ─── Email accounts ───────────────────────────────────────────────────────────
@@ -752,9 +736,15 @@ pub(crate) struct EmailAccountCreateBody {
     use_tls: bool,
 }
 
-fn default_imap_port() -> i64 { 993 }
-fn default_smtp_port() -> i64 { 587 }
-fn default_true() -> bool { true }
+fn default_imap_port() -> i64 {
+    993
+}
+fn default_smtp_port() -> i64 {
+    587
+}
+fn default_true() -> bool {
+    true
+}
 
 pub(crate) async fn space_email_accounts_create(
     State(s): State<Arc<UiState>>,
@@ -767,10 +757,16 @@ pub(crate) async fn space_email_accounts_create(
         || b.username.trim().is_empty()
         || b.password.is_empty()
     {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Missing required email account fields".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Missing required email account fields".into(),
+        ));
     }
     if !(1..=65_535).contains(&b.imap_port) || !(1..=65_535).contains(&b.smtp_port) {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid email port".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Invalid email port".into(),
+        ));
     }
 
     let db = db(&s)?;
@@ -816,7 +812,10 @@ pub(crate) async fn space_email_accounts_delete(
     let db = db(&s)?;
     db.with_conn(|conn| {
         conn.execute("DELETE FROM space_email_accounts WHERE id=?1", params![&id])?;
-        conn.execute("DELETE FROM space_email_cache WHERE account_id=?1", params![&id])?;
+        conn.execute(
+            "DELETE FROM space_email_cache WHERE account_id=?1",
+            params![&id],
+        )?;
         Ok(())
     })
     .map_err(internal)?;
@@ -835,15 +834,13 @@ pub(crate) async fn space_schedules_list(
     State(s): State<Arc<UiState>>,
     Query(q): Query<ScheduleListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.list_schedules(q.group);
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -859,10 +856,9 @@ pub(crate) async fn space_schedules_create(
     State(s): State<Arc<UiState>>,
     Json(b): Json<ScheduleCreateBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv
@@ -871,8 +867,7 @@ pub(crate) async fn space_schedules_create(
     if result.is_error {
         return Err(AppError(StatusCode::BAD_REQUEST, result.content));
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -886,10 +881,9 @@ pub(crate) async fn space_schedules_cancel(
     AxumPath(id): AxumPath<String>,
     Json(b): Json<ScheduleCancelBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.list_schedules(b.group_folder.clone()); // validate ownership
@@ -898,9 +892,9 @@ pub(crate) async fn space_schedules_cancel(
     }
 
     // Cancel = set status completed
-    let db_ref = s.db.as_deref().ok_or_else(|| {
-        AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into())
-    })?;
+    let db_ref =
+        s.db.as_deref()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     db_ref
         .with_conn(|conn| {
             conn.execute(
@@ -965,10 +959,20 @@ pub(crate) async fn space_apps_register(
         .get(&b.manifest_url)
         .send()
         .await
-        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, format!("Fetch manifest failed: {e}")))?
+        .map_err(|e| {
+            AppError(
+                StatusCode::BAD_GATEWAY,
+                format!("Fetch manifest failed: {e}"),
+            )
+        })?
         .json()
         .await
-        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, format!("Parse manifest failed: {e}")))?;
+        .map_err(|e| {
+            AppError(
+                StatusCode::BAD_GATEWAY,
+                format!("Parse manifest failed: {e}"),
+            )
+        })?;
 
     let app_id = manifest_json["id"]
         .as_str()
@@ -1018,16 +1022,24 @@ pub(crate) async fn space_apps_register_local(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let dir = PathBuf::from(b.path.trim());
     if !dir.is_dir() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Path is not a directory".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Path is not a directory".into(),
+        ));
     }
     let manifest_path = ["senclaw-manifest.json", "senclaw-app.json"]
         .iter()
         .map(|n| dir.join(n))
         .find(|p| p.is_file())
         .ok_or_else(|| {
-            AppError(StatusCode::BAD_REQUEST, "No senclaw-manifest.json in directory".into())
+            AppError(
+                StatusCode::BAD_REQUEST,
+                "No senclaw-manifest.json in directory".into(),
+            )
         })?;
-    let raw = tokio::fs::read_to_string(&manifest_path).await.map_err(internal)?;
+    let raw = tokio::fs::read_to_string(&manifest_path)
+        .await
+        .map_err(internal)?;
     let mut manifest: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid manifest: {e}")))?;
 
@@ -1093,10 +1105,9 @@ pub(crate) async fn space_apps_install_zip(
             .map(|name| name.to_ascii_lowercase().ends_with(".zip"))
             .unwrap_or(false);
         if field.name() == Some("file") || is_zip {
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Read upload failed: {e}")))?;
+            let bytes = field.bytes().await.map_err(|e| {
+                AppError(StatusCode::BAD_REQUEST, format!("Read upload failed: {e}"))
+            })?;
             zip_bytes = Some(bytes.to_vec());
             break;
         }
@@ -1109,7 +1120,10 @@ pub(crate) async fn space_apps_install_zip(
         )
     })?;
     if zip_bytes.len() > 50 * 1024 * 1024 {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Zip file too large (max 50MB)".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Zip file too large (max 50MB)".into(),
+        ));
     }
 
     let mut manifest = read_space_app_manifest_from_zip(&zip_bytes)?;
@@ -1151,7 +1165,8 @@ pub(crate) async fn space_apps_install_zip(
             let _ = tokio::fs::remove_dir_all(&target).await;
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
-                "Server Space App zip must contain its runtime.entrypoint (or be non-empty).".into(),
+                "Server Space App zip must contain its runtime.entrypoint (or be non-empty)."
+                    .into(),
             ));
         }
     } else if !target.join("index.html").is_file() {
@@ -1249,7 +1264,9 @@ pub(crate) async fn space_apps_delete(
             .and_then(|m| m["mcp"]["name"].as_str())
             .map(str::to_string),
     ) {
-        let _ = mgr.remove(&name, crate::mcp::config::McpScopeType::Project).await;
+        let _ = mgr
+            .remove(&name, crate::mcp::config::McpScopeType::Project)
+            .await;
     }
 
     db.with_conn(|conn| {
@@ -1322,7 +1339,10 @@ pub(crate) async fn space_apps_bridge(
             "status": "pending",
             "message": "This bridge action is declared for Space Apps but execution is not enabled yet.",
         }))),
-        _ => Err(AppError(StatusCode::BAD_REQUEST, "Unknown bridge action".into())),
+        _ => Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Unknown bridge action".into(),
+        )),
     }
 }
 
@@ -1407,7 +1427,10 @@ pub(crate) async fn space_app_config_get(
             "key": key,
             "value": serde_json::from_str::<serde_json::Value>(&raw).unwrap_or(serde_json::Value::String(raw)),
         }))),
-        None => Err(AppError(StatusCode::NOT_FOUND, "Config key not found".into())),
+        None => Err(AppError(
+            StatusCode::NOT_FOUND,
+            "Config key not found".into(),
+        )),
     }
 }
 
@@ -1420,7 +1443,10 @@ pub(crate) async fn space_app_config_set(
         return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
     }
     if key.trim().is_empty() || key.len() > 120 {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid config key".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Invalid config key".into(),
+        ));
     }
     let raw = serde_json::to_string(&b.value).map_err(internal)?;
     let now = now_ms();
@@ -1435,7 +1461,9 @@ pub(crate) async fn space_app_config_set(
         Ok(())
     })
     .map_err(internal)?;
-    Ok(Json(serde_json::json!({ "key": key, "value": b.value, "updated_at": now })))
+    Ok(Json(
+        serde_json::json!({ "key": key, "value": b.value, "updated_at": now }),
+    ))
 }
 
 pub(crate) async fn space_app_config_delete(
@@ -1469,7 +1497,9 @@ pub(crate) async fn space_app_sqlite_query(
     Json(b): Json<SpaceAppSqliteQueryBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let app_dir = space_app_dir(&s, &id)?;
-    tokio::fs::create_dir_all(&app_dir).await.map_err(internal)?;
+    tokio::fs::create_dir_all(&app_dir)
+        .await
+        .map_err(internal)?;
     let db_path = app_dir.join("app.sqlite");
     let sql = b.sql.trim().to_string();
     if sql.is_empty() {
@@ -1482,7 +1512,8 @@ pub(crate) async fn space_app_sqlite_query(
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
         let values: Vec<SqlValue> = params_json.iter().map(json_to_sql_value).collect();
-        let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        let refs: Vec<&dyn rusqlite::ToSql> =
+            values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
         let verb = sql
             .split_whitespace()
             .next()
@@ -1544,15 +1575,22 @@ pub(crate) async fn space_app_mcp_register(
     if !valid_space_app_id(&id) {
         return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
     }
-    let mgr = s
-        .mcp_manager
-        .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "MCP manager not initialized".into()))?;
+    let mgr = s.mcp_manager.as_ref().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "MCP manager not initialized".into(),
+        )
+    })?;
     let transport = match b.transport.as_str() {
         "stdio" => crate::mcp::config::McpTransportType::Stdio,
         "sse" => crate::mcp::config::McpTransportType::Sse,
         "http" => crate::mcp::config::McpTransportType::Http,
-        _ => return Err(AppError(StatusCode::BAD_REQUEST, "Invalid MCP transport".into())),
+        _ => {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "Invalid MCP transport".into(),
+            ))
+        }
     };
     let name = b.name.unwrap_or_else(|| format!("space-app-{id}"));
     let mut env = b.env.unwrap_or_default();
@@ -1670,10 +1708,9 @@ pub(crate) async fn space_events_set_reminder(
     AxumPath(id): AxumPath<String>,
     Json(b): Json<SetReminderBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
 
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let result = srv.set_reminder(
@@ -1686,8 +1723,7 @@ pub(crate) async fn space_events_set_reminder(
     if result.is_error {
         return Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, result.content));
     }
-    let v: serde_json::Value =
-        serde_json::from_str(&result.content).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     Ok(Json(v))
 }
 
@@ -1703,7 +1739,9 @@ pub(crate) async fn space_sync_google_calendar(
     State(s): State<Arc<UiState>>,
     Json(b): Json<SyncBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s.db.clone().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let r = srv.sync_google_calendar(b.token, b.days.unwrap_or(30));
     Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
@@ -1713,7 +1751,9 @@ pub(crate) async fn space_sync_apple_calendar(
     State(s): State<Arc<UiState>>,
     Json(b): Json<SyncBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s.db.clone().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let r = srv.sync_apple_calendar(b.token, b.days.unwrap_or(30));
     Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
@@ -1723,7 +1763,9 @@ pub(crate) async fn space_sync_apple_notes(
     State(s): State<Arc<UiState>>,
     Json(b): Json<SyncBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s.db.clone().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let r = srv.sync_apple_notes(b.token);
     Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
@@ -1733,7 +1775,9 @@ pub(crate) async fn space_sync_gmail(
     State(s): State<Arc<UiState>>,
     Json(b): Json<SyncBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc = s.db.clone().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
     let r = srv.sync_gmail(b.token, b.days.unwrap_or(7));
     Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
@@ -1752,7 +1796,10 @@ pub(crate) async fn space_sync_google_workspace(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let token = b.token.trim().to_string();
     if token.is_empty() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Google access token required".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Google access token required".into(),
+        ));
     }
 
     let services = b.services.unwrap_or_else(|| {
@@ -1763,10 +1810,9 @@ pub(crate) async fn space_sync_google_workspace(
         ]
     });
     let days = b.days.unwrap_or(7);
-    let db_arc = s
-        .db
-        .clone()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
 
     let mut results = serde_json::Map::new();
@@ -1776,14 +1822,16 @@ pub(crate) async fn space_sync_google_workspace(
                 let r = srv.sync_gmail(token.clone(), days);
                 results.insert(
                     "gmail".to_string(),
-                    serde_json::from_str(&r.content).unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
+                    serde_json::from_str(&r.content)
+                        .unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
                 );
             }
             "calendar" => {
                 let r = srv.sync_google_calendar(token.clone(), days);
                 results.insert(
                     "calendar".to_string(),
-                    serde_json::from_str(&r.content).unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
+                    serde_json::from_str(&r.content)
+                        .unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
                 );
             }
             "notes" => {

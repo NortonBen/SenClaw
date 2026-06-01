@@ -39,7 +39,7 @@ Only after ToolSearch returns the matched schemas may you call the tool directly
 
 ## Core workflows
 
-### 1. Quick web search (preferred for "find/search X")
+### 1. Quick web search + detail extraction (preferred for "find/search X")
 
 Use **`mcp__browser__search`** — returns ranked SERP results without opening a tab. Cheapest path for fact-finding.
 
@@ -52,7 +52,18 @@ mcp__browser__search {
 }
 ```
 
-Returns structured results (`title`, `url`, `snippet`, …). Use snippets directly if they answer the question. If you need full content, `mcp__browser__navigate` to the top URL.
+Returns structured results (`title`, `url`, `snippet`, …). Treat snippets as a lead, not the final source, whenever the user asks for current data, prices, news, comparisons, summaries, or "tổng hợp".
+
+After search:
+
+1. Pick the most relevant 1-3 result URLs. Prefer official, primary, or high-authority sources.
+2. Navigate to each selected URL with `mcp__browser__navigate`.
+3. Extract the page content with `mcp__browser__extract_text` or `mcp__browser__extract_structured`.
+4. Pull out the concrete facts, numbers, timestamps, source names, and any disagreement between sources.
+5. Close tabs you opened if the task is done.
+6. Answer from the extracted page content, citing each URL.
+
+Only answer directly from snippets when the user explicitly asks for search-result links/snippets, or when navigation/extraction fails and you clearly say the answer is based on search snippets only. Do not ask the user whether to open the pages; open the relevant result pages yourself.
 
 ### 2. Open a page + read content
 
@@ -161,6 +172,7 @@ User asks for…
 
 - **ToolSearch before the first call** (Step 0). A direct call to a not-yet-loaded `mcp__browser__*` tool fails with `InputValidationError`.
 - **Search first** for general questions — use `mcp__browser__search` before navigating blindly.
+- **Do not stop at SERP snippets for synthesis/current data** — after search, open the selected result URLs and extract page content before answering.
 - **Single tab per task** — open with `mcp__browser__new_tab`, close with `mcp__browser__close_tab` when done. `tab_id` is optional elsewhere (defaults to the active tab).
 - **Indices come from the snapshot** — never invent element numbers. If you need to click and don't have a current snapshot, run `mcp__browser__snapshot` first; re-snapshot after the DOM changes.
 - **Wait when navigating** — use `mcp__browser__click_and_wait` for nav-triggering clicks; `mcp__browser__wait` after manual navigation if the page is slow.
@@ -184,12 +196,16 @@ User asks for…
 **Query**: "tìm giá vàng hôm nay"
 
 ```
-1. ToolSearch { query: "select:mcp__browser__search" }        ← load the search tool
+1. ToolSearch { query: "select:mcp__browser__search,mcp__browser__navigate,mcp__browser__extract_text,mcp__browser__close_tab" }
 2. mcp__browser__search {
      "query": "giá vàng hôm nay",
      "num_results": 5
    }
-3. Read top snippets — answer the user with the figure + source URL.
+3. Pick the top relevant source URLs (for example 24h, PNJ, SJC/DOJI/BTMC if present).
+4. mcp__browser__navigate { "url": "<selected result URL>" }
+5. mcp__browser__extract_text { "tab_id": "<from navigate response>" }
+6. Repeat for 1-2 additional high-value sources if the figures need corroboration.
+7. Summarize the extracted prices, units, update time/source, and cite each URL. Mention if sources disagree.
 ```
 
 **Query**: "screenshot github.com/trending"

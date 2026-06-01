@@ -10,8 +10,8 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::code_engine::session::CodeSession;
 use crate::code_engine::prompt::PromptParseResult;
+use crate::code_engine::session::CodeSession;
 
 /// Coding-specific preamble injected after the standard `SYSTEM_PROMPT`. Tells
 /// the agent it's in a sandboxed git-backed workspace and how to behave for
@@ -74,10 +74,7 @@ If a tool call returned an error or you never actually ran it, say so explicitly
 /// should be **appended** to the base `SYSTEM_PROMPT` already produced by
 /// `ZenEngine::assemble_system_prompt`. The engine receives this via
 /// [`crate::zen_core::ZenCoreOptions::system_prompt`].
-pub fn build_code_system_prompt(
-    session: &CodeSession,
-    session_name: &str,
-) -> String {
+pub fn build_code_system_prompt(session: &CodeSession, session_name: &str) -> String {
     let mut out = String::new();
     out.push_str(CODE_SYSTEM_PROMPT);
     out.push_str("\n\n## Session\n");
@@ -85,10 +82,7 @@ pub fn build_code_system_prompt(
         "- Session: `{}` (id={})\n",
         session_name, session.session_id
     ));
-    out.push_str(&format!(
-        "- Workspace: `{}`\n",
-        session.workspace.display()
-    ));
+    out.push_str(&format!("- Workspace: `{}`\n", session.workspace.display()));
     out.push_str(&format!(
         "- Git: {}\n",
         if session.git_enabled {
@@ -125,10 +119,7 @@ pub fn build_code_system_prompt(
 ///
 /// Returns the wrapped prompt. When the parsed result has nothing to inject,
 /// returns the original plain text unchanged.
-pub fn build_user_prompt(
-    parsed: &PromptParseResult,
-    resolved_refs: &[String],
-) -> String {
+pub fn build_user_prompt(parsed: &PromptParseResult, resolved_refs: &[String]) -> String {
     if parsed.command.is_none() && resolved_refs.is_empty() && parsed.skills.is_empty() {
         return parsed.plain_text.clone();
     }

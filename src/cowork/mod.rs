@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::agent::dispatch_bridge::{traits::DispatchBridgeApi, DispatchBridge, DispatchTask, DispatchTaskStatus};
+use crate::agent::dispatch_bridge::{
+    traits::DispatchBridgeApi, DispatchBridge, DispatchTask, DispatchTaskStatus,
+};
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::{
@@ -116,7 +118,10 @@ fn validate_output_format(
     let output_format = output_format_json?;
     let fmt: serde_json::Value = serde_json::from_str(output_format).ok()?;
 
-    let expected_format = fmt.get("format").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let expected_format = fmt
+        .get("format")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let required_sections: Vec<String> = fmt
         .get("requiredSections")
         .and_then(|v| v.as_array())
@@ -136,7 +141,7 @@ fn validate_output_format(
                 serde_json::from_str::<serde_json::Value>(output).is_ok()
             }
             "markdown" | "plain" => true, // Text is always valid for markdown/plain
-            _ => true, // Unknown format, assume valid
+            _ => true,                    // Unknown format, assume valid
         }
     } else {
         true // No format specified, assume valid
@@ -398,16 +403,15 @@ impl CoworkManager {
             );
             if cowork_status == "done" {
                 // Validate output against member's output format requirements
-                let output_validation = if let (Some(result), Ok(task_opt)) = (
-                    result_opt,
-                    db.get_cowork_task(&cowork_task_id),
-                ) {
+                let output_validation = if let (Some(result), Ok(task_opt)) =
+                    (result_opt, db.get_cowork_task(&cowork_task_id))
+                {
                     if let Some(task) = task_opt {
-                        if let (Some(assignee), Ok(members)) = (
-                            &task.assignee,
-                            db.list_cowork_members(&workspace_id),
-                        ) {
-                            if let Some(member) = members.iter().find(|m| m.member_id == *assignee) {
+                        if let (Some(assignee), Ok(members)) =
+                            (&task.assignee, db.list_cowork_members(&workspace_id))
+                        {
+                            if let Some(member) = members.iter().find(|m| m.member_id == *assignee)
+                            {
                                 validate_output_format(result, member.output_format.as_deref())
                             } else {
                                 None
@@ -423,14 +427,20 @@ impl CoworkManager {
                 };
 
                 // Get file changes and verification result from dispatch task
-                let artifacts_json = if let Some(ref bridge) = *self.dispatch_bridge.lock().unwrap() {
-                    if let Some(dispatch_task) = bridge.get_parents().iter()
+                let artifacts_json = if let Some(ref bridge) = *self.dispatch_bridge.lock().unwrap()
+                {
+                    if let Some(dispatch_task) = bridge
+                        .get_parents()
+                        .iter()
                         .flat_map(|p| p.tasks.iter())
                         .find(|t| t.id == dispatch_task_id)
                     {
                         // Serialize file changes as JSON
                         if !dispatch_task.file_changes.is_empty() {
-                            Some(serde_json::to_string(&dispatch_task.file_changes).unwrap_or_default())
+                            Some(
+                                serde_json::to_string(&dispatch_task.file_changes)
+                                    .unwrap_or_default(),
+                            )
                         } else {
                             None
                         }
@@ -556,7 +566,10 @@ impl CoworkManager {
             // Ping-pong guard: if this rule would hand back to a member
             // that already handed it to us, refuse. Detects the simplest
             // A → B → A loop without needing full DAG traversal.
-            if completed_task.title.contains(&format!("[handoff from {to}]")) {
+            if completed_task
+                .title
+                .contains(&format!("[handoff from {to}]"))
+            {
                 tracing::warn!(
                     "[Cowork] Handoff rule → {to} skipped: target already appears \
                      in handoff chain for task '{}'",
@@ -586,7 +599,9 @@ impl CoworkManager {
             let handoff_type = rule["type"].as_str().unwrap_or("handoff");
             // Find target member
             if !members.iter().any(|m| m.member_id == to) {
-                tracing::warn!("[Cowork] Handoff target '{to}' not found in workspace {workspace_id}");
+                tracing::warn!(
+                    "[Cowork] Handoff target '{to}' not found in workspace {workspace_id}"
+                );
                 continue;
             }
             // Strip nested `[handoff from …]` prefixes off the completed
@@ -623,7 +638,14 @@ impl CoworkManager {
                     );
                     // Post a handoff message
                     let _ = db.insert_cowork_message(&CoworkMessage {
-                        id: format!("cwmsg-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")),
+                        id: format!(
+                            "cwmsg-{}",
+                            uuid::Uuid::new_v4()
+                                .to_string()
+                                .split('-')
+                                .next()
+                                .unwrap_or("0")
+                        ),
                         workspace_id: workspace_id.to_string(),
                         from_member: assignee_id.clone(),
                         to_member: Some(to.to_string()),
@@ -1131,9 +1153,8 @@ impl CoworkManager {
 
                         let pool: Vec<&CoworkTask> =
                             already_created.iter().chain(out.iter()).collect();
-                        let duplicate_assignee = pool
-                            .iter()
-                            .any(|t| t.assignee.as_deref() == Some(to));
+                        let duplicate_assignee =
+                            pool.iter().any(|t| t.assignee.as_deref() == Some(to));
 
                         if duplicate_assignee {
                             tracing::info!(
@@ -2031,7 +2052,9 @@ impl CoworkManager {
         agent_api: Option<Arc<dyn AgentApi>>,
         self_arc: Arc<CoworkManager>,
     ) -> Result<()> {
-        let old_task = db.get_cowork_task(id)?.ok_or_else(|| anyhow::anyhow!("Task not found"))?;
+        let old_task = db
+            .get_cowork_task(id)?
+            .ok_or_else(|| anyhow::anyhow!("Task not found"))?;
         let old_status = old_task.status.clone();
 
         tracing::info!(
@@ -2954,7 +2977,8 @@ mod truncate_tests {
 
     #[test]
     fn count_prefixes_handles_chains() {
-        let t = "[handoff from synthesizer] [handoff from critic] [handoff from synthesizer] original";
+        let t =
+            "[handoff from synthesizer] [handoff from critic] [handoff from synthesizer] original";
         assert_eq!(count_handoff_prefixes(t), 3);
     }
 

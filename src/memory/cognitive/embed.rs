@@ -88,7 +88,11 @@ impl CognitiveEmbedder {
         vector: Arc<dyn VectorStore>,
         provider: Arc<dyn EmbeddingProvider>,
     ) -> Self {
-        Self { graph, vector, provider }
+        Self {
+            graph,
+            vector,
+            provider,
+        }
     }
 
     /// Upsert the node, then embed + index it. Convenience for `add()`-style

@@ -1,9 +1,7 @@
 use anyhow::Result;
 use rusqlite::params;
 
-use crate::types::{
-    RunStatus, ScheduledTask, TaskRunLog, TaskRunLogInsert, TaskStatus,
-};
+use crate::types::{RunStatus, ScheduledTask, TaskRunLog, TaskRunLogInsert, TaskStatus};
 
 use super::rows::row_to_task;
 

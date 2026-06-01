@@ -7,17 +7,17 @@
 //!
 //! Uses zen_core hook types to avoid duplication.
 
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::Context;
-use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 // Re-export zen_core hook types
 use crate::zen_core::hooks::{
-    HookConfig as ZenHookConfig, HookDefinition as ZenHookDefinition,
-    HookEventConfig as ZenHookEventConfig, HookEvent, HookType as ZenHookType,
+    HookConfig as ZenHookConfig, HookDefinition as ZenHookDefinition, HookEvent,
+    HookEventConfig as ZenHookEventConfig, HookType as ZenHookType,
 };
 
 /// Hook configuration with string keys for JSON deserialization.
@@ -150,10 +150,7 @@ pub fn convert_to_zen_hook_config(config: HookConfig) -> Result<ZenHookConfig, S
 /// - Unknown event names → skip entire group (warn)
 /// - Missing required fields → skip that hook entry (warn)
 /// - blocking=true without timeout → add timeout=30 and warn (don't skip)
-fn validate_and_filter_marketplace_hook_config(
-    config: HookConfig,
-    file_path: &Path,
-) -> HookConfig {
+fn validate_and_filter_marketplace_hook_config(config: HookConfig, file_path: &Path) -> HookConfig {
     let mut result = HookConfig::default();
 
     for (event, event_configs) in config.hooks {
@@ -416,8 +413,8 @@ pub fn load_merged_hook_config(
     extra_files: Option<&[PathBuf]>,
 ) -> HookConfig {
     let global_hooks = load_hook_json(&global_config_dir.join("hooks.json"));
-    let workspace_hooks = workspace_dir
-        .and_then(|dir| load_hook_json(&dir.join(".senclaw").join("hooks.json")));
+    let workspace_hooks =
+        workspace_dir.and_then(|dir| load_hook_json(&dir.join(".senclaw").join("hooks.json")));
 
     let mut merged = merge_hook_configs(global_hooks, workspace_hooks);
 
@@ -434,10 +431,7 @@ pub fn load_merged_hook_config(
         }
 
         // Plugin layout: <pluginDir>/hooks/hooks.json — resolve ${SEMACLAW_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}
-        let plugin_dir = file_path
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("");
+        let plugin_dir = file_path.parent().and_then(|p| p.to_str()).unwrap_or("");
 
         let resolved = resolve_plugin_root_in_config(validated, plugin_dir);
         merged = merge_hook_configs(Some(merged), Some(resolved));
@@ -447,7 +441,10 @@ pub fn load_merged_hook_config(
 }
 
 /// Build hook environment variables.
-pub fn resolve_hook_env(global_config_dir: &Path, workspace_dir: Option<&Path>) -> HashMap<String, String> {
+pub fn resolve_hook_env(
+    global_config_dir: &Path,
+    workspace_dir: Option<&Path>,
+) -> HashMap<String, String> {
     let mut env = HashMap::new();
 
     env.insert(
@@ -549,10 +546,7 @@ mod tests {
 
         let env = resolve_hook_env(&global_dir, None);
         assert_eq!(env.get("SEMACLAW_ROOT"), Some(&"/global".to_string()));
-        assert_eq!(
-            env.get("AGENT_WORKSPACE"),
-            Some(&"/global".to_string())
-        );
+        assert_eq!(env.get("AGENT_WORKSPACE"), Some(&"/global".to_string()));
     }
 
     #[test]
@@ -636,15 +630,30 @@ mod tests {
 
     #[test]
     fn test_parse_hook_event() {
-        assert_eq!(parse_hook_event("UserPromptSubmit"), Some(HookEvent::UserPromptSubmit));
+        assert_eq!(
+            parse_hook_event("UserPromptSubmit"),
+            Some(HookEvent::UserPromptSubmit)
+        );
         assert_eq!(parse_hook_event("PreToolUse"), Some(HookEvent::PreToolUse));
-        assert_eq!(parse_hook_event("PostToolUse"), Some(HookEvent::PostToolUse));
-        assert_eq!(parse_hook_event("PermissionRequest"), Some(HookEvent::PermissionRequest));
+        assert_eq!(
+            parse_hook_event("PostToolUse"),
+            Some(HookEvent::PostToolUse)
+        );
+        assert_eq!(
+            parse_hook_event("PermissionRequest"),
+            Some(HookEvent::PermissionRequest)
+        );
         assert_eq!(parse_hook_event("Stop"), Some(HookEvent::Stop));
-        assert_eq!(parse_hook_event("SessionStart"), Some(HookEvent::SessionStart));
+        assert_eq!(
+            parse_hook_event("SessionStart"),
+            Some(HookEvent::SessionStart)
+        );
         assert_eq!(parse_hook_event("SessionEnd"), Some(HookEvent::SessionEnd));
         assert_eq!(parse_hook_event("PreCompact"), Some(HookEvent::PreCompact));
-        assert_eq!(parse_hook_event("PostCompact"), Some(HookEvent::PostCompact));
+        assert_eq!(
+            parse_hook_event("PostCompact"),
+            Some(HookEvent::PostCompact)
+        );
         assert_eq!(parse_hook_event("InvalidEvent"), None);
     }
 
@@ -676,7 +685,10 @@ mod tests {
         assert_eq!(event_configs[0].matcher, Some("*".to_string()));
         assert_eq!(event_configs[0].hooks.len(), 1);
         assert_eq!(event_configs[0].hooks[0].hook_type, ZenHookType::Command);
-        assert_eq!(event_configs[0].hooks[0].command, Some("echo hello".to_string()));
+        assert_eq!(
+            event_configs[0].hooks[0].command,
+            Some("echo hello".to_string())
+        );
     }
 
     #[test]

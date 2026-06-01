@@ -40,16 +40,13 @@ pub struct ZenCoreApi {
     /// (lib.rs) uses it to broadcast the event over WS so the UI can render
     /// the plan-approval modal. `Arc<Mutex>` so spawned event loops can hold
     /// a cheap clone and pick up callbacks set after engine creation.
-    on_plan_exit_request: Arc<
-        Mutex<Option<Arc<dyn Fn(String, crate::zen_core::PlanExitRequestData) + Send + Sync>>>,
-    >,
+    on_plan_exit_request:
+        Arc<Mutex<Option<Arc<dyn Fn(String, crate::zen_core::PlanExitRequestData) + Send + Sync>>>>,
     /// Callback fired for every `EngineEvent::ToolExecutionComplete` and
     /// `ToolExecutionError`. Lets `lib.rs` push a `tool:execution` WS event so
     /// the chat UI can render a claude-code-style collapsible "Read 3 files,
     /// ran 1 command" tool-group card.
-    on_tool_execution: Arc<
-        Mutex<Option<Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>>>,
-    >,
+    on_tool_execution: Arc<Mutex<Option<Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>>>>,
 }
 
 /// Wire-format tool-execution event used by the AgentPool → WS gateway path.
@@ -94,10 +91,7 @@ impl ZenCoreApi {
     /// Wire a callback fired for every tool execution (complete or error).
     /// Used by lib.rs to broadcast `tool:execution` over the WebSocket gateway
     /// so the chat UI can render tool-call activity inline.
-    pub fn set_on_tool_execution(
-        &self,
-        cb: Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>,
-    ) {
+    pub fn set_on_tool_execution(&self, cb: Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>) {
         *self.on_tool_execution.lock().unwrap() = Some(cb);
     }
 
@@ -297,27 +291,33 @@ impl ZenCoreApi {
                             EngineEvent::ToolExecutionComplete(data) => {
                                 let cb_opt = tool_exec_callback_for_loop.lock().unwrap().clone();
                                 if let Some(cb) = cb_opt {
-                                    cb(jid.clone(), ToolExecutionEvent {
-                                        agent_id: data.agent_id,
-                                        tool_name: data.tool_name,
-                                        title: data.title,
-                                        summary: data.summary,
-                                        content: data.content,
-                                        ok: true,
-                                    });
+                                    cb(
+                                        jid.clone(),
+                                        ToolExecutionEvent {
+                                            agent_id: data.agent_id,
+                                            tool_name: data.tool_name,
+                                            title: data.title,
+                                            summary: data.summary,
+                                            content: data.content,
+                                            ok: true,
+                                        },
+                                    );
                                 }
                             }
                             EngineEvent::ToolExecutionError(data) => {
                                 let cb_opt = tool_exec_callback_for_loop.lock().unwrap().clone();
                                 if let Some(cb) = cb_opt {
-                                    cb(jid.clone(), ToolExecutionEvent {
-                                        agent_id: data.agent_id,
-                                        tool_name: data.tool_name,
-                                        title: data.title,
-                                        summary: String::new(),
-                                        content: serde_json::Value::String(data.content),
-                                        ok: false,
-                                    });
+                                    cb(
+                                        jid.clone(),
+                                        ToolExecutionEvent {
+                                            agent_id: data.agent_id,
+                                            tool_name: data.tool_name,
+                                            title: data.title,
+                                            summary: String::new(),
+                                            content: serde_json::Value::String(data.content),
+                                            ok: false,
+                                        },
+                                    );
                                 }
                             }
                             _ => {}
@@ -574,12 +574,7 @@ impl CoreApi for ZenCoreApi {
         Ok(())
     }
 
-    fn respond_to_plan_exit(
-        &self,
-        jid: &str,
-        agent_id: &str,
-        selected: &str,
-    ) -> Result<()> {
+    fn respond_to_plan_exit(&self, jid: &str, agent_id: &str, selected: &str) -> Result<()> {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.respond_to_plan_exit(PlanExitResponseData {
                 agent_id: agent_id.to_string(),

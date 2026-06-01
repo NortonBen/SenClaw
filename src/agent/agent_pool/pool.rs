@@ -30,8 +30,7 @@ use crate::db::Db;
 use crate::mcp::helper::{
     browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config,
     litho_mcp_config, memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config,
-    wiki_mcp_config, workspace_mcp_config,
-    McpServerConfig,
+    wiki_mcp_config, workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -252,7 +251,10 @@ impl AgentPool {
     }
 
     /// Workbench bridge — bound to each per-group engine after creation.
-    pub fn set_workbench_bridge(&self, bridge: Arc<crate::agent::workbench_bridge::WorkbenchBridge>) {
+    pub fn set_workbench_bridge(
+        &self,
+        bridge: Arc<crate::agent::workbench_bridge::WorkbenchBridge>,
+    ) {
         *self.workbench_bridge.lock().unwrap() = Some(bridge);
     }
 
@@ -282,7 +284,10 @@ impl AgentPool {
     }
 
     /// Marketplace manager for loading MCP servers from plugins.
-    pub fn set_marketplace_manager(&self, manager: Arc<crate::marketplace::manager::MarketplaceManager>) {
+    pub fn set_marketplace_manager(
+        &self,
+        manager: Arc<crate::marketplace::manager::MarketplaceManager>,
+    ) {
         *self.marketplace_manager.lock().unwrap() = Some(manager);
     }
 
@@ -532,9 +537,7 @@ impl AgentPool {
             .core_api
             .respond_to_plan_exit(group_jid, agent_id, selected)
         {
-            tracing::warn!(
-                "[AgentPool] resolve_plan_exit failed for {group_jid}/{agent_id}: {e}"
-            );
+            tracing::warn!("[AgentPool] resolve_plan_exit failed for {group_jid}/{agent_id}: {e}");
         }
     }
 
@@ -1013,31 +1016,25 @@ impl AgentPool {
                 binding.bot_token.as_deref(),
                 &db_path_s,
             ));
-            if binding.is_admin
-                || binding.group_type == "cowork"
-                || binding.group_type == "code"
-            {
-                let cowork_dispatch_json: Option<String> =
-                    if binding.group_type == "cowork" {
-                        crate::cowork::workspace_id_from_cowork_jid(&binding.jid)
-                            .and_then(|ws_id| {
-                                self.db.lock().unwrap().as_ref().and_then(|db| {
-                                    match crate::cowork::dispatch_cowork_agents_json_for_mcp(db, ws_id)
-                                    {
-                                        Ok(j) => Some(j),
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "[AgentPool] Cowork dispatch agent list for {}: {e}",
-                                                binding.jid
-                                            );
-                                            None
-                                        }
-                                    }
-                                })
-                            })
-                    } else {
-                        None
-                    };
+            if binding.is_admin || binding.group_type == "cowork" || binding.group_type == "code" {
+                let cowork_dispatch_json: Option<String> = if binding.group_type == "cowork" {
+                    crate::cowork::workspace_id_from_cowork_jid(&binding.jid).and_then(|ws_id| {
+                        self.db.lock().unwrap().as_ref().and_then(|db| {
+                            match crate::cowork::dispatch_cowork_agents_json_for_mcp(db, ws_id) {
+                                Ok(j) => Some(j),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "[AgentPool] Cowork dispatch agent list for {}: {e}",
+                                        binding.jid
+                                    );
+                                    None
+                                }
+                            }
+                        })
+                    })
+                } else {
+                    None
+                };
                 mcp_servers.push(dispatch_mcp_config(
                     &dispatch_state_s,
                     &binding.folder,
@@ -1072,20 +1069,13 @@ impl AgentPool {
             mcp_servers.push(wiki_mcp_config(
                 cfg.paths.wiki_dir.to_string_lossy().as_ref(),
             ));
-            mcp_servers.push(space_mcp_config(
-                &db_path_s,
-                &binding.folder,
-                &binding.jid,
-            ));
+            mcp_servers.push(space_mcp_config(&db_path_s, &binding.folder, &binding.jid));
             mcp_servers.push(code_graph_mcp_config(
                 &db_path_s,
                 &binding.folder,
                 &workspace_s,
             ));
-            mcp_servers.push(code_server_mcp_config(
-                &workspace_s,
-                &binding.folder,
-            ));
+            mcp_servers.push(code_server_mcp_config(&workspace_s, &binding.folder));
             mcp_servers.push(litho_mcp_config(
                 cfg.mcp.litho_binary.as_str(),
                 if cfg.memory.openai_base_url.is_empty() {
@@ -1135,7 +1125,9 @@ impl AgentPool {
             if user_mcp_path.exists() {
                 if let Ok(raw) = std::fs::read_to_string(&user_mcp_path) {
                     if let Ok(user_mcp_data) = serde_json::from_str::<serde_json::Value>(&raw) {
-                        if let Some(servers) = user_mcp_data.get("mcpServers").and_then(|v| v.as_object()) {
+                        if let Some(servers) =
+                            user_mcp_data.get("mcpServers").and_then(|v| v.as_object())
+                        {
                             tracing::info!(
                                 "[AgentPool] Loading {} user MCP server(s) from {}",
                                 servers.len(),
@@ -1143,7 +1135,8 @@ impl AgentPool {
                             );
                             for (name, cfg) in servers {
                                 // Check if server is enabled
-                                let enabled = cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                                let enabled =
+                                    cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
                                 if !enabled {
                                     continue;
                                 }
@@ -1183,10 +1176,8 @@ impl AgentPool {
         // Init memory index for this agent folder — mirrors TS 628-639.
         // Register custom memory directory for cowork agents
         if let Some(ref custom_dir) = custom_memory_dir {
-            crate::memory::manager::get_instance().register_custom_memory_dir(
-                &memory_index_folder,
-                PathBuf::from(custom_dir),
-            );
+            crate::memory::manager::get_instance()
+                .register_custom_memory_dir(&memory_index_folder, PathBuf::from(custom_dir));
         }
         crate::memory::manager::get_instance()
             .init_agent(&memory_index_folder)
@@ -1289,7 +1280,8 @@ impl AgentPool {
         prompt: &str,
         retries_left: u32,
     ) -> Result<()> {
-        self.process_and_wait_inner_with_images(jid, group, prompt, &[], retries_left).await
+        self.process_and_wait_inner_with_images(jid, group, prompt, &[], retries_left)
+            .await
     }
 
     /// Process-and-wait with image attachments support.
@@ -1341,9 +1333,11 @@ impl AgentPool {
                 let shared_workspace_memory = if group.group_type == "cowork" {
                     crate::cowork::workspace_id_from_cowork_jid(jid)
                         .and_then(|ws_id| {
-                            self.db.lock().unwrap().as_ref().and_then(|db| {
-                                db.get_cowork_workspace(ws_id).ok()
-                            })
+                            self.db
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .and_then(|db| db.get_cowork_workspace(ws_id).ok())
                         })
                         .flatten()
                         .is_some()
@@ -1485,21 +1479,25 @@ impl AgentPool {
         let build_result = if attachments.is_empty() {
             crate::agent::input_builder::build_agent_input(&full_prompt, None)
         } else {
-            let ws_attachments: Vec<crate::agent::input_builder::WebSocketImageAttachment> = attachments
-                .iter()
-                .map(|a| crate::agent::input_builder::WebSocketImageAttachment {
-                    data_url: a.url.clone(),
-                    mime_type: a.mime_type.clone().unwrap_or_else(|| {
-                        // Try to detect MIME type from data URL if not provided
-                        if a.url.starts_with("data:image/") {
-                            a.url.split(';').next().unwrap_or("image/png").to_string()
-                        } else {
-                            "image/png".to_string()
-                        }
-                    }),
-                })
-                .collect();
-            crate::agent::input_builder::build_agent_input_with_attachments(&full_prompt, &ws_attachments)
+            let ws_attachments: Vec<crate::agent::input_builder::WebSocketImageAttachment> =
+                attachments
+                    .iter()
+                    .map(|a| crate::agent::input_builder::WebSocketImageAttachment {
+                        data_url: a.url.clone(),
+                        mime_type: a.mime_type.clone().unwrap_or_else(|| {
+                            // Try to detect MIME type from data URL if not provided
+                            if a.url.starts_with("data:image/") {
+                                a.url.split(';').next().unwrap_or("image/png").to_string()
+                            } else {
+                                "image/png".to_string()
+                            }
+                        }),
+                    })
+                    .collect();
+            crate::agent::input_builder::build_agent_input_with_attachments(
+                &full_prompt,
+                &ws_attachments,
+            )
         };
 
         // For now, convert back to string for CoreApi (future: extend CoreApi to support Input enum)
@@ -1712,8 +1710,8 @@ impl AgentPool {
                 // EMPTY_COMPLETION is upstream-recoverable (auth blip / tool overload /
                 // model not ready) — preserve the engine so the user can resend
                 // without a 30s+ MCP cold-restart and history loss.
-                let is_preservable = data.code == "EMPTY_COMPLETION"
-                    || msg.contains("EMPTY_COMPLETION");
+                let is_preservable =
+                    data.code == "EMPTY_COMPLETION" || msg.contains("EMPTY_COMPLETION");
 
                 if is_transient && retries_left > 0 {
                     tracing::warn!(
@@ -2464,17 +2462,11 @@ impl AgentPool {
                     // Agent Console todos panel.
                     if !transitions.is_empty() {
                         if let Some(db) = pool.db.lock().unwrap().clone() {
-                            let inserted = persist_todo_transitions_to_cowork(
-                                &db,
-                                &jid,
-                                &name,
-                                &transitions,
-                            );
+                            let inserted =
+                                persist_todo_transitions_to_cowork(&db, &jid, &name, &transitions);
                             // If any rows landed, ping the web UI to reload.
                             if inserted > 0 {
-                                if let Some(sink) =
-                                    pool.agent_event_sink.lock().unwrap().as_ref()
-                                {
+                                if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
                                     sink.notify_cowork_changed();
                                 }
                             }
@@ -2895,7 +2887,11 @@ pub(crate) fn persist_todo_transitions_to_cowork(
         let msg = crate::types::CoworkMessage {
             id: format!(
                 "cwmsg-{}",
-                uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("0")
             ),
             workspace_id: workspace_id.to_string(),
             from_member: member_id.to_string(),
@@ -2929,11 +2925,8 @@ async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: 
     let Some(sys) = crate::memory::cognitive::try_get_instance() else {
         return String::new();
     };
-    let mut q = crate::memory::cognitive::SearchQuery::spreading(
-        prompt.to_string(),
-        max_results,
-        2,
-    );
+    let mut q =
+        crate::memory::cognitive::SearchQuery::spreading(prompt.to_string(), max_results, 2);
     q.node_sets = vec![crate::memory::cognitive::NodeSet::group(
         group_folder,
         "default_memory",
@@ -2978,10 +2971,8 @@ pub(crate) fn should_reflect(text: &str, min_chars: usize, max_chars: usize) -> 
     // Pure-question heuristic: ends with question mark AND there's only one
     // sentence. "Where is X? It's on the table." → still reflect (statement
     // present). "Where is X?" alone → skip.
-    let only_question = t.ends_with('?')
-        && !t.contains(". ")
-        && !t.contains("。")
-        && !t.contains('.');
+    let only_question =
+        t.ends_with('?') && !t.contains(". ") && !t.contains("。") && !t.contains('.');
     !only_question
 }
 
@@ -3052,8 +3043,14 @@ mod merge_reasoning_tests {
         let reasoning = "The user wants gold price. I will search.";
         let content = "Here is the answer.";
         let out = merge_assistant_reasoning_for_web_ui(reasoning, content, false);
-        assert!(out.starts_with("<think>\n"), "expected leading <think>, got: {out:?}");
-        assert!(out.contains("</think>"), "expected closing </think>: {out:?}");
+        assert!(
+            out.starts_with("<think>\n"),
+            "expected leading <think>, got: {out:?}"
+        );
+        assert!(
+            out.contains("</think>"),
+            "expected closing </think>: {out:?}"
+        );
         assert!(out.contains(reasoning), "reasoning lost: {out:?}");
         assert!(out.contains(content), "content lost: {out:?}");
     }
@@ -3121,7 +3118,10 @@ mod merge_reasoning_tests {
             false, // ← FINAL turn
         );
         // No <think> wrap — direct content so the user sees it.
-        assert!(!out.starts_with("<think>"), "expected raw body, got: {out:?}");
+        assert!(
+            !out.starts_with("<think>"),
+            "expected raw body, got: {out:?}"
+        );
         assert!(out.contains("All the thinking"));
     }
 
@@ -3136,7 +3136,10 @@ mod merge_reasoning_tests {
         let reasoning = "The user wants today's gold price. I should invoke the \
                          agent-browser skill to search the web.";
         let out = merge_assistant_reasoning_for_web_ui(reasoning, "", true);
-        assert!(out.starts_with("<think>\n"), "expected <think> wrap: {out:?}");
+        assert!(
+            out.starts_with("<think>\n"),
+            "expected <think> wrap: {out:?}"
+        );
         assert!(out.contains("</think>"), "expected closing </think>");
         assert!(out.contains(reasoning), "reasoning lost: {out:?}");
         // No body after </think> — the tool-execution chip rendered next in the
@@ -3195,7 +3198,11 @@ mod reflection_tests {
         // Mixed content — there's a fact AND a question. Reflect anyway
         // since the cognify pipeline will pull triplets only from the
         // statement part.
-        assert!(should_reflect("My phone is 0901234567. What's yours?", MIN, MAX));
+        assert!(should_reflect(
+            "My phone is 0901234567. What's yours?",
+            MIN,
+            MAX
+        ));
     }
 }
 

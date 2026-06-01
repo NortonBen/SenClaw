@@ -228,11 +228,7 @@ pub(super) struct GlobalConfig {
         rename = "whisperConfig"
     )]
     pub(super) whisper_config: Option<WhisperSettings>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "ttsConfig"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ttsConfig")]
     pub(super) tts_config: Option<TtsSettings>,
     #[serde(
         default,

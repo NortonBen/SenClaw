@@ -18,8 +18,15 @@ impl AgentApi for AgentPool {
         self.process_and_wait_inner(jid, group, prompt, 5).await
     }
 
-    async fn process_and_wait_with_images(&self, jid: &str, group: &GroupBinding, prompt: &str, attachments: &[ImageAttachment]) -> Result<()> {
-        self.process_and_wait_inner_with_images(jid, group, prompt, attachments, 5).await
+    async fn process_and_wait_with_images(
+        &self,
+        jid: &str,
+        group: &GroupBinding,
+        prompt: &str,
+        attachments: &[ImageAttachment],
+    ) -> Result<()> {
+        self.process_and_wait_inner_with_images(jid, group, prompt, attachments, 5)
+            .await
     }
 
     async fn destroy(&self, jid: &str) {

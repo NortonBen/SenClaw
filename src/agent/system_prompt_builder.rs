@@ -79,7 +79,10 @@ pub fn generate_todo_reminders() -> Vec<ContentBlock> {
 /// Returns content blocks with plan mode instructions and file location guidance.
 pub fn generate_plan_reminders(task_description: Option<&str>) -> Vec<ContentBlock> {
     let plan_file_instruction = if let Some(desc) = task_description {
-        format!("Create your plan at .sema/plans/<kebab-case-title>.md (e.g. based on: \"{}\")", desc)
+        format!(
+            "Create your plan at .sema/plans/<kebab-case-title>.md (e.g. based on: \"{}\")",
+            desc
+        )
     } else {
         "Create your plan at .sema/plans/<kebab-case-title>.md".to_string()
     };

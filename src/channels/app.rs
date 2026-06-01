@@ -152,9 +152,11 @@ impl AppChannel {
                             "[AppChannel] Received message: {} from {}",
                             msg.message_id, msg.sender_id
                         );
-                        match client_for_inbound
-                            .decrypt_payload(&nonce_b64, &ciphertext_b64, &tag_b64)
-                        {
+                        match client_for_inbound.decrypt_payload(
+                            &nonce_b64,
+                            &ciphertext_b64,
+                            &tag_b64,
+                        ) {
                             Ok(text) => {
                                 info!("[AppChannel] Decrypted from {}: {}", msg.sender_id, text);
                                 let incoming = IncomingMessage {

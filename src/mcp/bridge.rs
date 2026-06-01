@@ -107,13 +107,7 @@ impl Tool for McpBridgeTool {
     fn search_hint(&self) -> String {
         // First sentence of description, prefixed with display_name so name
         // tokens contribute to scoring.
-        let first_sentence = self
-            .desc
-            .split('.')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let first_sentence = self.desc.split('.').next().unwrap_or("").trim().to_string();
         if first_sentence.is_empty() {
             self.display_name.clone()
         } else {
@@ -177,10 +171,7 @@ mod tests {
 
     #[test]
     fn always_loaded_set_overrides_defer() {
-        let t = mk(
-            "mcp__senclaw-memory__search",
-            "Search the memory store.",
-        );
+        let t = mk("mcp__senclaw-memory__search", "Search the memory store.");
         assert!(!t.should_defer());
     }
 

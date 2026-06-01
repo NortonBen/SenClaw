@@ -24,35 +24,35 @@ pub enum NodeKind {
 impl NodeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            NodeKind::Function      => "function",
+            NodeKind::Function => "function",
             NodeKind::AsyncFunction => "async_function",
-            NodeKind::Method        => "method",
-            NodeKind::Class         => "class",
-            NodeKind::Struct        => "struct",
-            NodeKind::Trait         => "trait",
-            NodeKind::Interface     => "interface",
-            NodeKind::Enum          => "enum",
-            NodeKind::Type          => "type",
-            NodeKind::Const         => "const",
-            NodeKind::Module        => "module",
-            NodeKind::File          => "file",
+            NodeKind::Method => "method",
+            NodeKind::Class => "class",
+            NodeKind::Struct => "struct",
+            NodeKind::Trait => "trait",
+            NodeKind::Interface => "interface",
+            NodeKind::Enum => "enum",
+            NodeKind::Type => "type",
+            NodeKind::Const => "const",
+            NodeKind::Module => "module",
+            NodeKind::File => "file",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            "function"       => NodeKind::Function,
+            "function" => NodeKind::Function,
             "async_function" => NodeKind::AsyncFunction,
-            "method"         => NodeKind::Method,
-            "class"          => NodeKind::Class,
-            "struct"         => NodeKind::Struct,
-            "trait"          => NodeKind::Trait,
-            "interface"      => NodeKind::Interface,
-            "enum"           => NodeKind::Enum,
-            "type"           => NodeKind::Type,
-            "const"          => NodeKind::Const,
-            "module"         => NodeKind::Module,
-            _                => NodeKind::File,
+            "method" => NodeKind::Method,
+            "class" => NodeKind::Class,
+            "struct" => NodeKind::Struct,
+            "trait" => NodeKind::Trait,
+            "interface" => NodeKind::Interface,
+            "enum" => NodeKind::Enum,
+            "type" => NodeKind::Type,
+            "const" => NodeKind::Const,
+            "module" => NodeKind::Module,
+            _ => NodeKind::File,
         }
     }
 }
@@ -93,24 +93,24 @@ pub enum EdgeKind {
 impl EdgeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            EdgeKind::Calls      => "calls",
-            EdgeKind::Imports    => "imports",
-            EdgeKind::Extends    => "extends",
+            EdgeKind::Calls => "calls",
+            EdgeKind::Imports => "imports",
+            EdgeKind::Extends => "extends",
             EdgeKind::Implements => "implements",
-            EdgeKind::Defines    => "defines",
-            EdgeKind::UsesType   => "uses_type",
+            EdgeKind::Defines => "defines",
+            EdgeKind::UsesType => "uses_type",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            "calls"      => EdgeKind::Calls,
-            "imports"    => EdgeKind::Imports,
-            "extends"    => EdgeKind::Extends,
+            "calls" => EdgeKind::Calls,
+            "imports" => EdgeKind::Imports,
+            "extends" => EdgeKind::Extends,
             "implements" => EdgeKind::Implements,
-            "defines"    => EdgeKind::Defines,
-            "uses_type"  => EdgeKind::UsesType,
-            _            => EdgeKind::Calls,
+            "defines" => EdgeKind::Defines,
+            "uses_type" => EdgeKind::UsesType,
+            _ => EdgeKind::Calls,
         }
     }
 }
@@ -168,61 +168,64 @@ pub enum Language {
 impl Language {
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
-            "rs"                        => Language::Rust,
-            "c" | "h"                   => Language::C,
+            "rs" => Language::Rust,
+            "c" | "h" => Language::C,
             "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Language::Cpp,
-            "cs"                        => Language::CSharp,
-            "go"                        => Language::Go,
-            "v" | "sv" | "svh"          => Language::Verilog,
-            "java"                      => Language::Java,
-            "scala" | "sc"              => Language::Scala,
+            "cs" => Language::CSharp,
+            "go" => Language::Go,
+            "v" | "sv" | "svh" => Language::Verilog,
+            "java" => Language::Java,
+            "scala" | "sc" => Language::Scala,
             "js" | "jsx" | "mjs" | "cjs" => Language::JavaScript,
-            "ts" | "tsx"                => Language::TypeScript,
-            "py" | "pyi"               => Language::Python,
-            "rb" | "rake" | "gemspec"   => Language::Ruby,
+            "ts" | "tsx" => Language::TypeScript,
+            "py" | "pyi" => Language::Python,
+            "rb" | "rake" | "gemspec" => Language::Ruby,
             "php" | "php4" | "php5" | "phps" => Language::PHP,
             "sh" | "bash" | "zsh" | "fish" => Language::Bash,
-            "jl"                        => Language::Julia,
-            "hs" | "lhs"                => Language::Haskell,
-            "ml" | "mli"                => Language::OCaml,
-            "agda"                      => Language::Agda,
+            "jl" => Language::Julia,
+            "hs" | "lhs" => Language::Haskell,
+            "ml" | "mli" => Language::OCaml,
+            "agda" => Language::Agda,
             "html" | "htm" | "erb" | "ejs" => Language::HTML,
-            "css" | "scss" | "sass"     => Language::CSS,
-            "json"                      => Language::JSON,
-            _                           => Language::Unknown,
+            "css" | "scss" | "sass" => Language::CSS,
+            "json" => Language::JSON,
+            _ => Language::Unknown,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Language::Rust       => "rust",
-            Language::C          => "c",
-            Language::Cpp        => "cpp",
-            Language::CSharp     => "c_sharp",
-            Language::Go         => "go",
-            Language::Verilog    => "verilog",
-            Language::Java       => "java",
-            Language::Scala      => "scala",
+            Language::Rust => "rust",
+            Language::C => "c",
+            Language::Cpp => "cpp",
+            Language::CSharp => "c_sharp",
+            Language::Go => "go",
+            Language::Verilog => "verilog",
+            Language::Java => "java",
+            Language::Scala => "scala",
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
-            Language::Python     => "python",
-            Language::Ruby       => "ruby",
-            Language::PHP        => "php",
-            Language::Bash       => "bash",
-            Language::Julia      => "julia",
-            Language::Haskell    => "haskell",
-            Language::OCaml      => "ocaml",
-            Language::Agda       => "agda",
-            Language::HTML       => "html",
-            Language::CSS        => "css",
-            Language::JSON       => "json",
-            Language::Unknown    => "unknown",
+            Language::Python => "python",
+            Language::Ruby => "ruby",
+            Language::PHP => "php",
+            Language::Bash => "bash",
+            Language::Julia => "julia",
+            Language::Haskell => "haskell",
+            Language::OCaml => "ocaml",
+            Language::Agda => "agda",
+            Language::HTML => "html",
+            Language::CSS => "css",
+            Language::JSON => "json",
+            Language::Unknown => "unknown",
         }
     }
 
     /// Languages where we extract meaningful symbols/edges for the code graph.
     pub fn is_indexable(self) -> bool {
-        !matches!(self, Language::HTML | Language::CSS | Language::JSON | Language::Unknown)
+        !matches!(
+            self,
+            Language::HTML | Language::CSS | Language::JSON | Language::Unknown
+        )
     }
 }
 

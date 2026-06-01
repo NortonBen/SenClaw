@@ -85,7 +85,16 @@ pub async fn query_llm(
             query_local_candle_native(messages, system_prompt, tools, cancel, profile).await
         }
         "local-mlx" => {
-            query_local_mlx(client, messages, system_prompt, tools, cancel, profile, stream).await
+            query_local_mlx(
+                client,
+                messages,
+                system_prompt,
+                tools,
+                cancel,
+                profile,
+                stream,
+            )
+            .await
         }
         _ => {
             query_openai(
@@ -120,7 +129,9 @@ pub async fn query_llm(
                     "[llm] EMPTY response provider={} model={} adapter={} \
                      blocks=0 tool_calls=0 — endpoint returned 200 OK with no content. \
                      Check endpoint logs (auth / rate-limit / tool count overload).",
-                    profile.provider, profile.model_name, adapt
+                    profile.provider,
+                    profile.model_name,
+                    adapt
                 );
             } else {
                 info!(
@@ -232,10 +243,10 @@ async fn query_local_candle_native(
 
         // Global registry: one CandleEngine per model_id, weights cached in memory.
         let engine = crate::gateway::ui_server::local_models::get_or_create_loaded_engine(
-            &model_key,
-            &model_dir,
+            &model_key, &model_dir,
         );
-        let _idle_gen = crate::gateway::ui_server::local_models::CandleInferenceGuard::new(&model_key);
+        let _idle_gen =
+            crate::gateway::ui_server::local_models::CandleInferenceGuard::new(&model_key);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
 
         let engine_clone = engine.clone();
@@ -312,7 +323,6 @@ pub(crate) fn build_hf_style_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
         .collect()
 }
 
-
 /// Convert internal [`Message`] history to OpenAI Chat Completions `messages` JSON.
 ///
 /// OpenAI-compatible APIs (DeepSeek, OpenRouter, etc.) expect:
@@ -324,7 +334,10 @@ pub(crate) fn build_hf_style_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
 ///
 /// Thinking / reasoning: [`ContentBlock::Thinking`] is serialized as `reasoning_content` on
 /// `assistant` messages (required by DeepSeek and similar when thinking mode is on).
-pub(crate) fn openai_messages_for_api(messages: &[Message], system_prompt: &str) -> Result<Vec<Value>> {
+pub(crate) fn openai_messages_for_api(
+    messages: &[Message],
+    system_prompt: &str,
+) -> Result<Vec<Value>> {
     let mut api_msgs: Vec<Value> = Vec::new();
 
     if !system_prompt.is_empty() {
@@ -454,7 +467,9 @@ pub(crate) fn openai_messages_for_api(messages: &[Message], system_prompt: &str)
                         ContentBlock::ControlSignal { .. } => {}
                         ContentBlock::Image { .. } => {
                             // Images in assistant messages are not standard, but handle gracefully
-                            tracing::warn!("OpenAI adapter: unexpected Image block in assistant message");
+                            tracing::warn!(
+                                "OpenAI adapter: unexpected Image block in assistant message"
+                            );
                         }
                     }
                 }
@@ -529,11 +544,9 @@ async fn query_local_mlx(
 
         // Global registry: one MlxNativeEngine per model_id, weights cached in memory.
         let engine = crate::gateway::ui_server::local_models::get_or_create_mlx_engine(
-            &model_key,
-            &model_dir,
+            &model_key, &model_dir,
         );
-        let _idle_gen =
-            crate::gateway::ui_server::local_models::MlxInferenceGuard::new(&model_key);
+        let _idle_gen = crate::gateway::ui_server::local_models::MlxInferenceGuard::new(&model_key);
 
         // warm_up() loads weights if not yet loaded.
         let engine_wu = engine.clone();
@@ -578,12 +591,15 @@ async fn query_local_mlx(
         // model-id-derived dialect preset only when the engine couldn't surface
         // its loaded config (shouldn't happen post-warm-up).
         let (clean_text, reasoning, tool_calls_from_text) = match engine.parser_config() {
-            Ok(cfg) => crate::local_model::stream_parser::parse_complete_with_config(&text_buf, &cfg),
+            Ok(cfg) => {
+                crate::local_model::stream_parser::parse_complete_with_config(&text_buf, &cfg)
+            }
             Err(e) => {
                 tracing::warn!(
                     "[local-mlx] parser_config unavailable ({e}); falling back to dialect preset"
                 );
-                let dialect = crate::local_model::stream_parser::dialect_for_model_id(&profile.model_name);
+                let dialect =
+                    crate::local_model::stream_parser::dialect_for_model_id(&profile.model_name);
                 crate::local_model::stream_parser::parse_complete(&text_buf, dialect)
             }
         };
@@ -1411,7 +1427,9 @@ mod tests {
     /// Detailed dialect coverage lives in `local_model::stream_parser::tests`.
     #[test]
     fn local_mlx_path_yields_canonical_shape_for_gemma4() {
-        use crate::local_model::stream_parser::{dialect_for_model_id, parse_complete, LocalDialect};
+        use crate::local_model::stream_parser::{
+            dialect_for_model_id, parse_complete, LocalDialect,
+        };
         let raw = "<|channel>thought\nthink<channel|>\
                    <|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>\
                    Visible answer.";
@@ -1481,7 +1499,8 @@ mod tests {
         let c = LlmError::classify(&err);
         assert_ne!(c.code, "NETWORK_ERROR");
 
-        let err2 = anyhow::anyhow!("https://json-schema.org/draft/2020-12/schema parse error in tool");
+        let err2 =
+            anyhow::anyhow!("https://json-schema.org/draft/2020-12/schema parse error in tool");
         let c2 = LlmError::classify(&err2);
         assert_ne!(c2.code, "API_RESPONSE_ERROR");
     }
@@ -1528,7 +1547,10 @@ mod tests {
         assert_eq!(text.trim(), "OK.");
         assert_eq!(tc.len(), 1);
         assert_eq!(tc[0]["function"]["name"], "weather");
-        assert!(tc[0]["function"]["arguments"].as_str().unwrap().contains("HN"));
+        assert!(tc[0]["function"]["arguments"]
+            .as_str()
+            .unwrap()
+            .contains("HN"));
     }
 
     #[test]
@@ -1536,9 +1558,15 @@ mod tests {
         // enable_thinking=true → prefilled open, dangling close.
         let raw = "<think>User said hi, I should ask 1-4 related questions in a single turn.</think>\n\nHi! What are your questions?";
         let (reasoning, clean, tcs) = qwen_pipeline(raw);
-        assert_eq!(reasoning, "User said hi, I should ask 1-4 related questions in a single turn.");
+        assert_eq!(
+            reasoning,
+            "User said hi, I should ask 1-4 related questions in a single turn."
+        );
         assert_eq!(clean, "Hi! What are your questions?");
-        assert!(!clean.contains("</think>"), "stray closing tag leaked: {clean:?}");
+        assert!(
+            !clean.contains("</think>"),
+            "stray closing tag leaked: {clean:?}"
+        );
         assert!(tcs.is_empty());
     }
 
@@ -1549,7 +1577,10 @@ mod tests {
         let raw = "<think>\nStep 1: analyze. Step 2: still reasoning, never finished";
         let (reasoning, clean, tcs) = qwen_pipeline(raw);
         assert!(reasoning.contains("Step 1: analyze"));
-        assert_eq!(clean, "", "unclosed reasoning leaked into answer: {clean:?}");
+        assert_eq!(
+            clean, "",
+            "unclosed reasoning leaked into answer: {clean:?}"
+        );
         assert!(tcs.is_empty());
     }
 
@@ -1558,7 +1589,10 @@ mod tests {
         let raw = "<think>I should look up the weather for the user.</think>\n\n<tool_call>\n<function=get_weather>\n<parameter=city>\nHanoi\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
         let (reasoning, clean, tcs) = qwen_pipeline(raw);
         assert_eq!(reasoning, "I should look up the weather for the user.");
-        assert!(!clean.contains("<tool_call>") && !clean.contains("</think>"), "tags leaked: {clean:?}");
+        assert!(
+            !clean.contains("<tool_call>") && !clean.contains("</think>"),
+            "tags leaked: {clean:?}"
+        );
         assert_eq!(tcs.len(), 1, "tool call not parsed");
         assert_eq!(tcs[0]["function"]["name"], "get_weather");
         let args = tcs[0]["function"]["arguments"].as_str().unwrap();
@@ -1575,7 +1609,10 @@ mod tests {
         assert_eq!(tc[0]["function"]["name"], "weather");
         let args = tc[0]["function"]["arguments"].as_str().unwrap();
         assert!(args.contains("\"city\":\"HN\""), "args: {args}");
-        assert!(args.contains("\"days\":3"), "days should be coerced to number: {args}");
+        assert!(
+            args.contains("\"days\":3"),
+            "days should be coerced to number: {args}"
+        );
     }
 
     #[test]

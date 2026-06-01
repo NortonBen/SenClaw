@@ -12,11 +12,11 @@ use async_trait::async_trait;
 
 pub mod agent;
 pub mod browser;
-pub mod code_engine;
-pub mod code_graph;
 pub mod channels;
 pub mod clawhub;
 pub mod cli;
+pub mod code_engine;
+pub mod code_graph;
 pub mod config;
 pub mod cowork;
 pub mod db;
@@ -25,9 +25,9 @@ pub mod local_model;
 pub mod marketplace;
 pub mod mcp;
 pub mod memory;
+pub mod plugins;
 pub mod scheduler;
 pub mod setup;
-pub mod plugins;
 pub mod skills;
 pub mod subagents;
 pub mod tools;
@@ -102,7 +102,13 @@ impl agent::permission_bridge::PermissionBridgeApi for RealPermissionApi {
 
 #[async_trait]
 impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
-    fn enqueue_and_process(&self, group_jid: &str, group: &crate::types::GroupBinding, text: &str, attachments: &[crate::agent::input_builder::ImageAttachment]) {
+    fn enqueue_and_process(
+        &self,
+        group_jid: &str,
+        group: &crate::types::GroupBinding,
+        text: &str,
+        attachments: &[crate::agent::input_builder::ImageAttachment],
+    ) {
         let agent_pool = Arc::clone(&self.agent_pool);
         let jid = group_jid.to_string();
         let g = group.clone();
@@ -114,8 +120,14 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
             gq.enqueue(
                 &jid_key,
                 Box::pin(async move {
-                    let _ =
-                        types::AgentApi::process_and_wait_with_images(agent_pool.as_ref(), &jid, &g, &t, &att).await;
+                    let _ = types::AgentApi::process_and_wait_with_images(
+                        agent_pool.as_ref(),
+                        &jid,
+                        &g,
+                        &t,
+                        &att,
+                    )
+                    .await;
                 }),
             )
             .await;
@@ -160,7 +172,8 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
     }
 
     fn get_tool_rules(&self) -> Vec<crate::agent::permission_bridge::types::ToolAutoAcceptRule> {
-        self.agent_pool.permission_bridge()
+        self.agent_pool
+            .permission_bridge()
             .map(|b| b.get_rules())
             .unwrap_or_default()
     }
@@ -189,7 +202,8 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
     }
 
     fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
-        self.agent_pool.resolve_plan_exit(group_jid, agent_id, selected);
+        self.agent_pool
+            .resolve_plan_exit(group_jid, agent_id, selected);
         // Persist the approval outcome on the most recent pending plan for
         // this chat so the Plan History panel reflects accepted/rejected
         // state (the row was inserted as "pending" at request time).
@@ -445,8 +459,13 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         let jid = chat_jid.to_string();
         let state = state.to_string();
         tokio::spawn(async move {
-            persist_chat_event(&db, &jid, "agent:state", None,
-                &serde_json::json!({"state": state}));
+            persist_chat_event(
+                &db,
+                &jid,
+                "agent:state",
+                None,
+                &serde_json::json!({"state": state}),
+            );
             gw.notify_agent_state(&jid, &state).await;
         });
     }
@@ -499,8 +518,13 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         let key = option_key.to_string();
         let label = option_label.to_string();
         tokio::spawn(async move {
-            persist_chat_event(&db, &jid, "permission:resolved", Some(&req),
-                &serde_json::json!({"key": key, "label": label}));
+            persist_chat_event(
+                &db,
+                &jid,
+                "permission:resolved",
+                Some(&req),
+                &serde_json::json!({"key": key, "label": label}),
+            );
             gw.notify_permission_resolved(&jid, &req, &key, &label)
                 .await;
         });
@@ -852,8 +876,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 anyhow::bail!("cognify LLM not configured: set SENCLAW_OPENAI_API_KEY")
             }
         }
-        let llm: Arc<dyn LlmClient> = create_cognitive_llm(&cfg)
-            .unwrap_or_else(|| Arc::new(DormantLlm));
+        let llm: Arc<dyn LlmClient> =
+            create_cognitive_llm(&cfg).unwrap_or_else(|| Arc::new(DormantLlm));
         match memory::cognitive::init_daemon(Arc::clone(&db), &cfg, llm) {
             Some(sys) => {
                 tracing::info!(
@@ -884,7 +908,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 // Periodic maintenance: cleanup junk + merge duplicate
                 // entities. Cadence comes from CognitiveConfig (0 disables).
                 let interval = std::time::Duration::from_secs(
-                    cfg.cognitive.maintenance_interval_hours.saturating_mul(3600),
+                    cfg.cognitive
+                        .maintenance_interval_hours
+                        .saturating_mul(3600),
                 );
                 memory::cognitive::start_maintenance_ticker(
                     Arc::clone(&sys.graph),
@@ -901,7 +927,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // Ensure main agent skeleton exists (missing dirs + SOUL.md/MEMORY.md templates),
     // avoiding the case where user accidentally deletes it and no group has isAdmin permissions.
     // Matches TypeScript: ensureAgentDirs('main') before GroupManager creation.
-    gateway::group_manager::ensure_agent_dirs(&cfg, &cfg.telegram.agent_folder, &cfg.telegram.agent_folder);
+    gateway::group_manager::ensure_agent_dirs(
+        &cfg,
+        &cfg.telegram.agent_folder,
+        &cfg.telegram.agent_folder,
+    );
     tracing::info!("[SenClaw] Main agent directory ensured");
 
     // ===== 2. GroupManager & Other Managers =====
@@ -1217,8 +1247,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // Auto-launch + auto-register MCP servers declared by installed Space Apps
     // (manifest `mcp.autoRegister`). Lifecycle is tied to the daemon.
-    let space_mcp_launcher =
-        Arc::new(gateway::ui_server::space_mcp::SpaceMcpLauncher::new());
+    let space_mcp_launcher = Arc::new(gateway::ui_server::space_mcp::SpaceMcpLauncher::new());
     {
         let apps_dir = cfg.paths.workspace_dir.join("space-apps");
         let base_url = format!("http://127.0.0.1:{}", cfg.ui_server.port);
@@ -1244,14 +1273,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 cfg.paths.marketplace_config_path.clone(),
                 cfg.paths.marketplace_state_path.clone(),
                 cfg.paths.marketplace_clones_dir.clone(),
-            ).unwrap_or_else(|_| {
+            )
+            .unwrap_or_else(|_| {
                 marketplace::manager::MarketplaceManager::with_paths(
                     std::path::PathBuf::from("/tmp/senclaw-marketplace-config.json"),
                     std::path::PathBuf::from("/tmp/senclaw-marketplace-state.json"),
                     std::path::PathBuf::from("/tmp/senclaw-marketplace"),
-                ).unwrap_or_else(|_| panic!("Failed to create marketplace manager"))
+                )
+                .unwrap_or_else(|_| panic!("Failed to create marketplace manager"))
             })
-        })
+        }),
     );
     agent_pool.set_marketplace_manager(Arc::clone(&marketplace_manager));
     tracing::info!("[SenClaw] MarketplaceManager initialized and wired to AgentPool");
@@ -1278,12 +1309,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     if let (Some(bridge), Ok(rows)) = (agent_pool.permission_bridge(), db.list_tool_rules()) {
         let mut loaded = 0usize;
         for row in &rows {
-            match serde_json::from_str::<agent::permission_bridge::types::ToolAutoAcceptRule>(&row.rule_json) {
+            match serde_json::from_str::<agent::permission_bridge::types::ToolAutoAcceptRule>(
+                &row.rule_json,
+            ) {
                 Ok(rule) => {
                     bridge.add_rule(rule);
                     loaded += 1;
                 }
-                Err(e) => tracing::warn!(error = %e, rule_id = %row.id, "[ToolRules] DB row deserialize failed"),
+                Err(e) => {
+                    tracing::warn!(error = %e, rule_id = %row.id, "[ToolRules] DB row deserialize failed")
+                }
             }
         }
         tracing::info!("[ToolRules] seeded permission bridge with {loaded} persisted rule(s)");
@@ -1316,7 +1351,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     for c in guard.iter() {
                         if c.owns_jid(&jid) {
                             if let Err(e) = c.send_message(&jid, &text, bt.as_deref()).await {
-                                tracing::warn!("[WorkbenchBridge] channel notify failed for {jid}: {e}");
+                                tracing::warn!(
+                                    "[WorkbenchBridge] channel notify failed for {jid}: {e}"
+                                );
                             }
                             break;
                         }
@@ -1578,8 +1615,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 for app in &app_chs {
                     if app.owns_jid(&chat_jid) {
                         let app = Arc::clone(app);
-                        let meta =
-                            serde_json::json!({ "topic": topic, "data": msg }).to_string();
+                        let meta = serde_json::json!({ "topic": topic, "data": msg }).to_string();
                         tokio::spawn(async move {
                             let _ = app.send_control(CTRL_API_EVENT, meta).await;
                         });
@@ -1650,7 +1686,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let artifact = serde_json::to_value(&payload.artifact).unwrap_or_default();
                 let replaces = payload.replaces_id.clone();
                 tokio::spawn(async move {
-                    gw.notify_workbench_new(&jid, &artifact, replaces.as_deref()).await;
+                    gw.notify_workbench_new(&jid, &artifact, replaces.as_deref())
+                        .await;
                 });
             }));
             let gw_ready = Arc::clone(&gw);
@@ -1680,7 +1717,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let aid = payload.artifact_id.clone();
                 let reason = payload.reason.clone();
                 tokio::spawn(async move {
-                    gw.notify_workbench_service_stopped(&jid, &aid, &reason).await;
+                    gw.notify_workbench_service_stopped(&jid, &aid, &reason)
+                        .await;
                 });
             }));
         }
@@ -1692,7 +1730,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         {
             let gw_plan = Arc::clone(&gw);
             let db_plan = Arc::clone(&db);
-            let plans_dir = cfg.paths.db_path
+            let plans_dir = cfg
+                .paths
+                .db_path
                 .parent()
                 .map(|p| p.join("plans"))
                 .unwrap_or_else(|| std::path::PathBuf::from("plans"));
@@ -1735,8 +1775,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     let ts = chrono::Utc::now().to_rfc3339();
                     // Persist before broadcasting so a reload immediately
                     // after the event still includes it in `history:load`.
-                    let content_json = serde_json::to_string(&ev.content)
-                        .unwrap_or_else(|_| "{}".to_string());
+                    let content_json =
+                        serde_json::to_string(&ev.content).unwrap_or_else(|_| "{}".to_string());
                     if let Err(e) = db.insert_tool_execution(
                         &jid,
                         &ev.agent_id,
@@ -1846,7 +1886,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             let db = Arc::clone(&db);
             let api = Arc::clone(&agent_pool) as Arc<dyn types::AgentApi>;
             dispatch_bridge.set_task_lifecycle_callback(Arc::new(
-                move |task_id: &str, status: &str, label: &str, goal: &str, result: Option<String>| {
+                move |task_id: &str,
+                      status: &str,
+                      label: &str,
+                      goal: &str,
+                      result: Option<String>| {
                     mgr.on_dispatch_task_lifecycle(
                         &db,
                         task_id,
@@ -2066,7 +2110,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let k = kind.to_string();
                 tokio::spawn(async move {
                     gw.push_event_reminder(
-                        &nid, &eid, &t, start_at_ms, &k, fired_at_ms, delayed_ms,
+                        &nid,
+                        &eid,
+                        &t,
+                        start_at_ms,
+                        &k,
+                        fired_at_ms,
+                        delayed_ms,
                     )
                     .await;
                 });
@@ -2139,9 +2189,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 answers: &serde_json::Value,
                 other_texts: Option<&serde_json::Value>,
             ) {
-                let _ = self
-                    .agent_pool
-                    .resolve_ask_question_batch(request_id, answers, other_texts);
+                let _ =
+                    self.agent_pool
+                        .resolve_ask_question_batch(request_id, answers, other_texts);
             }
             fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
                 self.agent_pool

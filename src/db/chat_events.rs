@@ -130,10 +130,7 @@ impl super::Db {
             // tidy even when an orphan resolved row sneaks in later.
             let mut total = 0usize;
             for id in &ids {
-                total += c.execute(
-                    "DELETE FROM chat_events WHERE request_id = ?1",
-                    params![id],
-                )?;
+                total += c.execute("DELETE FROM chat_events WHERE request_id = ?1", params![id])?;
             }
             Ok(total)
         })
@@ -151,9 +148,30 @@ mod tests {
         let db = Db::open_in_memory(&cfg).expect("open db");
 
         let jid = "tg:1";
-        db.insert_chat_event(jid, "agent:state", None, r#"{"state":"idle"}"#, "2026-05-19T10:00:00Z").unwrap();
-        db.insert_chat_event(jid, "permission:request", Some("req-1"), r#"{"toolName":"Bash"}"#, "2026-05-19T10:00:01Z").unwrap();
-        db.insert_chat_event(jid, "permission:resolved", Some("req-1"), r#"{"key":"allow"}"#, "2026-05-19T10:00:02Z").unwrap();
+        db.insert_chat_event(
+            jid,
+            "agent:state",
+            None,
+            r#"{"state":"idle"}"#,
+            "2026-05-19T10:00:00Z",
+        )
+        .unwrap();
+        db.insert_chat_event(
+            jid,
+            "permission:request",
+            Some("req-1"),
+            r#"{"toolName":"Bash"}"#,
+            "2026-05-19T10:00:01Z",
+        )
+        .unwrap();
+        db.insert_chat_event(
+            jid,
+            "permission:resolved",
+            Some("req-1"),
+            r#"{"key":"allow"}"#,
+            "2026-05-19T10:00:02Z",
+        )
+        .unwrap();
 
         let rows = db.get_chat_events(jid, None).unwrap();
         assert_eq!(rows.len(), 3);
@@ -183,19 +201,49 @@ mod tests {
         let jid = "web:main";
 
         // Old, unresolved → should be deleted.
-        db.insert_chat_event(jid, "permission:request", Some("old-1"),
-            r#"{"toolName":"Write"}"#, "2026-04-01T00:00:00Z").unwrap();
+        db.insert_chat_event(
+            jid,
+            "permission:request",
+            Some("old-1"),
+            r#"{"toolName":"Write"}"#,
+            "2026-04-01T00:00:00Z",
+        )
+        .unwrap();
         // Old, resolved → KEEP (request has matching resolution).
-        db.insert_chat_event(jid, "permission:request", Some("old-2"),
-            r#"{"toolName":"Bash"}"#, "2026-04-01T00:00:01Z").unwrap();
-        db.insert_chat_event(jid, "permission:resolved", Some("old-2"),
-            r#"{"key":"allow"}"#, "2026-04-01T00:00:02Z").unwrap();
+        db.insert_chat_event(
+            jid,
+            "permission:request",
+            Some("old-2"),
+            r#"{"toolName":"Bash"}"#,
+            "2026-04-01T00:00:01Z",
+        )
+        .unwrap();
+        db.insert_chat_event(
+            jid,
+            "permission:resolved",
+            Some("old-2"),
+            r#"{"key":"allow"}"#,
+            "2026-04-01T00:00:02Z",
+        )
+        .unwrap();
         // Recent, unresolved → KEEP (newer than cutoff).
-        db.insert_chat_event(jid, "permission:request", Some("new-1"),
-            r#"{"toolName":"Write"}"#, "2026-05-20T17:00:00Z").unwrap();
+        db.insert_chat_event(
+            jid,
+            "permission:request",
+            Some("new-1"),
+            r#"{"toolName":"Write"}"#,
+            "2026-05-20T17:00:00Z",
+        )
+        .unwrap();
         // Unrelated event → untouched regardless of age.
-        db.insert_chat_event(jid, "agent:state", None,
-            r#"{"state":"idle"}"#, "2026-04-01T00:00:03Z").unwrap();
+        db.insert_chat_event(
+            jid,
+            "agent:state",
+            None,
+            r#"{"state":"idle"}"#,
+            "2026-04-01T00:00:03Z",
+        )
+        .unwrap();
 
         // Cutoff between the old batch and the recent one.
         let removed = db
@@ -207,6 +255,8 @@ mod tests {
         let remaining = db.get_chat_events(jid, None).unwrap();
         // Should have: old-2 request, old-2 resolved, new-1 request, agent:state
         assert_eq!(remaining.len(), 4);
-        assert!(remaining.iter().all(|r| r.request_id.as_deref() != Some("old-1")));
+        assert!(remaining
+            .iter()
+            .all(|r| r.request_id.as_deref() != Some("old-1")));
     }
 }

@@ -231,7 +231,10 @@ pub fn shutdown_decay() {
 /// Format cognitive search hits as a compact context block for LLM prompt
 /// injection. Used by AgentPool pre-retrieval. Empty input → empty output
 /// so callers can `if !s.is_empty() { ... }` without surrounding logic.
-pub fn format_hits_for_prompt(hits: &[super::search::SearchHit], max_chars_per_hit: usize) -> String {
+pub fn format_hits_for_prompt(
+    hits: &[super::search::SearchHit],
+    max_chars_per_hit: usize,
+) -> String {
     if hits.is_empty() {
         return String::new();
     }
@@ -281,9 +284,15 @@ mod tests {
 
     #[async_trait]
     impl EmbeddingProvider for FakeEmbedder {
-        fn name(&self) -> &str { "fake" }
-        fn model(&self) -> &str { "fake-model" }
-        fn dimensions(&self) -> u32 { 8 }
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+        fn dimensions(&self) -> u32 {
+            8
+        }
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             Ok(texts
                 .iter()
@@ -362,7 +371,11 @@ mod tests {
 
         let mut node = DataPoint::chunk("x".repeat(500), None, 0);
         node.summary = "x".repeat(500);
-        let hits = vec![SearchHit { node, score: 0.5, path: Vec::new() }];
+        let hits = vec![SearchHit {
+            node,
+            score: 0.5,
+            path: Vec::new(),
+        }];
         let s = format_hits_for_prompt(&hits, 50);
         assert!(s.contains("..."), "truncation marker expected: {s}");
         // Header + body + trailing ellipsis — keep us well under 500.
@@ -371,13 +384,22 @@ mod tests {
 
     #[tokio::test]
     async fn end_to_end_via_facade() {
-        let canned = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#.to_string();
+        let canned =
+            r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+                .to_string();
         let sys = build_system(vec![canned]);
         let _ = sys
-            .cognify("Ada invented the compiler.", "doc", &CognifyOptions::default())
+            .cognify(
+                "Ada invented the compiler.",
+                "doc",
+                &CognifyOptions::default(),
+            )
             .await
             .unwrap();
-        let hits = sys.search(&SearchQuery::chunks("compiler", 5)).await.unwrap();
+        let hits = sys
+            .search(&SearchQuery::chunks("compiler", 5))
+            .await
+            .unwrap();
         assert!(!hits.is_empty());
         let stats = sys.stats().unwrap();
         assert!(stats.edges > 0);
@@ -391,17 +413,26 @@ mod tests {
         //   1. spreading recall
         //   2. format_hits_for_prompt over the result
         // Verifies the pipeline works without needing the global singleton.
-        let canned = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#.to_string();
+        let canned =
+            r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+                .to_string();
         let sys = build_system(vec![canned]);
-        sys.cognify("Ada invented the compiler.", "doc", &CognifyOptions::default())
-            .await
-            .unwrap();
+        sys.cognify(
+            "Ada invented the compiler.",
+            "doc",
+            &CognifyOptions::default(),
+        )
+        .await
+        .unwrap();
 
         let q = SearchQuery::spreading("compiler", 5, 2);
         let hits = sys.search(&q).await.unwrap();
         let filtered: Vec<_> = hits.into_iter().filter(|h| h.score >= 0.0).collect();
         let formatted = format_hits_for_prompt(&filtered, 200);
-        assert!(!formatted.is_empty(), "recall + format must produce a block");
+        assert!(
+            !formatted.is_empty(),
+            "recall + format must produce a block"
+        );
         // The block must be safe to embed inside the <cognitive_memory> tags
         // used by AgentPool — no stray angle-bracket / closing-tag content.
         assert!(!formatted.contains("</cognitive_memory>"));

@@ -12,9 +12,12 @@ use serde::Deserialize;
 use super::core::{AppError, UiState};
 
 fn agent_api(s: &Arc<UiState>) -> Result<&Arc<dyn super::core::UiApi>, AppError> {
-    s.agent_api
-        .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "agent API unavailable".into()))
+    s.agent_api.as_ref().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent API unavailable".into(),
+        )
+    })
 }
 
 #[derive(Deserialize)]

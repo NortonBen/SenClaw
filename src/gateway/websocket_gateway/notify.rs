@@ -1,10 +1,8 @@
 //! Event injection methods (called externally by daemon wiring).
 
-
 use super::gateway::WebSocketGateway;
 use super::wire::to_group_info;
 use crate::types::GroupBinding;
-
 
 impl WebSocketGateway {
     // ===== Event injection (called externally) =====
@@ -374,12 +372,7 @@ impl WebSocketGateway {
     /// Server-side confirmation that the engine accepted the user's choice.
     /// Sent after `respond_to_plan_exit` completes so UI can close the modal
     /// even if it was opened in multiple browser sessions.
-    pub async fn notify_plan_exit_response(
-        &self,
-        chat_jid: &str,
-        agent_id: &str,
-        selected: &str,
-    ) {
+    pub async fn notify_plan_exit_response(&self, chat_jid: &str, agent_id: &str, selected: &str) {
         let msg = serde_json::json!({
             "type": "plan:exit:response",
             "groupJid": chat_jid,

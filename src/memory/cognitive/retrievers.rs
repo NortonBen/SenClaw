@@ -30,7 +30,10 @@ pub struct CognitiveRetriever {
 
 impl CognitiveRetriever {
     pub fn new(embedder: Arc<CognitiveEmbedder>) -> Self {
-        Self { embedder, scorer: None }
+        Self {
+            embedder,
+            scorer: None,
+        }
     }
 
     /// Attach a re-ranker (e.g. `LightGcnScorer`). Activated per call by
@@ -96,7 +99,11 @@ impl CognitiveRetriever {
                 h
             })
             .collect();
-        out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(out)
     }
 
@@ -144,7 +151,11 @@ impl CognitiveRetriever {
             .pop()
             .ok_or_else(|| anyhow::anyhow!("embedder returned empty"))?;
         // Over-fetch when filtering by kind so we still hit `limit` after the filter.
-        let fetch = if kind_filter.is_some() { limit * 4 } else { limit };
+        let fetch = if kind_filter.is_some() {
+            limit * 4
+        } else {
+            limit
+        };
         let hits = self.embedder.vector.search(&q, fetch.max(8))?;
 
         let mut out = Vec::with_capacity(hits.len().min(limit));
@@ -174,7 +185,11 @@ impl CognitiveRetriever {
             .await?;
         Ok(seeds
             .into_iter()
-            .map(|(node, score)| SearchHit { node, score, path: Vec::new() })
+            .map(|(node, score)| SearchHit {
+                node,
+                score,
+                path: Vec::new(),
+            })
             .collect())
     }
 
@@ -193,12 +208,20 @@ impl CognitiveRetriever {
                 .neighbors(entity.id, 32)
                 .context("neighbors for triplet")?;
             // The seed entity itself first.
-            hits.push(SearchHit { node: entity.clone(), score: seed_score, path: Vec::new() });
+            hits.push(SearchHit {
+                node: entity.clone(),
+                score: seed_score,
+                path: Vec::new(),
+            });
             for edge in edges {
                 if edge.predicate == "MENTIONS" {
                     continue; // skip provenance edges in TRIPLET view
                 }
-                let neighbor_id = if edge.src == entity.id { edge.dst } else { edge.src };
+                let neighbor_id = if edge.src == entity.id {
+                    edge.dst
+                } else {
+                    edge.src
+                };
                 if let Some(nbr) = self.embedder.graph.get_node(neighbor_id)? {
                     let strength = edge.effective_strength(now);
                     hits.push(SearchHit {
@@ -212,7 +235,11 @@ impl CognitiveRetriever {
                 break;
             }
         }
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(query.limit);
         Ok(hits)
     }
@@ -267,7 +294,11 @@ impl CognitiveRetriever {
             for (node_id, activation, path) in frontier.drain(..) {
                 let edges = self.embedder.graph.neighbors(node_id, 64)?;
                 for mut edge in edges {
-                    let neighbor_id = if edge.src == node_id { edge.dst } else { edge.src };
+                    let neighbor_id = if edge.src == node_id {
+                        edge.dst
+                    } else {
+                        edge.src
+                    };
                     let strength = edge.effective_strength(now);
                     let propagated = activation * decay * strength;
                     if propagated < 0.01 {
@@ -285,7 +316,9 @@ impl CognitiveRetriever {
                     let mut new_path = path.clone();
                     new_path.push(edge);
 
-                    let entry = best.entry(neighbor_id).or_insert((f32::NEG_INFINITY, Vec::new()));
+                    let entry = best
+                        .entry(neighbor_id)
+                        .or_insert((f32::NEG_INFINITY, Vec::new()));
                     if propagated > entry.0 {
                         *entry = (propagated, new_path.clone());
                         next.push((neighbor_id, propagated, new_path));
@@ -304,7 +337,11 @@ impl CognitiveRetriever {
                 hits.push(SearchHit { node, score, path });
             }
         }
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(query.limit);
         Ok(hits)
     }
@@ -333,9 +370,15 @@ mod tests {
 
     #[async_trait]
     impl EmbeddingProvider for FakeEmbedder {
-        fn name(&self) -> &str { "fake" }
-        fn model(&self) -> &str { "fake-model" }
-        fn dimensions(&self) -> u32 { 8 }
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+        fn dimensions(&self) -> u32 {
+            8
+        }
         async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
             Ok(texts
                 .iter()
@@ -397,7 +440,10 @@ mod tests {
     async fn triplet_retriever_returns_entities_and_edges() {
         let (embedder, _) = fixture().await;
         let r = CognitiveRetriever::new(embedder);
-        let hits = r.search(&SearchQuery::triplet("compiler", 10)).await.unwrap();
+        let hits = r
+            .search(&SearchQuery::triplet("compiler", 10))
+            .await
+            .unwrap();
         assert!(!hits.is_empty());
         // At least one hit should carry an outgoing edge.
         assert!(hits.iter().any(|h| !h.path.is_empty()));
@@ -417,7 +463,10 @@ mod tests {
             .filter(|h| h.node.kind == NodeKind::Entity)
             .map(|h| h.node.name.clone())
             .collect();
-        assert!(names.iter().any(|n| n == "machine"), "expected to reach 'machine'; got {names:?}");
+        assert!(
+            names.iter().any(|n| n == "machine"),
+            "expected to reach 'machine'; got {names:?}"
+        );
     }
 
     #[tokio::test]
@@ -436,9 +485,8 @@ mod tests {
         use super::super::gnn::LightGcnScorer;
 
         let (embedder, _) = fixture().await;
-        let scorer: Arc<dyn super::super::gnn::GraphScorer> = Arc::new(
-            LightGcnScorer::new(Arc::clone(&embedder.graph)).with_layers(2),
-        );
+        let scorer: Arc<dyn super::super::gnn::GraphScorer> =
+            Arc::new(LightGcnScorer::new(Arc::clone(&embedder.graph)).with_layers(2));
         let r = CognitiveRetriever::new(Arc::clone(&embedder)).with_scorer(scorer);
 
         let mut q = SearchQuery::graph_completion("Ada", 10, 2);
@@ -462,7 +510,10 @@ mod tests {
                 .map(|(_, s_old)| (s_new - s_old).abs() > 1e-4)
                 .unwrap_or(true)
         });
-        assert!(any_diff, "expected at least one score to change after rerank");
+        assert!(
+            any_diff,
+            "expected at least one score to change after rerank"
+        );
     }
 
     #[tokio::test]

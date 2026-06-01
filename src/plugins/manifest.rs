@@ -18,15 +18,17 @@ impl PluginType {
     pub fn as_str(&self) -> &'static str {
         match self {
             PluginType::ChannelAdapter => "channel_adapter",
-            PluginType::McpServer      => "mcp_server",
-            PluginType::HttpRoute      => "http_route",
-            PluginType::Cron           => "cron",
+            PluginType::McpServer => "mcp_server",
+            PluginType::HttpRoute => "http_route",
+            PluginType::Cron => "cron",
         }
     }
 }
 
 impl Default for PluginType {
-    fn default() -> Self { PluginType::McpServer }
+    fn default() -> Self {
+        PluginType::McpServer
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,16 +80,24 @@ fn parse_yaml_manifest(yaml: &str) -> Option<PluginManifest> {
 
     for raw in yaml.lines() {
         let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
 
         if line.starts_with("- ") {
             // List item under current_key
             if let Some(ref k) = current_key {
-                map.entry(k.clone()).or_default().push(line[2..].trim().to_string());
+                map.entry(k.clone())
+                    .or_default()
+                    .push(line[2..].trim().to_string());
             }
         } else if let Some(colon) = line.find(':') {
             let key = line[..colon].trim().to_string();
-            let val = line[colon + 1..].trim().trim_matches('"').trim_matches('\'').to_string();
+            let val = line[colon + 1..]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
             current_key = Some(key.clone());
             if !val.is_empty() {
                 map.entry(key).or_default().push(val);
@@ -96,24 +106,24 @@ fn parse_yaml_manifest(yaml: &str) -> Option<PluginManifest> {
     }
 
     let scalar = |k: &str| map.get(k).and_then(|v| v.first()).cloned();
-    let list   = |k: &str| map.get(k).cloned().unwrap_or_default();
+    let list = |k: &str| map.get(k).cloned().unwrap_or_default();
 
     Some(PluginManifest {
-        name:         scalar("name")?,
+        name: scalar("name")?,
         display_name: scalar("display_name"),
-        version:      scalar("version").unwrap_or_else(|| "0.0.0".into()),
-        description:  scalar("description"),
+        version: scalar("version").unwrap_or_else(|| "0.0.0".into()),
+        description: scalar("description"),
         plugin_type: match scalar("plugin_type").as_deref() {
             Some("channel_adapter") => PluginType::ChannelAdapter,
-            Some("http_route")      => PluginType::HttpRoute,
-            Some("cron")            => PluginType::Cron,
-            _                       => PluginType::McpServer,
+            Some("http_route") => PluginType::HttpRoute,
+            Some("cron") => PluginType::Cron,
+            _ => PluginType::McpServer,
         },
-        entry_point:  scalar("entry_point"),
-        env_vars:     list("env_vars"),
-        routes:       list("routes"),
-        permissions:  list("permissions"),
-        tags:         list("tags"),
-        min_senclaw:  scalar("min_senclaw"),
+        entry_point: scalar("entry_point"),
+        env_vars: list("env_vars"),
+        routes: list("routes"),
+        permissions: list("permissions"),
+        tags: list("tags"),
+        min_senclaw: scalar("min_senclaw"),
     })
 }

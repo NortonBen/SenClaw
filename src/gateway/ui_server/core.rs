@@ -19,6 +19,12 @@ use crate::mcp::manager::McpManager;
 use crate::wiki::manager::WikiManager;
 
 use super::chat::{chat_permission_respond, chat_plan_respond, chat_question_respond};
+use super::code::{
+    code_chat_group_messages, code_chat_group_stop_current, code_chat_groups_create,
+    code_chat_groups_list, code_chat_ws, code_sessions_archive, code_sessions_chat,
+    code_sessions_create, code_sessions_file_content, code_sessions_files, code_sessions_get,
+    code_sessions_git_log, code_sessions_list, code_sessions_rollback, fs_ls,
+};
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::cowork::{
     cowork_board_get, cowork_board_update, cowork_documents_upload, cowork_files_download,
@@ -27,76 +33,66 @@ use super::cowork::{
     cowork_task_comments_add, cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete,
     cowork_tasks_get, cowork_tasks_list, cowork_tasks_update, cowork_templates_get,
     cowork_templates_list, cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get,
-    cowork_ws_list, cowork_ws_update, cowork_ws_resources_list, cowork_ws_resource_upsert,
-    cowork_ws_resource_delete,
+    cowork_ws_list, cowork_ws_resource_delete, cowork_ws_resource_upsert, cowork_ws_resources_list,
+    cowork_ws_update,
 };
 use super::embedding_config::{embedding_config_get, embedding_config_save};
-use super::local_models::{
-    local_models_cancel, local_models_delete, local_models_download, local_models_list,
-    local_models_load, local_models_load_mlx, local_models_loaded_list, local_models_runtime,
-    local_models_settings_get, local_models_settings_put, local_models_status,
-    local_models_unload, local_models_unload_all, local_models_use_as_llm,
-};
-use super::whisper::{
-    whisper_cancel, whisper_delete, whisper_download, whisper_models_list, whisper_settings_get,
-    whisper_settings_put, whisper_status, whisper_transcribe,
-};
-use super::tts::{
-    tts_cancel, tts_delete, tts_download, tts_models_list, tts_settings_get, tts_settings_put,
-    tts_status, tts_synthesize,
-};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test, llm_config_update,
+};
+use super::local_models::{
+    local_models_cancel, local_models_delete, local_models_download, local_models_list,
+    local_models_load, local_models_load_mlx, local_models_loaded_list, local_models_runtime,
+    local_models_settings_get, local_models_settings_put, local_models_status, local_models_unload,
+    local_models_unload_all, local_models_use_as_llm,
+};
+use super::marketplace::{
+    marketplace_mcp_status, marketplace_mcp_use_tools, marketplace_plugin_toggle,
+    marketplace_source_disable_all, marketplace_source_enable_all, marketplace_source_get,
+    marketplace_sources_add, marketplace_sources_delete, marketplace_sources_list,
+    marketplace_sources_reorder, marketplace_sources_sync,
 };
 use super::mcp::{
     hooks_get, hooks_put, mcp_servers_connect, mcp_servers_delete, mcp_servers_disconnect,
     mcp_servers_enabled, mcp_servers_get, mcp_servers_list, mcp_servers_save, mcp_servers_test,
     mcp_servers_tools,
 };
-use super::code::{
-    code_chat_group_messages, code_chat_groups_create, code_chat_groups_list,
-    code_chat_group_stop_current,
-    code_chat_ws,
-    code_sessions_archive, code_sessions_chat, code_sessions_create, code_sessions_file_content, code_sessions_files,
-    code_sessions_get, code_sessions_git_log, code_sessions_list, code_sessions_rollback,
-    fs_ls,
+use super::plugins::{
+    plugins_configure, plugins_disable, plugins_enable, plugins_get, plugins_install, plugins_list,
+    plugins_remote_search, plugins_uninstall,
 };
 use super::quicknotes::quicknotes_save;
-use super::space::{
-    space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
-    space_app_env, space_app_mcp_info, space_app_mcp_register, space_app_sqlite_query,
-    space_apps_bridge,
-    space_apps_delete, space_apps_install_zip, space_apps_list, space_apps_register,
-    space_apps_register_local, space_apps_static,
-    space_email_accounts_create, space_email_accounts_delete, space_email_accounts_list,
-    space_email_draft, space_email_inbox, space_email_read, space_email_search, space_email_send,
-    space_events_create, space_events_delete, space_events_list, space_events_search,
-    space_events_set_reminder, space_events_update,
-    space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
-    space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_list,
-    space_sync_apple_calendar, space_sync_apple_notes, space_sync_gmail,
-    space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
-};
 use super::skills::{
     skills_install, skills_list, skills_readme, skills_readme_save, skills_remote_search,
     skills_toggle, skills_uninstall,
 };
-use super::plugins::{
-    plugins_list, plugins_remote_search, plugins_install, plugins_get,
-    plugins_uninstall, plugins_enable, plugins_disable, plugins_configure,
-};
-use super::marketplace::{
-    marketplace_sources_list, marketplace_sources_add, marketplace_sources_delete,
-    marketplace_sources_sync, marketplace_sources_reorder, marketplace_source_get,
-    marketplace_source_enable_all, marketplace_source_disable_all, marketplace_plugin_toggle,
-    marketplace_mcp_use_tools, marketplace_mcp_status,
-};
 use super::spa::spa_fallback;
+use super::space::{
+    space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
+    space_app_env, space_app_mcp_info, space_app_mcp_register, space_app_sqlite_query,
+    space_apps_bridge, space_apps_delete, space_apps_install_zip, space_apps_list,
+    space_apps_register, space_apps_register_local, space_apps_static, space_email_accounts_create,
+    space_email_accounts_delete, space_email_accounts_list, space_email_draft, space_email_inbox,
+    space_email_read, space_email_search, space_email_send, space_events_create,
+    space_events_delete, space_events_list, space_events_search, space_events_set_reminder,
+    space_events_update, space_notes_create, space_notes_delete, space_notes_list,
+    space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
+    space_schedules_list, space_sync_apple_calendar, space_sync_apple_notes, space_sync_gmail,
+    space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
+};
 use super::subagents::{
     subagents_create, subagents_list, subagents_readme, subagents_readme_save, subagents_toggle,
 };
+use super::tts::{
+    tts_cancel, tts_delete, tts_download, tts_models_list, tts_settings_get, tts_settings_put,
+    tts_status, tts_synthesize,
+};
 use super::types::AdminPermissionsConfig;
+use super::whisper::{
+    whisper_cancel, whisper_delete, whisper_download, whisper_models_list, whisper_settings_get,
+    whisper_settings_put, whisper_status, whisper_transcribe,
+};
 use super::wiki::{
     wiki_dir_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
     wiki_tree, wiki_write,
@@ -207,19 +203,46 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/plugins", get(plugins_list))
         .route("/api/plugins/remote-search", get(plugins_remote_search))
         .route("/api/plugins/install", post(plugins_install))
-        .route("/api/plugins/:slug", get(plugins_get).delete(plugins_uninstall))
+        .route(
+            "/api/plugins/:slug",
+            get(plugins_get).delete(plugins_uninstall),
+        )
         .route("/api/plugins/:slug/enable", post(plugins_enable))
         .route("/api/plugins/:slug/disable", post(plugins_disable))
         .route("/api/plugins/:slug/configure", post(plugins_configure))
         // ── Marketplace API ──────────────────────────────────────────────────────
-        .route("/api/marketplace/sources", get(marketplace_sources_list).post(marketplace_sources_add))
-        .route("/api/marketplace/sources/reorder", post(marketplace_sources_reorder))
-        .route("/api/marketplace/sources/:id", get(marketplace_source_get).delete(marketplace_sources_delete))
-        .route("/api/marketplace/sources/:id/sync", post(marketplace_sources_sync))
-        .route("/api/marketplace/sources/:id/enable-all", post(marketplace_source_enable_all))
-        .route("/api/marketplace/sources/:id/disable-all", post(marketplace_source_disable_all))
-        .route("/api/marketplace/sources/:id/plugins/:name/toggle", post(marketplace_plugin_toggle))
-        .route("/api/marketplace/sources/:id/plugins/:name/mcp/:server/use-tools", post(marketplace_mcp_use_tools))
+        .route(
+            "/api/marketplace/sources",
+            get(marketplace_sources_list).post(marketplace_sources_add),
+        )
+        .route(
+            "/api/marketplace/sources/reorder",
+            post(marketplace_sources_reorder),
+        )
+        .route(
+            "/api/marketplace/sources/:id",
+            get(marketplace_source_get).delete(marketplace_sources_delete),
+        )
+        .route(
+            "/api/marketplace/sources/:id/sync",
+            post(marketplace_sources_sync),
+        )
+        .route(
+            "/api/marketplace/sources/:id/enable-all",
+            post(marketplace_source_enable_all),
+        )
+        .route(
+            "/api/marketplace/sources/:id/disable-all",
+            post(marketplace_source_disable_all),
+        )
+        .route(
+            "/api/marketplace/sources/:id/plugins/:name/toggle",
+            post(marketplace_plugin_toggle),
+        )
+        .route(
+            "/api/marketplace/sources/:id/plugins/:name/mcp/:server/use-tools",
+            post(marketplace_mcp_use_tools),
+        )
         .route("/api/marketplace/mcp-status", get(marketplace_mcp_status))
         .route("/api/subagents", get(subagents_list))
         .route("/api/subagents/create", post(subagents_create))
@@ -242,7 +265,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/llm-config/active", post(llm_config_set_active))
         .route("/api/llm-config/test", post(llm_config_test))
         .route("/api/llm-config/models", post(llm_config_fetch_models))
-        .route("/api/llm-config/:id", delete(llm_config_delete).patch(llm_config_update))
+        .route(
+            "/api/llm-config/:id",
+            delete(llm_config_delete).patch(llm_config_update),
+        )
         // Local model management (MLX/HF download)
         .route("/api/local-models", get(local_models_list))
         .route("/api/local-models/runtime", get(local_models_runtime))
@@ -258,11 +284,20 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/local-models/:id/cancel", post(local_models_cancel))
         .route("/api/local-models/:id", delete(local_models_delete))
         .route("/api/local-models/:id/load", post(local_models_load))
-        .route("/api/local-models/:id/load-mlx", post(local_models_load_mlx))
+        .route(
+            "/api/local-models/:id/load-mlx",
+            post(local_models_load_mlx),
+        )
         .route("/api/local-models/:id/unload", post(local_models_unload))
-        .route("/api/local-models/unload-all", post(local_models_unload_all))
+        .route(
+            "/api/local-models/unload-all",
+            post(local_models_unload_all),
+        )
         .route("/api/local-models/loaded", get(local_models_loaded_list))
-        .route("/api/local-models/:id/use-as-llm", post(local_models_use_as_llm))
+        .route(
+            "/api/local-models/:id/use-as-llm",
+            post(local_models_use_as_llm),
+        )
         // Whisper ASR management + transcription
         .route("/api/whisper/models", get(whisper_models_list))
         .route(
@@ -389,17 +424,32 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         // ── Space API ─────────────────────────────────────────────────────────
         // Notes
-        .route("/api/space/notes", get(space_notes_list).post(space_notes_create))
+        .route(
+            "/api/space/notes",
+            get(space_notes_list).post(space_notes_create),
+        )
         .route("/api/space/notes/search", get(space_notes_search))
         .route(
             "/api/space/notes/:id",
             axum::routing::put(space_notes_update).delete(space_notes_delete),
         )
         // Calendar
-        .route("/api/space/calendar/events", get(space_events_list).post(space_events_create))
-        .route("/api/space/calendar/events/search", get(space_events_search))
-        .route("/api/space/calendar/events/:id", patch(space_events_update).delete(space_events_delete))
-        .route("/api/space/calendar/events/:id/reminder", post(space_events_set_reminder))
+        .route(
+            "/api/space/calendar/events",
+            get(space_events_list).post(space_events_create),
+        )
+        .route(
+            "/api/space/calendar/events/search",
+            get(space_events_search),
+        )
+        .route(
+            "/api/space/calendar/events/:id",
+            patch(space_events_update).delete(space_events_delete),
+        )
+        .route(
+            "/api/space/calendar/events/:id/reminder",
+            post(space_events_set_reminder),
+        )
         .route("/api/space/calendar/today", get(space_today_summary))
         // Email
         .route("/api/space/email/inbox", get(space_email_inbox))
@@ -411,14 +461,23 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/space/email/accounts",
             get(space_email_accounts_list).post(space_email_accounts_create),
         )
-        .route("/api/space/email/accounts/:id", delete(space_email_accounts_delete))
+        .route(
+            "/api/space/email/accounts/:id",
+            delete(space_email_accounts_delete),
+        )
         // Schedules
-        .route("/api/space/schedules", get(space_schedules_list).post(space_schedules_create))
+        .route(
+            "/api/space/schedules",
+            get(space_schedules_list).post(space_schedules_create),
+        )
         .route("/api/space/schedules/:id", delete(space_schedules_cancel))
         // Apps
         .route("/api/space/apps", get(space_apps_list))
         .route("/api/space/apps/register", post(space_apps_register))
-        .route("/api/space/apps/register-local", post(space_apps_register_local))
+        .route(
+            "/api/space/apps/register-local",
+            post(space_apps_register_local),
+        )
         .route(
             "/api/space/apps/install-zip",
             // Server-app ZIPs (Next.js standalone) are tens of MB — raise the
@@ -429,38 +488,79 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/space/apps/:id/config", get(space_app_config_list))
         .route(
             "/api/space/apps/:id/config/:key",
-            get(space_app_config_get).put(space_app_config_set).delete(space_app_config_delete),
+            get(space_app_config_get)
+                .put(space_app_config_set)
+                .delete(space_app_config_delete),
         )
-        .route("/api/space/apps/:id/sqlite/query", post(space_app_sqlite_query))
+        .route(
+            "/api/space/apps/:id/sqlite/query",
+            post(space_app_sqlite_query),
+        )
         .route("/api/space/apps/:id/mcp", get(space_app_mcp_info))
-        .route("/api/space/apps/:id/mcp/register", post(space_app_mcp_register))
+        .route(
+            "/api/space/apps/:id/mcp/register",
+            post(space_app_mcp_register),
+        )
         .route("/api/space/apps/:id/bridge", post(space_apps_bridge))
         .route("/api/space/apps/:id/static/*path", get(space_apps_static))
         .route("/api/space/apps/:id", delete(space_apps_delete))
         // External sync
-        .route("/api/space/sync/google-calendar", post(space_sync_google_calendar))
-        .route("/api/space/sync/google-workspace", post(space_sync_google_workspace))
-        .route("/api/space/sync/apple-calendar", post(space_sync_apple_calendar))
+        .route(
+            "/api/space/sync/google-calendar",
+            post(space_sync_google_calendar),
+        )
+        .route(
+            "/api/space/sync/google-workspace",
+            post(space_sync_google_workspace),
+        )
+        .route(
+            "/api/space/sync/apple-calendar",
+            post(space_sync_apple_calendar),
+        )
         .route("/api/space/sync/apple-notes", post(space_sync_apple_notes))
         .route("/api/space/sync/gmail", post(space_sync_gmail))
         // ── Chat interaction resolve (mobile parity with WS permission/question) ─
-        .route("/api/chat/permission/respond", post(chat_permission_respond))
+        .route(
+            "/api/chat/permission/respond",
+            post(chat_permission_respond),
+        )
         .route("/api/chat/question/respond", post(chat_question_respond))
         .route("/api/chat/plan/respond", post(chat_plan_respond))
         // ── Filesystem browser ───────────────────────────────────────────────
         .route("/api/fs/ls", get(fs_ls))
         // ── Code Engine API ──────────────────────────────────────────────────
-        .route("/api/code/sessions", get(code_sessions_list).post(code_sessions_create))
-        .route("/api/code/sessions/:id", get(code_sessions_get).delete(code_sessions_archive))
+        .route(
+            "/api/code/sessions",
+            get(code_sessions_list).post(code_sessions_create),
+        )
+        .route(
+            "/api/code/sessions/:id",
+            get(code_sessions_get).delete(code_sessions_archive),
+        )
         .route("/api/code/sessions/:id/files", get(code_sessions_files))
-        .route("/api/code/sessions/:id/file-content", get(code_sessions_file_content))
+        .route(
+            "/api/code/sessions/:id/file-content",
+            get(code_sessions_file_content),
+        )
         .route("/api/code/sessions/:id/chat", post(code_sessions_chat))
-        .route("/api/code/projects/:id/groups", get(code_chat_groups_list).post(code_chat_groups_create))
-        .route("/api/code/groups/:id/messages", get(code_chat_group_messages))
-        .route("/api/code/groups/:id/stop-current", post(code_chat_group_stop_current))
+        .route(
+            "/api/code/projects/:id/groups",
+            get(code_chat_groups_list).post(code_chat_groups_create),
+        )
+        .route(
+            "/api/code/groups/:id/messages",
+            get(code_chat_group_messages),
+        )
+        .route(
+            "/api/code/groups/:id/stop-current",
+            post(code_chat_group_stop_current),
+        )
         .route("/api/code/ws", get(code_chat_ws))
         .route("/api/code/sessions/:id/git-log", get(code_sessions_git_log))
-        .route("/api/code/sessions/:id/rollback", post(code_sessions_rollback))
+        .route(
+            "/api/code/sessions/:id/rollback",
+            post(code_sessions_rollback),
+        )
         // Workbench reverse ops (artifacts published by tools)
         .route(
             "/api/workbench/:jid/:id/mark-viewed",
@@ -479,8 +579,14 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(super::workbench::workbench_fetch_logs),
         )
         // Cognitive memory (graph + Hebbian)
-        .route("/api/cognitive/stats", get(super::cognitive::cognitive_stats))
-        .route("/api/cognitive/nodes", get(super::cognitive::cognitive_list_nodes))
+        .route(
+            "/api/cognitive/stats",
+            get(super::cognitive::cognitive_stats),
+        )
+        .route(
+            "/api/cognitive/nodes",
+            get(super::cognitive::cognitive_list_nodes),
+        )
         .route(
             "/api/cognitive/node/:id",
             get(super::cognitive::cognitive_get_node).delete(super::cognitive::cognitive_forget),
@@ -493,11 +599,26 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/cognitive/decay-log",
             get(super::cognitive::cognitive_decay_log),
         )
-        .route("/api/cognitive/search", post(super::cognitive::cognitive_search))
-        .route("/api/cognitive/subgraph", get(super::cognitive::cognitive_subgraph))
-        .route("/api/cognitive/top-nodes", get(super::cognitive::cognitive_top_nodes))
-        .route("/api/cognitive/sample", get(super::cognitive::cognitive_sample))
-        .route("/api/cognitive/cleanup", post(super::cognitive::cognitive_cleanup))
+        .route(
+            "/api/cognitive/search",
+            post(super::cognitive::cognitive_search),
+        )
+        .route(
+            "/api/cognitive/subgraph",
+            get(super::cognitive::cognitive_subgraph),
+        )
+        .route(
+            "/api/cognitive/top-nodes",
+            get(super::cognitive::cognitive_top_nodes),
+        )
+        .route(
+            "/api/cognitive/sample",
+            get(super::cognitive::cognitive_sample),
+        )
+        .route(
+            "/api/cognitive/cleanup",
+            post(super::cognitive::cognitive_cleanup),
+        )
         .route(
             "/api/cognitive/maintenance",
             post(super::cognitive::cognitive_maintenance),

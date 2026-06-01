@@ -51,9 +51,8 @@ async fn run_command(mut cmd: tokio::process::Command, label: &str) -> ToolResul
             let code = out.status.code().unwrap_or(-1);
             let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-            let mut msg = format!(
-                "{label}\nexit_code={code}\n--- stderr ---\n{stderr}\n--- stdout ---\n"
-            );
+            let mut msg =
+                format!("{label}\nexit_code={code}\n--- stderr ---\n{stderr}\n--- stdout ---\n");
             msg.push_str(&truncate_preview(stdout));
             if out.status.success() {
                 ToolResult::ok(msg)
@@ -191,7 +190,9 @@ impl McpLithoServer {
         run_command(cmd, "litho_sync_knowledge").await.content
     }
 
-    #[rmcp::tool(description = "Read a generated markdown file from a Litho output directory (safe path join).")]
+    #[rmcp::tool(
+        description = "Read a generated markdown file from a Litho output directory (safe path join)."
+    )]
     fn litho_read_doc(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<

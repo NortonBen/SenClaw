@@ -133,8 +133,7 @@ pub fn start_decay_ticker(graph: Arc<dyn GraphStore>, cfg: DecayConfig) -> JoinH
             ticker.tick().await;
             let graph_ref = Arc::clone(&graph);
             let cfg_ref = cfg.clone();
-            let res = tokio::task::spawn_blocking(move || run_decay(&*graph_ref, &cfg_ref))
-                .await;
+            let res = tokio::task::spawn_blocking(move || run_decay(&*graph_ref, &cfg_ref)).await;
             match res {
                 Ok(Ok(rep)) => tracing::debug!(
                     scanned = rep.edges_scanned,
@@ -211,7 +210,10 @@ mod tests {
         g.upsert_edge(&edge).unwrap();
 
         let report = run_decay(&*g, &DecayConfig::default()).unwrap();
-        assert_eq!(report.edges_pruned, 0, "Full LTP edges must survive past max_age");
+        assert_eq!(
+            report.edges_pruned, 0,
+            "Full LTP edges must survive past max_age"
+        );
         assert_eq!(g.count_edges().unwrap(), 1);
     }
 

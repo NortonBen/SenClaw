@@ -58,12 +58,8 @@ pub trait GraphStore: Send + Sync {
     fn nodes_in_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<DataPoint>>;
 
     /// Paginated node listing for the Web UI. `kind=None` returns all kinds.
-    fn list_nodes(
-        &self,
-        kind: Option<&str>,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<DataPoint>>;
+    fn list_nodes(&self, kind: Option<&str>, limit: usize, offset: usize)
+        -> Result<Vec<DataPoint>>;
     fn count_nodes(&self, kind: Option<&str>) -> Result<usize>;
     fn recent_decay_runs(&self, limit: usize) -> Result<Vec<DecayLogRow>>;
 
@@ -250,10 +246,9 @@ fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<RelationshipEdge> {
     let act_str: String = row.get("activation_timestamps")?;
     let activation_timestamps: Vec<i64> = serde_json::from_str(&act_str).unwrap_or_default();
     let src_ep: Option<Vec<u8>> = row.get("source_episode_id")?;
-    let source_episode_id = src_ep
-        .map(bytes_uuid)
-        .transpose()
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, e.into()))?;
+    let source_episode_id = src_ep.map(bytes_uuid).transpose().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, e.into())
+    })?;
     Ok(RelationshipEdge {
         src,
         dst,
@@ -267,9 +262,15 @@ fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<RelationshipEdge> {
         last_activated: row.get("last_activated")?,
         ltp_status: LtpStatus::from_u8(row.get::<_, i64>("ltp_status")? as u8),
         ltp_detected_at: row.get("ltp_detected_at")?,
-        entity_confidence: row.get::<_, Option<f64>>("entity_confidence")?.map(|v| v as f32),
-        endpoint_selectivity: row.get::<_, Option<f64>>("endpoint_selectivity")?.map(|v| v as f32),
-        forman_curvature: row.get::<_, Option<f64>>("forman_curvature")?.map(|v| v as f32),
+        entity_confidence: row
+            .get::<_, Option<f64>>("entity_confidence")?
+            .map(|v| v as f32),
+        endpoint_selectivity: row
+            .get::<_, Option<f64>>("endpoint_selectivity")?
+            .map(|v| v as f32),
+        forman_curvature: row
+            .get::<_, Option<f64>>("forman_curvature")?
+            .map(|v| v as f32),
         activation_timestamps,
         source_episode_id,
         context: row.get("context")?,
@@ -400,7 +401,8 @@ impl GraphStore for SqliteGraphStore {
         let src = uuid_bytes(edge.src).to_vec();
         let dst = uuid_bytes(edge.dst).to_vec();
         let props = serde_json::to_string(&edge.props).unwrap_or_else(|_| "{}".into());
-        let acts = serde_json::to_string(&edge.activation_timestamps).unwrap_or_else(|_| "[]".into());
+        let acts =
+            serde_json::to_string(&edge.activation_timestamps).unwrap_or_else(|_| "[]".into());
         let ep_id = edge.source_episode_id.map(|u| uuid_bytes(u).to_vec());
         self.db.with_cog_conn(|conn| {
             conn.execute(
@@ -934,7 +936,10 @@ impl GraphStore for SqliteGraphStore {
                 .query_map(params![limit as i64], |row| {
                     let node = row_to_node(row)?;
                     let degree: i64 = row.get("degree")?;
-                    Ok(NodeWithDegree { node, degree: degree as usize })
+                    Ok(NodeWithDegree {
+                        node,
+                        degree: degree as usize,
+                    })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
@@ -1103,8 +1108,11 @@ mod tests {
         store.upsert_node(&junk).unwrap();
 
         // Junk chunk #2 — has a `<message ` tag mid-text.
-        let mut junk2 =
-            DataPoint::chunk("prefix <message sender=\"a\">x</message>", Some("h2".into()), 1);
+        let mut junk2 = DataPoint::chunk(
+            "prefix <message sender=\"a\">x</message>",
+            Some("h2".into()),
+            1,
+        );
         junk2.id = uuid::Uuid::new_v4();
         store.upsert_node(&junk2).unwrap();
 

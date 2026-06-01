@@ -215,15 +215,21 @@ pub(crate) async fn skills_uninstall(
     }
 
     let managed_dir = &s.config.paths.managed_skills_dir;
-    let canonical_managed = managed_dir
-        .canonicalize()
-        .map_err(|_| AppError(StatusCode::INTERNAL_SERVER_ERROR, "Managed skills dir missing".into()))?;
+    let canonical_managed = managed_dir.canonicalize().map_err(|_| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Managed skills dir missing".into(),
+        )
+    })?;
     let canonical_skill = skill
         .dir
         .canonicalize()
         .map_err(|_| AppError(StatusCode::NOT_FOUND, "Skill directory not found".into()))?;
     if !canonical_skill.starts_with(&canonical_managed) {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid skill path".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "Invalid skill path".into(),
+        ));
     }
 
     let origin = read_skill_origin(&skill.dir);
@@ -255,7 +261,9 @@ pub(crate) async fn skills_uninstall(
     }
     let _ = emit_skills_refresh(&s.config);
 
-    Ok(Json(serde_json::json!({ "ok": true, "name": name, "slug": slug })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "name": name, "slug": slug }),
+    ))
 }
 
 // ===== /api/skills/{name}/readme =====

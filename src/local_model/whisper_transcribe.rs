@@ -558,7 +558,7 @@ impl WhisperEngine {
             )?;
             // Drop encoder output now that decode is done for this window.
             drop(feats);
-            
+
             // Clear cache immediately to return Metal VRAM to the OS
             #[cfg(feature = "local-mlx-whisper")]
             unsafe {
@@ -867,11 +867,7 @@ fn pick(row: &[f32], tokenizer: &WhisperTokenizer, allow_eot: bool) -> (u32, f32
 /// For a future beam-search upgrade this function is the right place to
 /// add top-k filtering (keep only k logits before softmax) to avoid the
 /// full-vocab transfer.
-fn pick_fast(
-    logits: &Array,
-    tokenizer: &WhisperTokenizer,
-    allow_eot: bool,
-) -> Result<(u32, f32)> {
+fn pick_fast(logits: &Array, tokenizer: &WhisperTokenizer, allow_eot: bool) -> Result<(u32, f32)> {
     let row = last_row_f32(logits)?;
     Ok(pick(&row, tokenizer, allow_eot))
 }

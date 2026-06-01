@@ -330,7 +330,8 @@ Senior-engineer crisp: direct, concrete, low-fluff. Short paragraphs. File paths
 };
 
 /// All built-in agent configurations.
-pub const BUILTIN_AGENTS: &[BuiltinAgentConfig] = &[RESEARCHER_AGENT, CREATOR_AGENT, ARCHITECT_AGENT];
+pub const BUILTIN_AGENTS: &[BuiltinAgentConfig] =
+    &[RESEARCHER_AGENT, CREATOR_AGENT, ARCHITECT_AGENT];
 
 /// Get a built-in agent configuration by name.
 pub fn get_builtin_agent(name: &str) -> Option<&'static BuiltinAgentConfig> {

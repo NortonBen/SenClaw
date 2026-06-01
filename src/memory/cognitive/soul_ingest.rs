@@ -208,10 +208,11 @@ pub async fn consolidate_to_soul(
         } else {
             continue;
         };
-        by_subject
-            .entry(subj)
-            .or_default()
-            .push((edge.predicate.replace('_', " "), obj, edge.strength));
+        by_subject.entry(subj).or_default().push((
+            edge.predicate.replace('_', " "),
+            obj,
+            edge.strength,
+        ));
     }
 
     let n_edges: usize = by_subject.values().map(|v| v.len()).sum();
@@ -262,9 +263,7 @@ pub(crate) fn splice_learned_section(existing: &str, new_section: &str) -> Strin
             // markers. Walk backwards to the nearest `## Learned` header
             // so we also strip the heading the previous write produced.
             let before_marker = &existing[..start];
-            let block_start = before_marker
-                .rfind("## Learned")
-                .unwrap_or(start);
+            let block_start = before_marker.rfind("## Learned").unwrap_or(start);
             let after_end_marker = end + LEARNED_END.len();
             // Skip the trailing newline so we don't accumulate blank
             // lines across consolidations.
@@ -423,7 +422,10 @@ mod tests {
                     ## Memory Management\n\nUpdate MEMORY.md.\n";
         let sections = split_soul_sections(text);
         let labels: Vec<&str> = sections.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels, vec!["intro", "identity", "guidelines", "memory-management"]);
+        assert_eq!(
+            labels,
+            vec!["intro", "identity", "guidelines", "memory-management"]
+        );
         assert!(sections[0].1.contains("helpful AI assistant"));
         assert!(sections[2].1.contains("Be concise"));
     }
@@ -459,16 +461,27 @@ mod tests {
     struct FakeEmbedder;
     #[async_trait]
     impl EmbeddingProvider for FakeEmbedder {
-        fn name(&self) -> &str { "fake" }
-        fn model(&self) -> &str { "fake-model" }
-        fn dimensions(&self) -> u32 { 8 }
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+        fn dimensions(&self) -> u32 {
+            8
+        }
         async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
-            Ok(texts.iter().map(|t| {
-                let mut v = vec![0.0f32; 8];
-                for (i, b) in t.bytes().enumerate() { v[i % 8] += b as f32; }
-                let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
-                v.iter().map(|x| x / n).collect()
-            }).collect())
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    let mut v = vec![0.0f32; 8];
+                    for (i, b) in t.bytes().enumerate() {
+                        v[i % 8] += b as f32;
+                    }
+                    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+                    v.iter().map(|x| x / n).collect()
+                })
+                .collect())
         }
     }
 
@@ -483,13 +496,18 @@ mod tests {
     #[tokio::test]
     async fn ingest_soul_tags_nodes_under_persona_scope() {
         // Two H2 sections → two cognify calls → StubLlm needs two replies.
-        let r1 = r#"{"triplets":[{"subject":"agent","predicate":"is","object":"helpful"}]}"#.to_string();
-        let r2 = r#"{"triplets":[{"subject":"agent","predicate":"updates","object":"MEMORY.md"}]}"#.to_string();
+        let r1 =
+            r#"{"triplets":[{"subject":"agent","predicate":"is","object":"helpful"}]}"#.to_string();
+        let r2 = r#"{"triplets":[{"subject":"agent","predicate":"updates","object":"MEMORY.md"}]}"#
+            .to_string();
         let sys = build_system(vec![r1, r2]);
 
         let soul = "# main\n\n## Identity\n\nYou are helpful.\n\n## Memory\n\nUpdate MEMORY.md.\n";
         let report = ingest_soul(&sys, "main", soul).await.unwrap();
-        assert!(report.entities_added > 0, "should have created entity nodes");
+        assert!(
+            report.entities_added > 0,
+            "should have created entity nodes"
+        );
 
         // The persona NodeSets should be wired: lookup by "soul" tag returns
         // every node tagged from this ingest.
@@ -497,13 +515,17 @@ mod tests {
             .graph
             .nodes_in_set(&NodeSet::persona("main", "soul"), 100)
             .unwrap();
-        assert!(!nodes.is_empty(), "persona 'soul' tag must catch ingested nodes");
+        assert!(
+            !nodes.is_empty(),
+            "persona 'soul' tag must catch ingested nodes"
+        );
     }
 
     #[test]
     fn splice_appends_when_no_markers_present() {
         let existing = "# Agent\n\nIntro paragraph.\n";
-        let new_block = "## Learned\n<!-- senclaw:learned:start -->\nbody\n<!-- senclaw:learned:end -->\n";
+        let new_block =
+            "## Learned\n<!-- senclaw:learned:start -->\nbody\n<!-- senclaw:learned:end -->\n";
         let out = splice_learned_section(existing, new_block);
         assert!(out.starts_with("# Agent"), "user content preserved at top");
         assert!(out.contains("## Learned"));
@@ -512,8 +534,10 @@ mod tests {
 
     #[test]
     fn splice_replaces_existing_managed_block() {
-        let block_v1 = "## Learned\n<!-- senclaw:learned:start -->\nold\n<!-- senclaw:learned:end -->\n";
-        let block_v2 = "## Learned\n<!-- senclaw:learned:start -->\nnew\n<!-- senclaw:learned:end -->\n";
+        let block_v1 =
+            "## Learned\n<!-- senclaw:learned:start -->\nold\n<!-- senclaw:learned:end -->\n";
+        let block_v2 =
+            "## Learned\n<!-- senclaw:learned:start -->\nnew\n<!-- senclaw:learned:end -->\n";
         let v1 = format!("# Agent\n\nIntro.\n\n{block_v1}");
         let v2 = splice_learned_section(&v1, block_v2);
         // Old body gone, new body present, intro preserved.
@@ -534,7 +558,8 @@ mod tests {
         // contract is now: 2nd pass = pure no-op modulo `chunks_deduped`.
         // Strengthening still happens, but on the *recall* side via
         // SpreadingActivation — not via wasted re-extraction.
-        let r = r#"{"triplets":[{"subject":"agent","predicate":"is","object":"helpful"}]}"#.to_string();
+        let r =
+            r#"{"triplets":[{"subject":"agent","predicate":"is","object":"helpful"}]}"#.to_string();
         // Only the first reply should ever be consumed. The extras are a
         // canary — if the LLM gets called a second time something regressed.
         let sys = build_system(vec![r.clone(), r.clone(), r.clone(), r]);
@@ -547,7 +572,10 @@ mod tests {
         assert_eq!(second.chunks_added, 0, "re-ingest must dedupe chunks");
         // Re-ingest with existing edges = no LLM, no edge churn.
         assert_eq!(second.edges_added, 0, "no new edges on identical content");
-        assert_eq!(second.edges_strengthened, 0, "skip gate prevents extraction");
+        assert_eq!(
+            second.edges_strengthened, 0,
+            "skip gate prevents extraction"
+        );
         assert!(!second.llm_skipped);
     }
 }

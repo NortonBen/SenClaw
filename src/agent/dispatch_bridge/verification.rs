@@ -1,6 +1,6 @@
 //! Checklist verification logic for dispatch tasks.
 
-use super::types::{ChecklistItem, DispatchTask, DispatchParent, VerificationResult};
+use super::types::{ChecklistItem, DispatchParent, DispatchTask, VerificationResult};
 use std::collections::HashSet;
 
 /// Verify a single task's checklist against its result and file changes.
@@ -63,12 +63,20 @@ pub fn verify_task_checklist(task: &DispatchTask) -> VerificationResult {
 
     // Check file changes against checklist
     if !task.file_changes.is_empty() {
-        let file_paths: HashSet<&str> = task.file_changes.iter().map(|fc| fc.path.as_str()).collect();
+        let file_paths: HashSet<&str> = task
+            .file_changes
+            .iter()
+            .map(|fc| fc.path.as_str())
+            .collect();
         for item in &task.checklist {
             if item.description.contains("file") || item.description.contains("create") {
                 let has_file_change = file_paths.iter().any(|path| {
-                    item.description.to_lowercase().contains(&path.to_lowercase())
-                        || path.to_lowercase().contains(&item.description.to_lowercase())
+                    item.description
+                        .to_lowercase()
+                        .contains(&path.to_lowercase())
+                        || path
+                            .to_lowercase()
+                            .contains(&item.description.to_lowercase())
                 });
                 if !has_file_change && item.status == "completed" {
                     warnings.push(format!(
@@ -127,7 +135,10 @@ pub fn verify_parent_checklist(parent: &DispatchParent) -> VerificationResult {
 
     let missing_items: Vec<String> = all_items
         .iter()
-        .filter(|item| !completed_items.contains(item) && !failed_items.iter().any(|f| f.contains(item.as_str())))
+        .filter(|item| {
+            !completed_items.contains(item)
+                && !failed_items.iter().any(|f| f.contains(item.as_str()))
+        })
         .cloned()
         .collect();
 
@@ -171,11 +182,15 @@ pub fn generate_checklist_from_prompt(prompt: &str) -> Vec<ChecklistItem> {
     // Look for numbered lists or bullet points in the prompt
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        
+
         // Match numbered lists: "1.", "2.", etc.
         if let Some(rest) = trimmed.strip_prefix(|c: char| c.is_ascii_digit()) {
             if rest.starts_with('.') || rest.starts_with(')') {
-                let description = rest[1..].trim().trim_start_matches(')').trim_start_matches('.').trim();
+                let description = rest[1..]
+                    .trim()
+                    .trim_start_matches(')')
+                    .trim_start_matches('.')
+                    .trim();
                 if !description.is_empty() {
                     items.push(ChecklistItem {
                         id: format!("item-{}", i),
@@ -187,7 +202,7 @@ pub fn generate_checklist_from_prompt(prompt: &str) -> Vec<ChecklistItem> {
                 }
             }
         }
-        
+
         // Match bullet points: "-", "*"
         if trimmed.starts_with('-') || trimmed.starts_with('*') {
             let description = trimmed[1..].trim();
@@ -256,7 +271,8 @@ mod tests {
 
     #[test]
     fn test_generate_checklist_from_prompt() {
-        let prompt = "Implement feature X:\n1. Create new file\n2. Modify existing code\n3. Add tests";
+        let prompt =
+            "Implement feature X:\n1. Create new file\n2. Modify existing code\n3. Add tests";
         let checklist = generate_checklist_from_prompt(prompt);
         assert_eq!(checklist.len(), 3);
         assert_eq!(checklist[0].description, "Create new file");

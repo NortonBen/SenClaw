@@ -230,14 +230,14 @@ fn mean_self_and_neighbors(self_vec: &[f32], neighbor_vecs: &[Vec<f32>]) -> Vec<
 /// as the post-activation vector — gradient through ReLU is just zero
 /// where `h_pre <= 0`, so we keep the pre-activation around.
 struct Acts {
-    agg1: Vec<f32>,     // input to layer 1
-    h1_pre: Vec<f32>,   // linear output of layer 1 (pre-ReLU)
-    h1: Vec<f32>,       // post-ReLU
-    agg2: Vec<f32>,     // input to layer 2 = mean(h1_self, h1_neighbors)
+    agg1: Vec<f32>,   // input to layer 1
+    h1_pre: Vec<f32>, // linear output of layer 1 (pre-ReLU)
+    h1: Vec<f32>,     // post-ReLU
+    agg2: Vec<f32>,   // input to layer 2 = mean(h1_self, h1_neighbors)
     h2_pre: Vec<f32>,
     h2: Vec<f32>,
-    z_norm: f32,        // L2 norm of h2 before normalisation
-    z: Vec<f32>,        // final embedding (h2 / z_norm)
+    z_norm: f32, // L2 norm of h2 before normalisation
+    z: Vec<f32>, // final embedding (h2 / z_norm)
 }
 
 /// Single-pass forward. Caller supplies:
@@ -610,9 +610,8 @@ fn sgd_step(
     let (gw1_v, gb1_v, _) = linear_backward(&model.w1, &a_v.agg1, &dh1_pre_v);
 
     // Combine u + v gradients.
-    let combine = |a: &[f32], b: &[f32]| -> Vec<f32> {
-        a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
-    };
+    let combine =
+        |a: &[f32], b: &[f32]| -> Vec<f32> { a.iter().zip(b.iter()).map(|(x, y)| x + y).collect() };
     let gw1 = combine(&gw1_u, &gw1_v);
     let gb1 = combine(&gb1_u, &gb1_v);
     let gw2 = combine(&gw2_u, &gw2_v);
@@ -807,7 +806,10 @@ mod tests {
         let x = vec![5.0, 6.0];
         let mut out = vec![0.0; 2];
         linear(&w, &b, &x, &mut out);
-        assert_eq!(out, vec![1.0 * 5.0 + 2.0 * 6.0 + 10.0, 3.0 * 5.0 + 4.0 * 6.0 + 20.0]);
+        assert_eq!(
+            out,
+            vec![1.0 * 5.0 + 2.0 * 6.0 + 10.0, 3.0 * 5.0 + 4.0 * 6.0 + 20.0]
+        );
     }
 
     #[test]
@@ -859,7 +861,10 @@ mod tests {
         // Output is L2-normalized: ‖z‖ ∈ {0, 1}. Zero is acceptable when
         // ReLU killed everything (a fresh Xavier init can do this for
         // small dim + adversarial input).
-        assert!(n < 1e-3 || (n - 1.0).abs() < 1e-3, "norm should be 0 or 1, got {n}");
+        assert!(
+            n < 1e-3 || (n - 1.0).abs() < 1e-3,
+            "norm should be 0 or 1, got {n}"
+        );
     }
 
     // ---- Training reduces loss on a tiny synthetic graph --------------
@@ -885,11 +890,7 @@ mod tests {
                 vec![3, 5],    // 4
                 vec![3, 4],    // 5
             ],
-            edges: vec![
-                (0, 1), (0, 2), (1, 2),
-                (3, 4), (3, 5), (4, 5),
-                (2, 3),
-            ],
+            edges: vec![(0, 1), (0, 2), (1, 2), (3, 4), (3, 5), (4, 5), (2, 3)],
         }
     }
 

@@ -282,11 +282,13 @@ mod tests {
         let web_research = entries
             .iter()
             .find(|e| e.name == "web-research")
-            .unwrap_or_else(|| panic!(
-                "web-research skill not found among {} bundled entries: {:?}",
-                entries.len(),
-                entries.iter().map(|e| &e.name).collect::<Vec<_>>()
-            ));
+            .unwrap_or_else(|| {
+                panic!(
+                    "web-research skill not found among {} bundled entries: {:?}",
+                    entries.len(),
+                    entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+                )
+            });
         assert!(
             web_research.description.contains("research"),
             "web-research description should mention research: {:?}",

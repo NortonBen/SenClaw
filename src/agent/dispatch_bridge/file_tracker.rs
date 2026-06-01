@@ -58,7 +58,11 @@ impl FileTracker {
     }
 
     /// Scan a directory recursively and build a snapshot.
-    fn scan_directory(&self, dir: &Path, snapshot: &mut HashMap<String, FileSnapshot>) -> anyhow::Result<()> {
+    fn scan_directory(
+        &self,
+        dir: &Path,
+        snapshot: &mut HashMap<String, FileSnapshot>,
+    ) -> anyhow::Result<()> {
         if !dir.exists() {
             return Ok(());
         }
@@ -67,9 +71,10 @@ impl FileTracker {
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            
+
             // Skip hidden files and directories
-            if path.file_name()
+            if path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n.starts_with('.'))
                 .unwrap_or(false)
@@ -96,12 +101,15 @@ impl FileTracker {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
-                
-                snapshot.insert(relative_path, FileSnapshot {
-                    modified: metadata.modified()?,
-                    size: metadata.len(),
-                    exists: true,
-                });
+
+                snapshot.insert(
+                    relative_path,
+                    FileSnapshot {
+                        modified: metadata.modified()?,
+                        size: metadata.len(),
+                        exists: true,
+                    },
+                );
             } else if metadata.is_dir() {
                 self.scan_directory(&path, snapshot)?;
             }

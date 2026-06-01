@@ -48,7 +48,8 @@ pub async fn execute_command_hook(
         let history_limit = hook.history_limit.unwrap_or(10);
         if let Some(msgs) = messages {
             let recent_messages = msgs.iter().rev().take(history_limit).collect::<Vec<_>>();
-            let mut input_value: serde_json::Value = serde_json::from_str(input_json).unwrap_or(serde_json::json!({}));
+            let mut input_value: serde_json::Value =
+                serde_json::from_str(input_json).unwrap_or(serde_json::json!({}));
             let history_array: Vec<serde_json::Value> = recent_messages
                 .into_iter()
                 .rev()

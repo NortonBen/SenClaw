@@ -11,6 +11,22 @@ mcp_servers:
 
 The Space feature gives you a personal productivity layer: **notes**, **calendar events**, **email**, and **recurring schedules**. All tools are prefixed `space_*` and available through the `senclaw-space` MCP server.
 
+## Required Tool Discovery
+
+Loading this skill does not create notes, events, reminders, emails, or schedules. Before calling any Space action, make sure the concrete MCP tool is visible. If it is not visible, call `ToolSearch` first.
+
+Common discovery calls:
+
+```
+ToolSearch { query: "select:mcp__space__space_current_time" }
+ToolSearch { query: "select:mcp__space__space_event_create" }
+ToolSearch { query: "select:mcp__space__space_note_create" }
+```
+
+If an exact `select:` query returns no match, search by keywords such as `space event create`, `space note create`, or `space current time`, then call the exact tool name returned by `ToolSearch`.
+
+Only tell the user the item was created after the concrete tool call returns a success result.
+
 ---
 
 ## Notes

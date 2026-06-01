@@ -754,11 +754,14 @@ pub(crate) async fn cowork_tasks_update(
     Json(body): Json<UpdateTaskBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mgr = s.cowork_manager.as_ref().ok_or_else(|| {
-        AppError(StatusCode::SERVICE_UNAVAILABLE, "Cowork not initialized".into())
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Cowork not initialized".into(),
+        )
     })?;
-    let db = s.db.as_ref().ok_or_else(|| {
-        AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into())
-    })?;
+    let db =
+        s.db.as_ref()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
     let now = now_iso();
     let agent_api = s.cowork_agent_api.clone();
 
@@ -1146,8 +1149,11 @@ pub async fn cowork_ws_resources_list(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db = s.db.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
-    let resources = db.list_workspace_resources(&id)
+    let db =
+        s.db.as_ref()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
+    let resources = db
+        .list_workspace_resources(&id)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "resources": resources })))
 }
@@ -1163,23 +1169,35 @@ pub async fn cowork_ws_resource_upsert(
     AxumPath(id): AxumPath<String>,
     Json(body): Json<UpsertResourceBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db = s.db.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
+    let db =
+        s.db.as_ref()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
     let mgr = cowork_mgr(&s)?;
     let valid_kinds = ["raw", "wiki", "reference", "workdir"];
     if !valid_kinds.contains(&body.kind.as_str()) {
-        return Err(AppError(StatusCode::BAD_REQUEST, format!("invalid kind '{}', must be one of: raw, wiki, reference, workdir", body.kind)));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "invalid kind '{}', must be one of: raw, wiki, reference, workdir",
+                body.kind
+            ),
+        ));
     }
     fs::create_dir_all(&body.path).ok();
     mgr.upsert_resource(db, &id, &body.kind, &body.path)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "workspaceId": id, "kind": body.kind, "path": body.path })))
+    Ok(Json(
+        serde_json::json!({ "workspaceId": id, "kind": body.kind, "path": body.path }),
+    ))
 }
 
 pub async fn cowork_ws_resource_delete(
     State(s): State<Arc<UiState>>,
     AxumPath((id, kind)): AxumPath<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db = s.db.as_ref().ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
+    let db =
+        s.db.as_ref()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
     let mgr = cowork_mgr(&s)?;
     mgr.delete_resource(db, &id, &kind)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

@@ -52,7 +52,10 @@ pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<d
         }
     }
     for t in tools {
-        if t.aliases().iter().any(|a| *a == name || normalize_mcp_tool_name(a) == normalized) {
+        if t.aliases()
+            .iter()
+            .any(|a| *a == name || normalize_mcp_tool_name(a) == normalized)
+        {
             return Some(Arc::clone(t));
         }
     }
@@ -285,17 +288,11 @@ impl Tool for ToolSearchTool {
                 deferred.len()
             )
         } else {
-            let mut s = format!(
-                "Found {} tool(s) matching '{}':\n",
-                matches.len(),
-                query
-            );
+            let mut s = format!("Found {} tool(s) matching '{}':\n", matches.len(), query);
             for t in &matches {
                 s.push_str(&format!("  - {}: {}\n", t.name(), t.search_hint()));
             }
-            s.push_str(
-                "\nThese tools are now usable. Call them directly in your next turn.",
-            );
+            s.push_str("\nThese tools are now usable. Call them directly in your next turn.");
             s
         };
 
@@ -522,7 +519,8 @@ mod tests {
         let discovered = Arc::new(Mutex::new(Vec::<String>::new()));
         let disc = Arc::clone(&discovered);
         let resolver: DeferredToolsFn = Arc::new(|| fixtures());
-        let register: RegisterDiscoveredFn = Arc::new(move |name| disc.lock().unwrap().push(name.to_string()));
+        let register: RegisterDiscoveredFn =
+            Arc::new(move |name| disc.lock().unwrap().push(name.to_string()));
         let tool = ToolSearchTool::new(resolver).with_discovery(register);
         let ctx = ToolContext {
             agent_id: "main",

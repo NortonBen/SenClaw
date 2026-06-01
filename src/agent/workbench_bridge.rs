@@ -24,8 +24,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::zen_core::{
-    EngineEvent, WorkbenchArtifact, WorkbenchMode, WorkbenchNewData,
-    WorkbenchServiceCrashedData, WorkbenchServiceReadyData, WorkbenchServiceStoppedData, ZenEngine,
+    EngineEvent, WorkbenchArtifact, WorkbenchMode, WorkbenchNewData, WorkbenchServiceCrashedData,
+    WorkbenchServiceReadyData, WorkbenchServiceStoppedData, ZenEngine,
 };
 
 /// Closure used to push a text notification to a chat channel (IM fallback for

@@ -1,8 +1,8 @@
 use axum::http::StatusCode;
 use std::path::Path;
 
-pub mod tokenizer;
 pub mod modules;
+pub mod tokenizer;
 
 pub fn synthesize(
     _model_id: &str,

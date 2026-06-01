@@ -145,7 +145,10 @@ mod tests {
             event_bus: None,
             response_registry: None,
         };
-        let out = tool.call(serde_json::json!({"reason": "test"}), &ctx).await.unwrap();
+        let out = tool
+            .call(serde_json::json!({"reason": "test"}), &ctx)
+            .await
+            .unwrap();
         assert!(flag.load(Ordering::SeqCst));
         let ToolOutput::Result { data, .. } = &out[0] else {
             panic!();

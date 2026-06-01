@@ -24,12 +24,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{
-    events::EventBus,
-    hooks::HookManager,
-    state::StateManager,
-    ModelProfile,
-};
+use super::{events::EventBus, hooks::HookManager, state::StateManager, ModelProfile};
 
 /// Per-engine isolated resources.
 #[derive(Clone)]
@@ -287,6 +282,13 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result, (Some("/test/dir".to_string()), Some("/test/dir/.sema".to_string()), Some("test".to_string())));
+        assert_eq!(
+            result,
+            (
+                Some("/test/dir".to_string()),
+                Some("/test/dir/.sema".to_string()),
+                Some("test".to_string())
+            )
+        );
     }
 }

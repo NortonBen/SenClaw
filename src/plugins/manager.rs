@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
-use crate::db::Db;
 use super::db::{upsert_runtime, PluginRuntime};
 use super::manifest::parse_plugin_md;
+use crate::db::Db;
 
 struct RunningProcess {
     child: Child,
@@ -23,13 +23,16 @@ struct Inner {
 
 /// Manages lifecycle of plugin subprocesses.
 pub struct PluginManager {
-    db:    Arc<Db>,
+    db: Arc<Db>,
     inner: Mutex<Inner>,
 }
 
 impl PluginManager {
     pub fn new(db: Arc<Db>) -> Self {
-        Self { db, inner: Mutex::default() }
+        Self {
+            db,
+            inner: Mutex::default(),
+        }
     }
 
     /// Spawn the plugin subprocess for `slug` using env from `config_json`.
@@ -38,7 +41,9 @@ impl PluginManager {
         let manifest = parse_plugin_md(&manifest_path)
             .with_context(|| format!("missing PLUGIN.md for plugin `{slug}`"))?;
 
-        let entry = manifest.entry_point.as_deref()
+        let entry = manifest
+            .entry_point
+            .as_deref()
             .with_context(|| format!("plugin `{slug}` has no entry_point"))?;
 
         let binary = plugin_dir.join(entry);
@@ -46,8 +51,8 @@ impl PluginManager {
             anyhow::bail!("plugin binary not found: {}", binary.display());
         }
 
-        let env_vals: HashMap<String, String> = serde_json::from_str(config_json)
-            .unwrap_or_default();
+        let env_vals: HashMap<String, String> =
+            serde_json::from_str(config_json).unwrap_or_default();
 
         let mut cmd = Command::new(&binary);
         cmd.current_dir(plugin_dir);
@@ -58,10 +63,11 @@ impl PluginManager {
         }
         // Pipe stdio so we can capture logs
         cmd.stdin(std::process::Stdio::piped())
-           .stdout(std::process::Stdio::piped())
-           .stderr(std::process::Stdio::piped());
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn()
+        let child = cmd
+            .spawn()
             .with_context(|| format!("failed to spawn plugin `{slug}`"))?;
 
         let pid = child.id().map(|p| p as i64);
@@ -78,10 +84,11 @@ impl PluginManager {
         };
         let _ = upsert_runtime(&self.db, &rt);
 
-        self.inner.lock().unwrap().procs.insert(
-            slug.to_string(),
-            RunningProcess { child },
-        );
+        self.inner
+            .lock()
+            .unwrap()
+            .procs
+            .insert(slug.to_string(), RunningProcess { child });
         Ok(())
     }
 
@@ -118,8 +125,7 @@ impl PluginManager {
 
     /// Kill all running plugins (called on daemon shutdown).
     pub async fn stop_all(&self) {
-        let slugs: Vec<String> = self.inner.lock().unwrap()
-            .procs.keys().cloned().collect();
+        let slugs: Vec<String> = self.inner.lock().unwrap().procs.keys().cloned().collect();
         for slug in slugs {
             let _ = self.stop(&slug).await;
         }

@@ -33,9 +33,7 @@ use super::core::{AppError, UiState};
 // GET /api/embedding/features
 // =====================================================================
 
-pub(crate) async fn embedding_features(
-    State(_s): State<Arc<UiState>>,
-) -> Json<serde_json::Value> {
+pub(crate) async fn embedding_features(State(_s): State<Arc<UiState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "candle": cfg!(feature = "local-embed"),
         "candle_metal": cfg!(feature = "local-embed-metal"),
@@ -90,18 +88,8 @@ const MODEL_CATALOG: &[(&str, &str, u32, &str)] = &[
         768,
         "~1.1GB",
     ),
-    (
-        "bge-small-en-v1.5",
-        "BAAI/bge-small-en-v1.5",
-        384,
-        "~130MB",
-    ),
-    (
-        "bge-base-en-v1.5",
-        "BAAI/bge-base-en-v1.5",
-        768,
-        "~440MB",
-    ),
+    ("bge-small-en-v1.5", "BAAI/bge-small-en-v1.5", 384, "~130MB"),
+    ("bge-base-en-v1.5", "BAAI/bge-base-en-v1.5", 768, "~440MB"),
     (
         "bge-large-en-v1.5",
         "BAAI/bge-large-en-v1.5",
@@ -127,8 +115,8 @@ fn is_model_cached(dir: &Path) -> bool {
         return false;
     }
     let has_tok = dir.join("tokenizer.json").exists();
-    let has_weights = dir.join("model.safetensors").exists()
-        || dir.join("pytorch_model.safetensors").exists();
+    let has_weights =
+        dir.join("model.safetensors").exists() || dir.join("pytorch_model.safetensors").exists();
     has_tok && has_weights
 }
 
@@ -180,12 +168,28 @@ pub(crate) struct DownloadBody {
 #[serde(tag = "phase")]
 #[serde(rename_all = "snake_case")]
 enum DlEvent {
-    Start { repo: String, files: Vec<String> },
-    FileStart { file: String, total: Option<u64> },
-    Progress { file: String, downloaded: u64, total: Option<u64> },
-    FileDone { file: String },
-    Done { dir: String },
-    Error { message: String },
+    Start {
+        repo: String,
+        files: Vec<String>,
+    },
+    FileStart {
+        file: String,
+        total: Option<u64>,
+    },
+    Progress {
+        file: String,
+        downloaded: u64,
+        total: Option<u64>,
+    },
+    FileDone {
+        file: String,
+    },
+    Done {
+        dir: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 pub(crate) async fn embedding_download_model(
@@ -194,8 +198,7 @@ pub(crate) async fn embedding_download_model(
 ) -> Response {
     let model = body.model.trim().to_owned();
     if model.is_empty() {
-        return AppError(StatusCode::BAD_REQUEST, "missing 'model' name".into())
-            .into_response();
+        return AppError(StatusCode::BAD_REQUEST, "missing 'model' name".into()).into_response();
     }
     if !cfg!(feature = "local-embed") {
         return AppError(
@@ -220,7 +223,11 @@ pub(crate) async fn embedding_download_model(
     // long as the channel is open; closing it cleanly aborts.
     tokio::spawn(async move {
         if let Err(e) = run_download(&model, cache_dir, tx.clone()).await {
-            let _ = tx.send(DlEvent::Error { message: e.to_string() }).await;
+            let _ = tx
+                .send(DlEvent::Error {
+                    message: e.to_string(),
+                })
+                .await;
         }
     });
 
@@ -271,11 +278,12 @@ async fn run_download(
     for filename in &files {
         // Allow PyTorch safetensors as a fallback for the weights file —
         // matches `files_from_hub`.
-        let primary_ok =
-            stream_one(&client, &repo_id, filename, &dest_dir, tx.clone()).await;
+        let primary_ok = stream_one(&client, &repo_id, filename, &dest_dir, tx.clone()).await;
         if let Err(e) = primary_ok {
             if filename == "model.safetensors" {
-                tracing::warn!("[LocalEmbed] {filename} failed ({e}); trying pytorch_model.safetensors");
+                tracing::warn!(
+                    "[LocalEmbed] {filename} failed ({e}); trying pytorch_model.safetensors"
+                );
                 stream_one(
                     &client,
                     &repo_id,
@@ -325,10 +333,15 @@ async fn stream_one(
     if dest.exists() {
         // Treat already-cached as a zero-byte "done" so the UI still ticks.
         let _ = tx
-            .send(DlEvent::FileStart { file: filename.to_owned(), total: Some(0) })
+            .send(DlEvent::FileStart {
+                file: filename.to_owned(),
+                total: Some(0),
+            })
             .await;
         let _ = tx
-            .send(DlEvent::FileDone { file: filename.to_owned() })
+            .send(DlEvent::FileDone {
+                file: filename.to_owned(),
+            })
             .await;
         return Ok(());
     }
@@ -346,7 +359,10 @@ async fn stream_one(
 
     let total = response.content_length();
     let _ = tx
-        .send(DlEvent::FileStart { file: filename.to_owned(), total })
+        .send(DlEvent::FileStart {
+            file: filename.to_owned(),
+            total,
+        })
         .await;
 
     let tmp = dest.with_extension("tmp");
@@ -384,7 +400,9 @@ async fn stream_one(
     tokio::fs::rename(&tmp, &dest).await.context("rename")?;
 
     let _ = tx
-        .send(DlEvent::FileDone { file: filename.to_owned() })
+        .send(DlEvent::FileDone {
+            file: filename.to_owned(),
+        })
         .await;
     Ok(())
 }
@@ -448,7 +466,9 @@ mod tests {
 
     #[test]
     fn dl_event_error_shape() {
-        let ev = DlEvent::Error { message: "boom".into() };
+        let ev = DlEvent::Error {
+            message: "boom".into(),
+        };
         let j = serde_json::to_string(&ev).unwrap();
         assert!(j.contains("\"phase\":\"error\""));
         assert!(j.contains("boom"));

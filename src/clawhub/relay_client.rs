@@ -294,9 +294,7 @@ impl RelayClient {
         let tag = base64::engine::general_purpose::STANDARD
             .decode(tag_b64)
             .context("invalid tag b64")?;
-        let plaintext = self
-            .crypto
-            .decrypt(&nonce, &ciphertext, &tag)?;
+        let plaintext = self.crypto.decrypt(&nonce, &ciphertext, &tag)?;
         String::from_utf8(plaintext).map_err(|e| anyhow!("Invalid UTF-8: {}", e))
     }
 }

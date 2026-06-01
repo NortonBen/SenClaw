@@ -48,7 +48,11 @@ pub struct OpenAiCompatLlm {
 }
 
 impl OpenAiCompatLlm {
-    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>, model: impl Into<String>) -> Result<Self> {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
         let client = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -137,12 +141,20 @@ pub(crate) fn build_body(
     let req = ChatRequest {
         model,
         messages: vec![
-            ChatMessage { role: "system", content: system },
-            ChatMessage { role: "user", content: user },
+            ChatMessage {
+                role: "system",
+                content: system,
+            },
+            ChatMessage {
+                role: "user",
+                content: user,
+            },
         ],
         temperature: 0.1, // low — we want deterministic JSON
         response_format: if request_json_object {
-            Some(ResponseFormat { kind: "json_object" })
+            Some(ResponseFormat {
+                kind: "json_object",
+            })
         } else {
             None
         },
@@ -226,9 +238,7 @@ impl LlmClient for OpenAiCompatLlm {
 pub fn create_cognitive_llm(
     config: &crate::config::Config,
 ) -> Option<std::sync::Arc<dyn super::llm::LlmClient>> {
-    let stored = crate::gateway::group_manager::load_llm_configs(
-        &config.paths.global_config_path,
-    );
+    let stored = crate::gateway::group_manager::load_llm_configs(&config.paths.global_config_path);
 
     // Try each LLM-config id in priority order. First one with both an
     // API key AND a base URL wins.
@@ -491,11 +501,8 @@ mod tests {
             vision: None,
         };
         save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
-        set_active_cognitive_llm_config(
-            &cfg.paths.global_config_path,
-            Some("test-anthropic"),
-        )
-        .unwrap();
+        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-anthropic"))
+            .unwrap();
 
         let client = create_cognitive_llm(&cfg);
         assert!(

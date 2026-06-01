@@ -137,7 +137,13 @@ pub trait AgentApi: Send + Sync {
     async fn process_and_wait(&self, jid: &str, group: &GroupBinding, prompt: &str) -> Result<()>;
 
     /// Process a prompt with image attachments through the agent. Blocks until the agent finishes.
-    async fn process_and_wait_with_images(&self, jid: &str, group: &GroupBinding, prompt: &str, _attachments: &[crate::agent::input_builder::ImageAttachment]) -> Result<()> {
+    async fn process_and_wait_with_images(
+        &self,
+        jid: &str,
+        group: &GroupBinding,
+        prompt: &str,
+        _attachments: &[crate::agent::input_builder::ImageAttachment],
+    ) -> Result<()> {
         // Default implementation: ignore attachments and call the basic version
         self.process_and_wait(jid, group, prompt).await
     }

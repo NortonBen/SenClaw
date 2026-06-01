@@ -4,12 +4,12 @@
 //! Detects and processes image URLs and file references in user input,
 //! converting them to appropriate content blocks for the agent.
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 /// Image attachment from explicit uploads (channel/UI).
 #[derive(Debug, Clone)]
@@ -307,7 +307,10 @@ pub fn build_agent_input(prompt: &str, attachments: Option<&[ImageAttachment]>) 
 ///
 /// This is a convenience function that converts WebSocket image attachments
 /// (with data_url and mime_type) to the InputBuilder format.
-pub fn build_agent_input_with_attachments(prompt: &str, ws_attachments: &[WebSocketImageAttachment]) -> BuildResult {
+pub fn build_agent_input_with_attachments(
+    prompt: &str,
+    ws_attachments: &[WebSocketImageAttachment],
+) -> BuildResult {
     let attachments: Vec<ImageAttachment> = ws_attachments
         .iter()
         .map(|ws_att| ws_att.clone().into())
@@ -346,11 +349,7 @@ fn strip_at_path_refs(text: &str) -> String {
     if let Ok(re) = Regex::new(AT_PATH_IMAGE_REGEX) {
         re.replace_all(text, |caps: &regex::Captures| {
             let path = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let name = path
-                .split('/')
-                .last()
-                .unwrap_or("image")
-                .to_string();
+            let name = path.split('/').last().unwrap_or("image").to_string();
             format!(" [image:{}]", name)
         })
         .to_string()
@@ -379,7 +378,8 @@ mod tests {
 
     #[test]
     fn test_detect_url_images() {
-        let text = "Check this image https://example.com/photo.png and this one http://test.org/image.jpg";
+        let text =
+            "Check this image https://example.com/photo.png and this one http://test.org/image.jpg";
         let found = detect_images_in_text(text);
         assert_eq!(found.len(), 2);
         assert!(found.contains(&"https://example.com/photo.png".to_string()));
@@ -420,7 +420,9 @@ mod tests {
         let prompt = "Check https://example.com/photo.png";
         let result = build_agent_input(prompt, None);
         assert!(!result.image_srcs.is_empty());
-        assert!(result.image_srcs.contains(&"https://example.com/photo.png".to_string()));
+        assert!(result
+            .image_srcs
+            .contains(&"https://example.com/photo.png".to_string()));
     }
 
     #[test]

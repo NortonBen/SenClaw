@@ -220,8 +220,10 @@ pub fn wiki_mcp_config(wiki_dir: &str) -> McpServerConfig {
 pub fn code_graph_mcp_config(db_path: &str, project_id: &str, workspace: &str) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-code-graph", "code-graph-server");
     cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
-    cfg.env.insert("SENCLAW_PROJECT_ID".into(), project_id.to_owned());
-    cfg.env.insert("SENCLAW_WORKSPACE".into(), workspace.to_owned());
+    cfg.env
+        .insert("SENCLAW_PROJECT_ID".into(), project_id.to_owned());
+    cfg.env
+        .insert("SENCLAW_WORKSPACE".into(), workspace.to_owned());
     cfg
 }
 
@@ -229,8 +231,10 @@ pub fn code_graph_mcp_config(db_path: &str, project_id: &str, workspace: &str) -
 
 pub fn code_server_mcp_config(workspace: &str, project_id: &str) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-code", "code-server");
-    cfg.env.insert("SENCLAW_CODE_WORKSPACE".into(), workspace.to_owned());
-    cfg.env.insert("SENCLAW_CODE_PROJECT_ID".into(), project_id.to_owned());
+    cfg.env
+        .insert("SENCLAW_CODE_WORKSPACE".into(), workspace.to_owned());
+    cfg.env
+        .insert("SENCLAW_CODE_PROJECT_ID".into(), project_id.to_owned());
     cfg
 }
 
@@ -257,17 +261,20 @@ pub fn litho_mcp_config(
         .insert("SENCLAW_LITHO_BINARY".into(), litho_binary.to_owned());
     if let Some(u) = llm_api_base_url {
         if !u.is_empty() {
-            cfg.env.insert("SENCLAW_LITHO_LLMAPI_BASE_URL".into(), u.to_owned());
+            cfg.env
+                .insert("SENCLAW_LITHO_LLMAPI_BASE_URL".into(), u.to_owned());
         }
     }
     if let Some(k) = llm_api_key {
         if !k.is_empty() {
-            cfg.env.insert("SENCLAW_LITHO_LLMAPI_KEY".into(), k.to_owned());
+            cfg.env
+                .insert("SENCLAW_LITHO_LLMAPI_KEY".into(), k.to_owned());
         }
     }
     if let Some(m) = model_efficient {
         if !m.is_empty() {
-            cfg.env.insert("SENCLAW_LITHO_MODEL_EFFICIENT".into(), m.to_owned());
+            cfg.env
+                .insert("SENCLAW_LITHO_MODEL_EFFICIENT".into(), m.to_owned());
         }
     }
     cfg

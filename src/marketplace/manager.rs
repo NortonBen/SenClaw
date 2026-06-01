@@ -42,7 +42,8 @@ struct PluginJson {
 impl MarketplaceManager {
     /// Create a new marketplace manager with default paths
     pub fn new() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Failed to get home directory"))?;
+        let home =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Failed to get home directory"))?;
         let senclaw_home = home.join(".senclaw");
 
         let config_path = senclaw_home.join("marketplace.json");
@@ -89,8 +90,8 @@ impl MarketplaceManager {
         if self.config_path.exists() {
             let raw = fs::read_to_string(&self.config_path)
                 .with_context(|| format!("Failed to read config from {:?}", self.config_path))?;
-            self.config = serde_json::from_str(&raw)
-                .with_context(|| "Failed to parse marketplace config")?;
+            self.config =
+                serde_json::from_str(&raw).with_context(|| "Failed to parse marketplace config")?;
         }
         Ok(())
     }
@@ -110,8 +111,8 @@ impl MarketplaceManager {
         if self.state_path.exists() {
             let raw = fs::read_to_string(&self.state_path)
                 .with_context(|| format!("Failed to read state from {:?}", self.state_path))?;
-            self.state = serde_json::from_str(&raw)
-                .with_context(|| "Failed to parse marketplace state")?;
+            self.state =
+                serde_json::from_str(&raw).with_context(|| "Failed to parse marketplace state")?;
         }
         Ok(())
     }
@@ -283,7 +284,17 @@ impl MarketplaceManager {
             clone_or_pull(&url, branch, local_path)?;
 
             let now = chrono::Utc::now().to_rfc3339();
-            self.update_source(id, None, None, None, None, None, None, Some(Some(now)), Some(None))?;
+            self.update_source(
+                id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(Some(now)),
+                Some(None),
+            )?;
         }
 
         Ok(())
@@ -322,7 +333,12 @@ impl MarketplaceManager {
     }
 
     /// Set plugin enabled/disabled state
-    pub fn set_plugin_enabled(&mut self, source_id: &str, plugin_name: &str, enabled: bool) -> Result<()> {
+    pub fn set_plugin_enabled(
+        &mut self,
+        source_id: &str,
+        plugin_name: &str,
+        enabled: bool,
+    ) -> Result<()> {
         let st = self.ensure_source_state(source_id);
         if enabled {
             st.plugins.insert(plugin_name.to_string(), true);
@@ -393,8 +409,8 @@ impl MarketplaceManager {
         }
 
         let mut plugins = Vec::new();
-        let entries = fs::read_dir(base)
-            .with_context(|| format!("Failed to read directory {:?}", base))?;
+        let entries =
+            fs::read_dir(base).with_context(|| format!("Failed to read directory {:?}", base))?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -429,20 +445,23 @@ impl MarketplaceManager {
 
     /// Get plugin name from metadata and directory
     fn plugin_name(&self, meta: &PluginJson, dir: &str) -> String {
-        meta.name
-            .clone()
-            .unwrap_or_else(|| Path::new(dir).file_name().unwrap().to_string_lossy().to_string())
+        meta.name.clone().unwrap_or_else(|| {
+            Path::new(dir)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        })
     }
 
     /// Parse author field from JSON (can be string or object with name field)
     fn parse_author(&self, author: &Option<serde_json::Value>) -> Option<String> {
         match author {
             Some(serde_json::Value::String(s)) => Some(s.clone()),
-            Some(serde_json::Value::Object(obj)) => {
-                obj.get("name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            }
+            Some(serde_json::Value::Object(obj)) => obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -510,10 +529,7 @@ impl MarketplaceManager {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     skills.push(MarketplacePluginSkill {
-                        name: entry
-                            .file_name()
-                            .to_string_lossy()
-                            .to_string(),
+                        name: entry.file_name().to_string_lossy().to_string(),
                         description: String::new(),
                         disabled: false,
                     });
@@ -535,10 +551,7 @@ impl MarketplaceManager {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     subagents.push(MarketplacePluginSubagent {
-                        name: entry
-                            .file_name()
-                            .to_string_lossy()
-                            .to_string(),
+                        name: entry.file_name().to_string_lossy().to_string(),
                         description: String::new(),
                         disabled: false,
                     });
@@ -560,10 +573,7 @@ impl MarketplaceManager {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     servers.push(MarketplacePluginMCPServer {
-                        name: entry
-                            .file_name()
-                            .to_string_lossy()
-                            .to_string(),
+                        name: entry.file_name().to_string_lossy().to_string(),
                         transport: "stdio".to_string(),
                         description: None,
                         use_tools: None,
@@ -637,7 +647,8 @@ mod tests {
         let state_path = temp.path().join("state.json");
         let clones_dir = temp.path().join("clones");
 
-        let mut manager = MarketplaceManager::with_paths(config_path, state_path, clones_dir).unwrap();
+        let mut manager =
+            MarketplaceManager::with_paths(config_path, state_path, clones_dir).unwrap();
         let source = manager
             .add_source(
                 "test".to_string(),
@@ -661,7 +672,8 @@ mod tests {
         let state_path = temp.path().join("state.json");
         let clones_dir = temp.path().join("clones");
 
-        let mut manager = MarketplaceManager::with_paths(config_path, state_path, clones_dir).unwrap();
+        let mut manager =
+            MarketplaceManager::with_paths(config_path, state_path, clones_dir).unwrap();
         let source = manager
             .add_source(
                 "test".to_string(),

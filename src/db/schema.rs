@@ -641,13 +641,16 @@ pub(crate) fn apply_marketplace_tables(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
-    
+
     // Migration: Add attachments column if it doesn't exist
-    conn.execute("ALTER TABLE channel_messages ADD COLUMN attachments TEXT", [])
-        .ok(); // Ignore error if column already exists
+    conn.execute(
+        "ALTER TABLE channel_messages ADD COLUMN attachments TEXT",
+        [],
+    )
+    .ok(); // Ignore error if column already exists
     conn.execute("ALTER TABLE group_messages ADD COLUMN attachments TEXT", [])
         .ok(); // Ignore error if column already exists
-    
+
     Ok(())
 }
 

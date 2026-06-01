@@ -202,13 +202,16 @@ mod tests {
         }
 
         let rep = run_maintenance(&*g).unwrap();
-        assert_eq!(rep.inference.associations_created, 1, "one ASSOCIATED_WITH expected");
+        assert_eq!(
+            rep.inference.associations_created, 1,
+            "one ASSOCIATED_WITH expected"
+        );
 
         // The inferred edge connects Alice and Bob (either direction).
         let nbrs = g.neighbors(alice.id, 10).unwrap();
         assert!(
-            nbrs.iter().any(|e| e.predicate == "ASSOCIATED_WITH"
-                && (e.dst == bob.id || e.src == bob.id)),
+            nbrs.iter()
+                .any(|e| e.predicate == "ASSOCIATED_WITH" && (e.dst == bob.id || e.src == bob.id)),
             "expected inferred ASSOCIATED_WITH edge between Alice and Bob",
         );
 

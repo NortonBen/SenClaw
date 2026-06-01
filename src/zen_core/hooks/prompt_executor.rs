@@ -105,15 +105,16 @@ pub async fn execute_prompt_hook(
             let recent_messages = msgs.iter().rev().take(history_limit).collect::<Vec<_>>();
             user_content.push_str("\n\nRecent message history:\n");
             for msg in recent_messages.into_iter().rev() {
-                user_content.push_str(&format!("{}\n", serde_json::to_string(msg).unwrap_or_default()));
+                user_content.push_str(&format!(
+                    "{}\n",
+                    serde_json::to_string(msg).unwrap_or_default()
+                ));
             }
         }
     }
 
     let system_prompt = format!("{DECISION_SYSTEM_PROMPT}\nYour task: {prompt_text}");
-    let user_msg = create_user_message(vec![ContentBlock::Text {
-        text: user_content,
-    }]);
+    let user_msg = create_user_message(vec![ContentBlock::Text { text: user_content }]);
 
     let inner_cancel = CancellationToken::new();
     let _cancel_guard = if let Some(tok) = cancel {

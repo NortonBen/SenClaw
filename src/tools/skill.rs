@@ -199,6 +199,9 @@ impl Tool for SkillTool {
             .unwrap_or("");
 
         let mut content = format!("Base directory: {base_dir}\n\n");
+        content.push_str(
+            "Status: skill instructions loaded only. No user task has been completed by loading this skill.\n\n",
+        );
         if !allowed_tools.is_empty() {
             content.push_str(&format!(
                 "Recommended tools: {}\n\n",
@@ -214,7 +217,7 @@ impl Tool for SkillTool {
 
         ToolResultMessage {
             title: skill_name.to_string(),
-            summary: format!("Skill \"{skill_name}\" loaded successfully"),
+            summary: format!("Skill \"{skill_name}\" instructions loaded"),
             content: serde_json::Value::String(content),
         }
     }
@@ -261,6 +264,15 @@ fn gen_result_for_assistant(
         }
         result.push('\n');
     }
+    result.push_str("<system-reminder>\n");
+    result.push_str(
+        "Loading a skill only provides instructions. It does not perform the user's task, create records, send messages, schedule events, edit files, or complete any external action.\n",
+    );
+    result.push_str(
+        "Do not tell the user the task is done until you have called the concrete action tool required by the skill and received a successful tool result. If the needed action tool is not visible, call ToolSearch first.\n",
+    );
+    result.push_str("</system-reminder>\n\n");
+
     result.push_str(skill_content);
     result.push('\n');
 
@@ -279,7 +291,7 @@ fn gen_result_for_assistant(
 
     result.push_str("\n---\n\n");
     result.push_str(
-        "Now that you have loaded the skill instructions, please proceed with the task based on the guidelines above.",
+        "Now that you have loaded the skill instructions, proceed with the task based on the guidelines above. Do not report success yet; first call the required action tool and verify its successful result.",
     );
     if let Some(a) = args {
         result.push_str(&format!(" Remember to process the provided arguments: {a}"));

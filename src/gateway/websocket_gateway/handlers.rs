@@ -342,15 +342,11 @@ pub(crate) async fn handle_subscribe(
     // ToolGroupCard runs identically to the live path.
     {
         let text_msgs = state.db.get_group_messages(&jid, None).unwrap_or_default();
-        let tool_msgs = state
-            .db
-            .get_tool_executions(&jid, None)
-            .unwrap_or_default();
+        let tool_msgs = state.db.get_tool_executions(&jid, None).unwrap_or_default();
 
         if !text_msgs.is_empty() || !tool_msgs.is_empty() {
-            let mut history: Vec<serde_json::Value> = Vec::with_capacity(
-                text_msgs.len() + tool_msgs.len(),
-            );
+            let mut history: Vec<serde_json::Value> =
+                Vec::with_capacity(text_msgs.len() + tool_msgs.len());
             for m in &text_msgs {
                 history.push(serde_json::json!({
                     "id": m.message_id,
@@ -402,13 +398,16 @@ pub(crate) async fn handle_subscribe(
     // via last_known_states snapshot above, and DB-replayed agent:state can be
     // stale (e.g. from before a server restart where the agent was destroyed).
     if let Ok(events) = state.db.get_chat_events(&jid, Some(200)) {
-        let filtered: Vec<_> = events.into_iter().filter(|e| e.event_type != "agent:state").collect();
+        let filtered: Vec<_> = events
+            .into_iter()
+            .filter(|e| e.event_type != "agent:state")
+            .collect();
         if !filtered.is_empty() {
             let payload: Vec<serde_json::Value> = filtered
                 .iter()
                 .map(|e| {
-                    let inner: serde_json::Value = serde_json::from_str(&e.payload_json)
-                        .unwrap_or(serde_json::Value::Null);
+                    let inner: serde_json::Value =
+                        serde_json::from_str(&e.payload_json).unwrap_or(serde_json::Value::Null);
                     serde_json::json!({
                         "id": e.id,
                         "eventType": e.event_type,
@@ -884,7 +883,7 @@ pub(crate) async fn handle_message_send(
     }
     let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
     let text = msg["text"].as_str().unwrap_or("").trim().to_string();
-    
+
     // Extract attachments if present
     let attachments: Vec<super::wire::ImageAttachment> = msg["attachments"]
         .as_array()
@@ -905,7 +904,7 @@ pub(crate) async fn handle_message_send(
                 .collect()
         })
         .unwrap_or_default();
-    
+
     if group_jid.is_empty() || (text.is_empty() && attachments.is_empty()) {
         send_json(
             sender,
@@ -973,7 +972,7 @@ pub(crate) async fn handle_message_send(
     } else {
         Some(serde_json::to_string(&attachments).unwrap_or_default())
     };
-    
+
     let stored = crate::types::StoredMessage {
         message_id: format!("web:{}", Uuid::new_v4()),
         chat_jid: group_jid.clone(),
@@ -1001,7 +1000,9 @@ pub(crate) async fn handle_message_send(
         })
         .collect();
 
-    state.api.enqueue_and_process(&group_jid, &group, &text, &agent_attachments);
+    state
+        .api
+        .enqueue_and_process(&group_jid, &group, &text, &agent_attachments);
 }
 
 pub(crate) async fn handle_permission_response(
@@ -1036,28 +1037,41 @@ pub(crate) async fn handle_notifications_list(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
     let limit = msg["limit"].as_u64().map(|v| v as u32).unwrap_or(100);
     match state.db.list_event_notifications(Some(limit)) {
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|n| serde_json::json!({
-                "id": n.id,
-                "eventId": n.event_id,
-                "title": n.title,
-                "startAt": n.start_at,
-                "kind": n.kind,
-                "firedAt": n.fired_at,
-                "delayedMs": n.delayed_ms,
-                "readAt": n.read_at,
-            })).collect();
-            send_json(sender, &serde_json::json!({
-                "type": "notifications:list",
-                "notifications": items,
-            }));
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|n| {
+                    serde_json::json!({
+                        "id": n.id,
+                        "eventId": n.event_id,
+                        "title": n.title,
+                        "startAt": n.start_at,
+                        "kind": n.kind,
+                        "firedAt": n.fired_at,
+                        "delayedMs": n.delayed_ms,
+                        "readAt": n.read_at,
+                    })
+                })
+                .collect();
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "notifications:list",
+                    "notifications": items,
+                }),
+            );
         }
         Err(e) => {
             tracing::warn!(error = %e, "[handle_notifications_list] db error");
-            send_json(sender, &serde_json::json!({"type": "error", "message": "list failed"}));
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "list failed"}),
+            );
         }
     }
 }
@@ -1072,29 +1086,42 @@ pub(crate) async fn handle_notifications_pending(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
     // Default to 24h preview — covers the working day without scrolling.
     let window_min = msg["windowMin"].as_i64().unwrap_or(24 * 60);
     let window_ms = window_min * 60_000;
     let now_ms = chrono::Utc::now().timestamp_millis();
     match state.db.list_pending_event_reminders(now_ms, window_ms) {
         Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows.iter().map(|p| serde_json::json!({
-                "eventId": p.event_id,
-                "title": p.title,
-                "startAt": p.start_at,
-                "reminderMin": p.reminder_min,
-                "triggerAt": p.trigger_at,
-            })).collect();
-            send_json(sender, &serde_json::json!({
-                "type": "notifications:pending",
-                "windowMin": window_min,
-                "items": items,
-            }));
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "eventId": p.event_id,
+                        "title": p.title,
+                        "startAt": p.start_at,
+                        "reminderMin": p.reminder_min,
+                        "triggerAt": p.trigger_at,
+                    })
+                })
+                .collect();
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "notifications:pending",
+                    "windowMin": window_min,
+                    "items": items,
+                }),
+            );
         }
         Err(e) => {
             tracing::warn!(error = %e, "[handle_notifications_pending] db error");
-            send_json(sender, &serde_json::json!({"type": "error", "message": "pending failed"}));
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "pending failed"}),
+            );
         }
     }
 }
@@ -1106,33 +1133,49 @@ pub(crate) async fn handle_plan_list(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
     let jid = msg["groupJid"].as_str().unwrap_or("").to_string();
     if jid.is_empty() {
-        send_json(sender, &serde_json::json!({"type": "error", "message": "groupJid required"}));
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "groupJid required"}),
+        );
         return;
     }
     match state.db.list_plans_for_chat(&jid, Some(100)) {
         Ok(rows) => {
-            let plans: Vec<serde_json::Value> = rows.iter().map(|p| serde_json::json!({
-                "id": p.id,
-                "chatJid": p.chat_jid,
-                "agentId": p.agent_id,
-                "title": p.title,
-                "filePath": p.file_path,
-                "approval": p.approval,
-                "createdAt": p.created_at,
-                "approvedAt": p.approved_at,
-            })).collect();
-            send_json(sender, &serde_json::json!({
-                "type": "plans:list",
-                "groupJid": jid,
-                "plans": plans,
-            }));
+            let plans: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p.id,
+                        "chatJid": p.chat_jid,
+                        "agentId": p.agent_id,
+                        "title": p.title,
+                        "filePath": p.file_path,
+                        "approval": p.approval,
+                        "createdAt": p.created_at,
+                        "approvedAt": p.approved_at,
+                    })
+                })
+                .collect();
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "plans:list",
+                    "groupJid": jid,
+                    "plans": plans,
+                }),
+            );
         }
         Err(e) => {
             tracing::warn!(error = %e, "[handle_plan_list] db error");
-            send_json(sender, &serde_json::json!({"type": "error", "message": "plan list failed"}));
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "plan list failed"}),
+            );
         }
     }
 }
@@ -1144,35 +1187,49 @@ pub(crate) async fn handle_plan_get(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
     let id = msg["id"].as_str().unwrap_or("");
     if id.is_empty() {
-        send_json(sender, &serde_json::json!({"type": "error", "message": "id required"}));
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "id required"}),
+        );
         return;
     }
     match state.db.get_plan(id) {
         Ok(Some(p)) => {
-            send_json(sender, &serde_json::json!({
-                "type": "plans:get",
-                "plan": {
-                    "id": p.id,
-                    "chatJid": p.chat_jid,
-                    "agentId": p.agent_id,
-                    "title": p.title,
-                    "filePath": p.file_path,
-                    "contentMd": p.content_md,
-                    "approval": p.approval,
-                    "createdAt": p.created_at,
-                    "approvedAt": p.approved_at,
-                },
-            }));
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "plans:get",
+                    "plan": {
+                        "id": p.id,
+                        "chatJid": p.chat_jid,
+                        "agentId": p.agent_id,
+                        "title": p.title,
+                        "filePath": p.file_path,
+                        "contentMd": p.content_md,
+                        "approval": p.approval,
+                        "createdAt": p.created_at,
+                        "approvedAt": p.approved_at,
+                    },
+                }),
+            );
         }
         Ok(None) => {
-            send_json(sender, &serde_json::json!({"type": "error", "message": "plan not found"}));
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "plan not found"}),
+            );
         }
         Err(e) => {
             tracing::warn!(error = %e, "[handle_plan_get] db error");
-            send_json(sender, &serde_json::json!({"type": "error", "message": "plan get failed"}));
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": "plan get failed"}),
+            );
         }
     }
 }
@@ -1184,10 +1241,18 @@ pub(crate) async fn handle_tool_rule_add(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
-    if let Ok(rule) = serde_json::from_value::<crate::agent::permission_bridge::types::ToolAutoAcceptRule>(msg["rule"].clone()) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if let Ok(rule) = serde_json::from_value::<
+        crate::agent::permission_bridge::types::ToolAutoAcceptRule,
+    >(msg["rule"].clone())
+    {
         state.api.add_tool_rule(rule.clone());
-        send_json(sender, &serde_json::json!({"type": "permission:rule:added", "rule": rule}));
+        send_json(
+            sender,
+            &serde_json::json!({"type": "permission:rule:added", "rule": rule}),
+        );
     }
 }
 
@@ -1198,10 +1263,15 @@ pub(crate) async fn handle_tool_rule_remove(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
     if let Some(rule_id) = msg["ruleId"].as_str() {
         state.api.remove_tool_rule(rule_id);
-        send_json(sender, &serde_json::json!({"type": "permission:rule:removed", "ruleId": rule_id}));
+        send_json(
+            sender,
+            &serde_json::json!({"type": "permission:rule:removed", "ruleId": rule_id}),
+        );
     }
 }
 
@@ -1212,10 +1282,18 @@ pub(crate) async fn handle_tool_rule_update(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
-    if let Ok(rule) = serde_json::from_value::<crate::agent::permission_bridge::types::ToolAutoAcceptRule>(msg["rule"].clone()) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    if let Ok(rule) = serde_json::from_value::<
+        crate::agent::permission_bridge::types::ToolAutoAcceptRule,
+    >(msg["rule"].clone())
+    {
         state.api.update_tool_rule(rule.clone());
-        send_json(sender, &serde_json::json!({"type": "permission:rule:updated", "rule": rule}));
+        send_json(
+            sender,
+            &serde_json::json!({"type": "permission:rule:updated", "rule": rule}),
+        );
     }
 }
 
@@ -1226,10 +1304,15 @@ pub(crate) async fn handle_tool_accept_all(
     state: &Arc<WsState>,
     msg: &serde_json::Value,
 ) {
-    if !require_auth(clients, client_idx, sender).await { return; }
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
     let enabled = msg["enabled"].as_bool().unwrap_or(false);
     state.api.set_accept_all(enabled);
-    send_json(sender, &serde_json::json!({"type": "permission:accept-all:updated", "enabled": enabled}));
+    send_json(
+        sender,
+        &serde_json::json!({"type": "permission:accept-all:updated", "enabled": enabled}),
+    );
 }
 
 pub(crate) async fn handle_question_response(
@@ -1273,7 +1356,10 @@ pub(crate) async fn handle_plan_exit_response(
     }
     let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
     let agent_id = msg["agentId"].as_str().unwrap_or("main").to_string();
-    let selected = msg["selected"].as_str().unwrap_or("startEditing").to_string();
+    let selected = msg["selected"]
+        .as_str()
+        .unwrap_or("startEditing")
+        .to_string();
     if group_jid.is_empty() {
         send_json(
             sender,
@@ -1282,7 +1368,9 @@ pub(crate) async fn handle_plan_exit_response(
         return;
     }
     // Deliver to the engine: unblocks ExitPlanMode + flips mode on approval.
-    state.api.resolve_plan_exit(&group_jid, &agent_id, &selected);
+    state
+        .api
+        .resolve_plan_exit(&group_jid, &agent_id, &selected);
     // Broadcast so all clients (the one that answered + others) dismiss the
     // dialog. Frontend listens for `plan:exit:response`.
     broadcast_to_all_inner(

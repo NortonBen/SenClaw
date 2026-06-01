@@ -11,8 +11,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::task;
 
-use crate::marketplace::types::{MarketplaceSource, SourceType};
 use super::core::{AppError, UiState};
+use crate::marketplace::types::{MarketplaceSource, SourceType};
 
 fn internal(e: impl std::fmt::Display) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -70,18 +70,24 @@ pub struct SourceInfoResponse {
 pub(crate) async fn marketplace_sources_list(
     State(s): State<Arc<UiState>>,
 ) -> Result<Json<SourceListResponse>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let sources = task::spawn_blocking(move || {
         let manager = manager.lock().unwrap();
         manager.get_sources()
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(SourceListResponse { sources }))
 }
 
@@ -90,11 +96,17 @@ pub(crate) async fn marketplace_sources_add(
     State(s): State<Arc<UiState>>,
     Json(body): Json<AddSourceBody>,
 ) -> Result<Json<MarketplaceSource>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let result = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.add_source(
@@ -109,7 +121,7 @@ pub(crate) async fn marketplace_sources_add(
     })
     .await
     .map_err(internal)?;
-    
+
     let result = result.map_err(internal)?;
     Ok(Json(result))
 }
@@ -119,18 +131,24 @@ pub(crate) async fn marketplace_sources_delete(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let _ = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.remove_source(&id)
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -139,18 +157,24 @@ pub(crate) async fn marketplace_sources_sync(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let _ = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.sync_source(&id)
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -159,18 +183,24 @@ pub(crate) async fn marketplace_sources_reorder(
     State(s): State<Arc<UiState>>,
     Json(body): Json<ReorderSourcesBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let _ = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.reorder_sources(body.ordered_ids)
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -179,26 +209,35 @@ pub(crate) async fn marketplace_source_get(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<SourceInfoResponse>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let source_info = task::spawn_blocking(move || {
         let manager = manager.lock().unwrap();
         manager.get_source_info(&id)
     })
     .await
     .map_err(internal)?;
-    
+
     let source_info = source_info.map_err(internal)?;
-    let source_info = source_info.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Source not found".into()))?;
-    
+    let source_info =
+        source_info.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Source not found".into()))?;
+
     // Convert plugins to JSON
-    let plugins_json: Vec<serde_json::Value> = source_info.plugins.into_iter()
+    let plugins_json: Vec<serde_json::Value> = source_info
+        .plugins
+        .into_iter()
         .map(|p| serde_json::to_value(p).unwrap_or(serde_json::Value::Null))
         .collect();
-    
+
     Ok(Json(SourceInfoResponse {
         source: source_info.source,
         plugins: plugins_json,
@@ -210,18 +249,24 @@ pub(crate) async fn marketplace_source_enable_all(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let _ = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.enable_all_in_source(&id)
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -230,18 +275,24 @@ pub(crate) async fn marketplace_source_disable_all(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let manager = s.marketplace_manager
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let _ = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.disable_all_in_source(&id)
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -252,19 +303,25 @@ pub(crate) async fn marketplace_plugin_toggle(
     Json(body): Json<TogglePluginBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let (id, name) = params;
-    
-    let manager = s.marketplace_manager
+
+    let manager = s
+        .marketplace_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "Marketplace manager not available".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
         .clone();
-    
+
     let _ = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
         manager.set_plugin_enabled(&id, &name, body.enabled)
     })
     .await
     .map_err(internal)?;
-    
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 

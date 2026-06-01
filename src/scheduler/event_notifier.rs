@@ -53,7 +53,8 @@ impl EventNotifySink for NoopEventSink {
         _kind: &str,
         _fired_at_ms: i64,
         _delayed_ms: i64,
-    ) {}
+    ) {
+    }
 }
 
 pub struct EventNotifier {
@@ -171,7 +172,9 @@ impl EventNotifier {
                     local_iso_string_now(),
                     (now_ms - trigger_at).max(0)
                 );
-                self.persist_and_notify(conn, &id, &title, start_at, "reminder", trigger_at, now_ms)?;
+                self.persist_and_notify(
+                    conn, &id, &title, start_at, "reminder", trigger_at, now_ms,
+                )?;
                 conn.execute(
                     "UPDATE space_events SET reminder_sent_at = ?1, updated_at = ?1 WHERE id = ?2",
                     params![now_ms, id],
@@ -251,7 +254,9 @@ impl EventNotifier {
                     title,
                     local_iso_string_now()
                 );
-                self.persist_and_notify(conn, &id, &title, start_at, "renotify", trigger_at, now_ms)?;
+                self.persist_and_notify(
+                    conn, &id, &title, start_at, "renotify", trigger_at, now_ms,
+                )?;
                 conn.execute(
                     "UPDATE space_events SET renotify_sent_at = ?1, updated_at = ?1 WHERE id = ?2",
                     params![now_ms, id],
@@ -314,7 +319,15 @@ mod tests {
         let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
         let now_ms = chrono::Utc::now().timestamp_millis();
         db.with_conn(|conn| {
-            insert_event(conn, "e1", "Meeting", now_ms + 2 * 60_000, now_ms + 62 * 60_000, Some(5), None);
+            insert_event(
+                conn,
+                "e1",
+                "Meeting",
+                now_ms + 2 * 60_000,
+                now_ms + 62 * 60_000,
+                Some(5),
+                None,
+            );
             Ok(())
         })
         .unwrap();
@@ -324,7 +337,9 @@ mod tests {
         notifier.tick().unwrap();
 
         let fired = rec.0.lock().unwrap().clone();
-        assert!(fired.iter().any(|(_, id, kind, _)| id == "e1" && kind == "reminder"));
+        assert!(fired
+            .iter()
+            .any(|(_, id, kind, _)| id == "e1" && kind == "reminder"));
 
         let rows = db.list_event_notifications(None).unwrap();
         assert_eq!(rows.len(), 1);
@@ -338,7 +353,15 @@ mod tests {
         let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
         let now_ms = chrono::Utc::now().timestamp_millis();
         db.with_conn(|conn| {
-            insert_event(conn, "e2", "Standup", now_ms + 60_000, now_ms + 120_000, Some(10), None);
+            insert_event(
+                conn,
+                "e2",
+                "Standup",
+                now_ms + 60_000,
+                now_ms + 120_000,
+                Some(10),
+                None,
+            );
             Ok(())
         })
         .unwrap();
@@ -348,7 +371,13 @@ mod tests {
         notifier.tick().unwrap();
         notifier.tick().unwrap();
 
-        let count = rec.0.lock().unwrap().iter().filter(|(_, id, _, _)| id == "e2").count();
+        let count = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, id, _, _)| id == "e2")
+            .count();
         assert_eq!(count, 1, "reminder should fire exactly once");
     }
 
@@ -358,7 +387,15 @@ mod tests {
         let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
         let now_ms = chrono::Utc::now().timestamp_millis();
         db.with_conn(|conn| {
-            insert_event(conn, "e3", "Past", now_ms - 120_000, now_ms - 60_000, None, None);
+            insert_event(
+                conn,
+                "e3",
+                "Past",
+                now_ms - 120_000,
+                now_ms - 60_000,
+                None,
+                None,
+            );
             Ok(())
         })
         .unwrap();
@@ -368,11 +405,9 @@ mod tests {
 
         let status: String = db
             .with_conn(|conn| {
-                conn.query_row(
-                    "SELECT status FROM space_events WHERE id = 'e3'",
-                    [],
-                    |r| r.get(0),
-                )
+                conn.query_row("SELECT status FROM space_events WHERE id = 'e3'", [], |r| {
+                    r.get(0)
+                })
                 .map_err(anyhow::Error::from)
             })
             .unwrap();
@@ -389,7 +424,15 @@ mod tests {
         let now_ms = chrono::Utc::now().timestamp_millis();
         db.with_conn(|conn| {
             // Started 1 min ago, ends in 59 min, NO reminder.
-            insert_event(conn, "ev-start", "Đi Uniqlo", now_ms - 60_000, now_ms + 59 * 60_000, None, None);
+            insert_event(
+                conn,
+                "ev-start",
+                "Đi Uniqlo",
+                now_ms - 60_000,
+                now_ms + 59 * 60_000,
+                None,
+                None,
+            );
             Ok(())
         })
         .unwrap();
@@ -400,12 +443,16 @@ mod tests {
 
         let fired = rec.0.lock().unwrap().clone();
         assert!(
-            fired.iter().any(|(_, id, kind, _)| id == "ev-start" && kind == "start"),
+            fired
+                .iter()
+                .any(|(_, id, kind, _)| id == "ev-start" && kind == "start"),
             "start notification must fire even without reminder_min; got {fired:?}"
         );
         // Persisted as a `start` notification row.
         let rows = db.list_event_notifications(None).unwrap();
-        assert!(rows.iter().any(|r| r.event_id == "ev-start" && r.kind == "start"));
+        assert!(rows
+            .iter()
+            .any(|r| r.event_id == "ev-start" && r.kind == "start"));
     }
 
     #[test]
@@ -414,7 +461,15 @@ mod tests {
         let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
         let now_ms = chrono::Utc::now().timestamp_millis();
         db.with_conn(|conn| {
-            insert_event(conn, "ev-once", "Họp", now_ms - 30_000, now_ms + 30 * 60_000, None, None);
+            insert_event(
+                conn,
+                "ev-once",
+                "Họp",
+                now_ms - 30_000,
+                now_ms + 30 * 60_000,
+                None,
+                None,
+            );
             Ok(())
         })
         .unwrap();
@@ -442,7 +497,15 @@ mod tests {
         let now_ms = chrono::Utc::now().timestamp_millis();
         db.with_conn(|conn| {
             // Starts in 10 min — start notification must NOT fire now.
-            insert_event(conn, "ev-future", "Tương lai", now_ms + 10 * 60_000, now_ms + 70 * 60_000, None, None);
+            insert_event(
+                conn,
+                "ev-future",
+                "Tương lai",
+                now_ms + 10 * 60_000,
+                now_ms + 70 * 60_000,
+                None,
+                None,
+            );
             Ok(())
         })
         .unwrap();

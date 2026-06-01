@@ -78,7 +78,9 @@ pub(crate) mod test_support {
 
     impl StubLlm {
         pub fn new(replies: Vec<String>) -> Self {
-            Self { replies: Mutex::new(replies) }
+            Self {
+                replies: Mutex::new(replies),
+            }
         }
     }
 

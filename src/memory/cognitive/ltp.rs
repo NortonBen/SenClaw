@@ -67,13 +67,19 @@ pub fn detect_ltp_status(timestamps: &[i64], total_count: u32, now: i64) -> LtpS
     let thirty_days = 30 * day;
 
     // Full — strongest: lifetime ≥ 10 OR ≥ 10 activations in the last 30 days.
-    let recent_30d = timestamps.iter().filter(|t| now - **t <= thirty_days).count();
+    let recent_30d = timestamps
+        .iter()
+        .filter(|t| now - **t <= thirty_days)
+        .count();
     if total_count >= 10 || recent_30d >= 10 {
         return LtpStatus::Full;
     }
 
     // Weekly — ≥ 3 activations in each of the last two weeks.
-    let last_2w: Vec<&i64> = timestamps.iter().filter(|t| now - **t <= 2 * week).collect();
+    let last_2w: Vec<&i64> = timestamps
+        .iter()
+        .filter(|t| now - **t <= 2 * week)
+        .collect();
     if last_2w.len() >= 6 {
         let mid = now - week;
         let recent_week = last_2w.iter().filter(|t| ***t > mid).count();
@@ -116,8 +122,12 @@ mod tests {
         // 3 in week 1 + 3 in week 2
         let week = 7 * 86_400;
         let ts = vec![
-            now - 1, now - 2, now - 3,                 // recent week
-            now - week - 1, now - week - 2, now - week - 3, // prior week
+            now - 1,
+            now - 2,
+            now - 3, // recent week
+            now - week - 1,
+            now - week - 2,
+            now - week - 3, // prior week
         ];
         assert_eq!(detect_ltp_status(&ts, 6, now), LtpStatus::Weekly);
     }

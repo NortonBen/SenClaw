@@ -48,12 +48,10 @@ pub trait DispatchBridgeApi: Send + Sync {
     }
 
     /// Set file changes for a dispatch task. Called by AgentPool during task execution.
-    fn set_task_file_changes(&self, _task_id: &str, _file_changes: Vec<super::types::FileChange>) {
-    }
+    fn set_task_file_changes(&self, _task_id: &str, _file_changes: Vec<super::types::FileChange>) {}
 
     /// Add a single file change to a task. Useful for incremental tracking.
-    fn add_file_change(&self, _task_id: &str, _path: &str, _change_type: &str) {
-    }
+    fn add_file_change(&self, _task_id: &str, _path: &str, _change_type: &str) {}
 
     /// Build a resume hint for the admin agent listing active dispatches.
     fn build_dispatch_resume_hint(&self, folder: &str) -> String

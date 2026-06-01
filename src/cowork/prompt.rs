@@ -5,9 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::types::{
-    CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkWorkspace,
-};
+use crate::types::{CoworkBoardEntry, CoworkMember, CoworkMessage, CoworkTask, CoworkWorkspace};
 
 /// Collapse newlines + tabs into single spaces and trim, so a chat-style
 /// message renders cleanly on a single XML line in the prompt. Prevents the
@@ -17,7 +15,11 @@ pub(crate) fn sanitize_one_line(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_space = false;
     for ch in s.chars() {
-        let mapped = if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch };
+        let mapped = if ch == '\n' || ch == '\r' || ch == '\t' {
+            ' '
+        } else {
+            ch
+        };
         if mapped == ' ' {
             if !last_space {
                 out.push(' ');
@@ -196,8 +198,7 @@ pub fn build_cowork_task_prompt_with_history(
     // members understand what already happened without having to be told.
     // Capped (RECENT_*_CAP / *_CHARS constants) to keep the prompt under
     // the LLM's effective attention window.
-    let has_history =
-        !recent_messages.is_empty() || !recent_completed_tasks.is_empty();
+    let has_history = !recent_messages.is_empty() || !recent_completed_tasks.is_empty();
     if has_history {
         p.push_str("<recent_activity>\n");
 
@@ -672,8 +673,13 @@ mod tests {
     #[test]
     fn history_block_omitted_when_empty() {
         let p = build_cowork_task_prompt_with_history(
-            &sample_task(), &sample_member(), &sample_workspace(),
-            &[], &[], &[], &[],
+            &sample_task(),
+            &sample_member(),
+            &sample_workspace(),
+            &[],
+            &[],
+            &[],
+            &[],
         );
         assert!(!p.contains("<recent_activity>"));
     }
@@ -707,8 +713,13 @@ mod tests {
             artifacts: None,
         }];
         let p = build_cowork_task_prompt_with_history(
-            &sample_task(), &sample_member(), &sample_workspace(),
-            &[], &[], &msgs, &done_tasks,
+            &sample_task(),
+            &sample_member(),
+            &sample_workspace(),
+            &[],
+            &[],
+            &msgs,
+            &done_tasks,
         );
         assert!(p.contains("<recent_activity>"));
         assert!(p.contains("<chat_messages>"));
@@ -724,8 +735,13 @@ mod tests {
         let long = "Đây là một tin nhắn rất dài ".repeat(60);
         let msgs = vec![sample_message("researcher", "result", &long)];
         let p = build_cowork_task_prompt_with_history(
-            &sample_task(), &sample_member(), &sample_workspace(),
-            &[], &[], &msgs, &[],
+            &sample_task(),
+            &sample_member(),
+            &sample_workspace(),
+            &[],
+            &[],
+            &msgs,
+            &[],
         );
         // Clipped — ellipsis present, and the content stays UTF-8 safe.
         assert!(p.contains('…'));
@@ -735,19 +751,23 @@ mod tests {
 
     #[test]
     fn history_collapses_newlines_in_chat() {
-        let msgs = vec![sample_message(
-            "user",
-            "status",
-            "Dòng 1\n\nDòng 2\tDòng 3",
-        )];
+        let msgs = vec![sample_message("user", "status", "Dòng 1\n\nDòng 2\tDòng 3")];
         let p = build_cowork_task_prompt_with_history(
-            &sample_task(), &sample_member(), &sample_workspace(),
-            &[], &[], &msgs, &[],
+            &sample_task(),
+            &sample_member(),
+            &sample_workspace(),
+            &[],
+            &[],
+            &msgs,
+            &[],
         );
         // sanitize_one_line drops \n and \t — message renders inline.
         assert!(p.contains("Dòng 1 Dòng 2 Dòng 3"));
         // And the <message> tag isn't broken by stray newlines.
-        let line = p.lines().find(|l| l.contains("Dòng 1")).expect("message line");
+        let line = p
+            .lines()
+            .find(|l| l.contains("Dòng 1"))
+            .expect("message line");
         assert!(line.contains("<message"));
         assert!(line.contains("</message>"));
     }
@@ -764,8 +784,13 @@ mod tests {
             msgs.push(sample_message("user", "status", &format!("[m{i:03}]")));
         }
         let p = build_cowork_task_prompt_with_history(
-            &sample_task(), &sample_member(), &sample_workspace(),
-            &[], &[], &msgs, &[],
+            &sample_task(),
+            &sample_member(),
+            &sample_workspace(),
+            &[],
+            &[],
+            &msgs,
+            &[],
         );
         let n_in_prompt = (0..total)
             .filter(|i| p.contains(&format!("[m{i:03}]")))

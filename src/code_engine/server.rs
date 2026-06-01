@@ -24,17 +24,18 @@ pub(super) struct McpCodeServer {
 
 impl McpCodeServer {
     fn session(&self) -> CodeSession {
-        CodeSession::open(&self.project_id, &self.workspace, true)
-            .unwrap_or_else(|_| CodeSession {
-                session_id: self.project_id.clone(),
-                workspace: self.workspace.clone(),
-                git_enabled: false,
-                tracker: Default::default(),
-            })
+        CodeSession::open(&self.project_id, &self.workspace, true).unwrap_or_else(|_| CodeSession {
+            session_id: self.project_id.clone(),
+            workspace: self.workspace.clone(),
+            git_enabled: false,
+            tracker: Default::default(),
+        })
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf, String> {
-        self.session().resolve_path(path).map_err(|e| format!("❌ {e}"))
+        self.session()
+            .resolve_path(path)
+            .map_err(|e| format!("❌ {e}"))
     }
 }
 
@@ -107,7 +108,9 @@ pub(super) struct ListFilesParams {
 
 #[rmcp::tool_router(server_handler)]
 impl McpCodeServer {
-    #[rmcp::tool(description = "Read a file from the workspace. Returns content with line numbers. Use start_line/end_line for a range.")]
+    #[rmcp::tool(
+        description = "Read a file from the workspace. Returns content with line numbers. Use start_line/end_line for a range."
+    )]
     fn read_file(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -123,9 +126,16 @@ impl McpCodeServer {
             Ok(content) => {
                 let lines: Vec<&str> = content.lines().collect();
                 let total = lines.len();
-                let start = p.start_line.map(|n| (n as usize).saturating_sub(1)).unwrap_or(0);
+                let start = p
+                    .start_line
+                    .map(|n| (n as usize).saturating_sub(1))
+                    .unwrap_or(0);
                 let end = p.end_line.map(|n| (n as usize).min(total)).unwrap_or(total);
-                let slice = if start < total { &lines[start..end] } else { &lines[0..0] };
+                let slice = if start < total {
+                    &lines[start..end]
+                } else {
+                    &lines[0..0]
+                };
                 let out = slice
                     .iter()
                     .enumerate()
@@ -137,7 +147,9 @@ impl McpCodeServer {
         }
     }
 
-    #[rmcp::tool(description = "Write (create or overwrite) a file in the workspace. Returns a unified diff.")]
+    #[rmcp::tool(
+        description = "Write (create or overwrite) a file in the workspace. Returns a unified diff."
+    )]
     fn write_file(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -164,7 +176,9 @@ impl McpCodeServer {
         format!("✅ Wrote {} ({} bytes)\n{diff}", p.path, p.content.len())
     }
 
-    #[rmcp::tool(description = "Edit a file by exact string replacement. old_str must appear exactly once. Returns unified diff.")]
+    #[rmcp::tool(
+        description = "Edit a file by exact string replacement. old_str must appear exactly once. Returns unified diff."
+    )]
     fn edit_file(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -202,7 +216,9 @@ impl McpCodeServer {
         format!("✅ Edited {}\n{diff}", p.path)
     }
 
-    #[rmcp::tool(description = "Run a shell command inside the workspace. Returns stdout + stderr + exit code.")]
+    #[rmcp::tool(
+        description = "Run a shell command inside the workspace. Returns stdout + stderr + exit code."
+    )]
     fn bash(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -231,7 +247,9 @@ impl McpCodeServer {
         }
     }
 
-    #[rmcp::tool(description = "Search code with ast-grep AST pattern. Falls back to grep if ast-grep is not installed.")]
+    #[rmcp::tool(
+        description = "Search code with ast-grep AST pattern. Falls back to grep if ast-grep is not installed."
+    )]
     fn search_code(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -305,7 +323,9 @@ impl McpCodeServer {
         }
     }
 
-    #[rmcp::tool(description = "Token-efficient code skeleton: function signatures, structs, imports — no bodies. Pass a file or directory path.")]
+    #[rmcp::tool(
+        description = "Token-efficient code skeleton: function signatures, structs, imports — no bodies. Pass a file or directory path."
+    )]
     fn get_skeleton(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -353,7 +373,7 @@ pub(super) fn make_unified_diff(old: &str, new: &str, file_path: &str) -> String
                 let prefix = match change.tag() {
                     ChangeTag::Delete => "-",
                     ChangeTag::Insert => "+",
-                    ChangeTag::Equal  => " ",
+                    ChangeTag::Equal => " ",
                 };
                 out.push_str(prefix);
                 out.push_str(change.value());
@@ -370,8 +390,11 @@ fn grep_fallback(workspace: &Path, pattern: &str, search_path: &str) -> String {
     let output = std::process::Command::new("grep")
         .args([
             "-rn",
-            "--include=*.rs", "--include=*.ts", "--include=*.py",
-            "--include=*.go", "--include=*.js",
+            "--include=*.rs",
+            "--include=*.ts",
+            "--include=*.py",
+            "--include=*.go",
+            "--include=*.js",
             pattern,
             search_path,
         ])
@@ -393,7 +416,14 @@ fn grep_fallback(workspace: &Path, pattern: &str, search_path: &str) -> String {
 fn build_skeleton(workspace: &Path, target: &Path) -> String {
     // Try ast-grep first
     let probe = std::process::Command::new("ast-grep")
-        .args(["run", "--pattern", "fn $NAME($$$) $$$", "--lang", "rust", "."])
+        .args([
+            "run",
+            "--pattern",
+            "fn $NAME($$$) $$$",
+            "--lang",
+            "rust",
+            ".",
+        ])
         .current_dir(workspace)
         .output();
 
@@ -406,7 +436,14 @@ fn build_skeleton(workspace: &Path, target: &Path) -> String {
         let mut out = String::new();
         for (lang, pat) in &langs {
             if let Ok(o) = std::process::Command::new("ast-grep")
-                .args(["run", "--pattern", pat, "--lang", lang, target.to_str().unwrap_or(".")])
+                .args([
+                    "run",
+                    "--pattern",
+                    pat,
+                    "--lang",
+                    lang,
+                    target.to_str().unwrap_or("."),
+                ])
                 .current_dir(workspace)
                 .output()
             {
@@ -424,7 +461,8 @@ fn build_skeleton(workspace: &Path, target: &Path) -> String {
     // Fallback: grep for declaration lines
     let output = std::process::Command::new("grep")
         .args([
-            "-rn", "-E",
+            "-rn",
+            "-E",
             r"^(pub )?(async )?(fn |def |function |class |struct |interface |type |const )",
             target.to_str().unwrap_or("."),
         ])
@@ -440,15 +478,23 @@ fn walk_tree(dir: &Path, root: &Path, depth: u32, max_depth: u32, out: &mut Vec<
     if depth > max_depth {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let indent = "  ".repeat(depth as usize);
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let path = entry.path();
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if name.starts_with('.')
-            || matches!(name.as_str(), "node_modules" | "target" | "dist" | "build" | "__pycache__")
+            || matches!(
+                name.as_str(),
+                "node_modules" | "target" | "dist" | "build" | "__pycache__"
+            )
         {
             continue;
         }
@@ -472,10 +518,9 @@ pub async fn run_code_server() -> Result<()> {
         )
         .try_init();
 
-    let workspace = std::env::var("SENCLAW_CODE_WORKSPACE")
-        .context("SENCLAW_CODE_WORKSPACE not set")?;
-    let project_id = std::env::var("SENCLAW_CODE_PROJECT_ID")
-        .unwrap_or_else(|_| "default".into());
+    let workspace =
+        std::env::var("SENCLAW_CODE_WORKSPACE").context("SENCLAW_CODE_WORKSPACE not set")?;
+    let project_id = std::env::var("SENCLAW_CODE_PROJECT_ID").unwrap_or_else(|_| "default".into());
 
     let server = McpCodeServer {
         workspace: PathBuf::from(workspace),

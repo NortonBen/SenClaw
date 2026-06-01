@@ -81,7 +81,10 @@ impl LaunchUITool {
             return format!("LaunchUI failed: {err}");
         }
         let mut parts = Vec::new();
-        let id = output.get("artifact_id").and_then(|v| v.as_str()).unwrap_or("");
+        let id = output
+            .get("artifact_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let mode = output.get("mode").and_then(|v| v.as_str()).unwrap_or("");
         parts.push(format!("Workbench opened (id={id}, mode={mode})."));
         if let Some(files) = output.get("files_resolved").and_then(|v| v.as_array()) {
@@ -194,7 +197,11 @@ impl Tool for LaunchUITool {
                 let files: Vec<String> = input
                     .get("files")
                     .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 match self.workbench.create_static(&files, title, agent_id) {
                     Ok(artifact) => {
@@ -354,11 +361,20 @@ mod tests {
         });
         tool.validate_input(&input, &ctx(&wd)).await.unwrap();
         let out = tool.call(input, &ctx(&wd)).await.unwrap();
-        let ToolOutput::Result { data, result_for_assistant } = &out[0] else {
+        let ToolOutput::Result {
+            data,
+            result_for_assistant,
+        } = &out[0]
+        else {
             panic!("expected Result");
         };
         assert_eq!(data.get("opened").and_then(|v| v.as_bool()), Some(true));
-        assert!(data.get("artifact_id").unwrap().as_str().unwrap().starts_with("wb_"));
+        assert!(data
+            .get("artifact_id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .starts_with("wb_"));
         assert!(result_for_assistant.contains("Workbench opened"));
         assert_eq!(svc.list().len(), 1);
 
@@ -375,7 +391,11 @@ mod tests {
 
         let input = serde_json::json!({ "mode": "static", "files": ["ghost.md"] });
         let out = tool.call(input, &ctx(&wd)).await.unwrap();
-        let ToolOutput::Result { data, result_for_assistant } = &out[0] else {
+        let ToolOutput::Result {
+            data,
+            result_for_assistant,
+        } = &out[0]
+        else {
             panic!("expected Result");
         };
         assert_eq!(data.get("opened").and_then(|v| v.as_bool()), Some(false));

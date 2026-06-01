@@ -297,8 +297,7 @@ impl CognifyPipeline {
             //     dormant — DO retry next time).
             if was_deduped {
                 match chunk_node.extraction_state {
-                    super::ExtractionState::Done
-                    | super::ExtractionState::SkippedNoFacts => {
+                    super::ExtractionState::Done | super::ExtractionState::SkippedNoFacts => {
                         tracing::debug!(
                             chunk_id = %chunk_node.id,
                             state = ?chunk_node.extraction_state,
@@ -306,8 +305,7 @@ impl CognifyPipeline {
                         );
                         continue;
                     }
-                    super::ExtractionState::Pending
-                    | super::ExtractionState::SkippedNoLlm => {
+                    super::ExtractionState::Pending | super::ExtractionState::SkippedNoLlm => {
                         // Either fresh (race?) or back-fill needed — fall
                         // through and let the LLM try again.
                     }
@@ -388,8 +386,12 @@ impl CognifyPipeline {
             return Ok(());
         }
 
-        let subj = self.resolve_or_create_entity(&raw.subject, opts, report, now).await?;
-        let obj = self.resolve_or_create_entity(&raw.object, opts, report, now).await?;
+        let subj = self
+            .resolve_or_create_entity(&raw.subject, opts, report, now)
+            .await?;
+        let obj = self
+            .resolve_or_create_entity(&raw.object, opts, report, now)
+            .await?;
 
         // chunk -[MENTIONS]→ subject / object (provenance edges).
         for ent in [&subj, &obj] {
@@ -484,8 +486,7 @@ mod sanitize_tests {
 
     #[test]
     fn drops_thinking_blocks() {
-        let raw =
-            "<think>Okay let me reason</think>The user says they like coffee.";
+        let raw = "<think>Okay let me reason</think>The user says they like coffee.";
         let out = sanitize_for_cognify(raw).expect("non-think part should survive");
         assert!(out.contains("user says they like coffee"));
         assert!(!out.contains("Okay let me reason"));
@@ -501,10 +502,7 @@ mod sanitize_tests {
     #[test]
     fn rejects_markup_heavy_payload() {
         // 5 chars of text, lots of brackets → markup ratio fails.
-        assert_eq!(
-            sanitize_for_cognify("hi <a><b><c><d><e><f><g><h><i>"),
-            None
-        );
+        assert_eq!(sanitize_for_cognify("hi <a><b><c><d><e><f><g><h><i>"), None);
     }
 
     #[test]
@@ -542,9 +540,15 @@ mod tests {
 
     #[async_trait]
     impl EmbeddingProvider for FakeEmbedder {
-        fn name(&self) -> &str { "fake" }
-        fn model(&self) -> &str { "fake-model" }
-        fn dimensions(&self) -> u32 { 8 }
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+        fn dimensions(&self) -> u32 {
+            8
+        }
         async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
             Ok(texts
                 .iter()
@@ -573,10 +577,16 @@ mod tests {
 
     #[tokio::test]
     async fn cognify_creates_nodes_and_edges() {
-        let canned = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#.to_string();
+        let canned =
+            r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+                .to_string();
         let pipe = build_pipeline(vec![canned]);
         let report = pipe
-            .cognify("Ada invented the compiler.", "doc1", &CognifyOptions::default())
+            .cognify(
+                "Ada invented the compiler.",
+                "doc1",
+                &CognifyOptions::default(),
+            )
             .await
             .unwrap();
         assert_eq!(report.chunks_added, 1);
@@ -592,15 +602,22 @@ mod tests {
         // extraction. Hebbian strengthen happens via CogRecall, not via
         // wasted LLM passes — there's no reason to re-extract the same
         // sentence on every restart / reflection / SOUL ingest.
-        let r1 = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#.to_string();
+        let r1 = r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+            .to_string();
         // Second reply MUST stay unused — if it gets pulled, the gate
         // didn't fire and we're wasting tokens on duplicate work.
         let r2_unused = r1.clone();
         let pipe = build_pipeline(vec![r1, r2_unused]);
 
         let opts = CognifyOptions::default();
-        let first = pipe.cognify("Ada invented the compiler.", "doc1", &opts).await.unwrap();
-        let second = pipe.cognify("Ada invented the compiler.", "doc1", &opts).await.unwrap();
+        let first = pipe
+            .cognify("Ada invented the compiler.", "doc1", &opts)
+            .await
+            .unwrap();
+        let second = pipe
+            .cognify("Ada invented the compiler.", "doc1", &opts)
+            .await
+            .unwrap();
 
         assert_eq!(first.chunks_added, 1);
         assert!(first.edges_added > 0);
@@ -622,7 +639,11 @@ mod tests {
         // Chunk should still be embedded though.
         let pipe = build_pipeline(vec![]);
         let report = pipe
-            .cognify("Ada invented the compiler.", "doc", &CognifyOptions::default())
+            .cognify(
+                "Ada invented the compiler.",
+                "doc",
+                &CognifyOptions::default(),
+            )
             .await
             .unwrap();
         assert_eq!(report.chunks_added, 1, "chunk still stored when LLM fails");
@@ -649,7 +670,10 @@ mod tests {
     async fn cognify_skips_empty_triplets() {
         let canned = r#"{"triplets":[{"subject":"","predicate":"x","object":"y"}]}"#.to_string();
         let pipe = build_pipeline(vec![canned]);
-        let r = pipe.cognify("noise", "doc", &CognifyOptions::default()).await.unwrap();
+        let r = pipe
+            .cognify("noise", "doc", &CognifyOptions::default())
+            .await
+            .unwrap();
         assert_eq!(r.edges_added, 0);
         assert_eq!(r.entities_added, 0);
     }

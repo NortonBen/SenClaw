@@ -90,11 +90,7 @@ pub struct CodeAgentSpec {
 }
 
 impl CodeAgentSpec {
-    pub fn for_session(
-        session: &CodeSession,
-        session_name: &str,
-        group_id: &str,
-    ) -> Self {
+    pub fn for_session(session: &CodeSession, session_name: &str, group_id: &str) -> Self {
         let jid = code_session_jid(group_id);
         let binding = build_code_group_binding(&jid, session, session_name);
         let system_prompt = build_code_system_prompt(session, session_name);
@@ -122,11 +118,7 @@ impl CodeAgentSpec {
     }
 
     /// Wrap the user's plain prompt with the `<context>` block.
-    pub fn user_prompt(
-        &self,
-        parsed: &PromptParseResult,
-        resolved_refs: &[String],
-    ) -> String {
+    pub fn user_prompt(&self, parsed: &PromptParseResult, resolved_refs: &[String]) -> String {
         build_user_prompt(parsed, resolved_refs)
     }
 }
@@ -149,15 +141,8 @@ pub fn build_code_group_binding(
     // Build allowed_tools = builtins + always-loaded code MCP tools.
     // The engine will further apply Layer 5 (defer filter); MCP tools not in
     // this list stay deferred and accessible only via `ToolSearch`.
-    let mut allowed: Vec<String> = CODE_SESSION_TOOLS
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    allowed.extend(
-        always_loaded_code_mcp_tools()
-            .iter()
-            .map(|s| s.to_string()),
-    );
+    let mut allowed: Vec<String> = CODE_SESSION_TOOLS.iter().map(|s| s.to_string()).collect();
+    allowed.extend(always_loaded_code_mcp_tools().iter().map(|s| s.to_string()));
 
     GroupBinding {
         jid: jid.to_string(),
@@ -220,15 +205,22 @@ mod tests {
         let s = mk("/tmp/x");
         let b = build_code_group_binding("code-chat:g3", &s, "P");
         let allowed = b.allowed_tools.unwrap();
-        for must in ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "ToolSearch", "Task"] {
+        for must in [
+            "Read",
+            "Write",
+            "Edit",
+            "Bash",
+            "Glob",
+            "Grep",
+            "ToolSearch",
+            "Task",
+        ] {
             assert!(allowed.iter().any(|t| t == must), "missing {must}");
         }
         assert!(allowed
             .iter()
             .any(|t| t == "mcp__senclaw-code-graph__symbol_lookup"));
-        assert!(allowed
-            .iter()
-            .any(|t| t == "mcp__senclaw-code__read_file"));
+        assert!(allowed.iter().any(|t| t == "mcp__senclaw-code__read_file"));
     }
 
     #[test]
