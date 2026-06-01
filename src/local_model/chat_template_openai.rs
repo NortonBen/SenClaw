@@ -137,9 +137,7 @@ where
     let jinja_path = model_dir.join("chat_template.jinja");
     if jinja_path.exists() {
         let t = std::fs::read_to_string(&jinja_path)?;
-        tracing::info!(
-            "[local-mlx-native] loaded chat_template.jinja for {model_id}"
-        );
+        tracing::info!("[local-mlx-native] loaded chat_template.jinja for {model_id}");
         return Ok(Some(t));
     }
     // Standalone `chat_template.json` (`{"chat_template": "…"}`) — same shape as
@@ -155,20 +153,16 @@ where
 }
 
 /// Pull `chat_template` out of `tokenizer_config.json` if present.
-pub fn load_chat_template_from_tokenizer_config(
-    path: &Path,
-) -> std::io::Result<Option<String>> {
+pub fn load_chat_template_from_tokenizer_config(path: &Path) -> std::io::Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
     let content = std::fs::read_to_string(path)?;
-    Ok(serde_json::from_str::<Value>(&content)
-        .ok()
-        .and_then(|v| {
-            v.get("chat_template")
-                .and_then(|x| x.as_str())
-                .map(ToString::to_string)
-        }))
+    Ok(serde_json::from_str::<Value>(&content).ok().and_then(|v| {
+        v.get("chat_template")
+            .and_then(|x| x.as_str())
+            .map(ToString::to_string)
+    }))
 }
 
 // ── Jinja env / filters ────────────────────────────────────────────────────
@@ -177,14 +171,17 @@ pub fn load_chat_template_from_tokenizer_config(
 /// — `{{- tool | tojson }}` is how Qwen3 / Llama-3 templates emit tool args).
 pub fn configure_jinja_env(env: &mut Environment<'static>) {
     env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
-    let _ = env.add_filter("tojson", |value: MjValue| -> Result<String, minijinja::Error> {
-        serde_json::to_string(&value).map_err(|e| {
-            minijinja::Error::new(
-                minijinja::ErrorKind::InvalidOperation,
-                format!("tojson: {e}"),
-            )
-        })
-    });
+    let _ = env.add_filter(
+        "tojson",
+        |value: MjValue| -> Result<String, minijinja::Error> {
+            serde_json::to_string(&value).map_err(|e| {
+                minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("tojson: {e}"),
+                )
+            })
+        },
+    );
 }
 
 // ── OpenAI message normalisation ───────────────────────────────────────────
@@ -219,8 +216,9 @@ fn openai_message_content_to_plain_string(content: &Value) -> Option<String> {
         Value::String(_) => None,
         Value::Null => Some(String::new()),
         Value::Array(parts) => Some(flatten_openai_content_parts(parts)),
-        Value::Object(block) => content_block_text(block)
-            .or_else(|| serde_json::to_string(content).ok()),
+        Value::Object(block) => {
+            content_block_text(block).or_else(|| serde_json::to_string(content).ok())
+        }
         Value::Number(n) => Some(n.to_string()),
         Value::Bool(b) => Some(b.to_string()),
     }
@@ -378,37 +376,61 @@ mod tests {
         let mut env1 = Environment::new();
         configure_jinja_env(&mut env1);
         let flat_res = apply_chat_template_openai_shape(
-            &mut env1, template.clone(), "gemma4-flat", None,
-            &messages, &flattened, Some(true), None, Some("<bos>"), None,
+            &mut env1,
+            template.clone(),
+            "gemma4-flat",
+            None,
+            &messages,
+            &flattened,
+            Some(true),
+            None,
+            Some("<bos>"),
+            None,
         );
-        assert!(flat_res.is_err(), "flattened tool should raise UndefinedError");
+        assert!(
+            flat_res.is_err(),
+            "flattened tool should raise UndefinedError"
+        );
 
         // Nested (what the engine now produces for Gemma-4) → must render.
         let mut env2 = Environment::new();
         configure_jinja_env(&mut env2);
         let nested_res = apply_chat_template_openai_shape(
-            &mut env2, template, "gemma4-nested", None,
-            &messages, &nested, Some(true), None, Some("<bos>"), None,
+            &mut env2,
+            template,
+            "gemma4-nested",
+            None,
+            &messages,
+            &nested,
+            Some(true),
+            None,
+            Some("<bos>"),
+            None,
         );
         let rendered = nested_res.expect("nested tool must render without error");
-        assert!(rendered.contains("get_weather"), "tool name should appear in render");
-        assert!(rendered.contains("model"), "generation prompt should be present");
+        assert!(
+            rendered.contains("get_weather"),
+            "tool name should appear in render"
+        );
+        assert!(
+            rendered.contains("model"),
+            "generation prompt should be present"
+        );
     }
 
     #[test]
     fn template_mentions_finds_bos() {
-        assert!(template_mentions("{{ bos_token }}{% for m in messages %}", "bos_token"));
+        assert!(template_mentions(
+            "{{ bos_token }}{% for m in messages %}",
+            "bos_token"
+        ));
         assert!(!template_mentions("{% for m in messages %}", "bos_token"));
     }
 
     #[test]
     fn load_chat_template_from_tokenizer_config_extracts_field() {
         let tmp = std::env::temp_dir().join("chat_template_test_tokcfg.json");
-        std::fs::write(
-            &tmp,
-            r#"{"chat_template": "hello {{ messages }}"}"#,
-        )
-        .unwrap();
+        std::fs::write(&tmp, r#"{"chat_template": "hello {{ messages }}"}"#).unwrap();
         let t = load_chat_template_from_tokenizer_config(&tmp).unwrap();
         assert_eq!(t.as_deref(), Some("hello {{ messages }}"));
         let _ = std::fs::remove_file(&tmp);

@@ -73,8 +73,8 @@ use std::{
     str::FromStr,
 };
 
-use minijinja::{context, Environment, Template};
 use minijinja::Value as MjValue;
+use minijinja::{context, Environment, Template};
 use serde::Serialize;
 use serde_json::Value;
 use tokenizers::Encoding;
@@ -84,14 +84,17 @@ use super::error::Error;
 fn register_hf_chat_template_filters(env: &mut Environment<'static>) {
     // HF chat templates (Qwen3, etc.) use Jinja's `tojson` filter for `{{- tool | tojson }}`.
     // Python Jinja provides it; minijinja does not — register a serde_json-backed filter.
-    let _ = env.add_filter("tojson", |value: MjValue| -> Result<String, minijinja::Error> {
-        serde_json::to_string(&value).map_err(|e| {
-            minijinja::Error::new(
-                minijinja::ErrorKind::InvalidOperation,
-                format!("tojson: {e}"),
-            )
-        })
-    });
+    let _ = env.add_filter(
+        "tojson",
+        |value: MjValue| -> Result<String, minijinja::Error> {
+            serde_json::to_string(&value).map_err(|e| {
+                minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("tojson: {e}"),
+                )
+            })
+        },
+    );
 }
 
 /// Wrapper around [`tokenizers::Tokenizer`] and [`minijinja::Environment`]
@@ -603,7 +606,9 @@ fn openai_message_content_to_plain_string(content: &Value) -> Option<String> {
         Value::String(_) => None,
         Value::Null => Some(String::new()),
         Value::Array(parts) => Some(flatten_openai_content_parts(parts)),
-        Value::Object(block) => content_block_text(block).or_else(|| serde_json::to_string(content).ok()),
+        Value::Object(block) => {
+            content_block_text(block).or_else(|| serde_json::to_string(content).ok())
+        }
         Value::Number(n) => Some(n.to_string()),
         Value::Bool(b) => Some(b.to_string()),
     }
@@ -632,10 +637,7 @@ fn content_block_text(block: &serde_json::Map<String, Value>) -> Option<String> 
     match block.get("text") {
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Array(chunks)) => {
-            let joined = chunks
-                .iter()
-                .filter_map(|c| c.as_str())
-                .collect::<String>();
+            let joined = chunks.iter().filter_map(|c| c.as_str()).collect::<String>();
             if joined.is_empty() {
                 None
             } else {

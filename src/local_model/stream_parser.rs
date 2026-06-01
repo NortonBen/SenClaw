@@ -227,10 +227,7 @@ impl ParserConfig {
         let token_str = |v: &Value| -> Option<String> {
             match v {
                 Value::String(s) => Some(s.clone()),
-                Value::Object(o) => o
-                    .get("content")
-                    .and_then(|x| x.as_str())
-                    .map(String::from),
+                Value::Object(o) => o.get("content").and_then(|x| x.as_str()).map(String::from),
                 _ => None,
             }
         };
@@ -253,12 +250,20 @@ impl ParserConfig {
                 std::fs::read_to_string(model_dir.join("chat_template.json"))
                     .ok()
                     .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-                    .and_then(|v| v.get("chat_template").and_then(|x| x.as_str()).map(String::from))
+                    .and_then(|v| {
+                        v.get("chat_template")
+                            .and_then(|x| x.as_str())
+                            .map(String::from)
+                    })
             });
 
         // Markers: explicit role-tokens (Gemma-4 style) → template scan → empty.
         let markers = MarkerSet::from_role_tokens(&tok_cfg)
-            .or_else(|| chat_template.as_deref().map(MarkerSet::detect_from_chat_template))
+            .or_else(|| {
+                chat_template
+                    .as_deref()
+                    .map(MarkerSet::detect_from_chat_template)
+            })
             .unwrap_or_default();
 
         Ok(Self {
@@ -578,8 +583,7 @@ impl LocalStreamParser {
         }
         if let Some((_, c)) = &self.markers.think {
             if marker == c {
-                if let State::InThink(content) =
-                    std::mem::replace(&mut self.state, State::Outside)
+                if let State::InThink(content) = std::mem::replace(&mut self.state, State::Outside)
                 {
                     let trimmed = content.trim();
                     if !trimmed.is_empty() {
@@ -591,8 +595,7 @@ impl LocalStreamParser {
         }
         if let Some((_, c)) = &self.markers.tool_call {
             if marker == c {
-                if let State::InToolCall(body) =
-                    std::mem::replace(&mut self.state, State::Outside)
+                if let State::InToolCall(body) = std::mem::replace(&mut self.state, State::Outside)
                 {
                     if let Some(tc) =
                         parse_tool_call_body(&body, self.markers.tool_call_format, self.tool_idx)
@@ -736,7 +739,10 @@ fn strip_quote(s: &str, markers: &MarkerSet) -> String {
 
 fn split_channel_name(content: &str) -> (String, String) {
     match content.find('\n') {
-        Some(nl) => (content[..nl].trim().to_string(), content[nl + 1..].to_string()),
+        Some(nl) => (
+            content[..nl].trim().to_string(),
+            content[nl + 1..].to_string(),
+        ),
         None => (content.trim().to_string(), String::new()),
     }
 }
@@ -824,7 +830,11 @@ pub fn collapse_events(events: Vec<ParserEvent>) -> (String, String, Vec<Value>)
             ParserEvent::ToolCall(v) => tool_calls.push(v),
         }
     }
-    (visible.trim().to_string(), reasoning.trim().to_string(), tool_calls)
+    (
+        visible.trim().to_string(),
+        reasoning.trim().to_string(),
+        tool_calls,
+    )
 }
 
 /// One-shot convenience using an explicit dialect preset. Prefer
@@ -842,7 +852,10 @@ pub fn parse_complete_with_config(
     parse_complete_with_markers(text, &config.markers)
 }
 
-pub fn parse_complete_with_markers(text: &str, markers: &MarkerSet) -> (String, String, Vec<Value>) {
+pub fn parse_complete_with_markers(
+    text: &str,
+    markers: &MarkerSet,
+) -> (String, String, Vec<Value>) {
     let mut p = LocalStreamParser::new(markers.clone());
     let mut events = p.push(text);
     events.extend(p.finish());
@@ -956,11 +969,17 @@ mod tests {
 
         // Discovered from explicit role-tokens (Gemma-4 declares soc/eoc/stc/etc).
         assert_eq!(
-            cfg.markers.channel.as_ref().map(|(o, c)| (o.as_str(), c.as_str())),
+            cfg.markers
+                .channel
+                .as_ref()
+                .map(|(o, c)| (o.as_str(), c.as_str())),
             Some(("<|channel>", "<channel|>"))
         );
         assert_eq!(
-            cfg.markers.tool_call.as_ref().map(|(o, c)| (o.as_str(), c.as_str())),
+            cfg.markers
+                .tool_call
+                .as_ref()
+                .map(|(o, c)| (o.as_str(), c.as_str())),
             Some(("<|tool_call>", "<tool_call|>"))
         );
         assert_eq!(cfg.markers.quote.as_deref(), Some("<|\"|>"));
@@ -968,7 +987,9 @@ mod tests {
         assert_eq!(cfg.bos_token.as_deref(), Some("<bos>"));
         assert_eq!(cfg.eos_token.as_deref(), Some("<eos>"));
         assert!(
-            cfg.chat_template.as_ref().is_some_and(|t| t.contains("<|channel>")),
+            cfg.chat_template
+                .as_ref()
+                .is_some_and(|t| t.contains("<|channel>")),
             "chat_template should have loaded from chat_template.jinja"
         );
 
@@ -1042,7 +1063,9 @@ mod tests {
             }
         }
         let (vis, reas, tcs) = collapse_events(events);
-        assert!(vis.contains("Some preamble") && vis.contains("Answer text") && vis.contains("end."));
+        assert!(
+            vis.contains("Some preamble") && vis.contains("Answer text") && vis.contains("end.")
+        );
         assert_eq!(reas, "reasoning here");
         let args: Value =
             serde_json::from_str(tcs[0]["function"]["arguments"].as_str().unwrap()).unwrap();
@@ -1079,8 +1102,7 @@ mod tests {
 
     #[test]
     fn unclosed_channel_at_eos_becomes_reasoning() {
-        let (_, reas, _) =
-            parse_complete("<|channel>thought\nhalf finished", LocalDialect::Gemma4);
+        let (_, reas, _) = parse_complete("<|channel>thought\nhalf finished", LocalDialect::Gemma4);
         assert_eq!(reas, "half finished");
     }
 
@@ -1105,8 +1127,17 @@ mod tests {
         // `<|channel>` marker straddles two messages.
         tokio::spawn(async move {
             raw_tx.send("Hi! <|cha".into()).await.unwrap();
-            raw_tx.send("nnel>thought\nReason about gold price.<chan".into()).await.unwrap();
-            raw_tx.send("nel|><|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>".into()).await.unwrap();
+            raw_tx
+                .send("nnel>thought\nReason about gold price.<chan".into())
+                .await
+                .unwrap();
+            raw_tx
+                .send(
+                    "nel|><|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>"
+                        .into(),
+                )
+                .await
+                .unwrap();
         });
 
         let parser = LocalStreamParser::new(MarkerSet::gemma4());
@@ -1251,8 +1282,15 @@ mod tests {
             !reas.contains("<|tool_call>") && !reas.contains("call:Skill"),
             "tool_call leaked into reasoning: {reas:?}"
         );
-        assert!(!vis.contains("call:Skill"), "tool_call leaked into visible: {vis:?}");
-        assert_eq!(tcs.len(), 1, "tool call must be extracted as a separate event");
+        assert!(
+            !vis.contains("call:Skill"),
+            "tool_call leaked into visible: {vis:?}"
+        );
+        assert_eq!(
+            tcs.len(),
+            1,
+            "tool call must be extracted as a separate event"
+        );
         assert_eq!(tcs[0]["function"]["name"], "Skill");
         let args: Value =
             serde_json::from_str(tcs[0]["function"]["arguments"].as_str().unwrap()).unwrap();
@@ -1292,8 +1330,10 @@ mod tests {
     /// Plain answer with no markers — pure visible text.
     #[test]
     fn gemma4_contract_plain_answer_only() {
-        let (vis, reas, tcs) =
-            parse_complete("Chào bạn, giá vàng hôm nay là 75 triệu.", LocalDialect::Gemma4);
+        let (vis, reas, tcs) = parse_complete(
+            "Chào bạn, giá vàng hôm nay là 75 triệu.",
+            LocalDialect::Gemma4,
+        );
         assert_eq!(vis, "Chào bạn, giá vàng hôm nay là 75 triệu.");
         assert!(reas.is_empty());
         assert!(tcs.is_empty());

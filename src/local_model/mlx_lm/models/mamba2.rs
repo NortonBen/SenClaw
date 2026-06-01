@@ -36,8 +36,9 @@ use mlx_rs::{
     module::{Module, Param},
     nn,
     ops::{
-        broadcast_to, concatenate_axis, zeros_dtype,
+        broadcast_to, concatenate_axis,
         indexing::{IndexOp, NewAxis},
+        zeros_dtype,
     },
     quantization::MaybeQuantized,
     Array, Dtype,
@@ -320,10 +321,7 @@ impl SsmScanBackend for SequentialScan {
             // far — not just the last one — because each one references the
             // state snapshot at its timestep. Leaving the earlier outs lazy
             // would force MLX to keep state[0..t] alive through them.
-            if SCAN_EVAL_CHUNK > 0
-                && (t + 1) % SCAN_EVAL_CHUNK == 0
-                && (t + 1) < seq_len
-            {
+            if SCAN_EVAL_CHUNK > 0 && (t + 1) % SCAN_EVAL_CHUNK == 0 && (t + 1) < seq_len {
                 let mut batch: Vec<Array> = outs.iter().cloned().collect();
                 batch.push(state.clone());
                 eval(&batch)?;
@@ -486,11 +484,7 @@ impl Mamba2Mixer {
 
         let z = proj.index((.., .., 0..d_inner));
         let x_bc = proj.index((.., .., d_inner..(d_inner + d_conv_dim)));
-        let dt = proj.index((
-            ..,
-            ..,
-            (d_inner + d_conv_dim)..(d_inner + d_conv_dim + n_h),
-        ));
+        let dt = proj.index((.., .., (d_inner + d_conv_dim)..(d_inner + d_conv_dim + n_h)));
 
         // ---- 2. depthwise causal conv ---------------------------------------
         // Concatenate the rolling conv state (NLC) in front of x_bc, run conv1d,
@@ -530,15 +524,8 @@ impl Mamba2Mixer {
 
         // ---- 4. SSM scan -----------------------------------------------------
         let state_in = cache.ssm_state_or_init(b_size, dtype)?.clone();
-        let (y, state_out) = scan.scan(
-            &x_ssm,
-            &dt,
-            &a,
-            &b_ssm,
-            &c_ssm,
-            self.D.as_ref(),
-            &state_in,
-        )?;
+        let (y, state_out) =
+            scan.scan(&x_ssm, &dt, &a, &b_ssm, &c_ssm, self.D.as_ref(), &state_in)?;
         cache.set_ssm_state(state_out);
         cache.advance(seq_len);
 
@@ -888,7 +875,10 @@ mod tests {
             .scan(&x_a, &dt_a, &a_a, &b_a, &c_a, &d_a, &s_a)
             .expect("scan");
         eval(&[y.clone(), s_out.clone()]).expect("eval");
-        (y.as_slice::<f32>().to_vec(), s_out.as_slice::<f32>().to_vec())
+        (
+            y.as_slice::<f32>().to_vec(),
+            s_out.as_slice::<f32>().to_vec(),
+        )
     }
 
     fn approx_eq(actual: &[f32], expected: &[f32], tol: f32) {
@@ -896,10 +886,7 @@ mod tests {
         for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
             let diff = (a - e).abs();
             let allow = tol * (1.0 + e.abs());
-            assert!(
-                diff <= allow,
-                "elem {i}: |{a} - {e}| = {diff} > {allow}"
-            );
+            assert!(diff <= allow, "elem {i}: |{a} - {e}| = {diff} > {allow}");
         }
     }
 
@@ -918,8 +905,8 @@ mod tests {
         let state_in = vec![0.0; b * h * p * n];
 
         let (y, _) = mlx_scan_collect(
-            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-            b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+            g as i32, n as i32,
         );
         approx_eq(&y, &x, 1e-5);
     }
@@ -939,8 +926,8 @@ mod tests {
         let state_in = vec![1.0; b * h * p * n];
 
         let (y, s_out) = mlx_scan_collect(
-            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-            b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+            g as i32, n as i32,
         );
 
         // After L=3 steps, each state element ≈ 1/8.
@@ -961,7 +948,9 @@ mod tests {
     fn scan_matches_reference_grouped() {
         let (b, l, h, p, g, n) = (1, 5, 4, 3, 2, 2);
         // Deterministic linspace-style fills so failures point at a specific index.
-        let x: Vec<f32> = (0..(b * l * h * p)).map(|i| (i as f32 * 0.013) - 0.2).collect();
+        let x: Vec<f32> = (0..(b * l * h * p))
+            .map(|i| (i as f32 * 0.013) - 0.2)
+            .collect();
         let dt: Vec<f32> = (0..(b * l * h)).map(|i| 0.1 + i as f32 * 0.07).collect();
         let a: Vec<f32> = (0..h).map(|i| -0.3 - 0.1 * i as f32).collect();
         let b_vec: Vec<f32> = (0..(b * l * g * n))
@@ -975,13 +964,11 @@ mod tests {
             .map(|i| 0.02 + i as f32 * 0.003)
             .collect();
 
-        let (y_ref, s_ref) = reference_scan(
-            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-            b, l, h, p, g, n,
-        );
+        let (y_ref, s_ref) =
+            reference_scan(&x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b, l, h, p, g, n);
         let (y_mlx, s_mlx) = mlx_scan_collect(
-            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-            b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+            g as i32, n as i32,
         );
         approx_eq(&y_mlx, &y_ref, 5e-5);
         approx_eq(&s_mlx, &s_ref, 5e-5);
@@ -995,18 +982,20 @@ mod tests {
         let x: Vec<f32> = (0..(b * l * h * p)).map(|i| i as f32 * 0.01).collect();
         let dt = vec![0.5; b * l * h];
         let a = vec![-0.2; h];
-        let b_vec: Vec<f32> = (0..(b * l * g * n)).map(|i| 0.1 + 0.01 * i as f32).collect();
-        let c_vec: Vec<f32> = (0..(b * l * g * n)).map(|i| 0.2 + 0.01 * i as f32).collect();
+        let b_vec: Vec<f32> = (0..(b * l * g * n))
+            .map(|i| 0.1 + 0.01 * i as f32)
+            .collect();
+        let c_vec: Vec<f32> = (0..(b * l * g * n))
+            .map(|i| 0.2 + 0.01 * i as f32)
+            .collect();
         let d = vec![0.0; h];
         let state_in = vec![0.0; b * h * p * n];
 
-        let (y_ref, s_ref) = reference_scan(
-            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-            b, l, h, p, g, n,
-        );
+        let (y_ref, s_ref) =
+            reference_scan(&x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b, l, h, p, g, n);
         let (y_mlx, s_mlx) = mlx_scan_collect(
-            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-            b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+            &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+            g as i32, n as i32,
         );
         assert_eq!(y_mlx.len(), b * l * h * p);
         assert_eq!(s_mlx.len(), b * h * p * n);
@@ -1051,9 +1040,7 @@ pub fn load_mamba2_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
         });
 
     let mut model = if let Some((group_size, bits)) = quant {
-        tracing::info!(
-            "[mamba2] quantizing layers: group_size={group_size}, bits={bits}"
-        );
+        tracing::info!("[mamba2] quantizing layers: group_size={group_size}, bits={bits}");
         // NB: deliberately *no* `m.eval()` here. `nn::quantize` produces
         // lazy `quantize(bf16_zeros)` ops for every `MaybeQuantized<Linear>`.
         // Evaluating them eagerly would materialise all 64 layers' bf16
@@ -1194,9 +1181,7 @@ pub fn load_mamba2_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
                 if let Some(w) = embed_weight {
                     e.weight.value = w;
                 }
-                tracing::info!(
-                    "[mamba2] embeddings (Embedding) populated via direct mutation"
-                );
+                tracing::info!("[mamba2] embeddings (Embedding) populated via direct mutation");
             }
         }
     }
@@ -1221,10 +1206,9 @@ pub fn load_mamba2_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
         );
     }
     if total_loaded == 0 {
-        return Err(Exception::custom(
-            "no safetensor keys matched the Mamba-2 parameter tree",
-        )
-        .into());
+        return Err(
+            Exception::custom("no safetensor keys matched the Mamba-2 parameter tree").into(),
+        );
     }
 
     model.eval()?;

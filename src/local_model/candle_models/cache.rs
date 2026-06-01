@@ -79,10 +79,7 @@ impl KvCache {
 
     /// Number of tokens currently held in the cache (after any eviction).
     pub fn seq_len(&self) -> usize {
-        self.keys
-            .as_ref()
-            .and_then(|t| t.dim(2).ok())
-            .unwrap_or(0)
+        self.keys.as_ref().and_then(|t| t.dim(2).ok()).unwrap_or(0)
     }
 }
 
@@ -136,8 +133,8 @@ mod tests {
         // verify the OLDEST tokens get evicted (not the newest).
         let mut cache = KvCache::with_max(2);
         for step in 0u32..4 {
-            let val = Tensor::full(step as f32, (1usize, 1usize, 1usize, 1usize), &Device::Cpu)
-                .unwrap();
+            let val =
+                Tensor::full(step as f32, (1usize, 1usize, 1usize, 1usize), &Device::Cpu).unwrap();
             cache.append(val.clone(), val).unwrap();
         }
         // After 4 steps with window=2, cache holds steps [2, 3]

@@ -9,13 +9,10 @@
 //! - `RMSNorm` with +1 convention (weights stored as w-1)
 //! - Alternating sliding window / global attention layers
 
-use std::{
-    collections::HashSet,
-    path::Path,
-};
+use std::{collections::HashSet, path::Path};
 
 use mlx_rs::{
-    Array, array,
+    array,
     builder::Builder,
     error::Exception,
     fast,
@@ -23,15 +20,14 @@ use mlx_rs::{
     module::{Module, ModuleParameters, ModuleParametersExt},
     nn, ops,
     quantization::MaybeQuantized,
+    Array,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::super::cache::{KeyValueCache, KvCache, KvFetchResult};
 use super::super::error::Error;
-use super::super::utils::{
-    create_attention_mask, AttentionMask,
-};
+use super::super::utils::{create_attention_mask, AttentionMask};
 
 /// RoPE bypassing the 3‑D reshape in `nn::Rope::forward` (same rationale as mlx‑lm / Higgs).
 fn apply_rope(x: &Array, rope: &nn::Rope, offset: i32) -> Result<Array, Exception> {
@@ -764,15 +760,17 @@ where
 
     type Error = Exception;
 
-    fn forward(&mut self, input: super::qwen3::ModelInput<'_, C>) -> Result<Self::Output, Self::Error> {
+    fn forward(
+        &mut self,
+        input: super::qwen3::ModelInput<'_, C>,
+    ) -> Result<Self::Output, Self::Error> {
         let super::qwen3::ModelInput {
             inputs,
             mask,
             cache,
             rope_offset,
         } = input;
-        let hidden_all =
-            Gemma2CausalLM::forward_hidden(self, inputs, mask, cache, rope_offset)?;
+        let hidden_all = Gemma2CausalLM::forward_hidden(self, inputs, mask, cache, rope_offset)?;
 
         let mut logits = match self.lm_head.as_mut() {
             Some(head) => head.forward(&hidden_all)?,
@@ -806,7 +804,10 @@ where
     }
 
     fn training_mode(&mut self, mode: bool) {
-        <Gemma2Model as Module<Gemma2ModelInput<'_, KvCache>>>::training_mode(&mut self.model, mode);
+        <Gemma2Model as Module<Gemma2ModelInput<'_, KvCache>>>::training_mode(
+            &mut self.model,
+            mode,
+        );
         if let Some(h) = self.lm_head.as_mut() {
             h.training_mode(mode);
         }
@@ -828,7 +829,10 @@ fn fold_eos_token_ids(val: Option<Value>) -> Vec<u32> {
     }
 }
 
-fn merge_eos_bos_tokenizer_fallback(model_dir: &Path, args: &mut Gemma2ModelArgs) -> Result<(), Error> {
+fn merge_eos_bos_tokenizer_fallback(
+    model_dir: &Path,
+    args: &mut Gemma2ModelArgs,
+) -> Result<(), Error> {
     let tok = model_dir.join("tokenizer_config.json");
     let Ok(raw) = std::fs::read_to_string(tok) else {
         return Ok(());
@@ -1093,10 +1097,13 @@ pub fn load_gemma2_model<P: AsRef<Path>>(model_dir: P) -> Result<Gemma2CausalLM,
         );
     }
     if total_loaded == 0 {
-        return Err(Exception::custom("no safetensor keys matched the Gemma-2 parameter tree").into());
+        return Err(
+            Exception::custom("no safetensor keys matched the Gemma-2 parameter tree").into(),
+        );
     }
 
-    apply_rmsnorm_plus_one(&mut model).map_err(|e| Error::Other(format!("RMSNorm +1: {e}").into()))?;
+    apply_rmsnorm_plus_one(&mut model)
+        .map_err(|e| Error::Other(format!("RMSNorm +1: {e}").into()))?;
 
     model
         .eval()

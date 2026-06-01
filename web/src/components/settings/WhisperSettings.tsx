@@ -319,7 +319,7 @@ export const WhisperSettings: React.FC = () => {
           </Button>
         </Space.Compact>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          Repo phải chứa tokenizer.json hoặc nằm trong danh mục có sẵn (mlx-community/whisper-large-v3-turbo).
+          Repo chỉ cần chứa config + weights Whisper. Nếu thiếu tokenizer.json, hệ thống sẽ tự lấy tokenizer từ repo OpenAI Whisper tương ứng.
         </Text>
       </Card>
 

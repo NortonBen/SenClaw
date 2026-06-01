@@ -57,11 +57,7 @@ use mlx_rs::{
     macros::{ModuleParameters, Quantizable},
     module::{Module, Param},
     nn,
-    ops::{
-        arange, concatenate_axis, full,
-        indexing::IndexOp,
-        ones, power,
-    },
+    ops::{arange, concatenate_axis, full, indexing::IndexOp, ones, power},
     quantization::{MaybeQuantized, Quantizable as _},
     Array,
 };
@@ -402,8 +398,14 @@ impl Attention {
         let o_proj = mk_lin(n_heads * head_dim, dim)?;
         let (k_proj, v_proj, k_norm) = if has_kv {
             (
-                Some(MaybeQuantized::Original(mk_lin(dim, n_kv_heads * head_dim)?)),
-                Some(MaybeQuantized::Original(mk_lin(dim, n_kv_heads * head_dim)?)),
+                Some(MaybeQuantized::Original(mk_lin(
+                    dim,
+                    n_kv_heads * head_dim,
+                )?)),
+                Some(MaybeQuantized::Original(mk_lin(
+                    dim,
+                    n_kv_heads * head_dim,
+                )?)),
                 Some(
                     nn::RmsNormBuilder::new(head_dim)
                         .eps(args.rms_norm_eps)
@@ -452,7 +454,9 @@ impl Attention {
         let L = shape[1];
 
         let queries = self.q_proj.forward(x)?;
-        let queries = self.q_norm.forward(&queries.reshape(&[B, L, self.n_heads, -1])?)?;
+        let queries = self
+            .q_norm
+            .forward(&queries.reshape(&[B, L, self.n_heads, -1])?)?;
         let mut queries = queries.transpose_axes(&[0, 2, 1, 3])?;
         queries = self.rope.forward(&queries, rope_offset)?;
 
@@ -543,8 +547,8 @@ impl Mlp {
     }
 
     fn forward(&mut self, x: &Array) -> Result<Array, Exception> {
-        let gated = nn::gelu_approximate(self.gate_proj.forward(x)?)?
-            .multiply(self.up_proj.forward(x)?)?;
+        let gated =
+            nn::gelu_approximate(self.gate_proj.forward(x)?)?.multiply(self.up_proj.forward(x)?)?;
         self.down_proj.forward(&gated)
     }
 }
@@ -590,7 +594,8 @@ impl DecoderLayer {
         let layer_type = &layer_types[layer_idx];
         let self_attn = Attention::new(args, layer_idx, layer_type)?;
 
-        let is_kv_shared = (layer_idx as i32) >= args.first_kv_shared() && args.first_kv_shared() > 0;
+        let is_kv_shared =
+            (layer_idx as i32) >= args.first_kv_shared() && args.first_kv_shared() > 0;
         let use_double_wide = args.use_double_wide_mlp && is_kv_shared;
         let inter = args.intermediate_size * if use_double_wide { 2 } else { 1 };
         let mlp = Mlp::new(args.hidden_size, inter)?;
@@ -605,10 +610,14 @@ impl DecoderLayer {
         let (gate, proj, norm) = if hpl > 0 {
             (
                 Some(MaybeQuantized::Original(
-                    nn::LinearBuilder::new(args.hidden_size, hpl).bias(false).build()?,
+                    nn::LinearBuilder::new(args.hidden_size, hpl)
+                        .bias(false)
+                        .build()?,
                 )),
                 Some(MaybeQuantized::Original(
-                    nn::LinearBuilder::new(hpl, args.hidden_size).bias(false).build()?,
+                    nn::LinearBuilder::new(hpl, args.hidden_size)
+                        .bias(false)
+                        .build()?,
                 )),
                 Some(mk_norm()?),
             )
@@ -643,7 +652,8 @@ impl DecoderLayer {
         // h = x + post_attn(attn(input_norm(x)))
         let normed = self.input_layernorm.forward(x)?;
         let (attn_out, k_full, v_full) =
-            self.self_attn.forward(&normed, mask, cache, shared_kv, rope_offset)?;
+            self.self_attn
+                .forward(&normed, mask, cache, shared_kv, rope_offset)?;
         let h = x.add(&self.post_attention_layernorm.forward(&attn_out)?)?;
 
         // h = h + post_ffn(mlp(pre_ffn(h)))
@@ -728,7 +738,11 @@ impl Gemma4TextModel {
                         .bias(false)
                         .build()?,
                 )),
-                Some(nn::RmsNormBuilder::new(hpl).eps(args.rms_norm_eps).build()?),
+                Some(
+                    nn::RmsNormBuilder::new(hpl)
+                        .eps(args.rms_norm_eps)
+                        .build()?,
+                ),
             )
         } else {
             (None, None, None)
@@ -793,10 +807,9 @@ impl Gemma4TextModel {
         let (b, l) = (shape[0], shape[1]);
 
         // Lookup table contribution.
-        let eple = self
-            .embed_tokens_per_layer
-            .as_mut()
-            .ok_or_else(|| Exception::custom("PLE configured but embed_tokens_per_layer missing"))?;
+        let eple = self.embed_tokens_per_layer.as_mut().ok_or_else(|| {
+            Exception::custom("PLE configured but embed_tokens_per_layer missing")
+        })?;
         let ple = match eple {
             MaybeQuantized::Original(e) => e.forward(inputs)?,
             MaybeQuantized::Quantized(q) => q.forward(inputs)?,
@@ -806,24 +819,20 @@ impl Gemma4TextModel {
             .reshape(&[b, l, n, hpl])?;
 
         // Model-projection contribution.
-        let plmp = self
-            .per_layer_model_projection
-            .as_mut()
-            .ok_or_else(|| Exception::custom("PLE configured but per_layer_model_projection missing"))?;
+        let plmp = self.per_layer_model_projection.as_mut().ok_or_else(|| {
+            Exception::custom("PLE configured but per_layer_model_projection missing")
+        })?;
         let proj = plmp.forward(scaled_emb)?;
         let proj = proj
             .multiply(&array!((self.args.hidden_size as f32).powf(-0.5)))?
             .reshape(&[b, l, n, hpl])?;
-        let norm = self
-            .per_layer_projection_norm
-            .as_mut()
-            .ok_or_else(|| Exception::custom("PLE configured but per_layer_projection_norm missing"))?;
+        let norm = self.per_layer_projection_norm.as_mut().ok_or_else(|| {
+            Exception::custom("PLE configured but per_layer_projection_norm missing")
+        })?;
         let proj = norm.forward(&proj)?;
 
         // Combine: (proj + ple) * 2^-0.5.
-        let combined = proj
-            .add(&ple)?
-            .multiply(&array!(2.0_f32.powf(-0.5)))?;
+        let combined = proj.add(&ple)?.multiply(&array!(2.0_f32.powf(-0.5)))?;
         Ok(Some(combined))
     }
 
@@ -1043,10 +1052,11 @@ pub fn get_gemma4_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, E
     };
     let mut args: ModelArgs = serde_json::from_value(text_obj)?;
 
-    let eos_value = root
-        .get("eos_token_id")
-        .cloned()
-        .or_else(|| root.get("text_config").and_then(|t| t.get("eos_token_id")).cloned());
+    let eos_value = root.get("eos_token_id").cloned().or_else(|| {
+        root.get("text_config")
+            .and_then(|t| t.get("eos_token_id"))
+            .cloned()
+    });
     args.eos_token_ids = match eos_value {
         Some(Value::Number(n)) => n.as_u64().map(|x| vec![x as u32]).unwrap_or_default(),
         Some(Value::Array(arr)) => arr
@@ -1199,7 +1209,8 @@ pub mod parser {
 
         #[test]
         fn parses_simple_tool_call_with_string_arg() {
-            let tc = parse_tool_call_body("call:Skill{skill:<|\"|>agent-browser<|\"|>}", 0).unwrap();
+            let tc =
+                parse_tool_call_body("call:Skill{skill:<|\"|>agent-browser<|\"|>}", 0).unwrap();
             assert_eq!(tc["function"]["name"], "Skill");
             let args: Value =
                 serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
@@ -1208,11 +1219,8 @@ pub mod parser {
 
         #[test]
         fn parses_mixed_typed_args() {
-            let tc = parse_tool_call_body(
-                "call:search{q:<|\"|>vàng<|\"|>,limit:5,fresh:true}",
-                7,
-            )
-            .unwrap();
+            let tc = parse_tool_call_body("call:search{q:<|\"|>vàng<|\"|>,limit:5,fresh:true}", 7)
+                .unwrap();
             assert_eq!(tc["id"], "local_tool_7");
             let args: Value =
                 serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
@@ -1223,11 +1231,7 @@ pub mod parser {
 
         #[test]
         fn parses_nested_object_and_array_args() {
-            let tc = parse_tool_call_body(
-                "call:f{a:{b:1,c:[2,3]},d:<|\"|>x<|\"|>}",
-                0,
-            )
-            .unwrap();
+            let tc = parse_tool_call_body("call:f{a:{b:1,c:[2,3]},d:<|\"|>x<|\"|>}", 0).unwrap();
             let args: Value =
                 serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
             assert_eq!(args["a"]["b"], 1);
@@ -1326,9 +1330,7 @@ impl QuantPlan {
 
         let default = match q {
             Some(qv) => (
-                qv.get("group_size")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(64) as i32,
+                qv.get("group_size").and_then(|v| v.as_i64()).unwrap_or(64) as i32,
                 qv.get("bits").and_then(|v| v.as_i64()).unwrap_or(4) as i32,
             ),
             None => (64, 4),
@@ -1437,25 +1439,45 @@ pub fn apply_per_module_quantization(model: &mut Model, plan: &QuantPlan) -> Res
         quantize_maybe_embedding(eple, "language_model.model.embed_tokens_per_layer", plan)?;
     }
     if let Some(plmp) = model.model.per_layer_model_projection.as_mut() {
-        quantize_maybe_linear(plmp, "language_model.model.per_layer_model_projection", plan)?;
+        quantize_maybe_linear(
+            plmp,
+            "language_model.model.per_layer_model_projection",
+            plan,
+        )?;
     }
 
     // Per-layer modules
     for (i, layer) in model.model.layers.iter_mut().enumerate() {
         let lp = format!("language_model.model.layers.{i}");
         // Attention (k/v/k_norm absent on KV-shared layers — see Attention::new)
-        quantize_maybe_linear(&mut layer.self_attn.q_proj, &format!("{lp}.self_attn.q_proj"), plan)?;
+        quantize_maybe_linear(
+            &mut layer.self_attn.q_proj,
+            &format!("{lp}.self_attn.q_proj"),
+            plan,
+        )?;
         if let Some(k) = layer.self_attn.k_proj.as_mut() {
             quantize_maybe_linear(k, &format!("{lp}.self_attn.k_proj"), plan)?;
         }
         if let Some(v) = layer.self_attn.v_proj.as_mut() {
             quantize_maybe_linear(v, &format!("{lp}.self_attn.v_proj"), plan)?;
         }
-        quantize_maybe_linear(&mut layer.self_attn.o_proj, &format!("{lp}.self_attn.o_proj"), plan)?;
+        quantize_maybe_linear(
+            &mut layer.self_attn.o_proj,
+            &format!("{lp}.self_attn.o_proj"),
+            plan,
+        )?;
         // MLP
-        quantize_maybe_linear(&mut layer.mlp.gate_proj, &format!("{lp}.mlp.gate_proj"), plan)?;
+        quantize_maybe_linear(
+            &mut layer.mlp.gate_proj,
+            &format!("{lp}.mlp.gate_proj"),
+            plan,
+        )?;
         quantize_maybe_linear(&mut layer.mlp.up_proj, &format!("{lp}.mlp.up_proj"), plan)?;
-        quantize_maybe_linear(&mut layer.mlp.down_proj, &format!("{lp}.mlp.down_proj"), plan)?;
+        quantize_maybe_linear(
+            &mut layer.mlp.down_proj,
+            &format!("{lp}.mlp.down_proj"),
+            plan,
+        )?;
         // PLE projections (per-layer-input gate + output projection)
         if let Some(g) = layer.per_layer_input_gate.as_mut() {
             quantize_maybe_linear(g, &format!("{lp}.per_layer_input_gate"), plan)?;
@@ -1529,7 +1551,11 @@ mod tests {
                 }
             }
         });
-        std::fs::write(dir.join("config.json"), serde_json::to_string(&cfg).unwrap()).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1579,9 +1605,18 @@ mod tests {
         assert_eq!(args.head_dim_for("full_attention"), 512);
         assert_eq!(args.head_dim_for("sliding_attention"), 256);
         // RoPE: full = proportional/1e6, sliding = default/1e4.
-        assert_eq!(args.rope_for("full_attention").rope_type.as_deref(), Some("proportional"));
-        assert_eq!(args.rope_for("full_attention").rope_theta, Some(1_000_000.0));
-        assert_eq!(args.rope_for("sliding_attention").rope_theta, Some(10_000.0));
+        assert_eq!(
+            args.rope_for("full_attention").rope_type.as_deref(),
+            Some("proportional")
+        );
+        assert_eq!(
+            args.rope_for("full_attention").rope_theta,
+            Some(1_000_000.0)
+        );
+        assert_eq!(
+            args.rope_for("sliding_attention").rope_theta,
+            Some(10_000.0)
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1608,7 +1643,11 @@ mod tests {
         ];
         let plan_reg = QuantPlan::from_config_and_index(&regular_cfg, regular_keys.into_iter());
         assert_eq!(plan_reg.default, (64, 4));
-        assert_eq!(plan_reg.overrides.len(), 0, "regular has no per-module overrides");
+        assert_eq!(
+            plan_reg.overrides.len(),
+            0,
+            "regular has no per-module overrides"
+        );
         assert_eq!(
             plan_reg.lookup("language_model.model.layers.0.self_attn.q_proj"),
             Some((64, 4)),
@@ -1669,7 +1708,8 @@ mod tests {
 
         // Replicate the routing logic (pure, no MLX needed).
         let mut previous_kvs: Vec<usize> = (0..n).collect();
-        let mut last_of_type: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut last_of_type: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
         for (i, lt) in layer_types.iter().enumerate().take(m) {
             last_of_type.insert(lt.as_str(), i);
         }

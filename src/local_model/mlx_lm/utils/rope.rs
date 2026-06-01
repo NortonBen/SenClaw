@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use mlx_rs::{
-    macros::ModuleParameters,
     builder::Builder,
     error::Exception,
+    macros::ModuleParameters,
     module::Module,
     nn,
     ops::{arange, which},

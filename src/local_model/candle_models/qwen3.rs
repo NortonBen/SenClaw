@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{
-    embedding, linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder,
-};
+use candle_nn::{embedding, linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use serde::Deserialize;
 
 use super::{cache::KvCache, rope::RotaryEmbedding};
@@ -180,11 +178,7 @@ impl DecoderLayer {
         Ok(Self {
             self_attn: Attention::new(cfg, rope, vb.pp("self_attn"))?,
             mlp: Mlp::new(cfg, vb.pp("mlp"))?,
-            input_layernorm: rms_norm(
-                cfg.hidden_size,
-                cfg.rms_norm_eps,
-                vb.pp("input_layernorm"),
-            )?,
+            input_layernorm: rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
             post_attention_layernorm: rms_norm(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -204,7 +198,9 @@ impl DecoderLayer {
             .self_attn
             .forward(&self.input_layernorm.forward(x)?, offset, cache, mask)?;
         let x = x.add(&h)?;
-        let h = self.mlp.forward(&self.post_attention_layernorm.forward(&x)?)?;
+        let h = self
+            .mlp
+            .forward(&self.post_attention_layernorm.forward(&x)?)?;
         x.add(&h)
     }
 }
@@ -238,9 +234,7 @@ impl Qwen3Model {
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, model_vb.pp("embed_tokens"))?;
 
         let layers = (0..cfg.num_hidden_layers)
-            .map(|i| {
-                DecoderLayer::new(cfg, rope.clone(), model_vb.pp(format!("layers.{i}")))
-            })
+            .map(|i| DecoderLayer::new(cfg, rope.clone(), model_vb.pp(format!("layers.{i}"))))
             .collect::<Result<Vec<_>>>()?;
 
         let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, model_vb.pp("norm"))?;

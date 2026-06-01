@@ -237,9 +237,7 @@ mod tests {
 
     #[test]
     fn drop_oldest_middle_refuses_when_single_user_no_system() {
-        let mut msgs: Vec<Value> = vec![
-            serde_json::json!({"role": "user", "content": "u0"}),
-        ];
+        let mut msgs: Vec<Value> = vec![serde_json::json!({"role": "user", "content": "u0"})];
         assert!(!drop_oldest_openai_middle_message(&mut msgs));
         assert_eq!(msgs.len(), 1);
     }

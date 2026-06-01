@@ -178,19 +178,15 @@ impl PrefixCache {
     ///    ~8.8 GB of KV state in the cache.
     /// 3. **Count + byte budget** — fall back to LRU eviction when over
     ///    [`MAX_ENTRIES`] or [`MAX_TOTAL_BYTES`].
-    pub fn store(
-        &mut self,
-        tokens: Vec<u32>,
-        caches: Vec<Option<KvCache>>,
-        rope_offset: usize,
-    ) {
+    pub fn store(&mut self, tokens: Vec<u32>, caches: Vec<Option<KvCache>>, rope_offset: usize) {
         // 1. Drop exact duplicate (will re-insert at front below as LRU touch).
         self.entries.retain(|e| e.tokens != tokens);
         // 2. Semantic eviction: any existing entry whose token list is a
         //    strict prefix of the new one is dominated and can be dropped.
         //    Counts entries removed for logging.
         let before = self.entries.len();
-        self.entries.retain(|e| !is_strict_prefix_of(&e.tokens, &tokens));
+        self.entries
+            .retain(|e| !is_strict_prefix_of(&e.tokens, &tokens));
         let dropped_dominated = before - self.entries.len();
         if dropped_dominated > 0 {
             tracing::debug!(
@@ -372,7 +368,9 @@ mod tests {
         let mut pc = PrefixCache::new();
         for i in 0..(MAX_ENTRIES + 2) {
             // Use DISTINCT (non-prefix) keys so semantic eviction doesn't drop them.
-            let toks: Vec<u32> = std::iter::repeat(i as u32).take(MIN_PREFIX_LEN + 10).collect();
+            let toks: Vec<u32> = std::iter::repeat(i as u32)
+                .take(MIN_PREFIX_LEN + 10)
+                .collect();
             pc.store(toks, vec![], 0);
         }
         assert_eq!(pc.len(), MAX_ENTRIES);

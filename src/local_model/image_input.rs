@@ -70,7 +70,12 @@ impl PreprocessedImage {
     /// `[1, channels, height, width]` — the MLX array shape consumed by the
     /// vision tower's patch embedding.
     pub fn nchw_shape(&self) -> [i32; 4] {
-        [1, self.channels as i32, self.height as i32, self.width as i32]
+        [
+            1,
+            self.channels as i32,
+            self.height as i32,
+            self.width as i32,
+        ]
     }
 }
 

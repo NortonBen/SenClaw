@@ -25,8 +25,7 @@ use super::super::{
     utils::{
         create_attention_mask,
         rope::{initialize_rope, FloatOrString, RopeVariant},
-        scaled_dot_product_attention,
-        AttentionMask,
+        scaled_dot_product_attention, AttentionMask,
     },
 };
 
@@ -180,9 +179,7 @@ where
                 .offset(rope_off)
                 .build()?;
             queries = self.rope.forward(q_input)?;
-            let k_input = nn::RopeInputBuilder::new(&keys)
-                .offset(rope_off)
-                .build()?;
+            let k_input = nn::RopeInputBuilder::new(&keys).offset(rope_off).build()?;
             keys = self.rope.forward(k_input)?;
 
             cache.update_and_fetch(keys, values)?
@@ -200,9 +197,13 @@ where
                 let c = cache
                     .as_mut()
                     .ok_or_else(|| Exception::custom("TurboQuant fetch without cache"))?;
-                if let Some(out) =
-                    c.turboquant_attention(&queries, self.scale, mask, self.n_heads, self.n_kv_heads)?
-                {
+                if let Some(out) = c.turboquant_attention(
+                    &queries,
+                    self.scale,
+                    mask,
+                    self.n_heads,
+                    self.n_kv_heads,
+                )? {
                     out
                 } else {
                     return Err(Exception::custom(

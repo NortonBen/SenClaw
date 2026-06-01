@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { theme } from 'antd';
 import type { GroupInfo, ChatMessage, ToolMessage, AgentState, UsageData, ImageAttachment } from '../types';
 import type { AgentMode } from '../hooks/useWebSocket';
+import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 import { ToolGroupCard } from './ToolGroupCard';
-import { Progress, Space, Tooltip, Typography, Drawer, Badge } from 'antd';
-import { FileTextOutlined } from '@ant-design/icons';
+import { Progress, Space, Tooltip, Typography, Drawer, Badge, message } from 'antd';
+import { AudioMutedOutlined, AudioOutlined, FileTextOutlined, LoadingOutlined } from '@ant-design/icons';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
 import { PlanHistoryPanel } from './PlanHistoryPanel';
 import { useAppContext } from '../contexts/AppContext';
@@ -32,6 +33,34 @@ interface Props {
 
 const PAGE_SIZE = 5;
 
+/** Encode mono Float32 PCM as a 16-bit PCM WAV blob for the Whisper endpoint. */
+function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const write = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i += 1) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  write(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  write(8, 'WAVE');
+  write(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1, offset += 2) {
+    const x = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  }
+  return new Blob([view], { type: 'audio/wav' });
+}
+
 export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion, agentMode, onModeChange }: Props) {
   const { token } = theme.useToken();
   const { ws } = useAppContext();
@@ -39,11 +68,20 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [plansOpen, setPlansOpen]   = useState(false);
+  const [recording, setRecording]   = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [recordElapsed, setRecordElapsed] = useState(0);
   const planCount = (ws.plansByJid[group.jid] ?? []).length;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const bottomRef                   = useRef<HTMLDivElement>(null);
   const scrollRef                   = useRef<HTMLDivElement>(null);
-  const textareaRef                 = useRef<HTMLTextAreaElement>(null);
+  const textareaRef                 = useRef<TextAreaRef>(null);
+  const audioCtxRef                 = useRef<AudioContext | null>(null);
+  const audioProcessorRef           = useRef<ScriptProcessorNode | null>(null);
+  const audioSourceRef              = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioStreamRef              = useRef<MediaStream | null>(null);
+  const audioChunksRef              = useRef<Float32Array[]>([]);
+  const recordTimerRef              = useRef<number | null>(null);
   const prevMessagesLenRef          = useRef(messages.length);
   const prevGroupJidRef             = useRef(group.jid);
   const preserveScrollRef           = useRef<{ prevHeight: number; prevTop: number } | null>(null);
@@ -51,6 +89,21 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   const isProcessing = agentState === 'processing';
   const isPaused     = agentState === 'paused';
   const isActive     = isProcessing || isPaused; // agent has work in progress
+
+  const cleanupRecording = () => {
+    audioProcessorRef.current?.disconnect();
+    audioSourceRef.current?.disconnect();
+    audioStreamRef.current?.getTracks().forEach((t) => t.stop());
+    audioCtxRef.current?.close().catch(() => {});
+    if (recordTimerRef.current) window.clearInterval(recordTimerRef.current);
+    audioProcessorRef.current = null;
+    audioSourceRef.current = null;
+    audioStreamRef.current = null;
+    audioCtxRef.current = null;
+    recordTimerRef.current = null;
+  };
+
+  useEffect(() => cleanupRecording, []);
 
   // Reset pagination when switching groups
   useEffect(() => {
@@ -209,6 +262,81 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           reader.readAsDataURL(file);
         });
     }
+  };
+
+  const transcribeAudio = async (blob: Blob, filename: string) => {
+    setTranscribing(true);
+    try {
+      const fd = new FormData();
+      fd.append('audio', blob, filename);
+      const res = await fetch('/api/whisper/transcribe', { method: 'POST', body: fd });
+      const raw = await res.text();
+      if (!res.ok) {
+        message.error(`Nhận diện thất bại: ${raw}`);
+        return;
+      }
+      const data = JSON.parse(raw) as { text?: string };
+      const text = (data.text ?? '').trim();
+      if (!text) {
+        message.info('Không nhận được văn bản từ bản ghi');
+        return;
+      }
+      setInput((prev) => {
+        const prefix = prev.trimEnd();
+        return prefix ? `${prefix} ${text}` : text;
+      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } catch (e: any) {
+      message.error(`Lỗi nhận diện: ${e?.message ?? e}`);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const startRecording = async () => {
+    if (isProcessing || transcribing) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      audioChunksRef.current = [];
+      processor.onaudioprocess = (e) => {
+        audioChunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      audioCtxRef.current = ctx;
+      audioSourceRef.current = source;
+      audioProcessorRef.current = processor;
+      audioStreamRef.current = stream;
+      setRecordElapsed(0);
+      recordTimerRef.current = window.setInterval(() => setRecordElapsed((s) => s + 1), 1000);
+      setRecording(true);
+    } catch (e: any) {
+      cleanupRecording();
+      message.error(`Không truy cập được micro: ${e?.message ?? e}`);
+    }
+  };
+
+  const stopRecordingAndTranscribe = async () => {
+    const sampleRate = audioCtxRef.current?.sampleRate ?? 48000;
+    const chunks = audioChunksRef.current;
+    cleanupRecording();
+    setRecording(false);
+
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    if (total === 0) {
+      message.warning('Bản ghi rỗng');
+      return;
+    }
+    const merged = new Float32Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    await transcribeAudio(encodeWav(merged, sampleRate), 'chat-recording.wav');
   };
 
   // ── Send / pause / resume single handler ──
@@ -448,6 +576,41 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           actionAriaLabel={actionButtonTitle}
           onPaste={handlePaste}
           onFileSelect={handleFileSelect}
+          textareaRef={textareaRef}
+          renderExtraActions={
+            <Tooltip title={recording ? `Dừng & nhận diện (${recordElapsed}s)` : transcribing ? 'Đang nhận diện…' : 'Ghi âm bằng Whisper'}>
+              <button
+                type="button"
+                onClick={recording ? stopRecordingAndTranscribe : startRecording}
+                disabled={!recording && (isProcessing || transcribing)}
+                className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                style={{
+                  background: recording
+                    ? `${token.colorError}1a`
+                    : transcribing || isProcessing
+                      ? token.colorFillTertiary
+                      : token.colorBgContainer,
+                  color: recording
+                    ? token.colorError
+                    : transcribing || isProcessing
+                      ? token.colorTextTertiary
+                      : token.colorTextSecondary,
+                  border: `1px solid ${recording ? token.colorError : token.colorBorderSecondary}`,
+                  cursor: !recording && (transcribing || isProcessing) ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s ease-in-out',
+                }}
+                aria-label={recording ? 'Stop recording and transcribe' : 'Record voice'}
+              >
+                {transcribing ? (
+                  <LoadingOutlined style={{ fontSize: 16 }} />
+                ) : recording ? (
+                  <AudioMutedOutlined style={{ fontSize: 16 }} />
+                ) : (
+                  <AudioOutlined style={{ fontSize: 16 }} />
+                )}
+              </button>
+            </Tooltip>
+          }
           renderActionIcon={
             isProcessing ? (
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">

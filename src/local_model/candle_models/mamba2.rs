@@ -191,7 +191,7 @@ impl Mamba2Mixer {
         // ── 2. Depthwise conv (ring-buffer update) ──────────────────────────
         let conv_state = &state.conv_states[layer_idx]; // [dc, d_conv-1]
         let window = Tensor::cat(&[conv_state, &xbc.unsqueeze(1)?], 1)?; // [dc, d_conv]
-        // Shift ring buffer: drop oldest slot
+                                                                         // Shift ring buffer: drop oldest slot
         if self.d_conv > 1 {
             state.conv_states[layer_idx] = window.narrow(1, 1, self.d_conv - 1)?.contiguous()?;
         }
@@ -201,8 +201,7 @@ impl Mamba2Mixer {
 
         // ── 3. Split conv output and activate ──────────────────────────────
         let x_ssm = conv_out.narrow(0, 0, self.d_inner)?.silu()?; // [d_inner]
-        let b_flat =
-            conv_out.narrow(0, self.d_inner, self.n_groups * self.d_state)?; // [ng*ds]
+        let b_flat = conv_out.narrow(0, self.d_inner, self.n_groups * self.d_state)?; // [ng*ds]
         let c_flat = conv_out.narrow(
             0,
             self.d_inner + self.n_groups * self.d_state,
@@ -221,7 +220,7 @@ impl Mamba2Mixer {
         // ── 6. Reshape for vectorised SSM update ────────────────────────────
         let x_head = x_ssm.reshape((self.n_heads, self.d_head))?; // [nh, dh]
         let hpg = self.n_heads / self.n_groups; // heads per group
-        // Expand B, C from [ngroups, d_state] → [n_heads, d_state]
+                                                // Expand B, C from [ngroups, d_state] → [n_heads, d_state]
         let b_per = b_flat
             .reshape((self.n_groups, self.d_state))?
             .unsqueeze(1)?
@@ -239,7 +238,7 @@ impl Mamba2Mixer {
         let ssm = state.ssm_states[layer_idx].clone(); // [nh, ds, dh]
         let da3 = da.reshape((self.n_heads, 1usize, 1usize))?; // [nh,1,1]
         let dt3 = dt.reshape((self.n_heads, 1usize, 1usize))?; // [nh,1,1]
-        // outer product B[h] ⊗ x[h]: [nh, ds, 1] × [nh, 1, dh] → via matmul
+                                                               // outer product B[h] ⊗ x[h]: [nh, ds, 1] × [nh, 1, dh] → via matmul
         let b3 = b_per.unsqueeze(2)?; // [nh, ds, 1]
         let x3 = x_head.unsqueeze(1)?; // [nh, 1, dh]
         let outer = b3.matmul(&x3)?; // [nh, ds, dh]
@@ -251,8 +250,9 @@ impl Mamba2Mixer {
         let c3 = c_per.unsqueeze(1)?; // [nh, 1, ds]
         let y = c3.matmul(&new_ssm)?.squeeze(1)?; // [nh, dh]
         let y_flat = y.reshape(self.d_inner)?; // [d_inner]
-        // D skip: D[h] broadcast over each head's d_head outputs
-        let d_exp = self.d_param
+                                               // D skip: D[h] broadcast over each head's d_head outputs
+        let d_exp = self
+            .d_param
             .to_dtype(x_ssm.dtype())?
             .unsqueeze(1)?
             .expand((self.n_heads, self.d_head))?
@@ -283,13 +283,10 @@ impl Mamba2Block {
         })
     }
 
-    fn forward(
-        &self,
-        x: &Tensor,
-        layer_idx: usize,
-        state: &mut Mamba2State,
-    ) -> Result<Tensor> {
-        let delta = self.mixer.forward_token(&self.norm.forward(x)?, layer_idx, state)?;
+    fn forward(&self, x: &Tensor, layer_idx: usize, state: &mut Mamba2State) -> Result<Tensor> {
+        let delta = self
+            .mixer
+            .forward_token(&self.norm.forward(x)?, layer_idx, state)?;
         (x + &delta)
     }
 }

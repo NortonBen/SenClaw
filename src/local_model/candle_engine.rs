@@ -25,7 +25,6 @@
 /// - **Gemma3**: internal KV cache inside the model; `clear_kv_cache()` is
 ///   called at the start of each generation.
 /// - **Mamba1/2**: per-generation `State`/`Mamba2State` allocated fresh.
-
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -44,8 +43,8 @@ use super::{
         mamba2::{Mamba2Config, Mamba2Model, Mamba2State},
         qwen3::{Qwen3Config, Qwen3Model},
     },
-    tokenizer_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer},
     runtime::{LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus},
+    tokenizer_utils::tokenizer::{load_model_chat_template_from_file, Tokenizer},
 };
 
 // Bring candle-transformers model types into scope
@@ -278,7 +277,10 @@ impl LocalModelRuntime for CandleEngine {
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     use super::models::read_model_context_length_from_dir;
 
-    tracing::info!("[local-candle] loading {model_id} from {}", model_dir.display());
+    tracing::info!(
+        "[local-candle] loading {model_id} from {}",
+        model_dir.display()
+    );
 
     let config_str = std::fs::read_to_string(model_dir.join("config.json"))
         .map_err(|e| anyhow::anyhow!("config.json read failed: {e}"))?;
@@ -392,14 +394,8 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
 
 /// Load chat template from the model directory.  For Mamba models (completion-
 /// only) we fall back to a simple turn-based format if no template is found.
-fn load_chat_template(
-    model_dir: &Path,
-    model_id: &str,
-    arch: ModelArch,
-) -> anyhow::Result<String> {
-    if let Some(t) =
-        load_model_chat_template_from_file(&model_dir.join("tokenizer_config.json"))?
-    {
+fn load_chat_template(model_dir: &Path, model_id: &str, arch: ModelArch) -> anyhow::Result<String> {
+    if let Some(t) = load_model_chat_template_from_file(&model_dir.join("tokenizer_config.json"))? {
         return Ok(t);
     }
     if let Ok(t) = std::fs::read_to_string(model_dir.join("chat_template.jinja")) {
@@ -511,9 +507,7 @@ fn select_device() -> anyhow::Result<Device> {
                 tracing::info!("[local-candle] Metal GPU selected (~7 tok/s decode)");
                 return Ok(d);
             }
-            Err(e) => tracing::warn!(
-                "[local-candle] Metal unavailable ({e}), falling back to CPU"
-            ),
+            Err(e) => tracing::warn!("[local-candle] Metal unavailable ({e}), falling back to CPU"),
         }
     }
 
@@ -573,7 +567,7 @@ fn generate_with_cache(
     model_dir: &Path,
     model_id: &str,
     messages: &[Value],
-    _tools: &[Value],  // tools intentionally ignored — local models can't call them
+    _tools: &[Value], // tools intentionally ignored — local models can't call them
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
     let mut guard = loaded
@@ -625,7 +619,7 @@ fn generate_with_cache(
             model_id,
             None,
             &processed_messages,
-            &[],   // no tools — local models can't call them
+            &[], // no tools — local models can't call them
             None,
             Some(true),
             gen_opt.enable_thinking,
@@ -780,7 +774,13 @@ fn generate_transformer(
             .map_err(|e| anyhow::anyhow!("chunk tensor: {e:?}"))?;
         let logits = model
             .forward(&chunk_tensor, chunk_start, &mut caches, is_last)
-            .map_err(|e| anyhow::anyhow!("prefill forward (chunk {}/{}): {e:?}", chunk_idx + 1, n_chunks))?;
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "prefill forward (chunk {}/{}): {e:?}",
+                    chunk_idx + 1,
+                    n_chunks
+                )
+            })?;
         if is_last {
             last_logits = Some(logits);
         }
@@ -905,15 +905,14 @@ fn generate_mamba1(
     t_start: std::time::Instant,
 ) -> anyhow::Result<()> {
     let device = model.dtype(); // dtype, not device — need device from model
-    // Mamba model: forward takes 1D token tensor [1], returns [1, vocab]
+                                // Mamba model: forward takes 1D token tensor [1], returns [1, vocab]
     let dev = mamba_state.hs[0].device().clone();
 
     // Prefill: feed each prompt token through the SSM state
     let mut last_logits: Option<Tensor> = None;
     let prompt_len = prompt.len();
     for &tok in prompt {
-        let tok_t = Tensor::new(&[tok], &dev)
-            .map_err(|e| anyhow::anyhow!("tok tensor: {e:?}"))?;
+        let tok_t = Tensor::new(&[tok], &dev).map_err(|e| anyhow::anyhow!("tok tensor: {e:?}"))?;
         last_logits = Some(
             model
                 .forward(&tok_t, mamba_state)
@@ -1108,8 +1107,8 @@ where
 /// only the last token's logits).
 fn greedy_last(logits: &Tensor) -> candle_core::Result<u32> {
     logits
-        .squeeze(0)?  // [1, vocab]
-        .squeeze(0)?  // [vocab]
+        .squeeze(0)? // [1, vocab]
+        .squeeze(0)? // [vocab]
         .argmax(candle_core::D::Minus1)?
         .to_scalar::<u32>()
 }

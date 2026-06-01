@@ -2,15 +2,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mlx_rs::{
     error::Exception,
-    ops::{concatenate_axis, zeros_dtype},
     ops::indexing::{IndexOp, TryIndexMutOp},
+    ops::{concatenate_axis, zeros_dtype},
     transforms::eval,
     Array, Dtype,
 };
-use turboquant::{
-    attention::QuantizedKVCache,
-    packed::TurboQuantConfig,
-};
+use turboquant::{attention::QuantizedKVCache, packed::TurboQuantConfig};
 
 /// Default TurboQuant activation threshold (tokens before quantizing KV storage).
 ///
@@ -69,9 +66,7 @@ impl KvCache {
     pub fn try_snapshot(&self) -> Option<Self> {
         match self {
             Self::Fp16(c) => Some(Self::Fp16(c.clone())),
-            Self::TurboQuant(c) if !c.is_turbo_active() => {
-                Some(Self::Fp16(c.staging_clone()))
-            }
+            Self::TurboQuant(c) if !c.is_turbo_active() => Some(Self::Fp16(c.staging_clone())),
             Self::TurboQuant(_) => None,
             Self::Mamba1(c) => Some(Self::Mamba1(c.clone())),
             Self::Mamba2(c) => Some(Self::Mamba2(c.clone())),
@@ -132,11 +127,15 @@ impl KvCache {
 
     /// Allocate a Mamba-2 SSM state cache for a single layer.
     pub fn mamba2(conv_dim: i32, d_conv: i32, n_heads: i32, head_dim: i32, d_state: i32) -> Self {
-        Self::Mamba2(Mamba2Cache::new(conv_dim, d_conv, n_heads, head_dim, d_state))
+        Self::Mamba2(Mamba2Cache::new(
+            conv_dim, d_conv, n_heads, head_dim, d_state,
+        ))
     }
 
     pub fn qwen35_linear(conv_dim: i32, d_conv: i32, n_v_heads: i32, d_v: i32, d_k: i32) -> Self {
-        Self::Qwen35Linear(Qwen35LinearCache::new(conv_dim, d_conv, n_v_heads, d_v, d_k))
+        Self::Qwen35Linear(Qwen35LinearCache::new(
+            conv_dim, d_conv, n_v_heads, d_v, d_k,
+        ))
     }
 
     /// Allocate a Mamba-1 SSM state cache for a single layer.
@@ -303,9 +302,7 @@ impl KeyValueCache for KvCache {
         n_kv_heads: i32,
     ) -> Result<Option<Array>, Exception> {
         match self {
-            Self::Fp16(c) => {
-                c.turboquant_attention(queries, scale, mask, n_heads, n_kv_heads)
-            }
+            Self::Fp16(c) => c.turboquant_attention(queries, scale, mask, n_heads, n_kv_heads),
             Self::TurboQuant(c) => {
                 c.turboquant_attention(queries, scale, mask, n_heads, n_kv_heads)
             }
@@ -357,8 +354,7 @@ pub trait KeyValueCache {
 
     fn max_size(&self) -> Option<i32>;
 
-    fn update_and_fetch(&mut self, keys: Array, values: Array)
-        -> Result<KvFetchResult, Exception>;
+    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<KvFetchResult, Exception>;
 
     /// When TurboQuant storage is active, run approximate GQA attention on CPU.
     fn turboquant_attention(
@@ -397,11 +393,7 @@ where
         T::max_size(self)
     }
 
-    fn update_and_fetch(
-        &mut self,
-        keys: Array,
-        values: Array,
-    ) -> Result<KvFetchResult, Exception> {
+    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<KvFetchResult, Exception> {
         T::update_and_fetch(self, keys, values)
     }
 
@@ -533,8 +525,7 @@ impl SteppingKeyValueCache {
         let new_len = self.stored_len.saturating_sub(trim);
         if new_len < self.stored_len {
             if let (Some(k), Some(v)) = (&self.keys, &self.values) {
-                if let (Ok(k2), Ok(v2)) = (slice_axis2(k, 0, new_len), slice_axis2(v, 0, new_len))
-                {
+                if let (Ok(k2), Ok(v2)) = (slice_axis2(k, 0, new_len), slice_axis2(v, 0, new_len)) {
                     self.keys = Some(k2);
                     self.values = Some(v2);
                 }
@@ -554,8 +545,12 @@ impl SteppingKeyValueCache {
     /// snapshot then owns its own compact buffer; the live cache's larger
     /// buffer is no longer pinned by the snapshot's Arc ref.
     pub fn compact_to_stored_len(&mut self) {
-        let Some(k) = self.keys.as_ref() else { return; };
-        let Some(v) = self.values.as_ref() else { return; };
+        let Some(k) = self.keys.as_ref() else {
+            return;
+        };
+        let Some(v) = self.values.as_ref() else {
+            return;
+        };
         let k_shape = k.shape();
         let v_shape = v.shape();
         if k_shape.len() != 4 || v_shape.len() != 4 {
@@ -571,10 +566,18 @@ impl SteppingKeyValueCache {
         new_k_shape[2] = target_t;
         let mut new_v_shape = v_shape.to_vec();
         new_v_shape[2] = target_t;
-        let Ok(empty_k) = zeros_dtype(&new_k_shape, k.dtype()) else { return; };
-        let Ok(empty_v) = zeros_dtype(&new_v_shape, v.dtype()) else { return; };
-        let Ok(stored_k) = slice_axis2(k, 0, target_t) else { return; };
-        let Ok(stored_v) = slice_axis2(v, 0, target_t) else { return; };
+        let Ok(empty_k) = zeros_dtype(&new_k_shape, k.dtype()) else {
+            return;
+        };
+        let Ok(empty_v) = zeros_dtype(&new_v_shape, v.dtype()) else {
+            return;
+        };
+        let Ok(stored_k) = slice_axis2(k, 0, target_t) else {
+            return;
+        };
+        let Ok(stored_v) = slice_axis2(v, 0, target_t) else {
+            return;
+        };
         if let Ok(compact_k) = slice_update_axis2(&empty_k, &stored_k, 0, target_t) {
             if let Ok(compact_v) = slice_update_axis2(&empty_v, &stored_v, 0, target_t) {
                 // Force materialization so the resulting Array owns its
@@ -692,14 +695,9 @@ impl SteppingKeyValueCache {
                     // Pad up to new_cap from stored_len (NOT from cap_now —
                     // we already stripped padding above).
                     let pad_slots = (new_cap - self.stored_len).max(0);
-                    let pad_k = zeros_dtype(
-                        &[b, n_kv_heads, pad_slots, k_head_dim],
-                        keys.dtype(),
-                    )?;
-                    let pad_v = zeros_dtype(
-                        &[b, n_kv_heads, pad_slots, v_head_dim],
-                        values.dtype(),
-                    )?;
+                    let pad_k = zeros_dtype(&[b, n_kv_heads, pad_slots, k_head_dim], keys.dtype())?;
+                    let pad_v =
+                        zeros_dtype(&[b, n_kv_heads, pad_slots, v_head_dim], values.dtype())?;
                     (
                         concatenate_axis(&[trimmed_k, pad_k], 2)?,
                         concatenate_axis(&[trimmed_v, pad_v], 2)?,
@@ -707,14 +705,9 @@ impl SteppingKeyValueCache {
                 }
                 _ => {
                     // First-alloc — no existing buffer to keep.
-                    let fresh_k = zeros_dtype(
-                        &[b, n_kv_heads, new_cap, k_head_dim],
-                        keys.dtype(),
-                    )?;
-                    let fresh_v = zeros_dtype(
-                        &[b, n_kv_heads, new_cap, v_head_dim],
-                        values.dtype(),
-                    )?;
+                    let fresh_k = zeros_dtype(&[b, n_kv_heads, new_cap, k_head_dim], keys.dtype())?;
+                    let fresh_v =
+                        zeros_dtype(&[b, n_kv_heads, new_cap, v_head_dim], values.dtype())?;
                     (fresh_k, fresh_v)
                 }
             };
@@ -764,11 +757,7 @@ impl KeyValueCache for SteppingKeyValueCache {
         self.max_seq_len
     }
 
-    fn update_and_fetch(
-        &mut self,
-        keys: Array,
-        values: Array,
-    ) -> Result<KvFetchResult, Exception> {
+    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<KvFetchResult, Exception> {
         let (k, v) = self.update_dense(&keys, &values)?;
         let (k, v) = materialize_pair(k, v)?;
         Ok(KvFetchResult::Fp16(k, v))
@@ -858,10 +847,7 @@ impl TurboQuantKeyValueCache {
         if self.staging.stored_len < self.activate_at {
             return Ok(());
         }
-        if let (Some(k), Some(v)) = (
-            self.staging.keys.as_ref(),
-            self.staging.values.as_ref(),
-        ) {
+        if let (Some(k), Some(v)) = (self.staging.keys.as_ref(), self.staging.values.as_ref()) {
             let k = slice_axis2(k, 0, self.staging.stored_len)?;
             let v = slice_axis2(v, 0, self.staging.stored_len)?;
             push_kv_arrays(&mut self.tq, 0, &k, &v, self.n_kv_heads)?;
@@ -953,13 +939,11 @@ impl KeyValueCache for TurboQuantKeyValueCache {
         self.staging.max_seq_len
     }
 
-    fn update_and_fetch(
-        &mut self,
-        keys: Array,
-        values: Array,
-    ) -> Result<KvFetchResult, Exception> {
+    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<KvFetchResult, Exception> {
         if !self.active {
-            let out = self.staging.update_and_fetch(keys.clone(), values.clone())?;
+            let out = self
+                .staging
+                .update_and_fetch(keys.clone(), values.clone())?;
             let KvFetchResult::Fp16(k, v) = out else {
                 return Err(Exception::custom("staging must return FP16"));
             };
@@ -988,12 +972,7 @@ impl KeyValueCache for TurboQuantKeyValueCache {
             return Ok(None);
         }
         super::utils::turboquant_attn::turboquant_gqa_attention(
-            queries,
-            self,
-            scale,
-            mask,
-            n_heads,
-            n_kv_heads,
+            queries, self, scale, mask, n_heads, n_kv_heads,
         )
         .map(Some)
     }
@@ -1011,7 +990,9 @@ fn push_kv_arrays(
     let v = values.as_dtype(Dtype::Float32)?;
     let sh = k.shape();
     if sh.len() != 4 {
-        return Err(Exception::custom("push_kv_arrays: keys must be 4D [B,H,T,D]"));
+        return Err(Exception::custom(
+            "push_kv_arrays: keys must be 4D [B,H,T,D]",
+        ));
     }
     let t = sh[2] as usize;
     let h = n_kv_heads as usize;
@@ -1148,8 +1129,12 @@ impl Mamba2Cache {
             n * 2
         }
         let mut total = 0;
-        if let Some(c) = &self.conv_state { total += array_bytes(c); }
-        if let Some(s) = &self.ssm_state { total += array_bytes(s); }
+        if let Some(c) = &self.conv_state {
+            total += array_bytes(c);
+        }
+        if let Some(s) = &self.ssm_state {
+            total += array_bytes(s);
+        }
         total
     }
 }
@@ -1250,8 +1235,12 @@ impl Mamba1Cache {
             n * 2
         }
         let mut total = 0;
-        if let Some(c) = &self.conv_state { total += array_bytes(c); }
-        if let Some(s) = &self.ssm_state { total += array_bytes(s); }
+        if let Some(c) = &self.conv_state {
+            total += array_bytes(c);
+        }
+        if let Some(s) = &self.ssm_state {
+            total += array_bytes(s);
+        }
         total
     }
 }
@@ -1335,8 +1324,12 @@ impl Qwen35LinearCache {
             n * 2
         }
         let mut total = 0;
-        if let Some(c) = &self.conv_state { total += array_bytes(c); }
-        if let Some(s) = &self.ssm_state { total += array_bytes(s); }
+        if let Some(c) = &self.conv_state {
+            total += array_bytes(c);
+        }
+        if let Some(s) = &self.ssm_state {
+            total += array_bytes(s);
+        }
         total
     }
 }

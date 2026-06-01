@@ -103,7 +103,9 @@ pub fn turboquant_gqa_attention(
     let l = shape[2] as usize;
     let d = shape[3] as usize;
     if d != head_dim || h != n_heads {
-        return Err(Exception::custom("turboquant attention: query shape mismatch"));
+        return Err(Exception::custom(
+            "turboquant attention: query shape mismatch",
+        ));
     }
     let q_flat = q.as_slice::<f32>();
 
@@ -124,28 +126,28 @@ pub fn turboquant_gqa_attention(
                 let base = ((bi * h + hi) * l + li) * d;
                 let q_start = ((bi * h + hi) * l + li) * d;
                 let q_vec = &q_flat[q_start..q_start + d];
-                let mut scores =
-                    attention_scores_one_head(tq, layer, kv_h, n_kv_heads, q_vec)?;
+                let mut scores = attention_scores_one_head(tq, layer, kv_h, n_kv_heads, q_vec)?;
                 for s in &mut scores {
                     *s *= scale;
                 }
                 if let Some((ref m_flat, ref m_shape)) = mask_flat {
                     if m_shape.len() == 2 {
                         let cols = m_shape[1] as usize;
-                        let row: Vec<f32> = (0..scores.len())
-                            .map(|ki| m_flat[li * cols + ki])
-                            .collect();
+                        let row: Vec<f32> =
+                            (0..scores.len()).map(|ki| m_flat[li * cols + ki]).collect();
                         apply_mask_row(&mut scores, &row);
                     }
                 }
                 let weights = softmax(&scores);
-                let v_out = weighted_values_one_head(
-                    tq, layer, kv_h, n_kv_heads, head_dim, &weights,
-                )?;
+                let v_out =
+                    weighted_values_one_head(tq, layer, kv_h, n_kv_heads, head_dim, &weights)?;
                 out[base..base + d].copy_from_slice(&v_out);
             }
         }
     }
 
-    Ok(Array::from_slice(&out, &[b as i32, h as i32, l as i32, d as i32]))
+    Ok(Array::from_slice(
+        &out,
+        &[b as i32, h as i32, l as i32, d as i32],
+    ))
 }

@@ -65,7 +65,7 @@ pub struct TelegramBotConfig {
     pub name: Option<String>,
 }
 
-/// Whisper ASR UI settings: selected model (HF repo id) + default language.
+/// Whisper ASR UI settings: selected model id + default language.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhisperSettings {
     #[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]

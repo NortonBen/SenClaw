@@ -22,9 +22,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use super::runtime::{
-    LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus,
-};
+use super::runtime::{LocalModelRuntime, RuntimeEndpoint, RuntimeHealth, RuntimeStatus};
 
 /// Architecture-tagged model handle. The transformer (Qwen3) and SSM (Mamba-2)
 /// paths share a single engine but have wildly different forward signatures,
@@ -101,10 +99,7 @@ impl ModelKind {
     /// Per-arch dispatch into [`ChatTemplateModel::stop_token_ids`]. The
     /// terminator set is config-specific and lives next to each model's `args`
     /// (see the model files in `mlx_lm/models/`); this just routes to it.
-    fn stop_token_ids(
-        &self,
-        tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer,
-    ) -> Vec<u32> {
+    fn stop_token_ids(&self, tokenizer: &super::mlx_lm_utils::tokenizer::Tokenizer) -> Vec<u32> {
         use super::chat_template_openai::ChatTemplateModel;
         match self {
             Self::Qwen3(m) => m.stop_token_ids(tokenizer),
@@ -317,7 +312,11 @@ impl LocalModelRuntime for MlxNativeEngine {
     }
 
     async fn health(&self) -> anyhow::Result<RuntimeHealth> {
-        let status = self.status.lock().map(|g| *g).unwrap_or(RuntimeStatus::Error);
+        let status = self
+            .status
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(RuntimeStatus::Error);
         Ok(RuntimeHealth {
             status,
             message: None,
@@ -385,7 +384,9 @@ impl MlxNativeEngine {
         let kv_bits = self.kv_cache_bits;
 
         let join = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            generate_with_cache(&loaded, &model_dir, &model_id, &messages, &tools, kv_bits, tx)
+            generate_with_cache(
+                &loaded, &model_dir, &model_id, &messages, &tools, kv_bits, tx,
+            )
         });
 
         join.await??;
@@ -629,9 +630,15 @@ fn mlx_log_generate_done(label: &'static str, rss_start: f64, generated_count: u
 fn fmt_bytes(n: usize) -> String {
     const KB: f64 = 1024.0;
     let n = n as f64;
-    if n < KB { return format!("{n:.0} B"); }
-    if n < KB * KB { return format!("{:.0} KB", n / KB); }
-    if n < KB * KB * KB { return format!("{:.1} MB", n / (KB * KB)); }
+    if n < KB {
+        return format!("{n:.0} B");
+    }
+    if n < KB * KB {
+        return format!("{:.0} KB", n / KB);
+    }
+    if n < KB * KB * KB {
+        return format!("{:.1} MB", n / (KB * KB));
+    }
     format!("{:.2} GB", n / (KB * KB * KB))
 }
 
@@ -695,10 +702,7 @@ fn mlx_release_after_turn() {
 /// Load the model's Jinja chat template. Probes `tokenizer_config.json` →
 /// `chat_template.jinja` → arch-specific fallback (Mistral `[INST]` when the
 /// detected arch is Mamba-class and the tokenizer ships `[INST]` tokens).
-fn load_mlx_chat_template(
-    model_dir: &Path,
-    model_id: &str,
-) -> anyhow::Result<Option<String>> {
+fn load_mlx_chat_template(model_dir: &Path, model_id: &str) -> anyhow::Result<Option<String>> {
     let detected = detect_architecture(model_id, model_dir)?;
     super::chat_template_openai::load_chat_template_from_dir(model_dir, model_id, |dir| {
         match detected {
@@ -741,7 +745,8 @@ fn sample_decode_token_id(
     let apply_penalty = repetition_penalty > 1.0 && !recent_decode_ids.is_empty();
     // Fast path: nothing to adjust — sample the raw logits directly.
     if forbidden_ids.is_empty() && !apply_penalty {
-        return mlx_sample(last_logits, temperature).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"));
+        return mlx_sample(last_logits, temperature)
+            .map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"));
     }
     if !forbidden_ids.is_empty() {
         tracing::debug!(
@@ -783,8 +788,12 @@ fn sample_decode_token_id(
             .map_err(|e| anyhow::anyhow!("penalty cmp: {e:?}"))?;
         let scaled = which(
             &positive,
-            &vals.divide(&p).map_err(|e| anyhow::anyhow!("penalty div: {e:?}"))?,
-            &vals.multiply(&p).map_err(|e| anyhow::anyhow!("penalty mul: {e:?}"))?,
+            &vals
+                .divide(&p)
+                .map_err(|e| anyhow::anyhow!("penalty div: {e:?}"))?,
+            &vals
+                .multiply(&p)
+                .map_err(|e| anyhow::anyhow!("penalty mul: {e:?}"))?,
         )
         .map_err(|e| anyhow::anyhow!("penalty select: {e:?}"))?;
         logits = logits
@@ -799,10 +808,7 @@ fn sample_decode_token_id(
     if !forbidden_ids.is_empty() {
         let ids: Vec<i32> = forbidden_ids.iter().map(|&t| t as i32).collect();
         let idx = Array::from_slice(&ids, &[1, ids.len() as i32]);
-        let neg = Array::from_slice(
-            &vec![f32::NEG_INFINITY; ids.len()],
-            &[1, ids.len() as i32],
-        );
+        let neg = Array::from_slice(&vec![f32::NEG_INFINITY; ids.len()], &[1, ids.len() as i32]);
         logits = logits
             .put_along_axis(&idx, &neg, -1)
             .map_err(|e| anyhow::anyhow!("forbidden scatter: {e:?}"))?;
@@ -886,7 +892,7 @@ fn generate_with_cache(
     _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::cache::{eval_all_caches, DEFAULT_TQ_ACTIVATE_AT, KvCache};
+    use super::mlx_lm::cache::{eval_all_caches, KvCache, DEFAULT_TQ_ACTIVATE_AT};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::{async_eval, eval};
     use mlx_rs::Array;
@@ -904,8 +910,7 @@ fn generate_with_cache(
     let n_layers = state.n_layers;
 
     let settings_dir = model_dir.parent().unwrap_or(model_dir);
-    let gen_opt =
-        crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
+    let gen_opt = crate::gateway::ui_server::local_models::load_settings_blocking(settings_dir);
 
     let messages = preprocess_openai_messages_for_mlx(messages);
     let enable_thinking = gen_opt.enable_thinking;
@@ -1208,7 +1213,11 @@ fn generate_with_cache(
                 .map(|_| {
                     Some(if let Some(bits) = tq_bits {
                         KvCache::turboquant_with_max(
-                            bits, head_dim, n_kv_heads, max_kv_tokens, tq_activate_at,
+                            bits,
+                            head_dim,
+                            n_kv_heads,
+                            max_kv_tokens,
+                            tq_activate_at,
                         )
                     } else {
                         KvCache::fp16_with_max(max_kv_tokens)
@@ -1234,7 +1243,11 @@ fn generate_with_cache(
                 .map(|_| {
                     Some(if let Some(bits) = tq_bits {
                         KvCache::turboquant_with_max(
-                            bits, head_dim, n_kv_heads, max_kv_tokens, tq_activate_at,
+                            bits,
+                            head_dim,
+                            n_kv_heads,
+                            max_kv_tokens,
+                            tq_activate_at,
                         )
                     } else {
                         KvCache::fp16_with_max(max_kv_tokens)
@@ -1347,10 +1360,7 @@ fn generate_with_cache(
     let prefix_cache_eligible = tq_bits.is_none()
         && matches!(
             &state.model,
-            ModelKind::Qwen3(_)
-                | ModelKind::Llama(_)
-                | ModelKind::Qwen35(_)
-                | ModelKind::Gemma4(_)
+            ModelKind::Qwen3(_) | ModelKind::Llama(_) | ModelKind::Qwen35(_) | ModelKind::Gemma4(_)
         );
     let mut prefill_start = 0usize;
     if prefix_cache_eligible {
@@ -1429,7 +1439,10 @@ fn generate_with_cache(
         .temperature
         .map(|t| t.clamp(0.0_f32, 4.0_f32))
         .unwrap_or_else(|| match &state.model {
-            ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::Gemma4(_) | ModelKind::BonsaiQ1(_) => 0.65_f32,
+            ModelKind::Gemma2(_)
+            | ModelKind::Gemma3(_)
+            | ModelKind::Gemma4(_)
+            | ModelKind::BonsaiQ1(_) => 0.65_f32,
             ModelKind::Qwen3(_) | ModelKind::Qwen35(_) => {
                 if gen_opt.enable_thinking.unwrap_or(false) {
                     0.6_f32
@@ -1448,7 +1461,10 @@ fn generate_with_cache(
         .repetition_penalty
         .map(|p| p.clamp(1.0_f32, 2.0_f32))
         .unwrap_or_else(|| match &state.model {
-            ModelKind::Gemma2(_) | ModelKind::Gemma3(_) | ModelKind::Gemma4(_) | ModelKind::BonsaiQ1(_) => 1.15_f32,
+            ModelKind::Gemma2(_)
+            | ModelKind::Gemma3(_)
+            | ModelKind::Gemma4(_)
+            | ModelKind::BonsaiQ1(_) => 1.15_f32,
             ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_)
                 if decode_temperature == 0.0_f32 =>
             {
@@ -1465,11 +1481,11 @@ fn generate_with_cache(
     // parser receives unclosed JSON.
     const QWEN3_TOOL_CALL_OPEN: u32 = 151_657;
     const QWEN3_TOOL_CALL_CLOSE: u32 = 151_658;
-    const QWEN3_STOP_TOKENS_TO_MASK: &[u32] = &[151_645 /* <|im_end|> */, 151_643 /* <|endoftext|> */];
-    let qwen3_family = matches!(
-        &state.model,
-        ModelKind::Qwen3(_) | ModelKind::Qwen35(_)
-    );
+    const QWEN3_STOP_TOKENS_TO_MASK: &[u32] = &[
+        151_645, /* <|im_end|> */
+        151_643, /* <|endoftext|> */
+    ];
+    let qwen3_family = matches!(&state.model, ModelKind::Qwen3(_) | ModelKind::Qwen35(_));
     let mut inside_tool_call = false;
 
     let max_tokens: usize = max_new_tokens;
@@ -1760,11 +1776,7 @@ fn generate_with_cache(
         forbidden_now,
     )?;
     let first_id = next_token.item::<u32>();
-    mlx_recent_decode_push(
-        &mut recent_decode_ids,
-        first_id,
-        MLX_REPEN_DECODE_WINDOW,
-    );
+    mlx_recent_decode_push(&mut recent_decode_ids, first_id, MLX_REPEN_DECODE_WINDOW);
     // Track tool-call open/close so subsequent decode steps can mask stops.
     if qwen3_family {
         if first_id == QWEN3_TOOL_CALL_OPEN {
@@ -1859,19 +1871,39 @@ fn generate_with_cache(
         ($inputs:expr) => {
             match &mut state.model {
                 ModelKind::Qwen3(m) => m
-                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .forward(ModelInput {
+                        inputs: $inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    })
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Qwen35(m) => m
                     .forward($inputs, &mut cache, rope_offset)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Llama(m) => m
-                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .forward(ModelInput {
+                        inputs: $inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    })
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Gemma2(m) => m
-                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .forward(ModelInput {
+                        inputs: $inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    })
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Gemma3(m) => m
-                    .forward(ModelInput { inputs: $inputs, mask: None, cache: &mut cache, rope_offset })
+                    .forward(ModelInput {
+                        inputs: $inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    })
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Gemma4(m) => m
                     .forward($inputs, &mut cache, rope_offset)
@@ -2060,137 +2092,133 @@ fn generate_with_cache(
             }
         }
     } else if !pipeline_decode {
-    for _step in 1..max_tokens {
-        if hit_stop {
-            break;
-        }
-        let inputs = next_token
-            .reshape(&[1, 1])
-            .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
-        let logits = match &mut state.model {
-            ModelKind::Qwen3(m) => {
-                let decode_input = ModelInput {
-                    inputs: &inputs,
-                    mask: None,
-                    cache: &mut cache,
-                    rope_offset,
-                };
-                m.forward(decode_input)
-                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
+        for _step in 1..max_tokens {
+            if hit_stop {
+                break;
             }
-            ModelKind::Qwen35(m) => m
-                .forward(&inputs, &mut cache, rope_offset)
-                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
-            ModelKind::Llama(m) => {
-                let decode_input = ModelInput {
-                    inputs: &inputs,
-                    mask: None,
-                    cache: &mut cache,
-                    rope_offset,
-                };
-                m.forward(decode_input)
-                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
-            }
-            ModelKind::Gemma2(m) => {
-                let decode_input = ModelInput {
-                    inputs: &inputs,
-                    mask: None,
-                    cache: &mut cache,
-                    rope_offset,
-                };
-                m.forward(decode_input)
-                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
-            }
-            ModelKind::Gemma3(m) => {
-                let decode_input = ModelInput {
-                    inputs: &inputs,
-                    mask: None,
-                    cache: &mut cache,
-                    rope_offset,
-                };
-                m.forward(decode_input)
-                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
-            }
-            ModelKind::Gemma4(m) => m
-                .forward(&inputs, &mut cache, rope_offset)
-                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
-            ModelKind::Mamba2(m) => m
-                .forward(&inputs, &mut cache, &scan)
-                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
-            ModelKind::FalconMamba(m) => m
-                .forward(&inputs, &mut cache)
-                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
-            ModelKind::BonsaiQ1(b) => b
-                .gpu
-                .forward_all_logits_native(&inputs, &mut cache, rope_offset)
-                .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
-        };
-        rope_offset += 1;
-        // Single sync per decode step: `y.item()` below transitively forces
-        // the whole graph (forward → cache update → logits index → sample).
-        // Previous code emitted 4 separate eval() calls — each ~5–10 ms of
-        // CPU↔GPU dispatch overhead — capping decode at ~12 tok/s. Folding
-        // them yields ~30–50 % decode speedup on M-series.
-        let last_logits = logits.index((.., -1, ..));
-        let forbidden_now: &[u32] = if qwen3_family && inside_tool_call {
-            QWEN3_STOP_TOKENS_TO_MASK
-        } else {
-            &[]
-        };
-        let y = sample_decode_token_id(
-            &last_logits,
-            decode_temperature,
-            decode_repetition_penalty,
-            &recent_decode_ids,
-            forbidden_now,
-        )?;
-        let token_id = y.item::<u32>();
-        mlx_recent_decode_push(
-            &mut recent_decode_ids,
-            token_id,
-            MLX_REPEN_DECODE_WINDOW,
-        );
-        if qwen3_family {
-            if token_id == QWEN3_TOOL_CALL_OPEN {
-                inside_tool_call = true;
-                tracing::info!(
+            let inputs = next_token
+                .reshape(&[1, 1])
+                .map_err(|e| anyhow::anyhow!("reshape failed: {e:?}"))?;
+            let logits = match &mut state.model {
+                ModelKind::Qwen3(m) => {
+                    let decode_input = ModelInput {
+                        inputs: &inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(decode_input)
+                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
+                }
+                ModelKind::Qwen35(m) => m
+                    .forward(&inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Llama(m) => {
+                    let decode_input = ModelInput {
+                        inputs: &inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(decode_input)
+                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
+                }
+                ModelKind::Gemma2(m) => {
+                    let decode_input = ModelInput {
+                        inputs: &inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(decode_input)
+                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
+                }
+                ModelKind::Gemma3(m) => {
+                    let decode_input = ModelInput {
+                        inputs: &inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(decode_input)
+                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
+                }
+                ModelKind::Gemma4(m) => m
+                    .forward(&inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Mamba2(m) => m
+                    .forward(&inputs, &mut cache, &scan)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::FalconMamba(m) => m
+                    .forward(&inputs, &mut cache)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::BonsaiQ1(b) => b
+                    .gpu
+                    .forward_all_logits_native(&inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+            };
+            rope_offset += 1;
+            // Single sync per decode step: `y.item()` below transitively forces
+            // the whole graph (forward → cache update → logits index → sample).
+            // Previous code emitted 4 separate eval() calls — each ~5–10 ms of
+            // CPU↔GPU dispatch overhead — capping decode at ~12 tok/s. Folding
+            // them yields ~30–50 % decode speedup on M-series.
+            let last_logits = logits.index((.., -1, ..));
+            let forbidden_now: &[u32] = if qwen3_family && inside_tool_call {
+                QWEN3_STOP_TOKENS_TO_MASK
+            } else {
+                &[]
+            };
+            let y = sample_decode_token_id(
+                &last_logits,
+                decode_temperature,
+                decode_repetition_penalty,
+                &recent_decode_ids,
+                forbidden_now,
+            )?;
+            let token_id = y.item::<u32>();
+            mlx_recent_decode_push(&mut recent_decode_ids, token_id, MLX_REPEN_DECODE_WINDOW);
+            if qwen3_family {
+                if token_id == QWEN3_TOOL_CALL_OPEN {
+                    inside_tool_call = true;
+                    tracing::info!(
                     "[local-mlx-native] tool_call OPEN at step {} (token 151657) — masking stops",
                     generated_count
                 );
-            } else if token_id == QWEN3_TOOL_CALL_CLOSE {
-                inside_tool_call = false;
-                tracing::info!(
+                } else if token_id == QWEN3_TOOL_CALL_CLOSE {
+                    inside_tool_call = false;
+                    tracing::info!(
                     "[local-mlx-native] tool_call CLOSE at step {} (token 151658) — un-masking stops",
                     generated_count
                 );
+                }
             }
-        }
-        next_token = y;
+            next_token = y;
 
-        if is_stop(token_id) {
-            if inside_tool_call {
-                // Should not happen if logit masking is active. Loud diagnostic so
-                // we can tell whether the binary actually has the mask applied vs.
-                // some other path emitting a stop token mid tool_call.
-                tracing::error!(
-                    "[local-mlx-native] STOP TOKEN {} emitted INSIDE <tool_call> at step {}. \
+            if is_stop(token_id) {
+                if inside_tool_call {
+                    // Should not happen if logit masking is active. Loud diagnostic so
+                    // we can tell whether the binary actually has the mask applied vs.
+                    // some other path emitting a stop token mid tool_call.
+                    tracing::error!(
+                        "[local-mlx-native] STOP TOKEN {} emitted INSIDE <tool_call> at step {}. \
                      Mask must have failed — verify forbidden_ids was non-empty for this step.",
-                    token_id,
-                    generated_count,
-                );
+                        token_id,
+                        generated_count,
+                    );
+                }
+                hit_stop = true;
+                break;
             }
-            hit_stop = true;
-            break;
-        }
-        buffer.push(next_token.clone());
-        generated_count += 1;
+            buffer.push(next_token.clone());
+            generated_count += 1;
 
-        let should_flush = buffer.len() >= 20;
-        if should_flush {
-            eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
-            if generated_count <= 20 {
-                let (ma, mc, _) = mlx_mem_mib();
-                tracing::info!(
+            let should_flush = buffer.len() >= 20;
+            if should_flush {
+                eval(&buffer).map_err(|e| anyhow::anyhow!("eval failed: {e:?}"))?;
+                if generated_count <= 20 {
+                    let (ma, mc, _) = mlx_mem_mib();
+                    tracing::info!(
                     "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
                     generated_count,
                     rss_mib(),
@@ -2198,49 +2226,49 @@ fn generate_with_cache(
                     ma,
                     mc
                 );
-            }
-            let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
-            if generated_count <= 20 {
-                let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
-                tracing::info!(
-                    "[local-mlx-native] first {} token ids: {:?} → {:?}",
-                    slice.len(),
-                    slice,
-                    decoded_preview
-                );
-            }
-            let text = tokenizer
-                .decode(&slice, decode_skip_special)
-                .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
-            if !text.is_empty() && tx.blocking_send(text).is_err() {
-                mlx_release_after_turn();
-                return Ok(());
-            }
-            // Periodic pool flush during long decode. Each forward pass
-            // adds small intermediate buffers (attention scores, MLP
-            // activations) that aren't reclaimed until the next eval
-            // barrier. Without this, decode of 1000+ tokens grows pool by
-            // ~1 GB. The flush is a sync barrier (~10-20 ms) but reclaims
-            // hundreds of MB → net win for long generation.
-            //
-            // Every 5 flushes = every 100 decode tokens. Trade-off:
-            // - Too frequent → wastes time on syncs that have nothing to free.
-            // - Too rare → pool grows; user sees ~1 GB jump mid-decode.
-            if generated_count > 0 && generated_count % 100 == 0 {
-                unsafe {
-                    mlx_sys::mlx_clear_cache();
+                }
+                let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
+                if generated_count <= 20 {
+                    let decoded_preview = tokenizer.decode(&slice, false).unwrap_or_default();
+                    tracing::info!(
+                        "[local-mlx-native] first {} token ids: {:?} → {:?}",
+                        slice.len(),
+                        slice,
+                        decoded_preview
+                    );
+                }
+                let text = tokenizer
+                    .decode(&slice, decode_skip_special)
+                    .map_err(|e| anyhow::anyhow!("decode failed: {e:?}"))?;
+                if !text.is_empty() && tx.blocking_send(text).is_err() {
+                    mlx_release_after_turn();
+                    return Ok(());
+                }
+                // Periodic pool flush during long decode. Each forward pass
+                // adds small intermediate buffers (attention scores, MLP
+                // activations) that aren't reclaimed until the next eval
+                // barrier. Without this, decode of 1000+ tokens grows pool by
+                // ~1 GB. The flush is a sync barrier (~10-20 ms) but reclaims
+                // hundreds of MB → net win for long generation.
+                //
+                // Every 5 flushes = every 100 decode tokens. Trade-off:
+                // - Too frequent → wastes time on syncs that have nothing to free.
+                // - Too rare → pool grows; user sees ~1 GB jump mid-decode.
+                if generated_count > 0 && generated_count % 100 == 0 {
+                    unsafe {
+                        mlx_sys::mlx_clear_cache();
+                    }
                 }
             }
         }
-    }
     } // end synchronous (repetition-penalty) decode path
-    // Flush any tokens still in the buffer regardless of whether we stopped
-    // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
-    // without flushing, which dropped up to the last 19 tokens (buffer flush
-    // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
-    // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
-    // never sees the closing tag and rejects the tool call as "truncated".
-    // The fix here is structural: drain the buffer on every exit path.
+      // Flush any tokens still in the buffer regardless of whether we stopped
+      // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
+      // without flushing, which dropped up to the last 19 tokens (buffer flush
+      // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
+      // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
+      // never sees the closing tag and rejects the tool call as "truncated".
+      // The fix here is structural: drain the buffer on every exit path.
     if !buffer.is_empty() {
         eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
         let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
@@ -2302,8 +2330,8 @@ fn gemma3_safetensors_has_lm_head(model_dir: &Path) -> anyhow::Result<bool> {
     if index.exists() {
         let json = std::fs::read_to_string(&index)
             .map_err(|e| anyhow::anyhow!("read gemma3 index: {e}"))?;
-        let map: super::mlx_lm::models::gemma3::WeightMap = serde_json::from_str(&json)
-            .map_err(|e| anyhow::anyhow!("parse gemma3 index: {e}"))?;
+        let map: super::mlx_lm::models::gemma3::WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse gemma3 index: {e}"))?;
         for raw in map.weight_map.keys() {
             let k = gemma3_loader_strip_prefix(raw);
             if k == "lm_head" || k.starts_with("lm_head.") {
@@ -2374,8 +2402,8 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
     let quant = cfg
         .get("quantization")
         .or_else(|| cfg.get("quantization_config"))
@@ -2403,8 +2431,8 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     if weights_index.exists() {
         let json = std::fs::read_to_string(&weights_index)
             .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
-        let map: super::mlx_lm::models::gemma3::WeightMap = serde_json::from_str(&json)
-            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let map: super::mlx_lm::models::gemma3::WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
         let files: HashSet<&String> = map.weight_map.values().collect();
         for f in files {
             shard_files.push(model_dir.join(f));
@@ -2430,7 +2458,9 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     let mut embed_biases: Option<mlx_rs::Array> = None;
 
     let strip = |key: &str| -> String {
-        key.strip_prefix("language_model.").unwrap_or(key).to_string()
+        key.strip_prefix("language_model.")
+            .unwrap_or(key)
+            .to_string()
     };
 
     let mut unfilled_slots: std::collections::HashSet<String> = {
@@ -2568,8 +2598,8 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
 
     // Per-module quantization plan — handles both uniform 4-bit
     // (`gemma-4-*-it-4bit`) and OptiQ mixed-bit (`gemma-4-*-it-OptiQ-4bit`).
@@ -2581,8 +2611,8 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     let index_keys_owned: Vec<String> = if weights_index.exists() {
         let json = std::fs::read_to_string(&weights_index)
             .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
-        let map: WeightMap = serde_json::from_str(&json)
-            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let map: WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
         map.weight_map.keys().cloned().collect()
     } else {
         // Single-file safetensors — peek at its key list.
@@ -2598,14 +2628,15 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
         loaded.keys().map(|k| k.as_str().to_string()).collect()
     };
 
-    let plan = QuantPlan::from_config_and_index(
-        &cfg,
-        index_keys_owned.iter().map(|s| s.as_str()),
-    );
+    let plan = QuantPlan::from_config_and_index(&cfg, index_keys_owned.iter().map(|s| s.as_str()));
     let is_quant = !plan.quantized_paths.is_empty();
     if is_quant {
         let override_count = plan.overrides.len();
-        let mode = if override_count > 0 { "OptiQ mixed-bit" } else { "uniform" };
+        let mode = if override_count > 0 {
+            "OptiQ mixed-bit"
+        } else {
+            "uniform"
+        };
         tracing::info!(
             "[local-mlx-native] quantizing Gemma-4 ({}): default={}-bit/group{}, {} per-module overrides, {} quantized modules",
             mode,
@@ -2625,8 +2656,8 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     if weights_index.exists() {
         let json = std::fs::read_to_string(&weights_index)
             .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
-        let map: WeightMap = serde_json::from_str(&json)
-            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let map: WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
         let files: HashSet<&String> = map.weight_map.values().collect();
         for f in files {
             shard_files.push(model_dir.join(f));
@@ -2644,7 +2675,9 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
 
     // `language_model.model.X` → `model.X`; `language_model.lm_head.X` → `lm_head.X`.
     let strip = |key: &str| -> String {
-        key.strip_prefix("language_model.").unwrap_or(key).to_string()
+        key.strip_prefix("language_model.")
+            .unwrap_or(key)
+            .to_string()
     };
 
     let mut total_loaded = 0usize;
@@ -2854,8 +2887,7 @@ fn apply_quantized_embedding(
 /// post-load quantization in this build — `mlx-community/mamba2-*` ships bf16).
 fn load_mamba2_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::mamba2::Model> {
     use super::mlx_lm::models::mamba2::load_mamba2_model;
-    load_mamba2_model(model_dir)
-        .map_err(|e| anyhow::anyhow!("load_mamba2_model failed: {e:?}"))
+    load_mamba2_model(model_dir).map_err(|e| anyhow::anyhow!("load_mamba2_model failed: {e:?}"))
 }
 
 /// Load a Falcon-Mamba (Mamba-1) [`Model`]. The loader inside the model module
@@ -2885,8 +2917,8 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
     let quant = cfg.get("quantization").and_then(|q| {
         let g = q.get("group_size")?.as_i64()? as i32;
         let b = q.get("bits")?.as_i64()? as i32;
@@ -2911,8 +2943,8 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
     if weights_index.exists() {
         let json = std::fs::read_to_string(&weights_index)
             .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
-        let map: WeightMap = serde_json::from_str(&json)
-            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let map: WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
         let files: HashSet<&String> = map.weight_map.values().collect();
         for f in files {
             shard_files.push(model_dir.join(f));
@@ -3066,8 +3098,8 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
     let quant = cfg.get("quantization").and_then(|q| {
         let g = q.get("group_size")?.as_i64()? as i32;
         let b = q.get("bits")?.as_i64()? as i32;
@@ -3093,8 +3125,8 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
     if weights_index.exists() {
         let json = std::fs::read_to_string(&weights_index)
             .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
-        let map: WeightMap = serde_json::from_str(&json)
-            .map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let map: WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
         let files: HashSet<&String> = map.weight_map.values().collect();
         for f in files {
             shard_files.push(model_dir.join(f));
@@ -3208,7 +3240,9 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
                 if let Some(w) = embed_weight {
                     e.weight.value = w;
                 }
-                tracing::info!("[local-mlx-native] embed_tokens (Embedding) populated via direct mutation");
+                tracing::info!(
+                    "[local-mlx-native] embed_tokens (Embedding) populated via direct mutation"
+                );
             }
         }
     }
@@ -3382,7 +3416,11 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_installed_errors_when_missing() {
-        let eng = MlxNativeEngine::new(Path::new("/nonexistent/path"), "mlx-community/Qwen3-4B-bf16", None);
+        let eng = MlxNativeEngine::new(
+            Path::new("/nonexistent/path"),
+            "mlx-community/Qwen3-4B-bf16",
+            None,
+        );
         let err = eng.ensure_installed().await.unwrap_err().to_string();
         assert!(err.contains("model directory not found"), "got: {err}");
     }
@@ -3437,9 +3475,10 @@ mod tests {
         let template = load_mlx_chat_template(&dir, model_id)
             .expect("load template")
             .expect("qwen3.5 has a chat template");
-        let mut tok =
-            crate::local_model::mlx_lm_utils::tokenizer::Tokenizer::from_file(dir.join("tokenizer.json"))
-                .expect("load tokenizer");
+        let mut tok = crate::local_model::mlx_lm_utils::tokenizer::Tokenizer::from_file(
+            dir.join("tokenizer.json"),
+        )
+        .expect("load tokenizer");
 
         let msgs = vec![
             serde_json::json!({"role": "user", "content": "giá vàng?"}),
@@ -3454,14 +3493,25 @@ mod tests {
             serde_json::json!({"role": "tool", "tool_call_id": "t0", "content": "results"}),
         ];
 
-        let render = |t: &mut crate::local_model::mlx_lm_utils::tokenizer::Tokenizer, m: &[serde_json::Value]| {
+        let render = |t: &mut crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
+                      m: &[serde_json::Value]| {
             t.apply_chat_template_json_and_encode(
-                template.clone(), model_id, m, &[], Some(true), Some(false), Some(""), Some(""),
+                template.clone(),
+                model_id,
+                m,
+                &[],
+                Some(true),
+                Some(false),
+                Some(""),
+                Some(""),
             )
         };
 
         // Negative control: raw string-args message reproduces the crash.
-        assert!(render(&mut tok, &msgs).is_err(), "expected string-args render to fail (the bug)");
+        assert!(
+            render(&mut tok, &msgs).is_err(),
+            "expected string-args render to fail (the bug)"
+        );
 
         // After preprocess: arguments is an object → template renders.
         let fixed = preprocess_openai_messages_for_mlx(&msgs);
@@ -3485,18 +3535,27 @@ mod tests {
             eprintln!("skip qwen35 stop-token test: model not on disk");
             return;
         }
-        let tok =
-            crate::local_model::mlx_lm_utils::tokenizer::Tokenizer::from_file(dir.join("tokenizer.json"))
-                .expect("tokenizer");
+        let tok = crate::local_model::mlx_lm_utils::tokenizer::Tokenizer::from_file(
+            dir.join("tokenizer.json"),
+        )
+        .expect("tokenizer");
         let im_end = tok.token_to_id("<|im_end|>");
         let endoftext = tok.token_to_id("<|endoftext|>");
         assert_eq!(im_end, Some(248_046), "<|im_end|> must resolve to 248046");
-        assert_eq!(endoftext, Some(248_044), "<|endoftext|> must resolve to 248044");
+        assert_eq!(
+            endoftext,
+            Some(248_044),
+            "<|endoftext|> must resolve to 248044"
+        );
         assert_ne!(im_end, endoftext, "im_end must differ from endoftext");
         // The config eos (the value our stop set previously relied on alone) is
         // endoftext, NOT the chat terminator — proving why im_end must be added.
         let cfg_eos = 248_044u32;
         assert_eq!(endoftext, Some(cfg_eos));
-        assert_ne!(im_end, Some(cfg_eos), "stopping only on config eos would miss <|im_end|>");
+        assert_ne!(
+            im_end,
+            Some(cfg_eos),
+            "stopping only on config eos would miss <|im_end|>"
+        );
     }
 }

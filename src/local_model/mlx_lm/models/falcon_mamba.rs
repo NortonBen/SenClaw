@@ -44,8 +44,9 @@ use mlx_rs::{
     module::{Module, Param},
     nn,
     ops::{
-        concatenate_axis, ones_dtype,
+        concatenate_axis,
         indexing::{IndexOp, NewAxis},
+        ones_dtype,
     },
     quantization::MaybeQuantized,
     Array,
@@ -227,11 +228,7 @@ impl MambaBlock {
             dt_rank + 2 * args.state_size,
             false,
         )?;
-        let dt_proj = super::mamba2::zero_linear_bf16(
-            dt_rank,
-            args.intermediate_size,
-            true,
-        )?;
+        let dt_proj = super::mamba2::zero_linear_bf16(dt_rank, args.intermediate_size, true)?;
         let out_proj = super::mamba2::zero_linear_bf16(
             args.intermediate_size,
             args.hidden_size,
@@ -273,11 +270,7 @@ impl MambaBlock {
     /// `x` is `[B, L, hidden_size]`. The cache is mandatory: prefill passes a
     /// freshly allocated [`Mamba1Cache`] (state lazily zeroed on first use),
     /// decode passes the same cache back unchanged.
-    pub fn forward(
-        &mut self,
-        x: &Array,
-        cache: &mut Mamba1Cache,
-    ) -> Result<Array, Exception> {
+    pub fn forward(&mut self, x: &Array, cache: &mut Mamba1Cache) -> Result<Array, Exception> {
         let shape = x.shape();
         let b_size = shape[0];
         let seq_len = shape[1];
@@ -301,8 +294,7 @@ impl MambaBlock {
 
         // Save trailing (d_conv - 1) tokens for the next step.
         let total_len = x_aug.shape()[1];
-        let new_conv_state =
-            x_aug.index((.., (total_len - (self.d_conv - 1))..total_len, ..));
+        let new_conv_state = x_aug.index((.., (total_len - (self.d_conv - 1))..total_len, ..));
         cache.set_conv_state(new_conv_state);
 
         // ---- 3. SSM scan ---------------------------------------------------
@@ -323,9 +315,7 @@ impl MambaBlock {
             let delta_bc = self.x_proj.forward(&x_t)?;
             let mut delta = delta_bc.index((.., 0..dt_rank));
             let mut b_t = delta_bc.index((.., dt_rank..(dt_rank + d_state)));
-            let mut c_t = delta_bc.index((..,
-                (dt_rank + d_state)..(dt_rank + 2 * d_state),
-            ));
+            let mut c_t = delta_bc.index((.., (dt_rank + d_state)..(dt_rank + 2 * d_state)));
 
             if self.use_bcdt_rms {
                 delta = self.mixer_rms(&delta)?;
@@ -340,7 +330,8 @@ impl MambaBlock {
             //   shape [B, d_inner, d_state]
             let dt_x = delta.multiply(&x_t)?;
             let mut new_state =
-                dt_x.index((.., .., NewAxis)).multiply(&b_t.index((.., NewAxis, ..)))?;
+                dt_x.index((.., .., NewAxis))
+                    .multiply(&b_t.index((.., NewAxis, ..)))?;
 
             if let Some(prev_state) = state.as_ref() {
                 // state * exp(delta[:, :, None] * A[None, :, :])
@@ -617,9 +608,7 @@ pub fn load_falcon_mamba_model(model_dir: impl AsRef<Path>) -> Result<Model, Err
         });
 
     let mut model = if let Some((group_size, bits)) = quant {
-        tracing::info!(
-            "[falcon_mamba] quantizing layers: group_size={group_size}, bits={bits}"
-        );
+        tracing::info!("[falcon_mamba] quantizing layers: group_size={group_size}, bits={bits}");
         // Skip `m.eval()` — see [`super::mamba2::load_mamba2_model`] for why
         // eagerly evaluating the lazy `quantize(bf16_zeros)` ops would blow
         // out RAM only to have the safetensors load overwrite everything.

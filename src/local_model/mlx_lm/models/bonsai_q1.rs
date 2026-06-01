@@ -44,16 +44,15 @@
 use half::f16;
 use std::path::Path;
 
-use mlx_rs::{Array, Dtype, error::Exception, fast, ops};
+use mlx_rs::{error::Exception, fast, ops, Array, Dtype};
 use safetensors::SafeTensors;
 
 use super::super::cache::{KeyValueCache, KvCache, KvFetchResult, SteppingKeyValueCache};
 use super::super::error::Error;
 use super::super::utils::{
-    create_attention_mask,
-    scaled_dot_product_attention,
-    AttentionMask,
+    create_attention_mask, scaled_dot_product_attention,
     yarn::{apply_yarn_rope, compute_yarn_freqs, yarn_get_mscale},
+    AttentionMask,
 };
 
 /// Loads packed Q1 checkpoint and uploads to MLX device memory.
@@ -95,7 +94,9 @@ fn bos_token_id_from_hf_dir(model_dir: &Path) -> Option<u32> {
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    v.get("bos_token_id").and_then(|x| x.as_u64()).map(|x| x as u32)
+    v.get("bos_token_id")
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32)
 }
 
 fn eos_ids_from_hf_dir(model_dir: &Path) -> Result<Vec<u32>, Error> {
@@ -684,8 +685,8 @@ pub fn forward_trunk_free(
 
     let mask = create_attention_mask(&h, cache, rope_off_usize, Some(true))?;
 
-    let heads =
-        i32::try_from(gpu.config.heads).map_err(|_| Exception::custom("bonsai-q1 heads overflows i32"))?;
+    let heads = i32::try_from(gpu.config.heads)
+        .map_err(|_| Exception::custom("bonsai-q1 heads overflows i32"))?;
     let kv_heads = i32::try_from(gpu.config.kv_heads)
         .map_err(|_| Exception::custom("bonsai-q1 kv_heads overflows i32"))?;
     let rms_eps = gpu.config.rms_norm_eps;

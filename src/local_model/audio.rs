@@ -69,8 +69,8 @@ impl MelSpectrogram {
 /// averaging; non-16 kHz audio is resampled with a high-quality sinc filter.
 pub fn load_audio(path: impl AsRef<Path>) -> Result<Vec<f32>> {
     let path = path.as_ref();
-    let (samples, src_hz) = decode_to_mono_f32(path)
-        .with_context(|| format!("decoding audio {}", path.display()))?;
+    let (samples, src_hz) =
+        decode_to_mono_f32(path).with_context(|| format!("decoding audio {}", path.display()))?;
     resample_to_16k(samples, src_hz)
 }
 
@@ -78,7 +78,11 @@ pub fn load_audio(path: impl AsRef<Path>) -> Result<Vec<f32>> {
 ///
 /// `n_mels` must be 80 or 128. `padding` zero-samples are appended on the right
 /// before the STFT (the reference pads to align chunk boundaries).
-pub fn log_mel_spectrogram(samples: &[f32], n_mels: usize, padding: usize) -> Result<MelSpectrogram> {
+pub fn log_mel_spectrogram(
+    samples: &[f32],
+    n_mels: usize,
+    padding: usize,
+) -> Result<MelSpectrogram> {
     if n_mels != 80 && n_mels != N_MELS_LARGE_V3 {
         return Err(anyhow!("unsupported n_mels {n_mels} (expected 80 or 128)"));
     }
@@ -143,7 +147,11 @@ pub fn log_mel_spectrogram(samples: &[f32], n_mels: usize, padding: usize) -> Re
         *v = (v.max(floor) + 4.0) / 4.0;
     }
 
-    Ok(MelSpectrogram { data, n_frames, n_mels })
+    Ok(MelSpectrogram {
+        data,
+        n_frames,
+        n_mels,
+    })
 }
 
 /// Decode a file and compute its log-mel spectrogram in one call.
@@ -270,7 +278,12 @@ fn decode_to_mono_f32(path: &Path) -> Result<(Vec<f32>, u32)> {
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .context("unsupported or corrupt audio container")?;
     let mut format = probed.format;
 
@@ -342,8 +355,8 @@ fn resample_to_16k(samples: Vec<f32>, src_hz: u32) -> Result<Vec<f32>> {
         window: WindowFunction::BlackmanHarris2,
     };
     const CHUNK: usize = 1024;
-    let mut resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, CHUNK, 1)
-        .context("constructing resampler")?;
+    let mut resampler =
+        SincFixedIn::<f32>::new(ratio, 2.0, params, CHUNK, 1).context("constructing resampler")?;
 
     let mut out: Vec<f32> = Vec::with_capacity((samples.len() as f64 * ratio) as usize + CHUNK);
     let mut pos = 0;
@@ -420,7 +433,9 @@ mod tests {
     fn normalization_dynamic_range_within_bounds() {
         // 440 Hz tone, 1 s, padded to a full chunk.
         let mut samples: Vec<f32> = (0..SAMPLE_RATE)
-            .map(|n| (2.0 * std::f64::consts::PI * 440.0 * n as f64 / SAMPLE_RATE as f64).sin() as f32)
+            .map(|n| {
+                (2.0 * std::f64::consts::PI * 440.0 * n as f64 / SAMPLE_RATE as f64).sin() as f32
+            })
             .collect();
         pad_or_trim(&mut samples, N_SAMPLES);
         let mel = log_mel_spectrogram(&samples, N_MELS_LARGE_V3, 0).unwrap();
@@ -461,7 +476,10 @@ mod tests {
         for &s in samples {
             buf.extend_from_slice(&s.to_le_bytes());
         }
-        std::fs::File::create(path).unwrap().write_all(&buf).unwrap();
+        std::fs::File::create(path)
+            .unwrap()
+            .write_all(&buf)
+            .unwrap();
     }
 
     fn tone_i16(freq: f64, sr: u32, secs: f64) -> Vec<i16> {
@@ -482,7 +500,11 @@ mod tests {
 
         let pcm = load_audio(&path).unwrap();
         // 0.5 s @ 16 kHz, no resampling → ~8000 samples.
-        assert!((pcm.len() as i64 - 8000).abs() < 16, "got {} samples", pcm.len());
+        assert!(
+            (pcm.len() as i64 - 8000).abs() < 16,
+            "got {} samples",
+            pcm.len()
+        );
         assert!(pcm.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
 
         let mel = file_to_log_mel(&path, N_MELS_LARGE_V3).unwrap();
@@ -510,7 +532,9 @@ mod tests {
         // A pure 1 kHz tone should peak in the mel band whose center is nearest
         // 1 kHz, not at DC or Nyquist.
         let mut samples: Vec<f32> = (0..SAMPLE_RATE)
-            .map(|n| (2.0 * std::f64::consts::PI * 1000.0 * n as f64 / SAMPLE_RATE as f64).sin() as f32)
+            .map(|n| {
+                (2.0 * std::f64::consts::PI * 1000.0 * n as f64 / SAMPLE_RATE as f64).sin() as f32
+            })
             .collect();
         pad_or_trim(&mut samples, N_SAMPLES);
         let mel = log_mel_spectrogram(&samples, N_MELS_LARGE_V3, 0).unwrap();
@@ -532,6 +556,9 @@ mod tests {
             .0;
         // 1 kHz is well below Nyquist (8 kHz); the peak band must be in the
         // lower portion of the 128-band range, and not band 0 (DC).
-        assert!(peak > 0 && peak < n_mels / 2, "peak band {peak} unexpected for 1 kHz");
+        assert!(
+            peak > 0 && peak < n_mels / 2,
+            "peak band {peak} unexpected for 1 kHz"
+        );
     }
 }

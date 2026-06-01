@@ -9,7 +9,7 @@
 
 use std::f32::consts::PI;
 
-use mlx_rs::{Array, error::Exception, fast};
+use mlx_rs::{error::Exception, fast, Array};
 
 #[allow(
     clippy::as_conversions,
@@ -126,8 +126,28 @@ pub(crate) fn apply_yarn_rope(
         x.clone()
     };
     yarn_freqs.map_or_else(
-        || fast::rope(&x_scaled, dim, traditional, base, 1.0, offset, None::<&Array>),
-        |freqs| fast::rope(&x_scaled, dim, traditional, None::<f32>, 1.0, offset, Some(freqs)),
+        || {
+            fast::rope(
+                &x_scaled,
+                dim,
+                traditional,
+                base,
+                1.0,
+                offset,
+                None::<&Array>,
+            )
+        },
+        |freqs| {
+            fast::rope(
+                &x_scaled,
+                dim,
+                traditional,
+                None::<f32>,
+                1.0,
+                offset,
+                Some(freqs),
+            )
+        },
     )
 }
 

@@ -7,15 +7,18 @@
 //! - Non-overlapping 30 s windows concatenated — a word straddling a window
 //!   boundary may be clipped. (Whisper's reference uses overlapped sliding
 //!   windows with previous-text conditioning.)
-//! - Special-token suppression keeps text + `<|endoftext|>` only; the full
-//!   non-speech token blacklist is not applied.
+//! - Special-token and non-speech-token suppression follow Whisper's default
+//!   greedy decode path; no-speech and compression/logprob gates reject common
+//!   silence/noise hallucinations.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use flate2::{write::GzEncoder, Compression};
 use mlx_rs::{ops::indexing::IndexOp, Array, Dtype};
+use std::io::Write;
 
 use super::audio::{self, N_SAMPLES};
 use super::mlx_lm::models::whisper::{load_whisper_model, maybe_causal_mask, WhisperModel};
@@ -33,11 +36,34 @@ const NO_SPEECH_THRESHOLD: f32 = 0.6;
 /// model at all (digital silence / quiet mic noise). Cheap pre-filter.
 const SILENCE_PEAK: f32 = 0.005;
 
+/// RMS floor paired with [`SILENCE_PEAK`]. A single click can exceed the peak
+/// floor while the window is still mostly silence; RMS catches that case.
+const SILENCE_RMS: f32 = 0.0015;
+
 /// If the mean per-token log-probability of a window's transcript is below this,
 /// the output is discarded as a low-confidence hallucination (Whisper's default
 /// `logprob_threshold`). This is what catches "silence → invented YouTube outro"
 /// when the audio sneaks past the energy + no-speech gates.
 const LOGPROB_THRESHOLD: f32 = -1.0;
+
+/// If gzip compression ratio is above this, Whisper treats the decode as too
+/// repetitive. Upstream falls back to higher temperatures; this deterministic
+/// engine rejects the segment instead.
+const COMPRESSION_RATIO_THRESHOLD: f32 = 2.4;
+const VAD_FRAME_MS: usize = 30;
+const VAD_MIN_SPEECH_MS: usize = 350;
+const VAD_PAD_MS: usize = 120;
+const VAD_MERGE_GAP_MS: usize = 250;
+const VAD_ABSOLUTE_RMS: f32 = 0.006;
+const MAX_TEXT_CHARS_PER_SPEECH_SEC: f32 = 18.0;
+const MAX_TOKENS_PER_SPEECH_SEC: f32 = 7.5;
+
+fn whisper_debug_enabled() -> bool {
+    matches!(
+        std::env::var("SENCLAW_WHISPER_DEBUG").as_deref(),
+        Ok("1" | "true" | "TRUE" | "yes" | "YES")
+    )
+}
 
 /// Timing/throughput breakdown for one transcription (for benchmarks).
 #[derive(Debug, Clone, Default)]
@@ -105,8 +131,15 @@ impl WhisperEngine {
     fn ensure_loaded(&self) -> Result<()> {
         let mut guard = self.loaded.lock().unwrap();
         if guard.is_none() {
-            let model = load_whisper_model(&self.model_dir)
-                .with_context(|| format!("loading Whisper model from {}", self.model_dir.display()))?;
+            if whisper_debug_enabled() {
+                eprintln!(
+                    "[whisper-debug] load model dir={}",
+                    self.model_dir.display()
+                );
+            }
+            let model = load_whisper_model(&self.model_dir).with_context(|| {
+                format!("loading Whisper model from {}", self.model_dir.display())
+            })?;
             let tokenizer = WhisperTokenizer::from_file(&self.model_dir)
                 .context("loading Whisper tokenizer.json")?;
             let dtype = model.dtype();
@@ -115,13 +148,20 @@ impl WhisperEngine {
                 tokenizer,
                 dtype,
             });
+            if whisper_debug_enabled() {
+                eprintln!("[whisper-debug] model loaded dtype={dtype:?}");
+            }
         }
         Ok(())
     }
 
     /// Transcribe an audio file. `language` defaults to Vietnamese; pass e.g.
     /// `Some("en")` to force another language.
-    pub fn transcribe_file(&self, path: impl AsRef<Path>, language: Option<&str>) -> Result<String> {
+    pub fn transcribe_file(
+        &self,
+        path: impl AsRef<Path>,
+        language: Option<&str>,
+    ) -> Result<String> {
         let pcm = audio::load_audio(path)?;
         self.transcribe_pcm(&pcm, language)
     }
@@ -147,6 +187,7 @@ impl WhisperEngine {
         pcm: &[f32],
         language: Option<&str>,
     ) -> Result<(String, TranscribeStats)> {
+        let debug = whisper_debug_enabled();
         self.ensure_loaded()?;
         let mut guard = self.loaded.lock().unwrap();
         let Loaded {
@@ -167,6 +208,19 @@ impl WhisperEngine {
             sp.transcribe as i32,
             sp.no_timestamps as i32,
         ];
+        if debug {
+            eprintln!(
+                "[whisper-debug] transcribe start lang={lang} lang_tok={lang_tok} pcm_samples={} audio_secs={:.3} prompt={:?} thresholds={{peak:{:.4},rms:{:.4},no_speech:{:.2},logprob:{:.2},compression:{:.2}}}",
+                pcm.len(),
+                pcm.len() as f32 / audio::SAMPLE_RATE as f32,
+                initial,
+                SILENCE_PEAK,
+                SILENCE_RMS,
+                NO_SPEECH_THRESHOLD,
+                LOGPROB_THRESHOLD,
+                COMPRESSION_RATIO_THRESHOLD,
+            );
+        }
 
         let mut stats = TranscribeStats {
             audio_secs: pcm.len() as f32 / audio::SAMPLE_RATE as f32,
@@ -179,20 +233,54 @@ impl WhisperEngine {
         let mut out = String::new();
         let total = pcm.len().max(1);
         let mut start = 0usize;
+        let mut chunk_idx = 0usize;
         while start < total {
             let end = (start + N_SAMPLES).min(pcm.len());
             let content = &pcm[start..end.max(start)];
             stats.n_chunks += 1;
+            chunk_idx += 1;
+            let chunk_start_sec = start as f32 / audio::SAMPLE_RATE as f32;
+            let chunk_end_sec = end as f32 / audio::SAMPLE_RATE as f32;
 
             // Energy pre-gate: a near-silent window can't contain speech — skip
             // it without running the model (avoids hallucinating text on silence).
             let peak = content.iter().fold(0f32, |m, &x| m.max(x.abs()));
-            if peak < SILENCE_PEAK {
+            let rms = if content.is_empty() {
+                0.0
+            } else {
+                (content.iter().map(|x| x * x).sum::<f32>() / content.len() as f32).sqrt()
+            };
+            if peak < SILENCE_PEAK || rms < SILENCE_RMS {
+                if debug {
+                    eprintln!(
+                        "[whisper-debug] chunk={chunk_idx} range={chunk_start_sec:.2}-{chunk_end_sec:.2}s decision=skip_energy peak={peak:.6} rms={rms:.6}"
+                    );
+                }
                 start += N_SAMPLES;
                 continue;
             }
+            if debug {
+                eprintln!(
+                    "[whisper-debug] chunk={chunk_idx} range={chunk_start_sec:.2}-{chunk_end_sec:.2}s decision=run peak={peak:.6} rms={rms:.6} samples={}",
+                    content.len()
+                );
+            }
 
-            let mut window = content.to_vec();
+            let speech = extract_speech_pcm(content, debug, chunk_idx, chunk_start_sec);
+            if speech.speech_ms < VAD_MIN_SPEECH_MS || speech.pcm.is_empty() {
+                if debug {
+                    eprintln!(
+                        "[whisper-debug] chunk={chunk_idx} decision=skip_vad speech_ms={} segments={}",
+                        speech.speech_ms,
+                        speech.segments.len()
+                    );
+                }
+                start += N_SAMPLES;
+                continue;
+            }
+            let speech_secs = speech.pcm.len() as f32 / audio::SAMPLE_RATE as f32;
+
+            let mut window = speech.pcm;
             audio::pad_or_trim(&mut window, N_SAMPLES);
 
             let t_mel = Instant::now();
@@ -200,20 +288,41 @@ impl WhisperEngine {
             let mel_arr =
                 Array::from_slice(&mel.data, &[1, mel.n_frames as i32, mel.n_mels as i32])
                     .as_dtype(dtype)?;
-            stats.mel_ms += t_mel.elapsed().as_secs_f64() * 1000.0;
+            let chunk_mel_ms = t_mel.elapsed().as_secs_f64() * 1000.0;
+            stats.mel_ms += chunk_mel_ms;
 
             let t_enc = Instant::now();
             let feats = model.encoder.forward(&mel_arr)?;
             feats.eval()?; // force evaluation so the timing is real, not lazy
-            stats.encode_ms += t_enc.elapsed().as_secs_f64() * 1000.0;
+            let chunk_encode_ms = t_enc.elapsed().as_secs_f64() * 1000.0;
+            stats.encode_ms += chunk_encode_ms;
 
             let t_dec = Instant::now();
-            let (text, tokens, nsp, alp) =
-                decode_window(model, tokenizer, &feats, &initial, dtype)?;
-            stats.decode_ms += t_dec.elapsed().as_secs_f64() * 1000.0;
+            let (text, tokens, nsp, alp) = decode_window(
+                model,
+                tokenizer,
+                &feats,
+                &initial,
+                dtype,
+                chunk_idx,
+                chunk_start_sec,
+                chunk_end_sec,
+                speech_secs,
+            )?;
+            let chunk_decode_ms = t_dec.elapsed().as_secs_f64() * 1000.0;
+            stats.decode_ms += chunk_decode_ms;
             stats.tokens += tokens;
             stats.no_speech_prob = stats.no_speech_prob.max(nsp);
             stats.avg_logprob = stats.avg_logprob.min(alp);
+            if debug {
+                eprintln!(
+                    "[whisper-debug] chunk={chunk_idx} timing mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} tokens={tokens} no_speech_prob={nsp:.3} avg_logprob={alp:.3} emitted_chars={}",
+                    chunk_mel_ms,
+                    chunk_encode_ms,
+                    chunk_decode_ms,
+                    text.chars().count()
+                );
+            }
 
             if !text.is_empty() {
                 if !out.is_empty() {
@@ -228,6 +337,20 @@ impl WhisperEngine {
             stats.avg_logprob = 0.0; // no window decoded (all silence)
         }
         stats.total_ms = t_total.elapsed().as_secs_f64() * 1000.0;
+        if debug {
+            eprintln!(
+                "[whisper-debug] transcribe done chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} total_ms={:.1} text={:?}",
+                stats.n_chunks,
+                stats.tokens,
+                stats.no_speech_prob,
+                stats.avg_logprob,
+                stats.mel_ms,
+                stats.encode_ms,
+                stats.decode_ms,
+                stats.total_ms,
+                out
+            );
+        }
         Ok((out, stats))
     }
 }
@@ -240,6 +363,10 @@ fn decode_window(
     feats: &Array,
     initial: &[i32],
     dtype: Dtype,
+    chunk_idx: usize,
+    chunk_start_sec: f32,
+    chunk_end_sec: f32,
+    speech_secs: f32,
 ) -> Result<(String, usize, f32, f32)> {
     let (mut self_caches, mut cross_caches) = model.new_caches();
     let eot = tokenizer.specials().eot;
@@ -258,21 +385,18 @@ fn decode_window(
         &mut cross_caches,
     )?;
 
-    // No-speech gate: if the model strongly flags silence at the SOT position,
-    // emit nothing rather than hallucinating text over silence/noise.
-    let ns = tokenizer.specials().no_speech;
-    let mut no_speech_prob = 0.0f32;
-    if ns != 0 {
-        let sot_row = logits.index((0, 0, ..)).as_dtype(Dtype::Float32)?;
-        sot_row.eval()?;
-        no_speech_prob = softmax_prob(sot_row.as_slice::<f32>(), ns as usize);
-        if no_speech_prob > NO_SPEECH_THRESHOLD {
-            return Ok((String::new(), 0, no_speech_prob, 0.0));
-        }
-    }
-    let debug = std::env::var("SENCLAW_WHISPER_DEBUG").is_ok();
+    let debug = whisper_debug_enabled();
 
     let mut row = last_row_f32(&logits)?;
+    // Capture no-speech probability from the first generated-token row. The
+    // previous SOT-row probe missed confident silence/noise hallucinations
+    // because it read the wrong decoder position after the full prompt.
+    let ns = tokenizer.specials().no_speech;
+    let no_speech_prob = if ns != 0 {
+        softmax_prob(&row, ns as usize)
+    } else {
+        0.0
+    };
     // First sampled position: forbid <|endoftext|> (suppress_blank-ish) so an
     // empty transcript isn't produced immediately.
     let (mut next, mut next_lp) = pick(&row, tokenizer, false);
@@ -280,9 +404,19 @@ fn decode_window(
     let mut text_ids: Vec<u32> = Vec::new();
     let mut logprob_sum = 0.0f32;
     let mut offset = initial.len() as i32;
+    let stop_reason: &'static str;
 
     loop {
-        if next == eot || text_ids.len() >= max_new || offset >= n_text_ctx {
+        if next == eot {
+            stop_reason = "eot";
+            break;
+        }
+        if text_ids.len() >= max_new {
+            stop_reason = "max_new";
+            break;
+        }
+        if offset >= n_text_ctx {
+            stop_reason = "text_ctx";
             break;
         }
         text_ids.push(next);
@@ -305,27 +439,79 @@ fn decode_window(
     }
 
     let n = text_ids.len();
-    let avg_logprob = if n > 0 { logprob_sum / n as f32 } else { 0.0 };
+    let avg_logprob = if n > 0 {
+        // OpenAI divides by generated token count + 1 to include the EOT-ish
+        // terminal step in the confidence estimate.
+        logprob_sum / (n as f32 + 1.0)
+    } else {
+        0.0
+    };
+    let txt = tokenizer.decode(&text_ids).map_err(anyhow::Error::from)?;
+    let compression_ratio = compression_ratio(&txt);
+    let max_chars = max_reasonable_chars(speech_secs);
+    let max_tokens = max_reasonable_tokens(speech_secs);
     if debug {
-        let txt = tokenizer.decode(&text_ids).unwrap_or_default();
         eprintln!(
-            "[whisper-debug] no_speech_prob={no_speech_prob:.3} avg_logprob={avg_logprob:.3} tokens={n} text={txt:?}"
+            "[whisper-debug] chunk={chunk_idx} range={chunk_start_sec:.2}-{chunk_end_sec:.2}s decode stop={stop_reason} no_speech_prob={no_speech_prob:.3} avg_logprob={avg_logprob:.3} compression_ratio={compression_ratio:.3} speech_secs={speech_secs:.2} max_chars={max_chars} max_tokens={max_tokens} tokens={n} text={txt:?}"
         );
     }
-    // Discard degenerate, very-low-confidence output (repetition loops / garbage
-    // run well below this). NOTE: confident common-phrase hallucinations on loud
-    // broadband noise (e.g. "thanks for watching") score like real speech and are
-    // NOT caught here — that needs a real VAD; the energy gate covers the common
-    // case (silence / quiet room tone).
-    if n > 0 && avg_logprob < LOGPROB_THRESHOLD {
+    if no_speech_prob > NO_SPEECH_THRESHOLD && avg_logprob < LOGPROB_THRESHOLD {
+        if debug {
+            eprintln!(
+                "[whisper-debug] chunk={chunk_idx} decision=reject_no_speech no_speech_prob={no_speech_prob:.3}>{NO_SPEECH_THRESHOLD:.3} avg_logprob={avg_logprob:.3}<{LOGPROB_THRESHOLD:.3}"
+            );
+        }
         return Ok((String::new(), n, no_speech_prob, avg_logprob));
     }
-    Ok((
-        tokenizer.decode(&text_ids).map_err(anyhow::Error::from)?,
-        n,
-        no_speech_prob,
-        avg_logprob,
-    ))
+    // Discard degenerate low-confidence or repetitive output. OpenAI uses these
+    // thresholds to trigger temperature fallback; this engine has no fallback
+    // sampler, so rejecting the segment is safer than returning invented text.
+    if n > 0 && avg_logprob < LOGPROB_THRESHOLD {
+        if debug {
+            eprintln!(
+                "[whisper-debug] chunk={chunk_idx} decision=reject_low_logprob avg_logprob={avg_logprob:.3}<{LOGPROB_THRESHOLD:.3}"
+            );
+        }
+        return Ok((String::new(), n, no_speech_prob, avg_logprob));
+    }
+    if n > 0 && compression_ratio > COMPRESSION_RATIO_THRESHOLD {
+        if debug {
+            eprintln!(
+                "[whisper-debug] chunk={chunk_idx} decision=reject_compression compression_ratio={compression_ratio:.3}>{COMPRESSION_RATIO_THRESHOLD:.3}"
+            );
+        }
+        return Ok((String::new(), n, no_speech_prob, avg_logprob));
+    }
+    if n > 0 && txt.chars().count() > max_chars {
+        if debug {
+            eprintln!(
+                "[whisper-debug] chunk={chunk_idx} decision=reject_too_dense_chars chars={} max_chars={} speech_secs={speech_secs:.2}",
+                txt.chars().count(),
+                max_chars
+            );
+        }
+        return Ok((String::new(), n, no_speech_prob, avg_logprob));
+    }
+    if n > max_tokens {
+        if debug {
+            eprintln!(
+                "[whisper-debug] chunk={chunk_idx} decision=reject_too_dense_tokens tokens={n} max_tokens={max_tokens} speech_secs={speech_secs:.2}"
+            );
+        }
+        return Ok((String::new(), n, no_speech_prob, avg_logprob));
+    }
+    if looks_like_common_outro_hallucination(&txt) {
+        if debug {
+            eprintln!(
+                "[whisper-debug] chunk={chunk_idx} decision=reject_common_outro text={txt:?}"
+            );
+        }
+        return Ok((String::new(), n, no_speech_prob, avg_logprob));
+    }
+    if debug {
+        eprintln!("[whisper-debug] chunk={chunk_idx} decision=accept tokens={n}");
+    }
+    Ok((txt, n, no_speech_prob, avg_logprob))
 }
 
 /// Softmax probability of index `idx` over a logit row (numerically stable).
@@ -347,8 +533,9 @@ fn last_row_f32(logits: &Array) -> Result<Vec<f32>> {
     Ok(row.as_slice::<f32>().to_vec())
 }
 
-/// Argmax over `row`, suppressing control tokens. Text tokens (< sot) and, when
-/// `allow_eot`, `<|endoftext|>` are eligible; all other specials are skipped.
+/// Argmax over `row`, suppressing control/non-speech tokens. Text tokens (< sot)
+/// and, when `allow_eot`, `<|endoftext|>` are eligible; all other specials are
+/// skipped.
 /// Returns `(token_id, log_probability)` — the logprob (over the full
 /// distribution) is accumulated to gate low-confidence hallucinations.
 fn pick(row: &[f32], tokenizer: &WhisperTokenizer, allow_eot: bool) -> (u32, f32) {
@@ -357,8 +544,9 @@ fn pick(row: &[f32], tokenizer: &WhisperTokenizer, allow_eot: bool) -> (u32, f32
     let mut best_v = f32::NEG_INFINITY;
     for (i, &v) in row.iter().enumerate() {
         let id = i as u32;
-        let suppressed =
-            (tokenizer.is_special(id) && id != eot) || (!allow_eot && id == eot);
+        let suppressed = tokenizer.is_non_speech(id)
+            || (tokenizer.is_special(id) && id != eot)
+            || (!allow_eot && id == eot);
         if suppressed {
             continue;
         }
@@ -371,6 +559,154 @@ fn pick(row: &[f32], tokenizer: &WhisperTokenizer, allow_eot: bool) -> (u32, f32
     let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let lse = max + row.iter().map(|&x| (x - max).exp()).sum::<f32>().ln();
     (best, best_v - lse)
+}
+
+fn compression_ratio(text: &str) -> f32 {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() {
+        return 0.0;
+    }
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    if encoder.write_all(bytes).is_err() {
+        return 0.0;
+    }
+    match encoder.finish() {
+        Ok(compressed) if !compressed.is_empty() => bytes.len() as f32 / compressed.len() as f32,
+        _ => 0.0,
+    }
+}
+
+#[derive(Debug, Default)]
+struct SpeechExtraction {
+    pcm: Vec<f32>,
+    speech_ms: usize,
+    segments: Vec<(usize, usize)>,
+}
+
+fn extract_speech_pcm(
+    pcm: &[f32],
+    debug: bool,
+    chunk_idx: usize,
+    chunk_start_sec: f32,
+) -> SpeechExtraction {
+    let frame = (audio::SAMPLE_RATE * VAD_FRAME_MS / 1000).max(1);
+    if pcm.len() < frame {
+        return SpeechExtraction::default();
+    }
+
+    let mut rms_values = Vec::new();
+    let mut frames = Vec::new();
+    for (idx, chunk) in pcm.chunks(frame).enumerate() {
+        let start = idx * frame;
+        let end = (start + chunk.len()).min(pcm.len());
+        let (_, rms) = energy(chunk);
+        rms_values.push(rms);
+        frames.push((start, end, rms));
+    }
+
+    let mut sorted = rms_values.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p20_idx = sorted.len() / 5;
+    let noise_floor = sorted.get(p20_idx).copied().unwrap_or(0.0);
+    let threshold = VAD_ABSOLUTE_RMS.max(noise_floor * 4.0);
+    let pad = audio::SAMPLE_RATE * VAD_PAD_MS / 1000;
+    let merge_gap = audio::SAMPLE_RATE * VAD_MERGE_GAP_MS / 1000;
+
+    let mut raw_segments = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut last_end = 0usize;
+    for (start, end, rms) in frames {
+        if rms >= threshold {
+            open.get_or_insert(start);
+            last_end = end;
+        } else if let Some(seg_start) = open.take() {
+            raw_segments.push((
+                seg_start.saturating_sub(pad),
+                (last_end + pad).min(pcm.len()),
+            ));
+        }
+    }
+    if let Some(seg_start) = open {
+        raw_segments.push((
+            seg_start.saturating_sub(pad),
+            (last_end + pad).min(pcm.len()),
+        ));
+    }
+
+    let mut segments: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in raw_segments {
+        if end <= start {
+            continue;
+        }
+        if let Some(last) = segments.last_mut() {
+            if start <= last.1 + merge_gap {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        segments.push((start, end));
+    }
+
+    let speech_samples: usize = segments.iter().map(|(start, end)| end - start).sum();
+    let speech_ms = speech_samples * 1000 / audio::SAMPLE_RATE;
+    let mut speech_pcm = Vec::with_capacity(speech_samples + segments.len() * frame);
+    for (idx, (start, end)) in segments.iter().copied().enumerate() {
+        if idx > 0 {
+            speech_pcm.extend(std::iter::repeat(0.0).take(frame));
+        }
+        speech_pcm.extend_from_slice(&pcm[start..end]);
+    }
+
+    if debug {
+        eprintln!(
+            "[whisper-debug] chunk={chunk_idx} vad noise_floor={noise_floor:.6} threshold={threshold:.6} segments={:?} speech_ms={speech_ms}",
+            segments
+                .iter()
+                .map(|(s, e)| {
+                    (
+                        chunk_start_sec + *s as f32 / audio::SAMPLE_RATE as f32,
+                        chunk_start_sec + *e as f32 / audio::SAMPLE_RATE as f32,
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    SpeechExtraction {
+        pcm: speech_pcm,
+        speech_ms,
+        segments,
+    }
+}
+
+fn energy(pcm: &[f32]) -> (f32, f32) {
+    if pcm.is_empty() {
+        return (0.0, 0.0);
+    }
+    let peak = pcm.iter().fold(0f32, |m, &x| m.max(x.abs()));
+    let rms = (pcm.iter().map(|x| x * x).sum::<f32>() / pcm.len() as f32).sqrt();
+    (peak, rms)
+}
+
+fn max_reasonable_chars(speech_secs: f32) -> usize {
+    ((speech_secs * MAX_TEXT_CHARS_PER_SPEECH_SEC).ceil() as usize + 12).clamp(18, 220)
+}
+
+fn max_reasonable_tokens(speech_secs: f32) -> usize {
+    ((speech_secs * MAX_TOKENS_PER_SPEECH_SEC).ceil() as usize + 3).clamp(6, 80)
+}
+
+fn looks_like_common_outro_hallucination(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("subscribe")
+        || lower.contains("đăng ký")
+        || lower.contains("ghiền mì gõ")
+        || lower.contains("la la school")
+        || lower.contains("không bỏ lỡ")
+        || lower.contains("video hấp dẫn")
+        || lower.contains("cảm ơn các bạn đã theo dõi")
+        || lower.contains("hẹn gặp lại")
+        || lower.contains("thanks for watching")
 }
 
 /// Lowercase, strip punctuation, collapse whitespace → token list. Used by the

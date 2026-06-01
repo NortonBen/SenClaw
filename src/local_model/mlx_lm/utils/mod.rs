@@ -10,8 +10,8 @@ use mlx_rs::{
     Array, Dtype,
 };
 
-pub use super::cache::{QuantizedKeys, QuantizedValues};
 use super::cache::KeyValueCache;
+pub use super::cache::{QuantizedKeys, QuantizedValues};
 
 pub mod rope;
 pub mod tokenizer;

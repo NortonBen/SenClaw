@@ -9,11 +9,7 @@ use mlx_rs::{
     ops::{
         expand_dims,
         indexing::{IndexOp, NewAxis},
-        repeat_axis,
-        sigmoid,
-        stack_axis,
-        sum_axis,
-        zeros_dtype,
+        repeat_axis, sigmoid, stack_axis, sum_axis, zeros_dtype,
     },
     transforms::compile::compile,
     Array, Dtype,
@@ -46,10 +42,12 @@ fn gated_delta_step(
     let delta = v
         .subtract(&kv_mem)?
         .multiply(&beta.index((.., .., NewAxis)))?;
-    state = state.add(
-        &k.index((.., .., NewAxis, ..))
-            .multiply(&delta.index((.., .., .., NewAxis)))?,
-    )?;
+    state = state.add(&k.index((.., .., NewAxis, ..)).multiply(&delta.index((
+        ..,
+        ..,
+        ..,
+        NewAxis,
+    )))?)?;
     let y = sum_axis(&state.multiply(&q.index((.., .., NewAxis, ..)))?, -1, false)?;
     let state = if let Some(mask) = mask {
         let mask = expand_dims(mask, 1)?.expand_dims(2)?.expand_dims(3)?;
@@ -114,8 +112,7 @@ pub fn gated_delta_update(
     if mask.is_none() {
         let mut step = compile(
             |inp: &[Array]| -> Result<Vec<Array>, Exception> {
-                let (q, k, v, g, beta, st) =
-                    (&inp[0], &inp[1], &inp[2], &inp[3], &inp[4], &inp[5]);
+                let (q, k, v, g, beta, st) = (&inp[0], &inp[1], &inp[2], &inp[3], &inp[4], &inp[5]);
                 let decay = if g.shape().len() == 2 {
                     g.index((.., .., NewAxis, NewAxis))
                 } else {
@@ -126,10 +123,12 @@ pub fn gated_delta_update(
                 let delta = v
                     .subtract(&kv_mem)?
                     .multiply(&beta.index((.., .., NewAxis)))?;
-                s = s.add(
-                    &k.index((.., .., NewAxis, ..))
-                        .multiply(&delta.index((.., .., .., NewAxis)))?,
-                )?;
+                s = s.add(&k.index((.., .., NewAxis, ..)).multiply(&delta.index((
+                    ..,
+                    ..,
+                    ..,
+                    NewAxis,
+                )))?)?;
                 let y = sum_axis(&s.multiply(&q.index((.., .., NewAxis, ..)))?, -1, false)?;
                 Ok(vec![y, s])
             },

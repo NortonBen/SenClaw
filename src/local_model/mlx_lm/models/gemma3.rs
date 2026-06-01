@@ -319,7 +319,9 @@ where
             .transpose_axes(&[0, 2, 1, 3])?;
 
         let fetch = if let Some(cache) = cache.as_mut() {
-            let q_input = nn::RopeInputBuilder::new(&queries).offset(rope_off).build()?;
+            let q_input = nn::RopeInputBuilder::new(&queries)
+                .offset(rope_off)
+                .build()?;
             queries = self.rope.forward(q_input)?;
             let k_input = nn::RopeInputBuilder::new(&keys).offset(rope_off).build()?;
             keys = self.rope.forward(k_input)?;
@@ -338,9 +340,13 @@ where
                 let c = cache
                     .as_mut()
                     .ok_or_else(|| Exception::custom("TurboQuant fetch without cache"))?;
-                if let Some(out) =
-                    c.turboquant_attention(&queries, self.scale, mask, self.n_heads, self.n_kv_heads)?
-                {
+                if let Some(out) = c.turboquant_attention(
+                    &queries,
+                    self.scale,
+                    mask,
+                    self.n_heads,
+                    self.n_kv_heads,
+                )? {
                     out
                 } else {
                     return Err(Exception::custom(
@@ -782,9 +788,7 @@ pub fn load_gemma3_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
         }
     }
 
-    tracing::info!(
-        "[gemma3] safetensor load: {total_loaded} matched, {total_missed} unmatched"
-    );
+    tracing::info!("[gemma3] safetensor load: {total_loaded} matched, {total_missed} unmatched");
     if !unmatched_samples.is_empty() {
         tracing::warn!(
             "[gemma3] sample unmatched keys: {}",
@@ -802,7 +806,9 @@ pub fn load_gemma3_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
         );
     }
     if total_loaded == 0 {
-        return Err(Exception::custom("no safetensor keys matched the Gemma-3 parameter tree").into());
+        return Err(
+            Exception::custom("no safetensor keys matched the Gemma-3 parameter tree").into(),
+        );
     }
 
     model.eval()?;

@@ -31,7 +31,9 @@ use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::gateway::group_manager::{load_whisper_settings, save_whisper_settings, WhisperSettings};
+use crate::gateway::group_manager::{
+    load_whisper_settings, save_whisper_settings, WhisperSettings,
+};
 
 use super::core::{AppError, UiState};
 
@@ -64,6 +66,14 @@ fn catalog_get(id: &str) -> Option<&'static CatalogEntry> {
 
 fn safe_dirname(id: &str) -> String {
     id.replace('/', "__")
+}
+
+fn unsafe_dirname(name: &str) -> Option<String> {
+    let (org, repo) = name.split_once("__")?;
+    if org.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{org}/{repo}"))
 }
 
 fn model_dir(state: &UiState, id: &str) -> PathBuf {
@@ -131,17 +141,113 @@ pub(crate) async fn whisper_models_list(
             "download": download,
         }));
     }
+    if let Ok(entries) = std::fs::read_dir(&state.config.paths.local_models_dir) {
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(id) = unsafe_dirname(&name) else {
+                continue;
+            };
+            if catalog_get(&id).is_some() {
+                continue;
+            }
+            let dir = entry.path();
+            let download = downloads.get(&id).map(|h| h.state.lock().unwrap().clone());
+            if is_installed(&dir) || download.is_some() {
+                models.push(json!({
+                    "id": id,
+                    "label": format!("Whisper custom ({id})"),
+                    "approx_size_gb": 0.0,
+                    "default_language": "vi",
+                    "installed": is_installed(&dir),
+                    "on_disk_path": dir.to_string_lossy(),
+                    "download": download,
+                }));
+            }
+        }
+    }
+    for (id, handle) in downloads.iter() {
+        if catalog_get(id).is_some() || models.iter().any(|m| m["id"] == *id) {
+            continue;
+        }
+        let dir = model_dir(&state, id);
+        models.push(json!({
+            "id": id,
+            "label": format!("Whisper custom ({id})"),
+            "approx_size_gb": 0.0,
+            "default_language": "vi",
+            "installed": is_installed(&dir),
+            "on_disk_path": dir.to_string_lossy(),
+            "download": handle.state.lock().unwrap().clone(),
+        }));
+    }
     Ok(Json(json!({ "models": models })))
 }
 
 // ── Routes: download (composite) ─────────────────────────────────────────────
 
+/// Normalize the user's input into a HuggingFace `org/repo` id. Accepts bare ids
+/// and full HuggingFace URLs.
+fn normalize_hf_id(raw: &str) -> Result<String, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("empty model id".into());
+    }
+    let stripped = s
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("huggingface.co/")
+        .trim_start_matches("hf.co/")
+        .trim_end_matches('/');
+    let parts: Vec<&str> = stripped.split('/').collect();
+    if parts.len() < 2 {
+        return Err(format!("expected `org/repo` form, got `{s}`"));
+    }
+    let org = parts[0];
+    let repo = parts[1];
+    if org.is_empty() || repo.is_empty() {
+        return Err(format!("invalid `org/repo` in `{s}`"));
+    }
+    for seg in [org, repo] {
+        if seg.contains("..") || seg.contains('\\') {
+            return Err(format!("unsafe path segment in `{s}`"));
+        }
+    }
+    Ok(format!("{org}/{repo}"))
+}
+
+fn infer_tokenizer_repo(weights_repo: &str) -> String {
+    let repo_name = weights_repo
+        .split('/')
+        .next_back()
+        .unwrap_or(weights_repo)
+        .trim();
+    let repo_name = repo_name
+        .strip_suffix("-4bit")
+        .or_else(|| repo_name.strip_suffix("-8bit"))
+        .or_else(|| repo_name.strip_suffix("-fp16"))
+        .or_else(|| repo_name.strip_suffix("-bf16"))
+        .unwrap_or(repo_name);
+    if repo_name.starts_with("whisper-") {
+        format!("openai/{repo_name}")
+    } else {
+        "openai/whisper-large-v3-turbo".to_string()
+    }
+}
+
 pub(crate) async fn whisper_download(
     State(state): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let entry = catalog_get(&id)
-        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, format!("unknown Whisper model `{id}`")))?;
+    let id = normalize_hf_id(&id).map_err(|e| AppError(StatusCode::BAD_REQUEST, e))?;
+    let tokenizer_repo = catalog_get(&id)
+        .map(|e| e.tokenizer_repo.to_string())
+        .unwrap_or_else(|| infer_tokenizer_repo(&id));
 
     {
         let downloads = DOWNLOADS.lock().unwrap();
@@ -183,12 +289,16 @@ pub(crate) async fn whisper_download(
         },
     );
 
-    let weights_repo = entry.id.to_string();
-    let tokenizer_repo = entry.tokenizer_repo.to_string();
+    let weights_repo = id.clone();
     tokio::spawn(async move {
-        let result =
-            run_whisper_download(&weights_repo, &tokenizer_repo, &dir, progress.clone(), cancel)
-                .await;
+        let result = run_whisper_download(
+            &weights_repo,
+            &tokenizer_repo,
+            &dir,
+            progress.clone(),
+            cancel,
+        )
+        .await;
         let mut s = progress.lock().unwrap();
         match result {
             Ok(()) if s.status != DownloadStatus::Cancelled => s.status = DownloadStatus::Done,
@@ -282,7 +392,11 @@ pub(crate) async fn whisper_transcribe(
     let mut audio: Option<(String, Vec<u8>)> = None;
     let mut language: Option<String> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("read multipart: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         if name == "language" {
             language = field.text().await.ok().filter(|s| !s.is_empty());
@@ -452,7 +566,10 @@ fn get_or_create_engine(dir: &PathBuf) -> Arc<crate::local_model::WhisperEngine>
 
 #[cfg(feature = "local-mlx-whisper")]
 fn drop_engine(dir: &PathBuf) {
-    ENGINES.lock().unwrap().remove(&dir.to_string_lossy().to_string());
+    ENGINES
+        .lock()
+        .unwrap()
+        .remove(&dir.to_string_lossy().to_string());
 }
 
 #[cfg(not(feature = "local-mlx-whisper"))]
@@ -465,25 +582,55 @@ async fn transcribe_impl(
     bytes: Vec<u8>,
     language: Option<String>,
 ) -> Result<axum::response::Json<serde_json::Value>, AppError> {
+    let debug = matches!(
+        std::env::var("SENCLAW_WHISPER_DEBUG").as_deref(),
+        Ok("1" | "true" | "TRUE" | "yes" | "YES")
+    );
+    if debug {
+        eprintln!(
+            "[whisper-debug] api transcribe request filename={filename:?} bytes={} model_dir={} language={:?}",
+            bytes.len(),
+            dir.display(),
+            language
+        );
+    }
     // Persist the upload to a temp file so symphonia can probe by extension.
     let ext = std::path::Path::new(&filename)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("bin");
-    let tmp = std::env::temp_dir().join(format!("senclaw-whisper-{}.{ext}", std::process::id()));
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let tmp = std::env::temp_dir().join(format!(
+        "senclaw-whisper-{}-{nonce}.{ext}",
+        std::process::id()
+    ));
     tokio::fs::write(&tmp, &bytes)
         .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let engine = get_or_create_engine(&dir);
     let tmp_for_task = tmp.clone();
-    let text = tokio::task::spawn_blocking(move || {
-        engine.transcribe_file(&tmp_for_task, language.as_deref())
+    let (text, stats) = tokio::task::spawn_blocking(move || {
+        engine.transcribe_file_timed(&tmp_for_task, language.as_deref())
     })
     .await
     .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let _ = tokio::fs::remove_file(&tmp).await;
+    if debug {
+        eprintln!(
+            "[whisper-debug] api transcribe response chars={} chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} total_ms={:.1}",
+            text.chars().count(),
+            stats.n_chunks,
+            stats.tokens,
+            stats.no_speech_prob,
+            stats.avg_logprob,
+            stats.total_ms
+        );
+    }
 
     Ok(Json(json!({ "ok": true, "text": text })))
 }

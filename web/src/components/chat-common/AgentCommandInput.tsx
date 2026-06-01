@@ -1,5 +1,6 @@
 import React from 'react';
 import { Input, Typography, theme } from 'antd';
+import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { getChatActionButtonStyle, getChatTextareaStyle } from './chatInputStyles';
 import { useChatCompositionGuard, useGuardedChatSubmit } from './useGuardedChatSubmit';
 
@@ -35,6 +36,8 @@ export interface AgentCommandInputProps {
   placeholder?: string;
   onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   onFileSelect?: (files: File[]) => void;
+  renderExtraActions?: React.ReactNode;
+  textareaRef?: React.Ref<TextAreaRef>;
 }
 
 interface SubagentApiItem {
@@ -77,6 +80,8 @@ export function AgentCommandInput({
   placeholder = 'Nhap yeu cau... (/ command, @ file/folder, # skill)',
   onPaste,
   onFileSelect,
+  renderExtraActions,
+  textareaRef,
 }: AgentCommandInputProps) {
   const { token } = theme.useToken();
   const [activeIndex, setActiveIndex] = React.useState(0);
@@ -334,6 +339,7 @@ export function AgentCommandInput({
       )}
       <div style={{ width: '100%', display: 'flex', gap: 12, alignItems: 'flex-end' }}>
         <Input.TextArea
+          ref={textareaRef}
           value={value}
           onChange={e => onChange(e.target.value)}
           onPaste={onPaste}
@@ -447,6 +453,7 @@ export function AgentCommandInput({
             </button>
           </>
         )}
+        {renderExtraActions}
         <button
           type="button"
           onClick={() => {

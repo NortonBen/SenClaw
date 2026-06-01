@@ -56,5 +56,6 @@ fn rotate(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     let x1 = x.narrow(candle_core::D::Minus1, 0, half)?;
     let x2 = x.narrow(candle_core::D::Minus1, half, half)?;
     let rotated = Tensor::cat(&[&x2.neg()?, &x1], candle_core::D::Minus1)?;
-    x.broadcast_mul(cos)?.broadcast_add(&rotated.broadcast_mul(sin)?)
+    x.broadcast_mul(cos)?
+        .broadcast_add(&rotated.broadcast_mul(sin)?)
 }

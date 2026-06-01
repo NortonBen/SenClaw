@@ -15,9 +15,7 @@ use mlx_rs::{
     macros::{ModuleParameters, Quantizable},
     module::{Module, ModuleParameters, Param},
     nn,
-    ops::{
-        concatenate_axis, indexing::IndexOp, ones_dtype, sigmoid,
-    },
+    ops::{concatenate_axis, indexing::IndexOp, ones_dtype, sigmoid},
     quantization::{MaybeQuantized, Quantizable},
     transforms::{eval, eval_params},
     Array, Dtype,
@@ -31,8 +29,7 @@ use super::super::{
     utils::{
         create_attention_mask,
         rope::{initialize_rope, FloatOrString, RopeVariant},
-        scaled_dot_product_attention,
-        AttentionMask,
+        scaled_dot_product_attention, AttentionMask,
     },
 };
 use super::gated_delta::gated_delta_update;
@@ -158,7 +155,6 @@ fn stateless_rms_norm(x: &Array, eps: f32) -> Result<Array, Exception> {
     mlx_rs::fast::rms_norm(x, &ones, eps)
 }
 
-
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
 #[allow(non_snake_case)]
 pub struct GatedDeltaNet {
@@ -212,12 +208,18 @@ impl GatedDeltaNet {
         let in_proj_qkv = nn::LinearBuilder::new(args.hidden_size, key_dim * 2 + value_dim)
             .bias(false)
             .build()?;
-        let in_proj_z =
-            nn::LinearBuilder::new(args.hidden_size, value_dim).bias(false).build()?;
-        let in_proj_b = nn::LinearBuilder::new(args.hidden_size, num_v).bias(false).build()?;
-        let in_proj_a = nn::LinearBuilder::new(args.hidden_size, num_v).bias(false).build()?;
-        let out_proj =
-            nn::LinearBuilder::new(value_dim, args.hidden_size).bias(false).build()?;
+        let in_proj_z = nn::LinearBuilder::new(args.hidden_size, value_dim)
+            .bias(false)
+            .build()?;
+        let in_proj_b = nn::LinearBuilder::new(args.hidden_size, num_v)
+            .bias(false)
+            .build()?;
+        let in_proj_a = nn::LinearBuilder::new(args.hidden_size, num_v)
+            .bias(false)
+            .build()?;
+        let out_proj = nn::LinearBuilder::new(value_dim, args.hidden_size)
+            .bias(false)
+            .build()?;
         let conv1d = nn::Conv1dBuilder::new(conv_dim, conv_dim, d_conv)
             .groups(conv_dim)
             .bias(false)
@@ -258,10 +260,12 @@ impl GatedDeltaNet {
         let dtype = x.dtype();
 
         let x_bc = self.in_proj_qkv.forward(x)?;
-        let z = self
-            .in_proj_z
-            .forward(x)?
-            .reshape(&[b_size, seq_len, self.num_v_heads, self.head_v_dim])?;
+        let z = self.in_proj_z.forward(x)?.reshape(&[
+            b_size,
+            seq_len,
+            self.num_v_heads,
+            self.head_v_dim,
+        ])?;
         let b = self.in_proj_b.forward(x)?;
         let a = self.in_proj_a.forward(x)?;
 
@@ -275,12 +279,18 @@ impl GatedDeltaNet {
 
         let split_a = self.key_dim;
         let split_b = self.key_dim + self.num_k_heads * self.head_k_dim;
-        let q = x_bc_conv
-            .index((.., .., 0..split_a))
-            .reshape(&[b_size, seq_len, self.num_k_heads, self.head_k_dim])?;
-        let k = x_bc_conv
-            .index((.., .., split_a..split_b))
-            .reshape(&[b_size, seq_len, self.num_k_heads, self.head_k_dim])?;
+        let q = x_bc_conv.index((.., .., 0..split_a)).reshape(&[
+            b_size,
+            seq_len,
+            self.num_k_heads,
+            self.head_k_dim,
+        ])?;
+        let k = x_bc_conv.index((.., .., split_a..split_b)).reshape(&[
+            b_size,
+            seq_len,
+            self.num_k_heads,
+            self.head_k_dim,
+        ])?;
         let v = x_bc_conv
             .index((.., .., split_b..self.conv_dim))
             .reshape(&[b_size, seq_len, self.num_v_heads, self.head_v_dim])?;
@@ -311,7 +321,8 @@ impl GatedDeltaNet {
         cache.advance(seq_len);
 
         let y_out = self.norm.forward(&y, &z)?;
-        self.out_proj.forward(&y_out.reshape(&[b_size, seq_len, self.value_dim])?)
+        self.out_proj
+            .forward(&y_out.reshape(&[b_size, seq_len, self.value_dim])?)
     }
 }
 
@@ -352,8 +363,7 @@ impl FullAttention {
         let n_heads = args.num_attention_heads;
         let n_kv = args.num_key_value_heads;
         let head_dim = args.head_dim;
-        let rope_dims =
-            (head_dim as f32 * args.partial_rotary_factor).round() as i32;
+        let rope_dims = (head_dim as f32 * args.partial_rotary_factor).round() as i32;
         let q_proj = nn::LinearBuilder::new(args.hidden_size, n_heads * head_dim * 2)
             .bias(args.attention_bias)
             .build()?;
@@ -366,8 +376,12 @@ impl FullAttention {
         let o_proj = nn::LinearBuilder::new(n_heads * head_dim, args.hidden_size)
             .bias(false)
             .build()?;
-        let q_norm = nn::RmsNormBuilder::new(head_dim).eps(args.rms_norm_eps).build()?;
-        let k_norm = nn::RmsNormBuilder::new(head_dim).eps(args.rms_norm_eps).build()?;
+        let q_norm = nn::RmsNormBuilder::new(head_dim)
+            .eps(args.rms_norm_eps)
+            .build()?;
+        let k_norm = nn::RmsNormBuilder::new(head_dim)
+            .eps(args.rms_norm_eps)
+            .build()?;
         let rope = initialize_rope(
             rope_dims,
             args.rope_theta,
@@ -424,15 +438,19 @@ where
         let mut queries = self
             .q_norm
             .forward(&queries.transpose_axes(&[0, 2, 1, 3])?)?;
-        let mut keys = self
-            .k_norm
-            .forward(&keys.reshape(&[b, l, self.n_kv_heads, -1])?.transpose_axes(&[0, 2, 1, 3])?)?;
+        let mut keys = self.k_norm.forward(
+            &keys
+                .reshape(&[b, l, self.n_kv_heads, -1])?
+                .transpose_axes(&[0, 2, 1, 3])?,
+        )?;
         let mut values = values
             .reshape(&[b, l, self.n_kv_heads, -1])?
             .transpose_axes(&[0, 2, 1, 3])?;
 
         let fetch = if let Some(cache) = cache.as_mut() {
-            let q_in = nn::RopeInputBuilder::new(&queries).offset(rope_off).build()?;
+            let q_in = nn::RopeInputBuilder::new(&queries)
+                .offset(rope_off)
+                .build()?;
             queries = self.rope.forward(q_in)?;
             let k_in = nn::RopeInputBuilder::new(&keys).offset(rope_off).build()?;
             keys = self.rope.forward(k_in)?;
@@ -562,9 +580,12 @@ impl TextBackbone {
         for (layer, slot) in self.layers.iter_mut().zip(caches.iter_mut()) {
             let normed = layer.input_layernorm.forward(&h)?;
             let r = if layer.is_linear {
-                let cache = slot.as_mut().and_then(KvCache::as_qwen35_linear_mut).ok_or_else(
-                    || Exception::custom("Qwen3.5 linear layer needs Qwen35Linear cache slot"),
-                )?;
+                let cache = slot
+                    .as_mut()
+                    .and_then(KvCache::as_qwen35_linear_mut)
+                    .ok_or_else(|| {
+                        Exception::custom("Qwen3.5 linear layer needs Qwen35Linear cache slot")
+                    })?;
                 layer
                     .linear_attn
                     .as_mut()
@@ -584,7 +605,9 @@ impl TextBackbone {
                     .forward(attn_input)?
             };
             h = h.add(&r)?;
-            let mlp_out = layer.mlp.forward(&layer.post_attention_layernorm.forward(&h)?)?;
+            let mlp_out = layer
+                .mlp
+                .forward(&layer.post_attention_layernorm.forward(&h)?)?;
             h = h.add(&mlp_out)?;
             eval(&[h.clone()])?;
         }
@@ -659,7 +682,10 @@ impl Model {
         caches: &mut [Option<KvCache>],
         rope_offset: usize,
     ) -> Result<Array, Exception> {
-        let h = self.language_model.model.forward(inputs, caches, rope_offset)?;
+        let h = self
+            .language_model
+            .model
+            .forward(inputs, caches, rope_offset)?;
         match &mut self.language_model.lm_head {
             Some(lm) => lm.forward(&h),
             None => match &mut self.language_model.model.embed_tokens {
@@ -695,14 +721,13 @@ pub fn get_qwen35_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, E
 
 fn optiq_bits_map(cfg: &Value) -> HashMap<String, (i32, i32)> {
     let mut map = HashMap::new();
-    let q = cfg.get("quantization").or_else(|| cfg.get("quantization_config"));
+    let q = cfg
+        .get("quantization")
+        .or_else(|| cfg.get("quantization_config"));
     let Some(q) = q.and_then(|v| v.as_object()) else {
         return map;
     };
-    let default_gs = q
-        .get("group_size")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(64) as i32;
+    let default_gs = q.get("group_size").and_then(|v| v.as_i64()).unwrap_or(64) as i32;
     let default_bits = q.get("bits").and_then(|v| v.as_i64()).unwrap_or(4) as i32;
     for (k, v) in q {
         if matches!(k.as_str(), "group_size" | "bits" | "mode") {
@@ -766,9 +791,24 @@ fn quantize_maybe_embedding(
     Ok(())
 }
 
-fn quantize_mlp(mlp: &mut Mlp, prefix: &str, map: &HashMap<String, (i32, i32)>, default: (i32, i32)) -> Result<(), Exception> {
-    quantize_maybe_linear(&mut mlp.gate_proj, &format!("{prefix}.gate_proj"), map, default)?;
-    quantize_maybe_linear(&mut mlp.down_proj, &format!("{prefix}.down_proj"), map, default)?;
+fn quantize_mlp(
+    mlp: &mut Mlp,
+    prefix: &str,
+    map: &HashMap<String, (i32, i32)>,
+    default: (i32, i32),
+) -> Result<(), Exception> {
+    quantize_maybe_linear(
+        &mut mlp.gate_proj,
+        &format!("{prefix}.gate_proj"),
+        map,
+        default,
+    )?;
+    quantize_maybe_linear(
+        &mut mlp.down_proj,
+        &format!("{prefix}.down_proj"),
+        map,
+        default,
+    )?;
     quantize_maybe_linear(&mut mlp.up_proj, &format!("{prefix}.up_proj"), map, default)?;
     Ok(())
 }
@@ -779,11 +819,36 @@ fn quantize_gated_delta(
     map: &HashMap<String, (i32, i32)>,
     default: (i32, i32),
 ) -> Result<(), Exception> {
-    quantize_maybe_linear(&mut net.in_proj_qkv, &format!("{prefix}.in_proj_qkv"), map, default)?;
-    quantize_maybe_linear(&mut net.in_proj_z, &format!("{prefix}.in_proj_z"), map, default)?;
-    quantize_maybe_linear(&mut net.in_proj_b, &format!("{prefix}.in_proj_b"), map, default)?;
-    quantize_maybe_linear(&mut net.in_proj_a, &format!("{prefix}.in_proj_a"), map, default)?;
-    quantize_maybe_linear(&mut net.out_proj, &format!("{prefix}.out_proj"), map, default)?;
+    quantize_maybe_linear(
+        &mut net.in_proj_qkv,
+        &format!("{prefix}.in_proj_qkv"),
+        map,
+        default,
+    )?;
+    quantize_maybe_linear(
+        &mut net.in_proj_z,
+        &format!("{prefix}.in_proj_z"),
+        map,
+        default,
+    )?;
+    quantize_maybe_linear(
+        &mut net.in_proj_b,
+        &format!("{prefix}.in_proj_b"),
+        map,
+        default,
+    )?;
+    quantize_maybe_linear(
+        &mut net.in_proj_a,
+        &format!("{prefix}.in_proj_a"),
+        map,
+        default,
+    )?;
+    quantize_maybe_linear(
+        &mut net.out_proj,
+        &format!("{prefix}.out_proj"),
+        map,
+        default,
+    )?;
     Ok(())
 }
 
@@ -820,7 +885,9 @@ fn quantize_decoder_layer(
 
 /// OptiQ checkpoints declare per-path `bits` / `group_size` (mixed 4- and 8-bit).
 fn apply_optiq_quantization(mut model: Model, cfg: &Value) -> Result<Model, Exception> {
-    let q = cfg.get("quantization").or_else(|| cfg.get("quantization_config"));
+    let q = cfg
+        .get("quantization")
+        .or_else(|| cfg.get("quantization_config"));
     let default = (
         q.and_then(|v| v.get("group_size"))
             .and_then(|v| v.as_i64())
@@ -838,13 +905,7 @@ fn apply_optiq_quantization(mut model: Model, cfg: &Value) -> Result<Model, Exce
         default,
     )?;
 
-    for (i, layer) in model
-        .language_model
-        .model
-        .layers
-        .iter_mut()
-        .enumerate()
-    {
+    for (i, layer) in model.language_model.model.layers.iter_mut().enumerate() {
         quantize_decoder_layer(layer, i as i32, &map, default)?;
     }
 
@@ -858,9 +919,9 @@ fn apply_optiq_quantization(mut model: Model, cfg: &Value) -> Result<Model, Exce
 fn sanitize_weights(weights: &mut HashMap<String, Array>) {
     // Match mlx-lm `TextModel.sanitize`: only shift HF-style layernorm weights when
     // conv1d still needs layout fix. Do NOT touch `.linear_attn.norm.weight`.
-    let has_unsanitized_conv1d = weights.iter().any(|(k, v)| {
-        k.contains("conv1d.weight") && v.shape().last().copied() != Some(1)
-    });
+    let has_unsanitized_conv1d = weights
+        .iter()
+        .any(|(k, v)| k.contains("conv1d.weight") && v.shape().last().copied() != Some(1));
     let should_shift_norm = has_unsanitized_conv1d;
     let norm_suffixes = [
         ".input_layernorm.weight",
@@ -876,9 +937,7 @@ fn sanitize_weights(weights: &mut HashMap<String, Array>) {
                 *v = t;
             }
         }
-        if should_shift_norm
-            && norm_suffixes.iter().any(|s| k.ends_with(s))
-            && v.shape().len() == 1
+        if should_shift_norm && norm_suffixes.iter().any(|s| k.ends_with(s)) && v.shape().len() == 1
         {
             if let Ok(shifted) = v.add(&array!(1.0_f32)) {
                 *v = shifted;
@@ -991,9 +1050,7 @@ pub fn load_qwen35_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
             }
         }
     }
-    tracing::info!(
-        "[qwen3_5] safetensor load: {loaded} matched, {missed} unmatched"
-    );
+    tracing::info!("[qwen3_5] safetensor load: {loaded} matched, {missed} unmatched");
     model
         .eval()
         .map_err(|e| Error::Other(format!("eval: {e:?}").into()))?;

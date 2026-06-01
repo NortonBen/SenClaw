@@ -43,8 +43,7 @@ use super::super::{
     utils::{
         create_attention_mask,
         rope::{initialize_rope, FloatOrString, RopeVariant},
-        scaled_dot_product_attention,
-        AttentionMask,
+        scaled_dot_product_attention, AttentionMask,
     },
 };
 // Reuse the input types from qwen3 verbatim — they are data carriers, not
@@ -191,7 +190,9 @@ where
             .transpose_axes(&[0, 2, 1, 3])?;
 
         let fetch = if let Some(cache) = cache.as_mut() {
-            let q_input = nn::RopeInputBuilder::new(&queries).offset(rope_off).build()?;
+            let q_input = nn::RopeInputBuilder::new(&queries)
+                .offset(rope_off)
+                .build()?;
             queries = self.rope.forward(q_input)?;
             let k_input = nn::RopeInputBuilder::new(&keys).offset(rope_off).build()?;
             keys = self.rope.forward(k_input)?;
@@ -210,9 +211,13 @@ where
                 let c = cache
                     .as_mut()
                     .ok_or_else(|| Exception::custom("TurboQuant fetch without cache"))?;
-                if let Some(out) =
-                    c.turboquant_attention(&queries, self.scale, mask, self.n_heads, self.n_kv_heads)?
-                {
+                if let Some(out) = c.turboquant_attention(
+                    &queries,
+                    self.scale,
+                    mask,
+                    self.n_heads,
+                    self.n_kv_heads,
+                )? {
                     out
                 } else {
                     return Err(Exception::custom(
@@ -267,8 +272,8 @@ impl Module<&Array> for Mlp {
     type Error = Exception;
 
     fn forward(&mut self, input: &Array) -> Result<Self::Output, Self::Error> {
-        let gated = nn::silu(self.gate_proj.forward(input)?)?
-            .multiply(self.up_proj.forward(input)?)?;
+        let gated =
+            nn::silu(self.gate_proj.forward(input)?)?.multiply(self.up_proj.forward(input)?)?;
         self.down_proj.forward(&gated)
     }
 

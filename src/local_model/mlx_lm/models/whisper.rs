@@ -82,7 +82,9 @@ impl MultiHeadAttention {
     fn new(n_state: i32, n_head: i32) -> Result<Self, Exception> {
         let query = nn::LinearBuilder::new(n_state, n_state).build()?;
         // Whisper's key projection has NO bias.
-        let key = nn::LinearBuilder::new(n_state, n_state).bias(false).build()?;
+        let key = nn::LinearBuilder::new(n_state, n_state)
+            .bias(false)
+            .build()?;
         let value = nn::LinearBuilder::new(n_state, n_state).build()?;
         let out = nn::LinearBuilder::new(n_state, n_state).build()?;
         let scale = ((n_state / n_head) as f32).powf(-0.25);
@@ -105,7 +107,10 @@ impl MultiHeadAttention {
         mask: Option<&Array>,
         cache: Option<&mut KvCache>,
     ) -> Result<Array, Exception> {
-        let q = self.query.forward(x)?.multiply(Array::from_f32(self.scale))?;
+        let q = self
+            .query
+            .forward(x)?
+            .multiply(Array::from_f32(self.scale))?;
 
         let (k, v) = match xa {
             // Self-attention: project x, optionally append to the growing cache.
@@ -126,13 +131,19 @@ impl MultiHeadAttention {
             Some(audio) => match cache {
                 Some(c) => {
                     if c.k.is_none() {
-                        c.k = Some(self.key.forward(audio)?.multiply(Array::from_f32(self.scale))?);
+                        c.k = Some(
+                            self.key
+                                .forward(audio)?
+                                .multiply(Array::from_f32(self.scale))?,
+                        );
                         c.v = Some(self.value.forward(audio)?);
                     }
                     (c.k.clone().unwrap(), c.v.clone().unwrap())
                 }
                 None => (
-                    self.key.forward(audio)?.multiply(Array::from_f32(self.scale))?,
+                    self.key
+                        .forward(audio)?
+                        .multiply(Array::from_f32(self.scale))?,
                     self.value.forward(audio)?,
                 ),
             },
@@ -154,11 +165,17 @@ impl MultiHeadAttention {
         let lk = k.shape()[1];
 
         // [B, Lq, H, d] -> [B, H, Lq, d]
-        let q = q.reshape(&[b, lq, self.n_head, -1])?.transpose_axes(&[0, 2, 1, 3])?;
+        let q = q
+            .reshape(&[b, lq, self.n_head, -1])?
+            .transpose_axes(&[0, 2, 1, 3])?;
         // [B, Lk, H, d] -> [B, H, d, Lk]  (transposed for q @ k)
-        let k = k.reshape(&[b, lk, self.n_head, -1])?.transpose_axes(&[0, 2, 3, 1])?;
+        let k = k
+            .reshape(&[b, lk, self.n_head, -1])?
+            .transpose_axes(&[0, 2, 3, 1])?;
         // [B, Lk, H, d] -> [B, H, Lk, d]
-        let v = v.reshape(&[b, lk, self.n_head, -1])?.transpose_axes(&[0, 2, 1, 3])?;
+        let v = v
+            .reshape(&[b, lk, self.n_head, -1])?
+            .transpose_axes(&[0, 2, 1, 3])?;
 
         let mut qk = ops::matmul(&q, &k)?;
         if let Some(m) = mask {
@@ -333,7 +350,8 @@ impl TextDecoder {
     fn new(dims: &ModelDimensions) -> Result<Self, Exception> {
         let n_state = dims.n_text_state;
         let token_embedding = nn::Embedding::new(dims.n_vocab, n_state)?;
-        let positional_embedding = Param::new(mlx_rs::ops::zeros::<f32>(&[dims.n_text_ctx, n_state])?);
+        let positional_embedding =
+            Param::new(mlx_rs::ops::zeros::<f32>(&[dims.n_text_ctx, n_state])?);
         let blocks = (0..dims.n_text_layer)
             .map(|_| DecoderBlock::new(n_state, dims.n_text_head))
             .collect::<Result<Vec<_>, _>>()?;
@@ -499,7 +517,10 @@ mod tests {
             .as_dtype(m.dtype())
             .unwrap();
         let feats = m.encoder.forward(&mel).unwrap();
-        assert_eq!(feats.shape(), &[1, m.dims.n_audio_ctx, m.dims.n_audio_state]);
+        assert_eq!(
+            feats.shape(),
+            &[1, m.dims.n_audio_ctx, m.dims.n_audio_state]
+        );
 
         // Decoder prefill of 4 tokens -> logits [1, 4, n_vocab].
         let toks = Array::from_slice(&[50258i32, 50278, 50360, 50364], &[1, 4]);

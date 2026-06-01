@@ -24,18 +24,10 @@ pub struct KnownModel {
 pub const KNOWN_MODELS: &[KnownModel] = &[
     // ── Qwen3 transformers (MLX native) ───────────────────────────────────
     KnownModel {
-        id: "Qwen/Qwen3-0.6B",
-        label: "Qwen3 0.6B",
-        approx_size_gb: 1.2,
-        context_length: 32_768,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "mlx-community/Qwen3-4B-4bit",
-        label: "Qwen3 4B 4-bit — recommended for tools/agents (GPU-bound prefill + prefix cache)",
-        approx_size_gb: 2.3,
-        context_length: 128_000,
+        id: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+        label: "Qwen3 4B Instruct 2507 4-bit — recommended for tools/agents (GPU-bound prefill + prefix cache)",
+        approx_size_gb: 1.8,
+        context_length: 250_720,
         native_supported: true,
         vision: false,
     },
@@ -53,14 +45,6 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         id: "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
         label: "Qwen3.5 0.8B OptiQ 4-bit — chat + agentic (prefix-cached turns)",
         approx_size_gb: 0.6,
-        context_length: 262_144,
-        native_supported: true,
-        vision: false,
-    },
-    KnownModel {
-        id: "mlx-community/Qwen3.5-4B-OptiQ-4bit",
-        label: "Qwen3.5 4B OptiQ 4-bit — chat + agentic (prefix-cached turns)",
-        approx_size_gb: 3.3,
         context_length: 262_144,
         native_supported: true,
         vision: false,

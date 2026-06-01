@@ -160,13 +160,25 @@ mod tests {
 
     #[test]
     fn key_routing_picks_embed_vision_but_not_embed_audio() {
-        assert!(is_embed_vision_key("embed_vision.embedding_projection.weight"));
-        assert!(is_embed_vision_key("embed_vision.embedding_pre_projection_norm.weight"));
+        assert!(is_embed_vision_key(
+            "embed_vision.embedding_projection.weight"
+        ));
+        assert!(is_embed_vision_key(
+            "embed_vision.embedding_pre_projection_norm.weight"
+        ));
         // These should be classified as NOT belonging to the embedder, so
         // the existing skip-paths still apply to them.
-        assert!(!is_embed_vision_key("embed_audio.embedding_projection.weight"));
-        assert!(!is_embed_vision_key("vision_tower.layers.0.self_attn.q_proj.weight"));
-        assert!(!is_embed_vision_key("audio_tower.layers.0.feed_forward1.linear.weight"));
-        assert!(!is_embed_vision_key("model.layers.0.self_attn.q_proj.weight"));
+        assert!(!is_embed_vision_key(
+            "embed_audio.embedding_projection.weight"
+        ));
+        assert!(!is_embed_vision_key(
+            "vision_tower.layers.0.self_attn.q_proj.weight"
+        ));
+        assert!(!is_embed_vision_key(
+            "audio_tower.layers.0.feed_forward1.linear.weight"
+        ));
+        assert!(!is_embed_vision_key(
+            "model.layers.0.self_attn.q_proj.weight"
+        ));
     }
 }

@@ -9,11 +9,11 @@ pub mod gemma4;
 /// the parent `mlx_lm` module — no extra feature flag needed.
 pub mod gemma4_vision;
 pub mod llama;
-/// Shared Qwen-family parser primitives (used by `qwen3` and `qwen3_5`).
-pub mod qwen_common;
 pub mod mamba2;
 pub mod qwen3;
 pub mod qwen3_5;
+/// Shared Qwen-family parser primitives (used by `qwen3` and `qwen3_5`).
+pub mod qwen_common;
 /// Whisper encoder/decoder ASR (gated on `local-mlx-whisper` via its driver,
 /// but the model itself compiles under `local-mlx`).
 pub mod whisper;
