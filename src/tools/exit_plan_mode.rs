@@ -95,19 +95,25 @@ impl Tool for ExitPlanModeTool {
             }
         };
 
-        let result_text = match selected.as_str() {
-            "clearContextAndStart" => "User chose to clear context and start fresh from the plan.".to_string(),
-            "cancelled" => "Plan approval was cancelled.".to_string(),
-            _ => "Plan approved. Begin implementation.".to_string(),
-        };
+        if selected.as_str() == "clearContextAndStart" {
+            Ok(vec![ToolOutput::ClearContextAndStart {
+                plan_file_path,
+                plan_content,
+            }])
+        } else {
+            let result_text = match selected.as_str() {
+                "cancelled" => "Plan approval was cancelled.".to_string(),
+                _ => "Plan approved. Begin implementation.".to_string(),
+            };
 
-        Ok(vec![ToolOutput::Result {
-            data: serde_json::json!({
-                "selected": selected,
-                "planFilePath": plan_file_path,
-            }),
-            result_for_assistant: result_text,
-        }])
+            Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({
+                    "selected": selected,
+                    "planFilePath": plan_file_path,
+                }),
+                result_for_assistant: result_text,
+            }])
+        }
     }
 
     fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {

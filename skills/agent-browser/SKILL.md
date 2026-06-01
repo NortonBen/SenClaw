@@ -45,7 +45,7 @@ Use **`mcp__browser__search`** — returns ranked SERP results without opening a
 
 ```
 mcp__browser__search {
-  "query": "dsdsd,
+  "query": "<user query in the user's language>",
   "engine": "google",            // or "bing"; default "google"
   "num_results": 10,             // default 10
   "language": "vi"               // optional
@@ -181,12 +181,12 @@ User asks for…
 
 ## Examples
 
-**Query**: "tìm giá bạc hôm nay"
+**Query**: "tìm giá vàng hôm nay"
 
 ```
 1. ToolSearch { query: "select:mcp__browser__search" }        ← load the search tool
 2. mcp__browser__search {
-     "query": "giá bạc hôm nay vnđ",
+     "query": "giá vàng hôm nay",
      "num_results": 5
    }
 3. Read top snippets — answer the user with the figure + source URL.

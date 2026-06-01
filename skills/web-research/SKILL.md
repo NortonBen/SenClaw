@@ -2,7 +2,7 @@
 name: web-research
 description: Multi-source web research with citation discipline and cross-verification. Use when a question needs an evidence-backed answer drawn from multiple live web sources (current data, comparisons, surveys, fact checks). Composes the `agent-browser` toolkit and adds research methodology — query planning, source diversity, claim verification, structured synthesis with URLs.
 version: 1.0.0
-when-to-use: questions that need a researched answer rather than a single fact ("compare X vs Y", "what's the current state of Z", "find studies on…", "is it true that…", "summarize today's news on…", multi-day market analyses, technical surveys, fact-checks). Prefer `agent-browser` directly for single-shot operations (open a page, screenshot, fill a form, one-snippet lookup like "giá vàng hôm nay").
+when-to-use: questions that need a researched answer rather than a single fact ("compare X vs Y", "what's the current state of Z", "find studies on…", "is it true that…", "summarize today's news on…", multi-day market analyses, technical surveys, fact-checks). Prefer `agent-browser` directly for single-shot operations such as opening a page, taking a screenshot, filling a form, or looking up one current price.
 ---
 
 # Web Research Skill

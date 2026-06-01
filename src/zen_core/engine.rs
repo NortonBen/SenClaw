@@ -940,15 +940,15 @@ impl ZenCore for ZenEngine {
             if let Some(hint) = self.build_skill_match_reminder(&prompt) {
                 blocks.push(ContentBlock::Text { text: hint });
             }
-            // Per-turn language lock. Small models (e.g. Qwen) default to
-            // reasoning in Chinese/English regardless of the user's language;
-            // naming the detected language in a reminder right next to the
-            // prompt steers both the thinking block and the reply. Re-evaluated
-            // every turn so a language switch mid-conversation is honoured.
+            // Per-turn language lock. Small models can default to English or
+            // Chinese even when the user writes another language. Keep this
+            // reminder close to the prompt, but avoid mentioning "thinking
+            // blocks" because some models copy that phrase into the visible
+            // answer.
             if let Some(lang) = detect_user_language(&prompt) {
                 blocks.push(ContentBlock::Text {
                     text: format!(
-                        "<system-reminder>\nReply in {lang}, and do your reasoning (the thinking block) in {lang} too — match the user's language. Do not reason or answer in English or Chinese when the user wrote {lang}.\n</system-reminder>"
+                        "<system-reminder>\nReply in {lang}. Do not include hidden reasoning, chain-of-thought, or thinking blocks in the final answer.\n</system-reminder>"
                     ),
                 });
             }
@@ -1271,6 +1271,9 @@ impl ZenCore for ZenEngine {
         match response.selected.as_str() {
             "startEditing" | "clearContextAndStart" => {
                 self.update_agent_mode(AgentMode::Agent);
+                self.fire(EngineEvent::PlanImplement(crate::zen_core::PlanImplementData {
+                    agent_id: response.agent_id.clone(),
+                }));
             }
             _ => {}
         }
@@ -1515,12 +1518,12 @@ impl ZenEngine {
         let first_sentence = desc.split('.').next().unwrap_or(&desc).trim();
         Some(format!(
             "<system-reminder>\n\
-🎯 SKILL MATCH: This request looks like a job for the `{name}` skill — {first_sentence}.\n\
+Skill hint: `{name}` may help with this request — {first_sentence}.\n\
 \n\
-**Recommended workflow:**\n\
+**Workflow:**\n\
 1. Invoke it with `Skill {{ \"skill\": \"{name}\" }}` to load its instructions.\n\
-2. Follow the skill's workflow — it knows the right MCP tools to call.\n\
-3. Do NOT answer from memory for time-sensitive or external data.\n\
+2. Follow the skill's workflow if it fits the user's exact request.\n\
+3. For time-sensitive or external data, use a live data tool; do not answer from memory.\n\
 </system-reminder>\n\n"
         ))
     }

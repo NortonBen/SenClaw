@@ -912,6 +912,33 @@ pub async fn query(
         } else {
             run_tools::run_tools(&fresh, cancel, &ctx).await
         };
+
+        // Check for control signals (e.g. clearContextAndStart)
+        let mut clear_context_payload = None;
+        for b in &tool_results {
+            if let ContentBlock::ControlSignal { signal_type, payload } = b {
+                if signal_type == "ClearContextAndStart" {
+                    clear_context_payload = Some(payload.clone());
+                }
+            }
+        }
+        if let Some(payload) = clear_context_payload {
+            let plan_content = payload.get("plan_content").and_then(|v| v.as_str()).unwrap_or("");
+            info!(
+                "[{}] received ClearContextAndStart control signal — clearing history",
+                config.agent_id
+            );
+            messages.clear();
+            messages.push(create_user_message(vec![ContentBlock::Text {
+                text: format!("按照以下计划进行实现：\n\n{}", plan_content),
+            }]));
+            // Trigger mode switch if needed (this matches TS behaviour)
+            // The ZenEngine will handle PlanImplement event and set agent_mode
+            // wait, but the event wasn't emitted here? Actually, the UI emits PlanExitResponse to engine,
+            // which flips mode. But we can emit a PlanImplement event just in case, or just continue.
+            continue;
+        }
+
         if !dup_ids.is_empty() {
             info!(
                 "[{}] intercepted {} duplicate tool call(s) — returning 'already have this' note",

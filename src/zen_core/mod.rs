@@ -107,6 +107,11 @@ pub enum ContentBlock {
     Image {
         source: ImageSource,
     },
+    #[serde(rename = "control_signal")]
+    ControlSignal {
+        signal_type: String,
+        payload: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -522,6 +527,11 @@ pub enum ToolOutput {
         data: serde_json::Value,
         result_for_assistant: String,
     },
+    /// A control signal that interrupts the loop and triggers a context rebuild.
+    ClearContextAndStart {
+        plan_file_path: String,
+        plan_content: String,
+    },
 }
 
 /// Display-ready summary emitted via `tool:execution:complete`.
@@ -867,5 +877,12 @@ pub fn create_tool_result_stop(tool_use_id: &str) -> ContentBlock {
 
 /// Normalize messages for API consumption (filter internal metadata).
 pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<Message> {
-    messages.to_vec()
+    messages
+        .iter()
+        .map(|m| {
+            let mut new_m = m.clone();
+            new_m.message.content.retain(|b| !matches!(b, ContentBlock::ControlSignal { .. }));
+            new_m
+        })
+        .collect()
 }

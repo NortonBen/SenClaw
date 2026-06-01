@@ -390,6 +390,7 @@ pub(crate) fn openai_messages_for_api(messages: &[Message], system_prompt: &str)
                                 "content": content,
                             }));
                         }
+                        ContentBlock::ControlSignal { .. } => {}
                         ContentBlock::Thinking { .. } => {}
                         ContentBlock::ToolUse { .. } => {
                             bail!("OpenAI adapter: unexpected ToolUse block in user message");
@@ -450,6 +451,7 @@ pub(crate) fn openai_messages_for_api(messages: &[Message], system_prompt: &str)
                             }));
                         }
                         ContentBlock::ToolResult { .. } => {}
+                        ContentBlock::ControlSignal { .. } => {}
                         ContentBlock::Image { .. } => {
                             // Images in assistant messages are not standard, but handle gracefully
                             tracing::warn!("OpenAI adapter: unexpected Image block in assistant message");
@@ -850,6 +852,7 @@ fn anthropic_content_blocks(blocks: &[ContentBlock]) -> Value {
                     }
                 }));
             }
+            ContentBlock::ControlSignal { .. } => {}
         }
     }
     Value::Array(parts)

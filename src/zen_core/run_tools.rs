@@ -603,6 +603,30 @@ async fn run_single_tool(
                             is_error: false,
                         });
                     }
+                    ToolOutput::ClearContextAndStart {
+                        plan_file_path,
+                        plan_content,
+                    } => {
+                        (ctx.fire)(EngineEvent::ToolExecutionComplete(
+                            ToolExecutionCompleteData {
+                                agent_id: ctx.agent_id.to_string(),
+                                tool_name: tool_name.clone(),
+                                title: "ExitPlanMode".to_string(),
+                                summary: "clearContextAndStart".to_string(),
+                                content: serde_json::json!({
+                                    "planFilePath": plan_file_path,
+                                    "selected": "clearContextAndStart"
+                                }),
+                            },
+                        ));
+                        results.push(ContentBlock::ControlSignal {
+                            signal_type: "ClearContextAndStart".to_string(),
+                            payload: serde_json::json!({
+                                "plan_file_path": plan_file_path,
+                                "plan_content": plan_content
+                            }),
+                        });
+                    }
                 }
             }
             results
