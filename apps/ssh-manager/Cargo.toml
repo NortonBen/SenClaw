@@ -1,0 +1,23 @@
+[package]
+name = "ssh-manager"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+app-space-sdk = { path = "../../app-space-sdk" }
+tokio = { version = "1.0", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+russh = "0.45.0"
+russh-keys = "0.45.0"
+async-trait = "0.1"
+anyhow = "1.0"
+dotenvy = "0.15"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+uuid = { version = "1.23.2", features = ["v4"] }
+futures-util = "0.3.32"
+russh-sftp = "2.3.0"
+async-stream = "0.3.6"
+tokio-stream = "0.1.18"
+dirs = "6.0.0"

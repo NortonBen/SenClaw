@@ -144,9 +144,10 @@ impl super::Db {
                 .query_row(
                     "SELECT allowed_tools FROM groups WHERE jid = ?1",
                     params![jid],
-                    |r| r.get(0),
+                    |r| r.get::<_, Option<String>>(0),
                 )
-                .optional()?;
+                .optional()?
+                .flatten();
 
             let mut tools: Vec<String> = match raw.as_deref() {
                 Some(s) if !s.is_empty() && s != "null" => {

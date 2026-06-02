@@ -1,0 +1,38 @@
+.termius-tab-bar .ant-tabs-nav {
+  margin-bottom: 0 !important;
+}
+
+.termius-tab-bar .ant-tabs-nav::before {
+  border-bottom: none !important;
+}
+
+.termius-tab-bar .ant-tabs-tab {
+  border: none !important;
+  border-radius: 8px 8px 0 0 !important;
+  background: transparent !important;
+  transition: all 0.2s;
+}
+
+.termius-tab-bar .ant-tabs-tab-active {
+  background: #1f2937 !important; /* same as sidebar background to blend in */
+}
+
+.termius-tab-bar .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #fff !important;
+}
+
+.termius-tab-bar .ant-tabs-tab:hover {
+  background: #374151 !important;
+}
+
+/* Make search bar blend in better */
+.custom-search .ant-input, 
+.custom-search .ant-input-search-button {
+  background-color: #1f2937 !important;
+  border-color: #374151 !important;
+  color: #fff;
+}
+
+.custom-search .ant-input::placeholder {
+  color: #9ca3af;
+}

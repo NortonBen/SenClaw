@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri"]
+members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "src-tauri"]
 resolver = "2"
 
 [package]
@@ -143,6 +143,10 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 minijinja = { version = "2", optional = true, features = ["serde"] }
 minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
+
+# App Space & SSH Dependencies
+russh = "0.44.1"
+russh-keys = "0.44.0"
 
 # Native MLX inference on Apple Silicon (feature-gated; macOS-only build).
 half = { version = "2.4", optional = true }

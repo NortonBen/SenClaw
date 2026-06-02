@@ -376,7 +376,7 @@ impl McpManager {
                 name: "senclaw-space".into(),
                 transport: "stdio".into(),
                 description: Some(
-                    "Built-in personal productivity service — notes, calendar, email, and recurring schedules.".into(),
+                    "Built-in personal productivity service — notes, calendar, and recurring schedules.".into(),
                 ),
                 tools: vec![
                     t("space_note_create", "Create a new note with title, body, and tags"),
@@ -392,17 +392,11 @@ impl McpManager {
                     t("space_event_delete", "Delete a calendar event"),
                     t("space_set_reminder", "Set or update reminder minutes for an event"),
                     t("space_today_summary", "Get today's events and recent notes as a brief"),
-                    t("space_email_inbox", "List recent emails from the inbox"),
-                    t("space_email_read", "Read the full body of an email message"),
-                    t("space_email_compose", "Send an email (draft and confirm with user first)"),
-                    t("space_email_search", "Search emails by keyword"),
-                    t("space_email_summary", "Summarize an email message"),
                     t("space_schedule_activity", "Create a recurring agent activity with a cron expression"),
                     t("space_list_schedules", "List recurring schedules for a group"),
                     t("space_sync_google_calendar", "Sync events from Google Calendar"),
                     t("space_sync_apple_calendar", "Sync events from Apple Calendar via CalDAV"),
                     t("space_sync_apple_notes", "Sync notes from Apple Notes via iCloud"),
-                    t("space_sync_gmail", "Sync emails from Gmail"),
                 ],
             },
             BuiltInServerInfo {

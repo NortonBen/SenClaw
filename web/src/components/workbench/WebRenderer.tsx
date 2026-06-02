@@ -1,17 +1,27 @@
 import type { WorkbenchArtifact } from '../../types';
 import { CopyPathButton } from './CopyPathButton';
+import { theme } from 'antd';
 
 interface Props {
   artifact: WorkbenchArtifact;
 }
 
 export function WebRenderer({ artifact }: Props) {
+  const { token } = theme.useToken();
+
   if (!artifact.url) {
-    return <div className="p-4 text-sm text-gray-400">No URL provided.</div>;
+    return <div className="p-4 text-sm" style={{ color: token.colorTextTertiary }}>No URL provided.</div>;
   }
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[10px] text-gray-500 flex-shrink-0">
+      <div
+        className="flex items-center justify-between gap-2 px-3 py-1.5 border-b text-[10px] flex-shrink-0"
+        style={{
+          background: token.colorFillQuaternary,
+          borderColor: token.colorBorderSecondary,
+          color: token.colorTextSecondary,
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <ServiceStatusDot status={artifact.process?.status} />
           <span className="font-mono truncate" title={artifact.url}>{artifact.url}</span>

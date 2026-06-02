@@ -1,26 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Button, Modal, Form, Input, Select, Tag, Empty, Spin, Popconfirm,
-  Typography, theme, Tooltip, Alert, Card, Badge,
+  Button, Modal, Form, Input, Tag, Empty, Spin, Popconfirm,
+  Typography, theme, Tooltip, Radio, TimePicker, Collapse, InputNumber, Alert,
 } from 'antd';
 import {
-  PlusOutlined, DeleteOutlined, ClockCircleOutlined, PlayCircleOutlined,
-  PauseCircleOutlined, ReloadOutlined,
+  PlusOutlined, DeleteOutlined, ClockCircleOutlined, MessageOutlined,
+  ReloadOutlined, CheckCircleTwoTone, CloseCircleTwoTone, RobotOutlined,
 } from '@ant-design/icons';
-import type { UseSpaceHook } from '../../../hooks/useSpace';
+import dayjs, { Dayjs } from 'dayjs';
+import { useNavigate } from 'react-router-dom';
+import type { UseSpaceHook, ScheduleCreatePayload, SpaceSchedule } from '../../../hooks/useSpace';
+import { ScheduleDetailPanel } from './ScheduleDetailPanel';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
-
-const CRON_PRESETS = [
-  { label: 'Mỗi ngày 7h sáng', value: '0 7 * * *' },
-  { label: 'Mỗi ngày 8h sáng', value: '0 8 * * *' },
-  { label: 'Mỗi ngày 12h trưa', value: '0 12 * * *' },
-  { label: 'Mỗi ngày 6h chiều', value: '0 18 * * *' },
-  { label: 'Thứ 2 đầu tuần 9h', value: '0 9 * * 1' },
-  { label: 'Mỗi thứ 6 5h chiều', value: '0 17 * * 5' },
-  { label: 'Tùy chỉnh...', value: '__custom__' },
-];
 
 const STATUS_MAP: Record<string, { color: string; label: string }> = {
   active: { color: 'green', label: 'Đang chạy' },
@@ -28,47 +21,66 @@ const STATUS_MAP: Record<string, { color: string; label: string }> = {
   completed: { color: 'default', label: 'Đã hủy' },
 };
 
+const WEEKDAY_OPTS = [
+  { label: 'CN', value: 0 },
+  { label: 'T2', value: 1 },
+  { label: 'T3', value: 2 },
+  { label: 'T4', value: 3 },
+  { label: 'T5', value: 4 },
+  { label: 'T6', value: 5 },
+  { label: 'T7', value: 6 },
+];
+
 interface Props {
   hook: UseSpaceHook;
-  groupFolder: string;
-  chatJid: string;
 }
 
-export function SchedulesList({ hook, groupFolder, chatJid }: Props) {
+function describeCron(s: SpaceSchedule): string {
+  const cron = (s.schedule_value || '').split(/\s+/);
+  if (cron.length !== 5) return s.schedule_value;
+  const [m, h, dom, , dow] = cron;
+  const hhmm = `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+  if (dom === '*' && dow === '*') return `Mỗi ngày · ${hhmm}`;
+  if (dom === '*' && dow === '1-5') return `Th 2–6 · ${hhmm}`;
+  if (dom === '*' && /^\d$/.test(dow)) {
+    const label = WEEKDAY_OPTS.find(w => w.value === Number(dow))?.label ?? dow;
+    return `Mỗi ${label} · ${hhmm}`;
+  }
+  if (/^\d+$/.test(dom) && dow === '*') return `Ngày ${dom} mỗi tháng · ${hhmm}`;
+  return s.schedule_value;
+}
+
+export function SchedulesList({ hook }: Props) {
   const { token } = theme.useToken();
-  const [showModal, setShowModal] = useState(false);
-  const [form] = Form.useForm();
-  const [saving, setSaving] = useState(false);
-  const [customCron, setCustomCron] = useState(false);
+  const navigate = useNavigate();
+  const [showAdd, setShowAdd] = useState(false);
+  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (groupFolder) hook.loadSchedules(groupFolder);
-  }, [groupFolder]);
+    hook.loadSchedules();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleCreate = async () => {
-    try {
-      const vals = await form.validateFields();
-      const cron = vals.cron_preset === '__custom__' ? vals.cron_custom : vals.cron_preset;
-      setSaving(true);
-      await hook.createSchedule(vals.prompt, cron, groupFolder, chatJid);
-      setShowModal(false);
-      form.resetFields();
-      setCustomCron(false);
-    } catch {
-      // validation error
-    } finally {
-      setSaving(false);
-    }
+  // Sort by next_run ascending so the soonest-up-next is first.
+  const byNextRun = (a: SpaceSchedule, b: SpaceSchedule) => {
+    const va = a.next_run ? new Date(a.next_run).getTime() : Number.MAX_SAFE_INTEGER;
+    const vb = b.next_run ? new Date(b.next_run).getTime() : Number.MAX_SAFE_INTEGER;
+    return va - vb;
   };
+  const active = useMemo(
+    () => hook.schedules.filter(s => s.status === 'active').sort(byNextRun),
+    [hook.schedules],
+  );
+  const paused = useMemo(
+    () => hook.schedules.filter(s => s.status === 'paused').sort(byNextRun),
+    [hook.schedules],
+  );
+  const completed = useMemo(
+    () => hook.schedules.filter(s => s.status === 'completed'),
+    [hook.schedules],
+  );
 
-  const handleCancel = async (id: string) => {
-    await hook.cancelSchedule(id, groupFolder);
-  };
-
-  const active = hook.schedules.filter(s => s.status === 'active');
-  const others = hook.schedules.filter(s => s.status !== 'active');
-
-  const noGroup = !groupFolder;
+  const openChat = (jid: string) => navigate(`/chats?jid=${encodeURIComponent(jid)}`);
 
   return (
     <div className="flex flex-col h-full">
@@ -78,21 +90,24 @@ export function SchedulesList({ hook, groupFolder, chatJid }: Props) {
         style={{ borderColor: token.colorBorderSecondary }}
       >
         <Title level={5} className="mb-0 flex-1">Lịch định kỳ</Title>
+        <Tooltip title="Agent AI có thể tạo/sửa/xoá lịch qua MCP (space_recurring_*)">
+          <Tag color="blue" className="!text-xs !mr-1 flex items-center gap-1">
+            <RobotOutlined /> Agent-ready
+          </Tag>
+        </Tooltip>
         <Tooltip title="Làm mới">
           <Button
             size="small"
             icon={<ReloadOutlined />}
             loading={hook.schedulesLoading}
-            onClick={() => hook.loadSchedules(groupFolder)}
-            disabled={noGroup}
+            onClick={() => hook.loadSchedules()}
           />
         </Tooltip>
         <Button
           type="primary"
           size="small"
           icon={<PlusOutlined />}
-          onClick={() => setShowModal(true)}
-          disabled={noGroup}
+          onClick={() => setShowAdd(true)}
         >
           Thêm lịch
         </Button>
@@ -100,156 +115,144 @@ export function SchedulesList({ hook, groupFolder, chatJid }: Props) {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        {noGroup && (
-          <Alert
-            type="warning"
-            title="Chưa chọn group"
-            description="Chức năng lịch định kỳ yêu cầu group folder. Kiểm tra Settings → Groups."
-            showIcon
-            className="mb-3"
-          />
-        )}
-
         {hook.schedulesLoading && (
           <div className="flex justify-center py-8"><Spin /></div>
         )}
 
-        {!hook.schedulesLoading && hook.schedules.length === 0 && !noGroup && (
-          <Empty
-            description={
-              <span>
-                Chưa có lịch định kỳ.{' '}
-                <Button type="link" size="small" onClick={() => setShowModal(true)}>
-                  Tạo ngay
-                </Button>
-              </span>
-            }
-            className="py-8"
-          />
+        {!hook.schedulesLoading && hook.schedules.length === 0 && (
+          <div className="py-8">
+            <Empty
+              description={
+                <span>
+                  Chưa có lịch định kỳ.{' '}
+                  <Button type="link" size="small" onClick={() => setShowAdd(true)}>
+                    Tạo ngay
+                  </Button>
+                </span>
+              }
+            />
+            <Alert
+              type="info"
+              showIcon
+              icon={<RobotOutlined />}
+              className="mt-4 mx-auto max-w-md"
+              message="Agent AI cũng có thể tạo lịch giúp bạn"
+              description={
+                <span style={{ fontSize: 12 }}>
+                  Nói với agent: <code>"Đặt lịch tìm giá vàng mỗi sáng 7h"</code> — agent sẽ dùng MCP tool{' '}
+                  <code>space_recurring_create</code> để tạo lịch và tự tạo chat session báo cáo.
+                </span>
+              }
+            />
+          </div>
         )}
 
-        {/* Active schedules */}
         {active.length > 0 && (
-          <div className="mb-4">
-            <Text type="secondary" className="text-xs uppercase tracking-wide mb-2 block">
-              Đang hoạt động ({active.length})
-            </Text>
-            <div className="space-y-2">
-              {active.map(s => (
-                <ScheduleCard key={s.id} schedule={s} onCancel={handleCancel} token={token} />
-              ))}
-            </div>
-          </div>
+          <Section title={`Đang hoạt động (${active.length})`}>
+            {active.map(s => (
+              <ScheduleCard
+                key={s.id}
+                schedule={s}
+                token={token}
+                onOpen={() => setOpenDetailId(s.id)}
+                onOpenChat={() => openChat(s.chat_jid)}
+                onCancel={() => hook.cancelSchedule(s.id)}
+              />
+            ))}
+          </Section>
         )}
 
-        {/* Completed / paused */}
-        {others.length > 0 && (
-          <div>
-            <Text type="secondary" className="text-xs uppercase tracking-wide mb-2 block">
-              Đã kết thúc ({others.length})
-            </Text>
-            <div className="space-y-2">
-              {others.map(s => (
-                <ScheduleCard key={s.id} schedule={s} onCancel={handleCancel} token={token} />
-              ))}
-            </div>
-          </div>
+        {paused.length > 0 && (
+          <Section title={`Tạm dừng (${paused.length})`}>
+            {paused.map(s => (
+              <ScheduleCard
+                key={s.id}
+                schedule={s}
+                token={token}
+                onOpen={() => setOpenDetailId(s.id)}
+                onOpenChat={() => openChat(s.chat_jid)}
+                onCancel={() => hook.cancelSchedule(s.id)}
+              />
+            ))}
+          </Section>
+        )}
+
+        {completed.length > 0 && (
+          <Section title={`Đã kết thúc (${completed.length})`}>
+            {completed.map(s => (
+              <ScheduleCard
+                key={s.id}
+                schedule={s}
+                token={token}
+                onOpen={() => setOpenDetailId(s.id)}
+                onOpenChat={() => openChat(s.chat_jid)}
+                onCancel={() => hook.cancelSchedule(s.id)}
+              />
+            ))}
+          </Section>
         )}
       </div>
 
-      {/* Create modal */}
-      <Modal
-        title="Thêm lịch định kỳ"
-        open={showModal}
-        onCancel={() => { setShowModal(false); form.resetFields(); setCustomCron(false); }}
-        onOk={handleCreate}
-        okText="Tạo"
-        cancelText="Hủy"
-        confirmLoading={saving}
-      >
-        <Alert
-          type="info"
-          className="mb-3"
-          title="Lịch định kỳ sẽ chạy agent với nội dung prompt vào thời điểm đã đặt."
-          showIcon
+      <ScheduleAddModal
+        open={showAdd}
+        onClose={() => setShowAdd(false)}
+        hook={hook}
+      />
+
+      {openDetailId && (
+        <ScheduleDetailPanel
+          scheduleId={openDetailId}
+          hook={hook}
+          onClose={() => setOpenDetailId(null)}
         />
-        <Form form={form} layout="vertical" className="mt-2">
-          <Form.Item
-            name="prompt"
-            label="Nhiệm vụ agent sẽ thực hiện"
-            rules={[{ required: true, message: 'Nhập nhiệm vụ' }]}
-            tooltip="Agent sẽ nhận prompt này và thực hiện mỗi lần lịch chạy"
-          >
-            <TextArea
-              rows={3}
-              placeholder="VD: Lấy giá vàng hôm nay và báo cáo vào chat&#10;VD: Kiểm tra hộp thư và tóm tắt email chưa đọc"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="cron_preset"
-            label="Lịch lặp lại"
-            rules={[{ required: true, message: 'Chọn lịch' }]}
-          >
-            <Select
-              placeholder="Chọn thời gian..."
-              options={CRON_PRESETS}
-              onChange={v => setCustomCron(v === '__custom__')}
-            />
-          </Form.Item>
-
-          {customCron && (
-            <Form.Item
-              name="cron_custom"
-              label="Cron expression"
-              tooltip="VD: '0 9 * * 1-5' = 9h sáng thứ 2-6"
-              rules={[{ required: true, message: 'Nhập cron expression' }]}
-            >
-              <Input
-                placeholder="0 7 * * * (phút giờ ngày tháng thứ)"
-                className="font-mono"
-              />
-            </Form.Item>
-          )}
-        </Form>
-      </Modal>
+      )}
     </div>
   );
 }
 
-// ─── Schedule card ─────────────────────────────────────────────────────────────
-
-interface CardProps {
-  schedule: ReturnType<typeof useScheduleType>;
-  onCancel: (id: string) => void;
-  token: ReturnType<typeof theme.useToken>['token'];
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-4">
+      <Text type="secondary" className="text-xs uppercase tracking-wide mb-2 block">{title}</Text>
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
 }
 
-// workaround for type inference
-function useScheduleType() {
-  return null as unknown as import('../../../hooks/useSpace').SpaceSchedule;
+function relativeNextRun(v: string | null): string {
+  if (!v) return '';
+  const diffMs = new Date(v).getTime() - Date.now();
+  if (diffMs <= 0) return 'sắp chạy';
+  const m = Math.floor(diffMs / 60_000);
+  if (m < 60) return `sau ${m} phút`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `sau ${h} giờ ${m % 60 ? `${m % 60}p` : ''}`.trim();
+  const d = Math.floor(h / 24);
+  return `sau ${d} ngày`;
 }
 
 function ScheduleCard({
-  schedule,
-  onCancel,
-  token,
+  schedule, onOpen, onOpenChat, onCancel, token,
 }: {
-  schedule: import('../../../hooks/useSpace').SpaceSchedule;
-  onCancel: (id: string) => void;
+  schedule: SpaceSchedule;
+  onOpen: () => void;
+  onOpenChat: () => void;
+  onCancel: () => void;
   token: ReturnType<typeof theme.useToken>['token'];
 }) {
   const st = STATUS_MAP[schedule.status] ?? { color: 'default', label: schedule.status };
 
-  const formatNext = (v: string | null) => {
+  const formatTs = (v: string | null) => {
     if (!v) return '—';
-    const d = new Date(v);
-    return d.toLocaleString('vi', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return new Date(v).toLocaleString('vi', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
   };
 
   return (
     <div
-      className="p-3 rounded border"
+      onClick={onOpen}
+      className="p-3 rounded border cursor-pointer transition-colors"
       style={{
         borderColor: schedule.status === 'active' ? token.colorPrimaryBorder : token.colorBorderSecondary,
         background: schedule.status === 'active' ? token.colorPrimaryBg : token.colorFillQuaternary,
@@ -258,39 +261,215 @@ function ScheduleCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <Tag color={st.color} className="!text-xs">{st.label}</Tag>
-            <Text className="font-mono text-xs" style={{ color: token.colorTextSecondary }}>
-              {schedule.schedule_value}
+            <Text className="text-xs" style={{ color: token.colorTextSecondary }}>
+              {describeCron(schedule)}
             </Text>
+            {schedule.last_status === 'success' && (
+              <Tooltip title="Lần chạy gần nhất: thành công">
+                <CheckCircleTwoTone twoToneColor={token.colorSuccess} style={{ fontSize: 12 }} />
+              </Tooltip>
+            )}
+            {schedule.last_status === 'error' && (
+              <Tooltip title="Lần chạy gần nhất: lỗi">
+                <CloseCircleTwoTone twoToneColor={token.colorError} style={{ fontSize: 12 }} />
+              </Tooltip>
+            )}
           </div>
-          <Text ellipsis className="text-sm block">{schedule.prompt}</Text>
-          <div className="flex gap-4 mt-1">
-            {schedule.next_run && (
+          <Text className="text-sm font-medium block truncate">{schedule.label}</Text>
+          <Text type="secondary" className="text-xs block truncate">{schedule.prompt}</Text>
+          <div className="flex gap-3 mt-1 flex-wrap">
+            {schedule.next_run && schedule.status === 'active' && (
               <Text type="secondary" style={{ fontSize: 11 }}>
                 <ClockCircleOutlined className="mr-1" />
-                Lần tới: {formatNext(schedule.next_run)}
+                Lần tới: {formatTs(schedule.next_run)}
+                <span className="ml-1" style={{ color: token.colorPrimary }}>
+                  · {relativeNextRun(schedule.next_run)}
+                </span>
               </Text>
             )}
             {schedule.last_run && (
               <Text type="secondary" style={{ fontSize: 11 }}>
-                Lần cuối: {formatNext(schedule.last_run)}
+                Lần cuối: {formatTs(schedule.last_run)}
               </Text>
             )}
           </div>
         </div>
 
-        {schedule.status === 'active' && (
-          <Popconfirm
-            title="Hủy lịch này?"
-            onConfirm={() => onCancel(schedule.id)}
-            okText="Hủy lịch"
-            cancelText="Không"
-          >
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        )}
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <Tooltip title="Mở chat session">
+            <Button
+              type="text" size="small" icon={<MessageOutlined />}
+              onClick={e => { e.stopPropagation(); onOpenChat(); }}
+            />
+          </Tooltip>
+          {schedule.status !== 'completed' && (
+            <Popconfirm
+              title="Xoá lịch này? Cả chat session đi kèm sẽ bị xoá."
+              onConfirm={(e) => { e?.stopPropagation(); onCancel(); }}
+              onCancel={(e) => e?.stopPropagation()}
+              okText="Xoá"
+              cancelText="Không"
+            >
+              <Button
+                type="text" size="small" danger icon={<DeleteOutlined />}
+                onClick={e => e.stopPropagation()}
+              />
+            </Popconfirm>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+// ─── Add modal ────────────────────────────────────────────────────────────────
+
+interface AddProps {
+  open: boolean;
+  onClose: () => void;
+  hook: UseSpaceHook;
+}
+
+function ScheduleAddModal({ open, onClose, hook }: AddProps) {
+  const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
+  const [frequency, setFrequency] = useState<'daily' | 'weekdays' | 'weekly' | 'monthly'>('daily');
+  const [useAdvanced, setUseAdvanced] = useState(false);
+
+  const handleOk = async () => {
+    try {
+      const vals = await form.validateFields();
+      setSaving(true);
+      const payload: ScheduleCreatePayload = useAdvanced
+        ? { prompt: vals.prompt, label: vals.label, cron_advanced: vals.cron_advanced }
+        : {
+            prompt: vals.prompt,
+            label: vals.label,
+            time_local: (vals.time as Dayjs).format('HH:mm'),
+            frequency,
+            weekday: frequency === 'weekly' ? vals.weekday : undefined,
+            day_of_month: frequency === 'monthly' ? vals.day_of_month : undefined,
+          };
+      const res = await hook.createSchedule(payload);
+      if (res) {
+        form.resetFields();
+        setFrequency('daily');
+        setUseAdvanced(false);
+        onClose();
+      }
+    } catch {
+      /* validation error */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Thêm lịch định kỳ"
+      open={open}
+      onCancel={() => { form.resetFields(); setUseAdvanced(false); onClose(); }}
+      onOk={handleOk}
+      okText="Tạo"
+      cancelText="Huỷ"
+      confirmLoading={saving}
+      destroyOnClose
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          time: dayjs().hour(7).minute(0),
+          weekday: 1,
+          day_of_month: 1,
+        }}
+      >
+        <Form.Item
+          name="label"
+          label="Tên gọi (tuỳ chọn)"
+          tooltip="Hiển thị trên thẻ và làm tên chat session"
+        >
+          <Input placeholder="VD: Báo giá vàng sáng" />
+        </Form.Item>
+
+        <Form.Item
+          name="prompt"
+          label="Yêu cầu cho agent"
+          rules={[{ required: true, message: 'Nhập nội dung' }]}
+        >
+          <TextArea
+            rows={3}
+            placeholder={
+              'VD: Tìm giá vàng SJC hôm nay và tóm tắt biến động so với hôm qua\n' +
+              'VD: Liệt kê email chưa đọc và phân loại theo độ ưu tiên'
+            }
+          />
+        </Form.Item>
+
+        {!useAdvanced && (
+          <>
+            <Form.Item label="Tần suất" required>
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                value={frequency}
+                onChange={e => setFrequency(e.target.value)}
+                options={[
+                  { label: 'Mỗi ngày', value: 'daily' },
+                  { label: 'Th 2–6', value: 'weekdays' },
+                  { label: 'Hàng tuần', value: 'weekly' },
+                  { label: 'Hàng tháng', value: 'monthly' },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="time"
+              label="Giờ chạy (theo giờ máy)"
+              rules={[{ required: true, message: 'Chọn giờ' }]}
+            >
+              <TimePicker format="HH:mm" minuteStep={5} style={{ width: 140 }} />
+            </Form.Item>
+
+            {frequency === 'weekly' && (
+              <Form.Item name="weekday" label="Thứ trong tuần" rules={[{ required: true }]}>
+                <Radio.Group optionType="button" options={WEEKDAY_OPTS} />
+              </Form.Item>
+            )}
+
+            {frequency === 'monthly' && (
+              <Form.Item
+                name="day_of_month"
+                label="Ngày trong tháng"
+                rules={[{ required: true }]}
+              >
+                <InputNumber min={1} max={28} />
+              </Form.Item>
+            )}
+          </>
+        )}
+
+        <Collapse
+          ghost
+          activeKey={useAdvanced ? ['adv'] : []}
+          onChange={k => setUseAdvanced((k as string[]).includes('adv'))}
+          items={[{
+            key: 'adv',
+            label: 'Nâng cao: Cron expression',
+            children: (
+              <Form.Item
+                name="cron_advanced"
+                rules={useAdvanced ? [{ required: true, message: 'Nhập cron 5 trường' }] : []}
+                tooltip="5 trường: phút giờ ngày tháng thứ. VD: 0 9 * * 1-5"
+              >
+                <Input placeholder="0 7 * * *" className="font-mono" />
+              </Form.Item>
+            ),
+          }]}
+        />
+      </Form>
+    </Modal>
   );
 }

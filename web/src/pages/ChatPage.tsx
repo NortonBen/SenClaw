@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Layout } from 'antd';
+import { useSearchParams } from 'react-router-dom';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
 import { AgentSidebar } from '../components/AgentSidebar';
@@ -11,6 +12,22 @@ export function ChatPage() {
   const { ws } = useAppContext();
   const { dispatchParents, subscribeAll } = ws;
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep link: /chats?jid=<jid> selects that chat once it lands in ws.groups.
+  useEffect(() => {
+    const target = searchParams.get('jid');
+    if (!target) return;
+    if (ws.groups.some(g => g.jid === target)) {
+      setSelectedJid(target);
+      if (!ws.subscribed.has(target)) ws.subscribe(target);
+      // Clean the URL so back-navigation doesn't re-trigger selection.
+      const next = new URLSearchParams(searchParams);
+      next.delete('jid');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, ws.groups.length]);
 
   useEffect(() => {
     if (!selectedJid && ws.groups.length > 0) {

@@ -13,7 +13,10 @@ import {
   Upload,
   theme,
 } from 'antd';
-import { AppstoreOutlined, DeleteOutlined, LinkOutlined, UploadOutlined } from '@ant-design/icons';
+import {
+  AppstoreOutlined, DeleteOutlined, InfoCircleOutlined, LinkOutlined, UploadOutlined,
+} from '@ant-design/icons';
+import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -30,6 +33,7 @@ export const SpaceAppsSettings: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [registering, setRegistering] = useState(false);
+  const [detailApp, setDetailApp] = useState<DetailApp | null>(null);
   const [form] = Form.useForm();
 
   const loadApps = async () => {
@@ -143,6 +147,17 @@ export const SpaceAppsSettings: React.FC = () => {
         {apps.map(app => {
           const manifest = app.manifest ?? {};
           const integration = manifest.integration ?? {};
+          const detail: DetailApp = {
+            id: app.id,
+            name: manifest.name ?? app.id,
+            description: manifest.description,
+            icon: manifest.icon,
+            integration: {
+              type: integration.type ?? 'iframe',
+              url: integration.url ?? 'no url',
+            },
+            manifest,
+          };
           return (
             <Card
               key={app.id}
@@ -177,6 +192,13 @@ export const SpaceAppsSettings: React.FC = () => {
                 </Tag>
                 <Tag>{integration.url ?? 'no url'}</Tag>
                 {manifest.bridge?.postMessage && <Tag color="cyan">SemaClaw bridge</Tag>}
+                <Button
+                  size="small"
+                  icon={<InfoCircleOutlined />}
+                  onClick={() => setDetailApp(detail)}
+                >
+                  Details & logs
+                </Button>
               </Space>
             </Card>
           );
@@ -187,6 +209,12 @@ export const SpaceAppsSettings: React.FC = () => {
           </Card>
         )}
       </Space>
+
+      <SpaceAppDetailModal
+        app={detailApp}
+        open={!!detailApp}
+        onClose={() => setDetailApp(null)}
+      />
     </div>
   );
 };

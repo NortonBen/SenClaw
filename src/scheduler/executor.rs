@@ -11,16 +11,27 @@ use tracing::{debug, info, warn};
 
 use crate::db::Db;
 use crate::scheduler::task_scheduler::TaskExecutor;
-use crate::types::{ContextMode, RunStatus, ScheduledTask, TaskRunLogInsert};
+use crate::types::{AgentApi, ContextMode, RunStatus, ScheduledTask, TaskRunLogInsert};
 
 /// Executor that handles each context mode appropriately.
 pub struct DefaultTaskExecutor {
     db: Arc<Db>,
+    /// Used by `ContextMode::Group` to dispatch the scheduled prompt into the
+    /// owning chat session. `None` falls back to a stub log (useful in tests).
+    agent_api: Option<Arc<dyn AgentApi>>,
 }
 
 impl DefaultTaskExecutor {
     pub fn new(db: Arc<Db>) -> Self {
-        Self { db }
+        Self {
+            db,
+            agent_api: None,
+        }
+    }
+
+    pub fn with_agent_api(mut self, api: Arc<dyn AgentApi>) -> Self {
+        self.agent_api = Some(api);
+        self
     }
 }
 
@@ -41,17 +52,7 @@ impl TaskExecutor for DefaultTaskExecutor {
                 );
                 Ok(format!("[isolated] task queued: {}", task.prompt))
             }
-            ContextMode::Group => {
-                info!(
-                    task_id = %task.id,
-                    chat_jid = %task.chat_jid,
-                    "[TaskScheduler] group task (will be sent to group chat when agent pool is wired)"
-                );
-                Ok(format!(
-                    "[group] task queued for {}: {}",
-                    task.chat_jid, task.prompt
-                ))
-            }
+            ContextMode::Group => self.execute_group(&task).await,
         };
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -165,5 +166,39 @@ impl DefaultTaskExecutor {
         );
 
         Ok(result)
+    }
+
+    /// Group mode: dispatch the prompt as an agent run on the schedule's chat
+    /// session. Agent replies stream through `broadcast_reply` and land in the
+    /// existing chat history (channel_messages + WS push), so the recurring
+    /// schedule's chat view shows live output.
+    async fn execute_group(&self, task: &ScheduledTask) -> anyhow::Result<String> {
+        let api = match &self.agent_api {
+            Some(a) => a,
+            None => {
+                info!(
+                    task_id = %task.id,
+                    chat_jid = %task.chat_jid,
+                    "[TaskScheduler] group task: agent api not wired, logging only"
+                );
+                return Ok(format!("[group:stub] {}", task.prompt));
+            }
+        };
+        let group = match self.db.get_group(&task.chat_jid) {
+            Ok(Some(g)) => g,
+            Ok(None) => anyhow::bail!("chat session not found: {}", task.chat_jid),
+            Err(e) => anyhow::bail!("db error: {e}"),
+        };
+        info!(
+            task_id = %task.id,
+            chat_jid = %task.chat_jid,
+            "[TaskScheduler] group task: dispatching to agent"
+        );
+        api.process_and_wait(&task.chat_jid, &group, &task.prompt)
+            .await?;
+        let reply = api
+            .get_last_reply_text(&task.chat_jid)
+            .unwrap_or_else(|| "(no reply)".into());
+        Ok(reply)
     }
 }

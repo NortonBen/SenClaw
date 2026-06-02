@@ -3,7 +3,6 @@ import { Typography, Badge, theme, Tooltip } from 'antd';
 import {
   FileTextOutlined,
   CalendarOutlined,
-  MailOutlined,
   AppstoreOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
@@ -11,7 +10,7 @@ import type { TodaySummary } from '../../hooks/useSpace';
 
 const { Text } = Typography;
 
-export type SpaceSection = 'notes' | 'calendar' | 'email' | 'apps' | 'schedules';
+export type SpaceSection = 'notes' | 'calendar' | 'apps' | 'schedules';
 
 export interface SpaceSidebarApp {
   id: string;
@@ -31,11 +30,10 @@ interface Props {
   activeSection: SpaceSection | `app:${string}`;
   onSelect: (s: SpaceSection | `app:${string}`) => void;
   todaySummary: TodaySummary | null;
-  unreadEmails?: number;
   apps?: SpaceSidebarApp[];
 }
 
-export function SpaceSidebar({ activeSection, onSelect, todaySummary, unreadEmails = 0, apps = [] }: Props) {
+export function SpaceSidebar({ activeSection, onSelect, todaySummary, apps = [] }: Props) {
   const { token } = theme.useToken();
 
   const navItems: NavItem[] = [
@@ -46,12 +44,27 @@ export function SpaceSidebar({ activeSection, onSelect, todaySummary, unreadEmai
       label: 'Lịch trình',
       badge: todaySummary?.events?.length ?? 0,
     },
-    { key: 'email', icon: <MailOutlined />, label: 'Email', badge: unreadEmails },
     { key: 'schedules', icon: <ClockCircleOutlined />, label: 'Định kỳ' },
     { key: 'apps', icon: <AppstoreOutlined />, label: 'Apps' },
     ...apps.map(app => ({
       key: `app:${app.id}` as `app:${string}`,
-      icon: <span>{app.icon ?? '▣'}</span>,
+      icon: (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 24,
+            height: 24,
+            borderRadius: 7,
+            background: token.colorFillSecondary,
+            fontSize: 14,
+            lineHeight: 1,
+          }}
+        >
+          {app.icon ?? '▣'}
+        </span>
+      ),
       label: app.name,
       nested: true,
     })),

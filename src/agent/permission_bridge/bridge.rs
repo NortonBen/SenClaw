@@ -8,9 +8,11 @@ use crate::types::InlineButton;
 use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
 use super::types::{
     AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission, PermissionOption,
-    PermissionPayload, RuleAction, RuleMatcher, RuleMatcherType, ToolAutoAcceptRule, ToolCategory,
+    PermissionPayload, RuleAction, RuleMatcherType, ToolAutoAcceptRule, ToolCategory,
 };
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
+
+const DEPRECATED_DEFAULT_RULE_IDS: &[&str] = &["tool-category-skill", "tool-category-agent"];
 
 pub struct PermissionBridge {
     pub(crate) pending_permissions: Mutex<HashMap<String, PendingPermission>>,
@@ -58,6 +60,13 @@ impl PermissionBridge {
     // ===== Rule management =====
 
     pub fn add_rule(&self, rule: ToolAutoAcceptRule) {
+        if DEPRECATED_DEFAULT_RULE_IDS.contains(&rule.id.as_str()) {
+            tracing::info!(
+                "[PermissionBridge] ignoring deprecated default rule id={}",
+                rule.id
+            );
+            return;
+        }
         let mut rules = self.tool_rules.lock().unwrap();
         rules.retain(|r| r.id != rule.id); // replace if same id
         tracing::info!(
@@ -76,6 +85,10 @@ impl PermissionBridge {
     }
 
     pub fn update_rule(&self, rule: ToolAutoAcceptRule) {
+        if DEPRECATED_DEFAULT_RULE_IDS.contains(&rule.id.as_str()) {
+            self.remove_rule(&rule.id);
+            return;
+        }
         let mut rules = self.tool_rules.lock().unwrap();
         if let Some(existing) = rules.iter_mut().find(|r| r.id == rule.id) {
             *existing = rule;
@@ -91,14 +104,14 @@ impl PermissionBridge {
     }
 
     /// Check if `tool_name` (sema-core format, e.g. `mcp__browser__search`) is auto-accepted.
-    fn should_auto_accept(&self, tool_name: &str) -> bool {
+    fn should_auto_accept(&self, tool_name: &str, content: &serde_json::Value) -> bool {
         if *self.accept_all.lock().unwrap() {
             return true;
         }
         let rules = self.tool_rules.lock().unwrap();
         rules.iter().any(|r| {
             r.enabled
-                && Self::rule_matches(r, tool_name)
+                && Self::rule_matches(r, tool_name, content)
                 && matches!(
                     r.action,
                     RuleAction::AutoAccept | RuleAction::AutoAcceptAndAllow
@@ -106,10 +119,23 @@ impl PermissionBridge {
         })
     }
 
-    fn rule_matches(rule: &ToolAutoAcceptRule, tool_name: &str) -> bool {
+    fn rule_matches(
+        rule: &ToolAutoAcceptRule,
+        tool_name: &str,
+        content: &serde_json::Value,
+    ) -> bool {
         match rule.matcher.matcher_type {
             RuleMatcherType::Always => true,
             RuleMatcherType::ToolExact => rule.matcher.tool_name.as_deref() == Some(tool_name),
+            RuleMatcherType::SkillExact => {
+                if tool_name != "Skill" {
+                    return false;
+                }
+                let Some(expected_skill) = rule.matcher.skill_name.as_deref() else {
+                    return false;
+                };
+                content.get("skill").and_then(|v| v.as_str()) == Some(expected_skill)
+            }
             RuleMatcherType::McpServer => {
                 let Some(server) = rule.matcher.server.as_deref() else {
                     return false;
@@ -358,7 +384,7 @@ impl PermissionBridge {
         let rule_count = self.tool_rules.lock().unwrap().len();
         let accept_all = *self.accept_all.lock().unwrap();
         tracing::info!("[PermissionBridge] permission request tool={tool_name} accept_all={accept_all} rules={rule_count}");
-        if self.should_auto_accept(tool_name) {
+        if self.should_auto_accept(tool_name, content) {
             tracing::info!("[PermissionBridge] auto-accepting tool={tool_name} group={group_jid}");
             self.api
                 .respond_to_tool_permission(group_jid, tool_name, "allow");
@@ -648,36 +674,7 @@ impl PermissionBridge {
 }
 
 fn default_tool_rules() -> Vec<ToolAutoAcceptRule> {
-    vec![
-        ToolAutoAcceptRule {
-            id: "tool-category-skill".to_string(),
-            matcher: RuleMatcher {
-                matcher_type: RuleMatcherType::ToolCategory,
-                pattern: None,
-                tool_name: None,
-                server: None,
-                tool: None,
-                category: Some(ToolCategory::Skill),
-            },
-            action: RuleAction::AutoAccept,
-            enabled: true,
-            description: Some("Auto accept Skill invocations".to_string()),
-        },
-        ToolAutoAcceptRule {
-            id: "tool-category-agent".to_string(),
-            matcher: RuleMatcher {
-                matcher_type: RuleMatcherType::ToolCategory,
-                pattern: None,
-                tool_name: None,
-                server: None,
-                tool: None,
-                category: Some(ToolCategory::Agent),
-            },
-            action: RuleAction::AutoAccept,
-            enabled: true,
-            description: Some("Auto accept subagent Task invocations".to_string()),
-        },
-    ]
+    Vec::new()
 }
 
 fn glob_match(pattern: &str, text: &str) -> bool {

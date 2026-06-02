@@ -6,7 +6,6 @@ import { SpaceSidebar, type SpaceSection } from '../components/space/SpaceSideba
 import { NotesList } from '../components/space/notes/NotesList';
 import { NoteEditor } from '../components/space/notes/NoteEditor';
 import { CalendarView } from '../components/space/calendar/CalendarView';
-import { InboxView } from '../components/space/email/InboxView';
 import { SchedulesList } from '../components/space/schedules/SchedulesList';
 import { AppsGallery } from '../components/space/AppsGallery';
 import { SpaceAppFrame, type SpaceAppRuntime } from '../components/space/SpaceAppFrame';
@@ -163,14 +162,7 @@ export function SpacePage() {
   const contentMap: Record<SpaceSection, React.ReactNode> = {
     notes: NotesPanel,
     calendar: <CalendarView hook={space} />,
-    email: <InboxView hook={space} />,
-    schedules: (
-      <SchedulesList
-        hook={space}
-        groupFolder={groupFolder}
-        chatJid={chatJid}
-      />
-    ),
+    schedules: <SchedulesList hook={space} />,
     apps: (
       <AppsGallery
         groupFolder={groupFolder}

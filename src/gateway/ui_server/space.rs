@@ -1,4 +1,4 @@
-//! REST handlers for the Space feature (notes, calendar, email, schedules, apps).
+//! REST handlers for the Space feature (notes, calendar, schedules, apps).
 //!
 //! Routes are registered in `core.rs` under the `/api/space/*` prefix.
 //! All DB access goes through `Db::with_conn` on the SQLite pool.
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Json, Response},
 };
 use axum_extra::extract::Multipart;
@@ -576,336 +576,117 @@ pub(crate) async fn space_today_summary(
     Ok(Json(v))
 }
 
-// ─── Email ────────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub(crate) struct EmailInboxQuery {
-    account_id: Option<String>,
-    #[serde(default = "default_limit")]
-    limit: u32,
-}
-
-pub(crate) async fn space_email_inbox(
-    State(s): State<Arc<UiState>>,
-    Query(q): Query<EmailInboxQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv.email_inbox(q.account_id, q.limit);
-
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
-    Ok(Json(v))
-}
-
-pub(crate) async fn space_email_read(
-    State(s): State<Arc<UiState>>,
-    AxumPath(msg_id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv.email_read(msg_id);
-    if result.is_error {
-        return Err(AppError(StatusCode::NOT_FOUND, result.content));
-    }
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
-    Ok(Json(v))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EmailSearchQuery {
-    q: String,
-    account_id: Option<String>,
-    #[serde(default = "default_limit")]
-    limit: u32,
-}
-
-pub(crate) async fn space_email_search(
-    State(s): State<Arc<UiState>>,
-    Query(q): Query<EmailSearchQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv.email_search(q.q, q.account_id, q.limit);
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
-    Ok(Json(v))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EmailSendBody {
-    to: String,
-    subject: String,
-    body: String,
-    account_id: Option<String>,
-}
-
-pub(crate) async fn space_email_send(
-    State(s): State<Arc<UiState>>,
-    Json(b): Json<EmailSendBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv.email_compose(b.to, b.subject, b.body, b.account_id);
-    if result.is_error {
-        return Err(AppError(StatusCode::BAD_GATEWAY, result.content));
-    }
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
-    Ok(Json(v))
-}
-
-/// AI email draft — stub: returns a skeleton body that the space-assistant
-/// persona would normally fill via agent loop. The frontend calls this
-/// endpoint when user clicks "AI soạn thảo".
-#[derive(Deserialize)]
-pub(crate) struct EmailDraftBody {
-    prompt: String,
-}
-
-pub(crate) async fn space_email_draft(
-    State(_s): State<Arc<UiState>>,
-    Json(b): Json<EmailDraftBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    // Minimal template-based draft — replace with actual agent call when
-    // the agent loop integration is ready (Phase 3).
-    let subject = format!("Re: {}", b.prompt.chars().take(60).collect::<String>());
-    let body = format!("Kính gửi,\n\n{}\n\nTrân trọng,\n[Tên của bạn]", b.prompt);
-    Ok(Json(
-        serde_json::json!({ "subject": subject, "body": body }),
-    ))
-}
-
-// ─── Email accounts ───────────────────────────────────────────────────────────
-
-pub(crate) async fn space_email_accounts_list(
-    State(s): State<Arc<UiState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db = db(&s)?;
-    let rows = db
-        .with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, label, email, imap_host, imap_port, smtp_host, smtp_port, use_tls, created_at
-                 FROM space_email_accounts ORDER BY created_at DESC",
-            )?;
-            let rows: Vec<serde_json::Value> = stmt
-                .query_map([], |row| {
-                    Ok(serde_json::json!({
-                        "id":        row.get::<_,String>(0)?,
-                        "label":     row.get::<_,String>(1)?,
-                        "email":     row.get::<_,String>(2)?,
-                        "imap_host": row.get::<_,String>(3)?,
-                        "imap_port": row.get::<_,i64>(4)?,
-                        "smtp_host": row.get::<_,String>(5)?,
-                        "smtp_port": row.get::<_,i64>(6)?,
-                        "use_tls":   row.get::<_,i32>(7)? != 0,
-                        "created_at":row.get::<_,i64>(8)?,
-                    }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            Ok(rows)
-        })
-        .map_err(internal)?;
-
-    Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct EmailAccountCreateBody {
-    label: String,
-    email: String,
-    imap_host: String,
-    #[serde(default = "default_imap_port")]
-    imap_port: i64,
-    smtp_host: String,
-    #[serde(default = "default_smtp_port")]
-    smtp_port: i64,
-    username: String,
-    password: String,
-    #[serde(default = "default_true")]
-    use_tls: bool,
-}
-
-fn default_imap_port() -> i64 {
-    993
-}
-fn default_smtp_port() -> i64 {
-    587
-}
-fn default_true() -> bool {
-    true
-}
-
-pub(crate) async fn space_email_accounts_create(
-    State(s): State<Arc<UiState>>,
-    Json(b): Json<EmailAccountCreateBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    if b.label.trim().is_empty()
-        || b.email.trim().is_empty()
-        || b.imap_host.trim().is_empty()
-        || b.smtp_host.trim().is_empty()
-        || b.username.trim().is_empty()
-        || b.password.is_empty()
-    {
-        return Err(AppError(
-            StatusCode::BAD_REQUEST,
-            "Missing required email account fields".into(),
-        ));
-    }
-    if !(1..=65_535).contains(&b.imap_port) || !(1..=65_535).contains(&b.smtp_port) {
-        return Err(AppError(
-            StatusCode::BAD_REQUEST,
-            "Invalid email port".into(),
-        ));
-    }
-
-    let db = db(&s)?;
-    let id = Uuid::new_v4().to_string();
-    let now = now_ms();
-
-    // Password should be AES-GCM encrypted in production (Phase 3).
-    // Stored as-is for Phase 0 to unblock development — mark clearly.
-    let password_stored = format!("plaintext:{}", b.password);
-
-    db.with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO space_email_accounts
-             (id, label, email, imap_host, imap_port, smtp_host, smtp_port, username, password, use_tls, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![
-                id, b.label, b.email, b.imap_host, b.imap_port,
-                b.smtp_host, b.smtp_port, b.username, password_stored,
-                b.use_tls as i32, now
-            ],
-        )?;
-        Ok(())
-    })
-    .map_err(internal)?;
-
-    Ok(Json(serde_json::json!({
-        "id": id,
-        "label": b.label,
-        "email": b.email,
-        "imap_host": b.imap_host,
-        "imap_port": b.imap_port,
-        "smtp_host": b.smtp_host,
-        "smtp_port": b.smtp_port,
-        "use_tls": b.use_tls,
-        "created_at": now,
-    })))
-}
-
-pub(crate) async fn space_email_accounts_delete(
-    State(s): State<Arc<UiState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db = db(&s)?;
-    db.with_conn(|conn| {
-        conn.execute("DELETE FROM space_email_accounts WHERE id=?1", params![&id])?;
-        conn.execute(
-            "DELETE FROM space_email_cache WHERE account_id=?1",
-            params![&id],
-        )?;
-        Ok(())
-    })
-    .map_err(internal)?;
-
-    Ok(Json(serde_json::json!({ "success": true })))
-}
-
 // ─── Schedules ────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub(crate) struct ScheduleListQuery {
-    group: String,
-}
-
-pub(crate) async fn space_schedules_list(
-    State(s): State<Arc<UiState>>,
-    Query(q): Query<ScheduleListQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv.list_schedules(q.group);
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
-    Ok(Json(v))
-}
+//
+// Recurring schedule sessions. Each schedule owns a dedicated chat session
+// (a `groups` row with jid="schedule:<id>", folder="schedule_<id>") so the
+// agent runs land in that conversation.
+//
+// All logic lives on `SpaceServer` so it's shared with the `space_recurring_*`
+// MCP tools. These handlers are thin adaptors that translate JSON payloads.
 
 #[derive(Deserialize)]
 pub(crate) struct ScheduleCreateBody {
     prompt: String,
-    cron: String,
-    group_folder: String,
-    chat_jid: String,
+    label: Option<String>,
+    time_local: Option<String>,
+    frequency: Option<String>,
+    weekday: Option<u32>,
+    day_of_month: Option<u32>,
+    cron_advanced: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ScheduleUpdateBody {
+    prompt: Option<String>,
+    label: Option<String>,
+    status: Option<String>,
+    time_local: Option<String>,
+    frequency: Option<String>,
+    weekday: Option<u32>,
+    day_of_month: Option<u32>,
+    cron_advanced: Option<String>,
+}
+
+fn space_server(s: &UiState) -> Result<crate::mcp::space_server::SpaceServer, AppError> {
+    let db_arc =
+        s.db.clone()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
+    Ok(crate::mcp::space_server::SpaceServer::new(db_arc))
+}
+
+fn tool_result_to_response(
+    r: crate::mcp::schedule_server::ToolResult,
+    err_status: StatusCode,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if r.is_error {
+        return Err(AppError(err_status, r.content));
+    }
+    let v: serde_json::Value = serde_json::from_str(&r.content).unwrap_or_default();
+    Ok(Json(v))
+}
+
+pub(crate) async fn space_schedules_list(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tool_result_to_response(
+        space_server(&s)?.recurring_list(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
 }
 
 pub(crate) async fn space_schedules_create(
     State(s): State<Arc<UiState>>,
     Json(b): Json<ScheduleCreateBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv
-        .schedule_activity(b.prompt, b.cron, b.group_folder, b.chat_jid)
+    let r = space_server(&s)?
+        .recurring_create(
+            b.prompt,
+            b.label,
+            b.time_local,
+            b.frequency,
+            b.weekday,
+            b.day_of_month,
+            b.cron_advanced,
+        )
         .await;
-    if result.is_error {
-        return Err(AppError(StatusCode::BAD_REQUEST, result.content));
-    }
-    let v: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
-    Ok(Json(v))
+    tool_result_to_response(r, StatusCode::BAD_REQUEST)
 }
 
-#[derive(Deserialize)]
-pub(crate) struct ScheduleCancelBody {
-    group_folder: String,
+pub(crate) async fn space_schedules_detail(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tool_result_to_response(space_server(&s)?.recurring_get(&id), StatusCode::NOT_FOUND)
+}
+
+pub(crate) async fn space_schedules_update(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(b): Json<ScheduleUpdateBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let r = space_server(&s)?.recurring_update(
+        &id,
+        b.prompt,
+        b.label,
+        b.status,
+        b.time_local,
+        b.frequency,
+        b.weekday,
+        b.day_of_month,
+        b.cron_advanced,
+    );
+    tool_result_to_response(r, StatusCode::BAD_REQUEST)
 }
 
 pub(crate) async fn space_schedules_cancel(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
-    Json(b): Json<ScheduleCancelBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let result = srv.list_schedules(b.group_folder.clone()); // validate ownership
-    if result.is_error {
-        return Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, result.content));
-    }
-
-    // Cancel = set status completed
-    let db_ref =
-        s.db.as_deref()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-    db_ref
-        .with_conn(|conn| {
-            conn.execute(
-                "UPDATE scheduled_tasks SET status='completed' WHERE id=?1 AND group_folder=?2",
-                params![id, b.group_folder],
-            )?;
-            Ok(())
-        })
-        .map_err(internal)?;
-
-    Ok(Json(serde_json::json!({ "success": true, "id": id })))
+    tool_result_to_response(
+        space_server(&s)?.recurring_delete(&id),
+        StatusCode::NOT_FOUND,
+    )
 }
 
 // ─── Apps (micro-frontend registry) ──────────────────────────────────────────
@@ -1278,6 +1059,16 @@ pub(crate) async fn space_apps_delete(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+pub(crate) async fn space_apps_restart(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if let Some(launcher) = &s.space_mcp_launcher {
+        launcher.restart_app(&id).await;
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
 pub(crate) async fn space_apps_static(
     State(s): State<Arc<UiState>>,
     AxumPath((id, req_path)): AxumPath<(String, String)>,
@@ -1589,7 +1380,7 @@ pub(crate) async fn space_app_mcp_register(
             return Err(AppError(
                 StatusCode::BAD_REQUEST,
                 "Invalid MCP transport".into(),
-            ))
+            ));
         }
     };
     let name = b.name.unwrap_or_else(|| format!("space-app-{id}"));
@@ -1656,6 +1447,113 @@ pub(crate) async fn space_app_mcp_info(
         "appId": id,
         "declared": declared,
         "server": server,
+    })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SpaceAppLogsQuery {
+    max_bytes: Option<usize>,
+}
+
+fn installed_app_dir_from_manifest(
+    s: &UiState,
+    id: &str,
+    manifest: Option<&serde_json::Value>,
+) -> Result<PathBuf, AppError> {
+    manifest
+        .and_then(|m| m["install"]["localPath"].as_str())
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(|| space_app_dir(s, id))
+}
+
+fn space_app_runtime_log_path(
+    s: &UiState,
+    id: &str,
+    manifest: Option<&serde_json::Value>,
+) -> Result<PathBuf, AppError> {
+    let app_dir = installed_app_dir_from_manifest(s, id, manifest)?;
+    Ok(super::space_mcp::app_runtime_log_path(&app_dir))
+}
+
+pub(crate) async fn space_app_logs_get(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Query(q): Query<SpaceAppLogsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(&s)?;
+    let manifest: Option<serde_json::Value> = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?;
+
+    let log_path = space_app_runtime_log_path(&s, &id, manifest.as_ref())?;
+    let max_bytes = q.max_bytes.unwrap_or(128 * 1024).clamp(1, 1024 * 1024);
+    let metadata = tokio::fs::metadata(&log_path).await.ok();
+    let content = match metadata.as_ref().map(|m| m.len()).unwrap_or(0) {
+        0 => String::new(),
+        size => {
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            let mut file = tokio::fs::File::open(&log_path).await.map_err(internal)?;
+            let start = size.saturating_sub(max_bytes as u64);
+            if start > 0 {
+                file.seek(std::io::SeekFrom::Start(start))
+                    .await
+                    .map_err(internal)?;
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).await.map_err(internal)?;
+            String::from_utf8_lossy(&bytes).to_string()
+        }
+    };
+
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "path": log_path.to_string_lossy(),
+        "exists": metadata.is_some(),
+        "size": metadata.map(|m| m.len()).unwrap_or(0),
+        "maxBytes": max_bytes,
+        "content": content,
+    })))
+}
+
+pub(crate) async fn space_app_logs_clear(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(&s)?;
+    let manifest: Option<serde_json::Value> = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?;
+
+    let log_path = space_app_runtime_log_path(&s, &id, manifest.as_ref())?;
+    if let Some(parent) = log_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(internal)?;
+    }
+    tokio::fs::write(&log_path, "").await.map_err(internal)?;
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "path": log_path.to_string_lossy(),
+        "cleared": true,
     })))
 }
 
@@ -1771,18 +1669,6 @@ pub(crate) async fn space_sync_apple_notes(
     Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
 }
 
-pub(crate) async fn space_sync_gmail(
-    State(s): State<Arc<UiState>>,
-    Json(b): Json<SyncBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db_arc =
-        s.db.clone()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-    let srv = crate::mcp::space_server::SpaceServer::new(db_arc);
-    let r = srv.sync_gmail(b.token, b.days.unwrap_or(7));
-    Ok(Json(serde_json::from_str(&r.content).unwrap_or_default()))
-}
-
 #[derive(Deserialize)]
 pub(crate) struct GoogleWorkspaceSyncBody {
     token: String,
@@ -1804,7 +1690,6 @@ pub(crate) async fn space_sync_google_workspace(
 
     let services = b.services.unwrap_or_else(|| {
         vec![
-            "gmail".to_string(),
             "calendar".to_string(),
             "notes".to_string(),
         ]
@@ -1818,14 +1703,6 @@ pub(crate) async fn space_sync_google_workspace(
     let mut results = serde_json::Map::new();
     for service in services {
         match service.as_str() {
-            "gmail" => {
-                let r = srv.sync_gmail(token.clone(), days);
-                results.insert(
-                    "gmail".to_string(),
-                    serde_json::from_str(&r.content)
-                        .unwrap_or_else(|_| serde_json::json!({ "status": "error" })),
-                );
-            }
             "calendar" => {
                 let r = srv.sync_google_calendar(token.clone(), days);
                 results.insert(
@@ -1860,4 +1737,88 @@ pub(crate) async fn space_sync_google_workspace(
         "days": days,
         "results": results,
     })))
+}
+
+pub(crate) async fn space_apps_proxy(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+    req: axum::extract::Request<Body>,
+) -> Result<Response, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+
+    let manifest: Option<serde_json::Value> = db(&s)?
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?;
+
+    let manifest =
+        manifest.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "App not found".into()))?;
+
+    let port = manifest
+        .get("runtime")
+        .and_then(|r| r.get("port"))
+        .and_then(|p| p.as_u64())
+        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "App does not have a port".into()))?;
+
+    let path_str = if path.starts_with('/') {
+        path.clone()
+    } else {
+        format!("/{}", path)
+    };
+    let query_string = req
+        .uri()
+        .query()
+        .map(|q| format!("?{}", q))
+        .unwrap_or_default();
+    let target_url = format!("http://127.0.0.1:{}{}{}", port, path_str, query_string);
+
+    let client = reqwest::Client::new();
+
+    let (parts, body) = req.into_parts();
+    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read body: {}", e),
+        )
+    })?;
+
+    let mut builder = client.request(parts.method.clone(), &target_url);
+    for (name, value) in parts.headers.iter() {
+        if name != axum::http::header::HOST {
+            builder = builder.header(name, value);
+        }
+    }
+
+    let reqwest_req = builder.body(body_bytes).build().map_err(internal)?;
+    let res = client.execute(reqwest_req).await.map_err(|e| {
+        AppError(
+            StatusCode::BAD_GATEWAY,
+            format!("Proxy request failed: {}", e),
+        )
+    })?;
+
+    let mut response_builder = Response::builder().status(res.status());
+    for (name, value) in res.headers() {
+        response_builder = response_builder.header(name, value);
+    }
+
+    Ok(response_builder
+        .body(Body::from_stream(res.bytes_stream()))
+        .unwrap())
+}
+
+pub(crate) async fn space_apps_proxy_root(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    req: axum::extract::Request<Body>,
+) -> Result<Response, AppError> {
+    space_apps_proxy(State(s), AxumPath((id, "".to_string())), req).await
 }

@@ -13,7 +13,6 @@ import {
   ExperimentOutlined,
   AudioOutlined,
   SoundOutlined,
-  MailOutlined,
   AppstoreOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
@@ -30,7 +29,6 @@ import { LocalModelsSettings } from '../components/settings/LocalModelsSettings'
 import { CognitiveSettings } from '../components/settings/CognitiveSettings';
 import { WhisperSettings } from '../components/settings/WhisperSettings';
 import { TtsSettings } from '../components/settings/TtsSettings';
-import { EmailSettings } from '../components/settings/EmailSettings';
 import { SpaceAppsSettings } from '../components/settings/SpaceAppsSettings';
 
 const { Content } = Layout;
@@ -47,7 +45,6 @@ type SettingsSection =
   | 'local-models'
   | 'whisper'
   | 'tts'
-  | 'space-email'
   | 'space-apps'
   | 'cognitive';
 
@@ -74,7 +71,6 @@ export const SettingsPage: React.FC = () => {
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
       { key: 'whisper', icon: <AudioOutlined />, label: 'Whisper ASR' },
       { key: 'tts', icon: <SoundOutlined />, label: 'Text-to-Speech' },
-      { key: 'space-email', icon: <MailOutlined />, label: 'Space Email' },
       { key: 'space-apps', icon: <AppstoreOutlined />, label: 'Space Apps' },
       { key: 'cognitive', icon: <ExperimentOutlined />, label: 'Cognitive' },
     ],
@@ -130,8 +126,6 @@ export const SettingsPage: React.FC = () => {
         return <WhisperSettings />;
       case 'tts':
         return <TtsSettings />;
-      case 'space-email':
-        return <EmailSettings />;
       case 'space-apps':
         return <SpaceAppsSettings />;
       case 'cognitive':

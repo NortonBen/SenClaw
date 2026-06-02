@@ -385,6 +385,7 @@ export type RuleMatcherType =
   | 'bash_glob'
   | 'bash_regex'
   | 'tool_exact'
+  | 'skill_exact'
   | 'mcp_server'
   | 'mcp_glob'
   | 'tool_category'
@@ -398,6 +399,8 @@ export interface RuleMatcher {
   pattern?: string;
   /** tool_exact: exact tool name */
   tool_name?: string;
+  /** skill_exact: exact Skill input name */
+  skill_name?: string;
   /** mcp_server: server name */
   server?: string;
   /** mcp_server: specific tool (null = all tools of server) */

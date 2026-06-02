@@ -1,7 +1,7 @@
 //! Space MCP server — personal productivity tools for the SenClaw Space feature.
 //!
-//! Tools cover: Notes (CRUD + FTS), Calendar (events + reminders), Email (IMAP/SMTP),
-//! external sync (Google Calendar/Apple Calendar/Apple Notes/Gmail), and recurring
+//! Tools cover: Notes (CRUD + FTS), Calendar (events + reminders),
+//! external sync (Google Calendar/Apple Calendar/Apple Notes), and recurring
 //! schedule helpers that wrap the TaskScheduler.
 //!
 //! Tool namespace: `space:*`
@@ -156,43 +156,6 @@ struct SetReminderParams {
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-struct EmailInboxParams {
-    #[serde(default)]
-    account_id: Option<String>,
-    #[serde(default)]
-    limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-struct EmailReadParams {
-    message_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-struct EmailComposeParams {
-    /// Recipient email address
-    to: String,
-    subject: String,
-    body: String,
-    #[serde(default)]
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-struct EmailSearchParams {
-    query: String,
-    #[serde(default)]
-    account_id: Option<String>,
-    #[serde(default)]
-    limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-struct EmailSummaryParams {
-    message_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct SyncProviderParams {
     /// OAuth2 access token or service credential
     token: String,
@@ -215,6 +178,44 @@ struct ScheduleActivityParams {
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct ListSpaceSchedulesParams {
     group_folder: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RecurringCreateParams {
+    /// Yêu cầu gửi cho agent vào mỗi lần lịch chạy.
+    prompt: String,
+    /// Tên hiển thị cho lịch và chat session đi kèm.
+    label: Option<String>,
+    /// Giờ chạy theo giờ máy ("HH:MM", 24h). Bắt buộc khi không dùng cron_advanced.
+    time_local: Option<String>,
+    /// "daily" | "weekdays" | "weekly" | "monthly". Mặc định "daily".
+    frequency: Option<String>,
+    /// 0=Chủ nhật .. 6=Thứ Bảy, dùng khi frequency = "weekly".
+    weekday: Option<u32>,
+    /// 1..28, dùng khi frequency = "monthly".
+    day_of_month: Option<u32>,
+    /// Cron 5 trường (phút giờ ngày tháng thứ). Ghi đè time_local/frequency.
+    cron_advanced: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RecurringIdParams {
+    /// ID của lịch định kỳ.
+    id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RecurringUpdateParams {
+    id: String,
+    prompt: Option<String>,
+    label: Option<String>,
+    /// "active" | "paused" | "completed"
+    status: Option<String>,
+    time_local: Option<String>,
+    frequency: Option<String>,
+    weekday: Option<u32>,
+    day_of_month: Option<u32>,
+    cron_advanced: Option<String>,
 }
 
 // ─── MCP server struct ────────────────────────────────────────────────────────
@@ -537,70 +538,6 @@ impl McpSpaceServer {
         self.inner().today_summary().content
     }
 
-    // ── Email ──────────────────────────────────────────────────────────────
-
-    #[rmcp::tool(
-        description = "Xem inbox email. List inbox emails (cached). Use account_id to filter a specific account."
-    )]
-    fn space_email_inbox(
-        &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
-            EmailInboxParams,
-        >,
-    ) -> String {
-        self.inner()
-            .email_inbox(p.account_id, p.limit.unwrap_or(20))
-            .content
-    }
-
-    #[rmcp::tool(description = "Đọc nội dung email. Read full content of an email by message_id.")]
-    fn space_email_read(
-        &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
-            EmailReadParams,
-        >,
-    ) -> String {
-        self.inner().email_read(p.message_id).content
-    }
-
-    #[rmcp::tool(
-        description = "Soạn và gửi email. Compose and send an email. The agent should draft the body carefully before calling this."
-    )]
-    fn space_email_compose(
-        &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
-            EmailComposeParams,
-        >,
-    ) -> String {
-        self.inner()
-            .email_compose(p.to, p.subject, p.body, p.account_id)
-            .content
-    }
-
-    #[rmcp::tool(description = "Tìm kiếm email. Search emails by query string.")]
-    fn space_email_search(
-        &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
-            EmailSearchParams,
-        >,
-    ) -> String {
-        self.inner()
-            .email_search(p.query, p.account_id, p.limit.unwrap_or(10))
-            .content
-    }
-
-    #[rmcp::tool(
-        description = "Tóm tắt email bằng AI. Summarize an email thread using AI (returns structured summary)."
-    )]
-    fn space_email_summary(
-        &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
-            EmailSummaryParams,
-        >,
-    ) -> String {
-        self.inner().email_summary(p.message_id).content
-    }
-
     // ── External sync ──────────────────────────────────────────────────────
 
     #[rmcp::tool(
@@ -643,20 +580,6 @@ impl McpSpaceServer {
         self.inner().sync_apple_notes(p.token).content
     }
 
-    #[rmcp::tool(
-        description = "Đồng bộ Gmail. Sync recent emails from Gmail into Space email cache."
-    )]
-    fn space_sync_gmail(
-        &self,
-        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
-            SyncProviderParams,
-        >,
-    ) -> String {
-        self.inner()
-            .sync_gmail(p.token, p.days.unwrap_or(7))
-            .content
-    }
-
     // ── Recurring schedule ─────────────────────────────────────────────────
 
     #[rmcp::tool(
@@ -684,6 +607,89 @@ impl McpSpaceServer {
         >,
     ) -> String {
         self.inner().list_schedules(p.group_folder).content
+    }
+
+    // ── Recurring schedules (new model: each schedule owns a chat session) ─
+
+    #[rmcp::tool(
+        description = "Tạo lịch định kỳ tự động cho agent. \
+Mỗi lịch sẽ tự tạo một chat session riêng và mỗi lần đến giờ agent sẽ chạy prompt trong chat đó. \
+Dùng `time_local` (HH:MM, giờ máy) + `frequency` (daily/weekdays/weekly/monthly), hoặc `cron_advanced` (5 trường). \
+VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'."
+    )]
+    async fn space_recurring_create(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RecurringCreateParams,
+        >,
+    ) -> String {
+        self.inner()
+            .recurring_create(
+                p.prompt,
+                p.label,
+                p.time_local,
+                p.frequency,
+                p.weekday,
+                p.day_of_month,
+                p.cron_advanced,
+            )
+            .await
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Liệt kê toàn bộ lịch định kỳ tự động (mỗi mục có id, label, prompt, chat_jid, schedule_value, status, next_run, last_run, last_status)."
+    )]
+    fn space_recurring_list(&self) -> String {
+        self.inner().recurring_list().content
+    }
+
+    #[rmcp::tool(
+        description = "Lấy chi tiết một lịch định kỳ kèm lịch sử 20 lần chạy gần nhất."
+    )]
+    fn space_recurring_get(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RecurringIdParams,
+        >,
+    ) -> String {
+        self.inner().recurring_get(&p.id).content
+    }
+
+    #[rmcp::tool(
+        description = "Cập nhật lịch định kỳ. Có thể đổi prompt, label, lịch (time_local+frequency hoặc cron_advanced), và status (active/paused/completed)."
+    )]
+    fn space_recurring_update(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RecurringUpdateParams,
+        >,
+    ) -> String {
+        self.inner()
+            .recurring_update(
+                &p.id,
+                p.prompt,
+                p.label,
+                p.status,
+                p.time_local,
+                p.frequency,
+                p.weekday,
+                p.day_of_month,
+                p.cron_advanced,
+            )
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "Xoá lịch định kỳ và chat session đi kèm. Hành động này không thể hoàn tác."
+    )]
+    fn space_recurring_delete(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RecurringIdParams,
+        >,
+    ) -> String {
+        self.inner().recurring_delete(&p.id).content
     }
 }
 
@@ -1180,209 +1186,6 @@ impl SpaceServer {
         ToolResult::ok(serde_json::to_string_pretty(&summary).unwrap_or_default())
     }
 
-    // ── Email ──────────────────────────────────────────────────────────────
-
-    pub fn email_inbox(&self, account_id: Option<String>, limit: u32) -> ToolResult {
-        let result = self.db.with_conn(|conn| {
-            let sql = match &account_id {
-                Some(_) => "SELECT id, account_id, subject, from_addr, date, flags FROM space_email_cache WHERE account_id=?1 AND folder='INBOX' ORDER BY date DESC LIMIT ?2",
-                None => "SELECT id, account_id, subject, from_addr, date, flags FROM space_email_cache WHERE folder='INBOX' ORDER BY date DESC LIMIT ?2",
-            };
-            let mut stmt = conn.prepare(sql)?;
-            let rows: Vec<serde_json::Value> = if let Some(aid) = &account_id {
-                stmt.query_map(params![aid, limit], |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_,String>(0)?,
-                        "account_id": row.get::<_,String>(1)?,
-                        "subject": row.get::<_,Option<String>>(2)?,
-                        "from": row.get::<_,Option<String>>(3)?,
-                        "date": row.get::<_,Option<i64>>(4)?,
-                        "flags": row.get::<_,String>(5)?,
-                    }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect()
-            } else {
-                stmt.query_map(params![limit], |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_,String>(0)?,
-                        "account_id": row.get::<_,String>(1)?,
-                        "subject": row.get::<_,Option<String>>(2)?,
-                        "from": row.get::<_,Option<String>>(3)?,
-                        "date": row.get::<_,Option<i64>>(4)?,
-                        "flags": row.get::<_,String>(5)?,
-                    }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect()
-            };
-            Ok(rows)
-        });
-        match result {
-            Ok(rows) => ToolResult::ok(serde_json::to_string_pretty(&rows).unwrap_or_default()),
-            Err(e) => ToolResult::err(format!("Inbox failed: {e}")),
-        }
-    }
-
-    pub fn email_read(&self, message_id: String) -> ToolResult {
-        let result = self.db.with_conn(|conn| {
-            conn.query_row(
-                "SELECT id, account_id, subject, from_addr, to_addrs, date, body_text, body_html, flags
-                 FROM space_email_cache WHERE id=?1",
-                params![message_id],
-                |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_,String>(0)?,
-                        "account_id": row.get::<_,String>(1)?,
-                        "subject": row.get::<_,Option<String>>(2)?,
-                        "from": row.get::<_,Option<String>>(3)?,
-                        "to": row.get::<_,Option<String>>(4)?,
-                        "date": row.get::<_,Option<i64>>(5)?,
-                        "body_text": row.get::<_,Option<String>>(6)?,
-                        "flags": row.get::<_,String>(8)?,
-                    }))
-                },
-            )
-            .map_err(|e| anyhow::anyhow!(e))
-        });
-        match result {
-            Ok(v) => ToolResult::ok(serde_json::to_string_pretty(&v).unwrap_or_default()),
-            Err(e) => ToolResult::err(format!("Email not found: {e}")),
-        }
-    }
-
-    pub fn email_compose(
-        &self,
-        to: String,
-        subject: String,
-        body: String,
-        account_id: Option<String>,
-    ) -> ToolResult {
-        // Resolve account
-        let account = match account_id {
-            Some(id) => self.db.with_conn(|conn| {
-                conn.query_row(
-                    "SELECT id, smtp_host, smtp_port, username, password, use_tls FROM space_email_accounts WHERE id=?1",
-                    params![id],
-                    |row| {
-                        Ok(EmailAccountRow {
-                            id: row.get(0)?,
-                            smtp_host: row.get(1)?,
-                            smtp_port: row.get(2)?,
-                            username: row.get(3)?,
-                            password_enc: row.get(4)?,
-                            use_tls: row.get::<_, i32>(5)? != 0,
-                        })
-                    },
-                )
-                .map_err(|e| anyhow::anyhow!(e))
-            }),
-            None => self.db.with_conn(|conn| {
-                conn.query_row(
-                    "SELECT id, smtp_host, smtp_port, username, password, use_tls FROM space_email_accounts LIMIT 1",
-                    [],
-                    |row| {
-                        Ok(EmailAccountRow {
-                            id: row.get(0)?,
-                            smtp_host: row.get(1)?,
-                            smtp_port: row.get(2)?,
-                            username: row.get(3)?,
-                            password_enc: row.get(4)?,
-                            use_tls: row.get::<_, i32>(5)? != 0,
-                        })
-                    },
-                )
-                .map_err(|e| anyhow::anyhow!(e))
-            }),
-        };
-
-        match account {
-            Err(e) => ToolResult::err(format!("No email account configured. Add one first: {e}")),
-            Ok(acct) => {
-                // Actual SMTP send — requires the `lettre` crate wired up.
-                // For now, record the outgoing message in cache and return a
-                // stub confirmation; replace this block with lettre send when
-                // the email phase is implemented.
-                let msg_id = format!("out-{}", Uuid::new_v4());
-                let now_ms = Utc::now().timestamp_millis();
-                let _ = self.db.with_conn(|conn| {
-                    conn.execute(
-                        "INSERT OR IGNORE INTO space_email_cache (id, account_id, folder, subject, from_addr, to_addrs, date, body_text, flags, synced_at)
-                         VALUES (?1, ?2, 'Sent', ?3, ?4, ?5, ?6, ?7, '[]', ?6)",
-                        params![msg_id, acct.id, subject, acct.username, to, now_ms, body],
-                    )?;
-                    Ok(())
-                });
-                ToolResult::ok(
-                    serde_json::json!({
-                        "success": true,
-                        "note": "Email queued. SMTP send requires lettre integration (Phase 3).",
-                        "message_id": msg_id,
-                        "to": to,
-                    })
-                    .to_string(),
-                )
-            }
-        }
-    }
-
-    pub fn email_search(
-        &self,
-        query: String,
-        account_id: Option<String>,
-        limit: u32,
-    ) -> ToolResult {
-        let result = self.db.with_conn(|conn| {
-            let pattern = format!("%{query}%");
-            let sql = match &account_id {
-                Some(_) => "SELECT id, account_id, subject, from_addr, date FROM space_email_cache WHERE account_id=?1 AND (subject LIKE ?3 OR body_text LIKE ?3) ORDER BY date DESC LIMIT ?2",
-                None => "SELECT id, account_id, subject, from_addr, date FROM space_email_cache WHERE (subject LIKE ?2 OR body_text LIKE ?2) ORDER BY date DESC LIMIT ?1",
-            };
-            let mut stmt = conn.prepare(sql)?;
-            let rows: Vec<serde_json::Value> = if let Some(aid) = &account_id {
-                stmt.query_map(params![aid, limit, pattern], |row| {
-                    Ok(serde_json::json!({ "id": row.get::<_,String>(0)?, "account_id": row.get::<_,String>(1)?, "subject": row.get::<_,Option<String>>(2)?, "from": row.get::<_,Option<String>>(3)?, "date": row.get::<_,Option<i64>>(4)? }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect()
-            } else {
-                stmt.query_map(params![limit, pattern], |row| {
-                    Ok(serde_json::json!({ "id": row.get::<_,String>(0)?, "account_id": row.get::<_,String>(1)?, "subject": row.get::<_,Option<String>>(2)?, "from": row.get::<_,Option<String>>(3)?, "date": row.get::<_,Option<i64>>(4)? }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect()
-            };
-            Ok(rows)
-        });
-        match result {
-            Ok(rows) => ToolResult::ok(serde_json::to_string_pretty(&rows).unwrap_or_default()),
-            Err(e) => ToolResult::err(format!("Email search failed: {e}")),
-        }
-    }
-
-    pub fn email_summary(&self, message_id: String) -> ToolResult {
-        // Read email body then produce a structured summary.
-        // Full AI summarization requires agent loop integration — here we return
-        // the raw body_text truncated; the space-assistant persona will summarize it.
-        let read = self.email_read(message_id);
-        if read.is_error {
-            return read;
-        }
-        let v: serde_json::Value = serde_json::from_str(&read.content).unwrap_or_default();
-        let body = v["body_text"].as_str().unwrap_or("(no body)");
-        let preview = &body[..body.len().min(2000)];
-        ToolResult::ok(
-            serde_json::json!({
-                "subject": v["subject"],
-                "from": v["from"],
-                "date": v["date"],
-                "body_preview": preview,
-                "instruction": "Summarize the above email in Vietnamese: key points, action items, sentiment.",
-            })
-            .to_string(),
-        )
-    }
-
     // ── External sync (stubs — network calls implemented in Phase 3/4) ─────
 
     pub fn sync_google_calendar(&self, token: String, days: u32) -> ToolResult {
@@ -1422,20 +1225,7 @@ impl SpaceServer {
         )
     }
 
-    pub fn sync_gmail(&self, token: String, days: u32) -> ToolResult {
-        // TODO Phase 3: use Gmail API (users.messages.list) with OAuth2 token,
-        // fetch recent messages, upsert into space_email_cache.
-        let _ = (token, days);
-        ToolResult::ok(
-            serde_json::json!({
-                "status": "pending",
-                "message": "Gmail sync not yet implemented (Phase 3). Token received.",
-            })
-            .to_string(),
-        )
-    }
-
-    // ── Recurring schedule ─────────────────────────────────────────────────
+    // ── Recurring schedule (legacy, group-bound) ──────────────────────────
 
     pub async fn schedule_activity(
         &self,
@@ -1463,17 +1253,361 @@ impl SpaceServer {
         use crate::mcp::schedule_server::ScheduleServer;
         ScheduleServer::new().list_tasks(&self.db, &group_folder)
     }
+
+    // ── Recurring schedule (redesigned: each schedule owns a chat session) ─
+    //
+    // The new model auto-creates a dedicated `groups` row per schedule (jid
+    // `schedule:<id>`, folder `schedule_<id>`). Agent output streams into that
+    // chat session. Used by the Space UI and the `space_recurring_*` MCP tools.
+
+    pub async fn recurring_create(
+        &self,
+        prompt: String,
+        label: Option<String>,
+        time_local: Option<String>,
+        frequency: Option<String>,
+        weekday: Option<u32>,
+        day_of_month: Option<u32>,
+        cron_advanced: Option<String>,
+    ) -> ToolResult {
+        if prompt.trim().is_empty() {
+            return ToolResult::err("prompt is required".into());
+        }
+        let cron = match build_schedule_cron(
+            cron_advanced.as_deref(),
+            time_local.as_deref(),
+            frequency.as_deref(),
+            weekday,
+            day_of_month,
+        ) {
+            Ok(c) => c,
+            Err(e) => return ToolResult::err(e),
+        };
+        let id = Uuid::new_v4().to_string();
+        let chat_jid = format!("{SCHEDULE_JID_PREFIX}{id}");
+        let group_folder = format!("{SCHEDULE_FOLDER_PREFIX}{id}");
+        let label = label
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| truncate_label(&prompt, 60));
+
+        let now = Utc::now().to_rfc3339();
+        if let Err(e) = self.db.upsert_group(&crate::types::GroupBinding {
+            jid: chat_jid.clone(),
+            folder: group_folder.clone(),
+            name: label.clone(),
+            channel: String::new(),
+            group_type: "chat".into(),
+            is_admin: true,
+            requires_trigger: false,
+            allowed_tools: None,
+            allowed_paths: None,
+            allowed_work_dirs: None,
+            bot_token: None,
+            max_messages: None,
+            last_active: Some(now.clone()),
+            added_at: now,
+        }) {
+            return ToolResult::err(format!("create chat session: {e}"));
+        }
+
+        let srv = crate::mcp::schedule_server::ScheduleServer::new();
+        let result = srv
+            .schedule_task(
+                &self.db,
+                &group_folder,
+                &chat_jid,
+                &prompt,
+                "cron",
+                &cron,
+                Some("group"),
+                None,
+            )
+            .await;
+        if result.is_error {
+            let _ = self.db.delete_group(&chat_jid);
+            return result;
+        }
+        let info: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
+        let task_id = info
+            .get("taskId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let tasks = match self.db.get_tasks_by_group(&group_folder) {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("lookup task: {e}")),
+        };
+        let task = match tasks.into_iter().find(|t| t.id == task_id) {
+            Some(t) => t,
+            None => return ToolResult::err("task not found after insert".into()),
+        };
+        ToolResult::ok(self.serialize_schedule(&task).to_string())
+    }
+
+    pub fn recurring_list(&self) -> ToolResult {
+        let tasks = match self.db.list_all_tasks() {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("list tasks: {e}")),
+        };
+        let items: Vec<serde_json::Value> = tasks
+            .iter()
+            .filter(|t| t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+            .map(|t| self.serialize_schedule(t))
+            .collect();
+        ToolResult::ok(serde_json::Value::Array(items).to_string())
+    }
+
+    pub fn recurring_get(&self, id: &str) -> ToolResult {
+        let tasks = match self.db.list_all_tasks() {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("list tasks: {e}")),
+        };
+        let task = match tasks
+            .into_iter()
+            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+        {
+            Some(t) => t,
+            None => return ToolResult::err(format!("schedule not found: {id}")),
+        };
+        let runs = self.db.get_task_run_logs(id, 20).unwrap_or_default();
+        let mut item = self.serialize_schedule(&task);
+        item["runs"] = serde_json::json!(
+            runs.iter()
+                .map(|l| serde_json::json!({
+                    "id":          l.id,
+                    "run_at":      l.run_at,
+                    "duration_ms": l.duration_ms,
+                    "status":      l.status.as_str(),
+                    "result":      l.result,
+                    "error":       l.error,
+                }))
+                .collect::<Vec<_>>()
+        );
+        ToolResult::ok(item.to_string())
+    }
+
+    pub fn recurring_update(
+        &self,
+        id: &str,
+        prompt: Option<String>,
+        label: Option<String>,
+        status: Option<String>,
+        time_local: Option<String>,
+        frequency: Option<String>,
+        weekday: Option<u32>,
+        day_of_month: Option<u32>,
+        cron_advanced: Option<String>,
+    ) -> ToolResult {
+        let tasks = match self.db.list_all_tasks() {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("list tasks: {e}")),
+        };
+        let task = match tasks
+            .into_iter()
+            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+        {
+            Some(t) => t,
+            None => return ToolResult::err(format!("schedule not found: {id}")),
+        };
+
+        let touches_schedule = cron_advanced.is_some()
+            || time_local.is_some()
+            || frequency.is_some()
+            || weekday.is_some()
+            || day_of_month.is_some();
+        let new_cron = if touches_schedule {
+            match build_schedule_cron(
+                cron_advanced.as_deref(),
+                time_local.as_deref(),
+                frequency.as_deref(),
+                weekday,
+                day_of_month,
+            ) {
+                Ok(c) => Some(c),
+                Err(e) => return ToolResult::err(e),
+            }
+        } else {
+            None
+        };
+
+        if let Some(p) = prompt
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if let Err(e) = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE scheduled_tasks SET prompt = ?1 WHERE id = ?2",
+                    rusqlite::params![p, id],
+                )?;
+                Ok(())
+            }) {
+                return ToolResult::err(format!("update prompt: {e}"));
+            }
+        }
+
+        if let Some(cron) = &new_cron {
+            let mut tmp = task.clone();
+            tmp.schedule_value = cron.clone();
+            tmp.next_run = None;
+            let next = crate::scheduler::task_scheduler::compute_next_run(&tmp);
+            if let Err(e) = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE scheduled_tasks SET schedule_value=?1, next_run=?2 WHERE id=?3",
+                    rusqlite::params![cron, next, id],
+                )?;
+                Ok(())
+            }) {
+                return ToolResult::err(format!("update cron: {e}"));
+            }
+        }
+
+        if let Some(st) = status.as_deref() {
+            let parsed = match st {
+                "active" => Some(crate::types::TaskStatus::Active),
+                "paused" => Some(crate::types::TaskStatus::Paused),
+                "completed" => Some(crate::types::TaskStatus::Completed),
+                other => return ToolResult::err(format!("unknown status: {other}")),
+            };
+            if let Some(st) = parsed {
+                if let Err(e) = self.db.update_task_status(id, st) {
+                    return ToolResult::err(format!("update status: {e}"));
+                }
+            }
+        }
+
+        if let Some(new_label) = label
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if let Err(e) = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE groups SET name = ?1 WHERE jid = ?2",
+                    rusqlite::params![new_label, task.chat_jid],
+                )?;
+                Ok(())
+            }) {
+                return ToolResult::err(format!("update label: {e}"));
+            }
+        }
+
+        // Re-fetch and return.
+        let tasks = match self.db.list_all_tasks() {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("list tasks: {e}")),
+        };
+        let task = match tasks.into_iter().find(|t| t.id == id) {
+            Some(t) => t,
+            None => return ToolResult::err("schedule disappeared after update".into()),
+        };
+        ToolResult::ok(self.serialize_schedule(&task).to_string())
+    }
+
+    pub fn recurring_delete(&self, id: &str) -> ToolResult {
+        let tasks = match self.db.list_all_tasks() {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("list tasks: {e}")),
+        };
+        let task = match tasks
+            .into_iter()
+            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+        {
+            Some(t) => t,
+            None => return ToolResult::err(format!("schedule not found: {id}")),
+        };
+        if let Err(e) = self.db.delete_task(id) {
+            return ToolResult::err(format!("delete task: {e}"));
+        }
+        let _ = self.db.delete_group(&task.chat_jid);
+        let _ = self.db.delete_group_by_folder(&task.group_folder);
+        ToolResult::ok(serde_json::json!({ "success": true, "id": id }).to_string())
+    }
+
+    fn serialize_schedule(&self, task: &crate::types::ScheduledTask) -> serde_json::Value {
+        let label = self
+            .db
+            .get_group(&task.chat_jid)
+            .ok()
+            .flatten()
+            .map(|g| g.name)
+            .unwrap_or_else(|| truncate_label(&task.prompt, 40));
+        let logs = self.db.get_task_run_logs(&task.id, 1).unwrap_or_default();
+        let last_status = logs.first().map(|l| l.status.as_str().to_owned());
+        serde_json::json!({
+            "id":              task.id,
+            "label":           label,
+            "prompt":          task.prompt,
+            "chat_jid":        task.chat_jid,
+            "group_folder":    task.group_folder,
+            "schedule_type":   task.schedule_type.as_str(),
+            "schedule_value":  task.schedule_value,
+            "status":          task.status.as_str(),
+            "next_run":        task.next_run,
+            "last_run":        task.last_run,
+            "last_status":     last_status,
+            "created_at":      task.created_at,
+        })
+    }
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+// ─── Recurring schedule helpers ──────────────────────────────────────────────
 
-struct EmailAccountRow {
-    id: String,
-    smtp_host: String,
-    smtp_port: i64,
-    username: String,
-    password_enc: String,
-    use_tls: bool,
+pub(crate) const SCHEDULE_FOLDER_PREFIX: &str = "schedule_";
+pub(crate) const SCHEDULE_JID_PREFIX: &str = "schedule:";
+
+pub(crate) fn build_schedule_cron(
+    advanced: Option<&str>,
+    time_local: Option<&str>,
+    frequency: Option<&str>,
+    weekday: Option<u32>,
+    day_of_month: Option<u32>,
+) -> std::result::Result<String, String> {
+    if let Some(raw) = advanced.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if raw.split_whitespace().count() != 5 {
+            return Err("cron_advanced must be a 5-field expression".into());
+        }
+        return Ok(raw.to_owned());
+    }
+    let time = time_local.unwrap_or("").trim();
+    let (h, m) = parse_hhmm(time).ok_or_else(|| "time_local must be HH:MM (24h)".to_owned())?;
+    let freq = frequency.unwrap_or("daily");
+    Ok(match freq {
+        "daily" => format!("{m} {h} * * *"),
+        "weekdays" => format!("{m} {h} * * 1-5"),
+        "weekly" => {
+            let dow = weekday.unwrap_or(1).min(6);
+            format!("{m} {h} * * {dow}")
+        }
+        "monthly" => {
+            let dom = day_of_month.unwrap_or(1).clamp(1, 28);
+            format!("{m} {h} {dom} * *")
+        }
+        other => return Err(format!("Unknown frequency: {other}")),
+    })
+}
+
+fn parse_hhmm(s: &str) -> Option<(u32, u32)> {
+    let (h, m) = s.split_once(':')?;
+    let h: u32 = h.parse().ok()?;
+    let m: u32 = m.parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some((h, m))
+}
+
+pub(crate) fn truncate_label(s: &str, max: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max {
+        trimmed.to_owned()
+    } else {
+        let head: String = trimmed.chars().take(max - 1).collect();
+        format!("{head}…")
+    }
 }
 
 // ─── Date resolution helper ───────────────────────────────────────────────────

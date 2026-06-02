@@ -39,6 +39,7 @@ function ruleLabel(rule: ToolAutoAcceptRule): string {
     case 'bash_glob':   return `Bash: ${m.pattern}`;
     case 'bash_regex':  return `Bash ~/${m.pattern}/`;
     case 'tool_exact':  return `Tool: ${m.tool_name}`;
+    case 'skill_exact': return `Skill: ${m.skill_name}`;
     case 'mcp_server':  return m.tool ? `MCP: ${m.server} › ${m.tool}` : `MCP: ${m.server}/*`;
     case 'mcp_glob':    return `MCP: ${m.pattern}`;
     case 'tool_category': {
@@ -63,6 +64,7 @@ function ruleIcon(type: RuleMatcherType) {
     case 'bash_regex':    return <CodeOutlined />;
     case 'mcp_server':
     case 'mcp_glob':      return <ApiOutlined />;
+    case 'skill_exact':
     case 'tool_exact':
     case 'tool_category': return <FileOutlined />;
     case 'always':        return <ThunderboltOutlined />;

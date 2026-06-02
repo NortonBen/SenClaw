@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 pub mod agent;
+pub mod apps;
 pub mod browser;
 pub mod channels;
 pub mod clawhub;
@@ -1492,7 +1493,27 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     tracing::info!("[SenClaw] MessageRouter wired to {connected_count} channel(s)");
 
     // ===== 5. TaskScheduler =====
-    let task_executor = Arc::new(scheduler::DefaultTaskExecutor::new(Arc::clone(&db)));
+    //
+    // Migration: clear legacy scheduled tasks that predate the recurring-chat
+    // redesign. Schedules now own a dedicated group binding with folder prefix
+    // `schedule_`; older rows have a real group folder and can no longer be
+    // matched to a chat session here. Mark them completed so they stop firing.
+    if let Err(e) = db.with_conn(|c| {
+        c.execute(
+            "UPDATE scheduled_tasks
+             SET status = 'completed'
+             WHERE status = 'active' AND group_folder NOT LIKE 'schedule\\_%' ESCAPE '\\'",
+            [],
+        )?;
+        Ok(())
+    }) {
+        tracing::warn!("[SenClaw] failed to retire legacy schedules: {e}");
+    }
+
+    let task_executor = Arc::new(
+        scheduler::DefaultTaskExecutor::new(Arc::clone(&db))
+            .with_agent_api(Arc::clone(&agent_pool) as Arc<dyn types::AgentApi>),
+    );
     let _task_scheduler = scheduler::task_scheduler::TaskScheduler::new(
         Arc::clone(&db),
         task_executor,

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { theme } from 'antd';
 
 interface Props {
   path: string;
@@ -6,6 +7,7 @@ interface Props {
 }
 
 export function CopyPathButton({ path, label }: Props) {
+  const { token } = theme.useToken();
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
     try {
@@ -27,9 +29,22 @@ export function CopyPathButton({ path, label }: Props) {
       type="button"
       onClick={onCopy}
       title={`Copy: ${path}`}
-      className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
-        copied ? 'bg-green-50 border-green-200 text-green-600' : 'bg-gray-50 border-gray-200 text-gray-500 hover:text-[#5BBFE8] hover:border-[#5BBFE8]'
-      }`}
+      className="text-[10px] px-1.5 py-0.5 rounded border transition-colors"
+      style={{
+        background: copied ? token.colorSuccessBg : token.colorFillQuaternary,
+        borderColor: copied ? token.colorSuccessBorder : token.colorBorderSecondary,
+        color: copied ? token.colorSuccess : token.colorTextSecondary,
+      }}
+      onMouseEnter={(e) => {
+        if (copied) return;
+        e.currentTarget.style.color = token.colorPrimary;
+        e.currentTarget.style.borderColor = token.colorPrimary;
+      }}
+      onMouseLeave={(e) => {
+        if (copied) return;
+        e.currentTarget.style.color = token.colorTextSecondary;
+        e.currentTarget.style.borderColor = token.colorBorderSecondary;
+      }}
     >
       {copied ? '✓ copied' : (label ?? '⧉ copy path')}
     </button>

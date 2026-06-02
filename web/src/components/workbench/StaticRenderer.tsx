@@ -3,6 +3,7 @@ import type { WorkbenchArtifact, WorkbenchFile } from '../../types';
 import { HtmlIframe } from './HtmlIframe';
 import { MarkdownView } from './MarkdownView';
 import { CopyPathButton } from './CopyPathButton';
+import { theme } from 'antd';
 
 interface Props {
   artifact: WorkbenchArtifact;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function StaticRenderer({ artifact, readFile }: Props) {
+  const { token } = theme.useToken();
   const files = artifact.files ?? [];
   const [activeIdx, setActiveIdx] = useState(0);
 
@@ -20,7 +22,7 @@ export function StaticRenderer({ artifact, readFile }: Props) {
   }, [artifact.id]);
 
   if (files.length === 0) {
-    return <div className="p-4 text-sm text-gray-400">No files in this artifact.</div>;
+    return <div className="p-4 text-sm" style={{ color: token.colorTextTertiary }}>No files in this artifact.</div>;
   }
 
   const activeFile = files[Math.min(activeIdx, files.length - 1)];
@@ -28,16 +30,29 @@ export function StaticRenderer({ artifact, readFile }: Props) {
   return (
     <div className="flex flex-col h-full min-h-0">
       {files.length > 1 && (
-        <div className="flex items-center gap-1 px-2 pt-2 border-b border-gray-100 flex-shrink-0 overflow-x-auto">
+        <div
+          className="flex items-center gap-1 px-2 pt-2 border-b flex-shrink-0 overflow-x-auto"
+          style={{
+            background: token.colorBgElevated,
+            borderColor: token.colorBorderSecondary,
+          }}
+        >
           {files.map((f, i) => (
             <button
               key={f.path}
               onClick={() => setActiveIdx(i)}
-              className={`text-xs px-2.5 py-1 rounded-t border-t border-x transition-colors flex-shrink-0 ${
-                i === activeIdx
-                  ? 'bg-white border-gray-200 text-gray-700 font-medium'
-                  : 'bg-gray-50 border-transparent text-gray-400 hover:text-gray-600'
-              }`}
+              className={`text-xs px-2.5 py-1 rounded-t border-t border-x transition-colors flex-shrink-0 ${i === activeIdx ? 'font-medium' : ''}`}
+              style={{
+                background: i === activeIdx ? token.colorBgContainer : token.colorFillQuaternary,
+                borderColor: i === activeIdx ? token.colorBorderSecondary : 'transparent',
+                color: i === activeIdx ? token.colorText : token.colorTextTertiary,
+              }}
+              onMouseEnter={(e) => {
+                if (i !== activeIdx) e.currentTarget.style.color = token.colorTextSecondary;
+              }}
+              onMouseLeave={(e) => {
+                if (i !== activeIdx) e.currentTarget.style.color = token.colorTextTertiary;
+              }}
               title={f.path}
             >
               {filename(f.path)}
@@ -46,12 +61,19 @@ export function StaticRenderer({ artifact, readFile }: Props) {
         </div>
       )}
 
-      <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[10px] text-gray-500 flex-shrink-0">
+      <div
+        className="flex items-center justify-between px-3 py-1.5 border-b text-[10px] flex-shrink-0"
+        style={{
+          background: token.colorFillQuaternary,
+          borderColor: token.colorBorderSecondary,
+          color: token.colorTextSecondary,
+        }}
+      >
         <span className="font-mono truncate" title={activeFile.path}>{activeFile.path}</span>
         <CopyPathButton path={activeFile.path} />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden bg-white">
+      <div className="flex-1 min-h-0 overflow-hidden" style={{ background: token.colorBgContainer }}>
         <FileBody file={activeFile} readFile={readFile} />
       </div>
     </div>

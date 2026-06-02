@@ -3,25 +3,30 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { WorkbenchArtifact } from '../../types';
 import { CopyPathButton } from './CopyPathButton';
+import { theme } from 'antd';
 
 interface Props {
   artifact: WorkbenchArtifact;
 }
 
 export function BackendRenderer({ artifact }: Props) {
+  const { token } = theme.useToken();
+
   if (!artifact.url) {
-    return <div className="p-4 text-sm text-gray-400">No API URL provided.</div>;
+    return <div className="p-4 text-sm" style={{ color: token.colorTextTertiary }}>No API URL provided.</div>;
   }
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-auto bg-white">
-      <div className="p-4 border-b border-gray-100">
-        <div className="text-[10px] uppercase text-gray-400 tracking-wide mb-1">API Endpoint</div>
+    <div className="flex flex-col h-full min-h-0 overflow-auto" style={{ background: token.colorBgContainer }}>
+      <div className="p-4 border-b" style={{ borderColor: token.colorBorderSecondary }}>
+        <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: token.colorTextTertiary }}>
+          API Endpoint
+        </div>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-sm text-gray-800 break-all">{artifact.url}</span>
+          <span className="font-mono text-sm break-all" style={{ color: token.colorText }}>{artifact.url}</span>
           <CopyPathButton path={artifact.url} label="⧉ copy" />
         </div>
         {artifact.process && (
-          <div className="text-[10px] text-gray-500 mt-2">
+          <div className="text-[10px] mt-2" style={{ color: token.colorTextSecondary }}>
             Status: <span className={`font-semibold ${
               artifact.process.status === 'ready' ? 'text-green-600'
                 : artifact.process.status === 'crashed' ? 'text-red-600' : 'text-gray-500'

@@ -4,6 +4,7 @@ import { StaticRenderer } from './workbench/StaticRenderer';
 import { WebRenderer } from './workbench/WebRenderer';
 import { BackendRenderer } from './workbench/BackendRenderer';
 import { HistoryList } from './workbench/HistoryList';
+import { theme } from 'antd';
 
 // Drag-to-resize width, persisted to localStorage (mirrors AgentConsole).
 const WIDTH_KEY = 'senclaw:workbench:width';
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact, selectArtifact, markViewed }: Props) {
+  const { token } = theme.useToken();
   const current = state?.current ?? null;
   const history = state?.history ?? [];
 
@@ -103,24 +105,43 @@ export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact
 
   return (
     <div
-      className="relative flex flex-col flex-shrink-0 border-l border-gray-100 bg-[#F5F8FB] overflow-hidden"
-      style={{ width }}
+      className="relative flex flex-col flex-shrink-0 border-l overflow-hidden"
+      style={{
+        width,
+        background: token.colorBgContainer,
+        borderColor: token.colorBorderSecondary,
+      }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
+      <div
+        className="flex items-center justify-between px-3 py-2 border-b flex-shrink-0"
+        style={{
+          background: token.colorBgElevated,
+          borderColor: token.colorBorderSecondary,
+        }}
+      >
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-semibold text-gray-700 truncate">
+          <span className="text-sm font-semibold truncate" style={{ color: token.colorText }}>
             {current ? current.title : 'Workbench'}
           </span>
           {current && (
-            <span className="text-[10px] text-gray-400 font-mono">{current.mode}</span>
+            <span className="text-[10px] font-mono" style={{ color: token.colorTextTertiary }}>{current.mode}</span>
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {current && (
             <button
               onClick={() => closeArtifact(current.id)}
-              className="text-gray-400 hover:text-red-500 text-xs px-1.5 py-0.5 rounded hover:bg-gray-100"
+              className="text-xs px-1.5 py-0.5 rounded transition-colors"
+              style={{ color: token.colorTextTertiary }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = token.colorError;
+                e.currentTarget.style.background = token.colorFillTertiary;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = token.colorTextTertiary;
+                e.currentTarget.style.background = 'transparent';
+              }}
               title="Close this workbench"
             >
               ✕ close
@@ -128,7 +149,16 @@ export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact
           )}
           <button
             onClick={onCollapse}
-            className="text-gray-400 hover:text-gray-600 text-xs px-1.5 py-0.5 rounded hover:bg-gray-100"
+            className="text-xs px-1.5 py-0.5 rounded transition-colors"
+            style={{ color: token.colorTextTertiary }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = token.colorTextSecondary;
+              e.currentTarget.style.background = token.colorFillTertiary;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = token.colorTextTertiary;
+              e.currentTarget.style.background = 'transparent';
+            }}
           >
             Hide ▸
           </button>
@@ -138,7 +168,7 @@ export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {!current ? (
-          <div className="flex h-full items-center justify-center text-xs text-gray-400 px-4 text-center">
+          <div className="flex h-full items-center justify-center text-xs px-4 text-center" style={{ color: token.colorTextTertiary }}>
             No content yet
           </div>
         ) : current.mode === 'static' ? (
@@ -156,6 +186,7 @@ export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact
         currentId={current?.id ?? null}
         onSelect={selectArtifact}
         onClose={closeArtifact}
+        token={token}
       />
 
       {/* Resize handle (left edge) */}

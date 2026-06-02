@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::params;
 use serde_json::Value;
 use tokio::process::{Child, Command};
@@ -35,6 +35,7 @@ struct ChildProc {
     /// Process-group id (== leader pid) so we can signal the whole tree.
     pgid: i32,
     port: u16,
+    log_path: PathBuf,
 }
 
 /// Tracks server-app processes launched on behalf of Space Apps, keyed by app id.
@@ -58,6 +59,15 @@ impl SpaceMcpLauncher {
         Self {
             children: Mutex::new(HashMap::new()),
             http,
+        }
+    }
+
+    /// Kills the running app process if it exists, forcing it to restart on the next request.
+    pub async fn restart_app(&self, app_id: &str) {
+        let mut children = self.children.lock().await;
+        if let Some(mut proc) = children.remove(app_id) {
+            tracing::info!("[space-mcp] killing process for app {}", app_id);
+            let _ = proc.child.kill().await;
         }
     }
 
@@ -209,6 +219,28 @@ impl SpaceMcpLauncher {
         } else {
             pick_free_port().ok_or_else(|| anyhow!("no free port for app '{app_id}'"))?
         };
+        let log_path = app_runtime_log_path(app_dir);
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create log dir for app '{app_id}'"))?;
+        }
+        let mut log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .with_context(|| format!("open runtime log for app '{app_id}'"))?;
+        use std::io::Write as _;
+        let _ = writeln!(
+            log_file,
+            "\n===== {} launching {app_id}: {start} (PORT={port}) =====",
+            chrono::Utc::now().to_rfc3339()
+        );
+        let stdout = log_file
+            .try_clone()
+            .with_context(|| format!("clone stdout log for app '{app_id}'"))?;
+        let stderr = log_file
+            .try_clone()
+            .with_context(|| format!("clone stderr log for app '{app_id}'"))?;
 
         // Spawn the start command in its own process group so we can kill the
         // whole tree (npm -> next-server) on shutdown.
@@ -219,20 +251,29 @@ impl SpaceMcpLauncher {
             .env("PORT", port.to_string())
             .env("SENCLAW_BASE_URL", base_url)
             .env("SENCLAW_SPACE_APP_ID", app_id)
+            .env("SENCLAW_SPACE_LOG_FILE", &log_path)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .process_group(0)
             .kill_on_drop(true);
         let child = cmd
             .spawn()
             .with_context(|| format!("spawn '{start}' for app '{app_id}'"))?;
         let pgid = child.id().map(|i| i as i32).unwrap_or(0);
-        self.children
-            .lock()
-            .await
-            .insert(app_id.to_string(), ChildProc { child, pgid, port });
-        tracing::info!("[space-mcp] launched '{app_id}': {start} (PORT={port})");
+        self.children.lock().await.insert(
+            app_id.to_string(),
+            ChildProc {
+                child,
+                pgid,
+                port,
+                log_path: log_path.clone(),
+            },
+        );
+        tracing::info!(
+            "[space-mcp] launched '{app_id}': {start} (PORT={port}, log={})",
+            log_path.display()
+        );
 
         // Wait for health (server boot can take a few seconds).
         let url = health_url(port, health_path);
@@ -259,7 +300,10 @@ impl SpaceMcpLauncher {
             }
             let mut child = proc.child;
             let _ = child.start_kill();
-            tracing::info!("[space-mcp] stopped server process for '{app_id}' (uninstall)");
+            tracing::info!(
+                "[space-mcp] stopped server process for '{app_id}' (uninstall, log={})",
+                proc.log_path.display()
+            );
         }
     }
 
@@ -275,7 +319,10 @@ impl SpaceMcpLauncher {
             }
             let mut child = proc.child;
             let _ = child.start_kill();
-            tracing::info!("[space-mcp] stopped server process for '{app_id}'");
+            tracing::info!(
+                "[space-mcp] stopped server process for '{app_id}' (log={})",
+                proc.log_path.display()
+            );
         }
     }
 }
@@ -302,6 +349,10 @@ fn app_install_dir(manifest: &Value, apps_dir: &Path, app_id: &str) -> PathBuf {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .unwrap_or_else(|| apps_dir.join(app_id))
+}
+
+pub fn app_runtime_log_path(app_dir: &Path) -> PathBuf {
+    app_dir.join(".senclaw").join("runtime.log")
 }
 
 fn health_url(port: u16, path: &str) -> String {

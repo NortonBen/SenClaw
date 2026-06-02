@@ -1,5 +1,6 @@
 import type { DispatchParent, AgentTodosEntry, ChatMessage, GroupInfo, PermissionMessage, WorkbenchState } from '../types';
 import { useMemo } from 'react';
+import { theme } from 'antd';
 
 interface Props {
   expanded: 'agent' | 'workbench' | null;
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export function DockBadges(p: Props) {
+  const { token } = theme.useToken();
+
   // ===== AgentConsole signals =====
   const pendingPermissions = useMemo(() => {
     let n = 0;
@@ -33,7 +36,13 @@ export function DockBadges(p: Props) {
   const wbHasRunning = p.workbenchState?.history.some(h => h.process?.status === 'ready') ?? false;
 
   return (
-    <div className="flex flex-col items-center gap-3 w-10 flex-shrink-0 border-l border-gray-100 py-3 bg-white">
+    <div
+      className="flex flex-col items-center gap-3 w-10 flex-shrink-0 border-l py-3"
+      style={{
+        background: token.colorBgContainer,
+        borderColor: token.colorBorderSecondary,
+      }}
+    >
       <BadgeButton
         active={p.expanded === 'agent'}
         onClick={() => p.onToggle('agent')}
@@ -41,6 +50,7 @@ export function DockBadges(p: Props) {
         icon={<GearIcon />}
         countBadge={pendingPermissions > 0 ? pendingPermissions : null}
         dot={hasActivity ? 'live' : hasTodos ? 'info' : null}
+        token={token}
       />
       <BadgeButton
         active={p.expanded === 'workbench'}
@@ -49,6 +59,7 @@ export function DockBadges(p: Props) {
         icon={<MonitorIcon />}
         countBadge={null}
         dot={wbCurrent ? 'info' : wbHasRunning ? 'live' : null}
+        token={token}
       />
     </div>
   );
@@ -62,19 +73,26 @@ interface BadgeButtonProps {
   countBadge: number | null;
   /** Status dot: 'live' = pulsing green; 'info' = static blue. */
   dot: 'live' | 'info' | null;
+  token: ReturnType<typeof theme.useToken>['token'];
 }
 
-function BadgeButton({ active, onClick, title, icon, countBadge, dot }: BadgeButtonProps) {
+function BadgeButton({ active, onClick, title, icon, countBadge, dot, token }: BadgeButtonProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={`relative flex flex-col items-center gap-1 w-7 h-7 justify-center rounded transition-colors ${
-        active
-          ? 'text-[#5BBFE8] bg-[#EBF5FB]'
-          : 'text-gray-400 hover:text-[#5BBFE8]'
-      }`}
+      className="relative flex flex-col items-center gap-1 w-7 h-7 justify-center rounded transition-colors"
+      style={{
+        background: active ? token.colorPrimaryBg : 'transparent',
+        color: active ? token.colorPrimary : token.colorTextTertiary,
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.color = token.colorPrimary;
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.color = token.colorTextTertiary;
+      }}
     >
       {icon}
       {countBadge != null && (

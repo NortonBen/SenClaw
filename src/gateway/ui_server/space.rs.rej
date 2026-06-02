@@ -1,0 +1,61 @@
+@@ -1862,3 +1862,60 @@
+         }))
+     }
+ }
++
++pub(crate) async fn space_apps_proxy(
++    State(s): State<Arc<UiState>>,
++    AxumPath((id, path)): AxumPath<(String, String)>,
++    req: axum::extract::Request<Body>,
++) -> Result<Response, AppError> {
++    if !valid_space_app_id(&id) {
++        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
++    }
++    
++    let manifest: Option<serde_json::Value> = db(&s)?
++        .with_conn(|conn| {
++            let raw: Result<String, rusqlite::Error> = conn.query_row(
++                "SELECT manifest FROM space_apps WHERE id=?1",
++                params![&id],
++                |row| row.get(0),
++            );
++            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
++        })
++        .map_err(internal)?;
++        
++    let manifest = manifest.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "App not found".into()))?;
++    
++    let port = manifest
++        .get("runtime")
++        .and_then(|r| r.get("port"))
++        .and_then(|p| p.as_u64())
++        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "App does not have a port".into()))?;
++        
++    let path_str = if path.starts_with('/') { path.clone() } else { format!("/{}", path) };
++    let query_string = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
++    let target_url = format!("http://127.0.0.1:{}{}{}", port, path_str, query_string);
++    
++    let client = reqwest::Client::new();
++    
++    let (parts, body) = req.into_parts();
++    let body_bytes = axum::body::to_bytes(body, usize::MAX)
++        .await
++        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read body: {}", e)))?;
++        
++    let mut builder = client.request(parts.method.clone(), &target_url);
++    for (name, value) in parts.headers.iter() {
++        if name != axum::http::header::HOST {
++            builder = builder.header(name, value);
++        }
++    }
++    
++    let reqwest_req = builder.body(body_bytes).build().map_err(internal)?;
++    let res = client.execute(reqwest_req).await.map_err(|e| AppError(StatusCode::BAD_GATEWAY, format!("Proxy request failed: {}", e)))?;
++    
++    let mut response_builder = Response::builder().status(res.status());
++    for (name, value) in res.headers() {
++        response_builder = response_builder.header(name, value);
++    }
++    
++    Ok(response_builder.body(Body::from_stream(res.bytes_stream())).unwrap())
++}

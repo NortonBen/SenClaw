@@ -29,54 +29,47 @@ export interface SpaceEvent {
   source: string;
 }
 
-export interface SpaceEmail {
-  id: string;
-  account_id: string;
-  subject: string | null;
-  from: string | null;
-  date: number | null;
-  flags: string;
-}
-
-export interface SpaceEmailDetail extends SpaceEmail {
-  to: string | null;
-  body_text: string | null;
-}
-
-export interface SpaceEmailAccount {
-  id: string;
-  label: string;
-  email: string;
-  imap_host: string;
-  imap_port: number;
-  smtp_host: string;
-  smtp_port: number;
-  use_tls: boolean;
-  created_at: number;
-}
-
-export interface SpaceEmailAccountCreate {
-  label: string;
-  email: string;
-  imap_host: string;
-  imap_port: number;
-  smtp_host: string;
-  smtp_port: number;
-  username: string;
-  password: string;
-  use_tls: boolean;
-}
-
 export interface SpaceSchedule {
   id: string;
+  label: string;
   prompt: string;
+  chat_jid: string;
+  group_folder: string;
   schedule_type: string;
   schedule_value: string;
   status: string;
   next_run: string | null;
   last_run: string | null;
+  last_status: string | null;
   created_at: string;
 }
+
+export interface SpaceScheduleRun {
+  id: number;
+  run_at: string;
+  duration_ms: number | null;
+  status: string;
+  result: string | null;
+  error: string | null;
+}
+
+export interface SpaceScheduleDetail extends SpaceSchedule {
+  runs: SpaceScheduleRun[];
+}
+
+export interface ScheduleCreatePayload {
+  prompt: string;
+  label?: string;
+  time_local?: string;     // "HH:mm"
+  frequency?: 'daily' | 'weekdays' | 'weekly' | 'monthly';
+  weekday?: number;        // 0=Sun..6=Sat (weekly)
+  day_of_month?: number;   // 1..28 (monthly)
+  cron_advanced?: string;  // takes precedence
+}
+
+export type ScheduleUpdatePayload = Partial<ScheduleCreatePayload> & {
+  status?: 'active' | 'paused' | 'completed';
+};
 
 export interface TodaySummary {
   date: string;
@@ -106,24 +99,14 @@ export interface UseSpaceHook {
   todaySummary: TodaySummary | null;
   loadTodaySummary: () => Promise<void>;
 
-  // Email
-  emails: SpaceEmail[];
-  emailsLoading: boolean;
-  emailAccounts: SpaceEmailAccount[];
-  emailAccountsLoading: boolean;
-  loadEmails: (accountId?: string) => Promise<void>;
-  readEmail: (id: string) => Promise<SpaceEmailDetail | null>;
-  searchEmails: (q: string) => Promise<SpaceEmail[]>;
-  loadEmailAccounts: () => Promise<void>;
-  createEmailAccount: (payload: SpaceEmailAccountCreate) => Promise<SpaceEmailAccount | null>;
-  deleteEmailAccount: (id: string) => Promise<void>;
-
   // Schedules
   schedules: SpaceSchedule[];
   schedulesLoading: boolean;
-  loadSchedules: (groupFolder: string) => Promise<void>;
-  createSchedule: (prompt: string, cron: string, groupFolder: string, chatJid: string) => Promise<void>;
-  cancelSchedule: (id: string, groupFolder: string) => Promise<void>;
+  loadSchedules: () => Promise<void>;
+  createSchedule: (payload: ScheduleCreatePayload) => Promise<SpaceSchedule | null>;
+  updateSchedule: (id: string, payload: ScheduleUpdatePayload) => Promise<SpaceSchedule | null>;
+  getScheduleDetail: (id: string) => Promise<SpaceScheduleDetail | null>;
+  cancelSchedule: (id: string) => Promise<void>;
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -137,10 +120,6 @@ export function useSpace(): UseSpaceHook {
   const [notesLoading, setNotesLoading] = useState(false);
   const [events, setEvents] = useState<SpaceEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
-  const [emails, setEmails] = useState<SpaceEmail[]>([]);
-  const [emailsLoading, setEmailsLoading] = useState(false);
-  const [emailAccounts, setEmailAccounts] = useState<SpaceEmailAccount[]>([]);
-  const [emailAccountsLoading, setEmailAccountsLoading] = useState(false);
   const [schedules, setSchedules] = useState<SpaceSchedule[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(false);
   const [todaySummary, setTodaySummary] = useState<TodaySummary | null>(null);
@@ -243,76 +222,12 @@ export function useSpace(): UseSpaceHook {
     } catch {}
   }, []);
 
-  // ── Email ──────────────────────────────────────────────────────────────────
-
-  const loadEmails = useCallback(async (accountId?: string) => {
-    setEmailsLoading(true);
-    try {
-      const qs = accountId ? `?account_id=${encodeURIComponent(accountId)}` : '';
-      const data = await apiFetch<SpaceEmail[]>(`/api/space/email/inbox${qs}`);
-      setEmails(Array.isArray(data) ? data : []);
-    } catch {
-      setEmails([]);
-    } finally {
-      setEmailsLoading(false);
-    }
-  }, []);
-
-  const readEmail = useCallback(async (id: string): Promise<SpaceEmailDetail | null> => {
-    try {
-      return await apiFetch<SpaceEmailDetail>(`/api/space/email/messages/${id}`);
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const searchEmails = useCallback(async (q: string): Promise<SpaceEmail[]> => {
-    try {
-      return await apiFetch<SpaceEmail[]>(`/api/space/email/search?q=${encodeURIComponent(q)}`);
-    } catch {
-      return [];
-    }
-  }, []);
-
-  const loadEmailAccounts = useCallback(async () => {
-    setEmailAccountsLoading(true);
-    try {
-      const data = await apiFetch<SpaceEmailAccount[]>('/api/space/email/accounts');
-      setEmailAccounts(Array.isArray(data) ? data : []);
-    } catch {
-      setEmailAccounts([]);
-    } finally {
-      setEmailAccountsLoading(false);
-    }
-  }, []);
-
-  const createEmailAccount = useCallback(async (payload: SpaceEmailAccountCreate): Promise<SpaceEmailAccount | null> => {
-    try {
-      const data = await apiFetch<SpaceEmailAccount>('/api/space/email/accounts', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      await loadEmailAccounts();
-      return data;
-    } catch {
-      return null;
-    }
-  }, [loadEmailAccounts]);
-
-  const deleteEmailAccount = useCallback(async (id: string) => {
-    try {
-      await apiFetch(`/api/space/email/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      setEmailAccounts(prev => prev.filter(a => a.id !== id));
-      setEmails(prev => prev.filter(e => e.account_id !== id));
-    } catch {}
-  }, []);
-
   // ── Schedules ──────────────────────────────────────────────────────────────
 
-  const loadSchedules = useCallback(async (groupFolder: string) => {
+  const loadSchedules = useCallback(async () => {
     setSchedulesLoading(true);
     try {
-      const data = await apiFetch<SpaceSchedule[]>(`/api/space/schedules?group=${encodeURIComponent(groupFolder)}`);
+      const data = await apiFetch<SpaceSchedule[]>(`/api/space/schedules`);
       setSchedules(Array.isArray(data) ? data : []);
     } catch {
       setSchedules([]);
@@ -321,22 +236,43 @@ export function useSpace(): UseSpaceHook {
     }
   }, []);
 
-  const createSchedule = useCallback(async (prompt: string, cron: string, groupFolder: string, chatJid: string) => {
+  const createSchedule = useCallback(async (payload: ScheduleCreatePayload) => {
     try {
       const data = await apiFetch<SpaceSchedule>('/api/space/schedules', {
         method: 'POST',
-        body: JSON.stringify({ prompt, cron, group_folder: groupFolder, chat_jid: chatJid }),
+        body: JSON.stringify(payload),
       });
       setSchedules(prev => [...prev, data]);
-    } catch {}
+      return data;
+    } catch {
+      return null;
+    }
   }, []);
 
-  const cancelSchedule = useCallback(async (id: string, groupFolder: string) => {
+  const updateSchedule = useCallback(async (id: string, payload: ScheduleUpdatePayload) => {
     try {
-      await apiFetch(`/api/space/schedules/${id}`, {
-        method: 'DELETE',
-        body: JSON.stringify({ group_folder: groupFolder }),
+      const data = await apiFetch<SpaceSchedule>(`/api/space/schedules/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
       });
+      setSchedules(prev => prev.map(s => (s.id === id ? data : s)));
+      return data;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const getScheduleDetail = useCallback(async (id: string) => {
+    try {
+      return await apiFetch<SpaceScheduleDetail>(`/api/space/schedules/${id}`);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const cancelSchedule = useCallback(async (id: string) => {
+    try {
+      await apiFetch(`/api/space/schedules/${id}`, { method: 'DELETE' });
       setSchedules(prev => prev.filter(s => s.id !== id));
     } catch {}
   }, []);
@@ -344,14 +280,12 @@ export function useSpace(): UseSpaceHook {
   // Load today summary on mount
   useEffect(() => {
     loadTodaySummary();
-    loadEmailAccounts();
-  }, [loadTodaySummary, loadEmailAccounts]);
+  }, [loadTodaySummary]);
 
   return {
     notes, notesLoading, loadNotes, createNote, updateNote, deleteNote, searchNotes,
     events, eventsLoading, loadEvents, createEvent, updateEvent, deleteEvent, todaySummary, loadTodaySummary,
-    emails, emailsLoading, emailAccounts, emailAccountsLoading,
-    loadEmails, readEmail, searchEmails, loadEmailAccounts, createEmailAccount, deleteEmailAccount,
-    schedules, schedulesLoading, loadSchedules, createSchedule, cancelSchedule,
+    schedules, schedulesLoading,
+    loadSchedules, createSchedule, updateSchedule, getScheduleDetail, cancelSchedule,
   };
 }

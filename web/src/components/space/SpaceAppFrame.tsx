@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import { AppstoreOutlined, ReloadOutlined, LoadingOutlined } from '@ant-design/icons';
+import { useAppContext } from '../../contexts/AppContext';
 
 const { Text } = Typography;
 
@@ -19,10 +20,14 @@ interface Props {
 
 export function SpaceAppFrame({ app }: Props) {
   const { token } = theme.useToken();
+  const { isDarkMode } = useAppContext();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  const themeMode = isDarkMode ? 'dark' : 'light';
+
   const sendInit = React.useCallback(() => {
+    const mode = isDarkMode ? 'dark' : 'light';
     const env = {
       appId: app.id,
       apiBase: '/api/space/apps',
@@ -32,14 +37,24 @@ export function SpaceAppFrame({ app }: Props) {
       configEndpoint: `/api/space/apps/${encodeURIComponent(app.id)}/config`,
       sqliteEndpoint: `/api/space/apps/${encodeURIComponent(app.id)}/sqlite/query`,
       mcpRegisterEndpoint: `/api/space/apps/${encodeURIComponent(app.id)}/mcp/register`,
+      theme: mode,
     };
     iframeRef.current?.contentWindow?.postMessage({
       type: 'senclaw:init',
       appId: app.id,
       env,
+      theme: mode,
       capabilities: ['llm.request', 'mcp.call', 'space.rest'],
     }, '*');
-  }, [app.id]);
+  }, [app.id, isDarkMode]);
+
+  // Push theme changes to the embedded app so it can follow senclaw's dark/light mode.
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'senclaw:theme', theme: themeMode },
+      '*',
+    );
+  }, [themeMode]);
 
   useEffect(() => {
     const handleMessage = async (event: MessageEvent) => {
@@ -118,7 +133,7 @@ export function SpaceAppFrame({ app }: Props) {
         <iframe
           ref={iframeRef}
           title={app.name}
-          src={app.integration.url}
+          src={app.integration.url === '/' ? `/api/space/apps/${app.id}/proxy/` : app.integration.url}
           onLoad={() => { setLoaded(true); sendInit(); }}
           sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
           style={{

@@ -12,6 +12,8 @@ import rehypeHighlight from 'rehype-highlight';
 import { theme, Button, Input, Switch, Tag, Typography, Spin, Space, Tabs, message, Card, Flex, Popconfirm, Tooltip } from 'antd';
 import { SearchOutlined, ReloadOutlined, ArrowLeftOutlined, EditOutlined, ThunderboltOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import 'highlight.js/styles/github.css';
+import { useAppContext } from '../../contexts/AppContext';
+import type { ToolAutoAcceptRule } from '../../types';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -35,7 +37,23 @@ interface RemoteResult {
   installed: boolean;
 }
 
-type Tab = 'browse' | 'manage';
+type Tab = 'browse' | 'manage' | 'auto-access';
+
+const LEGACY_AUTO_ACCESS_RULE_IDS = ['tool-category-skill', 'tool-category-agent'];
+
+function skillAutoAccessRuleId(skillName: string) {
+  return `skill-auto-access:${encodeURIComponent(skillName)}`;
+}
+
+function buildSkillAutoAccessRule(skillName: string): ToolAutoAcceptRule {
+  return {
+    id: skillAutoAccessRuleId(skillName),
+    action: 'auto_accept',
+    enabled: true,
+    matcher: { type: 'skill_exact', skill_name: skillName },
+    description: `Auto accept Skill ${skillName}`,
+  };
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -750,10 +768,120 @@ function ManageTab({ skills, onRefreshSkills, onReloadSuccess }: { skills: Local
   );
 }
 
+function AutoAccessTab({
+  skills,
+  toolRules,
+  onAddRule,
+  onRemoveRule,
+}: {
+  skills: LocalSkill[];
+  toolRules: ToolAutoAcceptRule[];
+  onAddRule: (rule: ToolAutoAcceptRule) => void;
+  onRemoveRule: (id: string) => void;
+}) {
+  const { token } = theme.useToken();
+  const groups = groupBySource(skills);
+
+  const isAutoAccessEnabled = useCallback((skillName: string) => {
+    const rule = toolRules.find(r => r.id === skillAutoAccessRuleId(skillName));
+    return !!(rule?.enabled && rule.action === 'auto_accept');
+  }, [toolRules]);
+
+  useEffect(() => {
+    for (const id of LEGACY_AUTO_ACCESS_RULE_IDS) {
+      if (toolRules.some(r => r.id === id)) {
+        onRemoveRule(id);
+      }
+    }
+  }, [toolRules, onRemoveRule]);
+
+  const handleToggle = useCallback((skillName: string, enabled: boolean) => {
+    LEGACY_AUTO_ACCESS_RULE_IDS.forEach(onRemoveRule);
+    const id = skillAutoAccessRuleId(skillName);
+    if (enabled) {
+      onAddRule(buildSkillAutoAccessRule(skillName));
+    } else {
+      onRemoveRule(id);
+    }
+  }, [onAddRule, onRemoveRule]);
+
+  if (skills.length === 0) {
+    return (
+      <Flex vertical align="center" justify="center" style={{ padding: '80px 0' }}>
+        <SkillIcon style={{ color: token.colorPrimary, fontSize: 24 }} />
+        <Text type="secondary">No skills installed yet.</Text>
+      </Flex>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+      <Flex vertical gap={24}>
+        {groups.map(({ source, skills: groupSkills }) => (
+          <section key={source}>
+            <Flex align="center" gap={8} style={{ marginBottom: 12 }}>
+              <SourceBadge source={source} />
+              <Text type="secondary" style={{ fontSize: '10px' }}>
+                {groupSkills.filter(s => isAutoAccessEnabled(s.name)).length}/{groupSkills.length} auto
+              </Text>
+            </Flex>
+            <Card
+              size="small"
+              styles={{ body: { padding: 0 } }}
+              style={{
+                backgroundColor: token.colorBgContainer,
+                borderColor: token.colorBorderSecondary,
+                overflow: 'hidden'
+              }}
+            >
+              {groupSkills.map((skill, idx) => {
+                const enabled = isAutoAccessEnabled(skill.name);
+                return (
+                  <div
+                    key={skill.name}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '12px 16px',
+                      borderBottom: idx < groupSkills.length - 1 ? `1px solid ${token.colorBorderSecondary}` : 'none',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Flex align="center" gap={8}>
+                        <Text strong={enabled} style={{ fontSize: token.fontSizeSM }}>
+                          {skill.name}
+                        </Text>
+                        {skill.version && <Text type="secondary" style={{ fontSize: '10px' }}>v{skill.version}</Text>}
+                        {skill.disabled && <Tag color="error">off</Tag>}
+                      </Flex>
+                      {skill.description && (
+                        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2 }} ellipsis>
+                          {skill.description}
+                        </Text>
+                      )}
+                    </div>
+                    <Switch
+                      checked={enabled}
+                      onChange={(checked) => handleToggle(skill.name, checked)}
+                      size="small"
+                    />
+                  </div>
+                );
+              })}
+            </Card>
+          </section>
+        ))}
+      </Flex>
+    </div>
+  );
+}
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export function SkillsPanel() {
   const { token } = theme.useToken();
+  const { ws } = useAppContext();
   const [tab, setTab] = useState<Tab>('browse');
   const [skills, setSkills] = useState<LocalSkill[]>([]);
   const [loading, setLoading] = useState(true);
@@ -812,18 +940,41 @@ export function SkillsPanel() {
                 </Space>
               ),
             },
+            {
+              key: 'auto-access',
+              label: (
+                <Space size={6}>
+                  Auto Access
+                  {ws.toolRules.filter(r => r.enabled && r.matcher.type === 'skill_exact').length > 0 && (
+                    <span
+                      style={{
+                        backgroundColor: token.colorFillAlter,
+                        color: token.colorTextSecondary,
+                        fontSize: '10px',
+                        padding: '1px 6px',
+                        borderRadius: 10
+                      }}
+                    >
+                      {ws.toolRules.filter(r => r.enabled && r.matcher.type === 'skill_exact').length}
+                    </span>
+                  )}
+                </Space>
+              ),
+            },
           ]}
         />
-        <Button
-          type="text"
-          icon={<ReloadOutlined />}
-          onClick={() => {
-            setLoading(true);
-            fetchSkills().then(() => message.success('Refreshed'));
-          }}
-          title="Refresh list (does not affect running agents)"
-          size="small"
-        />
+        <Space size={8}>
+          <Button
+            type="text"
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              setLoading(true);
+              fetchSkills().then(() => message.success('Refreshed'));
+            }}
+            title="Refresh list (does not affect running agents)"
+            size="small"
+          />
+        </Space>
       </Flex>
 
       {loading ? (
@@ -836,11 +987,18 @@ export function SkillsPanel() {
           onRefreshSkills={fetchSkills}
           onReloadSuccess={() => { }}
         />
-      ) : (
+      ) : tab === 'manage' ? (
         <ManageTab
           skills={skills}
           onRefreshSkills={fetchSkills}
           onReloadSuccess={() => { }}
+        />
+      ) : (
+        <AutoAccessTab
+          skills={skills}
+          toolRules={ws.toolRules}
+          onAddRule={ws.addToolRule}
+          onRemoveRule={ws.removeToolRule}
         />
       )}
     </Flex>

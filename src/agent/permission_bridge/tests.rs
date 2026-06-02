@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use super::api::PermissionBridgeApi;
 use super::bridge::PermissionBridge;
+use super::types::{RuleAction, RuleMatcher, RuleMatcherType, ToolAutoAcceptRule};
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
 struct StubApi;
@@ -139,9 +140,10 @@ fn test_resolve_permission_first_responder_wins() {
 }
 
 #[test]
-fn test_default_rules_auto_accept_skill_and_task() {
+fn test_default_rules_do_not_auto_accept_skill_or_task() {
     let api = Arc::new(RecordingApi::default());
     let bridge = PermissionBridge::new(api.clone(), None);
+    bridge.set_permission_request_callback(|_, _, _| {});
     let options: HashMap<String, String> = [
         ("allow".into(), "Allow".into()),
         ("refuse".into(), "Refuse".into()),
@@ -168,12 +170,58 @@ fn test_default_rules_auto_accept_skill_and_task() {
     );
 
     let responses = api.responses.lock().unwrap().clone();
+    assert!(responses.is_empty());
+}
+
+#[test]
+fn test_skill_exact_rule_auto_accepts_only_selected_skill() {
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+    bridge.set_permission_request_callback(|_, _, _| {});
+    bridge.add_rule(ToolAutoAcceptRule {
+        id: "skill-auto-access:agent-browser".into(),
+        matcher: RuleMatcher {
+            matcher_type: RuleMatcherType::SkillExact,
+            pattern: None,
+            tool_name: None,
+            skill_name: Some("agent-browser".into()),
+            server: None,
+            tool: None,
+            category: None,
+        },
+        action: RuleAction::AutoAccept,
+        enabled: true,
+        description: None,
+    });
+    let options: HashMap<String, String> = [
+        ("allow".into(), "Allow".into()),
+        ("refuse".into(), "Refuse".into()),
+    ]
+    .into();
+
+    bridge.handle_permission_request(
+        "Skill",
+        "Load skill?",
+        &serde_json::json!({"skill": "agent-browser"}),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+    bridge.handle_permission_request(
+        "Skill",
+        "Load skill?",
+        &serde_json::json!({"skill": "web-research"}),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+
+    let responses = api.responses.lock().unwrap().clone();
     assert_eq!(
         responses,
-        vec![
-            ("group-1".into(), "Skill".into(), "allow".into()),
-            ("group-1".into(), "Task".into(), "allow".into()),
-        ]
+        vec![("group-1".into(), "Skill".into(), "allow".into())]
     );
 }
 

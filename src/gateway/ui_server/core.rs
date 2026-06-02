@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum::{
+    Router,
     extract::DefaultBodyLimit,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, patch, post},
-    Router,
 };
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
@@ -70,15 +70,16 @@ use super::skills::{
 use super::spa::spa_fallback;
 use super::space::{
     space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
-    space_app_env, space_app_mcp_info, space_app_mcp_register, space_app_sqlite_query,
-    space_apps_bridge, space_apps_delete, space_apps_install_zip, space_apps_list,
-    space_apps_register, space_apps_register_local, space_apps_static, space_email_accounts_create,
-    space_email_accounts_delete, space_email_accounts_list, space_email_draft, space_email_inbox,
-    space_email_read, space_email_search, space_email_send, space_events_create,
+    space_app_env, space_app_logs_clear, space_app_logs_get, space_app_mcp_info,
+    space_app_mcp_register, space_app_sqlite_query, space_apps_bridge, space_apps_delete,
+    space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
+    space_apps_register, space_apps_register_local, space_apps_restart, space_apps_static,
+    space_events_create,
     space_events_delete, space_events_list, space_events_search, space_events_set_reminder,
     space_events_update, space_notes_create, space_notes_delete, space_notes_list,
     space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
-    space_schedules_list, space_sync_apple_calendar, space_sync_apple_notes, space_sync_gmail,
+    space_schedules_detail, space_schedules_list, space_schedules_update,
+    space_sync_apple_calendar, space_sync_apple_notes,
     space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
 };
 use super::subagents::{
@@ -451,26 +452,17 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(space_events_set_reminder),
         )
         .route("/api/space/calendar/today", get(space_today_summary))
-        // Email
-        .route("/api/space/email/inbox", get(space_email_inbox))
-        .route("/api/space/email/messages/:id", get(space_email_read))
-        .route("/api/space/email/search", get(space_email_search))
-        .route("/api/space/email/send", post(space_email_send))
-        .route("/api/space/email/draft", post(space_email_draft))
-        .route(
-            "/api/space/email/accounts",
-            get(space_email_accounts_list).post(space_email_accounts_create),
-        )
-        .route(
-            "/api/space/email/accounts/:id",
-            delete(space_email_accounts_delete),
-        )
         // Schedules
         .route(
             "/api/space/schedules",
             get(space_schedules_list).post(space_schedules_create),
         )
-        .route("/api/space/schedules/:id", delete(space_schedules_cancel))
+        .route(
+            "/api/space/schedules/:id",
+            get(space_schedules_detail)
+                .patch(space_schedules_update)
+                .delete(space_schedules_cancel),
+        )
         // Apps
         .route("/api/space/apps", get(space_apps_list))
         .route("/api/space/apps/register", post(space_apps_register))
@@ -501,9 +493,26 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/space/apps/:id/mcp/register",
             post(space_app_mcp_register),
         )
+        .route(
+            "/api/space/apps/:id/logs",
+            get(space_app_logs_get).delete(space_app_logs_clear),
+        )
         .route("/api/space/apps/:id/bridge", post(space_apps_bridge))
         .route("/api/space/apps/:id/static/*path", get(space_apps_static))
+        .route(
+            "/api/space/apps/:id/proxy/*path",
+            axum::routing::any(space_apps_proxy),
+        )
+        .route(
+            "/api/space/apps/:id/proxy/",
+            axum::routing::any(space_apps_proxy_root),
+        )
+        .route(
+            "/api/space/apps/:id/proxy",
+            axum::routing::any(space_apps_proxy_root),
+        )
         .route("/api/space/apps/:id", delete(space_apps_delete))
+        .route("/api/space/apps/:id/restart", post(space_apps_restart))
         // External sync
         .route(
             "/api/space/sync/google-calendar",
@@ -518,7 +527,6 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(space_sync_apple_calendar),
         )
         .route("/api/space/sync/apple-notes", post(space_sync_apple_notes))
-        .route("/api/space/sync/gmail", post(space_sync_gmail))
         // ── Chat interaction resolve (mobile parity with WS permission/question) ─
         .route(
             "/api/chat/permission/respond",

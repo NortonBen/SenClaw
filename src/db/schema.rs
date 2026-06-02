@@ -489,36 +489,6 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_space_events_start ON space_events(start_at);
 
-        CREATE TABLE IF NOT EXISTS space_email_accounts (
-            id          TEXT PRIMARY KEY,
-            label       TEXT NOT NULL,
-            email       TEXT NOT NULL,
-            imap_host   TEXT NOT NULL,
-            imap_port   INTEGER NOT NULL DEFAULT 993,
-            smtp_host   TEXT NOT NULL,
-            smtp_port   INTEGER NOT NULL DEFAULT 587,
-            username    TEXT NOT NULL,
-            password    TEXT NOT NULL,
-            use_tls     INTEGER DEFAULT 1,
-            created_at  INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS space_email_cache (
-            id          TEXT PRIMARY KEY,
-            account_id  TEXT NOT NULL,
-            folder      TEXT NOT NULL DEFAULT 'INBOX',
-            subject     TEXT,
-            from_addr   TEXT,
-            to_addrs    TEXT,
-            date        INTEGER,
-            body_text   TEXT,
-            body_html   TEXT,
-            flags       TEXT DEFAULT '[]',
-            synced_at   INTEGER NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_space_email_cache_account ON space_email_cache(account_id, folder, date);
-
         CREATE TABLE IF NOT EXISTS space_apps (
             id          TEXT PRIMARY KEY,
             manifest    TEXT NOT NULL,

@@ -1,0 +1,32 @@
+{
+  "id": "email",
+  "name": "Email",
+  "description": "Standalone Email App Space for SemaClaw. IMAP inbox, full-text search, and SMTP composing with real transport.",
+  "icon": "📧",
+  "runtime": {
+    "kind": "server",
+    "start": "./email",
+    "healthPath": "/"
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "mcp": {
+    "name": "email-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Email MCP for reading the inbox, searching, and composing/sending email via IMAP/SMTP",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "email-reporting",
+      "path": "skills/email-reporting"
+    }
+  ]
+}
