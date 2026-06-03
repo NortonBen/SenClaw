@@ -18,34 +18,50 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  // Built lazily but kept alive in an IndexedStack so each tab preserves state.
-  late final List<Widget> _tabs = const [
-    ChatScreen(),
-    CodeScreen(),
-    SpaceScreen(),
-    CoworkScreen(),
-  ];
+  // Mounted lazily and then kept alive in an IndexedStack so inactive feature
+  // tabs do not issue relay/API requests during app startup.
+  late final List<Widget?> _tabs = [const ChatScreen(), null, null, null];
 
   @override
   void initState() {
     super.initState();
-    // Bring up the shared relay as soon as the shell mounts so the REST tunnel
-    // is ready by the time the user opens Code/Space/Cowork.
+    // Bring up the shared relay as soon as the shell mounts. The selected Chat
+    // tab may call the same method concurrently; RelayManager coalesces that.
     RelayManager().ensureStarted();
+  }
+
+  Widget _tabFor(int index) {
+    return switch (index) {
+      0 => const ChatScreen(),
+      1 => const CodeScreen(),
+      2 => const SpaceScreen(),
+      3 => const CoworkScreen(),
+      _ => const SizedBox.shrink(),
+    };
+  }
+
+  void _selectTab(int index) {
+    if (_tabs[index] == null) {
+      _tabs[index] = _tabFor(index);
+    }
+    setState(() => _index = index);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: IndexedStack(index: _index, children: _tabs),
+      body: IndexedStack(
+        index: _index,
+        children: _tabs.map((tab) => tab ?? const SizedBox.shrink()).toList(),
+      ),
       bottomNavigationBar: AnimatedBuilder(
         animation: RelayManager(),
         builder: (context, _) {
           final connected = RelayManager().connected;
           return BottomNavigationBar(
             currentIndex: _index,
-            onTap: (i) => setState(() => _index = i),
+            onTap: _selectTab,
             type: BottomNavigationBarType.fixed,
             backgroundColor: AppColors.surface,
             selectedItemColor: AppColors.accent,
@@ -80,8 +96,13 @@ class _MainShellState extends State<MainShell> {
                         height: 8,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: connected ? Colors.greenAccent : Colors.orangeAccent,
-                          border: Border.all(color: AppColors.surface, width: 1.5),
+                          color: connected
+                              ? Colors.greenAccent
+                              : Colors.orangeAccent,
+                          border: Border.all(
+                            color: AppColors.surface,
+                            width: 1.5,
+                          ),
                         ),
                       ),
                     ),

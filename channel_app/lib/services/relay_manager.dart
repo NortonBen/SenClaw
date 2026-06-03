@@ -33,7 +33,7 @@ class RelayManager extends ChangeNotifier {
 
   StreamSubscription? _connSub;
   StreamSubscription? _agentSub;
-  bool _starting = false;
+  Completer<bool>? _startCompleter;
 
   /// Whether a relay instance exists (started at least once this session).
   bool get hasRelay => _relay != null;
@@ -41,8 +41,13 @@ class RelayManager extends ChangeNotifier {
   /// Create and start the shared relay if it isn't already running.
   /// Returns false when pairing data is missing.
   Future<bool> ensureStarted() async {
-    if (_relay != null || _starting) return _relay != null;
-    _starting = true;
+    if (_relay != null) return true;
+
+    final inFlight = _startCompleter;
+    if (inFlight != null) return inFlight.future;
+
+    final completer = Completer<bool>();
+    _startCompleter = completer;
     try {
       final hub = await _config.hubUrl;
       final relayUrl = await _config.relayUrl;
@@ -57,6 +62,7 @@ class RelayManager extends ChangeNotifier {
           token == null ||
           key == null) {
         Log.w('[RelayManager] Missing pairing data; not starting relay');
+        completer.complete(false);
         return false;
       }
 
@@ -83,9 +89,15 @@ class RelayManager extends ChangeNotifier {
       _relay = relay;
       relay.start();
       notifyListeners();
+      completer.complete(true);
       return true;
+    } catch (e, st) {
+      if (!completer.isCompleted) completer.completeError(e, st);
+      rethrow;
     } finally {
-      _starting = false;
+      if (identical(_startCompleter, completer)) {
+        _startCompleter = null;
+      }
     }
   }
 
