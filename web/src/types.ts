@@ -52,6 +52,8 @@ export interface TextMessage {
   text: string;
   attachments?: ImageAttachment[];
   timestamp: string;
+  /** Output (completion) tokens this agent message cost. Shown per-message. */
+  tokens?: number;
 }
 
 export interface PermissionMessage {

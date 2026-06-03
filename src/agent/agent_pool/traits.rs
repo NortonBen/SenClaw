@@ -22,7 +22,7 @@ use crate::types::GroupBinding;
 /// Default impls are no-ops so partial wiring compiles.
 #[allow(unused_variables)]
 pub trait AgentEventSink: Send + Sync {
-    fn notify_agent_reply(&self, chat_jid: &str, text: &str);
+    fn notify_agent_reply(&self, chat_jid: &str, text: &str, tokens: u32);
     fn notify_agent_state(&self, chat_jid: &str, state: &str);
     fn notify_permission_request(
         &self,
@@ -108,6 +108,10 @@ pub trait CoreApi: Send + Sync {
     /// Hot-update the pre-trigger-skill flag for an existing core (set from the
     /// global `preTriggerSkill` toggle before each turn). Default no-op.
     fn set_pre_trigger_skill(&self, _jid: &str, _enabled: bool) {}
+
+    /// Hot-update the after-process flag for an existing core (set from the
+    /// global `afterProcess` toggle before each turn). Default no-op.
+    fn set_after_process(&self, _jid: &str, _enabled: bool) {}
 
     /// Switch the core's working directory (used by workspace_switch and dispatch).
     fn set_working_dir(&self, jid: &str, dir: &str) {}

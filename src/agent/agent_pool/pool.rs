@@ -710,11 +710,14 @@ impl AgentPool {
 
     /// Unified output: send to channel (when not web-only) and to WS gateway.
     pub async fn broadcast_reply(&self, jid: &str, text: &str, bot_token: Option<&str>) {
-        self.broadcast_reply_now(jid, text, bot_token);
+        self.broadcast_reply_now(jid, text, bot_token, 0);
     }
 
-    /// Synchronous reply fanout used by event callbacks.
-    fn broadcast_reply_now(&self, jid: &str, text: &str, bot_token: Option<&str>) {
+    /// Synchronous reply fanout used by event callbacks. `tokens` is the
+    /// assistant message's output-token cost (0 = unknown); forwarded to the WS
+    /// sink so the chat UI can show per-message token usage. Channel sends
+    /// ignore it.
+    fn broadcast_reply_now(&self, jid: &str, text: &str, bot_token: Option<&str>, tokens: u32) {
         if !jid.starts_with("web:") {
             let send = self.send_reply.lock().unwrap().clone();
             if let Some(send) = send {
@@ -724,7 +727,7 @@ impl AgentPool {
         // WS push: prefer the structured sink, fall back to legacy ReplyFn.
         let sink = self.agent_event_sink.lock().unwrap().clone();
         if let Some(sink) = sink {
-            sink.notify_agent_reply(jid, text);
+            sink.notify_agent_reply(jid, text, tokens);
         } else {
             let cb = self.on_reply.lock().unwrap().clone();
             if let Some(cb) = cb {
@@ -1324,6 +1327,8 @@ impl AgentPool {
         if let Some(ref path) = global_config_path {
             let enabled = crate::gateway::group_manager::get_pre_trigger_skill_enabled(path);
             self.core_api.set_pre_trigger_skill(jid, enabled);
+            let after = crate::gateway::group_manager::get_after_process_enabled(path);
+            self.core_api.set_after_process(jid, after);
         }
 
         // ---- Pre-process stage 2: pre-retrieval injection ----
@@ -2348,16 +2353,17 @@ impl AgentPool {
                         s.last_dispatch_replies
                             .insert(jid.clone(), data.content.clone());
                     }
-                    let reply_text = if jid.starts_with("web:") {
-                        merge_assistant_reasoning_for_web_ui(
-                            &data.reasoning,
-                            &data.content,
-                            data.has_tool_calls,
-                        )
-                    } else {
-                        data.content.clone()
-                    };
-                    pool.broadcast_reply_now(&jid, &reply_text, bot_token.as_deref());
+                    let reply_text = merge_assistant_reasoning_for_web_ui(
+                        &data.reasoning,
+                        &data.content,
+                        data.has_tool_calls,
+                    );
+                    pool.broadcast_reply_now(
+                        &jid,
+                        &reply_text,
+                        bot_token.as_deref(),
+                        data.output_tokens,
+                    );
                     if let Some(logger) = pool.daily_logger.lock().unwrap().as_ref() {
                         logger.append(
                             &folder,

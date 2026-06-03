@@ -701,6 +701,9 @@ export function useWebSocket(): WsHook {
               role:      'agent',
               text:      msg.text as string,
               timestamp: (msg.ts as string) ?? new Date().toISOString(),
+              tokens:    typeof msg.tokens === 'number' && (msg.tokens as number) > 0
+                           ? (msg.tokens as number)
+                           : undefined,
             });
             // State is managed solely by agent:state events — do not override here.
             // agent:reply can fire for intermediate replies during multi-turn dispatch,

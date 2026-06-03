@@ -1039,6 +1039,20 @@ impl ZenCore for ZenEngine {
                 st.set_message_history(MAIN_AGENT_ID, msgs.clone());
             }
 
+            // After-process stage: proactively summarize/compact the completed
+            // conversation so the stored context stays optimized and coherent
+            // for the next turn (Claude-Code-style). Runs on a clone (lock not
+            // held across the LLM call), then persists the compacted history.
+            // No-op for short conversations or when cancelled.
+            if opts.after_process && !cancel.is_cancelled() {
+                if let Ok(msgs) = &result {
+                    let compacted =
+                        conversation::compact_now(msgs.clone(), &config, &cancel).await;
+                    let mut st = state_for_spawn.lock().unwrap();
+                    st.set_message_history(MAIN_AGENT_ID, compacted);
+                }
+            }
+
             let stop_reason = match &result {
                 Ok(_) => {
                     info!("[{instance_id}] conversation loop completed");
@@ -1710,6 +1724,13 @@ until you have carried out the skill's steps.\n\
     /// keyword/trigger match force-loads the skill instead of only hinting.
     pub fn set_pre_trigger_skill(&self, enabled: bool) {
         self.options.write().unwrap().pre_trigger_skill = enabled;
+    }
+
+    /// Hot-update the after-process flag for this engine (set from the global
+    /// `afterProcess` toggle on each turn). When true, the conversation is
+    /// proactively compacted after each completed turn.
+    pub fn set_after_process(&self, enabled: bool) {
+        self.options.write().unwrap().after_process = enabled;
     }
 
     /// Deterministically pick the best-matching skill for a prompt by scoring it

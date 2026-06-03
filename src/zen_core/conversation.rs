@@ -43,6 +43,11 @@ const DEFAULT_CONTEXT_LENGTH: u64 = 128_000;
 /// Trigger proactive auto-compaction once input tokens reach this fraction of
 /// the model context window. Mirrors TS `AUTO_COMPACT_THRESHOLD_RATIO`.
 const AUTO_COMPACT_THRESHOLD_RATIO: f64 = 0.75;
+/// Minimum message count before the **after-process** stage will proactively
+/// compact a completed conversation. Below this the history is small enough that
+/// summarizing it would cost an LLM call without meaningful benefit (and risk
+/// losing recent detail), so `compact_now` is a no-op.
+const AFTER_PROCESS_MIN_MESSAGES: usize = 16;
 /// Hard cap for a single LLM request turn (cloud/API providers).
 /// Dispatch tasks have their own larger timeout, but the model call itself
 /// should not be able to hang silently with no message/tool events.
@@ -241,6 +246,60 @@ struct CompactOutcome {
     usage: UsageData,
     /// True when compaction actually changed the message list.
     changed: bool,
+}
+
+/// **After-process stage.** Run *after* a turn completes (not in the query
+/// loop) to keep the stored conversation compact and coherent — the same
+/// Claude-Code-style LLM summarization as the in-loop safety compaction, but
+/// triggered eagerly once the history has grown past
+/// [`AFTER_PROCESS_MIN_MESSAGES`] rather than only at the 75% context threshold.
+///
+/// Earlier messages are summarized into a lossless snapshot while the most
+/// recent turn is preserved verbatim; on summary failure it falls back to
+/// keep-recent truncation (inherited from [`auto_compact`]). Emits the same
+/// Compact/Usage events + Pre/PostCompact hooks as the in-loop path so the UI
+/// reflects the compaction. Returns the (possibly unchanged) message list;
+/// no-op for subagents and trivially short conversations.
+pub async fn compact_now(
+    mut messages: Vec<Message>,
+    config: &QueryConfig,
+    cancel: &CancellationToken,
+) -> Vec<Message> {
+    if config.is_subagent || messages.len() < AFTER_PROCESS_MIN_MESSAGES {
+        return messages;
+    }
+    info!(
+        agent_id = %config.agent_id,
+        msg_count = messages.len(),
+        "after-process: proactively compacting completed conversation"
+    );
+    config
+        .event_bus
+        .emit(EngineEvent::CompactStart(CompactStartData {
+            message_count: messages.len(),
+        }));
+    spawn_compact_hook(config, &messages, HookEvent::PreCompact);
+
+    let outcome = auto_compact(std::mem::take(&mut messages), config, cancel).await;
+    messages = outcome.messages;
+
+    config
+        .event_bus
+        .emit(EngineEvent::CompactExec(outcome.exec));
+    spawn_compact_hook(config, &messages, HookEvent::PostCompact);
+    if outcome.changed {
+        config
+            .event_bus
+            .emit(EngineEvent::ConversationUsage(ConversationUsageData {
+                usage: outcome.usage,
+            }));
+        info!(
+            agent_id = %config.agent_id,
+            new_msg_count = messages.len(),
+            "after-process: conversation compacted"
+        );
+    }
+    messages
 }
 
 /// Proactively compact the conversation via LLM summarization, preserving the
@@ -844,6 +903,18 @@ pub async fn query(
                 content: text_content.clone(),
                 has_tool_calls: has_tool_calls,
                 tool_calls: tool_call_infos,
+                // Prefer real API usage; fall back to a char-based estimate of
+                // THIS message's output for providers that don't report usage
+                // (e.g. local MLX/Candle inference), so the per-message token
+                // badge still shows a meaningful number.
+                output_tokens: assistant_msg
+                    .usage
+                    .as_ref()
+                    .map(|u| u.output() as u32)
+                    .filter(|&t| t > 0)
+                    .unwrap_or_else(|| {
+                        estimate_tokens_by_chars(std::slice::from_ref(&assistant_msg)) as u32
+                    }),
             }));
 
         // 3. Emit conversation:usage (subagents skip this)

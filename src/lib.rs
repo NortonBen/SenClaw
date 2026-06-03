@@ -445,12 +445,12 @@ fn persist_chat_event(
 }
 
 impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
-    fn notify_agent_reply(&self, chat_jid: &str, text: &str) {
+    fn notify_agent_reply(&self, chat_jid: &str, text: &str, tokens: u32) {
         let gw = Arc::clone(&self.gateway);
         let jid = chat_jid.to_string();
         let text = text.to_string();
         tokio::spawn(async move {
-            gw.notify_agent_reply(&jid, &text).await;
+            gw.notify_agent_reply(&jid, &text, tokens).await;
         });
     }
 

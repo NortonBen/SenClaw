@@ -389,24 +389,17 @@ pub struct LlamaModel {
 impl LlamaModel {
     pub fn new(args: &ModelArgs) -> Result<Self, Exception> {
         assert!(args.vocab_size.is_positive());
-        eprintln!(
-            "[llama-model-debug] embedding start qwen2={}",
-            args.is_qwen2()
-        );
         let embed_tokens = if args.is_qwen2() {
             zero_embedding_bf16(1, args.hidden_size)?
         } else {
             nn::Embedding::new(args.vocab_size, args.hidden_size)?
         };
-        eprintln!("[llama-model-debug] layers start");
         let layers = (0..args.num_hidden_layers)
             .map(|_| TransformerBlock::new(args))
             .collect::<Result<Vec<_>, _>>()?;
-        eprintln!("[llama-model-debug] norm start");
         let norm = nn::RmsNormBuilder::new(args.hidden_size)
             .eps(args.rms_norm_eps)
             .build()?;
-        eprintln!("[llama-model-debug] done");
         Ok(Self {
             vocab_size: args.vocab_size,
             num_hidden_layers: args.num_hidden_layers,

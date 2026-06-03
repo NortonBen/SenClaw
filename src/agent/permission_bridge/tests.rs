@@ -226,6 +226,67 @@ fn test_skill_exact_rule_auto_accepts_only_selected_skill() {
 }
 
 #[test]
+fn test_mcp_server_rule_auto_accepts_hyphenated_server() {
+    // Regression: app-space MCP servers keep hyphens in the tool name
+    // (e.g. "mcp__ssh-manager-mcp__ssh_list_hosts"). An "Auto Access ALL"
+    // rule stores server "ssh-manager-mcp"; the matcher must accept the
+    // hyphenated tool name, not only the underscore-normalized form.
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+    bridge.set_permission_request_callback(|_, _, _| {});
+    bridge.add_rule(ToolAutoAcceptRule {
+        id: "mcp:ssh-manager-mcp:*".into(),
+        matcher: RuleMatcher {
+            matcher_type: RuleMatcherType::McpServer,
+            pattern: None,
+            tool_name: None,
+            skill_name: None,
+            server: Some("ssh-manager-mcp".into()),
+            tool: None,
+            category: None,
+        },
+        action: RuleAction::AutoAccept,
+        enabled: true,
+        description: None,
+    });
+    let options: HashMap<String, String> = [
+        ("allow".into(), "Allow".into()),
+        ("refuse".into(), "Refuse".into()),
+    ]
+    .into();
+
+    bridge.handle_permission_request(
+        "mcp__ssh-manager-mcp__ssh_list_hosts",
+        "Run tool?",
+        &serde_json::json!(null),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+    // A tool from a different server must NOT auto-accept.
+    bridge.handle_permission_request(
+        "mcp__other-server__do_thing",
+        "Run tool?",
+        &serde_json::json!(null),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+
+    let responses = api.responses.lock().unwrap().clone();
+    assert_eq!(
+        responses,
+        vec![(
+            "group-1".into(),
+            "mcp__ssh-manager-mcp__ssh_list_hosts".into(),
+            "allow".into()
+        )]
+    );
+}
+
+#[test]
 fn test_handle_callback_unknown_prefix() {
     let bridge = PermissionBridge::new(stub_api(), None);
     assert_eq!(bridge.handle_callback("X:123:allow", "chat-1"), None);

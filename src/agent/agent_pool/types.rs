@@ -73,6 +73,9 @@ pub struct MessageCompleteData {
     /// to decide whether to surface reasoning as the body (final turn) or keep
     /// it collapsed under `<think>` (intermediate turn).
     pub has_tool_calls: bool,
+    /// Output (completion) tokens this assistant message cost. 0 when the
+    /// provider didn't report usage. Forwarded to the chat UI per-message.
+    pub output_tokens: u32,
 }
 
 /// `state:update` event payload.

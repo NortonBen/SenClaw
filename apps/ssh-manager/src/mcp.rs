@@ -201,10 +201,26 @@ pub async fn mcp_message(
         
         if name == "ssh_list_hosts" {
             let hosts = state.hosts.get_all();
+            // Security: never expose secrets to the agent. Strip `password` and
+            // `keychain_id`; surface only boolean flags so the agent can still
+            // reason about which auth method a host uses without seeing it.
+            let safe: Vec<serde_json::Value> = hosts
+                .iter()
+                .map(|h| {
+                    json!({
+                        "id": h.id,
+                        "name": h.name,
+                        "host": h.host,
+                        "port": h.port,
+                        "user": h.user,
+                        "tags": h.tags,
+                        "has_password": h.password.as_deref().map(|p| !p.is_empty()).unwrap_or(false),
+                        "has_keychain": h.keychain_id.is_some(),
+                    })
+                })
+                .collect();
             let result = json!({
-                "content": [{ "type": "text", "text": serde_json::to_string(&hosts).unwrap() }
-
-]
+                "content": [{ "type": "text", "text": serde_json::to_string(&safe).unwrap() }]
             });
             let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
             let _ = state.mcp_tx.send(resp.to_string());

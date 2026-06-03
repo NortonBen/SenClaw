@@ -82,31 +82,69 @@ pre code.hljs {
 }
 
 .prose pre {
-  background-color: rgba(0, 0, 0, 0.2) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  margin: 0.5rem 0;
+  margin: 0.65rem 0;
   border-radius: 8px;
 }
 
-.dark .prose pre {
-  background-color: rgba(0, 0, 0, 0.4) !important;
+.chat-markdown {
+  overflow-wrap: anywhere;
 }
 
-.prose code {
+.chat-markdown .chat-markdown-pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.06) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.dark .chat-markdown .chat-markdown-pre {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.chat-markdown :not(pre) > code {
   color: inherit;
-  background-color: rgba(0, 0, 0, 0.08);
-  padding: 0.2em 0.4em;
-  border-radius: 4px;
-  font-weight: 500;
+  background-color: rgba(15, 23, 42, 0.08);
+  padding: 0.12em 0.36em;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 5px;
+  font-weight: 600;
   font-size: 0.9em;
+  white-space: break-spaces;
 }
 
-.dark .prose code {
-  background-color: rgba(255, 255, 255, 0.15);
+.dark .chat-markdown :not(pre) > code {
+  background-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
-.prose :where(code):replace(::before, ::after) {
-  content: "";
+.chat-markdown pre > code {
+  display: block;
+  min-width: max-content;
+  padding: 0.75rem 0.9rem !important;
+  color: #334155;
+  background: transparent !important;
+  border: 0;
+  border-radius: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.chat-markdown pre > code *,
+.chat-markdown pre code.hljs {
+  color: #334155 !important;
+}
+
+.dark .chat-markdown pre > code,
+.dark .chat-markdown pre > code *,
+.dark .chat-markdown pre code.hljs {
+  color: #f8fafc !important;
 }
 
 .prose {

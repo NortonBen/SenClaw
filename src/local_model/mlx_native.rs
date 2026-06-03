@@ -142,6 +142,38 @@ struct Loaded {
     prefix_cache: super::mlx_lm::prefix_cache::PrefixCache,
 }
 
+/// **Process-wide serialization for ALL heavy MLX/Metal work.**
+///
+/// MLX uses a shared global Metal device + default stream that is NOT safe for
+/// concurrent model loads / generations / cache frees across threads. The main
+/// agent and the background cognitive-reflection pipeline each drive their own
+/// cached `MlxNativeEngine` (often *different* models, e.g. gemma-4 vs
+/// Qwen2.5-0.5B), so their per-instance `loaded` mutexes don't serialize each
+/// other — running both at once corrupts Metal state and **SIGSEGVs**. Every
+/// load / generate / unload / KV-free acquires this single lock so MLX work is
+/// strictly serialized across the whole process.
+static MLX_SERIAL: Mutex<()> = Mutex::new(());
+
+/// Acquire [`MLX_SERIAL`], recovering from a poisoned lock (a prior MLX panic
+/// must not wedge all future inference). Blocks until it's this caller's turn —
+/// use only from blocking/`spawn_blocking` contexts (load + generate).
+fn mlx_serial_lock() -> std::sync::MutexGuard<'static, ()> {
+    MLX_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Non-blocking [`MLX_SERIAL`] acquire. Returns `None` when MLX is busy (a
+/// load/generate is in flight). Used by the async-invoked free paths
+/// (`unload` / `release_kv_cache`) so they (a) never block a tokio worker
+/// waiting on a long generation and (b) never free Metal buffers concurrently
+/// with that generation — the caller simply skips and retries later.
+fn mlx_serial_try_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+    match MLX_SERIAL.try_lock() {
+        Ok(g) => Some(g),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+        Err(std::sync::TryLockError::Poisoned(g)) => Some(g.into_inner()),
+    }
+}
+
 /// In-process MLX inference engine. Caches the loaded model so subsequent
 /// chats reuse weights instead of re-reading safetensors every call.
 pub struct MlxNativeEngine {
@@ -178,6 +210,13 @@ impl MlxNativeEngine {
     /// returns to the OS immediately instead of waiting for the next pool
     /// cycle.
     pub fn unload(&self) {
+        // Freeing model weights + `mlx_clear_cache` must not run while another
+        // engine is mid-generate on the shared Metal device. If MLX is busy,
+        // skip — the idle sweep / next model switch retries.
+        let Some(_mlx_serial) = mlx_serial_try_lock() else {
+            tracing::debug!("[local-mlx-native] unload skipped — MLX busy (generation in progress)");
+            return;
+        };
         if let Ok(mut g) = self.loaded.lock() {
             // Dropping the `Loaded` releases model weights, tokenizer, AND
             // every PrefixCacheEntry's snapshot Arrays. Whatever MLX
@@ -225,6 +264,10 @@ impl MlxNativeEngine {
     /// cache hit. No-op when nothing is loaded. Contrast [`Self::unload`], which
     /// drops the weights too.
     pub fn release_kv_cache(&self) {
+        // Same Metal-safety constraint as `unload`: skip if MLX is busy.
+        let Some(_mlx_serial) = mlx_serial_try_lock() else {
+            return;
+        };
         if let Ok(mut g) = self.loaded.lock() {
             if let Some(loaded) = g.as_mut() {
                 let freed = loaded.prefix_cache.clear();
@@ -397,6 +440,13 @@ impl MlxNativeEngine {
 /// Synchronous, blocking-thread version of `MlxNativeEngine::warm_up`.
 /// Populates `loaded` (if currently None) with Model + Tokenizer + template.
 fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
+    // Fast path: already loaded — no MLX work, so skip the global serialization.
+    if engine.loaded.lock().map(|g| g.is_some()).unwrap_or(false) {
+        return Ok(());
+    }
+    // Serialize the (heavy, Metal-touching) weight load against any concurrent
+    // generate/load on another engine — see `MLX_SERIAL`.
+    let _mlx_serial = mlx_serial_lock();
     let mut guard = engine
         .loaded
         .lock()
@@ -413,11 +463,8 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     use super::mlx_lm_utils::tokenizer::Tokenizer;
 
-    eprintln!("[mlx-load-debug] detect architecture");
     let arch = detect_architecture(model_id, model_dir)?;
-    eprintln!("[mlx-load-debug] arch={arch:?}");
     let tokenizer_file = model_dir.join("tokenizer.json");
-    eprintln!("[mlx-load-debug] load tokenizer");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
 
@@ -428,7 +475,6 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     // template string for chat rendering (via `apply_chat_template_*`) and the
     // same MarkerSet for output-stream normalisation — no double load, no
     // chance of input and output drifting apart for new models.
-    eprintln!("[mlx-load-debug] load parser config");
     let mut parser_config = super::stream_parser::ParserConfig::from_model_dir(model_dir, model_id)
         .map_err(|e| anyhow::anyhow!("ParserConfig::from_model_dir failed: {e}"))?;
     let chat_template = parser_config.chat_template.clone();
@@ -458,7 +504,6 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
             (ModelKind::Qwen35(m), n, hd, kvh)
         }
         Arch::Llama => {
-            eprintln!("[mlx-load-debug] load llama-like");
             let m = load_llama_any(model_dir)
                 .map_err(|e| anyhow::anyhow!("load_llama failed: {e:?}"))?;
             let n = m.args.num_hidden_layers as usize;
@@ -901,6 +946,11 @@ fn generate_with_cache(
     use mlx_rs::Array;
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::{async_eval, eval};
+
+    // Serialize all MLX/Metal work process-wide (load + prefill + decode) so the
+    // main-agent model and the background cognitive model can't run on the
+    // shared Metal device concurrently and SIGSEGV. Held for the whole call.
+    let _mlx_serial = mlx_serial_lock();
 
     let mut guard = loaded
         .lock()
@@ -2951,14 +3001,8 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
     }
 
     let is_quant = quant.is_some();
-    eprintln!(
-        "[llama-load-debug] before Model::new qwen2={} quant={is_quant}",
-        args.is_qwen2()
-    );
     let model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
-    eprintln!("[llama-load-debug] after Model::new");
     let mut model = if let Some((group_size, bits)) = quant {
-        eprintln!("[llama-load-debug] before nn::quantize");
         tracing::info!(
             "[local-mlx-native] quantizing Llama layers: group_size={group_size}, bits={bits}"
         );
@@ -2966,12 +3010,10 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
             .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
         m.eval()
             .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
-        eprintln!("[llama-load-debug] after nn::quantize eval");
         m
     } else {
         model
     };
-    eprintln!("[llama-load-debug] before safetensor load");
 
     let mut total_loaded = 0usize;
     let mut total_missed = 0usize;

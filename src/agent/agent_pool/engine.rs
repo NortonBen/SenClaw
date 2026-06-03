@@ -191,6 +191,7 @@ impl ZenCoreApi {
                                         reasoning: data.reasoning,
                                         content: data.content,
                                         has_tool_calls: data.has_tool_calls,
+                                        output_tokens: data.output_tokens,
                                     });
                                 }
                             }
@@ -369,6 +370,12 @@ impl CoreApi for ZenCoreApi {
     fn set_pre_trigger_skill(&self, jid: &str, enabled: bool) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.set_pre_trigger_skill(enabled);
+        }
+    }
+
+    fn set_after_process(&self, jid: &str, enabled: bool) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_after_process(enabled);
         }
     }
 

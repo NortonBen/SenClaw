@@ -140,20 +140,22 @@ impl PermissionBridge {
                 let Some(server) = rule.matcher.server.as_deref() else {
                     return false;
                 };
-                // sema-core tool name format: mcp__{server_normalized}__{tool}
-                // Normalize: "senclaw-browser" → try "senclaw_browser" and also strip "senclaw-" → "browser"
-                let normalized = server.replace('-', "_");
-                let without_prefix = server
-                    .strip_prefix("senclaw-")
-                    .unwrap_or(server)
-                    .replace('-', "_");
-                let prefix_full = format!("mcp__{normalized}__");
-                let prefix_short = format!("mcp__{without_prefix}__");
-                let prefix = if tool_name.starts_with(&prefix_full) {
-                    &prefix_full
-                } else if tool_name.starts_with(&prefix_short) {
-                    &prefix_short
-                } else {
+                // sema-core tool name format: mcp__{server}__{tool}. The server
+                // segment may KEEP hyphens (e.g. app-space servers like
+                // "ssh-manager-mcp") or appear normalized to underscores
+                // depending on the registration path. Build candidate prefixes
+                // covering both forms — original (hyphenated) AND normalized —
+                // and also the "senclaw-" stripped short form, then match the
+                // tool name against whichever applies.
+                let stripped = server.strip_prefix("senclaw-").unwrap_or(server);
+                let candidates = [
+                    format!("mcp__{server}__"),                    // original (may have hyphens)
+                    format!("mcp__{}__", server.replace('-', "_")), // normalized
+                    format!("mcp__{stripped}__"),                  // senclaw- stripped, hyphens
+                    format!("mcp__{}__", stripped.replace('-', "_")), // stripped + normalized
+                ];
+                let Some(prefix) = candidates.iter().find(|p| tool_name.starts_with(p.as_str()))
+                else {
                     return false;
                 };
                 // If tool is None/empty, match all tools of this server

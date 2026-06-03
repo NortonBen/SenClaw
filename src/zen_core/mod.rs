@@ -307,6 +307,11 @@ pub struct MessageCompleteData {
     pub has_tool_calls: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallInfo>>,
+    /// Output (completion) tokens this assistant message cost, from the LLM
+    /// usage. 0 when the provider didn't report usage. Surfaced per-message in
+    /// the chat UI.
+    #[serde(default)]
+    pub output_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -700,6 +705,11 @@ pub struct ZenCoreOptions {
     /// before the main turn, instead of only emitting a soft skill hint.
     /// Set per-engine from the global `preTriggerSkill` toggle.
     pub pre_trigger_skill: bool,
+    /// After-process stage: when true, the conversation is proactively
+    /// summarized/compacted (Claude-Code-style) after each completed turn so the
+    /// stored context stays optimized and coherent. Set per-engine from the
+    /// global `afterProcess` toggle.
+    pub after_process: bool,
 }
 
 impl Default for ZenCoreOptions {
@@ -724,6 +734,7 @@ impl Default for ZenCoreOptions {
             custom_memory_dir: None,
             memory_folder_override: None,
             pre_trigger_skill: false,
+            after_process: false,
         }
     }
 }

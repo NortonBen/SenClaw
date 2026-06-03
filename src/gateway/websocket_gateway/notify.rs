@@ -19,7 +19,7 @@ impl WebSocketGateway {
         self.broadcast(&msg.chat_jid, &payload).await;
     }
 
-    pub async fn notify_agent_reply(&self, chat_jid: &str, text: &str) {
+    pub async fn notify_agent_reply(&self, chat_jid: &str, text: &str, tokens: u32) {
         // Stamp at emit time so the client can chronologically interleave
         // agent:reply with tool:execution events (both carry `ts`).
         // Without this, agent:reply used the client's WS-arrival clock and
@@ -28,6 +28,9 @@ impl WebSocketGateway {
             "type": "agent:reply",
             "groupJid": chat_jid,
             "text": text,
+            // Output-token cost of this assistant message (0 = unknown). The
+            // chat UI shows it per-message.
+            "tokens": tokens,
             "ts": chrono::Utc::now().to_rfc3339(),
         });
         self.broadcast(chat_jid, &payload).await;

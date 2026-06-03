@@ -175,14 +175,14 @@ function MarkdownContent({ content, isDarkMode }: { content: string, isDarkMode:
   if (typeof content !== 'string') return null;
   
   return (
-    <div className={`prose ${isDarkMode ? 'prose-invert' : ''} max-w-none`}>
+    <div className={`prose chat-markdown ${isDarkMode ? 'prose-invert' : ''} max-w-none`}>
       <ReactMarkdown 
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
           a: ({ ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />,
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          pre: ({ children }) => <pre className="p-0 m-0 bg-transparent">{children}</pre>
+          pre: ({ children }) => <pre className="chat-markdown-pre">{children}</pre>
         }}
       >
         {content}
@@ -208,7 +208,7 @@ function ImageAttachments({ attachments }: { attachments: ImageAttachment[] }) {
   );
 }
 
-function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: string; timestamp: string; isDarkMode: boolean; attachments?: ImageAttachment[] }) {
+function AgentBubble({ text, timestamp, isDarkMode, attachments, tokens }: { text: string; timestamp: string; isDarkMode: boolean; attachments?: ImageAttachment[]; tokens?: number }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [playState, setPlayState] = useState<'idle' | 'playing' | 'loading' | 'error'>('idle');
@@ -314,6 +314,11 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments }: { text: strin
       </div>
       <div className="flex items-center mt-1 gap-1">
         <Text type="secondary" className="text-[11px] ml-1 flex-1">{formatTime(timestamp)}</Text>
+        {tokens && tokens > 0 ? (
+          <Text type="secondary" className="text-[10px] tabular-nums" title={`${tokens.toLocaleString()} output tokens`}>
+            {tokens.toLocaleString()} tok
+          </Text>
+        ) : null}
         <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={handleCopy}
@@ -393,7 +398,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
     return null;
   }
 
-  const { role, text, timestamp, senderName, attachments } = message;
+  const { role, text, timestamp, senderName, attachments, tokens } = message;
 
   if (role === 'user') {
     return (
@@ -450,7 +455,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
         {isAgent ? 'AI' : (senderName?.charAt(0).toUpperCase() ?? '?')}
       </div>
       {isAgent ? (
-        <AgentBubble text={text} timestamp={timestamp} isDarkMode={isDarkMode} attachments={attachments} />
+        <AgentBubble text={text} timestamp={timestamp} isDarkMode={isDarkMode} attachments={attachments} tokens={tokens} />
       ) : (
         <div className="max-w-[85%]">
           {senderName && (
