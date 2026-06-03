@@ -324,6 +324,20 @@ pub(crate) async fn handle_subscribe(
         }
     }
 
+    // Push current agent mode so the frontend knows if Plan mode is active.
+    if let Some(mode) = state.api.get_agent_mode(&jid) {
+        if mode != "Agent" {
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "agent:mode:changed",
+                    "groupJid": jid,
+                    "mode": mode,
+                }),
+            );
+        }
+    }
+
     // Send current tool auto-accept rules to newly connected client.
     {
         let rules = state.api.get_tool_rules();
@@ -1768,15 +1782,16 @@ pub(crate) async fn handle_agent_mode(
         return;
     }
     state.api.set_agent_mode(&group_jid, &mode);
-    // Echo back so the originating tab + other tabs reflect the new mode.
-    send_json(
-        sender,
+    // Broadcast to all authenticated clients so every tab reflects the new mode.
+    broadcast_to_all_inner(
+        clients,
         &serde_json::json!({
             "type": "agent:mode:changed",
             "groupJid": group_jid,
             "mode": mode,
         }),
-    );
+    )
+    .await;
 }
 
 pub(crate) async fn handle_agent_control(

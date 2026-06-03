@@ -603,6 +603,25 @@ async fn query_local_mlx(
                 crate::local_model::stream_parser::parse_complete(&text_buf, dialect)
             }
         };
+
+        // Session-end cache cleanup (opt-in via `release_cache_after_session` in
+        // settings.json). A tool-call-free turn is the terminal turn of the
+        // agentic loop — the session is done — so drop the per-session prefix /
+        // KV cache now (weights stay loaded). Turns that DO make tool calls keep
+        // the cache so the within-session prefix hits survive.
+        if tool_calls_from_text.is_empty() {
+            let settings = crate::gateway::ui_server::local_models::load_settings_blocking(
+                &cfg.paths.local_models_dir,
+            );
+            if settings.release_cache_after_session.unwrap_or(false) {
+                let engine_rel = engine.clone();
+                // MLX (Metal) call off the async reactor; generation has already
+                // finished (gen_handle awaited) so there's no concurrent access.
+                let _ = tokio::task::spawn_blocking(move || engine_rel.release_kv_cache()).await;
+                debug!("[local-mlx] release_cache_after_session: dropped per-session KV");
+            }
+        }
+
         build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, None)
     }
 }

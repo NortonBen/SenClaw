@@ -486,6 +486,14 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn get_agent_mode(&self, jid: &str) -> Option<String> {
+        self.engines
+            .lock()
+            .unwrap()
+            .get(jid)
+            .map(|e| e.options.read().unwrap().agent_mode.as_str().to_string())
+    }
+
     fn on_message_complete(
         &self,
         jid: &str,

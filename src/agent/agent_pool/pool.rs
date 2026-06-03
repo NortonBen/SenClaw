@@ -1876,6 +1876,10 @@ impl AgentPool {
         self.core_api.update_agent_mode(jid, mode);
     }
 
+    pub fn get_agent_mode(&self, jid: &str) -> Option<String> {
+        self.core_api.get_agent_mode(jid)
+    }
+
     ///   A. **core-pause** — active PAW → `CoreApi::pause_session`
     ///   B. **dispatch-pause** — active dispatch → record in set, notify
     ///   C. **synth-pause** — fully idle → record in set, notify

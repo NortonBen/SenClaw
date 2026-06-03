@@ -102,6 +102,8 @@ interface InferenceSettings {
   repetition_penalty: number | null;
   /** 0 = off; omit/null defaults to 60s on server; min 60 when explicitly set nonzero */
   idle_unload_secs: number | null;
+  /** MLX: drop per-session KV/prefix cache the moment a chat session ends (tool-call-free final turn). Weights stay loaded. null/false = off. */
+  release_cache_after_session: boolean | null;
   /** "mlx" | "candle" | null (auto) */
   preferred_backend: string | null;
 }
@@ -117,6 +119,7 @@ const DEFAULT_SETTINGS: InferenceSettings = {
   temperature: null,
   repetition_penalty: null,
   idle_unload_secs: 60,
+  release_cache_after_session: false,
   preferred_backend: null,
 };
 
@@ -849,6 +852,26 @@ export const LocalModelsSettings: React.FC = () => {
                   checked={settings.enable_thinking === true}
                   onChange={(v) =>
                     setSettings((s) => ({ ...s, enable_thinking: v }))
+                  }
+                  checkedChildren="On"
+                  unCheckedChildren="Off"
+                />
+              </Form.Item>
+            </Col>
+
+            {/* Release cache after session (MLX) */}
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item
+                label={
+                  <Tooltip title="MLX only: free the model's KV / prefix cache (hundreds of MB) as soon as a chat session ends — the final answer that makes no tool calls. Weights stay loaded, so the next session is still warm; only the per-session KV is dropped immediately instead of waiting for the idle-unload timer. Within a session, tool-call turns keep the cache (prefix-cache hits still work). Best for RAM-tight machines.">
+                    Release cache after session (MLX)
+                  </Tooltip>
+                }
+              >
+                <Switch
+                  checked={settings.release_cache_after_session === true}
+                  onChange={(v) =>
+                    setSettings((s) => ({ ...s, release_cache_after_session: v }))
                   }
                   checkedChildren="On"
                   unCheckedChildren="Off"

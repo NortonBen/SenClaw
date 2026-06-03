@@ -816,6 +816,9 @@ export function useWebSocket(): WsHook {
             // Server-side confirmation that the engine accepted our choice.
             // Clearing local state collapses the dialog if still open.
             setPlanExitRequest(null);
+            // Refresh plan history so the newly approved plan appears immediately.
+            const planJid = msg.groupJid as string;
+            if (planJid) rawSend({ type: 'plan:list', groupJid: planJid });
             break;
           }
           case 'plan:implement': {

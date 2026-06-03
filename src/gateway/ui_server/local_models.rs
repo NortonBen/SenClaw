@@ -776,6 +776,18 @@ pub struct LocalModelSettings {
     /// weight size, else KV is released every turn).
     #[serde(default)]
     pub kv_release_rss_mib: Option<u32>,
+    /// **MLX native** session-end cleanup: when `true`, release the model's
+    /// prefix-cache + KV (and return MLX's pool to the OS) as soon as a chat
+    /// session finishes — i.e. the agentic loop ends with a final answer that
+    /// makes no tool calls. Weights stay loaded (next session is still warm),
+    /// so this only drops the per-session KV (~hundreds of MB) immediately
+    /// instead of waiting for the prefix cache's idle TTL or `idle_unload_secs`.
+    /// The within-session prefix cache (tool-call turns) is untouched — release
+    /// happens only on the terminal, tool-call-free turn. **`None`** / **`false`**
+    /// = disabled (default; KV persists until idle eviction). Best for RAM-tight
+    /// machines or when switching between models / long idle gaps are common.
+    #[serde(default)]
+    pub release_cache_after_session: Option<bool>,
 }
 
 impl Default for LocalModelSettings {
@@ -793,6 +805,7 @@ impl Default for LocalModelSettings {
             preferred_backend: None,
             idle_unload_secs: Some(DEFAULT_IDLE_UNLOAD_SECS),
             kv_release_rss_mib: None,
+            release_cache_after_session: None,
         }
     }
 }

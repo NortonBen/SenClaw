@@ -202,6 +202,10 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         self.agent_pool.set_agent_mode(group_jid, mode);
     }
 
+    fn get_agent_mode(&self, group_jid: &str) -> Option<String> {
+        self.agent_pool.get_agent_mode(group_jid)
+    }
+
     fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
         self.agent_pool
             .resolve_plan_exit(group_jid, agent_id, selected);

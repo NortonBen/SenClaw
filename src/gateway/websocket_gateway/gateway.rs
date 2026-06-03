@@ -53,6 +53,10 @@ pub trait WsGatewayApi: Send + Sync {
     async fn stop_agent(&self, _group_jid: &str) {}
     /// Switch agent mode (`"Agent" | "Plan"`) for a group's engine.
     fn set_agent_mode(&self, _group_jid: &str, _mode: &str) {}
+    /// Read the current agent mode for a group. Returns `None` if no engine.
+    fn get_agent_mode(&self, _group_jid: &str) -> Option<String> {
+        None
+    }
     /// Resolve a pending plan-exit approval. `selected` is one of
     /// `startEditing` / `clearContextAndStart` / `cancelled`. Delivers the
     /// choice to the waiting `ExitPlanMode` tool and (on approval) flips the
