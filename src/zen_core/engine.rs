@@ -849,6 +849,9 @@ impl ZenCore for ZenEngine {
         } else {
             None
         };
+        // Always-on skills (`use: always`) are injected in full every turn,
+        // independent of whether the Skill tool is registered.
+        let always_skills_block = self.build_always_skills_block();
         // Build deferred-tools reminder so the LLM knows ToolSearch can load
         // specialized tools on demand.
         let deferred_reminder = self.build_deferred_tools_reminder();
@@ -871,6 +874,7 @@ impl ZenCore for ZenEngine {
             skills_reminder.as_deref(),
             deferred_reminder.as_deref(),
             plan_mode_reminder.as_deref(),
+            always_skills_block.as_deref(),
         );
 
         // Resolve profile from active UI config first, env fallback second.
@@ -963,8 +967,19 @@ impl ZenCore for ZenEngine {
             // message so it gets the model's full attention on the very first
             // pass — vs the skill list at the end of the system prompt which
             // the model often skims.
-            // An explicit `#skill` directive wins over the keyword-based hint.
+            // Priority: explicit `#skill` directive > pre-trigger-skill
+            // force-load (when enabled and a match is found) > soft keyword hint.
             if let Some(reminder) = forced_skill_reminder.clone() {
+                blocks.push(ContentBlock::Text { text: reminder });
+            } else if let Some(reminder) = opts
+                .pre_trigger_skill
+                .then(|| self.match_skill_name(&prompt))
+                .flatten()
+                .and_then(|name| self.force_skill_reminder(&name))
+            {
+                // Pre-trigger-skill stage: deterministically load the matched
+                // skill's full instructions (+ pre-discover its tools) so a weak
+                // model never has to decide to call the Skill tool itself.
                 blocks.push(ContentBlock::Text { text: reminder });
             } else if let Some(hint) = self.build_skill_match_reminder(&prompt) {
                 blocks.push(ContentBlock::Text { text: hint });
@@ -1369,6 +1384,7 @@ impl ZenEngine {
         skills_reminder: Option<&str>,
         deferred_reminder: Option<&str>,
         plan_mode_reminder: Option<&str>,
+        always_skills: Option<&str>,
     ) -> String {
         // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
         // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
@@ -1392,6 +1408,10 @@ impl ZenEngine {
         if let Some(reminder) = plan_mode_reminder {
             out.push_str("\n\n");
             out.push_str(reminder);
+        }
+        if let Some(block) = always_skills {
+            out.push_str("\n\n");
+            out.push_str(block);
         }
         out
     }
@@ -1429,6 +1449,10 @@ impl ZenEngine {
         let skills: Vec<_> = names
             .iter()
             .filter_map(|n| self.skill_registry.find(n))
+            // `use: always` skills are already injected in full by
+            // `build_always_skills_block`, so don't also list them as
+            // "invoke via Skill" candidates here.
+            .filter(|s| s.metadata.use_mode != crate::skills::SkillUseMode::Always)
             .collect();
         let rows: Vec<SkillReminderRow<'_>> = skills
             .iter()
@@ -1440,6 +1464,56 @@ impl ZenEngine {
             })
             .collect();
         render_skills_reminder(&rows)
+    }
+
+    /// Build the always-on skills block: every eligible skill declared
+    /// `use: always` has its **full** instructions injected into the system
+    /// prompt on every turn (vs trigger-mode skills, which load only on match /
+    /// explicit call). Each skill's activation side effects (tool pre-discovery
+    /// + env injection) are applied and its params surfaced. Returns `None` when
+    /// no always-mode skill is active.
+    fn build_always_skills_block(&self) -> Option<String> {
+        let names = self.skill_registry.names();
+        let mut sections = Vec::new();
+        for n in &names {
+            let Some(skill) = self.skill_registry.find(n) else {
+                continue;
+            };
+            if skill.metadata.use_mode != crate::skills::SkillUseMode::Always {
+                continue;
+            }
+            // Respect load-time gating (os / required env / required bins).
+            if !skill.metadata.is_eligible() {
+                tracing::info!(
+                    "[Skill] skipping always-on skill '{}': {}",
+                    skill.metadata.name,
+                    skill
+                        .metadata
+                        .ineligible_reason()
+                        .unwrap_or_else(|| "ineligible".into())
+                );
+                continue;
+            }
+            self.apply_skill_activation(&skill);
+            let params = Self::format_skill_params(&skill.metadata.params);
+            sections.push(format!(
+                "===== SKILL: {name} =====\n{params}{content}\n===== END SKILL =====",
+                name = skill.metadata.name,
+                params = params,
+                content = skill.content,
+            ));
+        }
+        if sections.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "<system-reminder>\n\
+The following always-on skill(s) are active for every message. Follow their \
+instructions whenever relevant to the user's request; the MCP tools they \
+reference are already available (no ToolSearch needed).\n\n{}\n\
+</system-reminder>",
+            sections.join("\n\n")
+        ))
     }
 
     /// Collect runtime system context: working dir, OS, shell, git status.
@@ -1537,16 +1611,18 @@ impl ZenEngine {
         Some((name, rest))
     }
 
-    /// Build a hard directive that loads a skill's instructions inline and
-    /// pre-discovers the deferred MCP tools it references. Used when the user
-    /// explicitly invokes a skill via `#name` / `/name` — the instructions are
-    /// injected deterministically so even a weak model runs the skill without
-    /// having to call the `Skill` tool first.
-    fn force_skill_reminder(&self, skill_name: &str) -> Option<String> {
-        let skill = self.skill_registry.find(skill_name)?;
-
-        // Pre-discover deferred tools whose verb (last `__` segment) is named in
-        // the skill body, e.g. `ssh_list_hosts` → `mcp__ssh-manager-mcp__ssh_list_hosts`.
+    /// Apply a skill's load-time side effects, shared by the `Skill` tool path
+    /// and every force-load path (`#name`, pre-trigger-skill, `use: always`):
+    ///
+    /// 1. **Tool pre-discovery** — surface the deferred MCP tools whose verb
+    ///    (last `__` segment) is named in the skill body, e.g. `ssh_list_hosts`
+    ///    → `mcp__ssh-manager-mcp__ssh_list_hosts`, so they are callable without
+    ///    a `ToolSearch`.
+    /// 2. **OpenClaw env injection** — pull the skill's `skills.entries.<name>`
+    ///    config (`env` + `apiKey` → `primaryEnv`) and inject it into the process
+    ///    (only vars not already set), so the skill's tools actually have their
+    ///    credentials/config. Mirrors [`crate::tools::skill::SkillTool::call`].
+    fn apply_skill_activation(&self, skill: &crate::skills::Skill) {
         let content_lower = skill.content.to_lowercase();
         {
             let mut discovered = self.discovered_tools.lock().unwrap();
@@ -1555,11 +1631,62 @@ impl ZenEngine {
                 let verb = full.rsplit("__").next().unwrap_or(full);
                 if verb.len() >= 3 && content_lower.contains(&verb.to_lowercase()) {
                     if discovered.insert(full.to_string()) {
-                        tracing::info!("[Skill] pre-discovered tool for '{skill_name}': {full}");
+                        tracing::info!(
+                            "[Skill] pre-discovered tool for '{}': {full}",
+                            skill.metadata.name
+                        );
                     }
                 }
             }
         }
+
+        let cfg = crate::config::Config::from_env();
+        let skills_cfg =
+            crate::skills::config::SkillsRuntimeConfig::load(&cfg.paths.global_config_path);
+        if let Some(entry) = skills_cfg.entry(&skill.metadata.name) {
+            let injected =
+                crate::skills::config::inject_env(entry, skill.metadata.primary_env.as_deref());
+            if !injected.is_empty() {
+                tracing::info!(
+                    "[Skill] injected env for '{}': {}",
+                    skill.metadata.name,
+                    injected.join(", ")
+                );
+            }
+        }
+    }
+
+    /// Render a skill's declared OpenClaw `params` as a short prompt block so the
+    /// model knows what arguments the skill accepts. Empty when no params.
+    fn format_skill_params(params: &[crate::skills::SkillParam]) -> String {
+        if params.is_empty() {
+            return String::new();
+        }
+        let mut s = String::from("Parameters this skill accepts:\n");
+        for p in params {
+            let req = if p.required { "required" } else { "optional" };
+            let desc = p
+                .description
+                .as_deref()
+                .map(|d| format!(" — {d}"))
+                .unwrap_or_default();
+            s.push_str(&format!("- `{}` ({}, {}){}\n", p.name, p.type_, req, desc));
+        }
+        s.push('\n');
+        s
+    }
+
+    /// Build a hard directive that loads a skill's instructions inline,
+    /// pre-discovers the deferred MCP tools it references, injects its
+    /// configured env, and surfaces its params. Used when the user explicitly
+    /// invokes a skill via `#name` / `/name`, or when the pre-trigger-skill
+    /// stage force-loads a match — the instructions are injected
+    /// deterministically so even a weak model runs the skill without having to
+    /// call the `Skill` tool first.
+    fn force_skill_reminder(&self, skill_name: &str) -> Option<String> {
+        let skill = self.skill_registry.find(skill_name)?;
+        self.apply_skill_activation(&skill);
+        let params = Self::format_skill_params(&skill.metadata.params);
 
         Some(format!(
             "<system-reminder>\n\
@@ -1568,25 +1695,46 @@ follow them now to fulfill the request. The MCP tools it references are already 
 available; call them directly (no ToolSearch needed). Do not answer in plain text \
 until you have carried out the skill's steps.\n\
 \n\
-===== SKILL: {name} =====\n\
+{params}===== SKILL: {name} =====\n\
 {content}\n\
 ===== END SKILL =====\n\
 </system-reminder>\n\n",
             name = skill.metadata.name,
+            params = params,
             content = skill.content,
         ))
     }
 
-    fn build_skill_match_reminder(&self, prompt: &str) -> Option<String> {
+    /// Hot-update the pre-trigger-skill flag for this engine (set from the
+    /// global `preTriggerSkill` toggle on each turn). When true, a confident
+    /// keyword/trigger match force-loads the skill instead of only hinting.
+    pub fn set_pre_trigger_skill(&self, enabled: bool) {
+        self.options.write().unwrap().pre_trigger_skill = enabled;
+    }
+
+    /// Deterministically pick the best-matching skill for a prompt by scoring it
+    /// against each skill's `when-to-use` text **and** its explicit `triggers`
+    /// list (quoted-phrase + word overlap, no LLM call). Returns the winning
+    /// skill name, or `None` if nothing clears the confidence threshold. Skills
+    /// with `disable_model_invocation` are excluded.
+    fn match_skill_name(&self, prompt: &str) -> Option<String> {
         let prompt_lower = prompt.to_lowercase();
         let prompt_words: std::collections::HashSet<String> = prompt_lower
             .split(|c: char| !c.is_alphanumeric() && c != '\u{0301}' && c != '\u{0303}')
             .filter(|w| w.len() >= 3)
             .map(|w| w.to_string())
             .collect();
+        let word_overlap = |text_lower: &str| -> u32 {
+            text_lower
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| w.len() >= 3)
+                .filter(|w| prompt_words.contains(*w))
+                .count() as u32
+                * 5
+        };
 
         let names = self.skill_registry.names();
-        let mut best: Option<(u32, String, String)> = None;
+        let mut best: Option<(u32, String)> = None;
         for n in &names {
             let Some(skill) = self.skill_registry.find(n) else {
                 continue;
@@ -1594,38 +1742,50 @@ until you have carried out the skill's steps.\n\
             if skill.metadata.disable_model_invocation {
                 continue;
             }
-            let Some(when) = skill.metadata.when_to_use.as_deref() else {
+            // `use: always` skills are already fully injected — never trigger-
+            // match (would duplicate their content).
+            if skill.metadata.use_mode == crate::skills::SkillUseMode::Always {
                 continue;
-            };
-            let when_lower = when.to_lowercase();
+            }
 
-            // Score = exact quoted-trigger substring hits (heavy) + word overlap.
+            // Score = exact quoted-trigger substring hits (heavy) + word overlap,
+            // drawn from both the `when-to-use` text and the `triggers` list.
             let mut score: u32 = 0;
-            for quote in extract_quoted_phrases(&when_lower) {
-                if prompt_lower.contains(&quote) {
+            if let Some(when) = skill.metadata.when_to_use.as_deref() {
+                let when_lower = when.to_lowercase();
+                for quote in extract_quoted_phrases(&when_lower) {
+                    if prompt_lower.contains(&quote) {
+                        score += 50;
+                    }
+                }
+                score += word_overlap(&when_lower);
+            }
+            for trig in &skill.metadata.triggers {
+                let t = trig.trim().to_lowercase();
+                if t.is_empty() {
+                    continue;
+                }
+                // A whole-trigger phrase hit is a strong signal; otherwise fall
+                // back to per-word overlap so multi-word triggers still count.
+                if prompt_lower.contains(&t) {
                     score += 50;
+                } else {
+                    score += word_overlap(&t);
                 }
             }
-            for word in when_lower
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|w| w.len() >= 3)
-            {
-                if prompt_words.contains(word) {
-                    score += 5;
-                }
-            }
-            if score >= 15 {
-                if best.as_ref().map(|(s, _, _)| score > *s).unwrap_or(true) {
-                    best = Some((
-                        score,
-                        skill.metadata.name.clone(),
-                        skill.metadata.description.clone(),
-                    ));
-                }
+
+            if score >= 15 && best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+                best = Some((score, skill.metadata.name.clone()));
             }
         }
 
-        let (_, name, desc) = best?;
+        best.map(|(_, name)| name)
+    }
+
+    fn build_skill_match_reminder(&self, prompt: &str) -> Option<String> {
+        let name = self.match_skill_name(prompt)?;
+        let skill = self.skill_registry.find(&name)?;
+        let desc = skill.metadata.description;
         let first_sentence = desc.split('.').next().unwrap_or(&desc).trim();
         Some(format!(
             "<system-reminder>\n\
@@ -2340,6 +2500,181 @@ mod tests {
         assert!(engine.detect_explicit_skill("/Users/benji/file.rs").is_none());
         assert!(engine.detect_explicit_skill("#hashtag not a skill").is_none());
         assert!(engine.detect_explicit_skill("just connect ssh").is_none());
+    }
+
+    /// Build an engine with one skill carrying explicit `when_to_use` + `triggers`
+    /// metadata, for exercising the deterministic pre-trigger matcher.
+    fn engine_with_skill_meta(
+        instance: &str,
+        skill_name: &str,
+        when_to_use: Option<&str>,
+        triggers: &[&str],
+    ) -> Arc<ZenEngine> {
+        use crate::skills::metadata::SkillMetadata;
+        use crate::skills::scan::SkillEntry;
+
+        let dir = std::env::temp_dir().join(format!(
+            "senclaw_skillmeta_{}_{}_{}",
+            std::process::id(),
+            instance,
+            skill_name
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("SKILL.md");
+        std::fs::write(&file_path, "---\nname: x\ndescription: test\n---\n\nbody\n").unwrap();
+
+        let engine = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: instance.into(),
+                ..Default::default()
+            },
+            None,
+        );
+        engine.skill_registry.load_entries(&[SkillEntry {
+            name: skill_name.into(),
+            description: "Drive the browser to find live web content.".into(),
+            version: None,
+            source: "bundled".into(),
+            dir: dir.clone(),
+            file_path,
+            metadata: SkillMetadata {
+                name: skill_name.into(),
+                description: "Drive the browser to find live web content.".into(),
+                when_to_use: when_to_use.map(|s| s.to_string()),
+                triggers: triggers.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            eligible: true,
+            ineligible_reason: None,
+        }]);
+        engine
+    }
+
+    #[test]
+    fn match_skill_name_scores_when_to_use_and_triggers() {
+        // Matches via when-to-use word overlap (needs >=15: 3 words x 5).
+        let e = engine_with_skill_meta(
+            "m1",
+            "agent-browser",
+            Some("search web browser for current prices and news"),
+            &[],
+        );
+        assert_eq!(
+            e.match_skill_name("please search the web browser for prices").as_deref(),
+            Some("agent-browser")
+        );
+        // Unrelated prompt does not match.
+        assert_eq!(e.match_skill_name("hello there friend").as_deref(), None);
+
+        // Matches via an explicit multi-word trigger phrase (+50, clears bar).
+        let e2 = engine_with_skill_meta("m2", "agent-browser", None, &["giá vàng hôm nay"]);
+        assert_eq!(
+            e2.match_skill_name("cho tôi giá vàng hôm nay").as_deref(),
+            Some("agent-browser")
+        );
+        assert_eq!(e2.match_skill_name("what time is it").as_deref(), None);
+    }
+
+    #[test]
+    fn set_pre_trigger_skill_flips_option() {
+        let e = engine_with_skill_meta("m3", "s", None, &[]);
+        assert!(!e.options.read().unwrap().pre_trigger_skill);
+        e.set_pre_trigger_skill(true);
+        assert!(e.options.read().unwrap().pre_trigger_skill);
+    }
+
+    /// Build an engine from a fully-specified `SkillMetadata` + body.
+    fn engine_with_full_skill(
+        instance: &str,
+        meta: crate::skills::SkillMetadata,
+        body: &str,
+    ) -> Arc<ZenEngine> {
+        use crate::skills::scan::SkillEntry;
+        let dir = std::env::temp_dir().join(format!(
+            "senclaw_fullskill_{}_{}",
+            std::process::id(),
+            instance
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("SKILL.md");
+        std::fs::write(
+            &file_path,
+            format!("---\nname: {}\ndescription: d\n---\n\n{body}\n", meta.name),
+        )
+        .unwrap();
+        let engine = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: instance.into(),
+                ..Default::default()
+            },
+            None,
+        );
+        engine.skill_registry.load_entries(&[SkillEntry {
+            name: meta.name.clone(),
+            description: meta.description.clone(),
+            version: None,
+            source: "bundled".into(),
+            dir: dir.clone(),
+            file_path,
+            metadata: meta,
+            eligible: true,
+            ineligible_reason: None,
+        }]);
+        engine
+    }
+
+    #[test]
+    fn always_skills_block_injects_full_content_and_params() {
+        use crate::skills::{SkillMetadata, SkillParam, SkillUseMode};
+        let meta = SkillMetadata {
+            name: "house-style".into(),
+            description: "House writing style.".into(),
+            use_mode: SkillUseMode::Always,
+            params: vec![SkillParam {
+                name: "tone".into(),
+                type_: "string".into(),
+                required: true,
+                description: Some("formal or casual".into()),
+            }],
+            ..Default::default()
+        };
+        let e = engine_with_full_skill("always1", meta, "ALWAYS-BODY-MARKER");
+        let block = e.build_always_skills_block().expect("always block present");
+        assert!(block.contains("ALWAYS-BODY-MARKER"), "full body injected");
+        assert!(block.contains("SKILL: house-style"));
+        assert!(block.contains("Parameters this skill accepts"));
+        assert!(block.contains("`tone`"));
+
+        // A trigger-mode skill produces no always block.
+        let meta2 = SkillMetadata {
+            name: "trig".into(),
+            use_mode: SkillUseMode::Trigger,
+            ..Default::default()
+        };
+        let e2 = engine_with_full_skill("always2", meta2, "TRIGGER-BODY");
+        assert!(e2.build_always_skills_block().is_none());
+    }
+
+    #[test]
+    fn force_skill_reminder_surfaces_params() {
+        use crate::skills::{SkillMetadata, SkillParam, SkillUseMode};
+        let meta = SkillMetadata {
+            name: "weather".into(),
+            description: "Weather lookups.".into(),
+            use_mode: SkillUseMode::Trigger,
+            params: vec![SkillParam {
+                name: "city".into(),
+                type_: "string".into(),
+                required: true,
+                description: None,
+            }],
+            ..Default::default()
+        };
+        let e = engine_with_full_skill("force1", meta, "WEATHER-BODY");
+        let reminder = e.force_skill_reminder("weather").expect("reminder");
+        assert!(reminder.contains("Parameters this skill accepts"));
+        assert!(reminder.contains("`city`"));
+        assert!(reminder.contains("WEATHER-BODY"));
     }
 
     #[test]

@@ -1311,9 +1311,29 @@ impl AgentPool {
             }
         }
 
-        // Pre-retrieval memory injection — mirrors TS AgentPool.ts:703-715.
+        // ---- Pre-process stage 1: pre-trigger-skill (global toggle) ----
+        // Push the current `preTriggerSkill` flag to the engine before dispatch
+        // so a confident keyword/trigger match force-loads the skill instead of
+        // only hinting. Read per-turn so flips in the UI take effect immediately.
+        let global_config_path = self
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.paths.global_config_path.clone());
+        if let Some(ref path) = global_config_path {
+            let enabled = crate::gateway::group_manager::get_pre_trigger_skill_enabled(path);
+            self.core_api.set_pre_trigger_skill(jid, enabled);
+        }
+
+        // ---- Pre-process stage 2: pre-retrieval injection ----
+        // Two independent, user-toggleable backends:
+        //   • FTS memory   → env-level `memory.pre_retrieval`
+        //   • Cognitive    → global `preCognitive` toggle (pre-cognitive stage)
+        // Mirrors TS AgentPool.ts:703-715, but the two backends are decoupled so
+        // either can be enabled on its own.
         let full_prompt = {
-            let (do_retrieval, max_results, min_score) = {
+            let (do_memory, max_results, min_score) = {
                 let cfg = self.config.lock().unwrap();
                 let c = cfg.as_ref();
                 (
@@ -1322,7 +1342,13 @@ impl AgentPool {
                     c.map(|c| c.memory.search_min_score).unwrap_or(0.5),
                 )
             };
-            if do_retrieval {
+            let do_cognitive = global_config_path
+                .as_deref()
+                .map(crate::gateway::group_manager::get_pre_cognitive_enabled)
+                .unwrap_or(false);
+
+            // FTS memory backend.
+            let mem_context = if do_memory {
                 let today_file = chrono::Utc::now().format("%Y-%m-%d.md").to_string();
                 let mem_mgr = crate::memory::manager::get_instance();
                 let opts = crate::memory::fts_search::SearchOptions {
@@ -1360,37 +1386,33 @@ impl AgentPool {
                             .filter(|r| r.score >= min_score && !r.path.ends_with(&today_file))
                             .take(max_results)
                             .collect();
-                        let mem_context = crate::memory::manager::format_search_results(&filtered);
-                        let cog_context =
-                            cognitive_pre_retrieval(prompt, &group.folder, max_results).await;
-                        match (mem_context.is_empty(), cog_context.is_empty()) {
-                            (true, true) => prompt.to_string(),
-                            (false, true) => format!("<memory>\n{mem_context}\n</memory>\n\n{prompt}"),
-                            (true, false) => format!(
-                                "<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
-                            ),
-                            (false, false) => format!(
-                                "<memory>\n{mem_context}\n</memory>\n<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
-                            ),
-                        }
+                        crate::memory::manager::format_search_results(&filtered)
                     }
                     Err(e) => {
                         tracing::warn!("[AgentPool] Memory pre-retrieval failed: {e}");
-                        // FTS failed — try cognitive on its own so users don't lose
-                        // recall when only one backend is misbehaving.
-                        let cog_context =
-                            cognitive_pre_retrieval(prompt, &group.folder, max_results).await;
-                        if cog_context.is_empty() {
-                            prompt.to_string()
-                        } else {
-                            format!(
-                                "<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
-                            )
-                        }
+                        String::new()
                     }
                 }
             } else {
-                prompt.to_string()
+                String::new()
+            };
+
+            // Cognitive-graph backend (pre-cognitive stage).
+            let cog_context = if do_cognitive {
+                cognitive_pre_retrieval(prompt, &group.folder, max_results).await
+            } else {
+                String::new()
+            };
+
+            match (mem_context.is_empty(), cog_context.is_empty()) {
+                (true, true) => prompt.to_string(),
+                (false, true) => format!("<memory>\n{mem_context}\n</memory>\n\n{prompt}"),
+                (true, false) => {
+                    format!("<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}")
+                }
+                (false, false) => format!(
+                    "<memory>\n{mem_context}\n</memory>\n<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
+                ),
             }
         };
 

@@ -366,6 +366,12 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn set_pre_trigger_skill(&self, jid: &str, enabled: bool) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_pre_trigger_skill(enabled);
+        }
+    }
+
     fn set_working_dir(&self, jid: &str, dir: &str) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.set_working_dir(dir);

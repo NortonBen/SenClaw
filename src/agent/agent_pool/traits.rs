@@ -105,6 +105,10 @@ pub trait CoreApi: Send + Sync {
     /// Hot-update Thinking-mode flag for an existing core.
     fn update_thinking(&self, jid: &str, enabled: bool) {}
 
+    /// Hot-update the pre-trigger-skill flag for an existing core (set from the
+    /// global `preTriggerSkill` toggle before each turn). Default no-op.
+    fn set_pre_trigger_skill(&self, _jid: &str, _enabled: bool) {}
+
     /// Switch the core's working directory (used by workspace_switch and dispatch).
     fn set_working_dir(&self, jid: &str, dir: &str) {}
 

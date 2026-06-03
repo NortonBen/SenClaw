@@ -44,6 +44,32 @@ pub fn save_thinking_enabled(config_path: &Path, enabled: bool) -> Result<()> {
     save_global_config(config_path, &cfg)
 }
 
+// ===== Pre-process stage toggles (global, user-set) =====
+
+/// Pre-trigger-skill stage. Default OFF — opt-in deterministic skill force-load.
+pub fn get_pre_trigger_skill_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path)
+        .pre_trigger_skill
+        .unwrap_or(false)
+}
+
+pub fn save_pre_trigger_skill_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.pre_trigger_skill = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
+/// Pre-cognitive stage. Default OFF — opt-in cognitive-memory injection.
+pub fn get_pre_cognitive_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path).pre_cognitive.unwrap_or(false)
+}
+
+pub fn save_pre_cognitive_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.pre_cognitive = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== LLM config =====
 
 pub fn load_llm_configs(config_path: &Path) -> LlmConfigResult {

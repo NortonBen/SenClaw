@@ -254,6 +254,11 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/subagents/:name/:action", post(subagents_toggle))
         .route("/api/thinking", post(thinking_handler))
         .route(
+            "/api/agent-behavior",
+            get(super::agent_behavior_config::agent_behavior_get)
+                .post(super::agent_behavior_config::agent_behavior_set),
+        )
+        .route(
             "/api/admin-permissions",
             get(admin_perms_get).post(admin_perms_set),
         )

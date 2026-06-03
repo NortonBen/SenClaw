@@ -29,6 +29,29 @@
 
 use serde_yaml::Value as Yaml;
 
+/// How a skill is activated, declared by the frontmatter `use` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkillUseMode {
+    /// Default. The skill loads only when triggered — matched by
+    /// triggers/when-to-use (pre-trigger-skill), invoked via the `Skill` tool,
+    /// or called explicitly with `#name` / `/name`.
+    #[default]
+    Trigger,
+    /// The skill's full instructions are injected into every prompt (always-on
+    /// behavior, e.g. a persistent persona or house-style guide). Its env and
+    /// referenced tools are activated up front, like a force-loaded skill.
+    Always,
+}
+
+impl SkillUseMode {
+    fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "always" | "all" | "persistent" => SkillUseMode::Always,
+            _ => SkillUseMode::Trigger,
+        }
+    }
+}
+
 /// A custom argument the skill declares (OpenClaw-style `params`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillParam {
@@ -51,6 +74,8 @@ pub struct SkillMetadata {
     pub disable_model_invocation: bool,
     pub argument_hint: Option<String>,
     pub version: Option<String>,
+    /// Activation mode (`use: always|trigger`). Default [`SkillUseMode::Trigger`].
+    pub use_mode: SkillUseMode,
 
     // --- OpenClaw-compatible additions ---
     /// Keyword triggers that hint when this skill applies.
@@ -89,6 +114,7 @@ impl Default for SkillMetadata {
             disable_model_invocation: false,
             argument_hint: None,
             version: None,
+            use_mode: SkillUseMode::Trigger,
             triggers: Vec::new(),
             user_invocable: true,
             command_dispatch: None,
@@ -191,6 +217,9 @@ pub fn parse_skill_metadata(
     }
     meta.argument_hint = get_any(&root, &["argument-hint", "argument_hint"]).and_then(yaml_str);
     meta.version = root.get("version").and_then(yaml_str);
+    if let Some(s) = get_any(&root, &["use", "use-mode", "use_mode"]).and_then(yaml_str) {
+        meta.use_mode = SkillUseMode::parse(&s);
+    }
 
     // --- OpenClaw additions ---
     if let Some(v) = get_any(&root, &["triggers", "trigger"]) {
@@ -385,6 +414,21 @@ mod tests {
         assert_eq!(meta.allowed_tools, vec!["Bash", "Read"]);
         assert_eq!(meta.version, Some("1.0".into()));
         assert!(meta.user_invocable);
+    }
+
+    #[test]
+    fn parses_use_mode() {
+        // Default is Trigger when omitted.
+        let d = parse_skill_metadata("---\nname: s\ndescription: d\n---\n", "f", "f");
+        assert_eq!(d.use_mode, SkillUseMode::Trigger);
+        // `use: always` (and aliases) → Always; anything else → Trigger.
+        let a = parse_skill_metadata("---\nname: s\ndescription: d\nuse: always\n---\n", "f", "f");
+        assert_eq!(a.use_mode, SkillUseMode::Always);
+        let t = parse_skill_metadata("---\nname: s\ndescription: d\nuse: trigger\n---\n", "f", "f");
+        assert_eq!(t.use_mode, SkillUseMode::Trigger);
+        let alias =
+            parse_skill_metadata("---\nname: s\ndescription: d\nuse-mode: Persistent\n---\n", "f", "f");
+        assert_eq!(alias.use_mode, SkillUseMode::Always);
     }
 
     #[test]

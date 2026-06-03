@@ -695,6 +695,11 @@ pub struct ZenCoreOptions {
     /// When set with [`Self::custom_memory_dir`], registers that path under this SQLite folder key
     /// (e.g. shared `cowork-ws-{id}`) instead of [`Self::agent_data_dir`].
     pub memory_folder_override: Option<String>,
+    /// Pre-trigger-skill stage: when true, the engine deterministically matches
+    /// the prompt to a skill (by triggers / when-to-use) and force-loads it
+    /// before the main turn, instead of only emitting a soft skill hint.
+    /// Set per-engine from the global `preTriggerSkill` toggle.
+    pub pre_trigger_skill: bool,
 }
 
 impl Default for ZenCoreOptions {
@@ -718,6 +723,7 @@ impl Default for ZenCoreOptions {
             agent_mode: AgentMode::Agent,
             custom_memory_dir: None,
             memory_folder_override: None,
+            pre_trigger_skill: false,
         }
     }
 }

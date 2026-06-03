@@ -14,6 +14,7 @@ import {
   AudioOutlined,
   SoundOutlined,
   AppstoreOutlined,
+  ControlOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -21,6 +22,7 @@ import { AgentSidebar } from '../components/AgentSidebar';
 import { GeneralSettings } from '../components/settings/GeneralSettings';
 import { ChannelSettings } from '../components/settings/ChannelSettings';
 import { AgentSettings } from '../components/settings/AgentSettings';
+import { AgentBehaviorSettings } from '../components/settings/AgentBehaviorSettings';
 import { GroupSettings } from '../components/settings/GroupSettings';
 import { LLMSettings } from '../components/settings/LLMSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
@@ -46,7 +48,8 @@ type SettingsSection =
   | 'whisper'
   | 'tts'
   | 'space-apps'
-  | 'cognitive';
+  | 'cognitive'
+  | 'agent-behavior';
 
 export const SettingsPage: React.FC = () => {
   const { ws } = useAppContext();
@@ -66,6 +69,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'channels', icon: <ApiOutlined />, label: 'Channels' },
       { key: 'groups', icon: <TeamOutlined />, label: 'Groups' },
       { key: 'agents', icon: <UserOutlined />, label: 'Agents' },
+      { key: 'agent-behavior', icon: <ControlOutlined />, label: 'Pre-process' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
@@ -130,6 +134,8 @@ export const SettingsPage: React.FC = () => {
         return <SpaceAppsSettings />;
       case 'cognitive':
         return <CognitiveSettings />;
+      case 'agent-behavior':
+        return <AgentBehaviorSettings />;
       default:
         return null;
     }

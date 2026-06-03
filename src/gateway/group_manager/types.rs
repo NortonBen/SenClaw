@@ -216,6 +216,24 @@ pub(super) struct GlobalConfig {
         rename = "thinkingEnabled"
     )]
     pub(super) thinking_enabled: Option<bool>,
+    /// Pre-process stage 1: when enabled, the engine deterministically matches
+    /// the incoming message to a skill (by triggers / when-to-use) and
+    /// force-loads it before the main turn instead of only hinting.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "preTriggerSkill"
+    )]
+    pub(super) pre_trigger_skill: Option<bool>,
+    /// Pre-process stage 2: when enabled, relevant cognitive-graph memory is
+    /// retrieved for the incoming message and injected into the prompt before
+    /// the main turn (independent of the env-level FTS memory pre-retrieval).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "preCognitive"
+    )]
+    pub(super) pre_cognitive: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

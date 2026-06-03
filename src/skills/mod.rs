@@ -9,7 +9,7 @@ pub mod scan;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-pub use metadata::{SkillMetadata, SkillParam};
+pub use metadata::{SkillMetadata, SkillParam, SkillUseMode};
 use scan::SkillEntry;
 
 /// A loaded skill with metadata, content, and source info.
