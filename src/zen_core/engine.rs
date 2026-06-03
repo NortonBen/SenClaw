@@ -911,11 +911,30 @@ impl ZenCore for ZenEngine {
             prompt
         };
 
-        // Persist prompt to project history
+        // Persist prompt to project history (raw, including any `#skill` prefix).
         let working_dir_for_hist = self.options.read().unwrap().working_dir.clone();
         config_manager::with_conf_manager(|mgr| {
             mgr.save_user_input_to_history(&working_dir_for_hist, &prompt);
         });
+
+        // Explicit skill directive: a prompt that starts with `#skill-name` or
+        // `/skill-name` is a hard, deterministic request to run that skill —
+        // it must not depend on the model noticing the convention (weak models
+        // ignore it). Strip the directive, force-inject the skill instructions,
+        // and pre-discover the deferred MCP tools the skill references so they
+        // are immediately callable.
+        let (prompt, forced_skill_reminder) = match self.detect_explicit_skill(&prompt) {
+            Some((skill_name, rest)) => {
+                let reminder = self.force_skill_reminder(&skill_name);
+                let body = if rest.trim().is_empty() {
+                    prompt.clone()
+                } else {
+                    rest
+                };
+                (body, reminder)
+            }
+            None => (prompt, None),
+        };
 
         // Build the user message (after hooks may have modified prompt).
         // On the very first turn inject volatile context (SENCLAW.md, date) as a
@@ -944,7 +963,10 @@ impl ZenCore for ZenEngine {
             // message so it gets the model's full attention on the very first
             // pass — vs the skill list at the end of the system prompt which
             // the model often skims.
-            if let Some(hint) = self.build_skill_match_reminder(&prompt) {
+            // An explicit `#skill` directive wins over the keyword-based hint.
+            if let Some(reminder) = forced_skill_reminder.clone() {
+                blocks.push(ContentBlock::Text { text: reminder });
+            } else if let Some(hint) = self.build_skill_match_reminder(&prompt) {
                 blocks.push(ContentBlock::Text { text: hint });
             }
             // Per-turn language lock. Small models can default to English or
@@ -1484,6 +1506,77 @@ impl ZenEngine {
     ///   - require ≥3 distinct word overlaps OR an explicit quoted-trigger
     ///     ("…") substring hit
     ///   - ignore skills with `disable_model_invocation` (user-only)
+    /// Detect an explicit skill directive at the start of the prompt:
+    /// `#skill-name rest…` or `/skill-name rest…`. The token is resolved
+    /// against loaded skills, hyphen/underscore- and case-insensitively, so
+    /// `#ssh_connect`, `#ssh-connect`, and `/SSH-Connect` all match the
+    /// `ssh-connect` skill. Returns the canonical skill name and the prompt
+    /// with the directive token removed. Returns `None` when the leading token
+    /// does not resolve to a known skill (so ordinary `/path` or `#tag` text is
+    /// left untouched).
+    fn detect_explicit_skill(&self, prompt: &str) -> Option<(String, String)> {
+        let trimmed = prompt.trim_start();
+        let marker = trimmed.chars().next()?;
+        if marker != '#' && marker != '/' {
+            return None;
+        }
+        let after = &trimmed[marker.len_utf8()..];
+        let token_end = after.find(char::is_whitespace).unwrap_or(after.len());
+        let token = &after[..token_end];
+        if token.is_empty() {
+            return None;
+        }
+        let canon = |s: &str| s.replace('-', "_").to_lowercase();
+        let want = canon(token);
+        let name = self
+            .skill_registry
+            .names()
+            .into_iter()
+            .find(|n| canon(n) == want)?;
+        let rest = after[token_end..].trim_start().to_string();
+        Some((name, rest))
+    }
+
+    /// Build a hard directive that loads a skill's instructions inline and
+    /// pre-discovers the deferred MCP tools it references. Used when the user
+    /// explicitly invokes a skill via `#name` / `/name` — the instructions are
+    /// injected deterministically so even a weak model runs the skill without
+    /// having to call the `Skill` tool first.
+    fn force_skill_reminder(&self, skill_name: &str) -> Option<String> {
+        let skill = self.skill_registry.find(skill_name)?;
+
+        // Pre-discover deferred tools whose verb (last `__` segment) is named in
+        // the skill body, e.g. `ssh_list_hosts` → `mcp__ssh-manager-mcp__ssh_list_hosts`.
+        let content_lower = skill.content.to_lowercase();
+        {
+            let mut discovered = self.discovered_tools.lock().unwrap();
+            for t in self.deferred_tools() {
+                let full = t.name();
+                let verb = full.rsplit("__").next().unwrap_or(full);
+                if verb.len() >= 3 && content_lower.contains(&verb.to_lowercase()) {
+                    if discovered.insert(full.to_string()) {
+                        tracing::info!("[Skill] pre-discovered tool for '{skill_name}': {full}");
+                    }
+                }
+            }
+        }
+
+        Some(format!(
+            "<system-reminder>\n\
+The user explicitly invoked the `{name}` skill. Its instructions are loaded below — \
+follow them now to fulfill the request. The MCP tools it references are already \
+available; call them directly (no ToolSearch needed). Do not answer in plain text \
+until you have carried out the skill's steps.\n\
+\n\
+===== SKILL: {name} =====\n\
+{content}\n\
+===== END SKILL =====\n\
+</system-reminder>\n\n",
+            name = skill.metadata.name,
+            content = skill.content,
+        ))
+    }
+
     fn build_skill_match_reminder(&self, prompt: &str) -> Option<String> {
         let prompt_lower = prompt.to_lowercase();
         let prompt_words: std::collections::HashSet<String> = prompt_lower
@@ -2179,6 +2272,82 @@ mod tests {
         assert_eq!(out.lines().count(), 31); // 30 kept + 1 summary line
         assert!(out.contains("## main")); // branch header preserved
         assert!(out.contains("71 more changed path(s) omitted"));
+    }
+
+    fn engine_with_skill(instance: &str, skill_name: &str, body: &str) -> Arc<ZenEngine> {
+        use crate::skills::metadata::SkillMetadata;
+        use crate::skills::scan::SkillEntry;
+        use std::path::PathBuf;
+
+        let dir = std::env::temp_dir().join(format!(
+            "senclaw_skilltest_{}_{}_{}",
+            std::process::id(),
+            instance,
+            skill_name
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("SKILL.md");
+        std::fs::write(
+            &file_path,
+            format!("---\nname: {skill_name}\ndescription: test\n---\n\n{body}\n"),
+        )
+        .unwrap();
+
+        let opts = ZenCoreOptions {
+            instance_id: instance.into(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        engine.skill_registry.load_entries(&[SkillEntry {
+            name: skill_name.into(),
+            description: "test".into(),
+            version: None,
+            source: "bundled".into(),
+            dir: dir.clone(),
+            file_path,
+            metadata: SkillMetadata {
+                name: skill_name.into(),
+                description: "test".into(),
+                ..Default::default()
+            },
+            eligible: true,
+            ineligible_reason: None,
+        }]);
+        engine
+    }
+
+    #[test]
+    fn detect_explicit_skill_matches_hash_and_slash_and_separator_variants() {
+        let engine = engine_with_skill("test-skill-1", "ssh-connect", "Use ssh_list_hosts.");
+        // `#`, `/`, hyphen/underscore, and case variants all resolve.
+        for raw in [
+            "#ssh-connect kết nối host test",
+            "/ssh-connect kết nối host test",
+            "#ssh_connect kết nối host test",
+            "#SSH-Connect kết nối host test",
+        ] {
+            let (name, rest) = engine
+                .detect_explicit_skill(raw)
+                .unwrap_or_else(|| panic!("should detect in {raw:?}"));
+            assert_eq!(name, "ssh-connect");
+            assert_eq!(rest, "kết nối host test");
+        }
+        // A bare directive with no trailing request still resolves.
+        let (name, rest) = engine.detect_explicit_skill("#ssh-connect").unwrap();
+        assert_eq!(name, "ssh-connect");
+        assert!(rest.is_empty());
+        // Ordinary text that merely starts with `/` or `#` is left alone.
+        assert!(engine.detect_explicit_skill("/Users/benji/file.rs").is_none());
+        assert!(engine.detect_explicit_skill("#hashtag not a skill").is_none());
+        assert!(engine.detect_explicit_skill("just connect ssh").is_none());
+    }
+
+    #[test]
+    fn force_skill_reminder_inlines_content() {
+        let engine = engine_with_skill("test-skill-2", "ssh-connect", "Call ssh_list_hosts first.");
+        let reminder = engine.force_skill_reminder("ssh-connect").unwrap();
+        assert!(reminder.contains("explicitly invoked the `ssh-connect` skill"));
+        assert!(reminder.contains("Call ssh_list_hosts first."));
     }
 
     #[tokio::test]

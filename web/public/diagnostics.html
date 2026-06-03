@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>SemaClaw — Diagnostics</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d0d1f;
+    --bg-2: #14142a;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --accent: #5BBFE8;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --border: rgba(255,255,255,0.07);
+    --card: rgba(255,255,255,0.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; -webkit-app-region: drag; }
+  header h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: 0.02em; }
+  header .pill { padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  header .pill.ok { background: rgba(34,197,94,0.12); color: var(--ok); }
+  header .pill.err { background: rgba(239,68,68,0.12); color: var(--err); }
+  header .pill.warn { background: rgba(245,158,11,0.12); color: var(--warn); }
+  main { display: grid; grid-template-rows: auto 1fr; flex: 1; min-height: 0;
+    padding: 14px 18px; gap: 14px; }
+  section.card { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; }
+  section.card h2 { font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 6px 0; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .row .label { font-size: 13px; }
+  .row .meta { font-size: 12px; color: var(--muted); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { background: var(--bg-2); color: var(--fg); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 500;
+    cursor: pointer; transition: background 0.12s; -webkit-app-region: no-drag; }
+  button:hover { background: rgba(91,191,232,0.12); border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #001a26; border-color: var(--accent); }
+  button.danger:hover { background: rgba(239,68,68,0.15); border-color: var(--err); color: var(--err); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #logs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #logs .log-area { flex: 1; min-height: 0; overflow: auto;
+    background: #07071a; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px;
+    line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    -webkit-user-select: text; user-select: text; }
+  #logs .log-line { color: var(--fg); }
+  #logs .log-line.err { color: var(--err); }
+  #logs .log-line.warn { color: var(--warn); }
+  #logs .log-line.info { color: var(--fg); }
+  #logs .toolbar { display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px; }
+  .footer { display: flex; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--border);
+    background: var(--bg-2); }
+  code { font-family: "SF Mono", Menlo, monospace; font-size: 12px;
+    background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>SemaClaw · Diagnostics</h1>
+    <span id="daemon-pill" class="pill warn">Checking…</span>
+    <span id="self-pid" class="meta" style="margin-left:auto; font-size:11px; color:var(--muted);"></span>
+  </header>
+
+  <main>
+    <section class="card" id="ports">
+      <h2>Ports</h2>
+      <div id="port-list"></div>
+      <div id="last-error" style="margin-top:10px; font-size:12px; color:var(--err); display:none;"></div>
+    </section>
+
+    <section class="card" id="logs">
+      <div class="toolbar">
+        <h2 style="margin:0;">Daemon Logs</h2>
+        <div class="actions">
+          <label style="font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px;">
+            <input type="checkbox" id="autoscroll" checked /> auto-scroll
+          </label>
+          <button id="clear-view">Clear view</button>
+        </div>
+      </div>
+      <div class="log-area" id="log-area"></div>
+    </section>
+  </main>
+
+  <div class="footer">
+    <button class="primary" id="btn-restart">Restart daemon</button>
+    <button id="btn-chat">Open chat</button>
+    <button id="btn-full">Open full window</button>
+    <span style="flex:1;"></span>
+    <button id="btn-refresh">Refresh now</button>
+  </div>
+
+<script type="module">
+  const invoke = window.__TAURI__?.core?.invoke
+              ?? window.__TAURI_INTERNALS__?.invoke
+              ?? ((c, a) => Promise.reject(new Error('Tauri IPC unavailable')));
+
+  const el = (id) => document.getElementById(id);
+  const portList = el('port-list');
+  const logArea = el('log-area');
+  const daemonPill = el('daemon-pill');
+  const lastError = el('last-error');
+  const selfPid = el('self-pid');
+  const autoscroll = el('autoscroll');
+
+  let lastLogCount = 0;
+
+  function classifyLine(line) {
+    if (/\bERROR\b/.test(line)) return 'err';
+    if (/\bWARN\b/.test(line)) return 'warn';
+    return 'info';
+  }
+
+  async function refreshStatus() {
+    try {
+      const s = await invoke('app_status');
+      selfPid.textContent = `app pid ${s.self_pid}`;
+      const running = s.daemon.running;
+      daemonPill.className = 'pill ' + (running ? 'ok' : 'err');
+      daemonPill.textContent = running ? 'Daemon running' : 'Daemon stopped';
+      if (s.daemon.last_error) {
+        lastError.style.display = 'block';
+        lastError.textContent = 'Last error: ' + s.daemon.last_error;
+      } else {
+        lastError.style.display = 'none';
+      }
+      portList.innerHTML = '';
+      for (const p of s.ports) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        const left = document.createElement('div');
+        let badge, badgeClass;
+        if (p.free) { badge = 'FREE'; badgeClass = 'ok'; }
+        else if (p.self) { badge = 'OURS'; badgeClass = 'ok'; }
+        else { badge = 'TAKEN'; badgeClass = 'err'; }
+        const meta = p.free
+          ? `available`
+          : `held by ${p.process ?? 'unknown'} (pid ${p.pid})`;
+        left.innerHTML = `
+          <div class="label">
+            <code>127.0.0.1:${p.port}</code>
+            <span class="pill ${badgeClass}" style="margin-left:8px; font-size:10px;">${badge}</span>
+          </div>
+          <div class="meta">${meta}</div>`;
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+        if (!p.free && !p.self) {
+          const btn = document.createElement('button');
+          btn.className = 'danger';
+          btn.textContent = `Free port ${p.port}`;
+          btn.onclick = async () => {
+            btn.disabled = true; btn.textContent = 'Killing…';
+            try { await invoke('kill_port', { port: p.port }); await refreshStatus(); }
+            catch (e) { alert('Failed: ' + e); }
+            finally { btn.disabled = false; }
+          };
+          actions.appendChild(btn);
+        }
+        row.appendChild(left);
+        row.appendChild(actions);
+        portList.appendChild(row);
+      }
+    } catch (e) {
+      daemonPill.className = 'pill err';
+      daemonPill.textContent = 'IPC error';
+      portList.textContent = String(e);
+    }
+  }
+
+  async function refreshLogs() {
+    try {
+      const lines = await invoke('app_logs', { limit: 1000 });
+      if (lines.length === lastLogCount) return;
+      lastLogCount = lines.length;
+      const frag = document.createDocumentFragment();
+      for (const line of lines) {
+        const d = document.createElement('div');
+        d.className = 'log-line ' + classifyLine(line);
+        d.textContent = line;
+        frag.appendChild(d);
+      }
+      logArea.replaceChildren(frag);
+      if (autoscroll.checked) logArea.scrollTop = logArea.scrollHeight;
+    } catch (e) {
+      // Silent — status panel will show the IPC error.
+    }
+  }
+
+  el('clear-view').onclick = () => { logArea.replaceChildren(); lastLogCount = 0; };
+  el('btn-refresh').onclick = () => { refreshStatus(); refreshLogs(); };
+  el('btn-restart').onclick = async () => {
+    try { await invoke('restart_daemon'); }
+    catch (e) { alert('Failed: ' + e); }
+    setTimeout(() => { refreshStatus(); refreshLogs(); }, 600);
+  };
+  el('btn-chat').onclick = () => invoke('open_window', { label: 'chat' });
+  el('btn-full').onclick = () => invoke('open_window', { label: 'main' });
+
+  // Block the browser context menu (we're an app, not a web page).
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // Initial + poll loops.
+  refreshStatus();
+  refreshLogs();
+  setInterval(refreshStatus, 1500);
+  setInterval(refreshLogs, 1000);
+</script>
+</body>
+</html>

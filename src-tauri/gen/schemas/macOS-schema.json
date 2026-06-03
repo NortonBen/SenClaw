@@ -177,6 +177,36 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allow the diagnostics window to read the in-memory log ring buffer.",
+          "type": "string",
+          "const": "allow-app-logs",
+          "markdownDescription": "Allow the diagnostics window to read the in-memory log ring buffer."
+        },
+        {
+          "description": "Allow the diagnostics window to query daemon + port status.",
+          "type": "string",
+          "const": "allow-app-status",
+          "markdownDescription": "Allow the diagnostics window to query daemon + port status."
+        },
+        {
+          "description": "Allow the diagnostics window to free a listening port by terminating its owner process.",
+          "type": "string",
+          "const": "allow-kill-port",
+          "markdownDescription": "Allow the diagnostics window to free a listening port by terminating its owner process."
+        },
+        {
+          "description": "Allow the diagnostics window to show another app window by label.",
+          "type": "string",
+          "const": "allow-open-window",
+          "markdownDescription": "Allow the diagnostics window to show another app window by label."
+        },
+        {
+          "description": "Allow the diagnostics window to restart the embedded daemon.",
+          "type": "string",
+          "const": "allow-restart-daemon",
+          "markdownDescription": "Allow the diagnostics window to restart the embedded daemon."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

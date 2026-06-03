@@ -2,6 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Core permissions for the chat and main windows",
-  "windows": ["chat", "main"],
-  "permissions": ["core:default", "positioner:default"]
+  "windows": ["chat", "main", "diagnostics"],
+  "permissions": [
+    "core:default",
+    "positioner:default",
+    "allow-app-status",
+    "allow-app-logs",
+    "allow-kill-port",
+    "allow-restart-daemon",
+    "allow-open-window"
+  ]
 }

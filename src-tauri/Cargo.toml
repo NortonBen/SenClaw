@@ -23,6 +23,7 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 
 tokio = { version = "1", features = ["net", "time", "rt"] }
+serde_json = "1"
 dotenvy = "0.15"
 anyhow = "1"
 tracing = "0.1"

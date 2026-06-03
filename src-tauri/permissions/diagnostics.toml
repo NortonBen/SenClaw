@@ -1,0 +1,26 @@
+"$schema" = "../gen/schemas/desktop-schema.json"
+
+[[permission]]
+identifier = "allow-app-status"
+description = "Allow the diagnostics window to query daemon + port status."
+commands.allow = ["app_status"]
+
+[[permission]]
+identifier = "allow-app-logs"
+description = "Allow the diagnostics window to read the in-memory log ring buffer."
+commands.allow = ["app_logs"]
+
+[[permission]]
+identifier = "allow-kill-port"
+description = "Allow the diagnostics window to free a listening port by terminating its owner process."
+commands.allow = ["kill_port"]
+
+[[permission]]
+identifier = "allow-restart-daemon"
+description = "Allow the diagnostics window to restart the embedded daemon."
+commands.allow = ["restart_daemon"]
+
+[[permission]]
+identifier = "allow-open-window"
+description = "Allow the diagnostics window to show another app window by label."
+commands.allow = ["open_window"]

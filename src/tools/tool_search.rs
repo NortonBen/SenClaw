@@ -40,6 +40,16 @@ fn mcp_name_parts(name: &str) -> Option<(&str, &str)> {
     rest.split_once("__")
 }
 
+/// Canonicalize a tool name for hyphen/underscore-insensitive comparison.
+///
+/// Models frequently emit `mcp__ssh-manager_mcp__foo` (or all underscores) for
+/// a server registered as `ssh-manager-mcp`. The MCP bridge keeps hyphens in
+/// the server segment, so an exact match misses. Folding `-` to `_` lets a tool
+/// call resolve regardless of which separator the model chose.
+fn canonical_tool_name(name: &str) -> String {
+    name.replace('-', "_")
+}
+
 /// Resolve a tool by exact name, alias, or normalized MCP alias.
 pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<dyn Tool>> {
     if let Some(t) = tools.iter().find(|t| t.name() == name) {
@@ -59,16 +69,32 @@ pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<d
             return Some(Arc::clone(t));
         }
     }
+    // Hyphen/underscore-insensitive match: `mcp__ssh-manager_mcp__x` should
+    // resolve to a tool registered as `mcp__ssh-manager-mcp__x`.
+    let canon = canonical_tool_name(&normalized);
+    if let Some(t) = tools.iter().find(|t| canonical_tool_name(t.name()) == canon) {
+        return Some(Arc::clone(t));
+    }
+    for t in tools {
+        if t.aliases()
+            .iter()
+            .any(|a| canonical_tool_name(a) == canon)
+        {
+            return Some(Arc::clone(t));
+        }
+    }
     // Last resort: match MCP server + verb suffix (handles unstripped names).
     if let Some((server, verb)) = mcp_name_parts(&normalized) {
         let needle = format!("__{verb}");
+        let canon_server = canonical_tool_name(server);
         tools
             .iter()
             .find(|t| {
                 let n = t.name();
                 n.ends_with(&needle)
-                    && (n.contains(&format!("mcp__{server}__"))
-                        || n.contains(&format!("mcp__senclaw-{server}__")))
+                    && (canonical_tool_name(n).contains(&format!("mcp__{canon_server}__"))
+                        || canonical_tool_name(n)
+                            .contains(&format!("mcp__senclaw_{canon_server}__")))
             })
             .map(Arc::clone)
     } else {
@@ -415,6 +441,27 @@ mod tests {
         let hits = ToolSearchTool::rank_matches("screenshot", &tools, 5);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].name(), "browser_screenshot");
+    }
+
+    #[test]
+    fn resolve_tolerates_hyphen_underscore_in_mcp_server() {
+        // Tool registered with hyphens in the server segment (Space App MCP).
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(StubTool {
+            name: "mcp__ssh-manager-mcp__ssh_list_hosts",
+            desc: "List SSH hosts.",
+            hint: "ssh list hosts",
+            deferred: true,
+        })];
+        // Model emits underscores instead of hyphens — must still resolve.
+        for called in [
+            "mcp__ssh-manager-mcp__ssh_list_hosts", // exact
+            "mcp__ssh-manager_mcp__ssh_list_hosts", // observed failure
+            "mcp__ssh_manager_mcp__ssh_list_hosts", // all underscores
+        ] {
+            let t = resolve_tool_by_name(called, &tools);
+            assert!(t.is_some(), "should resolve {called}");
+            assert_eq!(t.unwrap().name(), "mcp__ssh-manager-mcp__ssh_list_hosts");
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@
     "frontendDist": "../web/dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "chat",
@@ -35,6 +36,17 @@
         "maximized": true,
         "maximizable": true,
         "fullscreen": false
+      },
+      {
+        "label": "diagnostics",
+        "title": "SemaClaw — Diagnostics",
+        "url": "diagnostics.html",
+        "width": 720,
+        "height": 560,
+        "minWidth": 540,
+        "minHeight": 420,
+        "visible": false,
+        "resizable": true
       }
     ],
     "security": {
