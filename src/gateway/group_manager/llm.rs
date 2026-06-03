@@ -70,6 +70,25 @@ pub fn save_pre_cognitive_enabled(config_path: &Path, enabled: bool) -> Result<(
     save_global_config(config_path, &cfg)
 }
 
+// ===== After-process stage toggle (global, user-set) =====
+
+/// After-process / context-update stage. Default OFF — opt-in.
+///
+/// When enabled, after the main agent turn completes the conversation is
+/// summarised and context is updated (Claude-Code style) so the agent retains
+/// a compact, optimised understanding of the whole dialogue for future turns.
+pub fn get_after_process_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path)
+        .after_process
+        .unwrap_or(false)
+}
+
+pub fn save_after_process_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.after_process = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== LLM config =====
 
 pub fn load_llm_configs(config_path: &Path) -> LlmConfigResult {

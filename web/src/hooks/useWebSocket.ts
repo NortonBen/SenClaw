@@ -39,6 +39,20 @@ function saveWorkbench(state: Record<string, WorkbenchState>): void {
   try { window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(state)); } catch {}
 }
 
+// ===== Agent usage local persistence (context bar survives page reload) =====
+const AGENT_USAGE_STORAGE_KEY = 'senclaw:agent-usage:v1';
+
+function loadAgentUsage(): Record<string, import('../types').UsageData> {
+  try {
+    const raw = window.localStorage.getItem(AGENT_USAGE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveAgentUsage(state: Record<string, import('../types').UsageData>): void {
+  try { window.localStorage.setItem(AGENT_USAGE_STORAGE_KEY, JSON.stringify(state)); } catch {}
+}
+
 interface WsConfig {
   wsPort: number;
   token: string;
@@ -60,6 +74,8 @@ export interface WsHook {
   resumeAgent: (jid: string, query?: string) => void;
   /** Stop and reset agent session (sends agent:control stop) */
   stopAgent: (jid: string) => void;
+  /** Stop agent and permanently delete all persisted history for this JID. */
+  stopAndClearHistory: (jid: string) => void;
   resolvePermission: (requestId: string, optionKey: string) => void;
   resolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
   registerGroup: (data: RegisterGroupPayload) => void;
@@ -191,7 +207,7 @@ export function useWebSocket(): WsHook {
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
-  const [agentUsage, setAgentUsage]           = useState<Record<string, UsageData>>({});
+  const [agentUsage, setAgentUsage]           = useState<Record<string, UsageData>>(loadAgentUsage);
   const [coworkChanged, setCoworkChanged]     = useState(0);
   const [lastTaskResult, setLastTaskResult]   = useState<TaskResultEvent | null>(null);
   const [coworkResourceChanged, setCoworkResourceChanged] = useState(0);
@@ -212,6 +228,9 @@ export function useWebSocket(): WsHook {
 
   // Mirror workbench state to localStorage so a refresh restores launched tabs.
   useEffect(() => { saveWorkbench(workbench); }, [workbench]);
+
+  // Persist context usage so the header bar survives page reloads.
+  useEffect(() => { saveAgentUsage(agentUsage); }, [agentUsage]);
 
   const wsRef        = useRef<WebSocket | null>(null);
   const configRef    = useRef<WsConfig | null>(null);
@@ -347,6 +366,38 @@ export function useWebSocket(): WsHook {
   const stopAgent = useCallback((jid: string) => {
     rawSend({ type: 'agent:control', groupJid: jid, action: 'stop' });
   }, [rawSend]);
+
+  const stopAndClearHistory = useCallback((jid: string) => {
+    rawSend({ type: 'agent:control', groupJid: jid, action: 'stop_and_clear' });
+
+    // ── Immediate local wipe ──────────────────────────────────────────────────
+    // Don't wait for the backend history:load echo — clear all local state for
+    // this JID right now so the UI feels instant.
+
+    // 1. Clear chat messages (tool actions, browser actions, text, etc.)
+    setMessages(prev => {
+      const next = { ...prev };
+      delete next[jid];
+      return next;
+    });
+
+    // 2. Clear workbench artifacts (sidebar panels, code previews, etc.)
+    setWorkbench(prev => {
+      const next = { ...prev };
+      delete next[jid];
+      return next;
+    });
+
+    // 3. Clear token usage indicator.
+    setAgentUsage(prev => {
+      const next = { ...prev };
+      delete next[jid];
+      return next;
+    });
+
+    // 4. Reset agent state to idle.
+    setAgentStates(prev => ({ ...prev, [jid]: 'idle' as AgentState }));
+  }, [rawSend, setMessages, setWorkbench, setAgentUsage, setAgentStates]);
 
   const subscribeAll = useCallback(() => {
     const toSubscribe: string[] = [];
@@ -1168,7 +1219,7 @@ export function useWebSocket(): WsHook {
   }, []);
 
   return useMemo(() => ({
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
@@ -1182,7 +1233,7 @@ export function useWebSocket(): WsHook {
     workbench, workbenchLatest, activeJid, setActiveJid,
     workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
   }), [
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,

@@ -19,9 +19,10 @@ pub use apps::{
 pub use chat::{delete_telegram_bot, get_telegram_bots, get_wechat_accounts, save_telegram_bot};
 pub use dirs::{ensure_agent_dirs, write_soul_md};
 pub use llm::{
-    get_admin_permissions_config, get_pre_cognitive_enabled, get_pre_trigger_skill_enabled,
-    get_thinking_enabled, load_cognitive_config, load_embedding_config, load_llm_configs,
-    load_tts_settings, load_whisper_settings, remove_llm_config, save_admin_permissions_config,
+    get_admin_permissions_config, get_after_process_enabled, get_pre_cognitive_enabled,
+    get_pre_trigger_skill_enabled, get_thinking_enabled, load_cognitive_config,
+    load_embedding_config, load_llm_configs, load_tts_settings, load_whisper_settings,
+    remove_llm_config, save_admin_permissions_config, save_after_process_enabled,
     save_cognitive_config, save_embedding_config, save_llm_config, save_pre_cognitive_enabled,
     save_pre_trigger_skill_enabled, save_thinking_enabled, save_tts_settings, save_whisper_settings,
     set_active_cognitive_llm_config, set_active_llm_config, set_active_quick_llm_config,

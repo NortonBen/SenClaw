@@ -5,8 +5,8 @@ import type { AgentMode } from '../hooks/useWebSocket';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 import { ToolGroupCard } from './ToolGroupCard';
-import { Progress, Space, Tooltip, Typography, Drawer, Badge, message } from 'antd';
-import { AudioMutedOutlined, AudioOutlined, FileTextOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Progress, Tooltip, Typography, Drawer, Badge, message } from 'antd';
+import { AudioMutedOutlined, AudioOutlined, FileTextOutlined, LoadingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
 import { PlanHistoryPanel } from './PlanHistoryPanel';
 import { useAppContext } from '../contexts/AppContext';
@@ -24,6 +24,7 @@ interface Props {
   onPause: () => void;
   onResume: (query?: string) => void;
   onStop: () => void;
+  onStopAndClear: () => void;
   onResolvePermission: (requestId: string, optionKey: string) => void;
   onResolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
   /** Active agent mode for this chat (defaults to 'Agent' when undefined). */
@@ -61,13 +62,15 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([view], { type: 'audio/wav' });
 }
 
-export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onResolvePermission, onResolveQuestion, agentMode, onModeChange }: Props) {
+export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onStopAndClear, onResolvePermission, onResolveQuestion, agentMode, onModeChange }: Props) {
   const { token } = theme.useToken();
   const { ws } = useAppContext();
   const [input, setInput]           = useState('');
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [plansOpen, setPlansOpen]   = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const [recording, setRecording]   = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [recordElapsed, setRecordElapsed] = useState(0);
@@ -447,6 +450,40 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
             <span className={`w-2 h-2 rounded-full transition-colors ${statusDotClass}`} />
             <span className="text-xs" style={{ color: token.colorTextSecondary }}>{statusText}</span>
           </div>
+          {/* View Context button — always shown; drawer handles empty state */}
+          <Tooltip title={usage && usage.maxTokens > 0 ? `Context: ${Math.round(Math.min(100, (usage.useTokens / usage.maxTokens) * 100))}% used` : 'View context'}>
+            <button
+              onClick={() => setContextOpen(true)}
+              className="w-7 h-7 rounded-full flex items-center justify-center transition-colors relative"
+              style={{ color: token.colorTextDescription }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = token.colorPrimary; e.currentTarget.style.background = `${token.colorPrimary}1a`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = token.colorTextDescription; e.currentTarget.style.background = 'transparent'; }}
+              aria-label="View context"
+            >
+              {/* database / layers icon */}
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M3 5v4c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
+                <path d="M3 9v4c0 1.66 4.03 3 9 3s9-1.34 9-3V9" />
+                <path d="M3 13v4c0 1.66 4.03 3 9 3s9-1.34 9-3v-4" />
+              </svg>
+              {/* small usage dot — visible only when we have data */}
+              {usage && usage.maxTokens > 0 && (() => {
+                const pct = Math.min(100, (usage.useTokens / usage.maxTokens) * 100);
+                const dotColor = pct >= 90 ? token.colorError : pct >= 70 ? token.colorWarning : token.colorPrimary;
+                return (
+                  <span
+                    style={{
+                      position: 'absolute', top: 1, right: 1,
+                      width: 5, height: 5, borderRadius: '50%',
+                      background: dotColor,
+                    }}
+                  />
+                );
+              })()}
+            </button>
+          </Tooltip>
+
           {/* Plan history — browse past plans this agent produced via ExitPlanMode */}
           <Tooltip title="Plan history">
             <button
@@ -630,7 +667,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
       {showStopConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div 
-            className="border rounded-2xl shadow-2xl p-6 w-80 flex flex-col gap-4"
+            className="border rounded-2xl shadow-2xl p-6 w-96 flex flex-col gap-4"
             style={{ 
               background: token.colorBgElevated,
               borderColor: token.colorBorderSecondary 
@@ -650,29 +687,63 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
                 ? 'Current task will be terminated and all conversation context will be discarded. This cannot be undone.'
                 : 'All conversation context will be cleared and a new session will start. This cannot be undone.'}
             </p>
-            <div className="flex gap-3 justify-end">
+
+            {/* Three action rows */}
+            <div className="flex flex-col gap-2 pt-1">
+              {/* Reset only */}
+              <button
+                onClick={() => { setShowStopConfirm(false); onStop(); }}
+                className="w-full px-4 py-2.5 text-sm rounded-xl text-white font-medium transition-all flex items-center gap-2"
+                style={{ background: token.colorError }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.88'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 flex-shrink-0">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                </svg>
+                <span>Reset session only</span>
+                <span className="ml-auto text-xs opacity-70">Keeps history log</span>
+              </button>
+
+              {/* Reset + clear history */}
+              <button
+                onClick={() => { setShowStopConfirm(false); onStopAndClear(); }}
+                className="w-full px-4 py-2.5 text-sm rounded-xl font-medium transition-all flex items-center gap-2"
+                style={{
+                  background: `${token.colorWarning}22`,
+                  color: token.colorWarning,
+                  border: `1px solid ${token.colorWarning}55`,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = `${token.colorWarning}33`; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = `${token.colorWarning}22`; }}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 flex-shrink-0">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                </svg>
+                <span>Reset + clear history</span>
+                <span className="ml-auto text-xs opacity-70">Deletes log permanently</span>
+              </button>
+
+              {/* Cancel */}
               <button
                 onClick={() => setShowStopConfirm(false)}
-                className="px-4 py-2 text-sm font-medium rounded-xl transition-colors"
+                className="w-full px-4 py-2 text-sm font-medium rounded-xl transition-colors"
                 style={{ color: token.colorTextSecondary }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = token.colorFillAlter; e.currentTarget.style.color = token.colorText; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = token.colorTextSecondary; }}
               >
                 Cancel
               </button>
-              <button
-                onClick={() => { setShowStopConfirm(false); onStop(); }}
-                className="px-4 py-2 text-sm rounded-xl text-white transition-colors"
-                style={{ background: token.colorError }}
-              >
-                Terminate
-              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Plan history drawer — persisted plans from ExitPlanMode, survives reload. */}
+      {/* Plan history drawer */}
       <Drawer
         title="Plan history"
         placement="right"
@@ -688,6 +759,157 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           requestPlanList={ws.requestPlanList}
           requestPlan={ws.requestPlan}
         />
+      </Drawer>
+
+      {/* ── View Context drawer ──────────────────────────────────── */}
+      <Drawer
+        title={
+          <div className="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 16, height: 16 }}>
+              <ellipse cx="12" cy="5" rx="9" ry="3" />
+              <path d="M3 5v4c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
+              <path d="M3 9v4c0 1.66 4.03 3 9 3s9-1.34 9-3V9" />
+              <path d="M3 13v4c0 1.66 4.03 3 9 3s9-1.34 9-3v-4" />
+            </svg>
+            <span>Context Window</span>
+          </div>
+        }
+        placement="right"
+        width={400}
+        open={contextOpen}
+        onClose={() => setContextOpen(false)}
+      >
+        {usage && usage.maxTokens > 0 ? (() => {
+          const pct = Math.min(100, (usage.useTokens / usage.maxTokens) * 100);
+          const remaining = Math.max(0, usage.maxTokens - usage.useTokens);
+          const barColor =
+            pct >= 90 ? token.colorError : pct >= 70 ? token.colorWarning : token.colorPrimary;
+          return (
+            <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+              {/* Donut-style arc replaced by a clean progress ring using SVG */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                {/* SVG arc gauge */}
+                {(() => {
+                  const r = 54; const cx = 64; const cy = 64;
+                  const circ = 2 * Math.PI * r;
+                  const used = (pct / 100) * circ;
+                  return (
+                    <svg width={128} height={128} viewBox="0 0 128 128">
+                      {/* Track */}
+                      <circle cx={cx} cy={cy} r={r} fill="none" stroke={token.colorFillSecondary} strokeWidth={10} />
+                      {/* Progress */}
+                      <circle
+                        cx={cx} cy={cy} r={r}
+                        fill="none"
+                        stroke={barColor}
+                        strokeWidth={10}
+                        strokeDasharray={`${used} ${circ - used}`}
+                        strokeDashoffset={circ / 4} /* start at top */
+                        strokeLinecap="round"
+                        style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                      />
+                      {/* Center label */}
+                      <text x={cx} y={cy - 6} textAnchor="middle" fontSize={20} fontWeight={700} fill={barColor}>{Math.round(pct)}%</text>
+                      <text x={cx} y={cy + 14} textAnchor="middle" fontSize={10} fill={token.colorTextTertiary}>used</text>
+                    </svg>
+                  );
+                })()}
+              </div>
+
+              {/* Token breakdown rows */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {[
+                  { label: 'Used', value: usage.useTokens, color: barColor },
+                  { label: 'Remaining', value: remaining, color: token.colorSuccess },
+                  { label: 'Max window', value: usage.maxTokens, color: token.colorTextSecondary },
+                ].map(({ label, value, color }) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 13, color: token.colorTextSecondary }}>{label}</Text>
+                    <Text style={{ fontSize: 13, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>
+                      {value.toLocaleString()}
+                    </Text>
+                  </div>
+                ))}
+              </div>
+
+              {/* Progress bar detail */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>Context fill</Text>
+                  <Text style={{ fontSize: 11, color: barColor, fontWeight: 600 }}>{Math.round(pct)}%</Text>
+                </div>
+                <Progress
+                  percent={pct}
+                  showInfo={false}
+                  size={['100%', 6]}
+                  strokeColor={barColor}
+                  trailColor={token.colorFillSecondary}
+                  style={{ margin: 0 }}
+                />
+                {pct >= 70 && (
+                  <Text style={{ fontSize: 11, color: pct >= 90 ? token.colorError : token.colorWarning, marginTop: 6, display: 'block' }}>
+                    {pct >= 90 ? '⚠ Context almost full — consider compacting.' : 'Context is getting large.'}
+                  </Text>
+                )}
+              </div>
+
+              {/* Compact / Update Context button */}
+              <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: 16 }}>
+                <Text style={{ fontSize: 12, color: token.colorTextSecondary, display: 'block', marginBottom: 10 }}>
+                  Compact context to free up space and keep the agent focused.
+                </Text>
+                <button
+                  disabled={compacting || isProcessing}
+                  onClick={async () => {
+                    setCompacting(true);
+                    try {
+                      const res = await fetch(`/api/groups/${encodeURIComponent(group.jid)}/compact`, { method: 'POST' });
+                      if (res.ok) {
+                        message.success('Context compacted');
+                      } else {
+                        // Fallback: send /compact command via chat
+                        message.info('Compact triggered');
+                      }
+                    } catch {
+                      message.error('Compact failed');
+                    } finally {
+                      setCompacting(false);
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 16px',
+                    borderRadius: 12,
+                    border: `1px solid ${token.colorPrimary}55`,
+                    background: compacting || isProcessing ? token.colorFillTertiary : `${token.colorPrimary}15`,
+                    color: compacting || isProcessing ? token.colorTextTertiary : token.colorPrimary,
+                    cursor: compacting || isProcessing ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {compacting ? (
+                    <LoadingOutlined style={{ fontSize: 15 }} />
+                  ) : (
+                    <ThunderboltOutlined style={{ fontSize: 15 }} />
+                  )}
+                  {compacting ? 'Compacting…' : 'Compact / Update Context now'}
+                </button>
+              </div>
+
+            </div>
+          );
+        })() : (
+          <div style={{ padding: 40, textAlign: 'center' }}>
+            <Text style={{ color: token.colorTextTertiary }}>No usage data yet. Start a conversation first.</Text>
+          </div>
+        )}
       </Drawer>
     </div>
   );

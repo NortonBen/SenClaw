@@ -1,23 +1,33 @@
 import React, { useEffect, useState } from 'react';
-import { Typography, Switch, Card, Space, Spin, message } from 'antd';
-import { ThunderboltOutlined, BulbOutlined } from '@ant-design/icons';
+import { Typography, Switch, Card, Space, Spin, message, Divider } from 'antd';
+import { ThunderboltOutlined, BulbOutlined, SyncOutlined } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
 
 interface AgentBehavior {
   preTriggerSkill: boolean;
   preCognitive: boolean;
+  afterProcess: boolean;
 }
 
 /**
- * Toggles for the two pre-process stages that run before the main agent turn.
- * Persisted globally (~/.senclaw/config.json) via `/api/agent-behavior` and read
- * per-turn by the daemon, so flips take effect on the next message.
+ * Toggles for the process stages:
+ *
+ * **Pre-process stages** — run before the main agent turn.
+ *   - preTriggerSkill: deterministic skill force-load by trigger matching.
+ *   - preCognitive: cognitive-graph memory injection into the prompt.
+ *
+ * **After-process stages** — run after the main agent turn.
+ *   - afterProcess: context update / conversation synthesis (Claude-Code style).
+ *
+ * Persisted globally (~/.senclaw/config.json) via `/api/agent-behavior` and
+ * read per-turn by the daemon, so flips take effect on the next message.
  */
 export const AgentBehaviorSettings: React.FC = () => {
   const [state, setState] = useState<AgentBehavior>({
     preTriggerSkill: false,
     preCognitive: false,
+    afterProcess: false,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<keyof AgentBehavior | null>(null);
@@ -93,10 +103,18 @@ export const AgentBehaviorSettings: React.FC = () => {
 
   return (
     <div style={{ maxWidth: 760 }}>
-      <Title level={4}>Pre-process Stages</Title>
+      <Title level={4}>Agent Behavior</Title>
       <Paragraph type="secondary">
-        Two optional stages that run before the main agent turn. Changes take effect on the
+        Optional processing stages that run before and after the main agent turn. Changes take effect on the
         next message.
+      </Paragraph>
+
+      {/* ── Pre-process ─────────────────────────────────────── */}
+      <Title level={5} style={{ marginTop: 16, marginBottom: 8 }}>
+        Pre-process Stages
+      </Title>
+      <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+        Run before the main agent turn to enrich the prompt.
       </Paragraph>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {row(
@@ -110,6 +128,24 @@ export const AgentBehaviorSettings: React.FC = () => {
           'Pre-cognitive',
           'Retrieve relevant entries from the cognitive-graph memory for the message and inject them into the prompt as context before the main turn.',
           'preCognitive'
+        )}
+      </Space>
+
+      <Divider />
+
+      {/* ── After-process ────────────────────────────────────── */}
+      <Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>
+        After-process Stages
+      </Title>
+      <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+        Run after the main agent turn to keep context optimised.
+      </Paragraph>
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        {row(
+          <SyncOutlined />,
+          'Update context',
+          'After each turn, synthesise and update the conversation context (inspired by Claude Code). The agent analyses recent messages, extracts key information, and compacts the context so future turns stay accurate and token-efficient without losing important history.',
+          'afterProcess'
         )}
       </Space>
     </div>

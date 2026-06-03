@@ -82,6 +82,7 @@ export function ChatPage() {
                 onPause={() => ws.pauseAgent(selectedJid!)}
                 onResume={(query?: string) => ws.resumeAgent(selectedJid!, query)}
                 onStop={() => ws.stopAgent(selectedJid!)}
+                onStopAndClear={() => ws.stopAndClearHistory(selectedJid!)}
                 onResolvePermission={ws.resolvePermission}
                 onResolveQuestion={ws.resolveQuestion}
                 agentMode={ws.agentModes[selectedJid!] ?? 'Agent'}

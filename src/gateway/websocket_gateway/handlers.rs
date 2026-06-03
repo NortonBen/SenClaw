@@ -1834,6 +1834,41 @@ pub(crate) async fn handle_agent_control(
                 api.stop_agent(&jid).await;
             });
         }
+        // Stop the agent AND permanently delete all persisted message history for this JID.
+        // After stopping, push an empty history:load so the frontend clears its local list.
+        "stop_and_clear" => {
+            let api = state.api.clone();
+            let db  = state.db.clone();
+            let jid = group_jid.clone();
+            let sender_clone = sender.clone();
+            tokio::spawn(async move {
+                api.stop_agent(&jid).await;
+
+                // 1. Chat messages (user / agent text turns)
+                let del_msg = db.delete_group_messages_for_jid(&jid).unwrap_or(0);
+
+                // 2. Tool-execution action logs (browser actions, bash, read, etc.)
+                let del_tools = db.delete_tool_executions_for_jid(&jid).unwrap_or(0);
+
+                // 3. Ephemeral chat events (permission/question request+resolved pairs)
+                let del_events = db.delete_chat_events_for_jid(&jid).unwrap_or(0);
+
+                tracing::info!(
+                    "[handle_agent_control] stop_and_clear for {jid}: \
+                     {del_msg} messages, {del_tools} tool actions, {del_events} chat events deleted"
+                );
+
+                // Signal frontend to wipe its in-memory list.
+                send_json(
+                    &sender_clone,
+                    &serde_json::json!({
+                        "type": "history:load",
+                        "groupJid": jid,
+                        "messages": [],
+                    }),
+                );
+            });
+        }
         _ => {
             send_json(
                 sender,
@@ -1842,3 +1877,4 @@ pub(crate) async fn handle_agent_control(
         }
     }
 }
+

@@ -5,7 +5,7 @@
 //! Supported architectures (autodetected from `config.json::model_type`):
 //! - **Qwen3** — `qwen3*` (transformer + GQA, with optional MLX quantization & TurboQuant KV).
 //! - **Qwen3.5** — `qwen3_5*` (hybrid GatedDeltaNet + full attention, OptiQ quants).
-//! - **Llama** — `llama` (Llama-3.x, Llama-3.2, Nesso; GQA, no Q/K norm, custom EOS from config).
+//! - **Llama/Qwen2** — `llama` / `qwen2` (Llama-3.x, Llama-3.2, Nesso, Qwen2.x; GQA, no Q/K norm, custom EOS from config).
 //! - **Gemma-2** — `gemma2` (alternating sliding-window/global attention, Gemma RMSNorm +1, attn/final soft-capping).
 //! - **Gemma-3** — `gemma3` / `gemma3_text` (hybrid sliding+full attention, Gemma RMSNorm, 4 norms/block, dual-RoPE).
 //! - **Mamba-2** — `mamba2` (SSD recurrence, fixed-size SSM cache; ignores `kv_cache_bits`).
@@ -413,8 +413,11 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     use super::mlx_lm_utils::tokenizer::Tokenizer;
 
+    eprintln!("[mlx-load-debug] detect architecture");
     let arch = detect_architecture(model_id, model_dir)?;
+    eprintln!("[mlx-load-debug] arch={arch:?}");
     let tokenizer_file = model_dir.join("tokenizer.json");
+    eprintln!("[mlx-load-debug] load tokenizer");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
         .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e:?}"))?;
 
@@ -425,6 +428,7 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     // template string for chat rendering (via `apply_chat_template_*`) and the
     // same MarkerSet for output-stream normalisation — no double load, no
     // chance of input and output drifting apart for new models.
+    eprintln!("[mlx-load-debug] load parser config");
     let mut parser_config = super::stream_parser::ParserConfig::from_model_dir(model_dir, model_id)
         .map_err(|e| anyhow::anyhow!("ParserConfig::from_model_dir failed: {e}"))?;
     let chat_template = parser_config.chat_template.clone();
@@ -454,6 +458,7 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
             (ModelKind::Qwen35(m), n, hd, kvh)
         }
         Arch::Llama => {
+            eprintln!("[mlx-load-debug] load llama-like");
             let m = load_llama_any(model_dir)
                 .map_err(|e| anyhow::anyhow!("load_llama failed: {e:?}"))?;
             let n = m.args.num_hidden_layers as usize;
@@ -892,10 +897,10 @@ fn generate_with_cache(
     _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::cache::{eval_all_caches, KvCache, DEFAULT_TQ_ACTIVATE_AT};
+    use super::mlx_lm::cache::{DEFAULT_TQ_ACTIVATE_AT, KvCache, eval_all_caches};
+    use mlx_rs::Array;
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::{async_eval, eval};
-    use mlx_rs::Array;
 
     let mut guard = loaded
         .lock()
@@ -2182,15 +2187,15 @@ fn generate_with_cache(
                 if token_id == QWEN3_TOOL_CALL_OPEN {
                     inside_tool_call = true;
                     tracing::info!(
-                    "[local-mlx-native] tool_call OPEN at step {} (token 151657) — masking stops",
-                    generated_count
-                );
+                        "[local-mlx-native] tool_call OPEN at step {} (token 151657) — masking stops",
+                        generated_count
+                    );
                 } else if token_id == QWEN3_TOOL_CALL_CLOSE {
                     inside_tool_call = false;
                     tracing::info!(
-                    "[local-mlx-native] tool_call CLOSE at step {} (token 151658) — un-masking stops",
-                    generated_count
-                );
+                        "[local-mlx-native] tool_call CLOSE at step {} (token 151658) — un-masking stops",
+                        generated_count
+                    );
                 }
             }
             next_token = y;
@@ -2219,13 +2224,13 @@ fn generate_with_cache(
                 if generated_count <= 20 {
                     let (ma, mc, _) = mlx_mem_mib();
                     tracing::info!(
-                    "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
-                    generated_count,
-                    rss_mib(),
-                    rss_mib() - rss_start,
-                    ma,
-                    mc
-                );
+                        "[local-mlx-native][mem] decode step {} — rss={:.0}(Δ{:.0}) | mlx active={:.0} cache={:.0} MiB",
+                        generated_count,
+                        rss_mib(),
+                        rss_mib() - rss_start,
+                        ma,
+                        mc
+                    );
                 }
                 let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
                 if generated_count <= 20 {
@@ -2262,13 +2267,13 @@ fn generate_with_cache(
             }
         }
     } // end synchronous (repetition-penalty) decode path
-      // Flush any tokens still in the buffer regardless of whether we stopped
-      // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
-      // without flushing, which dropped up to the last 19 tokens (buffer flush
-      // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
-      // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
-      // never sees the closing tag and rejects the tool call as "truncated".
-      // The fix here is structural: drain the buffer on every exit path.
+    // Flush any tokens still in the buffer regardless of whether we stopped
+    // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
+    // without flushing, which dropped up to the last 19 tokens (buffer flush
+    // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
+    // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
+    // never sees the closing tag and rejects the tool call as "truncated".
+    // The fix here is structural: drain the buffer on every exit path.
     if !buffer.is_empty() {
         eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
         let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
@@ -2367,7 +2372,7 @@ fn gemma3_safetensors_has_lm_head(model_dir: &Path) -> anyhow::Result<bool> {
 ///    `parameters_mut()` misses them. We capture them by raw key and apply
 ///    directly into the struct (same pattern as `load_qwen3_any`).
 fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::gemma3::Model> {
-    use super::mlx_lm::models::gemma3::{get_gemma3_model_args, Model};
+    use super::mlx_lm::models::gemma3::{Model, get_gemma3_model_args};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
@@ -2585,7 +2590,7 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
 /// `#[param]`-visible `inner/scales/biases` after quantization.
 fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::gemma4::Model> {
     use super::mlx_lm::models::gemma4::{
-        apply_per_module_quantization, get_gemma4_model_args, Model, QuantPlan, WeightMap,
+        Model, QuantPlan, WeightMap, apply_per_module_quantization, get_gemma4_model_args,
     };
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
@@ -2906,14 +2911,12 @@ fn load_falcon_mamba_any(
 /// variants and surfaces unmatched safetensors keys instead of silently
 /// dropping them.
 fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::llama::Model> {
-    use super::mlx_lm::models::llama::{get_llama_model_args, Model, WeightMap};
+    use super::mlx_lm::models::llama::{Model, WeightMap, get_llama_model_args};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
     let args = get_llama_model_args(model_dir)
         .map_err(|e| anyhow::anyhow!("read llama args failed: {e:?}"))?;
-    let model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
-
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
@@ -2924,19 +2927,6 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
         let b = q.get("bits")?.as_i64()? as i32;
         Some((g, b))
     });
-
-    let mut model = if let Some((group_size, bits)) = quant {
-        tracing::info!(
-            "[local-mlx-native] quantizing Llama layers: group_size={group_size}, bits={bits}"
-        );
-        let m = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
-            .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
-        m.eval()
-            .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
-        m
-    } else {
-        model
-    };
 
     let mut shard_files: Vec<std::path::PathBuf> = Vec::new();
     let weights_index = model_dir.join("model.safetensors.index.json");
@@ -2961,6 +2951,28 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
     }
 
     let is_quant = quant.is_some();
+    eprintln!(
+        "[llama-load-debug] before Model::new qwen2={} quant={is_quant}",
+        args.is_qwen2()
+    );
+    let model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
+    eprintln!("[llama-load-debug] after Model::new");
+    let mut model = if let Some((group_size, bits)) = quant {
+        eprintln!("[llama-load-debug] before nn::quantize");
+        tracing::info!(
+            "[local-mlx-native] quantizing Llama layers: group_size={group_size}, bits={bits}"
+        );
+        let m = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
+            .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
+        m.eval()
+            .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
+        eprintln!("[llama-load-debug] after nn::quantize eval");
+        m
+    } else {
+        model
+    };
+    eprintln!("[llama-load-debug] before safetensor load");
+
     let mut total_loaded = 0usize;
     let mut total_missed = 0usize;
     let mut unmatched_samples: Vec<String> = Vec::new();
@@ -3086,7 +3098,7 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
 /// Load a Qwen3 `Model`, applying `nn::quantize` when `config.json` declares a
 /// `quantization` block (mlx-community 4-bit / 8-bit variants).
 fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwen3::Model> {
-    use super::mlx_lm::models::qwen3::{get_qwen3_model_args, Model, WeightMap};
+    use super::mlx_lm::models::qwen3::{Model, WeightMap, get_qwen3_model_args};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
@@ -3234,7 +3246,9 @@ fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwe
                 if let Some(b) = embed_biases {
                     q.biases.value = b;
                 }
-                tracing::info!("[local-mlx-native] embed_tokens (QuantizedEmbedding) populated via direct mutation");
+                tracing::info!(
+                    "[local-mlx-native] embed_tokens (QuantizedEmbedding) populated via direct mutation"
+                );
             }
             mlx_rs::quantization::MaybeQuantized::Original(e) => {
                 if let Some(w) = embed_weight {
@@ -3339,8 +3353,11 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
                 if mt.contains("qwen3_5") {
                     return Ok(Arch::Qwen35);
                 }
-                if mt.contains("qwen3") || mt.contains("qwen2") {
+                if mt.contains("qwen3") {
                     return Ok(Arch::Qwen3);
+                }
+                if mt.contains("qwen2") {
+                    return Ok(Arch::Llama);
                 }
                 if mt == "gemma2" || mt.starts_with("gemma2") {
                     return Ok(Arch::Gemma2);
@@ -3386,8 +3403,11 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
     if lower.contains("qwen3.5") || lower.contains("qwen3_5") {
         return Ok(Arch::Qwen35);
     }
-    if lower.contains("qwen3") || lower.contains("qwen2") {
+    if lower.contains("qwen3") {
         return Ok(Arch::Qwen3);
+    }
+    if lower.contains("qwen2") {
+        return Ok(Arch::Llama);
     }
     if lower.contains("gemma2") || lower.contains("gemma-2") {
         return Ok(Arch::Gemma2);

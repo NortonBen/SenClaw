@@ -69,7 +69,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'channels', icon: <ApiOutlined />, label: 'Channels' },
       { key: 'groups', icon: <TeamOutlined />, label: 'Groups' },
       { key: 'agents', icon: <UserOutlined />, label: 'Agents' },
-      { key: 'agent-behavior', icon: <ControlOutlined />, label: 'Pre-process' },
+      { key: 'agent-behavior', icon: <ControlOutlined />, label: 'Agent Behavior' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },

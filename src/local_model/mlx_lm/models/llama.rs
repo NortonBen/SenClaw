@@ -25,13 +25,14 @@ use std::{
 };
 
 use mlx_rs::{
+    Array, Dtype,
     builder::Builder,
     error::Exception,
     macros::{ModuleParameters, Quantizable},
-    module::{Module, ModuleParametersExt},
+    module::{Module, ModuleParametersExt, Param},
     nn,
+    ops::zeros_dtype,
     quantization::MaybeQuantized,
-    Array,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -41,14 +42,14 @@ use super::super::{
     cache::{KeyValueCache, KvFetchResult},
     error::Error,
     utils::{
-        create_attention_mask,
-        rope::{initialize_rope, FloatOrString, RopeVariant},
-        scaled_dot_product_attention, AttentionMask,
+        AttentionMask, create_attention_mask,
+        rope::{FloatOrString, RopeVariant, initialize_rope},
+        scaled_dot_product_attention,
     },
 };
 // Reuse the input types from qwen3 verbatim — they are data carriers, not
 // architecture-specific.
-pub use super::qwen3::{sample, AttentionInput, ModelInput};
+pub use super::qwen3::{AttentionInput, ModelInput, sample};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelArgs {
@@ -82,11 +83,27 @@ fn default_eos() -> u32 {
 }
 
 impl ModelArgs {
+    pub fn is_qwen2(&self) -> bool {
+        self.model_type.to_lowercase().starts_with("qwen2")
+    }
+
     pub fn normalize(&mut self) {
         if self.head_dim <= 0 && self.num_attention_heads > 0 {
             self.head_dim = self.hidden_size / self.num_attention_heads;
         }
+        if self.is_qwen2() {
+            // Qwen2/Qwen2.5 checkpoints have Q/K/V projection bias but no O-proj
+            // bias. `Attention::new` handles that split explicitly.
+            self.attention_bias = true;
+        }
     }
+}
+
+fn zero_embedding_bf16(embedding_count: i32, dimensions: i32) -> Result<nn::Embedding, Exception> {
+    let weight = zeros_dtype(&[embedding_count, dimensions], Dtype::Bfloat16)?;
+    Ok(nn::Embedding {
+        weight: Param::new(weight),
+    })
 }
 
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
@@ -129,7 +146,7 @@ impl Attention {
             .bias(args.attention_bias)
             .build()?;
         let o_proj = nn::LinearBuilder::new(n_heads * head_dim, dim)
-            .bias(args.attention_bias)
+            .bias(args.attention_bias && !args.is_qwen2())
             .build()?;
 
         let rope = initialize_rope(
@@ -372,13 +389,24 @@ pub struct LlamaModel {
 impl LlamaModel {
     pub fn new(args: &ModelArgs) -> Result<Self, Exception> {
         assert!(args.vocab_size.is_positive());
-        let embed_tokens = nn::Embedding::new(args.vocab_size, args.hidden_size)?;
+        eprintln!(
+            "[llama-model-debug] embedding start qwen2={}",
+            args.is_qwen2()
+        );
+        let embed_tokens = if args.is_qwen2() {
+            zero_embedding_bf16(1, args.hidden_size)?
+        } else {
+            nn::Embedding::new(args.vocab_size, args.hidden_size)?
+        };
+        eprintln!("[llama-model-debug] layers start");
         let layers = (0..args.num_hidden_layers)
             .map(|_| TransformerBlock::new(args))
             .collect::<Result<Vec<_>, _>>()?;
+        eprintln!("[llama-model-debug] norm start");
         let norm = nn::RmsNormBuilder::new(args.hidden_size)
             .eps(args.rms_norm_eps)
             .build()?;
+        eprintln!("[llama-model-debug] done");
         Ok(Self {
             vocab_size: args.vocab_size,
             num_hidden_layers: args.num_hidden_layers,
@@ -546,9 +574,8 @@ pub fn load_llama_model(model_dir: impl AsRef<Path>) -> Result<Model, Error> {
     Ok(model)
 }
 
-/// Llama-3 chat templates use literal `<|begin_of_text|>` / `<|eot_id|>` headers
-/// inline; tools are emitted via `{{ tools | tojson }}` inside the system
-/// header. Neither needs runtime `bos_token` / `eos_token` injection.
+/// Llama-3 and Qwen2 chat templates keep their header/sentinel tokens inline.
+/// Neither needs runtime `bos_token` / `eos_token` injection.
 impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
     fn resolve_special_tokens(
         &self,
@@ -562,13 +589,12 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
         &self,
         tokenizer: &crate::local_model::mlx_lm_utils::tokenizer::Tokenizer,
     ) -> Vec<u32> {
-        // Config EOS (custom values like Nesso 128256 live here) plus the
-        // well-known Llama-3 chat terminators resolved by name (`<|eot_id|>`,
-        // `<|end_of_text|>`), with the canonical ids as a fallback.
+        // Config EOS (custom values like Nesso 128256 and Qwen2 `<|im_end|>`
+        // live here) plus well-known chat terminators resolved by name.
         let mut ids = vec![self.args.eos_token_id];
         for id in crate::local_model::chat_template_openai::resolve_token_ids(
             tokenizer,
-            &["<|eot_id|>", "<|end_of_text|>"],
+            &["<|eot_id|>", "<|end_of_text|>", "<|im_end|>"],
         ) {
             if !ids.contains(&id) {
                 ids.push(id);
