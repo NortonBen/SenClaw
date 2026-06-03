@@ -298,9 +298,20 @@ pub async fn mcp_message(
                 return Json(resp);
             }
 
-            match crate::client::SshClient::connect(&host.unwrap(), port.unwrap(), &user.unwrap(), password.as_deref(), None).await {
+            match crate::client::SshClient::connect(&host.unwrap(), port.unwrap(), &user.unwrap(), password.as_deref(), None, args["host_id"].as_str().map(|s| s.to_string())).await {
                 Ok(c) => {
                     let conn_id = state.connections.add(c).await;
+
+                    if let Some(host_id) = args["host_id"].as_str() {
+                        if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id) {
+                            let _ = state.ui_tx.send(json!({
+                                "type": "mcp_connect",
+                                "host_id": host_id,
+                                "host": saved
+                            }).to_string());
+                        }
+                    }
+
                     let result = json!({ "content": [{ "type": "text", "text": format!("Connected successfully. connection_id: {}", conn_id) }
 
 ] });
@@ -369,6 +380,14 @@ pub async fn mcp_message(
                 if let Some(client_arc) = state.connections.get(conn_id).await {
                     let mut client = client_arc.lock().await;
                     let output = client.execute(&command).await.unwrap_or_else(|e| format!("Error executing: {}", e));
+                    
+                    let _ = state.ui_tx.send(json!({
+                        "type": "mcp_execute",
+                        "host_id": client.host_id,
+                        "command": command,
+                        "output": output
+                    }).to_string());
+
                     let result = json!({ "content": [{ "type": "text", "text": output }
 
 ] });
@@ -407,7 +426,7 @@ pub async fn mcp_message(
                     return Json(resp);
                 }
 
-                let mut client = match crate::client::SshClient::connect(&host.unwrap(), port.unwrap(), &user.unwrap(), password.as_deref(), None).await {
+                let mut client = match crate::client::SshClient::connect(&host.unwrap(), port.unwrap(), &user.unwrap(), password.as_deref(), None, args["host_id"].as_str().map(|s| s.to_string())).await {
                     Ok(c) => c,
                     Err(e) => {
                         let resp = json!({

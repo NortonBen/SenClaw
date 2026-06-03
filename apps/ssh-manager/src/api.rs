@@ -28,6 +28,7 @@ pub struct SshExecuteResponse {
 
 pub struct AppState {
     pub mcp_tx: tokio::sync::broadcast::Sender<String>,
+    pub ui_tx: tokio::sync::broadcast::Sender<String>,
     pub filter: CommandFilter,
     pub hosts: HostStore,
     pub keychain: KeychainStore,
@@ -54,17 +55,19 @@ pub fn api_router() -> Router {
     let keychain_path = data_dir.join("keychain.json");
     let keychain = KeychainStore::new(keychain_path.to_str().unwrap());
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
+    let (ui_tx, _) = tokio::sync::broadcast::channel(100);
     let connections = crate::connection::ConnectionManager::new();
 
     let port_forwarding_path = data_dir.join("port_forwarding.json");
     let port_forwarding_store = crate::models::PortForwardingStore::new(port_forwarding_path.to_str().unwrap());
     let port_forwarding_manager = crate::port_forwarding::PortForwardingManager::new();
 
-    let state = Arc::new(AppState { filter, hosts, keychain, mcp_tx, connections, port_forwarding_store, port_forwarding_manager });
+    let state = Arc::new(AppState { filter, hosts, keychain, mcp_tx, ui_tx, connections, port_forwarding_store, port_forwarding_manager });
 
     Router::new()
         .nest("/sftp", crate::sftp_api::sftp_router())
         .merge(crate::port_forwarding::port_forwarding_router())
+        .route("/ui-events", get(ui_events_sse))
         .route("/execute", post(execute_command))
         .route("/hosts", get(list_hosts).post(create_host))
         .route("/hosts/:id", put(update_host).delete(delete_host))
@@ -128,6 +131,7 @@ async fn execute_command(
         &payload.user,
         password.as_deref(),
         key_pair,
+        None,
     )
     .await
     {
@@ -188,6 +192,7 @@ async fn ws_terminal_handler(
                 &host.user,
                 password.as_deref(),
                 key_pair,
+                None,
             ).await {
                 Ok(mut client) => {
                     if let Err(e) = client.interactive_shell(socket).await {
@@ -237,4 +242,14 @@ async fn delete_keychain(
     } else {
         Err(axum::http::StatusCode::NOT_FOUND)
     }
+}
+
+pub async fn ui_events_sse(State(state): State<Arc<AppState>>) -> axum::response::sse::Sse<impl futures_util::stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    let mut rx = state.ui_tx.subscribe();
+    let stream = async_stream::stream! {
+        while let Ok(msg) = rx.recv().await {
+            yield Ok(axum::response::sse::Event::default().event("ui-event").data(msg));
+        }
+    };
+    axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }

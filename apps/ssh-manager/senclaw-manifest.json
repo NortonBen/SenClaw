@@ -26,7 +26,18 @@
   "skills": [
     {
       "name": "ssh-reporting",
-      "path": "skills/ssh-reporting"
+      "path": "skills/ssh-reporting",
+      "triggers": ["báo cáo ssh", "ssh report", "thống kê server"]
+    },
+    {
+      "name": "ssh-guide",
+      "path": "skills/ssh-guide",
+      "triggers": ["hướng dẫn ssh", "ssh guide", "cách dùng ssh"]
+    },
+    {
+      "name": "ssh-connect",
+      "path": "skills/ssh-connect",
+      "triggers": ["kết nối ssh", "connect ssh", "thực hiện lệnh", "vào server"]
     }
   ]
 }

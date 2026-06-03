@@ -226,6 +226,7 @@ async fn connect_sftp(
         &host.user,
         password.as_deref(),
         key_pair,
+        None,
     ).await {
         Ok(client) => {
             let conn_id = state.connections.add(client).await;

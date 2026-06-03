@@ -80,7 +80,7 @@ impl PortForwardingManager {
                                             }
                                         }
                                     }
-                                    if let Ok(mut client) = crate::client::SshClient::connect(&host.host, host.port, &host.user, password.as_deref(), key_pair).await {
+                                    if let Ok(mut client) = crate::client::SshClient::connect(&host.host, host.port, &host.user, password.as_deref(), key_pair, None).await {
                                         if let Ok(channel) = client.handle.channel_open_direct_tcpip(&rule_clone.destination_address, rule_clone.destination_port as u32, "localhost", 0).await {
                                             let mut channel_stream = channel.into_stream();
                                             let _ = tokio::io::copy_bidirectional(&mut stream, &mut channel_stream).await;

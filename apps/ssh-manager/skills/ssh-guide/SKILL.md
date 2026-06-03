@@ -1,6 +1,10 @@
 ---
 name: ssh-guide
 description: A guide for AI agents on how to connect to SSH servers using the Stateful SSH MCP.
+triggers:
+  - "hướng dẫn ssh"
+  - "ssh guide"
+  - "cách dùng ssh"
 ---
 
 # SSH Connection Guide

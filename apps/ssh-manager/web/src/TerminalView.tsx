@@ -7,11 +7,14 @@ import type { Host } from './types';
 
 interface TerminalViewProps {
   host: Host;
+  isActive: boolean;
 }
 
-export function TerminalView({ host }: TerminalViewProps) {
+export function TerminalView({ host, isActive }: TerminalViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+
+  const fitAddonRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -40,9 +43,15 @@ export function TerminalView({ host }: TerminalViewProps) {
     
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    fitAddonRef.current = fitAddon;
     
     term.open(terminalRef.current);
-    fitAddon.fit();
+    
+    // Defer initial fit slightly to ensure container is rendered
+    setTimeout(() => {
+      try { fitAddon.fit(); } catch(e) {}
+    }, 10);
+    
     termRef.current = term;
 
     term.writeln(`\x1b[36mConnecting to ${host.user}@${host.host}...\x1b[0m`);
@@ -81,21 +90,47 @@ export function TerminalView({ host }: TerminalViewProps) {
     const handleResize = () => fitAddon.fit();
     window.addEventListener('resize', handleResize);
 
+    const mcpLogHandler = (e: any) => {
+      if (e.detail.host_id === host.id) {
+        term.writeln(`\r\n\x1b[33m[AI Agent executed: ${e.detail.command}]\x1b[0m\r\n`);
+        const output = e.detail.output || '';
+        output.split('\n').forEach((line: string) => {
+          term.writeln(line.replace(/\r/g, ''));
+        });
+        term.writeln(`\r\n`);
+      }
+    };
+    window.addEventListener('mcp-log', mcpLogHandler);
+
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('mcp-log', mcpLogHandler);
       socket.close();
       term.dispose();
     };
   }, [host]);
 
+  useEffect(() => {
+    if (isActive && fitAddonRef.current) {
+      // Delay fit to ensure DOM has updated its display property
+      setTimeout(() => {
+        try {
+          fitAddonRef.current?.fit();
+        } catch (e) {}
+      }, 50);
+    }
+  }, [isActive]);
+
   return (
     <div style={{ 
       width: '100%', 
       height: '100%', 
+      display: 'flex',
+      flex: 1,
       overflow: 'hidden', 
       backgroundColor: '#0f172a', 
     }}>
-      <div ref={terminalRef} style={{ width: '100%', height: '100%', padding: '8px' }} />
+      <div ref={terminalRef} style={{ width: '100%', height: '100%', flex: 1, padding: '8px' }} />
     </div>
   );
 }

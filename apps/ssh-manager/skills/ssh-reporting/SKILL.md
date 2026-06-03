@@ -1,6 +1,10 @@
 ---
 name: ssh-reporting
-description: Connects to SSH servers to check network, disk, cpu, ram and generate a system report.
+description: Báo cáo trạng thái và thống kê kết nối SSH
+triggers:
+  - "báo cáo ssh"
+  - "ssh report"
+  - "thống kê server"
 ---
 
 # SSH System Reporting Skill

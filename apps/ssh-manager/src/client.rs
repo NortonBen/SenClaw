@@ -25,6 +25,7 @@ impl russh::client::Handler for ClientHandler {
 
 pub struct SshClient {
     pub handle: Handle<ClientHandler>,
+    pub host_id: Option<String>,
 }
 
 impl SshClient {
@@ -34,6 +35,7 @@ impl SshClient {
         user: &str,
         password: Option<&str>,
         key_pair: Option<KeyPair>,
+        host_id: Option<String>,
     ) -> Result<Self> {
         let config = Arc::new(Config::default());
         let sh = ClientHandler {};
@@ -53,7 +55,7 @@ impl SshClient {
             return Err(anyhow::anyhow!("No authentication method provided"));
         }
 
-        Ok(Self { handle })
+        Ok(Self { handle, host_id })
     }
 
     pub async fn execute(&mut self, command: &str) -> Result<String> {

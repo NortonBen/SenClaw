@@ -17,15 +17,49 @@ function App() {
   const [selectedHost, setSelectedHost] = useState<Host | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   
-  const [tabs, setTabs] = useState<AppTab[]>([
-    { id: 'home', type: 'home', title: 'Vaults' },
-    { id: 'sftp', type: 'sftp', title: 'SFTP' }
-  ]);
+  const [tabs, setTabs] = useState<AppTab[]>(() => {
+    const saved = localStorage.getItem('ssh-tabs');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return [
+      { id: 'home', type: 'home', title: 'Vaults' },
+      { id: 'sftp', type: 'sftp', title: 'SFTP' }
+    ];
+  });
   const [activeTabId, setActiveTabId] = useState<string>('home');
   const [currentMenu, setCurrentMenu] = useState<string>('hosts');
 
   useEffect(() => {
+    localStorage.setItem('ssh-tabs', JSON.stringify(tabs));
+  }, [tabs]);
+
+  useEffect(() => {
     fetchHosts();
+
+    const evtSource = new EventSource("./api/ui-events");
+    evtSource.addEventListener("ui-event", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "mcp_connect") {
+          setTabs(prev => {
+            const tabExists = prev.find(t => t.type === 'terminal' && t.host?.id === data.host_id);
+            if (!tabExists) {
+              const tabId = `term-${data.host_id}-${Date.now()}`;
+              const newTabs = [...prev, { id: tabId, type: 'terminal' as const, title: data.host.name || data.host.host, host: data.host }];
+              setActiveTabId(tabId);
+              return newTabs;
+            }
+            return prev;
+          });
+        } else if (data.type === "mcp_execute") {
+           window.dispatchEvent(new CustomEvent('mcp-log', { detail: data }));
+        }
+      } catch (err) {}
+    });
+    return () => evtSource.close();
   }, []);
 
   const fetchHosts = async () => {
@@ -284,10 +318,11 @@ function App() {
                   display: activeTabId === tab.id ? 'block' : 'none', 
                   width: '100%', 
                   height: '100%',
+                  flex: 1,
                   background: '#0f172a'
                 }}
               >
-                {tab.host && <TerminalView host={tab.host} />}
+                {tab.host && <TerminalView host={tab.host} isActive={activeTabId === tab.id} />}
               </div>
             ))}
             
