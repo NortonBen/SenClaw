@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { theme, Button, Input, Switch, Tag, Typography, Spin, Space, Tabs, message, Card, Flex, Popconfirm, Tooltip } from 'antd';
+import { theme, Button, Input, Switch, Tag, Typography, Spin, Space, Tabs, message, Card, Flex, Popconfirm, Tooltip, Descriptions } from 'antd';
 import { SearchOutlined, ReloadOutlined, ArrowLeftOutlined, EditOutlined, ThunderboltOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import 'highlight.js/styles/github.css';
 import { useAppContext } from '../../contexts/AppContext';
@@ -177,6 +177,44 @@ function SkillCard({ skill, onClick }: { skill: LocalSkill; onClick: () => void 
 
 // ─── Detail view ──────────────────────────────────────────────────────────────
 
+function parseFrontmatter(readme: string) {
+  const match = readme.match(/^---\r?\n([\s\S]*?)\n---\r?\n/);
+  if (!match) return { meta: null, content: readme };
+  
+  const meta: Record<string, string | string[]> = {};
+  const lines = match[1].split(/\r?\n/);
+  let currentArrayKey: string | null = null;
+  
+  for (const line of lines) {
+    const listMatch = line.match(/^\s*-\s*"?([^"]*)"?$/);
+    if (listMatch && currentArrayKey) {
+      if (!meta[currentArrayKey]) meta[currentArrayKey] = [];
+      (meta[currentArrayKey] as string[]).push(listMatch[1].trim());
+      continue;
+    }
+    
+    const kvMatch = line.match(/^([a-zA-Z0-9_-]+):\s*(.*)$/);
+    if (kvMatch) {
+      const key = kvMatch[1].trim();
+      let val = kvMatch[2].trim();
+      if (val.startsWith('"') && val.endsWith('"')) {
+          val = val.slice(1, -1);
+      } else if (val.startsWith("'") && val.endsWith("'")) {
+          val = val.slice(1, -1);
+      }
+      
+      if (!val) {
+        currentArrayKey = key;
+        meta[key] = [];
+      } else {
+        currentArrayKey = null;
+        meta[key] = val;
+      }
+    }
+  }
+  return { meta, content: readme.slice(match[0].length) };
+}
+
 function SkillDetail({ skill, onBack, onToggleDisabled, onDelete }: {
   skill: LocalSkill;
   onBack: () => void;
@@ -321,37 +359,65 @@ function SkillDetail({ skill, onBack, onToggleDisabled, onDelete }: {
           />
         ) : readme ? (
           <div style={{ padding: '24px 28px', maxWidth: 900 }}>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeHighlight]}
-              components={{
-                h1: ({ children }) => <Title level={2} style={{ marginTop: 32, marginBottom: 12, fontWeight: 700, borderBottom: `1px solid ${token.colorBorderSecondary}`, paddingBottom: 8 }}>{children}</Title>,
-                h2: ({ children }) => <Title level={3} style={{ marginTop: 28, marginBottom: 10, fontWeight: 600 }}>{children}</Title>,
-                h3: ({ children }) => <Title level={4} style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>{children}</Title>,
-                h4: ({ children }) => <Title level={5} style={{ marginTop: 20, marginBottom: 6 }}>{children}</Title>,
-                p: ({ children }) => <Paragraph style={{ fontSize: token.fontSize, lineHeight: 1.75, marginBottom: 12, color: token.colorText }}>{children}</Paragraph>,
-                code: ({ className, children, ...props }: any) => {
-                  const isInline = !className;
-                  if (isInline) {
-                    return <code style={{ background: token.colorFillSecondary, padding: '2px 6px', borderRadius: 4, fontSize: '0.9em', fontFamily: 'Menlo, Monaco, monospace', color: token.colorError }} {...props}>{children}</code>;
-                  }
-                  return <code className={className} {...props}>{children}</code>;
-                },
-                pre: ({ children }) => <pre style={{ background: token.colorFillAlter, padding: 16, borderRadius: 8, overflow: 'auto', fontSize: 13, fontFamily: 'Menlo, Monaco, monospace', lineHeight: 1.6, border: `1px solid ${token.colorBorderSecondary}`, marginBottom: 16 }}>{children}</pre>,
-                ul: ({ children }) => <ul style={{ paddingLeft: 24, marginBottom: 12, lineHeight: 1.7, color: token.colorText }}>{children}</ul>,
-                ol: ({ children }) => <ol style={{ paddingLeft: 24, marginBottom: 12, lineHeight: 1.7, color: token.colorText }}>{children}</ol>,
-                li: ({ children }) => <li style={{ marginBottom: 4, fontSize: token.fontSize }}>{children}</li>,
-                blockquote: ({ children }) => <blockquote style={{ borderLeft: `4px solid ${token.colorPrimary}`, paddingLeft: 16, margin: '16px 0', color: token.colorTextSecondary, background: token.colorFillAlter, padding: '12px 16px', borderRadius: '0 8px 8px 0' }}>{children}</blockquote>,
-                table: ({ children }) => <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: token.fontSizeSM }}>{children}</table>,
-                th: ({ children }) => <th style={{ border: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px', background: token.colorFillAlter, fontWeight: 600, textAlign: 'left' }}>{children}</th>,
-                td: ({ children }) => <td style={{ border: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px', color: token.colorText }}>{children}</td>,
-                hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorderSecondary}`, margin: '24px 0' }} />,
-                a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: token.colorPrimary, textDecoration: 'underline' }}>{children}</a>,
-                img: ({ src, alt }) => <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 8, marginBottom: 12 }} />,
-              }}
-            >
-              {readme}
-            </ReactMarkdown>
+            {(() => {
+              const { meta, content } = parseFrontmatter(readme);
+              return (
+                <>
+                  {meta && Object.keys(meta).length > 0 && (
+                    <Descriptions
+                      title={null}
+                      bordered
+                      size="small"
+                      style={{ marginBottom: 24, background: token.colorFillAlter, borderRadius: 8, overflow: 'hidden' }}
+                      column={1}
+                    >
+                      {Object.entries(meta).map(([k, v]) => (
+                        <Descriptions.Item key={k} label={<span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{k}</span>}>
+                          {Array.isArray(v) ? (
+                            <Space wrap size={[0, 8]}>
+                              {v.map((item, i) => <Tag color="blue" key={i}>{item}</Tag>)}
+                            </Space>
+                          ) : (
+                            <Text>{v}</Text>
+                          )}
+                        </Descriptions.Item>
+                      ))}
+                    </Descriptions>
+                  )}
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={{
+                      h1: ({ children }) => <Title level={2} style={{ marginTop: 32, marginBottom: 12, fontWeight: 700, borderBottom: `1px solid ${token.colorBorderSecondary}`, paddingBottom: 8 }}>{children}</Title>,
+                      h2: ({ children }) => <Title level={3} style={{ marginTop: 28, marginBottom: 10, fontWeight: 600 }}>{children}</Title>,
+                      h3: ({ children }) => <Title level={4} style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>{children}</Title>,
+                      h4: ({ children }) => <Title level={5} style={{ marginTop: 20, marginBottom: 6 }}>{children}</Title>,
+                      p: ({ children }) => <Paragraph style={{ fontSize: token.fontSize, lineHeight: 1.75, marginBottom: 12, color: token.colorText }}>{children}</Paragraph>,
+                      code: ({ className, children, ...props }: any) => {
+                        const isInline = !className;
+                        if (isInline) {
+                          return <code style={{ background: token.colorFillSecondary, padding: '2px 6px', borderRadius: 4, fontSize: '0.9em', fontFamily: 'Menlo, Monaco, monospace', color: token.colorError }} {...props}>{children}</code>;
+                        }
+                        return <code className={className} {...props}>{children}</code>;
+                      },
+                      pre: ({ children }) => <pre style={{ background: token.colorFillAlter, padding: 16, borderRadius: 8, overflow: 'auto', fontSize: 13, fontFamily: 'Menlo, Monaco, monospace', lineHeight: 1.6, border: `1px solid ${token.colorBorderSecondary}`, marginBottom: 16 }}>{children}</pre>,
+                      ul: ({ children }) => <ul style={{ paddingLeft: 24, marginBottom: 12, lineHeight: 1.7, color: token.colorText }}>{children}</ul>,
+                      ol: ({ children }) => <ol style={{ paddingLeft: 24, marginBottom: 12, lineHeight: 1.7, color: token.colorText }}>{children}</ol>,
+                      li: ({ children }) => <li style={{ marginBottom: 4, fontSize: token.fontSize }}>{children}</li>,
+                      blockquote: ({ children }) => <blockquote style={{ borderLeft: `4px solid ${token.colorPrimary}`, paddingLeft: 16, margin: '16px 0', color: token.colorTextSecondary, background: token.colorFillAlter, padding: '12px 16px', borderRadius: '0 8px 8px 0' }}>{children}</blockquote>,
+                      table: ({ children }) => <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: token.fontSizeSM }}>{children}</table>,
+                      th: ({ children }) => <th style={{ border: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px', background: token.colorFillAlter, fontWeight: 600, textAlign: 'left' }}>{children}</th>,
+                      td: ({ children }) => <td style={{ border: `1px solid ${token.colorBorderSecondary}`, padding: '8px 12px', color: token.colorText }}>{children}</td>,
+                      hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${token.colorBorderSecondary}`, margin: '24px 0' }} />,
+                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: token.colorPrimary, textDecoration: 'underline' }}>{children}</a>,
+                      img: ({ src, alt }) => <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 8, marginBottom: 12 }} />,
+                    }}
+                  >
+                    {content}
+                  </ReactMarkdown>
+                </>
+              );
+            })()}
           </div>
         ) : (
           <Flex align="center" justify="center" style={{ height: 200 }}>

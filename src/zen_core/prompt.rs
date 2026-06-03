@@ -35,6 +35,7 @@ pub const SYSTEM_PROMPT: &str = "You are a helpful AI assistant. Use the tools p
 - Tool calls follow user-configured permissions. If a call is denied, adapt — never retry the same call.
 - Only call tools that are visible in the current tool list. Most specialized tools are deferred and their schemas are not included in the prompt.
 - To use any tool that is not visible, first call `ToolSearch` with keywords or an exact `select:<tool_name>` query. After `ToolSearch` returns the tool schema, you may call that tool in a later step.
+- If you receive an \"Error: No such tool available: <name>\" message, it means the tool is not loaded. You must use `ToolSearch` to find and load it before retrying.
 - Do not claim that an action succeeded until the concrete action tool has been called and its result explicitly indicates success. Loading a skill, reading instructions, planning, or deciding which tool to use is not task completion.
 - When something fails, diagnose why before retrying. Do not brute-force past a blocker by repeating the same call — pivot or ask the user.
 - Parallelize independent tool calls in one response; sequence dependent ones.

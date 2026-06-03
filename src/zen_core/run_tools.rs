@@ -222,7 +222,7 @@ async fn run_single_tool(
     let tool = match tool {
         Some(t) => t,
         None => {
-            let error_msg = format!("Error: No such tool available: {tool_name}");
+            let error_msg = format!("Error: No such tool available: {tool_name}. Please use the ToolSearch tool to find and load the correct tool before retrying.");
             warn!(
                 "[RunTools] tool not found agent={} tool={tool_name} id={tool_id}",
                 ctx.agent_id

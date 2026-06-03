@@ -15,6 +15,12 @@ The user's personal knowledge base is maintained using the **Wiki MCP server too
 The knowledge base is organized by topic folders, with each document as a Markdown file. 
 All changes are automatically tracked in git.
 
+## What to Save to the Wiki
+- **Learning & Research**: Summaries of new concepts, language features, architectural patterns, or API usages.
+- **Project Context**: Architecture decisions, standard operating procedures (SOPs), or project-specific setup guides.
+- **Troubleshooting**: Solutions to complex bugs, environment issues, or non-obvious configurations.
+- **DO NOT Save**: Ephemeral debug logs, scratchpad notes, or session-specific code that has no long-term value.
+
 ## Tools Available
 You have access to the following MCP tools for managing the wiki:
 - `wiki_status`: Show wiki root path and summary statistics
@@ -34,7 +40,11 @@ You have access to the following MCP tools for managing the wiki:
    - Content belongs to an existing directory → save directly there.
    - No suitable directory exists → create a new topic directory by calling `wiki_mkdir`.
    - Completely uncertain → stage in `inbox/` and inform the user to categorize later.
-3. **Save the document** by calling `wiki_write`. Provide the `path`, `content`, and optional `tags` or `commit_message`.
+3. **Format the document**:
+   - Use clear, descriptive H1 (`#`) titles.
+   - Organize content logically using H2 (`##`) and H3 (`###`) headers.
+   - Use code blocks with language specifiers for technical snippets.
+4. **Save the document** by calling `wiki_write`. Provide the `path`, `content`, and optional `tags` or `commit_message`.
 
 ### Example
 When the user asks to save an article about Rust async:

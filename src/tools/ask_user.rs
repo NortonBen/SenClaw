@@ -43,8 +43,8 @@ impl Tool for AskUserTool {
                             },
                             "header": {
                                 "type": "string",
-                                "maxLength": 12,
-                                "description": "Short label displayed as a chip/tag (max 12 chars)"
+                                "maxLength": 500,
+                                "description": "Short label displayed as a chip/tag (max 500 chars)"
                             },
                             "options": {
                                 "type": "array",
@@ -88,9 +88,9 @@ impl Tool for AskUserTool {
         };
         for q in questions {
             let header = q.get("header").and_then(|h| h.as_str()).unwrap_or("");
-            if header.len() > 12 {
+            if header.len() > 500 {
                 return Err(format!(
-                    "Header \"{header}\" exceeds maximum length of 12 characters"
+                    "Header \"{header}\" exceeds maximum length of 500 characters"
                 ));
             }
         }

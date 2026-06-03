@@ -38,7 +38,7 @@ impl Tool for AskUserQuestionTool {
                         "type": "object",
                         "properties": {
                             "question": {"type": "string"},
-                            "header": {"type": "string", "maxLength": 12},
+                            "header": {"type": "string", "maxLength": 500},
                             "options": {
                                 "type": "array",
                                 "minItems": 2,
@@ -87,9 +87,9 @@ impl Tool for AskUserQuestionTool {
         };
         for q in questions {
             let header = q.get("header").and_then(|h| h.as_str()).unwrap_or("");
-            if header.len() > 12 {
+            if header.len() > 500 {
                 return Err(format!(
-                    "Header \"{header}\" exceeds maximum length of 12 characters"
+                    "Header \"{header}\" exceeds maximum length of 500 characters"
                 ));
             }
         }
