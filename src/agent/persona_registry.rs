@@ -103,6 +103,10 @@ impl PersonaRegistry {
             project_dir,
         };
         reg.load_all();
+        tracing::info!(
+            "[PersonaRegistry] Initialized with {} persona(s)",
+            reg.personas.len()
+        );
         reg
     }
 
@@ -190,7 +194,7 @@ impl PersonaRegistry {
                 }
 
                 if changed {
-                    tracing::info!("[PersonaRegistry] File change detected, reloading...");
+                    tracing::debug!("[PersonaRegistry] File change detected, reloading...");
                     if let Ok(mut guard) = this.lock() {
                         guard.load_all();
                     }
@@ -249,7 +253,7 @@ impl PersonaRegistry {
         }
 
         let keys: Vec<&str> = self.personas.keys().map(|s| s.as_str()).collect();
-        tracing::info!(
+        tracing::debug!(
             "[PersonaRegistry] Loaded {} persona(s): {}",
             self.personas.len(),
             keys.join(", ")
@@ -311,7 +315,7 @@ impl PersonaRegistry {
                 // Only update if new location has higher or equal priority
                 if current_priority >= existing_priority {
                     if current_priority > existing_priority {
-                        tracing::info!(
+                        tracing::debug!(
                             "[PersonaRegistry] Agent [{}] overridden by {}-level config",
                             config.name,
                             location_str(location)
@@ -336,7 +340,7 @@ impl PersonaRegistry {
                     // Only add/update if new location has higher or equal priority
                     if current_priority >= existing_priority {
                         if current_priority > existing_priority {
-                            tracing::info!(
+                            tracing::debug!(
                                 "[PersonaRegistry] Agent [{}] overridden by {}-level config",
                                 key,
                                 location_str(location)

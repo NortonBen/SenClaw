@@ -61,9 +61,17 @@ impl Tool for ExitPlanModeTool {
             .unwrap_or("")
             .to_string();
 
+        tracing::info!(
+            "[ExitPlanMode] agent={} plan_file={} plan_len={}",
+            ctx.agent_id,
+            if plan_file_path.is_empty() { "(none)" } else { &plan_file_path },
+            plan_content.len()
+        );
+
         let (bus, registry) = match (ctx.event_bus, ctx.response_registry) {
             (Some(b), Some(r)) => (b, r),
             _ => {
+                tracing::warn!("[ExitPlanMode] no event bus — approval unavailable");
                 return Ok(vec![ToolOutput::Result {
                     data: serde_json::json!({"error": "no_event_bus"}),
                     result_for_assistant: "Plan-mode approval is unavailable in this context."
@@ -73,6 +81,7 @@ impl Tool for ExitPlanModeTool {
         };
 
         let rx = registry.register_ask_question(ctx.agent_id);
+        tracing::info!("[ExitPlanMode] emitting plan:exit:request, waiting for user approval");
         bus.emit(EngineEvent::PlanExitRequest(PlanExitRequestData {
             agent_id: ctx.agent_id.to_string(),
             plan_file_path: plan_file_path.clone(),
@@ -95,6 +104,11 @@ impl Tool for ExitPlanModeTool {
                 Err(_) => "cancelled".to_string(),
             }
         };
+
+        tracing::info!(
+            "[ExitPlanMode] user selected={selected} agent={}",
+            ctx.agent_id
+        );
 
         if selected.as_str() == "clearContextAndStart" {
             bus.emit(EngineEvent::PlanImplement(

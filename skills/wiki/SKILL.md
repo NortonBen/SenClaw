@@ -1,108 +1,70 @@
 ---
 name: wiki
-description: Save learning/research documents to the personal wiki knowledge base and search existing content
-version: 1.0.0
+description: Save learning/research documents to the personal wiki knowledge base and search existing content using the Wiki MCP server
+version: 2.0.0
+triggers:
+  - "wiki"
+  - "store"
+  - "storegate"
+  - "knowledge"
 ---
 
 # Wiki Knowledge Base Management
 
-The user's personal knowledge base is maintained with the `semaclaw wiki` command.
-The wiki directory is located at `{home}/semaclaw/wiki/`, where `{home}` is the user's home directory (`~` on macOS/Linux, `%USERPROFILE%` on Windows).
-The knowledge base is organized by topic folders, with each document as a Markdown file.
+The user's personal knowledge base is maintained using the **Wiki MCP server tools**.
+The knowledge base is organized by topic folders, with each document as a Markdown file. 
+All changes are automatically tracked in git.
+
+## Tools Available
+You have access to the following MCP tools for managing the wiki:
+- `wiki_status`: Show wiki root path and summary statistics
+- `wiki_tree`: List the wiki directory tree as plain text
+- `wiki_read`: Read a markdown wiki page by relative path
+- `wiki_write`: Create or update a markdown wiki page (handles frontmatter + git commit)
+- `wiki_search`: Search wiki pages by title, filename, or tags
+- `wiki_stats`: Detailed wiki stats (categories, tags, recent files)
+- `wiki_mkdir`: Create a subdirectory under the wiki
 
 ## Writing New Documents to Wiki
 
 ### Full Workflow
 
-1. **View the directory structure** to understand existing topic categories:
-   ```
-   semaclaw wiki tree
-   ```
-
+1. **View the directory structure** to understand existing topic categories by calling `wiki_tree`.
 2. **Determine the category**:
-   - Content belongs to an existing directory → save directly there
-   - No suitable directory exists → create a new topic directory under the closest parent:
-     ```
-     semaclaw wiki mkdir "new/directory/path"
-     ```
-   - Completely uncertain → stage in `inbox/` and inform the user to categorize later
-
-3. **Save the document** (pipe full Markdown content via heredoc to stdin):
-   ```bash
-   cat <<'WIKI_EOF' | semaclaw wiki save --path "directory/filename.md" --tags "tag1,tag2"
-   # Document Title
-
-   Document content...
-   WIKI_EOF
-   ```
+   - Content belongs to an existing directory → save directly there.
+   - No suitable directory exists → create a new topic directory by calling `wiki_mkdir`.
+   - Completely uncertain → stage in `inbox/` and inform the user to categorize later.
+3. **Save the document** by calling `wiki_write`. Provide the `path`, `content`, and optional `tags` or `commit_message`.
 
 ### Example
-
-```bash
-# Save an article about Rust async
-cat <<'WIKI_EOF' | semaclaw wiki save --path "programming/rust/async-runtime.md" --tags "rust,async,tokio"
-# Rust Async Runtime Explained
-
-## Core Concepts
-
-Tokio is the most popular async runtime for Rust...
-WIKI_EOF
-```
-
-Output JSON: `{"path": "programming/rust/async-runtime.md", "action": "created"}`
+When the user asks to save an article about Rust async:
+1. Call `wiki_write` with:
+   - `path`: "programming/rust/async-runtime.md"
+   - `content`: "# Rust Async Runtime Explained\n\n## Core Concepts..."
+   - `tags`: ["rust", "async", "tokio"]
 
 ## Organizing Existing Documents
 
 Use this workflow when the user wants to organize, classify, or tidy up documents already on disk into the wiki.
 
-**Critical rules:**
-- **Always use `cp` to copy files** — never rewrite or regenerate document content. Rewriting wastes time and risks altering the original.
-- Use `mv` **only** when the user explicitly asks to move (e.g. "move it", "don't keep the original").
-- **Never** rewrite document body content during organization. Only touch the YAML frontmatter.
-
 ### Full Workflow
 
-1. **Read the document title and first ~300 characters** to infer the topic — do not read the entire file.
-
-2. **View the wiki directory structure**:
-   ```
-   semaclaw wiki tree
-   ```
-
-3. **Determine the target category** using the same rules as saving:
-   - Matches an existing directory → use it
-   - No match → create with `semaclaw wiki mkdir "path"`
-   - Uncertain → place in `inbox/`
-
-4. **Copy the file** to the wiki (do not rewrite content):
-   ```bash
-   cp "/source/path/document.md" "{home}/semaclaw/wiki/category/filename.md"
-   # or on Windows: copy "source" "dest"
-   ```
-
-5. **Edit the YAML frontmatter** of the copied file to add/update tags and metadata. If no frontmatter exists, prepend it:
-   ```markdown
-   ---
-   tags: [tag1, tag2]
-   source: /original/path/document.md
-   ---
-   ```
-   Use the Edit tool to make this change — do not regenerate the file.
-
-
-### When to use `mv` instead of `cp`
-
-Only when the user explicitly says "move", "don't keep the original", or similar. Otherwise always default to `cp`.
+1. **Read the document** using standard file reading tools to get the title and content.
+2. **View the wiki directory structure** by calling `wiki_tree`.
+3. **Determine the target category** using the same rules as saving.
+4. **Copy the file** to the wiki by calling `wiki_write`:
+   - Pass the document's text as `content`.
+   - Set the `source` argument to the original file's absolute path (this will automatically add it to the frontmatter).
+   - Provide relevant `tags`.
+   - Do NOT rewrite or regenerate the document body content during organization. Keep the original text intact.
 
 ## Searching Existing Knowledge
 
-```bash
-# Search by title/filename
-semaclaw wiki search "rust async"
+When the user asks to search the knowledge base, use the `wiki_search` tool:
+- Search by query: `wiki_search(query="rust async")`
+- Filter by tags: `wiki_search(query="", filterTags=["tokio"])`
 
-# Filter by tags
-semaclaw wiki search "" --tags "tokio"
-```
+If you need to read a specific file from the search results, use `wiki_read(path="...")`.
 
 ## When to Trigger
 
@@ -121,6 +83,7 @@ semaclaw wiki search "" --tags "tokio"
 - "what did I save about X", "have I documented X before"
 - "find my notes on X", "pull up what I know about X"
 
-## Filename Conventions
-- Concise description of the topic (`async-runtime.md` not `notes-on-async-runtime-learning.md`)
-- No more than 40 characters
+## Configuration / Information Storage Guidelines
+- **Filenames**: Use concise descriptions of the topic (`async-runtime.md` not `notes-on-async-runtime-learning.md`), no more than 40 characters.
+- **Frontmatter**: Do not manually write YAML frontmatter. The `wiki_write` tool will automatically handle YAML frontmatter creation and updating based on the parameters you pass (`tags`, `source`).
+- **Git Tracking**: The MCP server automatically commits changes to git. You do not need to run git commands manually.

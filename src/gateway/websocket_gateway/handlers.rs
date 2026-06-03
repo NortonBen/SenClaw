@@ -1381,6 +1381,9 @@ pub(crate) async fn handle_plan_exit_response(
         );
         return;
     }
+    tracing::info!(
+        "[WsGateway] plan:exit:response client #{client_idx} jid={group_jid} agent={agent_id} selected={selected}"
+    );
     // Deliver to the engine: unblocks ExitPlanMode + flips mode on approval.
     state
         .api
@@ -1781,6 +1784,9 @@ pub(crate) async fn handle_agent_mode(
         );
         return;
     }
+    tracing::info!(
+        "[WsGateway] agent:mode client #{client_idx} jid={group_jid} mode={mode}"
+    );
     state.api.set_agent_mode(&group_jid, &mode);
     // Broadcast to all authenticated clients so every tab reflects the new mode.
     broadcast_to_all_inner(

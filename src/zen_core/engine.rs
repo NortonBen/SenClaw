@@ -863,6 +863,11 @@ impl ZenCore for ZenEngine {
                 .join("") // ensure trailing slash
                 .to_string_lossy()
                 .to_string();
+            tracing::info!(
+                "[{}] Plan mode active — injecting plan reminder (plans_dir={})",
+                self.instance_id,
+                plans_dir
+            );
             Some(crate::zen_core::prompt::plan_mode_reminder(&plans_dir))
         } else {
             None
@@ -1312,6 +1317,12 @@ impl ZenCore for ZenEngine {
     }
 
     fn respond_to_plan_exit(&self, response: PlanExitResponseData) {
+        tracing::info!(
+            "[{}] plan exit response: agent={} selected={}",
+            self.instance_id,
+            response.agent_id,
+            response.selected
+        );
         // Deliver the user's choice to the suspended `ExitPlanMode` tool. The
         // tool registered a waiter via `register_ask_question(agent_id)` and
         // reads `answers["selected"]`, so we shape the response accordingly.
@@ -1346,10 +1357,19 @@ impl ZenCore for ZenEngine {
     fn update_agent_mode(&self, mode: AgentMode) {
         let mut opts = self.options.write().unwrap();
         let changed = opts.agent_mode != mode;
+        let prev = opts.agent_mode;
         opts.agent_mode = mode;
-        if changed && mode == AgentMode::Plan {
-            let mut state = self.state.lock().unwrap();
-            state.reset_plan_mode_info_sent();
+        if changed {
+            tracing::info!(
+                "[{}] agent_mode: {} → {}",
+                self.instance_id,
+                prev.as_str(),
+                mode.as_str()
+            );
+            if mode == AgentMode::Plan {
+                let mut state = self.state.lock().unwrap();
+                state.reset_plan_mode_info_sent();
+            }
         }
     }
 

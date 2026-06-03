@@ -223,6 +223,10 @@ async fn run_single_tool(
         Some(t) => t,
         None => {
             let error_msg = format!("Error: No such tool available: {tool_name}");
+            warn!(
+                "[RunTools] tool not found agent={} tool={tool_name} id={tool_id}",
+                ctx.agent_id
+            );
             (ctx.fire)(EngineEvent::ToolExecutionError(ToolExecutionErrorData {
                 agent_id: ctx.agent_id.to_string(),
                 tool_name: tool_name.clone(),

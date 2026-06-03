@@ -207,6 +207,9 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
     }
 
     fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
+        tracing::info!(
+            "[Plans] resolve_plan_exit jid={group_jid} agent={agent_id} selected={selected}"
+        );
         self.agent_pool
             .resolve_plan_exit(group_jid, agent_id, selected);
         // Persist the approval outcome on the most recent pending plan for
@@ -407,6 +410,11 @@ fn persist_plan(
     };
     if let Err(e) = db.insert_plan(&plan) {
         tracing::warn!(error = %e, "[Plans] DB insert failed");
+    } else {
+        tracing::info!(
+            "[Plans] persisted plan id={} chat={} title=\"{}\" file={}",
+            plan.id, chat_jid, plan.title, file_path.display()
+        );
     }
 }
 
