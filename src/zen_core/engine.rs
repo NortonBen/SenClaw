@@ -320,8 +320,19 @@ impl ZenEngine {
             // they're research/escape tools with no destructive local effect.
             // WebFetch/WebSearch fetch external info (the "research" in
             // "read-only research"); ExitPlanMode is the approval escape hatch.
+            //
+            // Skill-discovered tools (via `apply_skill_activation`) are also
+            // exempt: the user explicitly triggered a skill (e.g. calendar),
+            // and the skill's pre-discovered MCP tools must remain callable
+            // even in plan mode — otherwise the skill asks questions but can
+            // never execute the action.
             const PLAN_ALLOWED: &[&str] = &["ExitPlanMode", "WebFetch", "WebSearch"];
-            filtered.retain(|t| t.is_read_only() || PLAN_ALLOWED.contains(&t.name()));
+            let discovered = self.discovered_tools.lock().unwrap().clone();
+            filtered.retain(|t| {
+                t.is_read_only()
+                    || PLAN_ALLOWED.contains(&t.name())
+                    || discovered.contains(t.name())
+            });
         }
 
         // DAG mode: read-only research + dispatch tools only. The agent

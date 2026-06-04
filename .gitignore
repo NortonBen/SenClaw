@@ -68,3 +68,9 @@ test_prompt.sh
 .vscode/
 workbench/
 skills/agent-browser/*.html
+apps/ssh-manager/release
+apps/**/*.zip
+.next
+dist
+target
+out

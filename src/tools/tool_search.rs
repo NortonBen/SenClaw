@@ -98,7 +98,21 @@ pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<d
             })
             .map(Arc::clone)
     } else {
-        None
+        // Bare name without `mcp__` prefix — models sometimes emit just the
+        // verb (e.g. `space_event_create` instead of `mcp__space__event_create`
+        // or `mcp__senclaw-space__space_event_create`). Find the unique tool
+        // whose last `__` segment matches.
+        let canon_bare = canonical_tool_name(&normalized);
+        let suffix = format!("__{canon_bare}");
+        let matches: Vec<_> = tools
+            .iter()
+            .filter(|t| canonical_tool_name(t.name()).ends_with(&suffix))
+            .collect();
+        if matches.len() == 1 {
+            Some(Arc::clone(matches[0]))
+        } else {
+            None
+        }
     }
 }
 
