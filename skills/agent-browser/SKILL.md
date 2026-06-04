@@ -1,13 +1,128 @@
 ---
 name: agent-browser
 description: Drive the connected browser via the `senclaw-browser` MCP server — search the web, navigate sites, extract structured data, fill forms, take screenshots. Use whenever a task needs live web content (current prices, news, docs, web research) or interaction with a web app.
-version: 1.1.0
+version: 1.2.0
 when-to-use: any request that needs fresh web content, web automation, or page screenshots (e.g. "tìm giá vàng hôm nay", "screenshot github trending", "fill this form", "extract product list from amazon")
+triggers:
+  # --- Web search & research ---
+  - search
+  - tìm
+  - tìm kiếm
+  - tra cứu
+  - look up
+  - google
+  - bing
+  - research
+  - nghiên cứu
+  # --- Current/live data ---
+  - giá
+  - price
+  - tỷ giá
+  - exchange rate
+  - thời tiết
+  - weather
+  - tin tức
+  - news
+  - hôm nay
+  - today
+  - hiện tại
+  - current
+  - latest
+  - mới nhất
+  - live
+  - real-time
+  # --- Web navigation ---
+  - mở trang
+  - open page
+  - navigate
+  - go to
+  - truy cập
+  - visit
+  - website
+  - url
+  - link
+  # --- Content extraction ---
+  - extract
+  - trích xuất
+  - lấy nội dung
+  - crawl
+  - scrape
+  - đọc trang
+  - read page
+  - nội dung trang
+  - page content
+  - tổng hợp
+  - summarize site
+  # --- Screenshot ---
+  - screenshot
+  - chụp màn hình
+  - chụp trang
+  - capture
+  # --- Form interaction ---
+  - fill form
+  - điền form
+  - đăng nhập
+  - login
+  - sign in
+  - submit
+  - gửi form
+  # --- Comparison & aggregation ---
+  - so sánh
+  - compare
+  - đánh giá
+  - review
+  - top
+  - best
+  - ranking
+  - xếp hạng
 ---
 
 # Agent Browser Skill
 
 A connected Chrome instance is exposed through the **`senclaw-browser`** MCP server (~30 tools). The browser runs in the user's actual session — pages they're logged in to are accessible.
+
+---
+
+## When to Activate This Skill
+
+Use this skill whenever the task requires **information or interaction that only a live browser can provide**. The key question: "Does this need the real, current web — or can I answer from my training data?"
+
+### ACTIVATE when the user:
+
+| Intent | Example phrases (VI/EN) | Why browser needed |
+|--------|------------------------|--------------------|
+| **Asks for current/live data** | "giá vàng hôm nay", "bitcoin price now", "tỷ giá USD" | Training data is stale; needs real-time source |
+| **Wants web search results** | "tìm kiếm X", "google Y", "search for Z", "tra cứu" | Needs SERP results from a search engine |
+| **Needs content from a URL** | "đọc trang này", "mở link này", "what does this page say" | Content lives on the web, not in training data |
+| **Requests a screenshot** | "chụp trang", "screenshot of X", "show me what Y looks like" | Visual capture requires a browser |
+| **Wants structured extraction** | "lấy danh sách sản phẩm", "extract table from", "scrape prices" | Structured data from a live DOM |
+| **Needs to interact with a web app** | "điền form", "đăng nhập vào", "submit this", "click the button" | Form filling and clicks require a browser session |
+| **Compares or aggregates from multiple sites** | "so sánh giá", "tổng hợp đánh giá", "which is cheaper" | Cross-site data aggregation |
+| **Asks about recent events/news** | "tin tức mới nhất", "what happened today", "latest release" | Current events not in training data |
+| **Wants to crawl/index a site** | "crawl documentation site", "index all blog posts" | Multi-page sweep |
+| **Checks website status or appearance** | "trang này còn hoạt động không", "how does this page look" | Needs live HTTP request / rendering |
+
+### DO NOT activate when:
+
+| Situation | Use instead |
+|-----------|-------------|
+| User asks a general knowledge question answerable from training | Answer directly |
+| User wants to edit local files or code | `code` skill or file tools |
+| User wants to manage notes/calendar/email | `space` or `note` skill |
+| User wants wiki/knowledge base operations | `wiki` skill |
+| User provides the full text and just asks to process it | Process directly, no browser needed |
+| User asks about a concept, definition, or how-to | Answer from training data |
+
+### Priority signals (strongest → weakest):
+
+1. **Explicit URL** in the message → always activate
+2. **Time-sensitive keywords** ("hôm nay", "hiện tại", "latest", "now", "current") → likely activate
+3. **Search verbs** ("tìm", "search", "google", "tra cứu", "look up") → activate
+4. **Price/rate/weather keywords** ("giá", "tỷ giá", "thời tiết", "price") → activate
+5. **Screenshot/capture** ("chụp", "screenshot", "capture") → always activate
+6. **General question without time/web signals** → probably don't activate
+
+---
 
 ## Tool names
 

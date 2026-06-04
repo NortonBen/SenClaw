@@ -16,8 +16,8 @@ impl super::Db {
                 r#"
                 INSERT INTO scheduled_tasks
                   (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-                   context_mode, script_path, next_run, last_run, last_result, status, created_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                   context_mode, agent_mode, script_path, next_run, last_run, last_result, status, created_at)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 "#,
                 params![
                     task.id,
@@ -27,6 +27,7 @@ impl super::Db {
                     task.schedule_type.as_str(),
                     task.schedule_value,
                     task.context_mode.as_str(),
+                    task.agent_mode.as_str(),
                     task.script_command,
                     task.next_run,
                     task.last_run,

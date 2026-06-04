@@ -1,5 +1,5 @@
 import { Dropdown, Tag, type MenuProps } from 'antd';
-import { ThunderboltOutlined, BulbOutlined, DownOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined, BulbOutlined, ApartmentOutlined, DownOutlined } from '@ant-design/icons';
 import type { AgentMode } from '../../hooks/useWebSocket';
 
 interface Props {
@@ -11,16 +11,11 @@ interface Props {
 }
 
 /**
- * Agent / Plan mode toggle for the chat input.
+ * Agent / Plan / Dag mode toggle for the chat input.
  *
- * Plan mode constrains the agent to writing a plan file and routes approval
- * through `ExitPlanMode` — see `code-old/sema-code-core/prompt/plan.ts`.
- * Agent mode is the default free-execution state.
- *
- * Click → emits `agent:mode` WS to `setAgentMode(jid, mode)` (in useWebSocket).
- * Backend `ZenCoreApi::update_agent_mode` flips `ZenCoreOptions.agent_mode`
- * which `tools_for_main_agent()` consumes to strip `TodoWrite` and to gate
- * write tools through the system reminder.
+ * - **Agent** — default free-execution state with full tool access.
+ * - **Plan** — read-only research → write plan file → approval via `ExitPlanMode`.
+ * - **Dag** — orchestrate a team of sub-agents via DAG task graph dispatch.
  */
 export function AgentModeSelector({ mode, onChange, disabled, readOnly }: Props) {
   const items: MenuProps['items'] = [
@@ -48,12 +43,28 @@ export function AgentModeSelector({ mode, onChange, disabled, readOnly }: Props)
         </div>
       ),
     },
+    {
+      key: 'Dag',
+      icon: <ApartmentOutlined />,
+      label: (
+        <div>
+          <div style={{ fontWeight: 600 }}>DAG Team</div>
+          <div style={{ fontSize: 11, opacity: 0.7 }}>
+            Orchestrate sub-agents via task graph. No direct edits.
+          </div>
+        </div>
+      ),
+    },
   ];
 
   const tag =
     mode === 'Plan' ? (
       <Tag color="gold" icon={<BulbOutlined />} style={{ margin: 0, cursor: readOnly ? 'default' : 'pointer' }}>
         Plan
+      </Tag>
+    ) : mode === 'Dag' ? (
+      <Tag color="purple" icon={<ApartmentOutlined />} style={{ margin: 0, cursor: readOnly ? 'default' : 'pointer' }}>
+        DAG
       </Tag>
     ) : (
       <Tag icon={<ThunderboltOutlined />} style={{ margin: 0, cursor: readOnly ? 'default' : 'pointer' }}>
@@ -72,7 +83,7 @@ export function AgentModeSelector({ mode, onChange, disabled, readOnly }: Props)
         selectedKeys: [mode],
         onClick: ({ key }) => {
           if (disabled) return;
-          if (key === 'Agent' || key === 'Plan') {
+          if (key === 'Agent' || key === 'Plan' || key === 'Dag') {
             onChange(key);
           }
         },

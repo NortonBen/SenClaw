@@ -179,7 +179,7 @@ export interface PlanFull extends PlanSummary {
   contentMd: string;
 }
 
-export type AgentMode = 'Agent' | 'Plan';
+export type AgentMode = 'Agent' | 'Plan' | 'Dag';
 
 export type PlanExitOption = 'startEditing' | 'clearContextAndStart';
 
@@ -829,7 +829,7 @@ export function useWebSocket(): WsHook {
           case 'agent:mode:changed': {
             const jid = msg.groupJid as string;
             const mode = msg.mode as AgentMode;
-            if (jid && (mode === 'Agent' || mode === 'Plan')) {
+            if (jid && (mode === 'Agent' || mode === 'Plan' || mode === 'Dag')) {
               setAgentModes((prev) => ({ ...prev, [jid]: mode }));
             }
             break;

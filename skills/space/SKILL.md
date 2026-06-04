@@ -1,29 +1,84 @@
 ---
 name: space
-description: Personal productivity tools — manage notes, calendar events, email, and recurring schedules via the Space MCP server
-version: 1.0.0
+description: Personal productivity tools — manage notes and email via the Space MCP server. For calendar events see the "calendar" skill; for recurring schedules see the "schedule" skill.
+version: 1.1.0
+when-to-use: When the user wants to manage notes (create, search, tag, organize) or email (check inbox, read, compose, search). For calendar events and reminders use the "calendar" skill; for recurring scheduled tasks use the "schedule" skill.
+triggers:
+  # --- Notes (Vietnamese) ---
+  - ghi chú
+  - tạo ghi chú
+  - note
+  - ghi lại
+  - lưu lại
+  - todo
+  - việc cần làm
+  - ý tưởng
+  - idea
+  - meeting notes
+  - biên bản
+  - tóm tắt cuộc họp
+  # --- Notes (English) ---
+  - take note
+  - create note
+  - save note
+  - find note
+  - search notes
+  - delete note
+  - list notes
+  - tag
+  # --- Email (Vietnamese) ---
+  - email
+  - mail
+  - thư
+  - hộp thư
+  - inbox
+  - kiểm tra mail
+  - kiểm tra email
+  - đọc mail
+  - viết email
+  - soạn email
+  - gửi email
+  - trả lời email
+  - tìm email
+  - tóm tắt email
+  # --- Email (English) ---
+  - check email
+  - read email
+  - compose email
+  - send email
+  - reply email
+  - search email
+  - email summary
+  # --- Sync ---
+  - đồng bộ
+  - sync
+  - google calendar
+  - apple notes
+  - icloud
 mcp_servers:
   - senclaw-space
-  - senclaw-schedule
 ---
 
-# Space — Personal Productivity Tools
+# Space — Notes & Email
 
-The Space feature gives you a personal productivity layer: **notes**, **calendar events**, **email**, and **recurring schedules**. All tools are prefixed `space_*` and available through the `senclaw-space` MCP server.
+The Space feature gives you a personal productivity layer. This skill covers **notes** and **email**. Related skills:
+- **calendar** — event management, reminders, conflict detection, schedule organization
+- **schedule** — recurring agent tasks with Agent/DAG/Plan modes
+
+All tools are prefixed `space_*` and available through the `senclaw-space` MCP server.
 
 ## Required Tool Discovery
 
-Loading this skill does not create notes, events, reminders, emails, or schedules. Before calling any Space action, make sure the concrete MCP tool is visible. If it is not visible, call `ToolSearch` first.
+Loading this skill does not create notes or emails. Before calling any Space action, make sure the concrete MCP tool is visible. If it is not visible, call `ToolSearch` first.
 
 Common discovery calls:
 
 ```
-ToolSearch { query: "select:mcp__space__space_current_time" }
-ToolSearch { query: "select:mcp__space__space_event_create" }
 ToolSearch { query: "select:mcp__space__space_note_create" }
+ToolSearch { query: "select:mcp__space__space_current_time" }
 ```
 
-If an exact `select:` query returns no match, search by keywords such as `space event create`, `space note create`, or `space current time`, then call the exact tool name returned by `ToolSearch`.
+If an exact `select:` query returns no match, search by keywords such as `space note create`, then call the exact tool name returned by `ToolSearch`.
 
 Only tell the user the item was created after the concrete tool call returns a success result.
 
@@ -59,66 +114,6 @@ Filter by folder or tag; omit both to list all recent notes.
 ```
 space_note_delete(id)
 ```
-
----
-
-## Current Time (call first!)
-
-```
-space_current_time()
-```
-
-Returns current local system time with pre-computed ranges. **Always call this before any time-relative query.**
-
-Response includes:
-- `now_ms` — current Unix timestamp (ms)
-- `display` — formatted Vietnamese string, e.g. "Thứ ba, 05/05/2026 14:30"
-- `timezone` — e.g. "UTC+7"
-- `today.start_ms` / `today.end_ms` — start/end of today
-- `this_week.start_ms` / `this_week.end_ms` — this week (Sun–Sat)
-- `this_month.start_ms` / `this_month.end_ms` — this month
-- `tomorrow.start_ms`, `yesterday.start_ms`
-
-```
-// Example: list all events today
-const t = await space_current_time();
-space_event_list({ from: t.today.start_ms, to: t.today.end_ms })
-
-// Example: event at 3pm today
-space_event_create({ start_at: t.today.start_ms + 15*3600*1000, ... })
-```
-
-## Calendar
-
-### Create an event
-```
-space_event_create(title, start_at, end_at, description?, location?, all_day?, reminder_min?, color?)
-```
-- `start_at` / `end_at`: Unix milliseconds
-- `reminder_min`: minutes before event to trigger a reminder notification (e.g. `15`)
-- `color`: hex color code for the event chip
-
-### List events in a range
-```
-space_event_list(from, to)
-```
-Both in Unix ms. Typically use start-of-day / end-of-day for the desired window.
-
-### Delete an event
-```
-space_event_delete(event_id)
-```
-
-### Set or update a reminder
-```
-space_set_reminder(event_id, reminder_min)
-```
-
-### Today's summary
-```
-space_today_summary()
-```
-Returns today's events and recent notes as a compact briefing. Use this to answer "hôm nay có gì" / "what's on my schedule today".
 
 ---
 
@@ -160,32 +155,6 @@ Returns a structured summary (subject, sender, key points, action items).
 
 ---
 
-## Recurring Schedules
-
-### Schedule a recurring activity
-```
-space_schedule_activity(prompt, cron, group_folder, chat_jid)
-```
-- `prompt`: what the agent should do when triggered (e.g. "Fetch gold price and report to user")
-- `cron`: standard cron expression
-
-**Common cron patterns:**
-| Intent | Cron |
-|--------|------|
-| Every day at 7am | `0 7 * * *` |
-| Every day at 9pm | `0 21 * * *` |
-| Every Monday at 9am | `0 9 * * 1` |
-| Every Friday at 5pm | `0 17 * * 5` |
-| Every weekday at 8am | `0 8 * * 1-5` |
-| Every hour | `0 * * * *` |
-
-### List schedules
-```
-space_list_schedules(group_folder)
-```
-
----
-
 ## External Sync (Phase 3+)
 
 ```
@@ -198,28 +167,43 @@ All sync tools require an OAuth2 token. They are stubs — return instructions f
 
 ---
 
-## Time Parsing Reference
-
-When user gives natural language times, convert to Unix ms:
-- "lúc 7h sáng" → today at 07:00 local time
-- "lúc 9 giờ tối" → today at 21:00 local time
-- "ngày mai lúc 2pm" → tomorrow at 14:00
-- "sau 30 phút" → now + 30 * 60 * 1000 ms
-- "thứ 2 tuần sau" → next Monday at 09:00 (default start time)
-
-Use `Date.now()` context for "now". Default event duration is 1 hour when end time is not specified.
-
----
-
 ## When to Use Space Tools
 
-| User says | Tool |
-|-----------|------|
-| "nhắc tôi họp lúc 3pm" / "remind me at 3pm" | `space_event_create` with `reminder_min: 15` |
-| "hôm nay có gì" / "today's schedule" | `space_today_summary` |
-| "ghi chú lại" / "note this" / "#note" / "📝" | `space_note_create` |
-| "việc cần làm" / "todo list" | `space_note_list(tag="todo")` |
-| "kiểm tra mail" / "check email" | `space_email_inbox` |
-| "viết email cho X" / "soạn email" | Draft → show → confirm → `space_email_compose` |
-| "định kỳ mỗi ngày lúc 7h" / "every day at 7am" | `space_schedule_activity` with cron |
-| "đồng bộ Google Calendar" | `space_sync_google_calendar` |
+### Notes
+| User says | Tool & parameters |
+|-----------|-------------------|
+| "ghi chú lại" / "note this" / "#note" | `space_note_create(title, body)` |
+| "ghi lại cuộc họp" / "meeting notes" | `space_note_create` with `tags: ["meeting"]` |
+| "lưu ý tưởng này" / "save this idea" | `space_note_create` with `tags: ["idea"]` |
+| "thêm vào todo" / "add to todo" | `space_note_create` with `tags: ["todo"]` |
+| "việc cần làm" / "todo list" / "danh sách công việc" | `space_note_list(tag: "todo")` |
+| "xem ghi chú" / "list notes" / "show my notes" | `space_note_list()` |
+| "tìm ghi chú về X" / "find note about X" | `space_note_search(query)` |
+| "sửa ghi chú" / "update note" | `space_note_update(id, title?, body?, tags?)` |
+| "xoá ghi chú" / "delete note" | `space_note_delete(id)` |
+| "gắn tag" / "add tag" | `space_note_update(id, tags: [...])` |
+
+### Email
+| User says | Tool & parameters |
+|-----------|-------------------|
+| "kiểm tra mail" / "check email" / "có mail mới không?" | `space_email_inbox()` |
+| "đọc email từ X" / "read email from X" | `space_email_inbox()` → find → `space_email_read(message_id)` |
+| "viết email cho X" / "soạn email" / "compose email" | Draft → show → confirm → `space_email_compose` |
+| "trả lời email này" / "reply to this email" | Draft reply → show → confirm → `space_email_compose` |
+| "gửi email" / "send email" | `space_email_compose(to, subject, body)` — confirm first! |
+| "tìm email về X" / "search email about X" | `space_email_search(query)` |
+| "tóm tắt email" / "summarize email" | `space_email_summary(message_id)` |
+| "có email quan trọng không?" / "any important emails?" | `space_email_inbox()` → highlight flagged/urgent |
+
+### Sync
+| User says | Tool & parameters |
+|-----------|-------------------|
+| "đồng bộ Google Calendar" / "sync Google Calendar" | `space_sync_google_calendar` (Phase 3+) |
+| "đồng bộ Apple Notes" / "sync iCloud Notes" | `space_sync_apple_notes` (Phase 3+) |
+| "đồng bộ Gmail" / "sync Gmail" | `space_sync_gmail` (Phase 3+) |
+
+### Redirect to other skills
+| User says | Redirect to |
+|-----------|-------------|
+| "thêm sự kiện" / "nhắc tôi" / "hôm nay có gì" / "rảnh không" | → **calendar** skill |
+| "định kỳ" / "mỗi ngày" / "đặt lịch tự động" / "cron" | → **schedule** skill |

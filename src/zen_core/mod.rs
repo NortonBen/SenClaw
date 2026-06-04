@@ -743,6 +743,7 @@ impl Default for ZenCoreOptions {
 pub enum AgentMode {
     Agent,
     Plan,
+    Dag,
 }
 
 impl AgentMode {
@@ -750,6 +751,7 @@ impl AgentMode {
         match self {
             AgentMode::Agent => "Agent",
             AgentMode::Plan => "Plan",
+            AgentMode::Dag => "Dag",
         }
     }
 }

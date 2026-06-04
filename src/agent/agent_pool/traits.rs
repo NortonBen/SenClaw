@@ -163,6 +163,9 @@ pub trait CoreApi: Send + Sync {
         None
     }
 
+    /// Register additional tools on an existing engine. Default no-op.
+    fn register_tools(&self, _jid: &str, _tools: Vec<std::sync::Arc<dyn crate::zen_core::Tool>>) {}
+
     /// Register event listeners on the underlying core.
     /// Default no-ops — real sema-core will implement these.
     fn on_message_complete(

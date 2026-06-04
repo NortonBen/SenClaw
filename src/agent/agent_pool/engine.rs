@@ -472,6 +472,7 @@ impl CoreApi for ZenCoreApi {
         let parsed = match mode {
             "Plan" => AgentMode::Plan,
             "Agent" => AgentMode::Agent,
+            "Dag" => AgentMode::Dag,
             other => {
                 tracing::warn!(
                     "[ZenCoreApi] update_agent_mode: unknown mode '{other}' for {jid}, ignored"
@@ -492,6 +493,14 @@ impl CoreApi for ZenCoreApi {
             .unwrap()
             .get(jid)
             .map(|e| e.options.read().unwrap().agent_mode.as_str().to_string())
+    }
+
+    fn register_tools(&self, jid: &str, tools: Vec<std::sync::Arc<dyn crate::zen_core::Tool>>) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid).cloned() {
+            let count = tools.len();
+            engine.register_tools(tools);
+            tracing::info!("[ZenCoreApi] registered {count} dispatch tool(s) for {jid}");
+        }
     }
 
     fn on_message_complete(

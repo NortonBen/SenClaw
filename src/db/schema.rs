@@ -193,6 +193,7 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           schedule_type  TEXT NOT NULL,
           schedule_value TEXT NOT NULL,
           context_mode   TEXT NOT NULL DEFAULT 'isolated',
+          agent_mode     TEXT NOT NULL DEFAULT 'agent',
           script_path    TEXT,
           next_run       TEXT,
           last_run       TEXT,
@@ -356,6 +357,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if !task_cols.iter().any(|c| c == "script_path") {
         conn.execute(
             "ALTER TABLE scheduled_tasks ADD COLUMN script_path TEXT",
+            [],
+        )?;
+    }
+    if !task_cols.iter().any(|c| c == "agent_mode") {
+        conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'agent'",
             [],
         )?;
     }

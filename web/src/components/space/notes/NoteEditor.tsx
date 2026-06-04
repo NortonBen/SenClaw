@@ -181,7 +181,7 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
   const [tags, setTags] = useState<string[]>(Array.isArray(note?.tags) ? note!.tags : []);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [mode, setMode] = useState<EditorMode>('split');
+  const [mode, setMode] = useState<EditorMode>(isNew ? 'edit' : 'preview');
 
   // Collect all unique tags across existing notes as suggestions
   const tagSuggestions = useMemo(() => {
@@ -200,6 +200,7 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
     setBody(note?.body ?? '');
     setTags(Array.isArray(note?.tags) ? note!.tags : []);
     setDirty(false);
+    setMode(isNew ? 'edit' : 'preview');
     if (isNew) setTimeout(() => titleRef.current?.focus(), 50);
   }, [note?.id, isNew]);
 
@@ -249,6 +250,8 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
     { icon: <span className="text-xs font-bold leading-none">❝</span>, title: 'Blockquote', action: { before: '', linePrefix: '> ' } },
   ];
 
+  const isViewOnly = mode === 'preview' && !isNew;
+
   return (
     <div className="flex flex-col h-full" style={{ minWidth: 0 }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -260,7 +263,7 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
           <Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={onBack} />
         </Tooltip>
         <span className="flex-1 text-sm font-medium truncate" style={{ color: token.colorTextSecondary }}>
-          {isNew ? 'Ghi chú mới' : 'Chỉnh sửa ghi chú'}
+          {isNew ? 'Ghi chú mới' : isViewOnly ? 'Xem ghi chú' : 'Chỉnh sửa ghi chú'}
         </span>
 
         {/* View mode toggle */}
@@ -269,80 +272,86 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
           value={mode}
           onChange={v => setMode(v as EditorMode)}
           options={[
-            { value: 'edit', icon: <EditOutlined />, title: 'Soạn thảo' },
+            { value: 'preview', icon: <EyeOutlined />, title: 'Xem' },
             { value: 'split', icon: <ColumnWidthOutlined />, title: 'Chia đôi' },
-            { value: 'preview', icon: <EyeOutlined />, title: 'Xem trước' },
+            { value: 'edit', icon: <EditOutlined />, title: 'Soạn thảo' },
           ]}
         />
 
-        <Button
-          type="primary"
-          size="small"
-          icon={<SaveOutlined />}
-          loading={saving}
-          disabled={!dirty && !isNew}
-          onClick={handleSave}
+        {!isViewOnly && (
+          <Button
+            type="primary"
+            size="small"
+            icon={<SaveOutlined />}
+            loading={saving}
+            disabled={!dirty && !isNew}
+            onClick={handleSave}
+          >
+            Lưu
+          </Button>
+        )}
+      </div>
+
+      {/* ── Tags bar (editable) ─────────────────────────────────────────────── */}
+      {!isViewOnly && (
+        <div
+          className="flex items-center gap-2 px-4 py-1.5 border-b flex-shrink-0"
+          style={{ borderColor: token.colorBorderSecondary }}
         >
-          Lưu
-        </Button>
-      </div>
-
-      {/* ── Tags bar ───────────────────────────────────────────────────────── */}
-      <div
-        className="flex items-center gap-2 px-4 py-1.5 border-b flex-shrink-0"
-        style={{ borderColor: token.colorBorderSecondary }}
-      >
-        <Select
-          mode="tags"
-          size="small"
-          value={tags}
-          onChange={handleTagsChange}
-          placeholder="Thêm tag... (nhập hoặc chọn gợi ý)"
-          style={{ flex: 1 }}
-          bordered={false}
-          suffixIcon={null}
-          tokenSeparators={[',', ' ']}
-          options={tagSuggestions.map(t => ({
-            value: t,
-            label: (
-              <span style={{ color: TAG_COLORS[t] ?? token.colorTextSecondary }}>
-                # {t}
-              </span>
-            ),
-          }))}
-          tagRender={({ label, value, closable, onClose }) => (
-            <span
-              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs mr-1"
-              style={{
-                background: (TAG_COLORS[value] ?? token.colorPrimary) + '20',
-                border: `1px solid ${(TAG_COLORS[value] ?? token.colorPrimary) + '50'}`,
-                color: TAG_COLORS[value] ?? token.colorPrimary,
-              }}
-            >
-              {value}
-              {closable && (
-                <span
-                  onClick={onClose}
-                  style={{ cursor: 'pointer', marginLeft: 2, opacity: 0.7 }}
-                >
-                  ×
+          <Select
+            mode="tags"
+            size="small"
+            value={tags}
+            onChange={handleTagsChange}
+            placeholder="Thêm tag... (nhập hoặc chọn gợi ý)"
+            style={{ flex: 1 }}
+            bordered={false}
+            suffixIcon={null}
+            tokenSeparators={[',', ' ']}
+            options={tagSuggestions.map(t => ({
+              value: t,
+              label: (
+                <span style={{ color: TAG_COLORS[t] ?? token.colorTextSecondary }}>
+                  # {t}
                 </span>
-              )}
-            </span>
-          )}
-        />
-      </div>
+              ),
+            }))}
+            tagRender={({ label, value, closable, onClose }) => (
+              <span
+                className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs mr-1"
+                style={{
+                  background: (TAG_COLORS[value] ?? token.colorPrimary) + '20',
+                  border: `1px solid ${(TAG_COLORS[value] ?? token.colorPrimary) + '50'}`,
+                  color: TAG_COLORS[value] ?? token.colorPrimary,
+                }}
+              >
+                {value}
+                {closable && (
+                  <span
+                    onClick={onClose}
+                    style={{ cursor: 'pointer', marginLeft: 2, opacity: 0.7 }}
+                  >
+                    ×
+                  </span>
+                )}
+              </span>
+            )}
+          />
+        </div>
+      )}
 
-      {/* ── Title ──────────────────────────────────────────────────────────── */}
-      <input
-        ref={titleRef}
-        value={title}
-        onChange={e => { setTitle(e.target.value); setDirty(true); }}
-        placeholder="Tiêu đề..."
-        onKeyDown={e => e.key === 'Enter' && e.preventDefault()}
-        className="w-full px-4 py-3 text-xl font-bold outline-none bg-transparent border-b"
-        style={{ borderColor: token.colorBorderSecondary, color: token.colorText }}
-      />
+      {/* ── Title (editable) ────────────────────────────────────────────────── */}
+      {!isViewOnly && (
+        <input
+          ref={titleRef}
+          value={title}
+          onChange={e => { setTitle(e.target.value); setDirty(true); }}
+          placeholder="Tiêu đề..."
+          onKeyDown={e => e.key === 'Enter' && e.preventDefault()}
+          className="w-full px-4 py-3 text-xl font-bold outline-none bg-transparent border-b"
+          style={{ borderColor: token.colorBorderSecondary, color: token.colorText }}
+        />
+      )}
 
       {/* ── Format toolbar (edit / split mode) ────────────────────────────── */}
       {mode !== 'preview' && (
@@ -427,35 +436,81 @@ export function NoteEditor({ hook, note, isNew, onBack, onSaved }: Props) {
         {/* Preview pane */}
         {(mode === 'preview' || mode === 'split') && (
           <div
-            className="flex-1 overflow-y-auto px-6 py-4"
+            className="flex-1 overflow-y-auto"
             style={{ width: mode === 'split' ? '50%' : '100%' }}
           >
-            {body.trim() ? (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={mdComponents(token) as any}
+            {/* View-only header: show title + tags in the preview area */}
+            {isViewOnly && (
+              <div
+                style={{
+                  padding: '20px 24px 0',
+                  borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                  marginBottom: 0,
+                }}
               >
-                {body}
-              </ReactMarkdown>
-            ) : (
-              <span style={{ color: token.colorTextQuaternary, fontSize: 14 }}>
-                Preview sẽ hiện ở đây...
-              </span>
+                <h1 style={{
+                  fontSize: 22,
+                  fontWeight: 700,
+                  color: token.colorText,
+                  margin: '0 0 10px',
+                  lineHeight: 1.3,
+                }}>
+                  {title || '(Không tiêu đề)'}
+                </h1>
+                {tags.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 12 }}>
+                    {tags.map(t => (
+                      <span
+                        key={t}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          background: (TAG_COLORS[t] ?? token.colorPrimary) + '20',
+                          border: `1px solid ${(TAG_COLORS[t] ?? token.colorPrimary) + '50'}`,
+                          color: TAG_COLORS[t] ?? token.colorPrimary,
+                        }}
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+
+            <div style={{ padding: isViewOnly ? '16px 24px' : '16px 24px' }}>
+              {body.trim() ? (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={mdComponents(token) as any}
+                >
+                  {body}
+                </ReactMarkdown>
+              ) : (
+                <span style={{ color: token.colorTextQuaternary, fontSize: 14 }}>
+                  {isViewOnly ? 'Ghi chú trống.' : 'Preview sẽ hiện ở đây...'}
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
 
       {/* ── Footer ─────────────────────────────────────────────────────────── */}
-      <div
-        className="px-4 py-1.5 flex items-center justify-between border-t flex-shrink-0"
-        style={{ borderColor: token.colorBorderSecondary }}
-      >
-        <Text type="secondary" style={{ fontSize: 11 }}>
-          {body.length} ký tự · {body.split('\n').length} dòng
-        </Text>
-        {dirty && <Text type="warning" style={{ fontSize: 11 }}>● Chưa lưu</Text>}
-      </div>
+      {!isViewOnly && (
+        <div
+          className="px-4 py-1.5 flex items-center justify-between border-t flex-shrink-0"
+          style={{ borderColor: token.colorBorderSecondary }}
+        >
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {body.length} ký tự · {body.split('\n').length} dòng
+          </Text>
+          {dirty && <Text type="warning" style={{ fontSize: 11 }}>● Chưa lưu</Text>}
+        </div>
+      )}
     </div>
   );
 }

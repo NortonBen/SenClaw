@@ -10,7 +10,7 @@ import {
 import dayjs, { Dayjs } from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import type {
-  UseSpaceHook, SpaceScheduleDetail, ScheduleUpdatePayload,
+  UseSpaceHook, SpaceScheduleDetail, ScheduleUpdatePayload, AgentModeType,
 } from '../../../hooks/useSpace';
 
 const { Text, Title } = Typography;
@@ -60,6 +60,7 @@ export function ScheduleDetailPanel({ scheduleId, hook, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [freq, setFreq] = useState<Freq>('daily');
+  const [agentMode, setAgentMode] = useState<AgentModeType>('agent');
   const [useAdvanced, setUseAdvanced] = useState(false);
 
   useEffect(() => {
@@ -70,6 +71,7 @@ export function ScheduleDetailPanel({ scheduleId, hook, onClose }: Props) {
       setDetail(d);
       const parsed = parseCron(d.schedule_value);
       setFreq(parsed.freq);
+      setAgentMode(d.agent_mode || 'agent');
       setUseAdvanced(parsed.freq === 'custom');
       form.setFieldsValue({
         label: d.label,
@@ -93,6 +95,7 @@ export function ScheduleDetailPanel({ scheduleId, hook, onClose }: Props) {
             prompt: vals.prompt,
             label: vals.label,
             cron_advanced: vals.cron_advanced,
+            agent_mode: agentMode,
           }
         : {
             prompt: vals.prompt,
@@ -101,6 +104,7 @@ export function ScheduleDetailPanel({ scheduleId, hook, onClose }: Props) {
             frequency: freq === 'custom' ? 'daily' : freq,
             weekday: freq === 'weekly' ? vals.weekday : undefined,
             day_of_month: freq === 'monthly' ? vals.day_of_month : undefined,
+            agent_mode: agentMode,
           };
       const res = await hook.updateSchedule(scheduleId, payload);
       if (res) {
@@ -191,6 +195,23 @@ export function ScheduleDetailPanel({ scheduleId, hook, onClose }: Props) {
               rules={[{ required: true, message: 'Nhập nội dung' }]}
             >
               <TextArea rows={3} />
+            </Form.Item>
+
+            <Form.Item
+              label="Chế độ chạy"
+              tooltip="Agent: chạy đơn lẻ. DAG: chạy nhóm agent theo sơ đồ. Plan: lên kế hoạch rồi thực thi."
+            >
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                value={agentMode}
+                onChange={e => setAgentMode(e.target.value)}
+                options={[
+                  { label: 'Agent', value: 'agent' },
+                  { label: 'DAG', value: 'dag' },
+                  { label: 'Plan', value: 'plan' },
+                ]}
+              />
             </Form.Item>
 
             {!useAdvanced && (

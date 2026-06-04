@@ -372,6 +372,103 @@ interface MessageBubbleProps {
   onResolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
 }
 
+function UserBubble({ text, timestamp, attachments }: { text: string; timestamp: string; attachments?: ImageAttachment[] }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+  const { token } = theme.useToken();
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopyState('copied');
+      setTimeout(() => setCopyState('idle'), 2000);
+    }).catch(() => {/* ignore */});
+  };
+
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] group">
+        <div 
+          className="px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-lg"
+          style={{
+            background: token.colorPrimary,
+            color: '#fff',
+            boxShadow: `0 4px 14px 0 ${token.colorPrimary}33`
+          }}
+        >
+          <MarkdownContent content={text} isDarkMode={true} />
+          <ImageAttachments attachments={attachments || []} />
+        </div>
+        <div className="flex items-center mt-1 justify-end gap-1">
+          <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={handleCopy}
+              title="Copy"
+              className="p-1 rounded transition-colors"
+              style={{
+                color: copyState === 'copied' ? token.colorSuccess : token.colorTextDescription,
+              }}
+            >
+              {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
+            </button>
+          </div>
+          <Text type="secondary" className="text-[10px] font-medium pr-1 block">
+            {formatTime(timestamp)}
+          </Text>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OtherUserBubble({ senderName, text, timestamp, attachments, isDarkMode }: { senderName?: string; text: string; timestamp: string; attachments?: ImageAttachment[]; isDarkMode: boolean; }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+  const { token } = theme.useToken();
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopyState('copied');
+      setTimeout(() => setCopyState('idle'), 2000);
+    }).catch(() => {/* ignore */});
+  };
+
+  return (
+    <div className="max-w-[85%] group">
+      {senderName && (
+        <Text type="secondary" className="text-[10px] font-bold tracking-wider mb-1 ml-1 uppercase block">
+          {senderName}
+        </Text>
+      )}
+      <div 
+        className="px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm border"
+        style={{ 
+          background: token.colorFillQuaternary,
+          color: token.colorText,
+          borderColor: token.colorBorderSecondary
+        }}
+      >
+        <MarkdownContent content={text} isDarkMode={isDarkMode} />
+        <ImageAttachments attachments={attachments || []} />
+      </div>
+      <div className="flex items-center mt-1 gap-1">
+        <Text type="secondary" className="text-[10px] font-medium ml-1 block flex-1">
+          {formatTime(timestamp)}
+        </Text>
+        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={handleCopy}
+            title="Copy"
+            className="p-1 rounded transition-colors"
+            style={{
+              color: copyState === 'copied' ? token.colorSuccess : token.colorTextDescription,
+            }}
+          >
+            {copyState === 'copied' ? <CheckIcon /> : <CopyIcon />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MessageBubble({ message, onResolvePermission, onResolveQuestion }: MessageBubbleProps) {
   const { token } = theme.useToken();
   const { isDarkMode } = useAppContext();
@@ -401,26 +498,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
   const { role, text, timestamp, senderName, attachments, tokens } = message;
 
   if (role === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%]">
-          <div 
-            className="px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-lg"
-            style={{
-              background: token.colorPrimary,
-              color: '#fff',
-              boxShadow: `0 4px 14px 0 ${token.colorPrimary}33`
-            }}
-          >
-            <MarkdownContent content={text} isDarkMode={true} />
-            <ImageAttachments attachments={attachments || []} />
-          </div>
-          <Text type="secondary" className="text-[10px] font-medium mt-1 text-right pr-1 block">
-            {formatTime(timestamp)}
-          </Text>
-        </div>
-      </div>
-    );
+    return <UserBubble text={text} timestamp={timestamp} attachments={attachments} />;
   }
 
   const isAgent = role === 'agent';
@@ -457,27 +535,7 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
       {isAgent ? (
         <AgentBubble text={text} timestamp={timestamp} isDarkMode={isDarkMode} attachments={attachments} tokens={tokens} />
       ) : (
-        <div className="max-w-[85%]">
-          {senderName && (
-            <Text type="secondary" className="text-[10px] font-bold tracking-wider mb-1 ml-1 uppercase block">
-              {senderName}
-            </Text>
-          )}
-          <div 
-            className="px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm border"
-            style={{ 
-              background: token.colorFillQuaternary,
-              color: token.colorText,
-              borderColor: token.colorBorderSecondary
-            }}
-          >
-            <MarkdownContent content={text} isDarkMode={isDarkMode} />
-            <ImageAttachments attachments={attachments || []} />
-          </div>
-          <Text type="secondary" className="text-[10px] font-medium mt-1 ml-1 block">
-            {formatTime(timestamp)}
-          </Text>
-        </div>
+        <OtherUserBubble senderName={senderName} text={text} timestamp={timestamp} attachments={attachments} isDarkMode={isDarkMode} />
       )}
     </div>
   );

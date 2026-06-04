@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useNavigate } from 'react-router-dom';
-import type { UseSpaceHook, ScheduleCreatePayload, SpaceSchedule } from '../../../hooks/useSpace';
+import type { UseSpaceHook, ScheduleCreatePayload, SpaceSchedule, AgentModeType } from '../../../hooks/useSpace';
 import { ScheduleDetailPanel } from './ScheduleDetailPanel';
 
 const { Text, Title } = Typography;
@@ -336,6 +336,7 @@ function ScheduleAddModal({ open, onClose, hook }: AddProps) {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [frequency, setFrequency] = useState<'daily' | 'weekdays' | 'weekly' | 'monthly'>('daily');
+  const [agentMode, setAgentMode] = useState<AgentModeType>('agent');
   const [useAdvanced, setUseAdvanced] = useState(false);
 
   const handleOk = async () => {
@@ -343,7 +344,7 @@ function ScheduleAddModal({ open, onClose, hook }: AddProps) {
       const vals = await form.validateFields();
       setSaving(true);
       const payload: ScheduleCreatePayload = useAdvanced
-        ? { prompt: vals.prompt, label: vals.label, cron_advanced: vals.cron_advanced }
+        ? { prompt: vals.prompt, label: vals.label, cron_advanced: vals.cron_advanced, agent_mode: agentMode }
         : {
             prompt: vals.prompt,
             label: vals.label,
@@ -351,11 +352,13 @@ function ScheduleAddModal({ open, onClose, hook }: AddProps) {
             frequency,
             weekday: frequency === 'weekly' ? vals.weekday : undefined,
             day_of_month: frequency === 'monthly' ? vals.day_of_month : undefined,
+            agent_mode: agentMode,
           };
       const res = await hook.createSchedule(payload);
       if (res) {
         form.resetFields();
         setFrequency('daily');
+        setAgentMode('agent');
         setUseAdvanced(false);
         onClose();
       }
@@ -405,6 +408,23 @@ function ScheduleAddModal({ open, onClose, hook }: AddProps) {
               'VD: Tìm giá vàng SJC hôm nay và tóm tắt biến động so với hôm qua\n' +
               'VD: Liệt kê email chưa đọc và phân loại theo độ ưu tiên'
             }
+          />
+        </Form.Item>
+
+        <Form.Item
+          label="Chế độ chạy"
+          tooltip="Agent: chạy đơn lẻ. DAG: chạy nhóm agent theo sơ đồ. Plan: lên kế hoạch rồi thực thi."
+        >
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            value={agentMode}
+            onChange={e => setAgentMode(e.target.value)}
+            options={[
+              { label: 'Agent', value: 'agent' },
+              { label: 'DAG', value: 'dag' },
+              { label: 'Plan', value: 'plan' },
+            ]}
           />
         </Form.Item>
 

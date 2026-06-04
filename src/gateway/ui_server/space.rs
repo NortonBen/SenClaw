@@ -594,6 +594,7 @@ pub(crate) struct ScheduleCreateBody {
     weekday: Option<u32>,
     day_of_month: Option<u32>,
     cron_advanced: Option<String>,
+    agent_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -606,6 +607,7 @@ pub(crate) struct ScheduleUpdateBody {
     weekday: Option<u32>,
     day_of_month: Option<u32>,
     cron_advanced: Option<String>,
+    agent_mode: Option<String>,
 }
 
 fn space_server(s: &UiState) -> Result<crate::mcp::space_server::SpaceServer, AppError> {
@@ -648,6 +650,7 @@ pub(crate) async fn space_schedules_create(
             b.weekday,
             b.day_of_month,
             b.cron_advanced,
+            b.agent_mode,
         )
         .await;
     tool_result_to_response(r, StatusCode::BAD_REQUEST)
@@ -675,6 +678,7 @@ pub(crate) async fn space_schedules_update(
         b.weekday,
         b.day_of_month,
         b.cron_advanced,
+        b.agent_mode,
     );
     tool_result_to_response(r, StatusCode::BAD_REQUEST)
 }

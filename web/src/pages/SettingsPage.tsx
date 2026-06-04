@@ -31,7 +31,6 @@ import { LocalModelsSettings } from '../components/settings/LocalModelsSettings'
 import { CognitiveSettings } from '../components/settings/CognitiveSettings';
 import { WhisperSettings } from '../components/settings/WhisperSettings';
 import { TtsSettings } from '../components/settings/TtsSettings';
-import { SpaceAppsSettings } from '../components/settings/SpaceAppsSettings';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -47,7 +46,6 @@ type SettingsSection =
   | 'local-models'
   | 'whisper'
   | 'tts'
-  | 'space-apps'
   | 'cognitive'
   | 'agent-behavior';
 
@@ -75,7 +73,6 @@ export const SettingsPage: React.FC = () => {
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
       { key: 'whisper', icon: <AudioOutlined />, label: 'Whisper ASR' },
       { key: 'tts', icon: <SoundOutlined />, label: 'Text-to-Speech' },
-      { key: 'space-apps', icon: <AppstoreOutlined />, label: 'Space Apps' },
       { key: 'cognitive', icon: <ExperimentOutlined />, label: 'Cognitive' },
     ],
     []
@@ -130,8 +127,6 @@ export const SettingsPage: React.FC = () => {
         return <WhisperSettings />;
       case 'tts':
         return <TtsSettings />;
-      case 'space-apps':
-        return <SpaceAppsSettings />;
       case 'cognitive':
         return <CognitiveSettings />;
       case 'agent-behavior':

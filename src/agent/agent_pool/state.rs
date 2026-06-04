@@ -46,6 +46,11 @@ pub(crate) struct State {
     pub paused_children_by_admin: HashMap<String, Vec<String>>,
     pub synth_paused_jids: HashSet<String>,
     pub dispatch_paused_jids: HashSet<String>,
+
+    /// Pending agent mode — stored when `set_agent_mode` is called before the
+    /// engine exists (or after stop_and_clear). Applied in `ensure_agent` when
+    /// the engine is (re)created.
+    pub pending_agent_modes: HashMap<String, String>,
 }
 
 impl State {
@@ -72,6 +77,7 @@ impl State {
             paused_children_by_admin: HashMap::new(),
             synth_paused_jids: HashSet::new(),
             dispatch_paused_jids: HashSet::new(),
+            pending_agent_modes: HashMap::new(),
         }
     }
 }

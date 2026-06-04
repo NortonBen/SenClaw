@@ -111,6 +111,49 @@ impl PersonaResolver for FsPersonaResolver {
     }
 }
 
+// ===== BuiltinAwarePersonaResolver =====
+
+/// Persona resolver that merges on-disk `.md` personas with built-in agents
+/// (`researcher`, `creator`, `architect`). FS personas override builtins with
+/// the same name (case-insensitive). Used by both native dispatch tools and
+/// the MCP stdio server so `persona:researcher` always resolves.
+pub struct BuiltinAwarePersonaResolver {
+    personas: Vec<PersonaInfo>,
+}
+
+impl BuiltinAwarePersonaResolver {
+    pub fn new(fs_resolver: Option<FsPersonaResolver>) -> Self {
+        let mut personas: Vec<PersonaInfo> = fs_resolver
+            .map(|r| r.list())
+            .unwrap_or_default();
+
+        let existing: std::collections::HashSet<String> =
+            personas.iter().map(|p| p.name.to_lowercase()).collect();
+        for builtin in crate::agent::builtin_agents::BUILTIN_AGENTS {
+            if !existing.contains(&builtin.name.to_lowercase()) {
+                personas.push(PersonaInfo {
+                    name: builtin.name.to_string(),
+                    description: builtin.description.to_string(),
+                });
+            }
+        }
+
+        Self { personas }
+    }
+}
+
+impl PersonaResolver for BuiltinAwarePersonaResolver {
+    fn list(&self) -> Vec<PersonaInfo> {
+        self.personas.clone()
+    }
+    fn get(&self, name: &str) -> Option<PersonaInfo> {
+        self.personas
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .cloned()
+    }
+}
+
 // ===== DispatchServer =====
 
 pub struct DispatchServer {
@@ -1087,32 +1130,32 @@ pub struct ChecklistItemInput {
 // ===== MCP stdio server =====
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
-struct CreateParentParams {
-    goal: String,
-    tasks: Vec<DispatchTaskInput>,
+pub struct CreateParentParams {
+    pub goal: String,
+    pub tasks: Vec<DispatchTaskInput>,
     #[serde(default)]
     #[serde(rename = "timeoutSeconds")]
-    timeout_seconds: Option<u64>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
-struct DispatchTaskParams {
+pub struct DispatchTaskParams {
     #[serde(rename = "parentId")]
-    parent_id: String,
+    pub parent_id: String,
     #[serde(rename = "taskLabel")]
-    task_label: String,
+    pub task_label: String,
     #[serde(default)]
     #[serde(rename = "timeoutSeconds")]
-    timeout_seconds: Option<u64>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
-struct DispatchAllTasksParams {
+pub struct DispatchAllTasksParams {
     #[serde(rename = "parentId")]
-    parent_id: String,
+    pub parent_id: String,
     #[serde(default)]
     #[serde(rename = "timeoutSeconds")]
-    timeout_seconds: Option<u64>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -1161,11 +1204,13 @@ struct McpDispatchServer {
 
 impl McpDispatchServer {
     fn inner(&self) -> DispatchServer {
-        let persona_resolver: Option<Box<dyn PersonaResolver>> =
-            self.agents_config_dir.as_ref().map(|dir| {
-                Box::new(FsPersonaResolver::from_dir(std::path::Path::new(dir)))
-                    as Box<dyn PersonaResolver>
-            });
+        let persona_resolver: Option<Box<dyn PersonaResolver>> = {
+            let fs = self
+                .agents_config_dir
+                .as_ref()
+                .map(|dir| FsPersonaResolver::from_dir(std::path::Path::new(dir)));
+            Some(Box::new(BuiltinAwarePersonaResolver::new(fs)) as Box<dyn PersonaResolver>)
+        };
         let cowork_agents = self.cowork_agents_json.as_ref().and_then(|raw| {
             let raw = raw.trim();
             if raw.is_empty() {
@@ -1475,5 +1520,57 @@ mod tests {
         let resolver = FsPersonaResolver::from_dir(tmp.path());
         let list = resolver.list();
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn resolve_agent_finds_builtin_personas() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("dispatch-state.json");
+        let body = serde_json::to_string(&DispatchState::default()).unwrap();
+        std::fs::write(&path, body).unwrap();
+
+        // No FS personas — only builtins
+        let resolver: Box<dyn PersonaResolver> =
+            Box::new(BuiltinAwarePersonaResolver::new(None));
+        let server = DispatchServer::new(&path, "test", Some(resolver), None);
+        let state = DispatchState::default();
+
+        // persona:researcher prefix
+        let r = server.resolve_agent(&state, "persona:researcher").expect("should resolve");
+        assert!(r.is_virtual);
+        assert_eq!(r.persona_name.as_deref(), Some("researcher"));
+        assert_eq!(r.id, "persona:researcher");
+
+        // Bare name fallback
+        let r = server.resolve_agent(&state, "creator").expect("bare name should resolve");
+        assert!(r.is_virtual);
+        assert_eq!(r.persona_name.as_deref(), Some("creator"));
+
+        // architect
+        assert!(server.resolve_agent(&state, "persona:architect").is_some());
+
+        // Unknown
+        assert!(server.resolve_agent(&state, "persona:nonexistent").is_none());
+        assert!(server.resolve_agent(&state, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn builtin_aware_resolver_lists_builtins_and_fs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("custom.md"),
+            "---\nname: custom\ndescription: Custom agent\n---\nBody.",
+        )
+        .unwrap();
+        let fs = FsPersonaResolver::from_dir(tmp.path());
+        let resolver = BuiltinAwarePersonaResolver::new(Some(fs));
+        let list = resolver.list();
+
+        // Should have: custom (FS) + researcher + creator + architect (builtins) = 4
+        assert_eq!(list.len(), 4, "got: {:?}", list.iter().map(|p| &p.name).collect::<Vec<_>>());
+        assert!(resolver.get("custom").is_some());
+        assert!(resolver.get("researcher").is_some());
+        assert!(resolver.get("creator").is_some());
+        assert!(resolver.get("architect").is_some());
     }
 }

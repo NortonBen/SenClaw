@@ -9,6 +9,7 @@ import { ApiOutlined } from '@ant-design/icons';
 import CoworkPanel from './CoworkPanel';
 import CodePanel from './CodePanel';
 import MarketplacePanel from './MarketplacePanel';
+import { SpaceAppsSettings } from '../settings/SpaceAppsSettings';
 
 const { Text } = Typography;
 
@@ -24,6 +25,7 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   cowork: 'Cowork',
   code: 'Code Executor',
   marketplace: 'Marketplace',
+  'space-apps': 'Space Apps',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -41,6 +43,7 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'cowork' && <CoworkPanel />}
         {activeNav === 'code' && <CodePanel />}
         {activeNav === 'marketplace' && <MarketplacePanel />}
+        {activeNav === 'space-apps' && <SpaceAppsSettings />}
       </Content>
     </Layout>
   );

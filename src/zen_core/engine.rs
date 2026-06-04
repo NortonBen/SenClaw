@@ -295,6 +295,7 @@ impl ZenEngine {
         let opts = self.options.read().unwrap();
         let use_tools = &opts.use_tools;
         let is_plan = opts.agent_mode == AgentMode::Plan;
+        let is_dag = opts.agent_mode == AgentMode::Dag;
         let tools = self.builtin_tools.read().unwrap();
 
         let mut filtered: Vec<Arc<dyn Tool>> = if use_tools.is_empty() {
@@ -321,6 +322,38 @@ impl ZenEngine {
             // "read-only research"); ExitPlanMode is the approval escape hatch.
             const PLAN_ALLOWED: &[&str] = &["ExitPlanMode", "WebFetch", "WebSearch"];
             filtered.retain(|t| t.is_read_only() || PLAN_ALLOWED.contains(&t.name()));
+        }
+
+        // DAG mode: read-only research + dispatch tools only. The agent
+        // designs a DAG task graph but cannot edit files or run shell commands.
+        if is_dag {
+            const DAG_ALLOWED: &[&str] = &[
+                "EnterPlanMode",
+                "WebFetch",
+                "WebSearch",
+                // Native dispatch tools:
+                "DispatchListAgents",
+                "DispatchCreateParent",
+                "DispatchCreateParentAndRun",
+                "DispatchTask",
+                "DispatchAllTasks",
+                // MCP fallback (backward compat during migration):
+                "mcp__senclaw-dispatch__list_agents",
+                "mcp__senclaw-dispatch__create_parent",
+                "mcp__senclaw-dispatch__create_parent_and_run",
+                "mcp__senclaw-dispatch__dispatch_task",
+                "mcp__senclaw-dispatch__dispatch_all_tasks",
+                // Virtual persona tools:
+                "mcp__senclaw-virtual__list_personas",
+                "mcp__senclaw-virtual__run_persona",
+            ];
+            filtered.retain(|t| {
+                let name = t.name();
+                t.is_read_only()
+                    || DAG_ALLOWED.contains(&name)
+                    || name.starts_with("Dispatch")
+                    || name.starts_with("mcp__senclaw-dispatch__")
+            });
         }
 
         // Cowork agents use synthetic JIDs (`cowork:{workspace}:{member}`). Interactive
@@ -356,6 +389,7 @@ impl ZenEngine {
         let opts = self.options.read().unwrap();
         let use_tools = &opts.use_tools;
         let is_plan = opts.agent_mode == AgentMode::Plan;
+        let is_dag = opts.agent_mode == AgentMode::Dag;
         let tools = self.builtin_tools.read().unwrap();
 
         let mut deferred: Vec<Arc<dyn Tool>> = tools
@@ -366,6 +400,15 @@ impl ZenEngine {
                     return false;
                 }
                 if is_plan && name == "TodoWrite" {
+                    return false;
+                }
+                // In DAG mode, only allow read-only + dispatch tools in deferred set.
+                if is_dag
+                    && !t.is_read_only()
+                    && !name.starts_with("Dispatch")
+                    && !name.starts_with("mcp__senclaw-dispatch__")
+                    && !name.starts_with("mcp__senclaw-virtual__")
+                {
                     return false;
                 }
                 if self.instance_id.starts_with("cowork:")
@@ -856,21 +899,29 @@ impl ZenCore for ZenEngine {
         // specialized tools on demand.
         let deferred_reminder = self.build_deferred_tools_reminder();
 
-        let plan_mode_reminder = if opts.agent_mode == AgentMode::Plan {
-            let plans_dir = std::path::Path::new(&opts.agent_data_dir)
-                .join(".sema")
-                .join("plans")
-                .join("") // ensure trailing slash
-                .to_string_lossy()
-                .to_string();
-            tracing::info!(
-                "[{}] Plan mode active — injecting plan reminder (plans_dir={})",
-                self.instance_id,
-                plans_dir
-            );
-            Some(crate::zen_core::prompt::plan_mode_reminder(&plans_dir))
-        } else {
-            None
+        let plan_mode_reminder = match opts.agent_mode {
+            AgentMode::Plan => {
+                let plans_dir = std::path::Path::new(&opts.agent_data_dir)
+                    .join(".sema")
+                    .join("plans")
+                    .join("") // ensure trailing slash
+                    .to_string_lossy()
+                    .to_string();
+                tracing::info!(
+                    "[{}] Plan mode active — injecting plan reminder (plans_dir={})",
+                    self.instance_id,
+                    plans_dir
+                );
+                Some(crate::zen_core::prompt::plan_mode_reminder(&plans_dir))
+            }
+            AgentMode::Dag => {
+                tracing::info!(
+                    "[{}] DAG mode active — injecting DAG orchestration reminder",
+                    self.instance_id
+                );
+                Some(crate::zen_core::prompt::dag_mode_reminder())
+            }
+            AgentMode::Agent => None,
         };
 
         let system_prompt = Self::assemble_system_prompt(
@@ -1369,6 +1420,24 @@ impl ZenCore for ZenEngine {
             if mode == AgentMode::Plan {
                 let mut state = self.state.lock().unwrap();
                 state.reset_plan_mode_info_sent();
+            }
+            // DAG mode: pre-discover dispatch tools so they appear in the
+            // active tool roster immediately (bypass should_defer filter).
+            if mode == AgentMode::Dag {
+                let mut disc = self.discovered_tools.lock().unwrap();
+                for name in &[
+                    "DispatchListAgents",
+                    "DispatchCreateParent",
+                    "DispatchCreateParentAndRun",
+                    "DispatchTask",
+                    "DispatchAllTasks",
+                ] {
+                    disc.insert((*name).to_string());
+                }
+                tracing::info!(
+                    "[{}] DAG mode: pre-discovered dispatch tools",
+                    self.instance_id
+                );
             }
         }
     }

@@ -100,7 +100,7 @@ export const SpaceAppsSettings: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div style={{ padding: '24px', maxWidth: 980, margin: '0 auto', width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16 }}>
         <div>
           <Title level={4} style={{ margin: 0 }}>Space Apps</Title>

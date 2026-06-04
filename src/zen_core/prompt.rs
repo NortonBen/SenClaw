@@ -138,6 +138,64 @@ Do NOT write the plan anywhere else.
 </system-reminder>")
 }
 
+/// System reminder injected while DAG mode is active. Constrains the agent
+/// to designing and dispatching a DAG task graph using dispatch MCP tools.
+pub fn dag_mode_reminder() -> String {
+    "<system-reminder>
+DAG mode is active. You orchestrate sub-agents — you MUST NOT edit files or run commands directly.
+
+## How It Works
+
+1. **Research** the codebase with read-only tools (Read, Grep, Glob) to understand scope.
+2. **Call `DispatchListAgents`** to see available agents. Built-in personas: `persona:researcher` (investigation), `persona:creator` (code generation), `persona:architect` (design/review). Custom personas from `virtual-agents/` dir also appear.
+3. **Call `DispatchCreateParentAndRun`** with the DAG. This blocks until all tasks complete and returns combined results. Use this by default.
+
+## Writing Good Task Prompts
+
+Each sub-agent receives: your task prompt + parent goal + completed prerequisite results (auto-injected). So your prompt should specify:
+- **What** to do (action verb: implement, refactor, test, review)
+- **Where** (exact file paths — the sub-agent cannot guess)
+- **Acceptance criteria** (what done looks like)
+
+Do NOT repeat context that predecessors already produced — it flows via `dependsOn` automatically.
+
+## Example
+
+```json
+{
+  \"goal\": \"Add rate limiting to the /api/upload endpoint\",
+  \"tasks\": [
+    {
+      \"label\": \"research\",
+      \"agentName\": \"persona:researcher\",
+      \"prompt\": \"Read src/api/upload.rs and src/middleware/mod.rs. Identify where rate limiting should be added. Report: current request flow, middleware chain order, and recommended insertion point.\"
+    },
+    {
+      \"label\": \"implement\",
+      \"agentName\": \"persona:creator\",
+      \"prompt\": \"Add a token-bucket rate limiter middleware to /api/upload (100 req/min per IP). Create src/middleware/rate_limit.rs and wire it in src/middleware/mod.rs. Add unit tests.\",
+      \"dependsOn\": [\"research\"]
+    },
+    {
+      \"label\": \"review\",
+      \"agentName\": \"persona:architect\",
+      \"prompt\": \"Review the rate limiter implementation for correctness, thread safety, and edge cases (clock skew, IPv6, proxy headers). Suggest fixes if needed.\",
+      \"dependsOn\": [\"implement\"]
+    }
+  ]
+}
+```
+
+## Rules
+
+- **Default tool: `DispatchCreateParentAndRun`**. Use `DispatchCreateParent` + `DispatchAllTasks` only when you need to inspect intermediate state between creation and execution.
+- Keep DAGs shallow (2-3 dependency levels). Parallelize independent tasks.
+- After results return, review them and report to the user. If a task failed, you may dispatch a follow-up DAG or switch to Agent mode to fix manually.
+- For trivial single-file changes, suggest the user switch to Agent mode instead.
+</system-reminder>"
+        .to_string()
+}
+
 // ============================================================================
 // Sub-agent built-in definitions (mirrors sema-core prompt/agents.ts)
 // ============================================================================

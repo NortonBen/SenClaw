@@ -7,6 +7,7 @@ pub mod ask_user_question;
 pub mod bash;
 pub mod bg_jobs;
 pub mod cognitive;
+pub mod dispatch;
 pub mod edit;
 pub mod enter_plan_mode;
 pub mod exit_plan_mode;
@@ -34,6 +35,10 @@ pub use ask_user::AskUserTool;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
 pub use cognitive::{CogAddTool, CogForgetTool, CogRecallTool, CogSearchTool, CogStatsTool};
+pub use dispatch::{
+    DispatchAllTasksTool, DispatchCreateParentAndRunTool, DispatchCreateParentTool,
+    DispatchListAgentsTool, DispatchTaskTool, DispatchToolsConfig,
+};
 pub use edit::EditTool;
 pub use enter_plan_mode::{EnterPlanFn, EnterPlanModeTool};
 pub use exit_plan_mode::ExitPlanModeTool;

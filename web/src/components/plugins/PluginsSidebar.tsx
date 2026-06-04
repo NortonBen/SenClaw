@@ -13,14 +13,15 @@ import {
   DownOutlined,
   FolderOutlined,
   ExperimentOutlined,
-  CloudServerOutlined
+  CloudServerOutlined,
+  AppstoreOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code' | 'marketplace';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code' | 'marketplace' | 'space-apps';
 
 interface SkillSummary {
   name: string;
@@ -395,6 +396,14 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               label="MCP Servers"
               isSelected={activeNav === 'mcp'}
               onClick={() => onSelect('mcp')}
+            />
+
+            {/* ─── Space Apps ─── */}
+            <StaticNavItem
+              icon={<AppstoreOutlined />}
+              label="Space Apps"
+              isSelected={activeNav === 'space-apps'}
+              onClick={() => onSelect('space-apps')}
             />
 
 

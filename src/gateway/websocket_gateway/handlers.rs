@@ -1777,7 +1777,7 @@ pub(crate) async fn handle_agent_mode(
         );
         return;
     }
-    if !matches!(mode.as_str(), "Agent" | "Plan") {
+    if !matches!(mode.as_str(), "Agent" | "Plan" | "Dag") {
         send_json(
             sender,
             &serde_json::json!({"type": "error", "message": format!("Unknown mode: {mode}")}),

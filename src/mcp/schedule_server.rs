@@ -212,6 +212,7 @@ impl ScheduleServer {
                     schedule_type,
                     schedule_value: schedule_value.to_owned(),
                     context_mode: resolved_mode,
+                    agent_mode: crate::types::AgentMode::Agent,
                     script_command: script_command.map(|s| s.to_owned()),
                     next_run: Some(next_run.clone()),
                     last_run: None,

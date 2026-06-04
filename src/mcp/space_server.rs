@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
-use crate::types::{ContextMode, ScheduleType, ScheduledTask, TaskStatus};
+use crate::types::{AgentMode, ContextMode, ScheduleType, ScheduledTask, TaskStatus};
 
 // ─── Params ─────────────────────────────────────────────────────────────────
 
@@ -196,6 +196,8 @@ struct RecurringCreateParams {
     day_of_month: Option<u32>,
     /// Cron 5 trường (phút giờ ngày tháng thứ). Ghi đè time_local/frequency.
     cron_advanced: Option<String>,
+    /// Chế độ chạy: "agent" (mặc định) | "dag" | "plan".
+    agent_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -216,6 +218,8 @@ struct RecurringUpdateParams {
     weekday: Option<u32>,
     day_of_month: Option<u32>,
     cron_advanced: Option<String>,
+    /// "agent" | "dag" | "plan"
+    agent_mode: Option<String>,
 }
 
 // ─── MCP server struct ────────────────────────────────────────────────────────
@@ -632,6 +636,7 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
                 p.weekday,
                 p.day_of_month,
                 p.cron_advanced,
+                p.agent_mode,
             )
             .await
             .content
@@ -676,6 +681,7 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
                 p.weekday,
                 p.day_of_month,
                 p.cron_advanced,
+                p.agent_mode,
             )
             .content
     }
@@ -891,6 +897,7 @@ impl SpaceServer {
                 schedule_type: ScheduleType::Once,
                 schedule_value: run_at.clone(),
                 context_mode: ContextMode::Notify,
+                agent_mode: AgentMode::Agent,
                 script_command: None,
                 next_run: Some(run_at),
                 last_run: None,
@@ -1146,6 +1153,7 @@ impl SpaceServer {
                     schedule_type: ScheduleType::Once,
                     schedule_value: run_at.clone(),
                     context_mode: ContextMode::Notify,
+                    agent_mode: AgentMode::Agent,
                     script_command: None,
                     next_run: Some(run_at),
                     last_run: None,
@@ -1269,6 +1277,7 @@ impl SpaceServer {
         weekday: Option<u32>,
         day_of_month: Option<u32>,
         cron_advanced: Option<String>,
+        agent_mode: Option<String>,
     ) -> ToolResult {
         if prompt.trim().is_empty() {
             return ToolResult::err("prompt is required".into());
@@ -1336,6 +1345,20 @@ impl SpaceServer {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+
+        let resolved_agent_mode = crate::types::AgentMode::parse(
+            agent_mode.as_deref().unwrap_or("agent"),
+        );
+        if resolved_agent_mode != crate::types::AgentMode::Agent {
+            let _ = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE scheduled_tasks SET agent_mode = ?1 WHERE id = ?2",
+                    rusqlite::params![resolved_agent_mode.as_str(), &task_id],
+                )?;
+                Ok(())
+            });
+        }
+
         let tasks = match self.db.get_tasks_by_group(&group_folder) {
             Ok(t) => t,
             Err(e) => return ToolResult::err(format!("lookup task: {e}")),
@@ -1400,6 +1423,7 @@ impl SpaceServer {
         weekday: Option<u32>,
         day_of_month: Option<u32>,
         cron_advanced: Option<String>,
+        agent_mode: Option<String>,
     ) -> ToolResult {
         let tasks = match self.db.list_all_tasks() {
             Ok(t) => t,
@@ -1479,6 +1503,23 @@ impl SpaceServer {
             }
         }
 
+        if let Some(am) = agent_mode
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let parsed = crate::types::AgentMode::parse(am);
+            if let Err(e) = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE scheduled_tasks SET agent_mode = ?1 WHERE id = ?2",
+                    rusqlite::params![parsed.as_str(), id],
+                )?;
+                Ok(())
+            }) {
+                return ToolResult::err(format!("update agent_mode: {e}"));
+            }
+        }
+
         if let Some(new_label) = label
             .as_deref()
             .map(|s| s.trim())
@@ -1545,6 +1586,7 @@ impl SpaceServer {
             "group_folder":    task.group_folder,
             "schedule_type":   task.schedule_type.as_str(),
             "schedule_value":  task.schedule_value,
+            "agent_mode":      task.agent_mode.as_str(),
             "status":          task.status.as_str(),
             "next_run":        task.next_run,
             "last_run":        task.last_run,

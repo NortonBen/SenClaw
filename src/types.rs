@@ -279,6 +279,31 @@ impl ContextMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum AgentMode {
+    Agent,
+    Dag,
+    Plan,
+}
+
+impl AgentMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Dag => "dag",
+            Self::Plan => "plan",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "dag" => Self::Dag,
+            "plan" => Self::Plan,
+            _ => Self::Agent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RunStatus {
     Success,
     Error,
@@ -308,6 +333,7 @@ pub struct ScheduledTask {
     pub schedule_type: ScheduleType,
     pub schedule_value: String,
     pub context_mode: ContextMode,
+    pub agent_mode: AgentMode,
     /// Bash command for `Script` / `ScriptAgent` modes.
     pub script_command: Option<String>,
     pub next_run: Option<String>,

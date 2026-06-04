@@ -1250,6 +1250,54 @@ impl AgentPool {
         self.core_api
             .update_thinking(&binding.jid, self.state.lock().unwrap().thinking_enabled);
 
+        // Apply pending agent mode (set via UI before engine existed).
+        let pending_mode = self
+            .state
+            .lock()
+            .unwrap()
+            .pending_agent_modes
+            .get(&binding.jid)
+            .cloned();
+        if let Some(mode) = &pending_mode {
+            if mode != "Agent" {
+                self.core_api.update_agent_mode(&binding.jid, mode);
+                tracing::info!(
+                    "[AgentPool] Applied pending agent mode for {}: {mode}",
+                    binding.jid
+                );
+            }
+        }
+
+        // Register native dispatch tools (replaces senclaw-dispatch MCP subprocess).
+        if let Some(cfg) = self.config.lock().unwrap().clone() {
+            let dispatch_config = std::sync::Arc::new(crate::tools::DispatchToolsConfig {
+                state_path: cfg.paths.dispatch_state_path.clone(),
+                admin_folder: binding.folder.clone(),
+                agents_config_dir: Some(
+                    cfg.paths.virtual_agents_dir.to_string_lossy().to_string(),
+                ),
+                cowork_agents_json: None, // set by Cowork wiring if applicable
+            });
+            self.core_api.register_tools(
+                &binding.jid,
+                vec![
+                    std::sync::Arc::new(crate::tools::DispatchListAgentsTool::new(
+                        dispatch_config.clone(),
+                    )),
+                    std::sync::Arc::new(crate::tools::DispatchCreateParentTool::new(
+                        dispatch_config.clone(),
+                    )),
+                    std::sync::Arc::new(crate::tools::DispatchCreateParentAndRunTool::new(
+                        dispatch_config.clone(),
+                    )),
+                    std::sync::Arc::new(crate::tools::DispatchTaskTool::new(
+                        dispatch_config.clone(),
+                    )),
+                    std::sync::Arc::new(crate::tools::DispatchAllTasksTool::new(dispatch_config)),
+                ],
+            );
+        }
+
         tracing::info!(
             "[AgentPool] Created agent for {} (folder: {}, skipPerms: {skip_perms})",
             binding.jid,
@@ -1873,11 +1921,26 @@ impl AgentPool {
     /// The change applies to the next LLM turn: Plan mode strips
     /// `TodoWrite` from the tool list and injects the plan-mode reminder.
     pub fn set_agent_mode(&self, jid: &str, mode: &str) {
+        // Always store in pending map so it survives engine destroy/recreate.
+        self.state
+            .lock()
+            .unwrap()
+            .pending_agent_modes
+            .insert(jid.to_string(), mode.to_string());
+        // If engine exists, apply immediately.
         self.core_api.update_agent_mode(jid, mode);
     }
 
     pub fn get_agent_mode(&self, jid: &str) -> Option<String> {
-        self.core_api.get_agent_mode(jid)
+        // Try live engine first, fall back to pending.
+        self.core_api.get_agent_mode(jid).or_else(|| {
+            self.state
+                .lock()
+                .unwrap()
+                .pending_agent_modes
+                .get(jid)
+                .cloned()
+        })
     }
 
     ///   A. **core-pause** — active PAW → `CoreApi::pause_session`

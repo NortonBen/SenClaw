@@ -29,6 +29,8 @@ export interface SpaceEvent {
   source: string;
 }
 
+export type AgentModeType = 'agent' | 'dag' | 'plan';
+
 export interface SpaceSchedule {
   id: string;
   label: string;
@@ -37,6 +39,7 @@ export interface SpaceSchedule {
   group_folder: string;
   schedule_type: string;
   schedule_value: string;
+  agent_mode: AgentModeType;
   status: string;
   next_run: string | null;
   last_run: string | null;
@@ -65,6 +68,7 @@ export interface ScheduleCreatePayload {
   weekday?: number;        // 0=Sun..6=Sat (weekly)
   day_of_month?: number;   // 1..28 (monthly)
   cron_advanced?: string;  // takes precedence
+  agent_mode?: AgentModeType;
 }
 
 export type ScheduleUpdatePayload = Partial<ScheduleCreatePayload> & {
