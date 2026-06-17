@@ -94,6 +94,10 @@ use super::whisper::{
     whisper_cancel, whisper_delete, whisper_download, whisper_models_list, whisper_settings_get,
     whisper_settings_put, whisper_status, whisper_transcribe,
 };
+use super::ocr::{
+    ocr_cancel, ocr_custom_download, ocr_delete, ocr_download, ocr_models_list, ocr_recognize,
+    ocr_settings_get, ocr_settings_put, ocr_status,
+};
 use super::wiki::{
     wiki_dir_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
     wiki_tree, wiki_write,
@@ -326,6 +330,18 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/tts/models/:id/cancel", post(tts_cancel))
         .route("/api/tts/models/:id", delete(tts_delete))
         .route("/api/tts/synthesize", post(tts_synthesize))
+        // OCR (PaddleOCR + MNN) model management + inference
+        .route("/api/ocr/models", get(ocr_models_list))
+        .route(
+            "/api/ocr/settings",
+            get(ocr_settings_get).put(ocr_settings_put),
+        )
+        .route("/api/ocr/models/:id/download", post(ocr_download))
+        .route("/api/ocr/models/custom", post(ocr_custom_download))
+        .route("/api/ocr/models/:id/status", get(ocr_status))
+        .route("/api/ocr/models/:id/cancel", post(ocr_cancel))
+        .route("/api/ocr/models/:id", delete(ocr_delete))
+        .route("/api/ocr/recognize", post(ocr_recognize))
         // Embedding provider config
         .route(
             "/api/embedding-config",

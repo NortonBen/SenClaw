@@ -1,6 +1,6 @@
 # Nghiên cứu đối chiếu: Sema Code VS Code Extension vs JCode
 
-> Phân tích hai AI coding agent hàng đầu từ **source code thực tế**, đối chiếu với SemaClaw để xác định cơ hội phát triển tính năng Chat, Cowork và Code.
+> Phân tích hai AI coding agent hàng đầu từ **source code thực tế**, đối chiếu với SenClaw để xác định cơ hội phát triển tính năng Chat, Cowork và Code.
 >
 > **Cập nhật:** 2026-05-01 | **Trạng thái:** Hoàn chỉnh
 
@@ -83,14 +83,14 @@ crates/
   ... (42 crates total)
 ```
 
-### 1.3. Vị trí so với SemaClaw
+### 1.3. Vị trí so với SenClaw
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        AI Coding Agents                         │
 │                                                                 │
 │  ┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ Sema Code (VSCode)│  │    JCode     │  │    SemaClaw      │  │
+│  │ Sema Code (VSCode)│  │    JCode     │  │    SenClaw      │  │
 │  │                  │  │              │  │                  │  │
 │  │ VS Code side-    │  │ Terminal TUI │  │ Multi-channel    │  │
 │  │ panel webview    │  │ native Rust  │  │ gateway (TG,     │  │
@@ -115,7 +115,7 @@ crates/
 
 ### 2.1. So sánh tính năng cốt lõi
 
-| Tính năng | Sema Code VSCode | JCode | SemaClaw (hiện tại) | SemaClaw (target) |
+| Tính năng | Sema Code VSCode | JCode | SenClaw (hiện tại) | SenClaw (target) |
 |---|---|---|---|---|
 | **Chat interface** | Webview side panel (React) | TUI ratatui | Web UI + Messaging apps | Web UI + channels |
 | **Multi-model** | Anthropic + OpenAI + more | 15+ providers | SemaCore (Anthropic/OpenAI) | SemaCore |
@@ -139,7 +139,7 @@ crates/
 
 ### 2.2. So sánh kiến trúc
 
-| Chiều | Sema Code VSCode | JCode | SemaClaw |
+| Chiều | Sema Code VSCode | JCode | SenClaw |
 |---|---|---|---|
 | **Engine** | sema-core (Node.js, subprocess) | Rust native | sema-core (subprocess) + Rust daemon |
 | **UI** | Webview (React) | TUI (ratatui) | Web UI (React) + mobile channels |
@@ -332,9 +332,9 @@ Agent::turn_execution()
   → compaction check → hard/soft compact if needed
 ```
 
-### 3.3. Đối chiếu Chat — Cơ hội cho SemaClaw
+### 3.3. Đối chiếu Chat — Cơ hội cho SenClaw
 
-| Tính năng | Sema Code VSCode | JCode | Trạng thái SemaClaw | Khuyến nghị |
+| Tính năng | Sema Code VSCode | JCode | Trạng thái SenClaw | Khuyến nghị |
 |---|---|---|---|---|
 | **Streaming delta UI** | Webview chunkUpdate | TUI ratatui inline | ✅ WS chunkUpdate | OK |
 | **Sub-agent visibility** | TaskDetailModal (throttled 3s) | Swarm status graph | ❌ | Implement Cowork dashboard |
@@ -473,9 +473,9 @@ CommSubscribeChannel { channel: "#reviews" }
 CommMessage { to: None, channel: Some("#reviews"), content: "PR ready" }
 ```
 
-### 4.3. SemaClaw CoworkManager (hiện tại)
+### 4.3. SenClaw CoworkManager (hiện tại)
 
-SemaClaw đã implement `src/gateway/cowork_manager.rs` với:
+SenClaw đã implement `src/gateway/cowork_manager.rs` với:
 
 ```
 CoworkManager {
@@ -533,13 +533,13 @@ CoworkMember {
 
 ### 4.4. Đối chiếu Cowork — Khoảng cách cần implement
 
-| Tính năng | JCode Swarm | SemaClaw (đã có) | Khoảng cách |
+| Tính năng | JCode Swarm | SenClaw (đã có) | Khoảng cách |
 |---|---|---|---|
 | **Workspace & members** | ✅ per-session | ✅ CoworkManager | Đã có — OK |
 | **Task board** | ✅ PlanGraphStatus DAG | ✅ CoworkTask | Đã có — cần wiring |
 | **Shared board** | ✅ CommShare KV | ✅ CoworkBoardEntry | Đã có — cần WS events |
 | **Message channel** | ✅ DM + broadcast | ✅ CoworkMessage | Đã có — cần WS fan-out |
-| **Templates** | ❌ | ✅ 6 built-in | SemaClaw tốt hơn |
+| **Templates** | ❌ | ✅ 6 built-in | SenClaw tốt hơn |
 | **Agent capabilities registry** | ✅ AgentRegister | ❌ | Cần thêm |
 | **Pub/Sub channels** | ✅ | ❌ | Nên thêm |
 | **Non-blocking status** | ✅ CommStatus | ❌ | Cần WS event |
@@ -667,7 +667,7 @@ BrowserTool {
 }
 ```
 
-### 5.3. SemaClaw — Code mode (hiện tại)
+### 5.3. SenClaw — Code mode (hiện tại)
 
 `GroupBinding.group_type == "code"` đã khai báo trong `src/types.rs:63` nhưng **chưa có logic phân biệt** với `chat` mode. Cần implement:
 
@@ -703,9 +703,9 @@ User click "Restore":
   → Emit: { type: 'code:snapshot', filePath, restored: true }
 ```
 
-### 5.4. Đối chiếu Code — Cơ hội cho SemaClaw
+### 5.4. Đối chiếu Code — Cơ hội cho SenClaw
 
-| Tính năng | Sema Code VSCode | JCode | SemaClaw hiện tại | Khuyến nghị |
+| Tính năng | Sema Code VSCode | JCode | SenClaw hiện tại | Khuyến nghị |
 |---|---|---|---|---|
 | **File Edit tool** | ✅ (string replace + diff) | ✅ | ✅ (sema-core) | OK |
 | **Diff visualization** | ✅ (webview diff panel) | ✅ (TUI side panel) | ⚠️ (Web UI có) | Thêm WS diff event |
@@ -762,7 +762,7 @@ Composite score:
         × consolidation_strength(ln(strength))
 ```
 
-**Khuyến nghị cho SemaClaw memory:**
+**Khuyến nghị cho SenClaw memory:**
 - Thêm **weighted edges** giữa memories (hiện chỉ có isolated entries)
 - Thêm **sidecar verification** dùng quick model (Haiku) để filter relevance trước khi inject
 - Thêm **reinforce** mechanism (cosine ≥ 0.85 → merge thay vì duplicate)
@@ -790,7 +790,7 @@ SQLite:
   ❌ WAL có thể grow lớn
 ```
 
-**Khuyến nghị cho SemaClaw:** Giữ SQLite cho structured/queryable data (groups, tasks, memory index). Thêm journal JSONL cho message streaming (append-only, giảm write amplification, crash recovery tốt hơn).
+**Khuyến nghị cho SenClaw:** Giữ SQLite cho structured/queryable data (groups, tasks, memory index). Thêm journal JSONL cho message streaming (append-only, giảm write amplification, crash recovery tốt hơn).
 
 ### 6.3. JCode — Swarm Architecture Lessons
 
@@ -834,7 +834,7 @@ sendTaskAgentUpdate(content: TaskMessageContent): void {
 }
 ```
 
-**Khuyến nghị cho SemaClaw:** Áp dụng throttle tương tự cho WS events từ agent khi đang chạy `cowork` mode — chỉ push 1 update/3s cho sub-task progress.
+**Khuyến nghị cho SenClaw:** Áp dụng throttle tương tự cho WS events từ agent khi đang chạy `cowork` mode — chỉ push 1 update/3s cho sub-task progress.
 
 ### 6.5. JCode — Crash Detection & Recovery
 
@@ -863,11 +863,11 @@ fn mark_crashed(session: &mut Session, message: &str) {
 }
 ```
 
-**Khuyến nghị cho SemaClaw:** Thêm `pid: Option<u32>` vào group/session state. Khi daemon restart, kiểm tra các session "active" xem process còn chạy không.
+**Khuyến nghị cho SenClaw:** Thêm `pid: Option<u32>` vào group/session state. Khi daemon restart, kiểm tra các session "active" xem process còn chạy không.
 
 ---
 
-## 7. Khuyến nghị phát triển cho SemaClaw
+## 7. Khuyến nghị phát triển cho SenClaw
 
 ### 7.1. Priority Matrix
 
@@ -891,7 +891,7 @@ fn mark_crashed(session: &mut Session, message: &str) {
 | **P3** | Browser automation MCP tool | JCode browser.rs | `mcp/` | Thấp | Cao |
 | **P3** | Mermaid rendering Web UI | JCode tui-mermaid | `web/` | Thấp | Thấp |
 
-### 7.2. Protocol Design cho Cowork (học từ JCode, adapted cho SemaClaw)
+### 7.2. Protocol Design cho Cowork (học từ JCode, adapted cho SenClaw)
 
 ```rust
 // Đề xuất: extend WS protocol cho cowork mode
@@ -1014,7 +1014,7 @@ Q4 2026: Memory & Polish (P2 + P3)
 - File change cross-agent notification
 - Browser automation (Firefox Bridge)
 
-### 8.2. SemaClaw có lợi thế gì?
+### 8.2. SenClaw có lợi thế gì?
 
 1. **Multi-channel gateway** — Telegram, Feishu, QQ, WeChat (không ai có)
 2. **Web UI self-hosted** — không phụ thuộc VS Code hay terminal
@@ -1026,8 +1026,8 @@ Q4 2026: Memory & Polish (P2 + P3)
 
 ### 8.3. Nhận định tổng quát
 
-SemaClaw đã xây dựng được **data layer và manager layer** cho Cowork rất tốt — templates phong phú hơn cả JCode. Điểm thiếu chủ yếu là **real-time layer** (WS fan-out) và **code mode** specific handlers. Một khi có WS fan-out, toàn bộ Cowork features sẽ hoạt động end-to-end ngay lập tức vì DB/manager đã sẵn sàng.
+SenClaw đã xây dựng được **data layer và manager layer** cho Cowork rất tốt — templates phong phú hơn cả JCode. Điểm thiếu chủ yếu là **real-time layer** (WS fan-out) và **code mode** specific handlers. Một khi có WS fan-out, toàn bộ Cowork features sẽ hoạt động end-to-end ngay lập tức vì DB/manager đã sẵn sàng.
 
 ---
 
-*Tài liệu được tổng hợp từ source code thực tế (không chỉ README): semaCoreWrapper.ts 39KB, chatWebview.ts 14KB, gateway.rs, session.rs 62KB, cowork_manager.rs SemaClaw, jcode-protocol crate.*
+*Tài liệu được tổng hợp từ source code thực tế (không chỉ README): semaCoreWrapper.ts 39KB, chatWebview.ts 14KB, gateway.rs, session.rs 62KB, cowork_manager.rs SenClaw, jcode-protocol crate.*

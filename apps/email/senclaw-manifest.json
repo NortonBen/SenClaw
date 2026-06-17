@@ -1,7 +1,7 @@
 {
   "id": "email",
   "name": "Email",
-  "description": "Standalone Email App Space for SemaClaw. IMAP inbox, full-text search, and SMTP composing with real transport.",
+  "description": "Standalone Email App Space for SenClaw. IMAP inbox, full-text search, and SMTP composing with real transport.",
   "icon": "📧",
   "runtime": {
     "kind": "server",

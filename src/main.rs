@@ -64,6 +64,8 @@ enum Command {
     LithoServer,
     /// Start the cognitive memory MCP server — graph + Hebbian (stdio JSON-RPC)
     CognitiveServer,
+    /// Start the OCR MCP server — PaddleOCR + MNN (stdio JSON-RPC)
+    OcrServer,
     /// Train the GraphSAGE re-ranker on the current cognitive graph.
     /// Writes weights to ~/.senclaw/cognitive/sage_<dim>.bin.
     CognitiveTrain {
@@ -110,6 +112,7 @@ async fn main() -> Result<()> {
                 | Command::CodeServer
                 | Command::LithoServer
                 | Command::CognitiveServer
+                | Command::OcrServer
         )
     );
 
@@ -155,6 +158,7 @@ async fn main() -> Result<()> {
         Command::CodeServer => senclaw::mcp::code_server::run_code_server().await,
         Command::LithoServer => senclaw::mcp::litho_server::run_stdio_server().await,
         Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
+        Command::OcrServer => senclaw::mcp::ocr_server::run_stdio_server().await,
         Command::CognitiveTrain {
             epochs,
             lr,

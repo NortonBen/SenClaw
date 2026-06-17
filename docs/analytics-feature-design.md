@@ -1,4 +1,4 @@
-# Thiết kế tính năng Analytics cho SemaClaw
+# Thiết kế tính năng Analytics cho SenClaw
 
 > Tài liệu thiết kế kỹ thuật — tháng 5/2026
 
@@ -11,7 +11,7 @@
 3. [Schema SQLite](#3-schema-sqlite)
 4. [MCP Analytics Server](#4-mcp-analytics-server)
 5. [Web UI Dashboard](#5-web-ui-dashboard)
-6. [Tích hợp vào SemaClaw](#6-tích-hợp-vào-semaclaw)
+6. [Tích hợp vào SenClaw](#6-tích-hợp-vào-senclaw)
 7. [Kết luận](#7-kết-luận)
 
 ---
@@ -20,7 +20,7 @@
 
 ### 1.1 Tại sao Analytics quan trọng với personal AI agent?
 
-SemaClaw là hệ thống agent chạy liên tục — xử lý tin nhắn, gọi tool, tốn token, tốn tiền. Không có analytics, người dùng không biết:
+SenClaw là hệ thống agent chạy liên tục — xử lý tin nhắn, gọi tool, tốn token, tốn tiền. Không có analytics, người dùng không biết:
 
 - Agent nào đang "ngốn" token nhiều nhất?
 - Tool nào hay fail, làm chậm response?
@@ -477,7 +477,7 @@ function useAnalytics(period: string) {
 
 ---
 
-## 6. Tích hợp vào SemaClaw
+## 6. Tích hợp vào SenClaw
 
 ### 6.1 Files mới cần tạo
 

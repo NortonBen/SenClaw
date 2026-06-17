@@ -1,6 +1,6 @@
 # Cowork Space — Thiết kế tính năng chi tiết
 
-> Tài liệu phân tích và thiết kế Cowork Space cho SemaClaw — không gian cộng tác đa agent cho nhóm người dùng.
+> Tài liệu phân tích và thiết kế Cowork Space cho SenClaw — không gian cộng tác đa agent cho nhóm người dùng.
 
 ---
 
@@ -34,7 +34,7 @@
 ### 2.1. Workspace
 
 **Workspace** là đơn vị tổ chức cơ bản của Cowork. Mỗi workspace có:
-- Một thư mục làm việc chung trên filesystem (`~/semaclaw/workspace/{name}/`)
+- Một thư mục làm việc chung trên filesystem (`~/senclaw/workspace/{name}/`)
 - Danh sách **member** (agent hoặc người dùng)
 - **Board** chia sẻ (context chung, tài liệu, ghi chú)
 - **Channel** giao tiếp nội bộ giữa các member
@@ -376,7 +376,7 @@ Mỗi workspace có một **internal channel** — một luồng tin nhắn có 
     { "agentFolder": "review-agent", "role": "reviewer", "subdir": "review" },
     { "agentFolder": "test-agent", "role": "worker", "subdir": "tests" }
   ],
-  "sharedDir": "~/semaclaw/workspace/project-alpha/shared"
+  "sharedDir": "~/senclaw/workspace/project-alpha/shared"
 }
 ```
 
@@ -626,8 +626,8 @@ memory_shared_link(memoryId: string, taskId: string)
   "workspace": "project-alpha",
   "defaultPermissions": {
     "allowedTools": ["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-    "allowedPaths": ["~/semaclaw/workspace/project-alpha/"],
-    "allowedWorkDirs": ["~/semaclaw/workspace/project-alpha/shared/"]
+    "allowedPaths": ["~/senclaw/workspace/project-alpha/"],
+    "allowedWorkDirs": ["~/senclaw/workspace/project-alpha/shared/"]
   },
   "memberPermissions": {
     "review-agent": {
@@ -946,7 +946,7 @@ Mỗi scheduled task trong UI có:
     "scheduleType": "interval",
     "scheduleValue": "1800000",
     "contextMode": "script-agent",
-    "scriptCommand": "cd ~/semaclaw/workspace/project-alpha/shared && cargo test 2>&1 | tail -20",
+    "scriptCommand": "cd ~/senclaw/workspace/project-alpha/shared && cargo test 2>&1 | tail -20",
     "prompt": "Phân tích kết quả CI. Nếu có test fail, tạo task mới gán cho code-agent với chi tiết lỗi.",
     "createTaskOnResult": true,
     "notifyChannel": true
@@ -1323,7 +1323,7 @@ sequenceDiagram
 
 ## 7. So sánh với tính năng Chat hiện tại
 
-Chat là tính năng cốt lõi của SemaClaw — một người dùng nhắn tin với một agent trong một group. Cowork được thiết kế để giải quyết những hạn chế cụ thể mà Chat không thể đáp ứng.
+Chat là tính năng cốt lõi của SenClaw — một người dùng nhắn tin với một agent trong một group. Cowork được thiết kế để giải quyết những hạn chế cụ thể mà Chat không thể đáp ứng.
 
 ### 7.1. Bảng so sánh trực tiếp
 
@@ -1396,7 +1396,7 @@ Chat và Cowork hoạt động song song, bổ sung nhau:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    SemaClaw                         │
+│                    SenClaw                         │
 │                                                     │
 │  ┌──────────────────┐    ┌────────────────────────┐ │
 │  │   CHAT (Groups)  │    │  COWORK (Workspaces)   │ │
@@ -1425,7 +1425,7 @@ Chat và Cowork hoạt động song song, bổ sung nhau:
 
 ## 8. Điểm khác biệt với các sản phẩm tương tự
 
-| Feature | SemaClaw Cowork | Linear | Notion AI | GitHub Copilot Workspace |
+| Feature | SenClaw Cowork | Linear | Notion AI | GitHub Copilot Workspace |
 |---------|----------------|--------|-----------|--------------------------|
 | AI agent làm task tự động | ✅ | ❌ | Giới hạn | Giới hạn |
 | Inter-agent messaging | ✅ | ❌ | ❌ | ❌ |

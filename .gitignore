@@ -74,3 +74,9 @@ apps/**/*.zip
 dist
 target
 out
+.senclaw
+.playwright-mcp
+scripts
+code-old/cognee
+code-old/sema-code-core
+code-old/SemaClaw

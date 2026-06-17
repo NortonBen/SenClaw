@@ -44,7 +44,7 @@ ClawHub là marketplace quản lý cả hai. Một skill/plugin có thể:
 1. Bundled (`assets/builtin-personas/`, `skills/`)
 2. ClawHub-managed (`~/.senclaw/managed/skills/`)
 3. Global-sema (`~/.sema/skills/`)
-4. Global-compat (`~/.semaclaw/skills/`)
+4. Global-compat (`~/.senclaw/skills/`)
 5. Workspace-local (`.senclaw/skills/` trong working dir)
 
 ### 2.2 SKILL.md schema

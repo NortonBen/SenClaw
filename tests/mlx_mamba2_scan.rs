@@ -138,8 +138,8 @@ fn scan_skip_connection_only() {
     let state_in = vec![0.0; b * h * p * n];
 
     let (y, _) = mlx_scan_collect(
-        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-        b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+        g as i32, n as i32,
     );
     approx_eq(&y, &x, 1e-5);
 }
@@ -158,8 +158,8 @@ fn scan_pure_state_decay() {
     let state_in = vec![1.0; b * h * p * n];
 
     let (y, s_out) = mlx_scan_collect(
-        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-        b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+        g as i32, n as i32,
     );
 
     // After L=3 steps each state element should be (1/2)^3 = 0.125.
@@ -178,7 +178,9 @@ fn scan_pure_state_decay() {
 #[test]
 fn scan_matches_reference_grouped() {
     let (b, l, h, p, g, n) = (1, 5, 4, 3, 2, 2);
-    let x: Vec<f32> = (0..(b * l * h * p)).map(|i| (i as f32 * 0.013) - 0.2).collect();
+    let x: Vec<f32> = (0..(b * l * h * p))
+        .map(|i| (i as f32 * 0.013) - 0.2)
+        .collect();
     let dt: Vec<f32> = (0..(b * l * h)).map(|i| 0.1 + i as f32 * 0.07).collect();
     let a: Vec<f32> = (0..h).map(|i| -0.3 - 0.1 * i as f32).collect();
     let b_vec: Vec<f32> = (0..(b * l * g * n))
@@ -192,13 +194,11 @@ fn scan_matches_reference_grouped() {
         .map(|i| 0.02 + i as f32 * 0.003)
         .collect();
 
-    let (y_ref, s_ref) = reference_scan(
-        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-        b, l, h, p, g, n,
-    );
+    let (y_ref, s_ref) =
+        reference_scan(&x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b, l, h, p, g, n);
     let (y_mlx, s_mlx) = mlx_scan_collect(
-        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-        b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+        g as i32, n as i32,
     );
     approx_eq(&y_mlx, &y_ref, 5e-5);
     approx_eq(&s_mlx, &s_ref, 5e-5);
@@ -221,13 +221,11 @@ fn scan_single_step_shape() {
     let d = vec![0.0; h];
     let state_in = vec![0.0; b * h * p * n];
 
-    let (y_ref, s_ref) = reference_scan(
-        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-        b, l, h, p, g, n,
-    );
+    let (y_ref, s_ref) =
+        reference_scan(&x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b, l, h, p, g, n);
     let (y_mlx, s_mlx) = mlx_scan_collect(
-        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in,
-        b as i32, l as i32, h as i32, p as i32, g as i32, n as i32,
+        &x, &dt, &a, &b_vec, &c_vec, &d, &state_in, b as i32, l as i32, h as i32, p as i32,
+        g as i32, n as i32,
     );
     assert_eq!(y_mlx.len(), b * l * h * p);
     assert_eq!(s_mlx.len(), b * h * p * n);

@@ -1,13 +1,13 @@
-# SemaClaw
+# SenClaw
 
-基于 [sema-code-core](https://github.com/midea-ai/sema-code-core/tree/feature/semaclaw) 构建的多群组 AI Agent 网关，支持 Telegram / 飞书 / QQ 多频道，提供 WebSocket 实时接口与 Web UI。
+基于 [sema-code-core](https://github.com/midea-ai/sema-code-core/tree/feature/senclaw) 构建的多群组 AI Agent 网关，支持 Telegram / 飞书 / QQ 多频道，提供 WebSocket 实时接口与 Web UI。
 
 ---
 
 ## 目录结构
 
 ```
-semaclaw/
+senclaw/
 ├── src/
 │   ├── index.ts              # 主入口，12 步启动序列
 │   ├── config.ts             # 环境变量与路径配置
@@ -50,7 +50,7 @@ semaclaw/
 │   ├── wiki/
 │   │   └── WikiManager.ts    # Git 驱动的个人知识库管理
 │   ├── clawhub/              # ClaWHub 技能市场集成
-│   ├── cli/                  # semaclaw CLI（skills / clawhub 子命令）
+│   ├── cli/                  # senclaw CLI（skills / clawhub 子命令）
 │   └── db/
 │       └── db.ts             # SQLite 操作（better-sqlite3）
 ├── web/                      # React + Vite Web UI
@@ -62,13 +62,13 @@ semaclaw/
 ## 运行时目录布局
 
 ```
-~/.semaclaw/
-├── semaclaw.db               # SQLite 数据库
+~/.senclaw/
+├── senclaw.db               # SQLite 数据库
 ├── config.json               # 全局配置（优先级高于 DB）
 ├── dispatch-state.json       # Dispatch 任务状态（DAG）
 └── workspace-state-{folder}.json  # 每个 Agent 的工作目录状态
 
-~/semaclaw/
+~/senclaw/
 ├── agents/{folder}/          # agentDataDir（固定，不随工作目录切换）
 │   ├── SOUL.md             # Agent 人格 / 系统指令（soul）
 │   ├── memory/
@@ -87,7 +87,7 @@ semaclaw/
 
 **方式 A：普通用户（推荐）**
 
-直接安装即可，`sema-core` 会自动从 GitHub 拉取 `feature/semaclaw` 分支并构建：
+直接安装即可，`sema-core` 会自动从 GitHub 拉取 `feature/senclaw` 分支并构建：
 
 ```bash
 # 安装根项目依赖
@@ -105,19 +105,19 @@ npm run build:web
 如果你需要在本地修改 `sema-code-core` 并实时联调，建议改用本地路径引用：
 
 ```bash
-# 1. 克隆 sema-code-core 到 semaclaw 的同级目录
-git clone -b feature/semaclaw https://github.com/midea-ai/sema-code-core.git
+# 1. 克隆 sema-code-core 到 senclaw 的同级目录
+git clone -b feature/senclaw https://github.com/midea-ai/sema-code-core.git
 
 # 2. 编译 sema-code-core
 cd sema-code-core
 npm install && npm run build
 
-# 3. 在 semaclaw/package.json 中将 sema-core 依赖临时改为本地路径：
+# 3. 在 senclaw/package.json 中将 sema-core 依赖临时改为本地路径：
 #    "sema-core": "file:../sema-code-core"
-#    （注意：提交代码前请改回 "github:midea-ai/sema-code-core#feature/semaclaw"）
+#    （注意：提交代码前请改回 "github:midea-ai/sema-code-core#feature/senclaw"）
 
-# 4. 安装 semaclaw 依赖并构建
-cd ../semaclaw
+# 4. 安装 senclaw 依赖并构建
+cd ../senclaw
 npm install
 npm run build
 npm run build:web
@@ -142,9 +142,9 @@ SCHEDULER_INTERVAL_SEC=60
 NOTIFY_MAX_DELAY_MINUTES=30
 
 # 路径覆盖（默认值见 config.ts）
-DB_PATH=~/.semaclaw/semaclaw.db
-AGENTS_DIR=~/semaclaw/agents
-WORKSPACE_DIR=~/semaclaw/workspace
+DB_PATH=~/.senclaw/senclaw.db
+AGENTS_DIR=~/senclaw/agents
+WORKSPACE_DIR=~/senclaw/workspace
 
 # WebSocket Gateway
 GATEWAY_PORT=18789
@@ -163,29 +163,29 @@ QQ_APP_SECRET=
 QQ_SANDBOX=false
 
 # 记忆系统 Embedding（可选，默认 none 仅用 FTS5）
-SEMACLAW_EMBEDDING_PROVIDER=none   # none | openai | openrouter | ollama | local
+SENCLAW_EMBEDDING_PROVIDER=none   # none | openai | openrouter | ollama | local
 
 # openai
-SEMACLAW_OPENAI_MODEL=text-embedding-3-small
+SENCLAW_OPENAI_MODEL=text-embedding-3-small
 OPENAI_API_KEY=
 
 # openrouter
-SEMACLAW_OPENROUTER_MODEL=openai/text-embedding-3-small
+SENCLAW_OPENROUTER_MODEL=openai/text-embedding-3-small
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
 # ollama（本地服务）
-SEMACLAW_OLLAMA_MODEL=nomic-embed-text
+SENCLAW_OLLAMA_MODEL=nomic-embed-text
 OLLAMA_BASE_URL=http://localhost:11434
 
 # local（Transformers.js 纯本地，首次使用自动下载模型，约几百MB）
-SEMACLAW_LOCAL_MODEL=Xenova/paraphrase-multilingual-MiniLM-L12-v2
-SEMACLAW_LOCAL_MODEL_PATH=   # 留空则缓存到 ~/.cache/transformers
+SENCLAW_LOCAL_MODEL=Xenova/paraphrase-multilingual-MiniLM-L12-v2
+SENCLAW_LOCAL_MODEL_PATH=   # 留空则缓存到 ~/.cache/transformers
 
 # 搜索调参
-SEMACLAW_EMBEDDING_DIMENSIONS=0        # 0=自动，手动指定时填向量维度
-SEMACLAW_SEARCH_MAX_RESULTS=5
-SEMACLAW_SEARCH_MIN_SCORE=0.5
+SENCLAW_EMBEDDING_DIMENSIONS=0        # 0=自动，手动指定时填向量维度
+SENCLAW_SEARCH_MAX_RESULTS=5
+SENCLAW_SEARCH_MIN_SCORE=0.5
 ```
 
 ### 3. 启动
@@ -213,9 +213,9 @@ npm run cli -- clawhub update --all
 
 # 全局安装后
 npm run build && npm link
-semaclaw skills list
-semaclaw clawhub list
-npm unlink semaclaw   # 取消注册
+senclaw skills list
+senclaw clawhub list
+npm unlink senclaw   # 取消注册
 ```
 
 ---
@@ -364,7 +364,7 @@ embedding 混合搜索 → FTS5 全文检索 → 关键词子串匹配
 
 isAdmin Agent 可通过 `dispatch-server` MCP 协调多个子 Agent 并行执行任务：
 
-- **DispatchBridge**：文件 IPC（`~/.semaclaw/dispatch-state.json`），lock 文件保护
+- **DispatchBridge**：文件 IPC（`~/.senclaw/dispatch-state.json`），lock 文件保护
 - **任务结构**：Parent（`p-YYYYMMDD-{seq}`）包含多个子任务（`d-YYYYMMDD-{seq}`），支持 DAG 依赖
 - **队列**：每个 admin 同时只有一个 active parent，其余排队
 - **工作区共享**：子任务激活时继承 admin Agent 的 workspace 状态
@@ -373,7 +373,7 @@ isAdmin Agent 可通过 `dispatch-server` MCP 协调多个子 Agent 并行执行
 
 ## Wiki 知识库
 
-`WikiManager` 提供 git 驱动的个人知识库，存储在 `~/semaclaw/wiki/`：
+`WikiManager` 提供 git 驱动的个人知识库，存储在 `~/senclaw/wiki/`：
 
 - YAML frontmatter 管理（created / updated / tags / source）
 - 目录树扫描、标签索引、git commit 历史
@@ -383,7 +383,7 @@ isAdmin Agent 可通过 `dispatch-server` MCP 协调多个子 Agent 并行执行
 
 ## 全局配置文件（可选）
 
-`~/.semaclaw/config.json` 不存在时自动忽略，启动时优先于 DB：
+`~/.senclaw/config.json` 不存在时自动忽略，启动时优先于 DB：
 
 ```json
 {

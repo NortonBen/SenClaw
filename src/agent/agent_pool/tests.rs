@@ -21,6 +21,7 @@ fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
         allowed_work_dirs: None,
         bot_token: None,
         max_messages: None,
+        llm_config_id: None,
         last_active: None,
         added_at: "2026-01-01T00:00:00Z".into(),
     }

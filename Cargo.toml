@@ -9,8 +9,8 @@ edition = "2021"
 description = "Multi-group AI gateway built on sema-code-core"
 license = "MIT"
 authors = ["AIRC Sema Team"]
-repository = "https://github.com/midea-ai/SemaClaw"
-homepage = "https://github.com/midea-ai/SemaClaw"
+repository = "https://github.com/midea-ai/SenClaw"
+homepage = "https://github.com/midea-ai/SenClaw"
 
 [[bin]]
 name = "senclaw"
@@ -67,7 +67,7 @@ zip = "2"
 qrcode = "0.14"
 
 # UUID / random
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 rand = "0.8"
 
 tokio-stream = "0.1"
@@ -176,6 +176,12 @@ realfft = { version = "3.5", optional = true }
 # can't run the Gemma-4 model that consumes them.
 image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
 
+# Pure-Rust OCR via PaddleOCR (PP-OCRv4/v5) on MNN inference backend.
+# Enable via the `ocr-paddle` feature. macOS Metal/CoreML acceleration available
+# via the additive `ocr-paddle-metal` feature. Off by default — pulls C++ MNN
+# toolchain (cmake/clang) which we don't want in the default build.
+ocr-rs = { git = "https://github.com/zibo-chen/rust-paddle-ocr.git", branch = "next", optional = true, default-features = false }
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4.5"
@@ -237,6 +243,22 @@ whisper-audio = ["dep:symphonia", "dep:rubato", "dep:realfft"]
 # Full native Whisper ASR on Apple Silicon: audio front-end + MLX encoder/decoder.
 # Build: cargo build --features local-mlx-whisper
 local-mlx-whisper = ["local-mlx", "whisper-audio"]
+
+# Native ZipVoice flow-matching TTS on Apple Silicon (in progress). Brings the
+# MLX stack plus the pure-Rust audio front-end (prompt-wav features + Vocos mel
+# I/O). Foundation modules (config/tokenizer/weights/scaling) are unit-tested;
+# the pure-Rust config/tokenizer/weight-index tests need no feature flag.
+# Build: cargo build --features local-mlx-tts
+local-mlx-tts = ["local-mlx", "whisper-audio"]
+
+# Pure-Rust OCR via PaddleOCR + MNN backend (cross-platform; CPU by default).
+# Build: cargo build --features ocr-paddle
+# The `image` crate is reused for decoding PNG/JPEG/WebP/BMP/GIF inputs.
+ocr-paddle = ["dep:ocr-rs", "dep:image"]
+
+# Additive: enable Metal + CoreML acceleration on macOS/iOS for OCR.
+# Build (macOS): cargo build --features ocr-paddle-metal
+ocr-paddle-metal = ["ocr-paddle", "ocr-rs/metal", "ocr-rs/coreml"]
 
 # NOTE — Gemma-4 vision input does NOT have its own feature flag. Image
 # decoding (the `image` crate) and the vision-side modules

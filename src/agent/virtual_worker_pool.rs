@@ -42,6 +42,31 @@ pub struct TodoItem {
 /// Callback for forwarding virtual-agent todos to WsGateway.
 pub type TodosNotifyFn = Arc<dyn Fn(&str, &str, &[TodoItem]) + Send + Sync>;
 
+/// A single activity entry emitted by a virtual sub-agent (tool call, thinking, message).
+/// Forwarded to admin WS clients as `dispatch:activity`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubAgentActivityEntry {
+    pub entry_type: String, // "tool" | "think" | "message"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>, // for think/message entries
+    pub ts: String,
+}
+
+/// Callback for forwarding virtual-agent activity (tool calls, thinking)
+/// to the admin UI. Arguments: (task_id, entry)
+pub type ActivityNotifyFn = Arc<dyn Fn(&str, SubAgentActivityEntry) + Send + Sync>;
+
 /// Callback wired from lib.rs so virtual agents can surface permission requests to admin UI.
 ///
 /// Arguments: (virtual_jid, tool_name, title, content, options, response_sender)
@@ -93,6 +118,7 @@ pub trait VirtualCoreApi: Send + Sync {
         permission_fn: Option<VirtualPermissionFn>,
         custom_memory_dir: Option<&str>,
         memory_folder_override: Option<&str>,
+        activity_notify: Option<ActivityNotifyFn>,
     ) -> Result<String> {
         Err(anyhow::anyhow!("VirtualCoreApi not wired"))
     }
@@ -149,6 +175,8 @@ pub struct VirtualWorkerPool {
     /// Forward permission requests from virtual agents to the admin UI.
     /// Set from lib.rs after PermissionBridge is available.
     permission_fn: Mutex<Option<VirtualPermissionFn>>,
+    /// Forward virtual-agent tool/thinking activity to admin UI.
+    activity_notify: Mutex<Option<ActivityNotifyFn>>,
 }
 
 impl VirtualWorkerPool {
@@ -162,7 +190,12 @@ impl VirtualWorkerPool {
             on_bind_permission: Mutex::new(None),
             get_skip_perms: Mutex::new(None),
             permission_fn: Mutex::new(None),
+            activity_notify: Mutex::new(None),
         }
+    }
+
+    pub fn set_activity_notify(&self, f: ActivityNotifyFn) {
+        *self.activity_notify.lock().unwrap() = Some(f);
     }
 
     /// Set extra MCP servers to inject into every virtual engine (e.g. browser-mcp).
@@ -435,6 +468,19 @@ impl VirtualWorkerPool {
         let custom_memory_dir_captured = custom_memory_dir.map(|s| s.to_string());
         let memory_folder_override_captured = memory_folder_override.map(|s| s.to_string());
 
+        // Wrap activity_notify with task_id for this run.
+        let activity_notify: Option<ActivityNotifyFn> = self
+            .activity_notify
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|notify| {
+                let tid = task_id.to_string();
+                Arc::new(move |_: &str, entry: SubAgentActivityEntry| {
+                    notify(&tid, entry);
+                }) as ActivityNotifyFn
+            });
+
         let result = tokio::task::spawn_blocking(move || {
             let sys_prompt_opt = if sys_prompt.is_empty() {
                 None
@@ -458,6 +504,7 @@ impl VirtualWorkerPool {
                 perm_fn,
                 custom_memory_dir_captured.as_deref(),
                 memory_folder_override_captured.as_deref(),
+                activity_notify,
             )
         })
         .await;
@@ -575,6 +622,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         permission_fn: Option<VirtualPermissionFn>,
         custom_memory_dir: Option<&str>,
         memory_folder_override: Option<&str>,
+        activity_notify: Option<ActivityNotifyFn>,
     ) -> Result<String> {
         use crate::zen_core::{EngineEvent, SessionState, ZenCore, ZenCoreOptions};
 
@@ -642,6 +690,22 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                             && !data.content.trim().is_empty()
                         {
                             last_message = Some(data.content.clone());
+                            // Forward main agent messages as activity entries
+                            if let Some(ref notify) = activity_notify {
+                                notify(
+                                    instance_id,
+                                    SubAgentActivityEntry {
+                                        entry_type: "message".into(),
+                                        tool_name: None,
+                                        title: None,
+                                        summary: None,
+                                        content: None,
+                                        ok: None,
+                                        text: Some(data.content),
+                                        ts: chrono::Utc::now().to_rfc3339(),
+                                    },
+                                );
+                            }
                         }
                     }
                     EngineEvent::StateUpdate(data) => {
@@ -710,6 +774,40 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                                 crate::zen_core::ToolPermissionResponseData {
                                     tool_name: data.tool_name,
                                     selected: "refuse".to_string(),
+                                },
+                            );
+                        }
+                    }
+                    EngineEvent::ToolExecutionComplete(data) => {
+                        if let Some(ref notify) = activity_notify {
+                            notify(
+                                instance_id,
+                                SubAgentActivityEntry {
+                                    entry_type: "tool".into(),
+                                    tool_name: Some(data.tool_name),
+                                    title: Some(data.title),
+                                    summary: Some(data.summary),
+                                    content: Some(data.content),
+                                    ok: Some(true),
+                                    text: None,
+                                    ts: chrono::Utc::now().to_rfc3339(),
+                                },
+                            );
+                        }
+                    }
+                    EngineEvent::ToolExecutionError(data) => {
+                        if let Some(ref notify) = activity_notify {
+                            notify(
+                                instance_id,
+                                SubAgentActivityEntry {
+                                    entry_type: "tool".into(),
+                                    tool_name: Some(data.tool_name),
+                                    title: Some(data.title),
+                                    summary: None,
+                                    content: Some(serde_json::Value::String(data.content)),
+                                    ok: Some(false),
+                                    text: None,
+                                    ts: chrono::Utc::now().to_rfc3339(),
                                 },
                             );
                         }

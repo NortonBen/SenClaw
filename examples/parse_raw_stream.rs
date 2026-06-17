@@ -48,7 +48,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!();
 
     // The whole point of the normalizer: NO marker may survive past it.
-    let markers = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>", "<|\"|>"];
+    let markers = [
+        "<|channel>",
+        "<channel|>",
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|\"|>",
+    ];
     let mut leaks = 0usize;
     for m in markers {
         if visible.contains(m) {

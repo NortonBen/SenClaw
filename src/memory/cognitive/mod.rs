@@ -41,7 +41,6 @@ pub mod soul_ingest;
 pub mod system;
 pub mod tiers;
 pub mod triplet;
-pub mod tts_mlx;
 pub mod vector_store;
 
 pub use cognify::{sanitize_for_cognify, CognifyOptions, CognifyPipeline, CognifyReport};

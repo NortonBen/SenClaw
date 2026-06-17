@@ -1,7 +1,7 @@
 //! Per-skill runtime configuration (env injection), OpenClaw-compatible.
 //!
 //! Mirrors OpenClaw's `skills.entries.<name>` block in `openclaw.json`. In
-//! SemaClaw this lives under the `skills` key of the global `config.json`
+//! SenClaw this lives under the `skills` key of the global `config.json`
 //! (path = [`crate::config::PathsConfig::global_config_path`]):
 //!
 //! ```json

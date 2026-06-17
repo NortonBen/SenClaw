@@ -58,7 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let merged = merge_for_ui(&reasoning, &visible);
 
     eprintln!("── step 2: merge ──");
-    eprintln!("merged starts with: {:?}", &merged.chars().take(40).collect::<String>());
+    eprintln!(
+        "merged starts with: {:?}",
+        &merged.chars().take(40).collect::<String>()
+    );
     eprintln!();
 
     // Step 3: simulate the UI's `extractLeadingReasoningBlocks` Regex match.

@@ -1,8 +1,8 @@
 // MCP server as a Next.js Route Handler. The same `npm start` (or standalone
 // `node server.js`) process that serves the UI also serves this endpoint at
-// `/mcp`, so SemaClaw only registers the URL — no separate MCP server process.
+// `/mcp`, so SenClaw only registers the URL — no separate MCP server process.
 //
-// Uses the MCP SDK's Web Standard transport (Fetch Request/Response). SemaClaw
+// Uses the MCP SDK's Web Standard transport (Fetch Request/Response). SenClaw
 // daemon calls go through the SenclawSpace SDK so the MCP tools share the same
 // config/core API contract as the app UI.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -60,7 +60,7 @@ function buildServer() {
     'gworkspace_set_settings',
     {
       title: 'Update Google Workspace Settings',
-      description: 'Merge-update saved settings (only provided fields change). Persisted to the SemaClaw config KV shared with the app UI.',
+      description: 'Merge-update saved settings (only provided fields change). Persisted to the SenClaw config KV shared with the app UI.',
       inputSchema: {
         days: z.number().int().min(1).max(90).optional().describe('Sync look-back window in days'),
         services: z.array(z.enum(KNOWN_SERVICES)).min(1).optional().describe('Enabled services'),
@@ -111,7 +111,7 @@ function buildServer() {
 }
 
 async function handle(req) {
-  // Accept-header shim: the SemaClaw Rust MCP client sends no `Accept` header,
+  // Accept-header shim: the SenClaw Rust MCP client sends no `Accept` header,
   // which the strict transport rejects with 406. Rebuild with a compliant one.
   const headers = new Headers(req.headers);
   const accept = headers.get('accept') || '';

@@ -210,6 +210,65 @@ pub(crate) async fn handle_subscribe(
                 sender,
                 &serde_json::json!({"type": "dispatch:update", "parents": parents}),
             );
+
+            // Send persisted dispatch activity for active/recent tasks so the
+            // UI replays sub-agent tool logs on reconnect.
+            if let Some(parents_arr) = parents.as_array() {
+                let task_ids: Vec<String> = parents_arr
+                    .iter()
+                    .filter(|p| {
+                        let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                        status == "active" || status == "queued"
+                    })
+                    .flat_map(|p| {
+                        p.get("tasks")
+                            .and_then(|v| v.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|t| t.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    })
+                    .collect();
+                if !task_ids.is_empty() {
+                    let id_refs: Vec<&str> = task_ids.iter().map(|s| s.as_str()).collect();
+                    if let Ok(activity) = state.db.get_dispatch_activity(&id_refs) {
+                        // Group by task_id and send one dispatch:activity:batch per task
+                        let mut by_task: std::collections::HashMap<&str, Vec<serde_json::Value>> =
+                            std::collections::HashMap::new();
+                        for row in &activity {
+                            let content: serde_json::Value = row
+                                .content_json
+                                .as_deref()
+                                .and_then(|s| serde_json::from_str(s).ok())
+                                .unwrap_or(serde_json::Value::Null);
+                            by_task.entry(&row.task_id).or_default().push(serde_json::json!({
+                                "entryType": row.entry_type,
+                                "toolName": row.tool_name,
+                                "title": row.title,
+                                "summary": row.summary,
+                                "content": content,
+                                "ok": row.ok,
+                                "text": row.text,
+                                "ts": row.ts,
+                            }));
+                        }
+                        for (tid, entries) in by_task {
+                            send_json(
+                                sender,
+                                &serde_json::json!({
+                                    "type": "dispatch:activity:batch",
+                                    "taskId": tid,
+                                    "entries": entries,
+                                }),
+                            );
+                        }
+                        tracing::info!(
+                            "[WsGateway] subscribe: sent {} persisted activity entries for {} task(s)",
+                            activity.len(),
+                            task_ids.len()
+                        );
+                    }
+                }
+            }
         }
         let todos = state.api.get_agent_todos();
         let mem_has_todos = matches!(&todos, serde_json::Value::Object(m) if !m.is_empty());
@@ -506,6 +565,7 @@ pub(crate) async fn handle_list_groups(
                 allowed_paths: br.agent.allowed_paths.clone(),
                 allowed_work_dirs: br.agent.allowed_work_dirs.clone(),
                 max_messages: br.binding.max_messages,
+                llm_config_id: None,
                 agent_id: Some(br.agent.id),
                 channel_id: Some(br.channel.id),
             });
@@ -676,6 +736,15 @@ pub(crate) async fn handle_register_group(
             msg["maxMessages"].as_u64().map(|n| n as u32)
         } else {
             existing.as_ref().and_then(|e| e.max_messages)
+        },
+        llm_config_id: if msg.get("modelId").is_some() {
+            msg["modelId"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        } else {
+            existing.as_ref().and_then(|e| e.llm_config_id.clone())
         },
         last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
         added_at: existing
@@ -863,12 +932,24 @@ pub(crate) async fn handle_update_group(
     if msg.get("maxMessages").is_some() {
         updates.max_messages = Some(msg["maxMessages"].as_u64().map(|n| n as u32));
     }
+    if msg.get("modelId").is_some() {
+        // null / empty string clears the override (→ global active model).
+        let id = msg["modelId"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        updates.llm_config_id = Some(id);
+    }
 
     match state
         .group_manager
         .update(&state.db, &state.config, &jid, updates)
     {
         Ok(updated) => {
+            // The new selection is persisted on the binding; AgentPool reads it
+            // fresh from the DB and applies it to the engine on the next turn
+            // (see `set_model_override` in the dispatch path).
             let info = to_group_info(&updated);
             broadcast_to_all_inner(
                 clients,

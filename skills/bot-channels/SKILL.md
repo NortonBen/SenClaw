@@ -1,11 +1,11 @@
 ---
 name: bot-channels
-description: Bind and manage bot channels (Telegram, WeChat/weixin, Feishu/Lark, QQ) for SemaClaw agents via CLI or Web UI
+description: Bind and manage bot channels (Telegram, WeChat/weixin, Feishu/Lark, QQ) for SenClaw agents via CLI or Web UI
 ---
 
 # Bot Channel Management
 
-SemaClaw agents communicate through channels. Each channel requires a bot account on the platform and a binding to an agent folder.
+SenClaw agents communicate through channels. Each channel requires a bot account on the platform and a binding to an agent folder.
 
 > **Language**: Always respond to the user in the language they used. Translate all guidance from asset files into the user's language when presenting it.
 
@@ -71,28 +71,28 @@ When a user asks to set up a channel for the first time, **present all available
 
 ```bash
 # List all configured channel bindings
-semaclaw channel list
+senclaw channel list
 
 # -- Telegram --
-semaclaw channel telegram list
-semaclaw channel telegram add --token <bot-token> --user <user-id> --group <folder>
-semaclaw channel telegram remove --token <bot-token>
+senclaw channel telegram list
+senclaw channel telegram add --token <bot-token> --user <user-id> --group <folder>
+senclaw channel telegram remove --token <bot-token>
 
 # -- WeChat --
-# After add: restart semaclaw; a QR code will appear in the terminal for scanning
-semaclaw channel wechat list
-semaclaw channel wechat add --group <folder> [--name <name>]
-semaclaw channel wechat remove --group <folder>
+# After add: restart senclaw; a QR code will appear in the terminal for scanning
+senclaw channel wechat list
+senclaw channel wechat add --group <folder> [--name <name>]
+senclaw channel wechat remove --group <folder>
 
 # -- Feishu --
-semaclaw channel feishu list
-semaclaw channel feishu add --app-id <app-id> --app-secret <app-secret> --group <folder> [--name <name>] [--jid <jid>] [--domain lark]
-semaclaw channel feishu remove --app-id <app-id>
+senclaw channel feishu list
+senclaw channel feishu add --app-id <app-id> --app-secret <app-secret> --group <folder> [--name <name>] [--jid <jid>] [--domain lark]
+senclaw channel feishu remove --app-id <app-id>
 
 # -- QQ --
-semaclaw channel qq list
-semaclaw channel qq add --app-id <app-id> --app-secret <app-secret> --group <folder> [--name <name>] [--sandbox]
-semaclaw channel qq remove --app-id <app-id>
+senclaw channel qq list
+senclaw channel qq add --app-id <app-id> --app-secret <app-secret> --group <folder> [--name <name>] [--sandbox]
+senclaw channel qq remove --app-id <app-id>
 ```
 
 ---

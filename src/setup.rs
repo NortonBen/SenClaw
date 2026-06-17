@@ -99,7 +99,7 @@ pub fn run_setup_if_needed(config_path: &Path) {
     let cfg = get_admin_permissions_config(config_path);
     let first_time = is_first_time(&cfg);
 
-    println!("\n=== SemaClaw Setup ===\n");
+    println!("\n=== SenClaw Setup ===\n");
 
     if first_time {
         println!("No permission policy found. Default policy: all agents require approval.");

@@ -1,4 +1,4 @@
-//! Code Engine — agent-driven code editing for SemaClaw.
+//! Code Engine — agent-driven code editing for SenClaw.
 //!
 //! # Modules
 //! - `session` — CodeSession: git-backed workspace sandbox + path-traversal protection

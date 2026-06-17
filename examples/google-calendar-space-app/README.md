@@ -2,7 +2,7 @@
 
 This is an installable Next.js Space App example. It is not built into the Space UI.
 
-The editable source lives in `app/`. SemaClaw should not run the Next.js source
+The editable source lives in `app/`. SenClaw should not run the Next.js source
 folder directly; install only the static export ZIP generated from `out/`.
 
 ## Build
@@ -30,5 +30,5 @@ Install the ZIP from `Space -> Apps -> Cài từ ZIP` or `Settings -> Space Apps
 
 ## Space Settings
 
-The page loads its settings from the SemaClaw Space App config KV store through
+The page loads its settings from the SenClaw Space App config KV store through
 `SenclawSpace.getConfig('google-calendar-settings')`.

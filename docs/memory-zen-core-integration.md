@@ -115,7 +115,7 @@ ${sections.join('\n\n')}
 
 ### 2.2. Dynamic Retrieval — Pre-Retrieval Search
 
-**File:** `code-old/SemaClaw/src/agent/AgentPool.ts` (lines 710-734)
+**File:** `code-old/SenClaw/src/agent/AgentPool.ts` (lines 710-734)
 
 ```typescript
 if (config.memory.preRetrieval) {
@@ -300,7 +300,7 @@ pub struct ZenCoreHandlers {
 
 ### 4.1. Agent mất persona
 
-**Hiện tại:** Mọi agent trong SemaClaw đều nhận system prompt `"You are a helpful AI assistant."` — giống hệt nhau, không phân biệt.
+**Hiện tại:** Mọi agent trong SenClaw đều nhận system prompt `"You are a helpful AI assistant."` — giống hệt nhau, không phân biệt.
 
 **Đúng ra phải là:** Mỗi agent có persona riêng từ `SOUL.md`:
 - `code-agent/SOUL.md`: "Bạn là senior Rust engineer. Ưu tiên correctness, không dùng unwrap()..."
@@ -729,7 +729,7 @@ pub async fn query(
 | `src/memory/fts_search.rs` | Hybrid search: hybrid_search, fts_search, vec_search |
 | `code-old/sema-core/dist/util/rules.js` | generateRulesReminders: SOUL.md + MEMORY.md + AGENTS.md |
 | `code-old/sema-core/dist/core/SemaEngine.js` | buildAdditionalReminders, formatSystemPrompt |
-| `code-old/SemaClaw/src/agent/AgentPool.ts` | Old TS AgentPool: pre-retrieval, memory integration |
+| `code-old/SenClaw/src/agent/AgentPool.ts` | Old TS AgentPool: pre-retrieval, memory integration |
 
 ---
 

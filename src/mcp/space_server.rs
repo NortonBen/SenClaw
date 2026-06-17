@@ -1316,6 +1316,7 @@ impl SpaceServer {
             allowed_work_dirs: None,
             bot_token: None,
             max_messages: None,
+            llm_config_id: None,
             last_active: Some(now.clone()),
             added_at: now,
         }) {

@@ -52,14 +52,17 @@ factual relationship — including everyday claims like names, locations, prefer
 roles, and identities, even when the sentence is short or first-person. Treat first-person pronouns \
 (I/tôi/我/etc.) as a concrete subject when an identity statement is being made. Keep entity names \
 in the SAME script as the source (don't translate or transliterate). Use compact, lowercase, \
-English predicates (e.g. `name`, `lives_in`, `likes`, `is_a`, `works_at`, `owns`). Skip filler \
-words and questions. Return JSON only.\n\n\
-Schema: {\"triplets\":[{\"subject\":\"...\",\"predicate\":\"...\",\"object\":\"...\"}]}\n\n\
+English predicates (e.g. `name`, `lives_in`, `likes`, `is_a`, `works_at`, `owns`). Also tag each \
+subject and object with `subject_type` / `object_type`: a short, lowercase, English category for \
+the entity (e.g. `person`, `city`, `country`, `organization`, `food`, `animal`, `concept`). Use an \
+empty string when the category is genuinely unclear. Skip filler words and questions. Return JSON \
+only.\n\n\
+Schema: {\"triplets\":[{\"subject\":\"...\",\"subject_type\":\"...\",\"predicate\":\"...\",\"object\":\"...\",\"object_type\":\"...\"}]}\n\n\
 Example input: \"tôi tên là Sen, sống ở Hà Nội và thích cà phê đen.\"\n\
 Example output: {\"triplets\":[\
-{\"subject\":\"tôi\",\"predicate\":\"name\",\"object\":\"Sen\"},\
-{\"subject\":\"tôi\",\"predicate\":\"lives_in\",\"object\":\"Hà Nội\"},\
-{\"subject\":\"tôi\",\"predicate\":\"likes\",\"object\":\"cà phê đen\"}\
+{\"subject\":\"tôi\",\"subject_type\":\"person\",\"predicate\":\"name\",\"object\":\"Sen\",\"object_type\":\"person\"},\
+{\"subject\":\"tôi\",\"subject_type\":\"person\",\"predicate\":\"lives_in\",\"object\":\"Hà Nội\",\"object_type\":\"city\"},\
+{\"subject\":\"tôi\",\"subject_type\":\"person\",\"predicate\":\"likes\",\"object\":\"cà phê đen\",\"object_type\":\"food\"}\
 ]}";
 
 fn content_hash(text: &str) -> String {
@@ -122,7 +125,11 @@ pub fn sanitize_for_cognify(text: &str) -> Option<String> {
     // raw HTML / a JSON dump / something else not made of sentences.
     let total = cleaned.chars().count() as f32;
     let markup = cleaned.chars().filter(|c| *c == '<' || *c == '>').count() as f32;
-    if total < 10.0 || markup / total > 0.04 {
+    // 0.4 = 40% (matches the doc comment above). HTML / JSON dumps run
+    // 50–60%+ angle-bracket chars and stay rejected; ordinary prose with the
+    // odd comparison ("giá < 100k", "a -> b") clears the bar instead of being
+    // silently dropped before it ever reaches triplet extraction.
+    if total < 10.0 || markup / total > 0.4 {
         return None;
     }
 
@@ -387,10 +394,10 @@ impl CognifyPipeline {
         }
 
         let subj = self
-            .resolve_or_create_entity(&raw.subject, opts, report, now)
+            .resolve_or_create_entity(&raw.subject, &raw.subject_type, opts, report, now)
             .await?;
         let obj = self
-            .resolve_or_create_entity(&raw.object, opts, report, now)
+            .resolve_or_create_entity(&raw.object, &raw.object_type, opts, report, now)
             .await?;
 
         // chunk -[MENTIONS]→ subject / object (provenance edges).
@@ -446,25 +453,94 @@ impl CognifyPipeline {
     /// Entity resolution: exact-name match first, then fall through to
     /// creating a new entity. Vector-based fuzzy matching is left to P4
     /// (needs a similarity threshold + benchmark before we trust it).
+    ///
+    /// `type_hint` is the cognee-style category from the extractor (may be
+    /// empty). When present and non-empty, the resolved entity is wired to a
+    /// shared [`DataPoint::entity_type`] node via an `is_a` edge so the graph
+    /// carries `entity -is_a-> type` exactly like cognee's
+    /// `expand_with_nodes_and_edges`.
     async fn resolve_or_create_entity(
         &self,
         name: &str,
+        type_hint: &str,
         opts: &CognifyOptions,
         report: &mut CognifyReport,
         now: i64,
     ) -> Result<DataPoint> {
         let canonical = name.trim();
-        if let Some(existing) = self.embedder.graph.find_entity_by_name(canonical)? {
-            report.entities_reused += 1;
-            return Ok(existing);
+        let type_name = type_hint.trim().to_lowercase();
+
+        let entity = match self.embedder.graph.find_entity_by_name(canonical)? {
+            Some(existing) => {
+                report.entities_reused += 1;
+                existing
+            }
+            None => {
+                let mut node = DataPoint::entity(canonical, now);
+                node.type_name = type_name.clone();
+                self.embedder.add_node(&node).await?;
+                for set in &opts.node_sets {
+                    let _ = self.embedder.graph.tag_node(node.id, set);
+                }
+                report.entities_added += 1;
+                node
+            }
+        };
+
+        // entity -[is_a]→ type (cognee EntityType). Folded into the existing
+        // entities_added / edges_added counters to keep the report shape
+        // stable for downstream callers.
+        if !type_name.is_empty() {
+            self.link_entity_type(&entity, &type_name, opts, report, now)
+                .await?;
         }
-        let node = DataPoint::entity(canonical, now);
-        self.embedder.add_node(&node).await?;
-        for set in &opts.node_sets {
-            let _ = self.embedder.graph.tag_node(node.id, set);
+
+        Ok(entity)
+    }
+
+    /// Ensure the shared `EntityType` node exists and the `entity -is_a-> type`
+    /// edge is present (creating or Hebbian-strengthening it). The type node's
+    /// id is deterministic (UUIDv5 of the name), so repeated runs dedupe
+    /// without a name lookup.
+    async fn link_entity_type(
+        &self,
+        entity: &DataPoint,
+        type_name: &str,
+        opts: &CognifyOptions,
+        report: &mut CognifyReport,
+        now: i64,
+    ) -> Result<()> {
+        let type_node = DataPoint::entity_type(type_name, now);
+        // Idempotent: ON CONFLICT(id) upsert. Only count it as "added" the
+        // first time the node is new to the graph.
+        if self.embedder.graph.get_node(type_node.id)?.is_none() {
+            self.embedder.add_node(&type_node).await?;
+            for set in &opts.node_sets {
+                let _ = self.embedder.graph.tag_node(type_node.id, set);
+            }
+            report.entities_added += 1;
         }
-        report.entities_added += 1;
-        Ok(node)
+
+        let existing = self
+            .embedder
+            .graph
+            .neighbors(entity.id, 256)?
+            .into_iter()
+            .find(|e| e.dst == type_node.id && e.predicate.eq_ignore_ascii_case("is_a"));
+        match existing {
+            Some(mut e) => {
+                e.strengthen(opts.importance, now);
+                self.embedder.graph.upsert_edge(&e)?;
+                report.edges_strengthened += 1;
+            }
+            None => {
+                let mut e = RelationshipEdge::new(entity.id, type_node.id, "is_a", now);
+                e.strengthen(opts.importance, now);
+                self.embedder.graph.upsert_edge(&e)?;
+                report.edges_added += 1;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -503,6 +579,17 @@ mod sanitize_tests {
     fn rejects_markup_heavy_payload() {
         // 5 chars of text, lots of brackets → markup ratio fails.
         assert_eq!(sanitize_for_cognify("hi <a><b><c><d><e><f><g><h><i>"), None);
+    }
+
+    #[test]
+    fn keeps_prose_with_occasional_angle_brackets() {
+        // Regression: the markup guard is 40%, not 4%. A normal chat line
+        // with one comparison operator is ~4–5% brackets and MUST survive —
+        // dropping it here loses the fact before triplet extraction ever runs.
+        let out = sanitize_for_cognify("tôi nghĩ giá sẽ < 100k và lãi > 5%")
+            .expect("prose with a couple of comparisons should pass");
+        assert!(out.contains("100k"));
+        assert!(out.contains("5%"));
     }
 
     #[test]
@@ -592,6 +679,72 @@ mod tests {
         assert_eq!(report.chunks_added, 1);
         assert_eq!(report.entities_added, 2);
         // 1 semantic edge + 2 MENTIONS provenance edges
+        assert_eq!(report.edges_added, 3);
+    }
+
+    #[tokio::test]
+    async fn cognify_creates_entity_types_and_is_a_edges() {
+        // Typed extraction (cognee parity): each subject/object carries a
+        // category → an EntityType node + an `is_a` edge per typed entity.
+        let canned = r#"{"triplets":[{"subject":"Sen","subject_type":"person","predicate":"lives_in","object":"Hà Nội","object_type":"city"}]}"#.to_string();
+        let pipe = build_pipeline(vec![canned]);
+        let report = pipe
+            .cognify("Sen sống ở Hà Nội.", "doc", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        // 2 entities (Sen, Hà Nội) + 2 type nodes (person, city).
+        assert_eq!(report.entities_added, 4);
+        // 1 semantic (lives_in) + 2 MENTIONS + 2 is_a.
+        assert_eq!(report.edges_added, 5);
+
+        // Type node exists under its deterministic id, with the right kind.
+        let person = DataPoint::entity_type("person", 0);
+        let fetched = pipe
+            .embedder
+            .graph
+            .get_node(person.id)
+            .unwrap()
+            .expect("person type node should be persisted");
+        assert_eq!(
+            fetched.kind,
+            crate::memory::cognitive::data_point::NodeKind::EntityType
+        );
+        assert_eq!(fetched.name, "person");
+
+        // The entity carries the denormalised type for single-read access.
+        let sen = pipe
+            .embedder
+            .graph
+            .find_entity_by_name("Sen")
+            .unwrap()
+            .expect("Sen entity");
+        assert_eq!(sen.type_name, "person");
+
+        // And the is_a edge is wired Sen -> person.
+        let has_is_a = pipe
+            .embedder
+            .graph
+            .neighbors(sen.id, 64)
+            .unwrap()
+            .into_iter()
+            .any(|e| e.dst == person.id && e.predicate.eq_ignore_ascii_case("is_a"));
+        assert!(has_is_a, "expected Sen -is_a-> person edge");
+    }
+
+    #[tokio::test]
+    async fn cognify_untyped_triplet_creates_no_type_nodes() {
+        // Backward-compat: a payload without *_type fields parses fine and
+        // produces no EntityType nodes / is_a edges — same shape as before.
+        let canned =
+            r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+                .to_string();
+        let pipe = build_pipeline(vec![canned]);
+        let report = pipe
+            .cognify("Ada invented the compiler.", "doc", &CognifyOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(report.entities_added, 2);
         assert_eq!(report.edges_added, 3);
     }
 

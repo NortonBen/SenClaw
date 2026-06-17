@@ -155,7 +155,7 @@ fn normalize_cron_expr(expr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContextMode, ScheduleType};
+    use crate::types::{AgentMode, ContextMode, ScheduleType};
     use std::sync::Mutex;
 
     fn task(schedule_type: ScheduleType, value: &str, next_run: Option<&str>) -> ScheduledTask {
@@ -167,6 +167,7 @@ mod tests {
             schedule_type,
             schedule_value: value.into(),
             context_mode: ContextMode::Isolated,
+            agent_mode: AgentMode::Agent,
             script_command: None,
             next_run: next_run.map(String::from),
             last_run: None,

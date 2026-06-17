@@ -20,13 +20,13 @@ ADMIN_TELEGRAM_USER_ID=987654321
 # TELEGRAM_AGENT_FOLDER=main
 ```
 
-Restart `semaclaw` after editing to apply changes.
+Restart `senclaw` after editing to apply changes.
 
 ---
 
 ## Method 2: Additional Bots (Web UI or CLI)
 
-Use this to bind second/third bots to different agent folders. Config is saved to `~/.semaclaw/config.json` and takes effect immediately without restart.
+Use this to bind second/third bots to different agent folders. Config is saved to `~/.senclaw/config.json` and takes effect immediately without restart.
 
 ### Web UI Configuration
 
@@ -49,17 +49,17 @@ To delete, click the delete button on the agent card. `User` bindings are remove
 
 ```bash
 # Add
-semaclaw channel telegram add \
+senclaw channel telegram add \
   --token 123456:ABC-your-token \
   --user 987654321 \
   --group alice
 
 # List
-semaclaw channel telegram list
-semaclaw channel list            # all channel types
+senclaw channel telegram list
+senclaw channel list            # all channel types
 
 # Remove (restart required)
-semaclaw channel telegram remove --token 123456:ABC-your-token
+senclaw channel telegram remove --token 123456:ABC-your-token
 ```
 
 | Parameter | Required | Description |

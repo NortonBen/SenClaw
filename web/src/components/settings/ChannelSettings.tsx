@@ -182,8 +182,8 @@ interface QRPairingData {
 
 function QRPairingModal({ data, onClose }: { data: QRPairingData; onClose: () => void }) {
   const { token } = theme.useToken();
-  // QR payload: semaclaw://connect protocol that the mobile app will parse
-  const qrPayload = `semaclaw://connect?hub=${encodeURIComponent(data.hubUrl)}&cid=${encodeURIComponent(data.channelId)}&key=${encodeURIComponent(data.encryptionKey)}&token=${encodeURIComponent(data.token)}`;
+  // QR payload: senclaw://connect protocol that the mobile app will parse
+  const qrPayload = `senclaw://connect?hub=${encodeURIComponent(data.hubUrl)}&cid=${encodeURIComponent(data.channelId)}&key=${encodeURIComponent(data.encryptionKey)}&token=${encodeURIComponent(data.token)}`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(qrPayload);

@@ -191,7 +191,7 @@ export const SpaceAppsSettings: React.FC = () => {
                   {integration.type ?? 'iframe'}
                 </Tag>
                 <Tag>{integration.url ?? 'no url'}</Tag>
-                {manifest.bridge?.postMessage && <Tag color="cyan">SemaClaw bridge</Tag>}
+                {manifest.bridge?.postMessage && <Tag color="cyan">SenClaw bridge</Tag>}
                 <Button
                   size="small"
                   icon={<InfoCircleOutlined />}

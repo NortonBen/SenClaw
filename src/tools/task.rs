@@ -63,6 +63,11 @@ const AGENT_PROMPT_GENERAL: &str = "You are a helpful AI assistant with access t
 /// the subagent inherits live engine state instead of a stale snapshot.
 pub type ToolResolver = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
 
+/// Closure that returns the model profile to use for a spawned subagent.
+/// Resolved per spawn so subagents inherit the engine's live model selection
+/// (e.g. a per-group LLM override) rather than a snapshot taken at construction.
+pub type ProfileResolver = Arc<dyn Fn() -> ModelProfile + Send + Sync>;
+
 pub struct TaskTool {
     http_client: Client,
     event_bus: EventBus,
@@ -75,8 +80,9 @@ pub struct TaskTool {
     /// every subagent call means the subagent sees `use_tools` / Plan-mode
     /// updates that happened after TaskTool was constructed.
     tools_resolver: ToolResolver,
-    /// Model profile
-    profile: ModelProfile,
+    /// Resolves the model profile at spawn time so subagents inherit the
+    /// engine's live model selection (per-group LLM override).
+    profile_resolver: ProfileResolver,
 }
 
 impl TaskTool {
@@ -90,7 +96,7 @@ impl TaskTool {
         working_dir: String,
         agent_data_dir: String,
         tools_resolver: ToolResolver,
-        profile: ModelProfile,
+        profile_resolver: ProfileResolver,
     ) -> Self {
         Self {
             http_client,
@@ -101,7 +107,7 @@ impl TaskTool {
             working_dir,
             agent_data_dir,
             tools_resolver,
-            profile,
+            profile_resolver,
         }
     }
 }
@@ -283,7 +289,7 @@ impl Tool for TaskTool {
             event_bus: self.event_bus.clone(),
             response_registry: None,
             permission_checker: self.permission_checker.clone(),
-            profile: self.profile.clone(),
+            profile: (self.profile_resolver)(),
             thinking: false,
             stream: false,
             is_subagent: true,

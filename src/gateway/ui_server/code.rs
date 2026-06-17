@@ -1171,6 +1171,7 @@ fn build_code_group_binding(jid: &str, session_id: &str, session_name: &str) -> 
         allowed_work_dirs: None,
         bot_token: None,
         max_messages: None,
+        llm_config_id: None,
         last_active: None,
         added_at: Utc::now().to_rfc3339(),
     }

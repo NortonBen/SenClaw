@@ -1,6 +1,6 @@
 //! WorkbenchBridge — relay engine workbench events to WebSocket + IM channels.
 //!
-//! Port of `code-old/SemaClaw/src/agent/WorkbenchBridge.ts`.
+//! Port of `code-old/SenClaw/src/agent/WorkbenchBridge.ts`.
 //!
 //! Responsibilities:
 //!   1. Subscribe to each engine's [`EventBus`] and fan out

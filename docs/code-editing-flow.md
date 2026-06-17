@@ -1,8 +1,8 @@
-# SemaClaw Code Editing — Tài liệu luồng chính chi tiết
+# SenClaw Code Editing — Tài liệu luồng chính chi tiết
 
 > Tổng hợp từ các tài liệu thiết kế: COWORK_DESIGN.md, core.md, vscode-extensions-research.md, memory.md
 >
-> Tài liệu mô tả chi tiết các luồng hoạt động chính của tính năng code editing trong SemaClaw.
+> Tài liệu mô tả chi tiết các luồng hoạt động chính của tính năng code editing trong SenClaw.
 
 ---
 
@@ -12,7 +12,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                        SemaClaw Code Editing Stack                        │
+│                        SenClaw Code Editing Stack                        │
 │                                                                          │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │                    INPUT LAYER                                   │    │

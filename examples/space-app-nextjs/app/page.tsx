@@ -2,7 +2,7 @@ export default function Page() {
   return (
     <main style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 24 }}>
       <h1>Next.js Space App</h1>
-      <p>This UI is embedded inside SemaClaw Space.</p>
+      <p>This UI is embedded inside SenClaw Space.</p>
       <button
         onClick={() => {
           const requestId = crypto.randomUUID();
@@ -14,7 +14,7 @@ export default function Page() {
           }, '*');
         }}
       >
-        Ask SemaClaw bridge
+        Ask SenClaw bridge
       </button>
     </main>
   );

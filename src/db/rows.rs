@@ -105,6 +105,7 @@ pub(crate) fn row_to_group(row: &Row<'_>) -> Result<GroupBinding> {
         allowed_work_dirs: parse_json_array(row.get("allowed_work_dirs")?),
         bot_token: row.get("bot_token")?,
         max_messages: row.get::<_, Option<i64>>("max_messages")?.map(|n| n as u32),
+        llm_config_id: row.get("llm_config_id")?,
         last_active: row.get("last_active")?,
         added_at: row.get("added_at")?,
     })

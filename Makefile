@@ -32,7 +32,7 @@ run:
 # local models: the gated-delta scan is host-dispatch-bound, so an optimized
 # build is ~3.5-5x faster on prefill (and keeps the GPU fed) vs. `make run`.
 run-release:
-	cargo run --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper
+	cargo run --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --features local-mlx-tts --features ocr-paddle-metal
 
 build-extension:
 	cd senclaw-extension-chrome && npm run build
@@ -54,3 +54,20 @@ app-build:
 	mkdir -p src-tauri/binaries
 	cp target/release/senclaw src-tauri/binaries/senclaw
 	cargo tauri build
+	@$(MAKE) app-clean-cache
+
+# Install the freshly-built .app into /Applications and launch it.
+app-install:
+	@test -d target/release/bundle/macos/SemaClaw.app || (echo "no .app — run 'make app-build' first" && exit 1)
+	@pkill -f "SemaClaw.app/Contents/MacOS/senclaw-app" 2>/dev/null || true
+	@sleep 1
+	rm -rf /Applications/SemaClaw.app
+	cp -R target/release/bundle/macos/SemaClaw.app /Applications/
+	open /Applications/SemaClaw.app
+
+# Reclaim disk: dev-profile artefacts + incremental caches. Safe — release
+# bundle in target/release/bundle/ and /Applications/ are untouched.
+app-clean-cache:
+	@echo "[clean] removing target/debug and incremental caches"
+	@rm -rf target/debug target/release/incremental target/release/build/*-*/incremental 2>/dev/null || true
+	@du -sh target 2>/dev/null || true

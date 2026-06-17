@@ -1,7 +1,7 @@
 //! ZenEngine — per-instance agent runtime orchestrator.
 //!
 //! Owns the [`EventBus`], [`StateManager`], tool registry, and config.
-//! Implements [`ZenCore`] so SemaClaw's [`AgentPool`] can drive it without
+//! Implements [`ZenCore`] so SenClaw's [`AgentPool`] can drive it without
 //! knowing about internal engine details.
 //!
 //! Port of TS `ZenEngine` from sema-core.
@@ -25,9 +25,22 @@ use super::*;
 use crate::gateway::group_manager::load_llm_configs;
 use crate::mcp::SharedMcpRegistry;
 use crate::skills::SkillRegistry;
+use crate::tools::tool_search::normalize_mcp_tool_name;
 use crate::tools::{SkillTool, TaskTool, TodoWriteTool, ToolSearchTool};
 use events::ResponseRegistry;
 use permissions::PermissionManager;
+
+/// Whether a tool counts as "discovered", tolerant of MCP naming schemes.
+///
+/// The discovered set may hold either the full registered name
+/// (`mcp__senclaw-browser__browser_search`, inserted by ToolSearch /
+/// `apply_skill_activation`) or the stripped bridge name
+/// (`mcp__browser__search`, inserted by the `agent-browser` load hook).
+/// Normalizing the queried tool's name collapses both onto the same key so a
+/// tool pre-discovered under either form un-defers correctly.
+fn discovered_has(set: &std::collections::HashSet<String>, name: &str) -> bool {
+    set.contains(name) || set.contains(&normalize_mcp_tool_name(name))
+}
 
 /// Per-instance agent execution engine.
 ///
@@ -199,15 +212,22 @@ impl ZenEngine {
         )));
 
         // Register TaskTool last so it knows about all other tools.
-        // Pass a resolver closure (vs a snapshot) so spawned subagents inherit
-        // `use_tools` / Plan-mode / cowork filters as they evolve at runtime.
-        let profile = Self::resolve_model_profile();
+        // Pass resolver closures (vs snapshots) so spawned subagents inherit
+        // `use_tools` / Plan-mode / cowork filters AND the engine's live model
+        // selection (per-group LLM override) as they evolve at runtime.
         let engine_for_resolver = Arc::downgrade(&engine);
         let tools_resolver: crate::tools::task::ToolResolver = Arc::new(move || {
             engine_for_resolver
                 .upgrade()
                 .map(|e| e.tools_for_main_agent())
                 .unwrap_or_default()
+        });
+        let engine_for_profile = Arc::downgrade(&engine);
+        let profile_resolver: crate::tools::task::ProfileResolver = Arc::new(move || {
+            engine_for_profile
+                .upgrade()
+                .map(|e| e.resolve_model_profile())
+                .unwrap_or_else(|| ZenEngine::resolve_model_profile_with(None))
         });
         engine.register_tool(Arc::new(TaskTool::new(
             engine.http_client.clone(),
@@ -218,7 +238,7 @@ impl ZenEngine {
             engine.options.read().unwrap().working_dir.clone(),
             engine.options.read().unwrap().agent_data_dir.clone(),
             tools_resolver,
-            profile,
+            profile_resolver,
         )));
 
         // Register custom memory directory with MemoryManager if provided
@@ -331,7 +351,7 @@ impl ZenEngine {
             filtered.retain(|t| {
                 t.is_read_only()
                     || PLAN_ALLOWED.contains(&t.name())
-                    || discovered.contains(t.name())
+                    || discovered_has(&discovered, t.name())
             });
         }
 
@@ -384,7 +404,8 @@ impl ZenEngine {
         //     so subsequent turns can actually invoke it. Mirrors claude-code's
         //     "lazy load" UX without breaking the dispatch lookup.
         let discovered = self.discovered_tools.lock().unwrap().clone();
-        filtered.retain(|t| t.always_load() || !t.should_defer() || discovered.contains(t.name()));
+        filtered
+            .retain(|t| t.always_load() || !t.should_defer() || discovered_has(&discovered, t.name()));
 
         // Layer 6 — stable sort for prompt-cache stability.
         filtered.sort_by(|a, b| a.name().cmp(b.name()));
@@ -604,7 +625,7 @@ impl ZenEngine {
 
     /// Build `ExecuteHooksOptions` reusing the engine's HTTP client and active profile.
     fn hook_opts(&self) -> (Client, ModelProfile) {
-        (self.http_client.clone(), Self::resolve_model_profile())
+        (self.http_client.clone(), self.resolve_model_profile())
     }
 
     /// Build the base fields included in every hook input payload.
@@ -620,8 +641,39 @@ impl ZenEngine {
         }
     }
 
-    /// Resolve active model profile from global config first, then env fallback.
-    fn resolve_model_profile() -> ModelProfile {
+    /// Resolve the model profile for this engine, honoring the per-engine
+    /// override (`options.model_config_id`, set from the group's `llm_config_id`).
+    fn resolve_model_profile(&self) -> ModelProfile {
+        let override_id = self.options.read().unwrap().model_config_id.clone();
+        Self::resolve_model_profile_with(override_id.as_deref())
+    }
+
+    /// Pure selection step: pick the `LlmConfig` for `override_id` (per-group
+    /// model), falling back to the globally active id. Returns `None` when
+    /// neither matches a known config (caller then defaults to the first entry).
+    fn select_llm_config(
+        loaded: &crate::gateway::group_manager::LlmConfigResult,
+        override_id: Option<&str>,
+    ) -> Option<crate::gateway::group_manager::LlmConfig> {
+        override_id
+            .and_then(|id| loaded.configs.iter().find(|c| c.id == id))
+            .or_else(|| {
+                loaded
+                    .active_id
+                    .as_ref()
+                    .and_then(|id| loaded.configs.iter().find(|c| &c.id == id))
+            })
+            .cloned()
+    }
+
+    /// Resolve a model profile against the global config.
+    ///
+    /// Resolution order:
+    /// 1. `override_id` (per-group selection) matched against `llmConfigs`.
+    /// 2. Globally active model (`activeLlmConfigId`).
+    /// 3. First config in the list.
+    /// 4. Legacy env-based setup (`SENCLAW_OPENAI_*`).
+    fn resolve_model_profile_with(override_id: Option<&str>) -> ModelProfile {
         let config_path = std::env::var("SENCLAW_CONFIG_PATH")
             .ok()
             .filter(|v| !v.trim().is_empty())
@@ -638,11 +690,7 @@ impl ZenEngine {
 
         let loaded = load_llm_configs(std::path::Path::new(&config_path));
         if !loaded.configs.is_empty() {
-            let selected = loaded
-                .active_id
-                .as_ref()
-                .and_then(|id| loaded.configs.iter().find(|c| &c.id == id))
-                .cloned()
+            let selected = Self::select_llm_config(&loaded, override_id)
                 .unwrap_or_else(|| loaded.configs[0].clone());
 
             let provider = if selected.provider.trim().is_empty() {
@@ -944,8 +992,8 @@ impl ZenCore for ZenEngine {
             always_skills_block.as_deref(),
         );
 
-        // Resolve profile from active UI config first, env fallback second.
-        let profile = Self::resolve_model_profile();
+        // Resolve profile: per-group override → active UI config → env fallback.
+        let profile = self.resolve_model_profile();
 
         // UserPromptSubmit hook — may update the prompt before it reaches the LLM.
         // Runs synchronously before the spawn so `updatedInput` can modify the prompt.
@@ -1742,8 +1790,14 @@ reference are already available (no ToolSearch needed).\n\n{}\n\
             let mut discovered = self.discovered_tools.lock().unwrap();
             for t in self.deferred_tools() {
                 let full = t.name();
+                // Match either the registered verb (`space_current_time`) or the
+                // canonical stripped bridge name (`mcp__space__current_time`) the
+                // skill docs use, so standardized docs still surface the tool.
                 let verb = full.rsplit("__").next().unwrap_or(full);
-                if verb.len() >= 3 && content_lower.contains(&verb.to_lowercase()) {
+                let canonical = normalize_mcp_tool_name(full).to_lowercase();
+                let matched = (verb.len() >= 3 && content_lower.contains(&verb.to_lowercase()))
+                    || content_lower.contains(&canonical);
+                if matched {
                     if discovered.insert(full.to_string()) {
                         tracing::info!(
                             "[Skill] pre-discovered tool for '{}': {full}",
@@ -1831,6 +1885,14 @@ until you have carried out the skill's steps.\n\
     /// proactively compacted after each completed turn.
     pub fn set_after_process(&self, enabled: bool) {
         self.options.write().unwrap().after_process = enabled;
+    }
+
+    /// Hot-update the per-group LLM override for this engine. `id` is an entry id
+    /// in the global `llmConfigs` list, or `None` to fall back to the globally
+    /// active model. Takes effect on the next turn (the request path re-resolves
+    /// the profile via [`Self::resolve_model_profile`]).
+    pub fn set_model_override(&self, id: Option<String>) {
+        self.options.write().unwrap().model_config_id = id;
     }
 
     /// Deterministically pick the best-matching skill for a prompt by scoring it
@@ -2203,6 +2265,23 @@ fn extract_quoted_phrases(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovered_has_matches_both_naming_schemes() {
+        let mut set = std::collections::HashSet::new();
+        // The agent-browser load hook inserts the STRIPPED bridge name…
+        set.insert("mcp__browser__search".to_string());
+        // …yet the deferred tool is registered under its FULL name. Membership
+        // must still hold, or the tool never un-defers.
+        assert!(discovered_has(&set, "mcp__senclaw-browser__browser_search"));
+        assert!(discovered_has(&set, "mcp__browser__search"));
+        // ToolSearch / apply_skill_activation insert the FULL name directly.
+        let mut set2 = std::collections::HashSet::new();
+        set2.insert("mcp__senclaw-space__space_note_create".to_string());
+        assert!(discovered_has(&set2, "mcp__senclaw-space__space_note_create"));
+        // A genuinely-undiscovered tool stays out.
+        assert!(!discovered_has(&set, "mcp__senclaw-space__space_note_create"));
+    }
 
     #[test]
     fn detect_user_language_covers_vi_zh_en() {
@@ -2817,5 +2896,51 @@ mod tests {
         engine.process_user_input("hello", None).unwrap();
         let state = engine.state.lock().unwrap();
         assert_eq!(state.current_state(MAIN_AGENT_ID), SessionState::Processing);
+    }
+
+    fn llm_cfg(id: &str, model: &str) -> crate::gateway::group_manager::LlmConfig {
+        crate::gateway::group_manager::LlmConfig {
+            id: id.into(),
+            label: format!("label-{id}"),
+            provider: "openai".into(),
+            base_url: "https://example/v1".into(),
+            api_key: "k".into(),
+            model_name: model.into(),
+            adapt: "openai".into(),
+            max_tokens: 4096,
+            context_length: 128000,
+            vision: None,
+        }
+    }
+
+    #[test]
+    fn select_llm_config_prefers_override_then_active() {
+        let loaded = crate::gateway::group_manager::LlmConfigResult {
+            configs: vec![llm_cfg("a", "gpt-a"), llm_cfg("b", "gpt-b")],
+            active_id: Some("a".into()),
+            active_quick_id: None,
+            active_cognitive_id: None,
+        };
+
+        // Per-group override wins over the global active id.
+        let sel = ZenEngine::select_llm_config(&loaded, Some("b")).unwrap();
+        assert_eq!(sel.model_name, "gpt-b");
+
+        // No override → falls back to the global active id.
+        let sel = ZenEngine::select_llm_config(&loaded, None).unwrap();
+        assert_eq!(sel.model_name, "gpt-a");
+
+        // Unknown override id → fall back to active id (not None).
+        let sel = ZenEngine::select_llm_config(&loaded, Some("missing")).unwrap();
+        assert_eq!(sel.model_name, "gpt-a");
+
+        // Neither override nor active matches → None (caller uses first config).
+        let loaded2 = crate::gateway::group_manager::LlmConfigResult {
+            configs: vec![llm_cfg("a", "gpt-a")],
+            active_id: Some("nope".into()),
+            active_quick_id: None,
+            active_cognitive_id: None,
+        };
+        assert!(ZenEngine::select_llm_config(&loaded2, Some("also-missing")).is_none());
     }
 }

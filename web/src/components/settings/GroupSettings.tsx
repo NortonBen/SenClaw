@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Typography,
   Button,
@@ -60,6 +60,12 @@ const GROUP_TYPE_COLORS: Record<string, string> = {
   code: '#52C41A',
 };
 
+interface LlmConfigLite {
+  id: string;
+  label: string;
+  modelName?: string;
+}
+
 export const GroupSettings: React.FC<GroupSettingsProps> = ({
   groups,
   agents,
@@ -72,6 +78,48 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [form] = Form.useForm();
   const [createForm] = Form.useForm();
+  const [llmConfigs, setLlmConfigs] = useState<LlmConfigLite[]>([]);
+  const [activeLlmId, setActiveLlmId] = useState<string | null>(null);
+
+  // Load the global LLM config list so groups can pick a per-group model.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/llm-config');
+        const d = await r.json();
+        const list: LlmConfigLite[] = Array.isArray(d) ? d : (d.configs ?? d.data ?? []);
+        setLlmConfigs(list);
+        if (!Array.isArray(d)) setActiveLlmId(d.activeId ?? null);
+      } catch {
+        // Non-fatal: the dropdown just shows "Default" only.
+      }
+    })();
+  }, []);
+
+  // Option list for the model picker: a "Default" entry (clears the override)
+  // followed by every configured LLM. Label the active one so users know the
+  // fallback target.
+  const modelOptions = [
+    {
+      value: '',
+      label:
+        'Default (global active' +
+        (activeLlmId
+          ? `: ${llmConfigs.find(c => c.id === activeLlmId)?.label ?? activeLlmId}`
+          : '') +
+        ')',
+    },
+    ...llmConfigs.map(c => ({
+      value: c.id,
+      label: c.modelName ? `${c.label} — ${c.modelName}` : c.label,
+    })),
+  ];
+
+  const modelLabel = (id: string | null | undefined) => {
+    if (!id) return null;
+    const c = llmConfigs.find(x => x.id === id);
+    return c ? (c.label || c.modelName || id) : id;
+  };
 
   // ---- Edit handlers ----
 
@@ -81,6 +129,7 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
       name: group.name,
       groupType: group.groupType || 'chat',
       isAdmin: group.isAdmin,
+      modelId: group.modelId ?? '',
       allowedTools: group.allowedTools?.join('\n') ?? '',
       allowedPaths: group.allowedPaths?.join('\n') ?? '',
       allowedWorkDirs: group.allowedWorkDirs?.join('\n') ?? '',
@@ -98,6 +147,7 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
       name: values.name,
       groupType: values.groupType,
       isAdmin: values.isAdmin,
+      modelId: values.modelId ? values.modelId : null,
       allowedTools: toArray(values.allowedTools),
       allowedPaths: toArray(values.allowedPaths),
       allowedWorkDirs: toArray(values.allowedWorkDirs),
@@ -131,6 +181,7 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
       channel: values.channel,
       groupType: values.groupType || 'chat',
       requiresTrigger: values.requiresTrigger,
+      modelId: values.modelId ? values.modelId : null,
       allowedTools: toArray(values.allowedTools),
       allowedPaths: toArray(values.allowedPaths),
       allowedWorkDirs: toArray(values.allowedWorkDirs),
@@ -189,6 +240,19 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
       render: (_: unknown, record: GroupInfo) => (
         <Text code style={{ fontSize: 12 }}>{record.folder || '—'}</Text>
       ),
+    },
+    {
+      title: 'Model',
+      key: 'model',
+      width: 140,
+      render: (_: unknown, record: GroupInfo) => {
+        const label = modelLabel(record.modelId);
+        return label ? (
+          <Tag color="geekblue" style={{ borderRadius: 4 }}>{label}</Tag>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>Default</Text>
+        );
+      },
     },
     {
       title: 'Messages',
@@ -357,6 +421,14 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
               </Form.Item>
 
               <Form.Item
+                name="modelId"
+                label="LLM Model"
+                tooltip="Which LLM this group uses. 'Default' falls back to the globally active model set in the LLM settings."
+              >
+                <Select options={modelOptions} />
+              </Form.Item>
+
+              <Form.Item
                 name="isAdmin"
                 label="Admin Group"
                 valuePropName="checked"
@@ -455,6 +527,14 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
             valuePropName="checked"
           >
             <Switch />
+          </Form.Item>
+
+          <Form.Item
+            name="modelId"
+            label="LLM Model"
+            tooltip="Which LLM this group uses. 'Default' falls back to the globally active model set in the LLM settings."
+          >
+            <Select options={modelOptions} />
           </Form.Item>
 
           <Divider plain><Text type="secondary" style={{ fontSize: 12 }}>Permissions</Text></Divider>

@@ -36,6 +36,9 @@ pub struct ZenCoreApi {
     workbench_bridge: Mutex<Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>>,
     /// Per-jid bot tokens used by the workbench-bridge IM fallback.
     bot_tokens: Mutex<HashMap<String, Option<String>>>,
+    /// Per-jid LLM override (entry id in the global `llmConfigs` list). Cached so
+    /// a lazily created engine picks up the group's model in `ensure_engine`.
+    model_overrides: Mutex<HashMap<String, String>>,
     /// Callback invoked when an engine emits a plan-exit request. Caller
     /// (lib.rs) uses it to broadcast the event over WS so the UI can render
     /// the plan-approval modal. `Arc<Mutex>` so spawned event loops can hold
@@ -74,6 +77,7 @@ impl ZenCoreApi {
             mcp_manager,
             workbench_bridge: Mutex::new(None),
             bot_tokens: Mutex::new(HashMap::new()),
+            model_overrides: Mutex::new(HashMap::new()),
             on_plan_exit_request: Arc::new(Mutex::new(None)),
             on_tool_execution: Arc::new(Mutex::new(None)),
         }
@@ -132,6 +136,7 @@ impl ZenCoreApi {
         }
         let opts = ZenCoreOptions {
             instance_id: jid.to_string(),
+            model_config_id: self.model_overrides.lock().unwrap().get(jid).cloned(),
             ..Default::default()
         };
         let engine = ZenEngine::new(opts, self.mcp_manager.clone());
@@ -376,6 +381,25 @@ impl CoreApi for ZenCoreApi {
     fn set_after_process(&self, jid: &str, enabled: bool) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.set_after_process(enabled);
+        }
+    }
+
+    fn set_model_override(&self, jid: &str, id: Option<String>) {
+        // Remember for lazily created engines.
+        match &id {
+            Some(v) => {
+                self.model_overrides
+                    .lock()
+                    .unwrap()
+                    .insert(jid.to_string(), v.clone());
+            }
+            None => {
+                self.model_overrides.lock().unwrap().remove(jid);
+            }
+        }
+        // Apply live if the engine already exists.
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_model_override(id);
         }
     }
 

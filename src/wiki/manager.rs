@@ -38,8 +38,8 @@ impl WikiManager {
         fs::create_dir_all(self.wiki_dir.join("inbox"))?;
 
         self.git(&["init"]).await?;
-        self.git(&["config", "user.name", "semaclaw"]).await?;
-        self.git(&["config", "user.email", "semaclaw@local"])
+        self.git(&["config", "user.name", "senclaw"]).await?;
+        self.git(&["config", "user.email", "senclaw@local"])
             .await?;
 
         fs::write(self.wiki_dir.join(".gitignore"), ".DS_Store\n*.swp\n")?;
@@ -47,7 +47,7 @@ impl WikiManager {
         let readme = concat!(
             "# Wiki\n",
             "\n",
-            "Personal knowledge base maintained by SemaClaw.\n",
+            "Personal knowledge base maintained by SenClaw.\n",
             "\n",
             "## Directory structure\n",
             "\n",
@@ -56,7 +56,7 @@ impl WikiManager {
             "## Remote backup (optional)\n",
             "\n",
             "```bash\n",
-            "cd ~/semaclaw/wiki\n",
+            "cd ~/senclaw/wiki\n",
             "git remote add origin git@github.com:user/my-wiki.git\n",
             "git push -u origin main\n",
             "```\n",

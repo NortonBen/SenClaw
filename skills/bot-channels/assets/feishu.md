@@ -100,13 +100,13 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # FEISHU_DOMAIN=feishu
 ```
 
-Restart `semaclaw` after editing to apply changes.
+Restart `senclaw` after editing to apply changes.
 
 ---
 
 ## Method 2: Additional Apps (Web UI or CLI)
 
-Use this to bind second/third apps to different agent folders. Config is saved to `~/.semaclaw/config.json` and takes effect immediately without restart.
+Use this to bind second/third apps to different agent folders. Config is saved to `~/.senclaw/config.json` and takes effect immediately without restart.
 
 ### Web UI Configuration
 
@@ -130,32 +130,32 @@ Open Settings -> Agents -> **Add Agent**, then choose `Feishu` as Channel:
 
 ```bash
 # Add (leave JID empty for auto-binding)
-semaclaw channel feishu add \
+senclaw channel feishu add \
   --app-id cli_xxxxxxxxxxxxxxxx \
   --app-secret xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --group mybot \
   --name "My Feishu Assistant"
 
 # Add (specify known JID, skip pending flow)
-semaclaw channel feishu add \
+senclaw channel feishu add \
   --app-id cli_xxxxxxxxxxxxxxxx \
   --app-secret xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --group mybot \
   --jid feishu:group:oc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # International version (Lark)
-semaclaw channel feishu add \
+senclaw channel feishu add \
   --app-id cli_xxxxxxxxxxxxxxxx \
   --app-secret xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --group mybot \
   --domain lark
 
 # List
-semaclaw channel feishu list
-semaclaw channel list            # all channel types summary
+senclaw channel feishu list
+senclaw channel list            # all channel types summary
 
 # Remove (also removes related group binding)
-semaclaw channel feishu remove --app-id cli_xxxxxxxxxxxxxxxx
+senclaw channel feishu remove --app-id cli_xxxxxxxxxxxxxxxx
 ```
 
 | Parameter | Required | Description |
@@ -194,7 +194,7 @@ You can change `requiresTrigger` in Agent settings in Web UI.
 -> `im.message.receive_v1` is not subscribed, or it was added but not published in a new app version.
 
 **Q: Multiple bots in one group; @new bot but old bot replies**  
--> Bots from different apps should be bound to **different groups**. Do not add two `semaclaw` bots to the same group.
+-> Bots from different apps should be bound to **different groups**. Do not add two `senclaw` bots to the same group.
 
 **Q: DM does not work**  
 -> Ensure permission `im:message.p2p_msg:readonly` exists and the app has been published within the enterprise tenant.

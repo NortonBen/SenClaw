@@ -79,15 +79,15 @@ mcp_servers:
 
 # Schedule — Recurring Agent Tasks
 
-Manage recurring scheduled tasks that run automatically. Each schedule owns a **dedicated chat session** — the system auto-creates a conversation thread so every agent run has full history. All tools are prefixed `space_recurring_*` and available through the `senclaw-space` MCP server.
+Manage recurring scheduled tasks that run automatically. Each schedule owns a **dedicated chat session** — the system auto-creates a conversation thread so every agent run has full history. Tools register as `space_recurring_*` on the `senclaw-space` MCP server. Call them by the **canonical bridge name** `mcp__space__<verb>` — the resolver strips the redundant `space_` prefix once (e.g. `space_recurring_create` → `mcp__space__recurring_create`). The bare `space_<verb>(...)` notation used below maps to the same tool.
 
 ## Required Tool Discovery
 
 Before calling any schedule action, make sure the concrete MCP tool is visible. If not, call `ToolSearch` first:
 
 ```
-ToolSearch { query: "select:mcp__space__space_recurring_create" }
-ToolSearch { query: "select:mcp__space__space_recurring_list" }
+ToolSearch { query: "select:mcp__space__recurring_create" }
+ToolSearch { query: "select:mcp__space__recurring_list" }
 ```
 
 If an exact `select:` query returns no match, search by keywords such as `space recurring create`, then call the exact tool name returned.

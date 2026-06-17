@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SemaClaw",
+  "productName": "SenClaw",
   "version": "0.1.1",
-  "identifier": "com.semaclaw.desktop",
+  "identifier": "com.senclaw.desktop",
   "build": {
     "frontendDist": "../web/dist"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "chat",
-        "title": "SemaClaw Chat",
+        "title": "SenClaw Chat",
         "url": "http://127.0.0.1:18788/?embed=1&app=1",
         "width": 420,
         "height": 640,
@@ -25,7 +25,7 @@
       },
       {
         "label": "main",
-        "title": "SemaClaw",
+        "title": "SenClaw",
         "url": "http://127.0.0.1:18788/?app=1",
         "width": 1280,
         "height": 820,
@@ -39,7 +39,7 @@
       },
       {
         "label": "diagnostics",
-        "title": "SemaClaw — Diagnostics",
+        "title": "SenClaw — Diagnostics",
         "url": "diagnostics.html",
         "width": 720,
         "height": 560,

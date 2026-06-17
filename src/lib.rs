@@ -32,6 +32,7 @@ pub mod setup;
 pub mod skills;
 pub mod subagents;
 pub mod tools;
+pub mod tts;
 pub mod types;
 pub mod util;
 pub mod wiki;
@@ -1979,6 +1980,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                     },
                                     bot_token: None,
                                     max_messages: None,
+                                    llm_config_id: None,
                                     last_active: None,
                                     added_at: chrono::Utc::now().to_rfc3339(),
                                 }
@@ -2068,6 +2070,44 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     let gw = Arc::clone(&gw_for_todos);
                     tokio::spawn(async move {
                         gw.notify_agent_todos(&jid, &name, &todos).await;
+                    });
+                },
+            ));
+        }
+
+        // Wire sub-agent activity events (tool calls, messages) → WS + DB persistence.
+        {
+            let gw_for_activity = Arc::clone(&gw);
+            let db_for_activity = Arc::clone(&db);
+            virtual_worker_pool.set_activity_notify(Arc::new(
+                move |task_id: &str, entry: agent::virtual_worker_pool::SubAgentActivityEntry| {
+                    let gw = Arc::clone(&gw_for_activity);
+                    let db = Arc::clone(&db_for_activity);
+                    let task_id = task_id.to_string();
+                    let entry_clone = entry.clone();
+                    tokio::spawn(async move {
+                        // Persist first so history:load includes it on next reload.
+                        let content_json = entry_clone
+                            .content
+                            .as_ref()
+                            .map(|v| serde_json::to_string(v).unwrap_or_default());
+                        if let Err(e) = db.insert_dispatch_activity(
+                            &task_id,
+                            "",  // parent_id — resolved by frontend from dispatchParents
+                            &entry_clone.entry_type,
+                            entry_clone.tool_name.as_deref(),
+                            entry_clone.title.as_deref(),
+                            entry_clone.summary.as_deref(),
+                            content_json.as_deref(),
+                            entry_clone.ok,
+                            entry_clone.text.as_deref(),
+                            &entry_clone.ts,
+                        ) {
+                            tracing::warn!(
+                                "[DispatchActivity] persist failed task={task_id}: {e}"
+                            );
+                        }
+                        gw.notify_dispatch_activity(&task_id, &entry).await;
                     });
                 },
             ));

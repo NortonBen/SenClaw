@@ -1,6 +1,6 @@
 //! LaunchUI tool — surface a deliverable in the WebUI workbench panel.
 //!
-//! Port of `code-old/SemaClaw/vendor/package/dist/tools/LaunchUI/`. The agent
+//! Port of `code-old/SenClaw/vendor/package/dist/tools/LaunchUI/`. The agent
 //! calls this after producing a viewable artifact (a rendered `.html`/`.md`
 //! file, a running web app, an exposed API endpoint). It hands the artifact to
 //! the engine [`WorkbenchService`], which persists it and emits `workbench:new`

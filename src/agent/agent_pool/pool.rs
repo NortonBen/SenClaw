@@ -28,7 +28,7 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config,
+    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config, ocr_mcp_config,
     litho_mcp_config, memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config,
     wiki_mcp_config, workspace_mcp_config, McpServerConfig,
 };
@@ -1098,6 +1098,7 @@ impl AgentPool {
                 },
             ));
             mcp_servers.push(browser_mcp_config(cfg.ws_port));
+            mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
 
             // Load marketplace MCP servers from enabled plugins — mirrors TS AgentPool.ts:753-755
             if let Some(mm) = self.marketplace_manager.lock().unwrap().as_ref() {
@@ -1379,20 +1380,26 @@ impl AgentPool {
             self.core_api.set_after_process(jid, after);
         }
 
+        // ---- Per-group LLM override ----
+        // Push the group's model selection to the engine before dispatch so the
+        // reply uses the group's chosen LLM (falls back to the globally active
+        // model when unset). Read per-turn so UI changes take effect immediately.
+        self.core_api
+            .set_model_override(jid, group.llm_config_id.clone());
+
         // ---- Pre-process stage 2: pre-retrieval injection ----
         // Two independent, user-toggleable backends:
-        //   • FTS memory   → env-level `memory.pre_retrieval`
+        //   • MEMORY.md    → env-level `memory.pre_retrieval` (whole-file load)
         //   • Cognitive    → global `preCognitive` toggle (pre-cognitive stage)
-        // Mirrors TS AgentPool.ts:703-715, but the two backends are decoupled so
-        // either can be enabled on its own.
+        // The memory backend now loads `~/.senclaw/agents/<folder>/MEMORY.md`
+        // verbatim instead of FTS-searching chunks + daily history.
         let full_prompt = {
-            let (do_memory, max_results, min_score) = {
+            let (do_memory, max_results) = {
                 let cfg = self.config.lock().unwrap();
                 let c = cfg.as_ref();
                 (
                     c.map(|c| c.memory.pre_retrieval).unwrap_or(false),
                     c.map(|c| c.memory.search_max_results as usize).unwrap_or(5),
-                    c.map(|c| c.memory.search_min_score).unwrap_or(0.5),
                 )
             };
             let do_cognitive = global_config_path
@@ -1400,51 +1407,30 @@ impl AgentPool {
                 .map(crate::gateway::group_manager::get_pre_cognitive_enabled)
                 .unwrap_or(false);
 
-            // FTS memory backend.
+            // MEMORY.md backend — read the file verbatim from the agent's dir.
             let mem_context = if do_memory {
-                let today_file = chrono::Utc::now().format("%Y-%m-%d.md").to_string();
-                let mem_mgr = crate::memory::manager::get_instance();
-                let opts = crate::memory::fts_search::SearchOptions {
-                    max_results: max_results * 3,
-                    min_score,
-                    source: None,
-                };
-                let shared_workspace_memory = if group.group_type == "cowork" {
-                    crate::cowork::workspace_id_from_cowork_jid(jid)
-                        .and_then(|ws_id| {
-                            self.db
-                                .lock()
-                                .unwrap()
-                                .as_ref()
-                                .and_then(|db| db.get_cowork_workspace(ws_id).ok())
-                        })
-                        .flatten()
-                        .is_some()
-                } else {
-                    false
-                };
-                let memory_search_folder = crate::cowork::cowork_memory_index_folder(
-                    jid,
-                    &group.group_type,
-                    &group.folder,
-                    shared_workspace_memory,
-                );
-                match mem_mgr
-                    .search(&memory_search_folder, prompt, Some(opts))
-                    .await
-                {
-                    Ok(results) => {
-                        let filtered: Vec<_> = results
-                            .into_iter()
-                            .filter(|r| r.score >= min_score && !r.path.ends_with(&today_file))
-                            .take(max_results)
-                            .collect();
-                        crate::memory::manager::format_search_results(&filtered)
+                let agents_dir = self
+                    .config
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|c| c.paths.agents_dir.clone());
+                match agents_dir {
+                    Some(dir) => {
+                        let memory_md = dir.join(&group.folder).join("MEMORY.md");
+                        match std::fs::read_to_string(&memory_md) {
+                            Ok(content) => content.trim().to_string(),
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "[AgentPool] Failed to read {}: {e}",
+                                    memory_md.display()
+                                );
+                                String::new()
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!("[AgentPool] Memory pre-retrieval failed: {e}");
-                        String::new()
-                    }
+                    None => String::new(),
                 }
             } else {
                 String::new()
@@ -1469,14 +1455,10 @@ impl AgentPool {
             }
         };
 
-        // Log user query to daily log (original prompt, without memory injection).
-        if let Some(logger) = self.daily_logger.lock().unwrap().as_ref() {
-            logger.append(
-                &group.folder,
-                crate::memory::daily_logger::Role::User,
-                prompt,
-            );
-        }
+        // Daily history log disabled — memory now flows only through
+        // ~/.senclaw/agents/<folder>/MEMORY.md. Daily-log files are no
+        // longer written or read.
+        let _ = &self.daily_logger;
 
         // ---- P14: auto-reflection ----
         // Fire-and-forget cognify on the user message so the knowledge
@@ -2431,13 +2413,9 @@ impl AgentPool {
                         bot_token.as_deref(),
                         data.output_tokens,
                     );
-                    if let Some(logger) = pool.daily_logger.lock().unwrap().as_ref() {
-                        logger.append(
-                            &folder,
-                            crate::memory::daily_logger::Role::Assistant,
-                            reply_text.as_str(),
-                        );
-                    }
+                    // Assistant reply no longer appended to daily history log.
+                    let _ = &pool.daily_logger;
+                    let _ = &folder;
                 }),
             );
         }

@@ -21,13 +21,13 @@ QQ_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # QQ_SANDBOX=true
 ```
 
-Restart `semaclaw` after changes. After the bot receives its first message, it auto-binds to a real JID (DM or group) with no manual setup.
+Restart `senclaw` after changes. After the bot receives its first message, it auto-binds to a real JID (DM or group) with no manual setup.
 
 ---
 
 ## Method 2: Additional Apps (Web UI or CLI)
 
-Use this to bind second/third QQ bots to different agent folders. Config is saved to `~/.semaclaw/config.json` and takes effect immediately without restart.
+Use this to bind second/third QQ bots to different agent folders. Config is saved to `~/.senclaw/config.json` and takes effect immediately without restart.
 
 ### Web UI Configuration
 
@@ -47,14 +47,14 @@ Open Settings -> Agents -> **Add Agent**, then choose `QQ` as Channel.
 
 ```bash
 # Add (JID auto-binding)
-semaclaw channel qq add \
+senclaw channel qq add \
   --app-id 1234567890 \
   --app-secret xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --group mybot \
   --name "My QQ Bot"
 
 # Sandbox mode
-semaclaw channel qq add \
+senclaw channel qq add \
   --app-id 1234567890 \
   --app-secret xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --group mybot-sandbox \
@@ -62,11 +62,11 @@ semaclaw channel qq add \
   --sandbox
 
 # List
-semaclaw channel qq list
-semaclaw channel list            # all channel types
+senclaw channel qq list
+senclaw channel list            # all channel types
 
 # Remove (also removes related group binding)
-semaclaw channel qq remove --app-id 1234567890
+senclaw channel qq remove --app-id 1234567890
 ```
 
 | Parameter | Required | Description |

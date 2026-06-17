@@ -80,6 +80,7 @@ impl AgentManager {
             allowed_work_dirs: allowed_work_dirs.cloned(),
             bot_token: None,
             max_messages: None,
+            llm_config_id: None,
             last_active: None,
             added_at: now.to_string(),
         };

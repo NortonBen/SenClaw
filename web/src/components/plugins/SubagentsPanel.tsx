@@ -528,7 +528,7 @@ function BrowseTab({ agents, onRefreshAgents, onReloadSuccess }: { agents: Subag
                   <Text type="secondary">{query.trim() ? `No agents match "${query}"` : 'No virtual agents found'}</Text>
                   {!query.trim() && (
                     <Text type="secondary" style={{ fontSize: '11px' }}>
-                      Add .md persona files to ~/semaclaw/virtual-agents/
+                      Add .md persona files to ~/senclaw/virtual-agents/
                     </Text>
                   )}
                 </Space>

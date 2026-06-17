@@ -15,6 +15,8 @@ import type { PermissionMessage, QuestionMessage, ToolMessage } from '../../../t
 import { useAppContext } from '../../../contexts/AppContext';
 import { AgentCommandInput, CommonChatInput, CommonPermissionRequestCard } from '../../chat-common';
 import { ToolGroupCard } from '../../ToolGroupCard';
+import { ReasoningCollapsible } from '../../ReasoningCollapsible';
+import { extractLeadingReasoningBlocks } from '../../../utils/reasoningBlocks';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -99,7 +101,7 @@ export function CodeView({
   createTrigger,
 }: Props) {
   const { token } = theme.useToken();
-  const { ws } = useAppContext();
+  const { ws, isDarkMode } = useAppContext();
 
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -713,28 +715,40 @@ export function CodeView({
                           fontSize: 13,
                         }}
                       >
-                        {msg.role === 'agent' ? (
-                          <div className="code-chat-markdown">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                p: ({ children }) => <p style={{ margin: '0 0 8px 0' }}>{children}</p>,
-                                code: ({ children }) => (
-                                  <code style={{ background: token.colorFillSecondary, padding: '1px 5px', borderRadius: 6, fontSize: 12 }}>
-                                    {children}
-                                  </code>
-                                ),
-                                pre: ({ children }) => (
-                                  <pre style={{ background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 8, padding: 10, overflowX: 'auto', margin: '6px 0' }}>
-                                    {children}
-                                  </pre>
-                                ),
-                              }}
-                            >
-                              {msg.text}
-                            </ReactMarkdown>
-                          </div>
-                        ) : (
+                        {msg.role === 'agent' ? (() => {
+                          // Split the model's leading <think> reasoning out of the
+                          // visible answer — same treatment as the chat view, so
+                          // reasoning shows as a collapsed "think" row instead of
+                          // bleeding into the code chat body.
+                          const { reasoning, body } = extractLeadingReasoningBlocks(msg.text);
+                          return (
+                            <div className="code-chat-markdown">
+                              {reasoning ? (
+                                <ReasoningCollapsible markdown={reasoning} isDarkMode={isDarkMode} />
+                              ) : null}
+                              {body ? (
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    p: ({ children }) => <p style={{ margin: '0 0 8px 0' }}>{children}</p>,
+                                    code: ({ children }) => (
+                                      <code style={{ background: token.colorFillSecondary, padding: '1px 5px', borderRadius: 6, fontSize: 12 }}>
+                                        {children}
+                                      </code>
+                                    ),
+                                    pre: ({ children }) => (
+                                      <pre style={{ background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 8, padding: 10, overflowX: 'auto', margin: '6px 0' }}>
+                                        {children}
+                                      </pre>
+                                    ),
+                                  }}
+                                >
+                                  {body}
+                                </ReactMarkdown>
+                              ) : null}
+                            </div>
+                          );
+                        })() : (
                           msg.text
                         )}
                       </div>

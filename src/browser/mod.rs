@@ -2,7 +2,7 @@
 //! crawl engine, and HTML compression.
 //!
 //! Communicates with the SenClaw Chrome Extension via WebSocket to
-//! provide remote browser control for SemaClaw agents.
+//! provide remote browser control for SenClaw agents.
 
 pub mod bridge;
 pub mod crawl_engine;

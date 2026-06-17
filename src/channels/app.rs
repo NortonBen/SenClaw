@@ -130,7 +130,7 @@ impl AppChannel {
         let client = RelayClient::connect(
             hub_url,
             channel_id.clone(),
-            "semaclaw-daemon".to_string(),
+            "senclaw-daemon".to_string(),
             access_token,
             encryption_key,
             Some(handler),

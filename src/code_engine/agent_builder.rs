@@ -157,6 +157,7 @@ pub fn build_code_group_binding(
         allowed_work_dirs: Some(vec![workspace_str]),
         bot_token: None,
         max_messages: None,
+        llm_config_id: None,
         last_active: None,
         added_at: Utc::now().to_rfc3339(),
     }

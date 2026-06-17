@@ -1,6 +1,6 @@
 {
   "name": "SenClaw Extension",
-  "description": "Chrome extension for remote browser control by SemaClaw agents",
+  "description": "Chrome extension for remote browser control by SenClaw agents",
   "version": "0.1.0",
   "private": true,
   "type": "module",

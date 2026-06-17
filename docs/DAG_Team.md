@@ -1,6 +1,6 @@
 # DAG Team — Luồng Chat & Dispatch Task
 
-Tài liệu mô tả cách SemaClaw thực hiện dispatch nhiều agent song song theo mô hình DAG (Directed Acyclic Graph), từ lúc admin agent nhận lệnh cho đến khi tổng hợp kết quả.
+Tài liệu mô tả cách SenClaw thực hiện dispatch nhiều agent song song theo mô hình DAG (Directed Acyclic Graph), từ lúc admin agent nhận lệnh cho đến khi tổng hợp kết quả.
 
 ---
 
@@ -49,7 +49,7 @@ Tài liệu mô tả cách SemaClaw thực hiện dispatch nhiều agent song so
 | **Admin Agent** | SemaCore instance của admin, gọi `create_parent` + `dispatch_task` | Main process, MCP subprocess (stdio) |
 | **dispatch-server** | MCP server xử lý 3 tool: `list_agents`, `create_parent`, `dispatch_task` | Subprocess riêng, giao tiếp stdio |
 | **DispatchBridge** | Poll + schedule task, quản lý DAG dependencies, timeout, heartbeat | Main process |
-| **dispatch-state.json** | File trạng thái shared giữa DispatchBridge và dispatch-server | `~/.semaclaw/dispatch-state.json` |
+| **dispatch-state.json** | File trạng thái shared giữa DispatchBridge và dispatch-server | `~/.senclaw/dispatch-state.json` |
 | **AgentPool** | Quản lý SemaCore instances, workspace switching, timeout | Main process |
 | **GroupQueue** | FIFO queue per-jid + global concurrency cap | Main process |
 | **VirtualWorkerPool** | Tạo SemaCore tạm thời cho virtual persona agents | Main process |
@@ -655,10 +655,10 @@ modifyState(fn: (state: DispatchState) => void): void {
 
 | Biến môi trường | Mặc định | Ý nghĩa |
 |---|---|---|
-| `SEMACLAW_DISPATCH_STATE_PATH` | `~/.semaclaw/dispatch-state.json` | File trạng thái dispatch |
-| `SEMACLAW_ADMIN_FOLDER` | (required) | Admin folder cho dispatch-server |
-| `SEMACLAW_AGENTS_CONFIG_DIR` | `~/.semaclaw/virtual-agents/` | Thư mục chứa persona configs |
-| `SEMACLAW_MAX_CONCURRENT` | (từ config.json) | Global concurrency limit |
+| `SENCLAW_DISPATCH_STATE_PATH` | `~/.senclaw/dispatch-state.json` | File trạng thái dispatch |
+| `SENCLAW_ADMIN_FOLDER` | (required) | Admin folder cho dispatch-server |
+| `SENCLAW_AGENTS_CONFIG_DIR` | `~/.senclaw/virtual-agents/` | Thư mục chứa persona configs |
+| `SENCLAW_MAX_CONCURRENT` | (từ config.json) | Global concurrency limit |
 | `AGENT_TIMEOUT_MS` | 30 phút | Hardcoded timeout cho processAndWait |
 
 ---

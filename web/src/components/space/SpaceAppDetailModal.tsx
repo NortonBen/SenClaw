@@ -206,7 +206,7 @@ export function SpaceAppDetailModal({ app, open, onClose }: Props) {
             </Descriptions.Item>
             {app.manifest?.bridge?.postMessage && (
               <Descriptions.Item label="Bridge">
-                <Tag color="cyan">SemaClaw bridge</Tag>
+                <Tag color="cyan">SenClaw bridge</Tag>
                 {(app.manifest.bridge.capabilities ?? []).map((c: string) => (
                   <Tag key={c}>{c}</Tag>
                 ))}

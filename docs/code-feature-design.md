@@ -1,4 +1,4 @@
-# Thiết kế tính năng Code cho SemaClaw
+# Thiết kế tính năng Code cho SenClaw
 
 > Tài liệu nghiên cứu kỹ thuật — tháng 5/2026
 >
@@ -13,7 +13,7 @@
 3. [Tối ưu token với ast-grep](#3-tối-ưu-token-với-ast-grep)
 4. [Các tool cần thiết](#4-các-tool-cần-thiết)
 5. [Áp dụng chỉnh sửa code](#5-áp-dụng-chỉnh-sửa-code)
-6. [Tích hợp vào SemaClaw](#6-tích-hợp-vào-semaclaw)
+6. [Tích hợp vào SenClaw](#6-tích-hợp-vào-senclaw)
 7. [Kết luận và đề xuất](#7-kết-luận-và-đề-xuất)
 8. [DAG Team cho tác vụ Code phức tạp](#8-dag-team-cho-tác-vụ-code-phức-tạp)
 9. [Bổ sung File Tools — so sánh với claude-code](#9-bổ-sung-file-tools--so-sánh-với-claude-code)
@@ -52,7 +52,7 @@ src/
 - **Streaming + live preview**: file được flush xuống disk mỗi 450ms trong khi model đang generate — người dùng thấy kết quả ngay.
 - **System prompt mạnh**: bắt buộc model phải emit `write_file` action ngay trong lần respond đầu tiên, tránh tình trạng "chỉ đưa kế hoạch".
 
-### 1.3 Mô hình kiến trúc đề xuất cho SemaClaw "Code"
+### 1.3 Mô hình kiến trúc đề xuất cho SenClaw "Code"
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -77,7 +77,7 @@ src/
                                     └───────────────────────┘
 ```
 
-SemaClaw đã có sẵn `workspace_server.rs` (MCP), `tools/` (bash, read, write, edit, grep, glob), và `gateway/ui_server`. Tính năng **Code** chủ yếu là thêm:
+SenClaw đã có sẵn `workspace_server.rs` (MCP), `tools/` (bash, read, write, edit, grep, glob), và `gateway/ui_server`. Tính năng **Code** chủ yếu là thêm:
 
 1. `src/mcp/code_server.rs` — MCP server mới expose các code-specific tools
 2. `src/agent/code_session.rs` — quản lý CodeSession với workspace sandbox
@@ -550,11 +550,11 @@ pub async fn show_diff(path: &Path, before: &str, after: &str) -> String {
 
 ---
 
-## 6. Tích hợp vào SemaClaw
+## 6. Tích hợp vào SenClaw
 
 ### 6.1 Nơi tích hợp
 
-SemaClaw đã có sẵn các thành phần cần thiết:
+SenClaw đã có sẵn các thành phần cần thiết:
 
 | Thành phần hiện có | Vai trò trong Code feature |
 |-------------------|---------------------------|
@@ -683,7 +683,7 @@ Từ `gemma-chat`: simplicity wins — XML thay JSON cho model nhỏ, 40-round l
 
 **Phase 2 — AST optimization (1-2 tuần)**:
 - [ ] Tích hợp ast-grep CLI (không cần Rust binding ngay)
-- [ ] Skeleton cache trong SQLite (dùng DB hiện có của SemaClaw)
+- [ ] Skeleton cache trong SQLite (dùng DB hiện có của SenClaw)
 - [ ] `search_code` tool dùng ast-grep
 - [ ] Context building thông minh: skeleton + relevant chunks
 
@@ -740,7 +740,7 @@ Single agent xử lý tuần tự sẽ chậm và dễ mất context khi file nh
 | **TesterAgent** | Chạy test, đọc output, báo lỗi cụ thể | `bash` (cargo test / pytest / jest) |
 | **IntegratorAgent** | Merge thay đổi từ các Implementer, resolve conflict | `read_file`, `edit_file`, `bash` (git) |
 
-Mỗi agent được spawn bằng **VirtualWorkerPool** của SemaClaw — cùng codebase, khác workspace context.
+Mỗi agent được spawn bằng **VirtualWorkerPool** của SenClaw — cùng codebase, khác workspace context.
 
 ### 8.3 Ví dụ DAG: "Thêm OAuth2 login"
 
@@ -904,7 +904,7 @@ dispatch_task(
 )
 ```
 
-### 8.7 Tích hợp kỹ thuật với SemaClaw hiện tại
+### 8.7 Tích hợp kỹ thuật với SenClaw hiện tại
 
 | Thành phần | Cần thêm/sửa |
 |---|---|
@@ -951,9 +951,9 @@ async fn code_skeleton(
 
 ## 9. Bổ sung File Tools — so sánh với claude-code
 
-### 9.1 Hiện trạng SemaClaw
+### 9.1 Hiện trạng SenClaw
 
-SemaClaw đã có 3 tools file cốt lõi trong `src/tools/`:
+SenClaw đã có 3 tools file cốt lõi trong `src/tools/`:
 
 | Tool | File | Khả năng hiện tại |
 |---|---|---|
@@ -963,7 +963,7 @@ SemaClaw đã có 3 tools file cốt lõi trong `src/tools/`:
 
 ### 9.2 So sánh với claude-code FileReadTool / FileWriteTool / FileEditTool
 
-| Tính năng | claude-code | SemaClaw hiện tại | Cần bổ sung? |
+| Tính năng | claude-code | SenClaw hiện tại | Cần bổ sung? |
 |---|---|---|---|
 | Đọc file text với offset/limit | ✅ | ✅ | — |
 | Hiển thị line numbers trong output | ✅ | ❌ | ✅ Quan trọng — agent cần tham chiếu dòng |
@@ -1148,9 +1148,9 @@ if metadata.len() > MAX_READ_BYTES {
 **Relationships**: `CALLS`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `MEMBER_OF`  
 **Storage**: LadybugDB (local) + 16 MCP tools  
 
-### 10.2 Thiết kế Knowledge Graph cho SemaClaw
+### 10.2 Thiết kế Knowledge Graph cho SenClaw
 
-SemaClaw dùng SQLite — không cần graph DB riêng. Dùng schema quan hệ + join queries là đủ cho personal codebase (thường < 100K LOC).
+SenClaw dùng SQLite — không cần graph DB riêng. Dùng schema quan hệ + join queries là đủ cho personal codebase (thường < 100K LOC).
 
 #### Schema SQLite
 
@@ -1449,7 +1449,7 @@ BuiltinServer {
 
 ### 10.7 So sánh với GitNexus
 
-| Tính năng | GitNexus | SemaClaw Code Graph |
+| Tính năng | GitNexus | SenClaw Code Graph |
 |---|---|---|
 | Storage | LadybugDB (custom) | SQLite (tích hợp sẵn) |
 | Parser | tree-sitter native | ast-grep (wrap tree-sitter) |
@@ -1460,7 +1460,7 @@ BuiltinServer {
 | Self-hosted | ✅ | ✅ |
 | Dependency | Bun + LadybugDB | Zero — chỉ ast-grep CLI |
 
-SemaClaw không cần reproduce toàn bộ GitNexus — 7 tools trên là đủ cho 90% use case coding agent: biết ai gọi gì, sửa cái gì bị ảnh hưởng gì.
+SenClaw không cần reproduce toàn bộ GitNexus — 7 tools trên là đủ cho 90% use case coding agent: biết ai gọi gì, sửa cái gì bị ảnh hưởng gì.
 
 ---
 

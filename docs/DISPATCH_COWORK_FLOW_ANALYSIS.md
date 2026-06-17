@@ -1,12 +1,12 @@
 # Phân tích chiều chạy Dispatch & Cowork - Quá trình lập kế hoạch và thực thi task
 
-> Tài liệu phân tích chi tiết luồng chạy Dispatch Bridge và Cowork Space trong SemaClaw, tập trung vào quy trình tạo checklist, chạy task, điều phối, đánh dấu và kiểm tra hoàn thành.
+> Tài liệu phân tích chi tiết luồng chạy Dispatch Bridge và Cowork Space trong SenClaw, tập trung vào quy trình tạo checklist, chạy task, điều phối, đánh dấu và kiểm tra hoàn thành.
 
 ---
 
 ## Tổng quan
 
-Hệ thống SemaClaw có hai cơ chế điều phối task chính:
+Hệ thống SenClaw có hai cơ chế điều phối task chính:
 
 1. **DAG Dispatch** - Điều phối tự động từ admin agent, sử dụng dependency graph
 2. **Cowork Space** - Không gian cộng tác đa agent với task board, shared memory, và inter-agent messaging
@@ -1510,7 +1510,7 @@ members:
 
 ## Kết luận
 
-Hệ thống Dispatch & Cowork trong SemaClaw cung cấp:
+Hệ thống Dispatch & Cowork trong SenClaw cung cấp:
 
 1. **Task lifecycle management** - Từ creation → dispatch → execution → completion
 2. **DAG-based orchestration** - Dependency graph với automatic scheduling

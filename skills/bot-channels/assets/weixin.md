@@ -27,13 +27,13 @@ WECHAT_ENABLED=true
 **Step 2: Start and scan QR code**
 
 ```bash
-semaclaw start
+senclaw start
 ```
 
 After startup, terminal shows a QR code. Scan it in WeChat to finish login. Credentials are saved to:
 
 ```
-~/.semaclaw/wechat/accounts/default.json
+~/.senclaw/wechat/accounts/default.json
 ```
 
 On future restarts, you usually do not need to scan again (long-lived credentials). If session expires, QR code appears again on restart.
@@ -49,7 +49,7 @@ For binding multiple WeChat accounts to different agent folders.
 ### Add
 
 ```bash
-semaclaw channel wechat add --group <folder> [--name <name>]
+senclaw channel wechat add --group <folder> [--name <name>]
 ```
 
 | Parameter | Required | Description |
@@ -57,20 +57,20 @@ semaclaw channel wechat add --group <folder> [--name <name>]
 | `--group` | ✓ | Target agent folder (lowercase letters/numbers/hyphens, e.g. `alice`) |
 | `--name` | | Optional display name (default is folder name) |
 
-Restart `semaclaw` after adding. Terminal will show a QR code for that account, and credentials will be saved to:
+Restart `senclaw` after adding. Terminal will show a QR code for that account, and credentials will be saved to:
 
 ```
-~/.semaclaw/wechat/accounts/<folder>.json
+~/.senclaw/wechat/accounts/<folder>.json
 ```
 
 **Example:**
 
 ```bash
 # Add a WeChat account for folder alice
-semaclaw channel wechat add --group alice --name "Alice WeChat"
+senclaw channel wechat add --group alice --name "Alice WeChat"
 
 # Restart and scan the QR code shown in terminal
-semaclaw start
+senclaw start
 ```
 
 After the bot receives the **first message**, system auto-migrates `wx:pending:<folder>` to the real JID (`wx:user:<userId>`) with no extra action.
@@ -78,25 +78,25 @@ After the bot receives the **first message**, system auto-migrates `wx:pending:<
 ### List
 
 ```bash
-semaclaw channel wechat list     # WeChat account list
-semaclaw channel list            # all channel types summary
+senclaw channel wechat list     # WeChat account list
+senclaw channel list            # all channel types summary
 ```
 
 ### Remove
 
 ```bash
-semaclaw channel wechat remove --group <folder>
+senclaw channel wechat remove --group <folder>
 ```
 
 This also removes:
-- `~/.semaclaw/wechat/accounts/<folder>.json` (credentials)
-- `~/.semaclaw/wechat/sync-buf-<folder>.bin` (message cursor)
-- `~/.semaclaw/wechat/context-tokens-<folder>.json` (conversation token cache)
+- `~/.senclaw/wechat/accounts/<folder>.json` (credentials)
+- `~/.senclaw/wechat/sync-buf-<folder>.bin` (message cursor)
+- `~/.senclaw/wechat/context-tokens-<folder>.json` (conversation token cache)
 - related group binding in `config.json`
 
-Restart `semaclaw` after deletion to apply changes.
+Restart `senclaw` after deletion to apply changes.
 
-> **Note**: `remove` only applies to Method 2 (CLI-added accounts). For the primary account in Method 1 (`.env`), set `WECHAT_ENABLED=false` in `.env`, delete `~/.semaclaw/wechat/accounts/default.json`, then restart.
+> **Note**: `remove` only applies to Method 2 (CLI-added accounts). For the primary account in Method 1 (`.env`), set `WECHAT_ENABLED=false` in `.env`, delete `~/.senclaw/wechat/accounts/default.json`, then restart.
 
 ---
 
@@ -131,11 +131,11 @@ WeChat iLink bot currently supports **1:1 direct messages only**. Every message 
 -> If logs show `session expired, re-scan required`, remove credentials and restart:
 ```bash
 # Method 1 primary account
-rm ~/.semaclaw/wechat/accounts/default.json
+rm ~/.senclaw/wechat/accounts/default.json
 
 # Method 2 additional account (alice example)
-semaclaw channel wechat remove --group alice
-semaclaw channel wechat add --group alice --name "Alice WeChat"
+senclaw channel wechat remove --group alice
+senclaw channel wechat add --group alice --name "Alice WeChat"
 ```
 
 **Q: Can one WeChat account bind to multiple folders?**  

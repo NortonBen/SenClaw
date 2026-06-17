@@ -111,10 +111,7 @@ fn loads_weights_and_runs_prefill_decode() {
     // Use a deterministic short prompt; values < vocab to be safe.
     let prompt_ids: Vec<u32> = (0..8u32).map(|i| (i * 31) % (vocab as u32)).collect();
     let prompt = Array::from_slice(
-        &prompt_ids
-            .iter()
-            .map(|&x| x as i32)
-            .collect::<Vec<i32>>(),
+        &prompt_ids.iter().map(|&x| x as i32).collect::<Vec<i32>>(),
         &[1, 8],
     );
     let logits = model

@@ -1,6 +1,6 @@
 //! `senclaw agent-task` — one-shot disposable agent task CLI.
 //!
-//! Port of `code-old/SemaClaw/src/cli/commands/agent-task.ts`.
+//! Port of `code-old/SenClaw/src/cli/commands/agent-task.ts`.
 //!
 //! Typical use: a hook script assembles the full prompt (template + history +
 //! existing wiki sections), then pipes/passes it here and parses the JSON output.

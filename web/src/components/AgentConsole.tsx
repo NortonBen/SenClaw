@@ -5,8 +5,9 @@ import {
   CloseOutlined,
   LeftOutlined,
 } from '@ant-design/icons';
-import type { AgentState, DispatchParent, DispatchTask, AgentTodosEntry, PermissionMessage, GroupInfo, ChatMessage } from '../types';
+import type { AgentState, DispatchParent, DispatchTask, SubAgentActivityEntry, AgentTodosEntry, PermissionMessage, GroupInfo, ChatMessage } from '../types';
 import { DispatchTree } from './DispatchTree';
+import { SubAgentActivityCard } from './SubAgentActivityCard';
 import { AgentTodoPanel } from './AgentTodoPanel';
 
 const { Text } = Typography;
@@ -42,6 +43,7 @@ function saveWidth(w: number) {
 
 interface AgentConsoleProps {
   dispatchParents: DispatchParent[];
+  dispatchActivity: Record<string, SubAgentActivityEntry[]>;
   agentTodos: Record<string, AgentTodosEntry>;
   messages: Record<string, ChatMessage[]>;
   groups: GroupInfo[];
@@ -55,7 +57,7 @@ interface AgentConsoleProps {
   onCollapse?: () => void;
 }
 
-export function AgentConsole({ dispatchParents, agentTodos, messages, groups, agentStates, resolvePermission, expanded, onExpand, onCollapse }: AgentConsoleProps) {
+export function AgentConsole({ dispatchParents, dispatchActivity, agentTodos, messages, groups, agentStates, resolvePermission, expanded, onExpand, onCollapse }: AgentConsoleProps) {
   const { token } = theme.useToken();
   const activeParents = dispatchParents.filter(p => p.status === 'active');
   const queuedParents = dispatchParents.filter(p => p.status === 'queued');
@@ -298,39 +300,55 @@ export function AgentConsole({ dispatchParents, agentTodos, messages, groups, ag
             </div>
           )}
 
-          {/* Task Detail Card */}
+          {/* Task Detail — activity log or static card */}
           {selectedTask && (
-            <Card
-              size="small"
-              title={<Text style={{ fontSize: '12px' }}>Task Details</Text>}
-              extra={<CloseOutlined onClick={() => setSelectedTask(null)} style={{ fontSize: '10px', cursor: 'pointer' }} />}
-              style={{ borderRadius: '8px' }}
-            >
-              <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text strong style={{ fontSize: '12px' }}>{selectedTask.label}</Text>
-                  <Tag color={selectedTask.status === 'done' ? 'success' : 'processing'} style={{ margin: 0, fontSize: '10px' }}>
-                    {selectedTask.status}
-                  </Tag>
-                </div>
-                <Text type="secondary" style={{ fontSize: '11px' }}>
-                  Agent: {selectedTask.isVirtual ? (selectedTask.personaName ?? selectedTask.agentId) : selectedTask.agentId}
-                </Text>
-                <Text style={{ fontSize: '11px', color: token.colorText }}>{selectedTask.prompt}</Text>
-                {selectedTask.result && (
-                  <div style={{
-                    marginTop: '4px',
-                    padding: '6px',
-                    background: token.colorSuccessBg,
-                    borderRadius: '4px',
-                    border: `1px solid ${token.colorSuccessBorder}`
-                  }}>
-                    <Text style={{ fontSize: '10px', color: token.colorSuccessText }}>{selectedTask.result}</Text>
+            dispatchActivity[selectedTask.id]?.length ? (
+              <SubAgentActivityCard
+                task={selectedTask}
+                entries={dispatchActivity[selectedTask.id]}
+              />
+            ) : (
+              <Card
+                size="small"
+                title={<Text style={{ fontSize: '12px' }}>Task Details</Text>}
+                extra={<CloseOutlined onClick={() => setSelectedTask(null)} style={{ fontSize: '10px', cursor: 'pointer' }} />}
+                style={{ borderRadius: '8px' }}
+              >
+                <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text strong style={{ fontSize: '12px' }}>{selectedTask.label}</Text>
+                    <Tag color={selectedTask.status === 'done' ? 'success' : 'processing'} style={{ margin: 0, fontSize: '10px' }}>
+                      {selectedTask.status}
+                    </Tag>
                   </div>
-                )}
-              </Space>
-            </Card>
+                  <Text type="secondary" style={{ fontSize: '11px' }}>
+                    Agent: {selectedTask.isVirtual ? (selectedTask.personaName ?? selectedTask.agentId) : selectedTask.agentId}
+                  </Text>
+                  <Text style={{ fontSize: '11px', color: token.colorText }}>{selectedTask.prompt}</Text>
+                  {selectedTask.result && (
+                    <div style={{
+                      marginTop: '4px',
+                      padding: '6px',
+                      background: token.colorSuccessBg,
+                      borderRadius: '4px',
+                      border: `1px solid ${token.colorSuccessBorder}`
+                    }}>
+                      <Text style={{ fontSize: '10px', color: token.colorSuccessText }}>{selectedTask.result}</Text>
+                    </div>
+                  )}
+                </Space>
+              </Card>
+            )
           )}
+
+          {/* Live activity for all active tasks (auto-expand) */}
+          {activeParents.flatMap(p => p.tasks).filter(t => t.status === 'processing' && dispatchActivity[t.id]?.length && t.id !== selectedTask?.id).map(t => (
+            <SubAgentActivityCard
+              key={t.id}
+              task={t}
+              entries={dispatchActivity[t.id] ?? []}
+            />
+          ))}
 
           {/* Todos Section */}
           {hasTodos && (

@@ -626,8 +626,8 @@ function AddServerModal({ open, onClose, onSaved }: {
         </Form.Item>
         <Form.Item name="scope" label="Scope" rules={[{ required: true }]}>
           <Radio.Group optionType="button" buttonStyle="solid">
-            <Radio.Button value="user">User (~/.semaclaw)</Radio.Button>
-            <Radio.Button value="project">Project (.semaclaw)</Radio.Button>
+            <Radio.Button value="user">User (~/.senclaw)</Radio.Button>
+            <Radio.Button value="project">Project (.senclaw)</Radio.Button>
           </Radio.Group>
         </Form.Item>
         <Form.Item name="enabled" valuePropName="checked">

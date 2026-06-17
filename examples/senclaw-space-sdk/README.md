@@ -47,9 +47,9 @@ await space.sqlite('INSERT INTO runs (created_at) VALUES (?1)', [Date.now()]);
 const rows = await space.sqlite('SELECT * FROM runs ORDER BY id DESC LIMIT 10');
 ```
 
-## Register MCP Back To SemaClaw
+## Register MCP Back To SenClaw
 
-If the app starts its own MCP server, register it back to SemaClaw:
+If the app starts its own MCP server, register it back to SenClaw:
 
 ```ts
 await space.registerMcp({
@@ -60,14 +60,14 @@ await space.registerMcp({
 });
 ```
 
-SemaClaw persists the MCP server in project scope and connects it through the normal MCP manager.
+SenClaw persists the MCP server in project scope and connects it through the normal MCP manager.
 
 ## Run An MCP Server From The SDK (Node-only)
 
 The `@senclaw/space-sdk/mcp` subpath turns a Space App into a local MCP server in
 a few lines. It bundles the Streamable HTTP transport, a settings tool pair
 (read/write over the config KV), Origin protection, and — importantly — an
-`Accept`-header compatibility shim so the **current SemaClaw Rust MCP client**
+`Accept`-header compatibility shim so the **current SenClaw Rust MCP client**
 (which sends no `Accept` header) interoperates with the strict MCP TypeScript SDK
 transport (which would otherwise reply HTTP 406).
 
@@ -90,7 +90,7 @@ await serveSpaceMcp({
       return { content: [{ type: 'text', text: JSON.stringify(r) }], structuredContent: r };
     });
   },
-  autoRegister: true,                  // optional: self-register with SemaClaw on startup
+  autoRegister: true,                  // optional: self-register with SenClaw on startup
 });
 ```
 

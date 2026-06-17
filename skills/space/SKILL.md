@@ -65,7 +65,10 @@ The Space feature gives you a personal productivity layer. This skill covers **n
 - **calendar** — event management, reminders, conflict detection, schedule organization
 - **schedule** — recurring agent tasks with Agent/DAG/Plan modes
 
-All tools are prefixed `space_*` and available through the `senclaw-space` MCP server.
+All tools register as `space_<verb>` on the `senclaw-space` MCP server. Call them by the
+**canonical bridge name** `mcp__space__<verb>` — the resolver strips the redundant `space_`
+prefix once (e.g. `space_note_create` → `mcp__space__note_create`). The bare `space_<verb>(...)`
+notation used below maps to the same tool.
 
 ## Required Tool Discovery
 
@@ -74,8 +77,8 @@ Loading this skill does not create notes or emails. Before calling any Space act
 Common discovery calls:
 
 ```
-ToolSearch { query: "select:mcp__space__space_note_create" }
-ToolSearch { query: "select:mcp__space__space_current_time" }
+ToolSearch { query: "select:mcp__space__note_create" }
+ToolSearch { query: "select:mcp__space__current_time" }
 ```
 
 If an exact `select:` query returns no match, search by keywords such as `space note create`, then call the exact tool name returned by `ToolSearch`.

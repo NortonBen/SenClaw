@@ -2,7 +2,7 @@
 
 > Nghiên cứu từ [alibaba/page-agent](https://github.com/alibaba/page-agent) (17.5k stars, TypeScript, MIT)
 >
-> Mục tiêu: MCP server cho phép SemaClaw agent điều khiển Chrome từ xa để tìm kiếm, nghiên cứu, kiểm tra và tổng hợp thông tin từ website.
+> Mục tiêu: MCP server cho phép SenClaw agent điều khiển Chrome từ xa để tìm kiếm, nghiên cứu, kiểm tra và tổng hợp thông tin từ website.
 
 ---
 
@@ -10,7 +10,7 @@
 
 ### 1.1. Bài toán
 
-SemaClaw agent cần khả năng:
+SenClaw agent cần khả năng:
 - **Tìm kiếm & nghiên cứu**: Search Google, duyệt kết quả, đọc nội dung
 - **Deep crawl**: Đi sâu vào nhiều trang từ một trang gốc, theo dõi liên kết
 - **Kiểm tra thông tin**: Cross-reference thông tin giữa nhiều nguồn
@@ -26,7 +26,7 @@ SemaClaw agent cần khả năng:
 │                        SenClaw Extension Architecture                    │
 │                                                                         │
 │  ┌──────────────────────┐          ┌──────────────────────────────┐    │
-│  │   SemaClaw Agent     │          │   Chrome Browser             │    │
+│  │   SenClaw Agent     │          │   Chrome Browser             │    │
 │  │                      │          │                              │    │
 │  │  MCP Client          │  stdio   │  ┌────────────────────────┐ │    │
 │  │  (sema-core)         │◄────────►│  │  SenClaw Extension     │ │    │
@@ -47,7 +47,7 @@ SemaClaw agent cần khả năng:
 │  └──────────────────────┘          │  │  └──────────────────┘  │ │    │
 │                                    │  └────────────────────────┘ │    │
 │  ┌──────────────────────┐          │                              │    │
-│  │   SemaClaw Web UI    │          │  Multi-tab control:          │    │
+│  │   SenClaw Web UI    │          │  Multi-tab control:          │    │
 │  │                      │  WS      │  - Tab A: Google Search      │    │
 │  │  Real-time preview:  │◄────────►│  - Tab B: Result page 1     │    │
 │  │  - Screenshot stream │          │  - Tab C: Result page 2     │    │
@@ -64,7 +64,7 @@ SemaClaw agent cần khả năng:
 | **MCP Server** | Node.js, stdio, 3 tools | Rust, tích hợp vào daemon, 13+ tools |
 | **Extension** | WXT + React, multi-page | WXT + React (tái sử dụng pattern) |
 | **DOM Model** | Text-based (flattened DOM tree) | Text-based + optional screenshot |
-| **LLM** | BYO LLM (agent tự think) | Agent là SemaClaw (qua MCP) |
+| **LLM** | BYO LLM (agent tự think) | Agent là SenClaw (qua MCP) |
 | **Search** | Không có built-in | Tích hợp Google/Bing search |
 | **Crawl** | Không có | Deep crawl với depth/breadth control |
 | **Extract** | Thủ công qua execute_javascript | Structured extraction với schema |
@@ -1042,7 +1042,7 @@ function extractBingResults(): SearchResultItem[] {
 ```mermaid
 sequenceDiagram
     actor User
-    participant Agent as SemaClaw Agent
+    participant Agent as SenClaw Agent
     participant MCP as Browser MCP Server
     participant Bridge as WS Bridge
     participant Ext as Chrome Extension
@@ -1091,7 +1091,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor User
-    participant Agent as SemaClaw Agent
+    participant Agent as SenClaw Agent
     participant MCP as Browser MCP Server
     participant Crawl as CrawlEngine
     participant Ext as Chrome Extension
@@ -1142,7 +1142,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor User
-    participant Agent as SemaClaw Agent
+    participant Agent as SenClaw Agent
     participant MCP as Browser MCP Server
     participant Ext as Chrome Extension
     participant Page as Web App
@@ -1412,7 +1412,7 @@ Browser Security Model:
    ├── Không expose ra network
    └── Extension ID verified
 
-2. Permission model (tích hợp với SemaClaw permission)
+2. Permission model (tích hợp với SenClaw permission)
    ├── browser_navigate: always allowed (read-only view)
    ├── browser_search: always allowed
    ├── browser_snapshot: always allowed
@@ -1449,7 +1449,7 @@ Browser Security Model:
 | Chiều | PageAgent | SenClaw Extension |
 |-------|-----------|-------------------|
 | **MCP Server** | Node.js, 3 tools, stdio | Rust, 25+ tools, tích hợp daemon |
-| **LLM** | Agent tự chứa LLM (BYO) | LLM là SemaClaw agent (MCP client) |
+| **LLM** | Agent tự chứa LLM (BYO) | LLM là SenClaw agent (MCP client) |
 | **DOM model** | Text-based flattened tree | Text-based + screenshot hybrid |
 | **Multi-tab** | MultiPageAgent + TabsController | TabsController + tab registry |
 | **Search** | Không có (phải tự navigate) | Built-in Google/Bing parser |
@@ -1457,7 +1457,7 @@ Browser Security Model:
 | **Extract** | execute_javascript thủ công | Structured extraction với JSON schema |
 | **Screenshot** | Không có (text-only) | Viewport, full-page, element screenshots |
 | **Integration** | Độc lập (npx @page-agent/mcp) | Tích hợp sâu: Cowork, Memory, Web UI |
-| **Permission** | Không có | Tích hợp SemaClaw permission system |
+| **Permission** | Không có | Tích hợp SenClaw permission system |
 | **Recording** | Không có | Tích hợp Cowork session recording |
 | **Memory** | Không có | Auto-index crawl results vào shared memory |
 | **Web UI** | Side panel | Side panel + Web UI dashboard |
@@ -1495,7 +1495,7 @@ Browser Security Model:
 - [ ] Press key, hover tools
 
 ### Phase 4 — Integration (2 tuần)
-- [ ] Tích hợp SemaClaw permission system
+- [ ] Tích hợp SenClaw permission system
 - [ ] Tích hợp Cowork: browser tools available trong workspace
 - [ ] Auto-index crawl results vào shared memory
 - [ ] Session recording cho browser interactions
@@ -1505,4 +1505,4 @@ Browser Security Model:
 
 ---
 
-*Nghiên cứu từ PageAgent (alibaba/page-agent, MIT license) — tài liệu thiết kế cho SemaClaw, ngày 2026-05-01.*
+*Nghiên cứu từ PageAgent (alibaba/page-agent, MIT license) — tài liệu thiết kế cho SenClaw, ngày 2026-05-01.*

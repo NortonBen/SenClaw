@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::types::{
-    ContextMode, GroupBinding, RunStatus, ScheduleType, ScheduledTask, StoredMessage,
+    AgentMode, ContextMode, GroupBinding, RunStatus, ScheduleType, ScheduledTask, StoredMessage,
     TaskRunLogInsert, TaskStatus,
 };
 
@@ -26,6 +26,7 @@ fn sample_group() -> GroupBinding {
         allowed_work_dirs: Some(vec!["/tmp/work".into()]),
         bot_token: Some("tok".into()),
         max_messages: Some(50),
+        llm_config_id: Some("llm-openai-1".into()),
         last_active: None,
         added_at: "2026-04-28T00:00:00Z".into(),
     }
@@ -52,6 +53,14 @@ fn group_upsert_get_list_delete() {
         got.allowed_work_dirs.as_deref(),
         Some(&["/tmp/work".into()][..])
     );
+    assert_eq!(got.llm_config_id.as_deref(), Some("llm-openai-1"));
+
+    // Clearing the per-group model override round-trips to NULL.
+    let mut g_no_model = g.clone();
+    g_no_model.llm_config_id = None;
+    db.upsert_group(&g_no_model).unwrap();
+    assert_eq!(db.get_group(&g.jid).unwrap().unwrap().llm_config_id, None);
+    db.upsert_group(&g).unwrap();
 
     let mut g2 = g.clone();
     g2.name = "Renamed".into();
@@ -172,6 +181,7 @@ fn task_lifecycle_and_logs() {
         schedule_type: ScheduleType::Cron,
         schedule_value: "*/5 * * * *".into(),
         context_mode: ContextMode::Isolated,
+        agent_mode: AgentMode::Agent,
         script_command: None,
         next_run: Some("2026-04-28T00:05:00Z".into()),
         last_run: None,

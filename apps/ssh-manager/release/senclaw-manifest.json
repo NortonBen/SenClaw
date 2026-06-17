@@ -1,7 +1,7 @@
 {
   "id": "ssh-manager",
   "name": "SSH Manager",
-  "description": "Standalone SSH Manager App Space for SemaClaw. Provides web terminal and secure command execution.",
+  "description": "Standalone SSH Manager App Space for SenClaw. Provides web terminal and secure command execution.",
   "icon": "S",
   "runtime": {
     "kind": "server",

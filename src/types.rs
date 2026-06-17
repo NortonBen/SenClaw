@@ -72,6 +72,9 @@ pub struct GroupBinding {
     pub bot_token: Option<String>,
     /// `None` = use `MAX_MESSAGES_PER_GROUP`.
     pub max_messages: Option<u32>,
+    /// Per-group LLM override: id of an entry in the global `llmConfigs` list.
+    /// `None` = use the globally active model (`activeLlmConfigId`).
+    pub llm_config_id: Option<String>,
     pub last_active: Option<String>,
     pub added_at: String,
 }

@@ -39,6 +39,8 @@ pub fn text_for_embedding(node: &DataPoint) -> String {
                 format!("{}\n{}", node.name, node.summary)
             }
         }
+        // Type/category nodes carry only their name (e.g. "person").
+        NodeKind::EntityType => node.name.clone(),
         NodeKind::Custom => {
             if !node.summary.is_empty() {
                 node.summary.clone()

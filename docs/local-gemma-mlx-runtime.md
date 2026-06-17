@@ -1,6 +1,6 @@
 # Local Gemma 4, MLX-LM và TurboQuant
 
-Tài liệu này tổng hợp hướng chạy LLM local cho SenClaw/SemaClaw với Gemma 4, MLX-LM trên
+Tài liệu này tổng hợp hướng chạy LLM local cho SenClaw/SenClaw với Gemma 4, MLX-LM trên
 Apple Silicon, cách repo `gemma-chat` vận hành, và vị trí phù hợp để tích hợp vào runtime Rust.
 Mục tiêu là có một lộ trình thực dụng: chạy local model trước bằng OpenAI-compatible endpoint,
 sau đó mới cân nhắc nhúng inference native vào Rust.

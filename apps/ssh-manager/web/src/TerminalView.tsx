@@ -61,7 +61,7 @@ export function TerminalView({ host, isActive }: TerminalViewProps) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     
     // Construct the websocket URL based on the current window location to ensure it works through the space proxy
-    // In semaclaw spaces, requests go to `/api/space/apps/ssh-manager/proxy/`
+    // In senclaw spaces, requests go to `/api/space/apps/ssh-manager/proxy/`
     // We just replace `http` with `ws` and append `api/ws/terminal/:id`
     
     // The current path could be `/api/space/apps/ssh-manager/proxy/`

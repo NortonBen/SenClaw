@@ -1,12 +1,12 @@
 ---
 name: clawhub
 version: 1.1.0
-description: Manage ClaWHub skills and local skill registry — search, install, update, uninstall, publish via clawhub, and enable/disable individual skills via the semaclaw CLI.
+description: Manage ClaWHub skills and local skill registry — search, install, update, uninstall, publish via clawhub, and enable/disable individual skills via the senclaw CLI.
 ---
 
 # ClaWHub Skill Marketplace & Local Skill Management
 
-ClaWHub is the skill marketplace for semaclaw. Skills are installed into the managed directory and automatically loaded by all agents.
+ClaWHub is the skill marketplace for senclaw. Skills are installed into the managed directory and automatically loaded by all agents.
 
 ## Decision Tree
 
@@ -29,7 +29,7 @@ User wants to...
 ### search
 
 ```bash
-semaclaw clawhub search <query> [--limit <n>]
+senclaw clawhub search <query> [--limit <n>]
 ```
 
 - Searches clawhub.ai (or the configured mirror) for matching skills
@@ -37,8 +37,8 @@ semaclaw clawhub search <query> [--limit <n>]
 
 Examples:
 ```bash
-semaclaw clawhub search git
-semaclaw clawhub search "code review" --limit 5
+senclaw clawhub search git
+senclaw clawhub search "code review" --limit 5
 ```
 
 ---
@@ -46,7 +46,7 @@ semaclaw clawhub search "code review" --limit 5
 ### install
 
 ```bash
-semaclaw clawhub install <slug> [--force] [--version <v>] [--group <id>]
+senclaw clawhub install <slug> [--force] [--version <v>] [--group <id>]
 ```
 
 - Downloads and extracts the skill into the managed skills directory
@@ -57,10 +57,10 @@ semaclaw clawhub install <slug> [--force] [--version <v>] [--group <id>]
 
 Examples:
 ```bash
-semaclaw clawhub install git
-semaclaw clawhub install github --version 1.0.0
-semaclaw clawhub install git --force
-semaclaw clawhub install git --group my-team
+senclaw clawhub install git
+senclaw clawhub install github --version 1.0.0
+senclaw clawhub install git --force
+senclaw clawhub install git --group my-team
 ```
 
 ---
@@ -68,7 +68,7 @@ semaclaw clawhub install git --group my-team
 ### update
 
 ```bash
-semaclaw clawhub update [<slug>] [--all] [--force] [--version <v>]
+senclaw clawhub update [<slug>] [--all] [--force] [--version <v>]
 ```
 
 - Updates one or all installed skills to their latest version
@@ -79,9 +79,9 @@ semaclaw clawhub update [<slug>] [--all] [--force] [--version <v>]
 
 Examples:
 ```bash
-semaclaw clawhub update git
-semaclaw clawhub update --all
-semaclaw clawhub update git --version 1.0.5 --force
+senclaw clawhub update git
+senclaw clawhub update --all
+senclaw clawhub update git --version 1.0.5 --force
 ```
 
 ---
@@ -89,7 +89,7 @@ semaclaw clawhub update git --version 1.0.5 --force
 ### list
 
 ```bash
-semaclaw clawhub list
+senclaw clawhub list
 ```
 
 Shows all ClaWHub-managed installed skills with their version and install date.
@@ -99,7 +99,7 @@ Shows all ClaWHub-managed installed skills with their version and install date.
 ### uninstall
 
 ```bash
-semaclaw clawhub uninstall <slug> [--yes]
+senclaw clawhub uninstall <slug> [--yes]
 ```
 
 - Removes the skill directory and its lockfile entry
@@ -107,8 +107,8 @@ semaclaw clawhub uninstall <slug> [--yes]
 
 Examples:
 ```bash
-semaclaw clawhub uninstall git
-semaclaw clawhub uninstall git --yes
+senclaw clawhub uninstall git
+senclaw clawhub uninstall git --yes
 ```
 
 ---
@@ -116,9 +116,9 @@ semaclaw clawhub uninstall git --yes
 ### login / logout / whoami
 
 ```bash
-semaclaw clawhub login [--token <clh_...>]
-semaclaw clawhub logout
-semaclaw clawhub whoami
+senclaw clawhub login [--token <clh_...>]
+senclaw clawhub logout
+senclaw clawhub whoami
 ```
 
 - `login` — save a ClaWHub API token (required for publish). Get token at https://clawhub.ai/settings/tokens
@@ -132,7 +132,7 @@ semaclaw clawhub whoami
 ### publish
 
 ```bash
-semaclaw clawhub publish <path> [--dry-run] [--tags <tags>] [--registry <url>]
+senclaw clawhub publish <path> [--dry-run] [--tags <tags>] [--registry <url>]
 ```
 
 - Publishes a skill directory to ClaWHub (requires login)
@@ -143,21 +143,21 @@ semaclaw clawhub publish <path> [--dry-run] [--tags <tags>] [--registry <url>]
 
 Examples:
 ```bash
-semaclaw clawhub publish ./my-skill
-semaclaw clawhub publish ./my-skill --dry-run
-semaclaw clawhub publish ./my-skill --tags latest,v2
+senclaw clawhub publish ./my-skill
+senclaw clawhub publish ./my-skill --dry-run
+senclaw clawhub publish ./my-skill --tags latest,v2
 ```
 
 ---
 
-## Local Skill Management (`semaclaw skills`)
+## Local Skill Management (`senclaw skills`)
 
 These commands manage skills from **all sources** (bundled, clawhub-managed, global `~/.sema/skills`, etc.).
 
 ### skills list
 
 ```bash
-semaclaw skills list [--verbose] [--json]
+senclaw skills list [--verbose] [--json]
 ```
 
 Lists all locally available skills with their source, version, and enabled/disabled status.
@@ -170,7 +170,7 @@ Lists all locally available skills with their source, version, and enabled/disab
 ### skills info
 
 ```bash
-semaclaw skills info <name>
+senclaw skills info <name>
 ```
 
 Shows full details for a single skill: version, source, directory, status (enabled/disabled).
@@ -180,7 +180,7 @@ Shows full details for a single skill: version, source, directory, status (enabl
 ### skills check
 
 ```bash
-semaclaw skills check
+senclaw skills check
 ```
 
 Scans all skill source directories, reports counts, lists disabled skills, and warns about duplicate names.
@@ -190,20 +190,20 @@ Scans all skill source directories, reports counts, lists disabled skills, and w
 ### skills disable / enable
 
 ```bash
-semaclaw skills disable <name>
-semaclaw skills enable <name>
+senclaw skills disable <name>
+senclaw skills enable <name>
 ```
 
 - `disable` — prevents the named skill from loading for **all agents**. The skill stays on disk; it is just excluded from the skill registry at load time.
 - `enable` — re-enables a previously disabled skill.
 - Changes take effect immediately: the daemon receives a reload signal and all running agents reload their skill registry.
-- Disabled list is stored in `~/.semaclaw/disabled-skills.json`.
+- Disabled list is stored in `~/.senclaw/disabled-skills.json`.
 
 Examples:
 ```bash
-semaclaw skills disable docx       # stop loading the docx skill
-semaclaw skills enable docx        # re-enable it
-semaclaw skills list               # check status (shows [disabled] tag)
+senclaw skills disable docx       # stop loading the docx skill
+senclaw skills enable docx        # re-enable it
+senclaw skills list               # check status (shows [disabled] tag)
 ```
 
 ---
@@ -211,7 +211,7 @@ semaclaw skills list               # check status (shows [disabled] tag)
 ### skills refresh
 
 ```bash
-semaclaw skills refresh
+senclaw skills refresh
 ```
 
 Manually signals the daemon to reload the skill registry for all running agents (useful after manually editing skill files).
@@ -224,8 +224,8 @@ Set `CLAWHUB_REGISTRY` to use a mirror for search/install/update:
 
 ```bash
 export CLAWHUB_REGISTRY=https://lightmake.site
-semaclaw clawhub search git
-semaclaw clawhub install git
+senclaw clawhub search git
+senclaw clawhub install git
 ```
 
 Mirror supports: `search` / `install` / `update` / `list` / `uninstall`
@@ -240,17 +240,17 @@ CLAWHUB_REGISTRY=https://lightmake.site
 
 ## Workflow: find and install a skill
 
-1. Search for the skill: `semaclaw clawhub search <keyword>`
+1. Search for the skill: `senclaw clawhub search <keyword>`
 2. Note the slug from results
-3. Install: `semaclaw clawhub install <slug>`
-4. Verify: `semaclaw clawhub list`
+3. Install: `senclaw clawhub install <slug>`
+4. Verify: `senclaw clawhub list`
 
 ## Workflow: publish a skill
 
 1. Create a directory with `SKILL.md` containing `name` and `version` fields
-2. Login: `semaclaw clawhub login`
-3. Dry-run to preview: `semaclaw clawhub publish <path> --dry-run`
-4. Publish: `semaclaw clawhub publish <path>`
+2. Login: `senclaw clawhub login`
+3. Dry-run to preview: `senclaw clawhub publish <path> --dry-run`
+4. Publish: `senclaw clawhub publish <path>`
 
 ## SKILL.md frontmatter required fields
 

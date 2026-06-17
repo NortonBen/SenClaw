@@ -147,10 +147,7 @@ fn mlx_mem_mib() -> (f64, f64, f64) {
 /// the first couple of requests = bounded; a steady climb = a leak / unbounded
 /// cache. Run after warm-up so weights are already resident in the baseline.
 #[cfg(feature = "local-mlx")]
-async fn mem_mode(
-    engine: &senclaw::local_model::MlxNativeEngine,
-    n: usize,
-) -> anyhow::Result<()> {
+async fn mem_mode(engine: &senclaw::local_model::MlxNativeEngine, n: usize) -> anyhow::Result<()> {
     use std::time::Instant;
     use tokio::sync::mpsc;
 
@@ -171,7 +168,10 @@ async fn mem_mode(
     let mut csv = std::env::var("MLX_BENCH_MEM_CSV").ok().and_then(|p| {
         let mut f = std::fs::File::create(&p).ok()?;
         use std::io::Write;
-        let _ = writeln!(f, "req,pre_rss,post_rss,d_rss,mlx_active,mlx_cache,mlx_peak,wall_s");
+        let _ = writeln!(
+            f,
+            "req,pre_rss,post_rss,d_rss,mlx_active,mlx_cache,mlx_peak,wall_s"
+        );
         eprintln!("(mem CSV → {p})");
         Some(f)
     });
@@ -181,7 +181,10 @@ async fn mem_mode(
     eprintln!(
         "\n──────── memory mode: {n} requests ────────\nbaseline (post warm-up): rss={base_rss:.0} MiB | mlx active={ba:.0} cache={bc:.0} MiB"
     );
-    eprintln!("{:>3}  {:>8}  {:>8}  {:>7}  {:>9}  {:>9}  {:>9}  {:>6}", "req", "pre", "post", "Δrss", "mlx_act", "mlx_cache", "mlx_peak", "wall");
+    eprintln!(
+        "{:>3}  {:>8}  {:>8}  {:>7}  {:>9}  {:>9}  {:>9}  {:>6}",
+        "req", "pre", "post", "Δrss", "mlx_act", "mlx_cache", "mlx_peak", "wall"
+    );
 
     let mut prev_rss = base_rss;
     for i in 1..=n {
@@ -354,12 +357,9 @@ async fn main() -> anyhow::Result<()> {
 
     let sink = Arc::new(PerfSink::default());
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer().with_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "warn".into()),
-            ),
-        )
+        .with(tracing_subscriber::fmt::layer().with_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
+        ))
         .with(PerfLayer(sink.clone()))
         .init();
 
@@ -379,7 +379,10 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("warm_up (weights load): {:.2}s", t.elapsed().as_secs_f64());
 
     // Memory-growth mode: `MLX_BENCH_REQUESTS=N` → N distinct requests, track RAM.
-    if let Some(n) = std::env::var("MLX_BENCH_REQUESTS").ok().and_then(|s| s.parse::<usize>().ok()) {
+    if let Some(n) = std::env::var("MLX_BENCH_REQUESTS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
         if n > 0 {
             return mem_mode(&engine, n).await;
         }
@@ -413,7 +416,10 @@ async fn main() -> anyhow::Result<()> {
                 body.push_str(&format!("[para {k}] {sentence}"));
                 k += 1;
             }
-            eprintln!("prompt    = ~{t} tokens (synthesized, {} chars)", body.len());
+            eprintln!(
+                "prompt    = ~{t} tokens (synthesized, {} chars)",
+                body.len()
+            );
             format!("Read the following document and summarize it in about 150 words.\n\n{body}")
         }
         None => "Write a detailed, ~600-word explanation of how the transformer neural network \
@@ -463,15 +469,30 @@ async fn main() -> anyhow::Result<()> {
     // one — subsequent turns hit the prefix cache (≥1024-token prompts) and
     // report near-instant prefill — so capture it before clearing.
     let _ = run_once(0).await?;
-    let cold_prompt_tokens = sink.prompt_tokens.lock().unwrap().last().copied().unwrap_or(0);
-    let cold_prefill_tok_s = sink.prefill_tok_s.lock().unwrap().last().copied().unwrap_or(0.0);
+    let cold_prompt_tokens = sink
+        .prompt_tokens
+        .lock()
+        .unwrap()
+        .last()
+        .copied()
+        .unwrap_or(0);
+    let cold_prefill_tok_s = sink
+        .prefill_tok_s
+        .lock()
+        .unwrap()
+        .last()
+        .copied()
+        .unwrap_or(0.0);
     sink.clear();
 
     let mut ttfts = Vec::new();
     let mut outputs = Vec::new();
     for i in 1..=iters {
         let (ttft, wall, out) = run_once(i).await?;
-        eprintln!("  run {i}: ttft={ttft:.2}s wall={wall:.2}s chars={}", out.chars().count());
+        eprintln!(
+            "  run {i}: ttft={ttft:.2}s wall={wall:.2}s chars={}",
+            out.chars().count()
+        );
         ttfts.push(ttft);
         outputs.push(out);
     }
@@ -489,12 +510,17 @@ async fn main() -> anyhow::Result<()> {
         (min, median, mean, max)
     };
 
-    eprintln!("\n──────── prompt {cold_prompt_tokens} tok / {} timed turns ────────", decode.len());
+    eprintln!(
+        "\n──────── prompt {cold_prompt_tokens} tok / {} timed turns ────────",
+        decode.len()
+    );
     eprintln!("  cold prefill: {cold_prefill_tok_s:.0} tok/s (warm-up turn, no prefix-cache hit)");
     let mut prefill = sink.prefill_tok_s.lock().unwrap().clone();
     if !prefill.is_empty() {
         let (_, pmed, _, _) = stats(&mut prefill);
-        eprintln!("  warm prefill: median={pmed:.0} tok/s (timed turns — prefix-cache hits if ≥1024 tok)");
+        eprintln!(
+            "  warm prefill: median={pmed:.0} tok/s (timed turns — prefix-cache hits if ≥1024 tok)"
+        );
     }
     if decode.is_empty() {
         eprintln!("  (no decode [perf] lines captured)");
@@ -508,7 +534,11 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("  ttft (s)      min={tmin:.2}  median={tmed:.2}  max={tmax:.2}");
     eprintln!(
         "  determinism:  {}",
-        if identical { "all timed turns byte-identical ✓" } else { "OUTPUTS DIFFER ✗" }
+        if identical {
+            "all timed turns byte-identical ✓"
+        } else {
+            "OUTPUTS DIFFER ✗"
+        }
     );
 
     if !identical {

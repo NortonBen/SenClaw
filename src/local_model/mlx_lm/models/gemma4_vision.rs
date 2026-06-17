@@ -14,7 +14,7 @@
 //! `VisionModel` — the 16-layer SigLIP2-variant transformer (ClippableLinear,
 //! multidim RoPE, fp32 RMSNorm variants) that turns `[B, 3, 224, 224]`
 //! pixel tensors into `[B, 280, 768]` image features. See
-//! `~/.claude/projects/-Users-benji-Projects-SemaClaw/memory/gemma4-vision-research.md`
+//! `~/.claude/projects/-Users-benji-Projects-SenClaw/memory/gemma4-vision-research.md`
 //! for the architecture details.
 //!
 //! ## Why a separate module instead of inside `gemma4.rs`?

@@ -196,6 +196,21 @@ impl WebSocketGateway {
         self.broadcast_to_admins_excluding(chat_jid, &msg).await;
     }
 
+    /// Forward a single sub-agent activity entry (tool call, message) to admin
+    /// clients. Lightweight — one entry per WS frame; frontend accumulates.
+    pub async fn notify_dispatch_activity(
+        &self,
+        task_id: &str,
+        entry: &crate::agent::virtual_worker_pool::SubAgentActivityEntry,
+    ) {
+        let msg = serde_json::json!({
+            "type": "dispatch:activity",
+            "taskId": task_id,
+            "entry": entry,
+        });
+        self.broadcast_to_admins(&msg).await;
+    }
+
     pub async fn notify_dispatch_update(&self, parents: &serde_json::Value) {
         let msg = serde_json::json!({
             "type": "dispatch:update",

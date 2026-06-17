@@ -23,11 +23,20 @@ pub trait LlmClient: Send + Sync {
 // =====================================================================
 
 /// One extracted triplet. Matches the JSON the LLM is prompted to return.
+///
+/// `subject_type` / `object_type` are the cognee-style entity categories
+/// (e.g. `"person"`, `"city"`). They are optional: smaller models often omit
+/// them, and `#[serde(default)]` keeps older `{subject,predicate,object}`
+/// payloads parsing unchanged. An empty / missing type means "untyped".
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct RawTriplet {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+    #[serde(default)]
+    pub subject_type: String,
+    #[serde(default)]
+    pub object_type: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

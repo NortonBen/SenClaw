@@ -1,12 +1,12 @@
 openapi: 3.0.3
 info:
-  title: ClawHub & SemaClaw API
+  title: ClawHub & SenClaw API
   description: |
-    Comprehensive API specification for ClawHub Registry and SemaClaw Channel synchronization.
+    Comprehensive API specification for ClawHub Registry and SenClaw Channel synchronization.
     Includes skill management, registry search, and real-time channel sync.
   version: 1.1.0
 servers:
-  - url: https://api.semaclaw.ai/v1
+  - url: https://api.senclaw.ai/v1
     description: Public Gateway / Channel Sync
   - url: https://lightmake.site/api/v1
     description: ClawHub Registry API

@@ -42,6 +42,10 @@ const BUILTIN_PERSONAS: &[BuiltinPersona] = &[
         filename: "space-assistant",
         content: include_str!("../../assets/builtin-personas/space-assistant.md"),
     },
+    BuiltinPersona {
+        filename: "ocr-worker",
+        content: include_str!("../../assets/builtin-personas/ocr-worker.md"),
+    },
 ];
 
 /// Install builtin personas to `virtual_agents_dir`.

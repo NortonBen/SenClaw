@@ -28,6 +28,8 @@ pub(crate) struct GroupInfo {
     pub(crate) allowed_work_dirs: Option<Vec<String>>,
     #[serde(rename = "maxMessages")]
     pub(crate) max_messages: Option<u32>,
+    #[serde(rename = "modelId", skip_serializing_if = "Option::is_none")]
+    pub(crate) llm_config_id: Option<String>,
     #[serde(rename = "agentId", skip_serializing_if = "Option::is_none")]
     pub(crate) agent_id: Option<i64>,
     #[serde(rename = "channelId", skip_serializing_if = "Option::is_none")]
@@ -47,6 +49,7 @@ pub(crate) fn to_group_info(g: &crate::types::GroupBinding) -> GroupInfo {
         allowed_paths: g.allowed_paths.clone(),
         allowed_work_dirs: g.allowed_work_dirs.clone(),
         max_messages: g.max_messages,
+        llm_config_id: g.llm_config_id.clone(),
         agent_id: None,
         channel_id: None,
     }

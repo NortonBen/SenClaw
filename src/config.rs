@@ -1,7 +1,7 @@
 //! Application configuration. Mirrors `src-old/config.ts`.
 //!
 //! Env vars are read once at process start via [`Config::from_env`]. Brand-
-//! prefixed vars use `SENCLAW_*` (renamed from `SEMACLAW_*`); platform-level
+//! prefixed vars use `SENCLAW_*` (renamed from `SENCLAW_*`); platform-level
 //! vars (`TELEGRAM_BOT_TOKEN`, `FEISHU_APP_ID`, …) are unchanged.
 //! Default paths live under `~/.senclaw/` and `~/senclaw/`.
 
@@ -87,6 +87,10 @@ pub struct PathsConfig {
     /// TTS (Text-to-Speech) model storage — separate from LLM and Whisper storage.
     /// Default: `~/.senclaw/tts-models`. Override with `SENCLAW_TTS_MODELS_DIR`.
     pub tts_models_dir: PathBuf,
+    /// OCR model storage (PaddleOCR `.mnn` weights + keys file), separate from
+    /// other model trees. Default: `~/.senclaw/ocr-models`. Override with
+    /// `SENCLAW_OCR_MODELS_DIR`.
+    pub ocr_models_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,6 +390,7 @@ impl Config {
                     senclaw_home.join("whisper-models"),
                 ),
                 tts_models_dir: env_path("SENCLAW_TTS_MODELS_DIR", senclaw_home.join("tts-models")),
+                ocr_models_dir: env_path("SENCLAW_OCR_MODELS_DIR", senclaw_home.join("ocr-models")),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(

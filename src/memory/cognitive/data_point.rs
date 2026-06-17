@@ -11,6 +11,12 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     Entity,
+    /// Category/class of an entity (cognee `EntityType`). Entities point at
+    /// their type via an `is_a` edge. Kept distinct from `Entity` so type
+    /// nodes never get picked up by `find_entity_by_name` (which keys on
+    /// `kind = 'entity'`) — otherwise "person" the type would shadow
+    /// "person" the entity.
+    EntityType,
     Chunk,
     Summary,
     Custom,
@@ -20,6 +26,7 @@ impl NodeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Entity => "entity",
+            Self::EntityType => "entity_type",
             Self::Chunk => "chunk",
             Self::Summary => "summary",
             Self::Custom => "custom",
@@ -29,6 +36,7 @@ impl NodeKind {
     pub fn from_str(s: &str) -> Self {
         match s {
             "entity" => Self::Entity,
+            "entity_type" => Self::EntityType,
             "chunk" => Self::Chunk,
             "summary" => Self::Summary,
             _ => Self::Custom,
@@ -122,6 +130,12 @@ impl DataPoint {
     }
 
     /// New entity node (produced by `cognify` / triplet extraction).
+    ///
+    /// Starts untyped; the cognify pipeline sets `type_name` (the cognee-style
+    /// category, e.g. `"person"` / `"city"`) and wires an `is_a` edge to the
+    /// matching [`DataPoint::entity_type`] node when the extractor supplied a
+    /// type. `type_name` is the denormalised copy so a single node read tells
+    /// you the type without traversing the edge.
     pub fn entity(name: impl Into<String>, now: i64) -> Self {
         let name = name.into();
         let proper = name.chars().next().is_some_and(|c| c.is_uppercase());
@@ -142,6 +156,33 @@ impl DataPoint {
             last_seen_at: now,
             // Entities are produced BY extraction — there's nothing to
             // extract from them.
+            extraction_state: ExtractionState::Done,
+            extracted_at: Some(now),
+        }
+    }
+
+    /// New entity-type (category) node. The id is a deterministic UUIDv5 of
+    /// the canonical name so repeated extraction of the same type dedupes
+    /// for free via `ON CONFLICT(id)` — no name lookup needed, mirroring
+    /// cognee's `uuid5`-keyed `EntityType` nodes.
+    pub fn entity_type(name: impl Into<String>, now: i64) -> Self {
+        let name = name.into();
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("entity_type:{name}").as_bytes());
+        Self {
+            id,
+            kind: NodeKind::EntityType,
+            type_name: String::new(),
+            name,
+            summary: String::new(),
+            content_hash: None,
+            props: Value::Object(Default::default()),
+            salience: 0.5,
+            mention_count: 1,
+            is_proper_noun: false,
+            selectivity: None,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: now,
             extraction_state: ExtractionState::Done,
             extracted_at: Some(now),
         }

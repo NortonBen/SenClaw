@@ -7,7 +7,7 @@ use anyhow::Result;
 use super::config::{load_global_config, save_global_config};
 use super::types::{
     AdminPermissions, AdminPermissionsSection, EmbeddingConfig, LlmConfig, LlmConfigResult,
-    TtsSettings, WhisperSettings,
+    OcrSettings, TtsSettings, WhisperSettings,
 };
 
 // ===== Admin permissions config =====
@@ -196,5 +196,19 @@ pub fn load_tts_settings(config_path: &Path) -> TtsSettings {
 pub fn save_tts_settings(config_path: &Path, s: &TtsSettings) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.tts_config = Some(s.clone());
+    save_global_config(config_path, &cfg)
+}
+
+// ===== OCR settings =====
+
+pub fn load_ocr_settings(config_path: &Path) -> OcrSettings {
+    load_global_config(config_path)
+        .ocr_config
+        .unwrap_or_default()
+}
+
+pub fn save_ocr_settings(config_path: &Path, s: &OcrSettings) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.ocr_config = Some(s.clone());
     save_global_config(config_path, &cfg)
 }

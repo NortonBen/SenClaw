@@ -215,6 +215,19 @@ pub fn wiki_mcp_config(wiki_dir: &str) -> McpServerConfig {
     cfg
 }
 
+// ===== OCR =====
+
+/// Build the MCP config for the OCR subprocess. The subprocess does not link
+/// MNN — it forwards image bytes to the daemon's `/api/ocr/recognize` endpoint.
+pub fn ocr_mcp_config(ui_port: u16) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-ocr", "ocr-server");
+    cfg.env.insert(
+        "SENCLAW_OCR_BRIDGE_URL".into(),
+        format!("http://127.0.0.1:{ui_port}"),
+    );
+    cfg
+}
+
 // ===== Code Knowledge Graph =====
 
 pub fn code_graph_mcp_config(db_path: &str, project_id: &str, workspace: &str) -> McpServerConfig {

@@ -3,6 +3,7 @@ import { Tag, theme, Typography, Tooltip } from 'antd';
 import { CheckCircleFilled, CloseCircleFilled, FileTextOutlined, EditOutlined, CodeOutlined, SearchOutlined, GlobalOutlined, ToolOutlined } from '@ant-design/icons';
 import type { ToolMessage } from '../types';
 import { ToolDetail } from './tool';
+import { normalizeMcpName } from '../utils/toolName';
 
 const { Text } = Typography;
 
@@ -13,11 +14,14 @@ interface Props {
 
 /** Map a tool name to a human-readable verb used in the collapsed summary
  *  (claude-code uses "Read a file, edited a file, ran a command"). */
-function verbFor(toolName: string): string {
-  if (toolName === 'Read' || toolName === 'mcp__senclaw-code__read_file') return 'Read a file';
-  if (toolName === 'Write' || toolName === 'mcp__senclaw-code__write_file') return 'Created a file';
-  if (toolName === 'Edit' || toolName === 'NotebookEdit' || toolName === 'mcp__senclaw-code__edit_file') return 'Edited a file';
-  if (toolName === 'Bash' || toolName === 'mcp__senclaw-code__bash') return 'Ran a command';
+function verbFor(rawName: string): string {
+  // Fold the full registered form and the stripped bridge form onto one key
+  // (e.g. `mcp__senclaw-space__space_event_create` → `mcp__space__event_create`).
+  const toolName = normalizeMcpName(rawName);
+  if (toolName === 'Read' || toolName === 'mcp__code__read_file') return 'Read a file';
+  if (toolName === 'Write' || toolName === 'mcp__code__write_file') return 'Created a file';
+  if (toolName === 'Edit' || toolName === 'NotebookEdit' || toolName === 'mcp__code__edit_file') return 'Edited a file';
+  if (toolName === 'Bash' || toolName === 'mcp__code__bash') return 'Ran a command';
   if (toolName === 'Glob') return 'Searched files';
   if (toolName === 'Grep') return 'Searched content';
   if (toolName === 'WebFetch') return 'Fetched a URL';
@@ -27,14 +31,18 @@ function verbFor(toolName: string): string {
   if (toolName === 'EnterPlanMode') return 'Entered Plan mode';
   if (toolName === 'ExitPlanMode') return 'Requested plan approval';
   if (toolName.startsWith('mcp__browser__')) return 'Browser action';
-  if (toolName.startsWith('mcp__senclaw-memory__')) return 'Memory lookup';
-  if (toolName.startsWith('mcp__senclaw-wiki__')) return 'Wiki action';
-  if (toolName.startsWith('mcp__senclaw-schedule__')) return 'Scheduled task';
+  if (toolName.startsWith('mcp__memory__')) return 'Memory lookup';
+  if (toolName.startsWith('mcp__wiki__')) return 'Wiki action';
+  if (toolName.startsWith('mcp__schedule__') || toolName.startsWith('mcp__space__recurring_')) return 'Scheduled task';
+  if (toolName.startsWith('mcp__space__event_')) return 'Calendar action';
+  if (toolName.startsWith('mcp__space__note_')) return 'Note action';
+  if (toolName.startsWith('mcp__space__')) return 'Space action';
   if (toolName.startsWith('mcp__')) return toolName.split('__').slice(-1)[0]?.replace(/_/g, ' ') ?? 'Tool';
   return toolName;
 }
 
-function iconFor(toolName: string) {
+function iconFor(rawName: string) {
+  const toolName = normalizeMcpName(rawName);
   if (toolName === 'Read' || toolName.endsWith('read_file')) return <FileTextOutlined />;
   if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit' || toolName.endsWith('write_file') || toolName.endsWith('edit_file')) return <EditOutlined />;
   if (toolName === 'Bash' || toolName === 'bash') return <CodeOutlined />;

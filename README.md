@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/images/semaclaw-logo.png" alt="SemaClaw logo" width="200" />
+  <img src="docs/images/senclaw-logo.png" alt="SenClaw logo" width="200" />
 </p>
 
-<h1 align="center">SemaClaw</h1>
+<h1 align="center">SenClaw</h1>
 
 <p align="center">
   <em>A general-purpose, open-source framework for personal AI agents.</em>
@@ -18,15 +18,15 @@
   <strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-[SemaClaw](https://github.com/midea-ai/SemaClaw) is a general-purpose engineering harness for building personal AI agents. It is built on top of a reusable agent runtime ([sema-code-core](https://github.com/midea-ai/sema-code-core)) and provides the surrounding machinery — permissions, memory, scheduling, multi-agent orchestration, channel adapters, and a Web UI — that turns a raw runtime into a usable personal AI system. It is also a reference implementation and starting point for the community to evaluate and improve on the engineering decisions behind it.
+[SenClaw](https://github.com/midea-ai/SenClaw) is a general-purpose engineering harness for building personal AI agents. It is built on top of a reusable agent runtime ([sema-code-core](https://github.com/midea-ai/sema-code-core)) and provides the surrounding machinery — permissions, memory, scheduling, multi-agent orchestration, channel adapters, and a Web UI — that turns a raw runtime into a usable personal AI system. It is also a reference implementation and starting point for the community to evaluate and improve on the engineering decisions behind it.
 
 ---
 
 <p align="center">
-  <img src="https://github.com/midea-ai/SemaClaw/releases/download/v0.1.1-preview/SemaClaw-demo.GIF" alt="SemaClaw Demo" width="720" />
+  <img src="https://github.com/midea-ai/SenClaw/releases/download/v0.1.1-preview/SenClaw-demo.GIF" alt="SenClaw Demo" width="720" />
 </p>
 
-*SemaClaw analyzed its own source code and generated the intro video above — powered by [frontend-slides](https://github.com/zarazhangrui/frontend-slides) and [remotion](https://github.com/remotion-dev/remotion) skills (DeepSeek-Chat for all preceding steps, Claude Sonnet 4.6 for Remotion animation coding).* [Watch full demo video](https://midea-ai.github.io/SemaClaw/assets/SemaClaw-demo.mp4)
+*SenClaw analyzed its own source code and generated the intro video above — powered by [frontend-slides](https://github.com/zarazhangrui/frontend-slides) and [remotion](https://github.com/remotion-dev/remotion) skills (DeepSeek-Chat for all preceding steps, Claude Sonnet 4.6 for Remotion animation coding).* [Watch full demo video](https://midea-ai.github.io/SenClaw/assets/SenClaw-demo.mp4)
 
 ## Highlights
 
@@ -46,24 +46,24 @@
 
 ```bash
 # 1. Install globally
-npm install -g semaclaw
+npm install -g senclaw
 
 # 2. Run
-semaclaw
+senclaw
 ```
 
 That's it. Open the Web UI at **<http://127.0.0.1:18788/>**.
 
-> **Configure an LLM on first launch.** SemaClaw starts without a built-in model. Open the Web UI → **Settings → LLM**, add a provider profile (OpenAI / Anthropic / DeepSeek / Qwen / …) with `baseURL`, `apiKey`, `modelName`. The profile is persisted to `~/.semaclaw/config.json` and synced to `~/.semaclaw/semaclaw-model.conf` — until at least one active profile exists, agent runs that call an LLM will fail.
+> **Configure an LLM on first launch.** SenClaw starts without a built-in model. Open the Web UI → **Settings → LLM**, add a provider profile (OpenAI / Anthropic / DeepSeek / Qwen / …) with `baseURL`, `apiKey`, `modelName`. The profile is persisted to `~/.senclaw/config.json` and synced to `~/.senclaw/senclaw-model.conf` — until at least one active profile exists, agent runs that call an LLM will fail.
 
-To enable messaging channels (Telegram / Feishu / QQ / WeChat), create a `.env` file in your working directory before starting `semaclaw`. See [docs/QUICK_START.md](docs/QUICK_START.md) for the full list of environment variables.
+To enable messaging channels (Telegram / Feishu / QQ / WeChat), create a `.env` file in your working directory before starting `senclaw`. See [docs/QUICK_START.md](docs/QUICK_START.md) for the full list of environment variables.
 
 ### Option B — Build from source
 
 ```bash
 # 1. Clone
-git clone https://github.com/midea-ai/SemaClaw.git
-cd SemaClaw
+git clone https://github.com/midea-ai/SenClaw.git
+cd SenClaw
 
 # 2. Install and build
 npm install
@@ -73,7 +73,7 @@ npm run build:web
 # 3. Configure (optional)
 cp .env.example .env
 # Edit .env to enable channels (Telegram / Feishu / QQ / WeChat).
-# If left unset, SemaClaw starts in Web UI–only mode.
+# If left unset, SenClaw starts in Web UI–only mode.
 
 # 4. Run
 npm start
@@ -99,7 +99,7 @@ For a complete walkthrough including environment variables, CLI usage, runtime l
 ## Project Structure
 
 ```
-semaclaw/
+senclaw/
 ├── src/
 │   ├── agent/          # Agent lifecycle, bridges, permission routing
 │   ├── channels/       # Telegram / Feishu / QQ adapters
@@ -118,7 +118,7 @@ semaclaw/
 
 ## Contributing
 
-Contributions are welcome. SemaClaw exists to advance the shared engineering foundation for personal AI agents — issues, pull requests, and design discussions are all valuable. See [CONTRIBUTING.md](CONTRIBUTING.md) *(coming soon)* for guidelines.
+Contributions are welcome. SenClaw exists to advance the shared engineering foundation for personal AI agents — issues, pull requests, and design discussions are all valuable. See [CONTRIBUTING.md](CONTRIBUTING.md) *(coming soon)* for guidelines.
 
 ---
 
@@ -130,14 +130,14 @@ Contributions are welcome. SemaClaw exists to advance the shared engineering fou
 
 ## About the Logo
 
-The SemaClaw logo depicts a horse with **claw-shaped wings** rising from its back. The imagery is inspired by the Chinese phrase *以梦为马* — *"to ride one's dreams as a horse"* — capturing the spirit of an AI harness that carries the user wherever their imagination leads. The name itself blends *Sema* (from *semantic*) and *Claw*, while *harness* nods to the literal meaning of the word: the gear used to control and restrain a horse.
+The SenClaw logo depicts a horse with **claw-shaped wings** rising from its back. The imagery is inspired by the Chinese phrase *以梦为马* — *"to ride one's dreams as a horse"* — capturing the spirit of an AI harness that carries the user wherever their imagination leads. The name itself blends *Sema* (from *semantic*) and *Claw*, while *harness* nods to the literal meaning of the word: the gear used to control and restrain a horse.
 
 ---
 
 ## Acknowledgments
 
-SemaClaw is built on top of [sema-code-core](https://github.com/midea-ai/sema-code-core), which provides the underlying agent runtime. Its product form is also inspired by [OpenClaw](https://github.com/openclaw/openclaw), and it integrates with the [ClaWHub](https://github.com/openclaw/clawhub) plugin marketplace from the same project. Thanks also to the broader open-source ecosystem this project depends on — including the [Model Context Protocol](https://modelcontextprotocol.io), [grammY](https://grammy.dev), and many others.
+SenClaw is built on top of [sema-code-core](https://github.com/midea-ai/sema-code-core), which provides the underlying agent runtime. Its product form is also inspired by [OpenClaw](https://github.com/openclaw/openclaw), and it integrates with the [ClaWHub](https://github.com/openclaw/clawhub) plugin marketplace from the same project. Thanks also to the broader open-source ecosystem this project depends on — including the [Model Context Protocol](https://modelcontextprotocol.io), [grammY](https://grammy.dev), and many others.
 
 ---
 
-> SemaClaw's ambition is not to define the final architecture of personal AI agents — it is to advance the shared engineering foundation on which better architectures can be built.
+> SenClaw's ambition is not to define the final architecture of personal AI agents — it is to advance the shared engineering foundation on which better architectures can be built.

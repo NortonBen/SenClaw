@@ -710,6 +710,10 @@ pub struct ZenCoreOptions {
     /// stored context stays optimized and coherent. Set per-engine from the
     /// global `afterProcess` toggle.
     pub after_process: bool,
+    /// Per-group LLM override: id of an entry in the global `llmConfigs` list.
+    /// `None` = resolve the globally active model (`activeLlmConfigId`).
+    /// Set per-engine from the group binding's `llm_config_id`.
+    pub model_config_id: Option<String>,
 }
 
 impl Default for ZenCoreOptions {
@@ -735,6 +739,7 @@ impl Default for ZenCoreOptions {
             memory_folder_override: None,
             pre_trigger_skill: false,
             after_process: false,
+            model_config_id: None,
         }
     }
 }

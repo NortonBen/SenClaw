@@ -48,6 +48,7 @@ pub(super) fn save_group_to_config(config_path: &Path, binding: &GroupBinding) {
         allowed_work_dirs: binding.allowed_work_dirs.clone(),
         bot_token: binding.bot_token.clone(),
         max_messages: binding.max_messages,
+        llm_config_id: binding.llm_config_id.clone(),
     };
     if let Some(existing) = groups.iter_mut().find(|g| g.jid == entry.jid) {
         *existing = entry;
@@ -106,6 +107,10 @@ pub fn sync_groups_from_config(
             allowed_work_dirs: entry.allowed_work_dirs.clone(),
             bot_token: entry.bot_token.clone(),
             max_messages: entry.max_messages,
+            llm_config_id: entry
+                .llm_config_id
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|e| e.llm_config_id.clone())),
             last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
             added_at: existing
                 .as_ref()

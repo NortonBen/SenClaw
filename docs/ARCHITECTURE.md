@@ -1,12 +1,12 @@
-# SemaClaw Architecture & Design Document
+# SenClaw Architecture & Design Document
 
-> Tài liệu phân tích kiến trúc và luồng hoạt động của SemaClaw (TypeScript reference implementation `src-old/`).
+> Tài liệu phân tích kiến trúc và luồng hoạt động của SenClaw (TypeScript reference implementation `src-old/`).
 
 ---
 
 ## 1. Tổng quan hệ thống
 
-SemaClaw là một **multi-agent orchestration framework** chạy trên [sema-code-core](https://github.com/midea-ai/sema-code-core). Nó kết nối nhiều kênh chat (Telegram, Feishu, QQ, WeChat) vào các AI agent, cung cấp quản lý bộ nhớ, lập lịch tác vụ, wiki, và Web UI real-time.
+SenClaw là một **multi-agent orchestration framework** chạy trên [sema-code-core](https://github.com/midea-ai/sema-code-core). Nó kết nối nhiều kênh chat (Telegram, Feishu, QQ, WeChat) vào các AI agent, cung cấp quản lý bộ nhớ, lập lịch tác vụ, wiki, và Web UI real-time.
 
 ### 1.1. Các thành phần chính
 
@@ -145,7 +145,7 @@ sequenceDiagram
     participant UI as UIServer
     participant WM as WikiManager
 
-    Main->>Main: 0. Cô lập model.conf (~/.semaclaw/)
+    Main->>Main: 0. Cô lập model.conf (~/.senclaw/)
     Main->>Setup: 1. runSetupIfNeeded() - cấu hình quyền
     Main->>DB: 2. initDb() - SQLite WAL + tạo bảng
     Main->>MM: 3. MemoryManager.init()
@@ -464,7 +464,7 @@ flowchart LR
 
 ### 8.2. Pre-retrieval
 
-Khi bật `SEMACLAW_PRE_RETRIEVAL=true`:
+Khi bật `SENCLAW_PRE_RETRIEVAL=true`:
 - Trước mỗi lần agent xử lý, MemoryManager tự động tìm kiếm các chunks liên quan
 - Kết quả được inject vào prompt dưới dạng context bổ sung
 - Có thể lọc theo `searchMinScore` (mặc định 0.5) và giới hạn `searchMaxResults` (mặc định 5)
@@ -598,15 +598,15 @@ flowchart LR
 ## 12. Cấu trúc thư mục dữ liệu
 
 ```
-~/.semaclaw/                         # Thư mục cấu hình hệ thống
-  semaclaw-model.conf                # LLM model config (cô lập với sema-core khác)
-  semaclaw.db                        # SQLite database (WAL mode)
+~/.senclaw/                         # Thư mục cấu hình hệ thống
+  senclaw-model.conf                # LLM model config (cô lập với sema-core khác)
+  senclaw.db                        # SQLite database (WAL mode)
   config.json                        # Cấu hình groups, channels, LLM
   dispatch-state.json                # Trạng thái dispatch tasks
   managed/skills/                    # Skills cài từ ClawHub
   workspace-state-{folder}.json      # Trạng thái workspace từng agent
 
-~/semaclaw/                          # Thư mục dữ liệu người dùng
+~/senclaw/                          # Thư mục dữ liệu người dùng
   agents/{folder}/                   # Mỗi group một folder
     CLAUDE.md                        # Agent persona
     .sema/sessions/                  # Session state
@@ -671,9 +671,9 @@ flowchart TB
 
 ### 14.1. Tổng quan
 
-SemaClaw **không trực tiếp gọi LLM API**. Nó sử dụng **SemaCore** engine (thư viện `sema-core`) làm trung gian. SemaCore chịu trách nhiệm:
+SenClaw **không trực tiếp gọi LLM API**. Nó sử dụng **SemaCore** engine (thư viện `sema-core`) làm trung gian. SemaCore chịu trách nhiệm:
 
-- Gọi LLM API (Claude API, OpenAI, v.v.) với cấu hình từ `~/.semaclaw/semaclaw-model.conf`
+- Gọi LLM API (Claude API, OpenAI, v.v.) với cấu hình từ `~/.senclaw/senclaw-model.conf`
 - Quản lý Prompt Cache (automatic caching theo Anthropic specification)
 - Quản lý Tool Use loop (MCP tools)
 - Quản lý session state, context compaction
@@ -681,7 +681,7 @@ SemaClaw **không trực tiếp gọi LLM API**. Nó sử dụng **SemaCore** en
 
 ```mermaid
 flowchart TB
-    subgraph "SemaClaw (src-old/)"
+    subgraph "SenClaw (src-old/)"
         AP[AgentPool]
         GQ[GroupQueue]
         SB[SessionBridge]
@@ -703,7 +703,7 @@ flowchart TB
 
     subgraph "Storage"
         SESS_DIR[(~/.sema/sessions/)]
-        MCONF[(semaclaw-model.conf)]
+        MCONF[(senclaw-model.conf)]
     end
 
     GQ -->|enqueue task| AP
@@ -852,7 +852,7 @@ flowchart LR
 
 1. **SessionBridge** — Đọc các message mới từ SQLite (sau `lastAgentTimestamp`), format thành XML `<messages><message sender="..." time="...">...</message></messages>`
 
-2. **Memory Pre-retrieval** (bật/tắt qua `SEMACLAW_PRE_RETRIEVAL`) — Tự động tìm kiếm memory chunks liên quan đến nội dung tin nhắn, inject vào prompt dưới dạng `<memory>...</memory>`. Lọc bỏ file log hôm nay (đang được ghi, nội dung không ổn định).
+2. **Memory Pre-retrieval** (bật/tắt qua `SENCLAW_PRE_RETRIEVAL`) — Tự động tìm kiếm memory chunks liên quan đến nội dung tin nhắn, inject vào prompt dưới dạng `<memory>...</memory>`. Lọc bỏ file log hôm nay (đang được ghi, nội dung không ổn định).
 
 3. **Dispatch Context** — Nếu admin agent có dispatch tasks đang chạy, inject reminder text để tránh agent tạo lại task trùng lặp.
 
@@ -935,7 +935,7 @@ sequenceDiagram
 
 ### 14.8. Các chế độ Agent & LLM
 
-SemaClaw có **4 chế độ** sử dụng LLM, mỗi chế độ có đặc điểm session khác nhau:
+SenClaw có **4 chế độ** sử dụng LLM, mỗi chế độ có đặc điểm session khác nhau:
 
 ```mermaid
 flowchart TB
@@ -1045,10 +1045,10 @@ Khi context quá dài (vượt context window của LLM), SemaCore tự động 
 
 ### 14.12. Cấu hình LLM Model
 
-Cấu hình model được lưu trong `~/.semaclaw/semaclaw-model.conf` (format của sema-core):
+Cấu hình model được lưu trong `~/.senclaw/senclaw-model.conf` (format của sema-core):
 
 - **Cô lập hoàn toàn** với các ứng dụng sema-core khác (như sema-code editor)
-- Khi khởi động, nếu chưa có file, SemaClaw copy từ `~/.sema/model.conf` (nếu tồn tại)
+- Khi khởi động, nếu chưa có file, SenClaw copy từ `~/.sema/model.conf` (nếu tồn tại)
 - Có thể cấu hình model khác nhau cho từng group qua `config.json` → sync vào sema-core ModelManager
 - **Thinking mode** có thể bật/tắt real-time qua Web UI (không cần khởi động lại agent)
 

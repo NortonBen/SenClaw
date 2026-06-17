@@ -2,7 +2,7 @@
 //!
 //! A Space App manifest may declare a `runtime.kind == "server"` block with a
 //! `start` command (e.g. `npm start`). On install and on daemon startup,
-//! SemaClaw will:
+//! SenClaw will:
 //!   1. launch the app's start command from its install directory with an
 //!      assigned `PORT` (so one process serves the UI + `/mcp` route + API),
 //!   2. wait for the app's health endpoint,

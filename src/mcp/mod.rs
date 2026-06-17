@@ -14,6 +14,7 @@ pub mod helper;
 pub mod litho_server;
 pub mod manager;
 pub mod memory_server;
+pub mod ocr_server;
 pub mod schedule_server;
 pub mod send_server;
 pub mod space_server;

@@ -113,6 +113,12 @@ pub trait CoreApi: Send + Sync {
     /// global `afterProcess` toggle before each turn). Default no-op.
     fn set_after_process(&self, _jid: &str, _enabled: bool) {}
 
+    /// Set the per-group LLM override for a core. `id` is an entry id in the
+    /// global `llmConfigs` list, or `None` to use the globally active model.
+    /// Applied to the live engine if present, and remembered so a lazily
+    /// created engine picks it up. Default no-op.
+    fn set_model_override(&self, _jid: &str, _id: Option<String>) {}
+
     /// Switch the core's working directory (used by workspace_switch and dispatch).
     fn set_working_dir(&self, jid: &str, dir: &str) {}
 

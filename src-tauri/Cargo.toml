@@ -2,10 +2,10 @@
 name = "senclaw-app"
 version = "0.1.1"
 edition = "2021"
-description = "SemaClaw desktop app (Tauri 2.0)"
+description = "SenClaw desktop app (Tauri 2.0)"
 license = "MIT"
 authors = ["AIRC Sema Team"]
-repository = "https://github.com/midea-ai/SemaClaw"
+repository = "https://github.com/midea-ai/SenClaw"
 
 [[bin]]
 name = "senclaw-app"

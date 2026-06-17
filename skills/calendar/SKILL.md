@@ -79,16 +79,16 @@ mcp_servers:
 
 # Calendar — Event Management & Notifications
 
-Manage calendar events with automatic notifications, conflict detection, and schedule organization. All tools are prefixed `space_event_*` and available through the `senclaw-space` MCP server.
+Manage calendar events with automatic notifications, conflict detection, and schedule organization. Tools register as `space_event_*` on the `senclaw-space` MCP server. Call them by the **canonical bridge name** `mcp__space__<verb>` — the resolver strips the redundant `space_` prefix once (e.g. `space_event_create` → `mcp__space__event_create`). The bare `space_<verb>(...)` notation used below maps to the same tool.
 
 ## Required Tool Discovery
 
 Before calling any calendar action, make sure the concrete MCP tool is visible. If not, call `ToolSearch` first:
 
 ```
-ToolSearch { query: "select:mcp__space__space_event_create" }
-ToolSearch { query: "select:mcp__space__space_event_list" }
-ToolSearch { query: "select:mcp__space__space_current_time" }
+ToolSearch { query: "select:mcp__space__event_create" }
+ToolSearch { query: "select:mcp__space__event_list" }
+ToolSearch { query: "select:mcp__space__current_time" }
 ```
 
 If an exact `select:` query returns no match, search by keywords such as `space event create`, then call the exact tool name returned.

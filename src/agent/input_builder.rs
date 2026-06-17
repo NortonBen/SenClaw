@@ -157,7 +157,7 @@ fn download_http_image(url: &str) -> Result<String, String> {
     // Create blocking client with timeout
     let client: Client = match Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent("SemaClaw/1.0")
+        .user_agent("SenClaw/1.0")
         .build()
     {
         Ok(c) => c,

@@ -18,8 +18,8 @@ impl super::Db {
                 INSERT INTO groups
                   (jid, folder, name, channel, group_type, is_admin, requires_trigger,
                    allowed_tools, allowed_paths, allowed_work_dirs,
-                   bot_token, max_messages, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                   bot_token, max_messages, llm_config_id, last_active, added_at)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                 ON CONFLICT(jid) DO UPDATE SET
                   folder            = excluded.folder,
                   name              = excluded.name,
@@ -32,6 +32,7 @@ impl super::Db {
                   allowed_work_dirs = excluded.allowed_work_dirs,
                   bot_token         = excluded.bot_token,
                   max_messages      = excluded.max_messages,
+                  llm_config_id     = excluded.llm_config_id,
                   last_active       = excluded.last_active
                 "#,
                 params![
@@ -47,6 +48,7 @@ impl super::Db {
                     json_or_null(&g.allowed_work_dirs)?,
                     g.bot_token,
                     g.max_messages,
+                    g.llm_config_id,
                     g.last_active,
                     g.added_at,
                 ],
@@ -112,8 +114,8 @@ impl super::Db {
                 INSERT INTO groups
                   (jid, folder, name, channel, is_admin, requires_trigger,
                    allowed_tools, allowed_paths, allowed_work_dirs,
-                   bot_token, max_messages, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                   bot_token, max_messages, llm_config_id, last_active, added_at)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 "#,
                 params![
                     binding.jid,
@@ -127,6 +129,7 @@ impl super::Db {
                     json_or_null(&binding.allowed_work_dirs)?,
                     binding.bot_token,
                     binding.max_messages,
+                    binding.llm_config_id,
                     binding.last_active,
                     binding.added_at,
                 ],

@@ -780,6 +780,7 @@ impl CoworkManager {
             allowed_work_dirs: Some(vec![workspace_dir.clone()]),
             bot_token: None,
             max_messages: None,
+            llm_config_id: None,
             last_active: None,
             added_at: chrono::Utc::now().to_rfc3339(),
         };

@@ -1,18 +1,18 @@
 /**
  * SenclawSpace MCP server harness (Node-only).
  *
- * Turns a Space App into a local MCP server that SemaClaw can register and call.
+ * Turns a Space App into a local MCP server that SenClaw can register and call.
  * It bakes in everything a Space App needs to expose itself over MCP:
  *
  *   - Streamable HTTP transport (stateless JSON) bound to loopback
- *   - An `Accept`-header normalization shim so the CURRENT SemaClaw Rust MCP
+ *   - An `Accept`-header normalization shim so the CURRENT SenClaw Rust MCP
  *     client (which sends no `Accept` header) interoperates with the strict
  *     MCP TypeScript SDK transport (which would otherwise return HTTP 406)
  *   - Origin validation (DNS-rebinding protection)
  *   - Optional built-in `*_get_settings` / `*_set_settings` tools backed by the
- *     SemaClaw config KV (read/write settings)
+ *     SenClaw config KV (read/write settings)
  *   - Custom tool registration hook
- *   - Optional self-registration back to SemaClaw on startup
+ *   - Optional self-registration back to SenClaw on startup
  *
  * Import only from a Node process: `import { serveSpaceMcp } from '@senclaw/space-sdk/mcp'`.
  */
@@ -65,7 +65,7 @@ export interface SpaceMcpContext {
 export interface ServeSpaceMcpOptions<T extends Record<string, unknown> = Record<string, unknown>> {
   /** Space App id (manifest `id`). */
   appId: string;
-  /** Absolute SemaClaw daemon UI base URL. Default `http://127.0.0.1:18788`. */
+  /** Absolute SenClaw daemon UI base URL. Default `http://127.0.0.1:18788`. */
   baseUrl?: string;
   /** Port to listen on. Default `4107`. */
   port?: number;
@@ -81,7 +81,7 @@ export interface ServeSpaceMcpOptions<T extends Record<string, unknown> = Record
   settings?: SpaceMcpSettings<T>;
   /** Register custom tools. Called once per request-scoped server instance. */
   registerTools?: (ctx: SpaceMcpContext) => void;
-  /** Register this server back to SemaClaw on startup (transport `http`). */
+  /** Register this server back to SenClaw on startup (transport `http`). */
   autoRegister?: boolean;
   /** Human-readable description used in the self-registration. */
   description?: string;
@@ -128,7 +128,7 @@ function settingsMarkdown(settings: Record<string, unknown>, heading: string): s
 
 /**
  * Only accept requests with no Origin (typical for non-browser MCP clients such
- * as the SemaClaw Rust client) or a loopback Origin.
+ * as the SenClaw Rust client) or a loopback Origin.
  */
 function originAllowed(origin: string | undefined): boolean {
   if (!origin) return true;
@@ -164,7 +164,7 @@ function registerSettingsTools<T extends Record<string, unknown>>(
     `${prefix}_get_settings`,
     {
       title: 'Get Settings',
-      description: `Read the saved settings for the "${space.env.appId}" Space App from SemaClaw.
+      description: `Read the saved settings for the "${space.env.appId}" Space App from SenClaw.
 
 Returns the persisted configuration (defaults applied when nothing is stored yet). Read-only.
 
@@ -207,7 +207,7 @@ Returns (JSON): the settings object.`,
       description: `Update the saved settings for the "${space.env.appId}" Space App.
 
 Performs a read-modify-write merge: only the fields you pass change, the rest are
-preserved. Persisted to the SemaClaw config KV so the app UI sees the same values.
+preserved. Persisted to the SenClaw config KV so the app UI sees the same values.
 
 Returns (JSON): the full settings object after the merge.`,
       inputSchema: { ...patchShape, response_format: responseFormatField },
@@ -244,7 +244,7 @@ Returns (JSON): the full settings object after the merge.`,
 
 /**
  * Start a Space App MCP server over Streamable HTTP. Resolves once it is
- * listening (and, if `autoRegister`, registered with SemaClaw).
+ * listening (and, if `autoRegister`, registered with SenClaw).
  */
 export async function serveSpaceMcp<T extends Record<string, unknown> = Record<string, unknown>>(
   options: ServeSpaceMcpOptions<T>
@@ -279,7 +279,7 @@ export async function serveSpaceMcp<T extends Record<string, unknown> = Record<s
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  // Compatibility shim: the SemaClaw Rust MCP client sends no `Accept` header,
+  // Compatibility shim: the SenClaw Rust MCP client sends no `Accept` header,
   // which the strict Streamable HTTP transport rejects with HTTP 406. The
   // transport (via Hono's node adapter) rebuilds request headers from
   // `req.rawHeaders` — the original [key, value, ...] array — so we must patch
@@ -356,7 +356,7 @@ export async function serveSpaceMcp<T extends Record<string, unknown> = Record<s
         description: description ?? `MCP server for the ${appId} Space App`,
       });
       // eslint-disable-next-line no-console
-      console.error(`Registered ${name} with SemaClaw at ${baseUrl}`);
+      console.error(`Registered ${name} with SenClaw at ${baseUrl}`);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error(`Self-registration failed (continuing): ${error instanceof Error ? error.message : String(error)}`);

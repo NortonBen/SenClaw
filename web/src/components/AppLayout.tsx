@@ -95,6 +95,7 @@ export function AppLayout({ sidebar, children, status }: Props) {
       </Layout>
       <AgentConsole
         dispatchParents={ws.dispatchParents}
+        dispatchActivity={ws.dispatchActivity}
         agentTodos={ws.agentTodos}
         messages={ws.messages}
         groups={ws.groups}
@@ -117,6 +118,7 @@ export function AppLayout({ sidebar, children, status }: Props) {
         expanded={expandedDock}
         onToggle={onToggleDock}
         dispatchParents={ws.dispatchParents}
+        dispatchActivity={ws.dispatchActivity}
         agentTodos={ws.agentTodos}
         messages={ws.messages}
         groups={ws.groups}

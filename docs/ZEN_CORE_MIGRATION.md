@@ -2,7 +2,7 @@
 
 Muc tieu: viet `zen-core` (Rust) de thay the `sema-core` trong luong migrate TS -> Rust, giu tuong thich hanh vi voi cac call-site hien tai.
 
-## Pham vi da dung trong SemaClaw
+## Pham vi da dung trong SenClaw
 
 Nguon map: `src-old/agent/AgentPool.ts`, `src-old/agent/PermissionBridge.ts`, `src-old/agent/VirtualWorkerPool.ts`, `src-old/gateway/UIServer.ts`.
 

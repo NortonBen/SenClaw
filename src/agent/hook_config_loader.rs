@@ -298,7 +298,7 @@ fn merge_hook_configs(global: Option<HookConfig>, workspace: Option<HookConfig>)
 
 /// Resolve variables in hook configuration.
 ///
-/// Supports: ${SEMACLAW_ROOT}, ${AGENT_WORKSPACE}
+/// Supports: ${SENCLAW_ROOT}, ${AGENT_WORKSPACE}
 fn resolve_variables_in_config(config: HookConfig, env: &HashMap<String, String>) -> HookConfig {
     let mut resolved = HookConfig::default();
 
@@ -353,7 +353,7 @@ fn resolve_variables(str: &str, env: &HashMap<String, String>) -> String {
 
 /// Resolve plugin root variables in hook configuration.
 ///
-/// Replaces ${SEMACLAW_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_ROOT} with plugin directory,
+/// Replaces ${SENCLAW_PLUGIN_ROOT} / ${CLAUDE_PLUGIN_ROOT} with plugin directory,
 /// allowing plugins to reference scripts bundled within themselves.
 fn resolve_plugin_root_in_config(config: HookConfig, plugin_dir: &str) -> HookConfig {
     let mut resolved = HookConfig::default();
@@ -373,7 +373,7 @@ fn resolve_plugin_root_in_config(config: HookConfig, plugin_dir: &str) -> HookCo
                             .command
                             .as_ref()
                             .map(|c| {
-                                c.replace("${SEMACLAW_PLUGIN_ROOT}", plugin_dir)
+                                c.replace("${SENCLAW_PLUGIN_ROOT}", plugin_dir)
                                     .replace("${CLAUDE_PLUGIN_ROOT}", plugin_dir)
                             })
                             .or_else(|| hook.command.clone()),
@@ -381,7 +381,7 @@ fn resolve_plugin_root_in_config(config: HookConfig, plugin_dir: &str) -> HookCo
                             .prompt
                             .as_ref()
                             .map(|p| {
-                                p.replace("${SEMACLAW_PLUGIN_ROOT}", plugin_dir)
+                                p.replace("${SENCLAW_PLUGIN_ROOT}", plugin_dir)
                                     .replace("${CLAUDE_PLUGIN_ROOT}", plugin_dir)
                             })
                             .or_else(|| hook.prompt.clone()),
@@ -430,7 +430,7 @@ pub fn load_merged_hook_config(
             continue;
         }
 
-        // Plugin layout: <pluginDir>/hooks/hooks.json — resolve ${SEMACLAW_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}
+        // Plugin layout: <pluginDir>/hooks/hooks.json — resolve ${SENCLAW_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT}
         let plugin_dir = file_path.parent().and_then(|p| p.to_str()).unwrap_or("");
 
         let resolved = resolve_plugin_root_in_config(validated, plugin_dir);
@@ -448,7 +448,7 @@ pub fn resolve_hook_env(
     let mut env = HashMap::new();
 
     env.insert(
-        "SEMACLAW_ROOT".to_string(),
+        "SENCLAW_ROOT".to_string(),
         global_config_dir.display().to_string(),
     );
 
@@ -536,7 +536,7 @@ mod tests {
         let workspace_dir = Some(PathBuf::from("/workspace"));
 
         let env = resolve_hook_env(&global_dir, workspace_dir.as_deref());
-        assert_eq!(env.get("SEMACLAW_ROOT"), Some(&"/global".to_string()));
+        assert_eq!(env.get("SENCLAW_ROOT"), Some(&"/global".to_string()));
         assert_eq!(env.get("AGENT_WORKSPACE"), Some(&"/workspace".to_string()));
     }
 
@@ -545,7 +545,7 @@ mod tests {
         let global_dir = PathBuf::from("/global");
 
         let env = resolve_hook_env(&global_dir, None);
-        assert_eq!(env.get("SEMACLAW_ROOT"), Some(&"/global".to_string()));
+        assert_eq!(env.get("SENCLAW_ROOT"), Some(&"/global".to_string()));
         assert_eq!(env.get("AGENT_WORKSPACE"), Some(&"/global".to_string()));
     }
 
@@ -601,7 +601,7 @@ mod tests {
                 condition: None,
                 hooks: vec![HookDefinition {
                     hook_type: "command".to_string(),
-                    command: Some("${SEMACLAW_PLUGIN_ROOT}/script.sh".to_string()),
+                    command: Some("${SENCLAW_PLUGIN_ROOT}/script.sh".to_string()),
                     prompt: None,
                     timeout: None,
                     blocking: None,

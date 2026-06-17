@@ -6,7 +6,7 @@ export default defineConfig({
   srcDir: 'src',
   manifest: {
     name: 'SenClaw Extension',
-    description: 'Remote browser control for SemaClaw agents',
+    description: 'Remote browser control for SenClaw agents',
     version: '0.1.0',
     icons: {
       '16': 'icon.png',

@@ -31,6 +31,12 @@ pub(super) struct GroupConfigEntry {
     pub(super) bot_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) max_messages: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "llmConfigId"
+    )]
+    pub(super) llm_config_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +74,15 @@ pub struct TelegramBotConfig {
 /// Whisper ASR UI settings: selected model id + default language.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhisperSettings {
+    #[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+/// OCR UI settings: selected PaddleOCR model id + default language.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OcrSettings {
     #[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +272,8 @@ pub(super) struct GlobalConfig {
     pub(super) whisper_config: Option<WhisperSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "ttsConfig")]
     pub(super) tts_config: Option<TtsSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ocrConfig")]
+    pub(super) ocr_config: Option<OcrSettings>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -335,6 +352,7 @@ pub struct GroupBindingUpdate {
     pub allowed_work_dirs: Option<Option<Vec<String>>>,
     pub bot_token: Option<Option<String>>,
     pub max_messages: Option<Option<u32>>,
+    pub llm_config_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone)]

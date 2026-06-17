@@ -61,6 +61,18 @@ pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<d
             return Some(Arc::clone(t));
         }
     }
+    // Bridge the stripped form against the registered full form. Tools register
+    // under their full server prefix (`mcp__senclaw-browser__browser_search`),
+    // but the model — and the skill docs — call them by the stripped bridge
+    // form (`mcp__browser__search`). Normalizing the tool's OWN name too makes
+    // the two meet, so the documented short name resolves to whatever long name
+    // the manager actually registered.
+    if let Some(t) = tools
+        .iter()
+        .find(|t| normalize_mcp_tool_name(t.name()) == normalized)
+    {
+        return Some(Arc::clone(t));
+    }
     for t in tools {
         if t.aliases()
             .iter()
@@ -98,15 +110,42 @@ pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<d
             })
             .map(Arc::clone)
     } else {
-        // Bare name without `mcp__` prefix — models sometimes emit just the
-        // verb (e.g. `space_event_create` instead of `mcp__space__event_create`
-        // or `mcp__senclaw-space__space_event_create`). Find the unique tool
-        // whose last `__` segment matches.
+        // Bare name without `mcp__` prefix — models sometimes strip the
+        // `mcp__{server}__` prefix and emit just the verb or server+verb:
+        //   - `event_create` for `mcp__space__event_create` (verb only)
+        //   - `space_event_create` for `mcp__space__event_create` (server_verb)
         let canon_bare = canonical_tool_name(&normalized);
+
+        // Strategy 1: exact verb match — bare name IS the verb segment.
+        // e.g. `event_create` → unique tool ending with `__event_create`.
         let suffix = format!("__{canon_bare}");
         let matches: Vec<_> = tools
             .iter()
             .filter(|t| canonical_tool_name(t.name()).ends_with(&suffix))
+            .collect();
+        if matches.len() == 1 {
+            return Some(Arc::clone(matches[0]));
+        }
+
+        // Strategy 2: server_verb concatenation — model concatenated server
+        // and verb with `_` instead of `mcp__{server}__{verb}`.
+        // e.g. `space_event_create` → `mcp__space__event_create` where
+        // server=space, verb=event_create.
+        let matches: Vec<_> = tools
+            .iter()
+            .filter(|t| {
+                let norm = normalize_mcp_tool_name(t.name());
+                if let Some((server, verb)) = mcp_name_parts(&norm) {
+                    let concat = format!(
+                        "{}_{}",
+                        canonical_tool_name(server),
+                        canonical_tool_name(verb)
+                    );
+                    concat == canon_bare
+                } else {
+                    false
+                }
+            })
             .collect();
         if matches.len() == 1 {
             Some(Arc::clone(matches[0]))
@@ -184,11 +223,15 @@ impl ToolSearchTool {
                 let desc = t.description().to_lowercase();
                 let mut score = 0i32;
                 // Boost entire MCP server families when the query names a server
-                // (e.g. "browser search" → all `mcp__browser__*` tools).
-                if name.starts_with("mcp__") {
+                // (e.g. "browser search" → all `mcp__browser__*` tools). Match on
+                // the normalized name so the full registered form
+                // (`mcp__senclaw-browser__browser_search`) is boosted under its
+                // stripped server name (`browser`) just like the short form.
+                let family_name = normalize_mcp_tool_name(&name);
+                if family_name.starts_with("mcp__") {
                     for term in &q_terms {
                         let family = format!("mcp__{term}__");
-                        if name.starts_with(&family) {
+                        if family_name.starts_with(&family) {
                             score += 80;
                         }
                     }
@@ -564,6 +607,48 @@ mod tests {
     }
 
     #[test]
+    fn resolve_stripped_bridge_name_to_registered_full_name() {
+        // The manager registers MCP tools under the FULL server prefix, but the
+        // agent-browser skill (and the model) call them by the stripped bridge
+        // form. The documented short name must resolve to the registered tool,
+        // both for direct dispatch and for `select:` loading via ToolSearch.
+        let tools: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(StubTool {
+                name: "mcp__senclaw-browser__browser_search",
+                desc: "Search the web.",
+                hint: "browser search web",
+                deferred: true,
+            }),
+            Arc::new(StubTool {
+                name: "mcp__senclaw-browser__browser_close_tab",
+                desc: "Close a browser tab.",
+                hint: "browser close tab",
+                deferred: true,
+            }),
+        ];
+        for called in [
+            "mcp__browser__search",                  // skill-documented short form
+            "mcp__senclaw-browser__browser_search",  // registered full form
+        ] {
+            let t = resolve_tool_by_name(called, &tools);
+            assert!(t.is_some(), "should resolve {called}");
+            assert_eq!(
+                t.unwrap().name(),
+                "mcp__senclaw-browser__browser_search"
+            );
+        }
+        // The exact `select:` query from the skill must load the tool too.
+        let hits = select_matches(
+            &[
+                "mcp__browser__search".to_string(),
+                "mcp__browser__close_tab".to_string(),
+            ],
+            &tools,
+        );
+        assert_eq!(hits.len(), 2, "select: should load both stripped names");
+    }
+
+    #[test]
     fn select_query_loads_exact_tools() {
         let tools = fixtures();
         let hits = select_matches(
@@ -612,6 +697,85 @@ mod tests {
         let tools = fixtures();
         let hits = ToolSearchTool::rank_matches("browser search", &tools, 5);
         assert_eq!(hits.first().map(|t| t.name()), Some("browser_screenshot"));
+    }
+
+    #[test]
+    fn resolve_bare_name_server_verb_concat() {
+        // Model emits `space_event_create` for `mcp__space__event_create`
+        // (server + "_" + verb, no mcp__ prefix).
+        let tools: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(StubTool {
+                name: "mcp__space__event_create",
+                desc: "Create event",
+                hint: "event create",
+                deferred: true,
+            }),
+            Arc::new(StubTool {
+                name: "mcp__space__event_delete",
+                desc: "Delete event",
+                hint: "event delete",
+                deferred: true,
+            }),
+        ];
+
+        // server_verb concatenation: space + _ + event_create
+        let t = resolve_tool_by_name("space_event_create", &tools);
+        assert!(t.is_some(), "should resolve space_event_create");
+        assert_eq!(t.unwrap().name(), "mcp__space__event_create");
+
+        // Also works for other verbs
+        let t = resolve_tool_by_name("space_event_delete", &tools);
+        assert!(t.is_some(), "should resolve space_event_delete");
+        assert_eq!(t.unwrap().name(), "mcp__space__event_delete");
+
+        // Pure verb match (only if unique)
+        let single: Vec<Arc<dyn Tool>> = vec![Arc::new(StubTool {
+            name: "mcp__space__event_create",
+            desc: "Create event",
+            hint: "event create",
+            deferred: true,
+        })];
+        let t = resolve_tool_by_name("event_create", &single);
+        assert!(t.is_some(), "should resolve bare verb event_create");
+
+        // Ambiguous verb → None (two tools share the suffix)
+        let ambig: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(StubTool {
+                name: "mcp__space__event_create",
+                desc: "Create event",
+                hint: "",
+                deferred: true,
+            }),
+            Arc::new(StubTool {
+                name: "mcp__calendar__event_create",
+                desc: "Create event",
+                hint: "",
+                deferred: true,
+            }),
+        ];
+        let t = resolve_tool_by_name("event_create", &ambig);
+        assert!(t.is_none(), "ambiguous verb should return None");
+
+        // But server_verb is still unique even with ambiguous verb
+        let t = resolve_tool_by_name("space_event_create", &ambig);
+        assert!(t.is_some(), "server_verb should resolve even when verb alone is ambiguous");
+        assert_eq!(t.unwrap().name(), "mcp__space__event_create");
+    }
+
+    #[test]
+    fn resolve_bare_name_with_senclaw_prefix_tools() {
+        // Real-world case: tool registered as mcp__senclaw-space__space_event_create
+        // which normalizes to mcp__space__event_create
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(StubTool {
+            name: "mcp__senclaw-space__space_event_create",
+            desc: "Create event",
+            hint: "event create",
+            deferred: true,
+        })];
+
+        let t = resolve_tool_by_name("space_event_create", &tools);
+        assert!(t.is_some(), "should resolve via normalize + server_verb");
+        assert_eq!(t.unwrap().name(), "mcp__senclaw-space__space_event_create");
     }
 
     #[test]

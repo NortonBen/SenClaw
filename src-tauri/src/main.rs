@@ -1,4 +1,4 @@
-// SemaClaw desktop app — Tauri 2.0 shell that embeds the SenClaw daemon
+// SenClaw desktop app — Tauri 2.0 shell that embeds the SenClaw daemon
 // in-process and exposes a compact chat window from the menu bar / tray.
 //
 // The diagnostics window (label "diagnostics") is loaded from the bundled
@@ -111,12 +111,16 @@ fn main() {
                         let _ = win.eval("window.location.reload()");
                     }
                 }
+                // App launch UX: auto-open the full chat window so the user
+                // lands in chat instead of a hidden menu-bar app. The chat
+                // popover stays hidden until they click the tray icon.
+                show_window_named(&handle, MAIN_WINDOW);
             });
 
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running SemaClaw app");
+        .expect("error while running SenClaw app");
 }
 
 // ===== Tracing — capture logs into both stderr and an in-memory ring buffer.
@@ -209,12 +213,10 @@ fn spawn_daemon(handle: tauri::AppHandle, state: Arc<AppState>) {
                 tracing::error!("[senclaw-app] daemon exited: {e:#}");
                 let mut d = state2.daemon.lock().unwrap();
                 d.last_error = Some(format!("{e:#}"));
-                drop(d);
-                // Auto-open diagnostics so the user can see + recover.
-                if let Some(w) = handle2.get_webview_window(DIAG_WINDOW) {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+                // Don't auto-open Diagnostics — user opens it from the tray
+                // when they want to investigate. The error is stored on the
+                // status panel and surfaced there.
+                let _ = handle2;
             }
         }
     });

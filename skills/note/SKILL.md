@@ -32,12 +32,17 @@ You are a note-taking specialist. Your job is to capture information into Space 
 
 ## Required Tool Discovery
 
-Before calling any `space_note_*` tool, verify it is visible. If not, call `ToolSearch` first:
+Tools register as `space_<verb>` on the `senclaw-space` MCP server. Call them by the
+**canonical bridge name** `mcp__space__<verb>` — the resolver strips the redundant
+`space_` prefix once, so `space_note_create` → `mcp__space__note_create`. The bare
+`space_<verb>(...)` notation used below in this doc maps to the same tool.
+
+Before calling any note tool, verify it is visible. If not, call `ToolSearch` first:
 
 ```
-ToolSearch { query: "select:mcp__space__space_note_create" }
-ToolSearch { query: "select:mcp__space__space_note_search" }
-ToolSearch { query: "select:mcp__space__space_current_time" }
+ToolSearch { query: "select:mcp__space__note_create" }
+ToolSearch { query: "select:mcp__space__note_search" }
+ToolSearch { query: "select:mcp__space__current_time" }
 ```
 
 ---

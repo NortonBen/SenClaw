@@ -126,14 +126,13 @@ Use this skill whenever the task requires **information or interaction that only
 
 ## Tool names
 
-The bridge strips the `senclaw-` server prefix **and** the redundant `browser_` tool prefix, so the names you call are:
+Always call the browser tools by their **stripped bridge name**:
 
 ```
 mcp__browser__<verb>      e.g. mcp__browser__search, mcp__browser__navigate, mcp__browser__snapshot
 ```
 
-> The registered functions are `browser_search`, `browser_navigate`, … but agents call them as `mcp__browser__search`, `mcp__browser__navigate`, … (the `browser_` part is dropped once).
-> If a `select:mcp__browser__*` load returns nothing, this deployment may expose them unstripped as `mcp__senclaw-browser__browser_<verb>` — in that case search the keyword (`"browser navigate snapshot"`) and call whatever exact name ToolSearch returns.
+> The MCP server registers these as `mcp__senclaw-browser__browser_<verb>` (full server + tool prefix). The tool resolver normalizes both directions, so the short `mcp__browser__<verb>` form always resolves to the registered tool — for `select:` loading and for direct calls alike. Prefer the short form everywhere; the long form also works if you ever need it.
 
 ## Step 0 — Load the tools FIRST (required)
 

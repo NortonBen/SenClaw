@@ -35,6 +35,7 @@ mod agents;
 mod bindings;
 mod channels;
 mod chat_events;
+mod dispatch_activity;
 mod embedding;
 pub(crate) mod event_notifications;
 mod groups;

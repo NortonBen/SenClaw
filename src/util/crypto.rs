@@ -108,7 +108,7 @@ mod tests {
     fn test_encrypt_decrypt() {
         let (key, _) = Crypto::generate_key();
         let crypto = Crypto::new(key);
-        let data = b"hello semaclaw";
+        let data = b"hello senclaw";
 
         let (nonce, ciphertext, tag) = crypto.encrypt(data).unwrap();
         let decrypted = crypto.decrypt(&nonce, &ciphertext, &tag).unwrap();

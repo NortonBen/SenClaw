@@ -107,6 +107,15 @@ pub mod whisper_transcribe;
 #[cfg(feature = "local-mlx-whisper")]
 pub use whisper_transcribe::WhisperEngine;
 
+// ── PaddleOCR + MNN OCR engine (cross-platform; feature `ocr-paddle`) ────────
+// Pure-Rust crate `ocr-rs` (rust-paddle-ocr). macOS gets Metal/CoreML
+// acceleration via the additive `ocr-paddle-metal` feature. Default builds
+// don't pull MNN's C++ toolchain.
+#[cfg(feature = "ocr-paddle")]
+pub mod ocr;
+#[cfg(feature = "ocr-paddle")]
+pub use ocr::{OcrBlock, OcrEngine, OcrResult};
+
 // ── Shared tokenizer / chat-template stack (candle) ───────────────────────
 #[cfg(feature = "local-candle")]
 pub mod tokenizer_utils;

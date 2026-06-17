@@ -1,6 +1,6 @@
 # Skill metadata (OpenClaw-compatible)
 
-SemaClaw skills live in a directory containing a `SKILL.md` = YAML frontmatter
+SenClaw skills live in a directory containing a `SKILL.md` = YAML frontmatter
 + markdown body. The frontmatter is parsed by [`src/skills/metadata.rs`] using
 `serde_yaml`, so both nested YAML and OpenClaw's single-line JSON form are
 accepted. This document is the canonical schema.
@@ -29,7 +29,7 @@ accepted. This document is the canonical schema.
 | `user-invocable` | bool | `true` | Expose the skill as a user slash command. |
 | `command-dispatch` | string | — | `tool` routes a slash command straight to a tool. |
 | `command-tool` | string | — | Tool invoked when `command-dispatch: tool`. |
-| `params` | list of objects | `[]` | Custom argument schema (see below). SemaClaw convention. |
+| `params` | list of objects | `[]` | Custom argument schema (see below). SenClaw convention. |
 | `metadata.openclaw` | object \| JSON string | — | Load-time gating block (see below). Aliases: `metadata.clawdbot`, `metadata.clawdis`. |
 
 ### `params`

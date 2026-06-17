@@ -1,6 +1,6 @@
 //! IsolatedRunner — one-shot disposable agent execution.
 //!
-//! Port of `code-old/SemaClaw/src/agent/IsolatedRunner.ts`.
+//! Port of `code-old/SenClaw/src/agent/IsolatedRunner.ts`.
 //!
 //! Decoupled from AgentPool / GroupBinding / ScheduleTool. Use cases:
 //!   1. AgentPool::run_isolated — scheduled tasks (caller wraps ScheduleTool MCP + broadcastReply)

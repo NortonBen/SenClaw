@@ -1,7 +1,7 @@
 //! Workbench — artifact publishing surface for tools/agents.
 //!
 //! Port of the sema-core `ArtifactRegistry` (the `WorkbenchService` impl):
-//! `code-old/SemaClaw/vendor/package/dist/workbench/{ArtifactRegistry,paths}.js`.
+//! `code-old/SenClaw/vendor/package/dist/workbench/{ArtifactRegistry,paths}.js`.
 //!
 //! Three artifact modes:
 //!   - **Static**: bundle of files (html/markdown) rendered by the WebUI

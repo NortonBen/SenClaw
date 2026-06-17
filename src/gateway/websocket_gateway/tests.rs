@@ -17,6 +17,7 @@ fn group_info_conversion() {
         allowed_work_dirs: Some(vec!["/tmp".into()]),
         bot_token: Some("tok123".into()),
         max_messages: Some(50),
+        llm_config_id: Some("llm-1".into()),
         last_active: None,
         added_at: "2026-01-01T00:00:00Z".into(),
     };

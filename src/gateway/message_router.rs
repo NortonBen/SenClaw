@@ -345,7 +345,7 @@ impl MessageRouter {
             }
         }
         let text = format!(
-            "👋 Hello!\n\nThis conversation is not bound to SemaClaw yet.\n\n\
+            "👋 Hello!\n\nThis conversation is not bound to SenClaw yet.\n\n\
              Your JID is: `{}`\n\n\
              Please add an Agent in the Web admin UI and paste the JID above into the Chat JID field.",
             msg.chat_jid
@@ -435,6 +435,7 @@ fn to_group_binding(br: &BindingWithRelations) -> GroupBinding {
         allowed_work_dirs: br.agent.allowed_work_dirs.clone(),
         bot_token: br.binding.bot_token_override.clone(),
         max_messages: br.binding.max_messages,
+        llm_config_id: None,
         last_active: br.binding.last_active.clone(),
         added_at: br.binding.created_at.clone(),
     }

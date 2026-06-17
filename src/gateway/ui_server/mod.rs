@@ -30,9 +30,10 @@ mod space;
 pub mod space_mcp;
 mod space_skills;
 mod subagents;
-mod tts;
+pub mod tts;
 pub mod types;
 mod whisper;
+mod ocr;
 mod wiki;
 mod workbench;
 

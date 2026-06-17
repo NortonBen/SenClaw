@@ -1,14 +1,14 @@
 # Workspace — Tài liệu Thiết kế Tính năng
 
 > **Phiên bản:** 0.1-draft · **Ngày:** 2026-05-04  
-> **Tác giả:** SemaClaw Core Team  
+> **Tác giả:** SenClaw Core Team  
 > **Trạng thái:** RFC (Request for Comments)
 
 ---
 
 ## 1. Tổng quan
 
-**Workspace** là không gian làm việc cá nhân tích hợp trực tiếp vào thanh điều hướng sidebar của SemaClaw Web UI. Nó bổ sung hàng dọc mới bên cạnh nút **Chat**, tập trung phục vụ năng suất hàng ngày của người dùng — ghi chú, lịch trình, nhắc nhở và email — với AI agent sẵn sàng hỗ trợ ở mọi màn hình. Kiến trúc được thiết kế để mở rộng thông qua mô hình **micro-frontend**, cho phép các module bên ngoài (viết bằng NestJS hoặc bất kỳ framework nào) tích hợp vào SenClaw qua một hợp đồng rõ ràng.
+**Workspace** là không gian làm việc cá nhân tích hợp trực tiếp vào thanh điều hướng sidebar của SenClaw Web UI. Nó bổ sung hàng dọc mới bên cạnh nút **Chat**, tập trung phục vụ năng suất hàng ngày của người dùng — ghi chú, lịch trình, nhắc nhở và email — với AI agent sẵn sàng hỗ trợ ở mọi màn hình. Kiến trúc được thiết kế để mở rộng thông qua mô hình **micro-frontend**, cho phép các module bên ngoài (viết bằng NestJS hoặc bất kỳ framework nào) tích hợp vào SenClaw qua một hợp đồng rõ ràng.
 
 ### Mục tiêu
 
@@ -77,7 +77,7 @@ Route mới: `/workspace` và các sub-route `/workspace/notes`, `/workspace/cal
 
 - Tạo / sửa / xoá note với editor Markdown (dùng `@uiw/react-md-editor` hoặc `tiptap`)
 - Phân loại bằng **tags** và **folders** (lưu DB)
-- Tìm kiếm FTS5 (tái dùng infrastructure memory đã có trong SemaClaw)
+- Tìm kiếm FTS5 (tái dùng infrastructure memory đã có trong SenClaw)
 - Pin note lên đầu
 - AI agent có thể đọc/ghi/tìm note qua MCP tool `workspace:notes`
 - **Quick capture**: phím tắt toàn cục `Cmd+Shift+N` mở popup ghi note nhanh
@@ -139,7 +139,7 @@ workspace:note_list     { folder_id?, tag? }
 
 ### 3.2 Calendar & Timeline — Lịch trình & Nhắc nhở
 
-**Mô tả:** Lịch cá nhân theo ngày/tuần/tháng, nhắc nhở có tích hợp với TaskScheduler của SemaClaw, hiển thị timeline công việc trong ngày.
+**Mô tả:** Lịch cá nhân theo ngày/tuần/tháng, nhắc nhở có tích hợp với TaskScheduler của SenClaw, hiển thị timeline công việc trong ngày.
 
 **Tính năng cốt lõi:**
 
@@ -296,7 +296,7 @@ Workspace sẽ phát triển với nhiều module khác nhau (Finance, CRM, Anal
 
 - Module bên ngoài viết bằng bất kỳ framework nào (React, Vue, Angular, plain JS)
 - NestJS microservice cung cấp API và UI module cùng lúc
-- Tích hợp không cần rebuild SemaClaw core
+- Tích hợp không cần rebuild SenClaw core
 
 ### 4.2 Mô hình tích hợp — 3 cấp độ
 
@@ -390,7 +390,7 @@ type AppToSenclaw =
 
 ### 4.5 NestJS Micro-Frontend — Template tích hợp
 
-Một NestJS app muốn tích hợp với SemaClaw cần:
+Một NestJS app muốn tích hợp với SenClaw cần:
 
 **1. Serve manifest endpoint:**
 
@@ -411,13 +411,13 @@ manifest() {
 
 ```typescript
 // GET /embed → trả về HTML page nhúng được trong iframe
-// Nhận senclaw:init message, lấy token + wsUrl để kết nối WS SemaClaw nếu cần
+// Nhận senclaw:init message, lấy token + wsUrl để kết nối WS SenClaw nếu cần
 ```
 
-**3. Gọi SemaClaw API từ backend NestJS** (qua HTTP internal hoặc token):
+**3. Gọi SenClaw API từ backend NestJS** (qua HTTP internal hoặc token):
 
 ```typescript
-// NestJS có thể gọi SemaClaw REST API với token
+// NestJS có thể gọi SenClaw REST API với token
 // hoặc mở WebSocket WS kết nối như một "service client"
 const response = await fetch(`${senclaw_url}/api/workspace/notes`, {
   headers: { Authorization: `Bearer ${ws_token}` }
@@ -432,7 +432,7 @@ const response = await fetch(`${senclaw_url}/api/workspace/notes`, {
 ### 4.6 Sơ đồ luồng đầy đủ
 
 ```
-User → SemaClaw UI (React)
+User → SenClaw UI (React)
          │
          ├── [Built-in modules] Notes/Calendar/Email
          │         │
@@ -447,12 +447,12 @@ User → SemaClaw UI (React)
                    ├── iframe embed (NestJS static serve)
                    │         │
                    │         ▼ postMessage bridge
-                   │    NestJS Backend ──► SemaClaw REST API
+                   │    NestJS Backend ──► SenClaw REST API
                    │
                    └── MCP Tool Proxy
                              │
                              ▼
-                        SemaClaw Agent Pool
+                        SenClaw Agent Pool
                              │
                         NestJS /mcp/call endpoint
 ```
@@ -655,7 +655,7 @@ web/src/
 ## 10. Tích hợp với tính năng hiện có
 
 
-| Tính năng SemaClaw    | Tích hợp Workspace                                               |
+| Tính năng SenClaw    | Tích hợp Workspace                                               |
 | --------------------- | ---------------------------------------------------------------- |
 | **TaskScheduler**     | Calendar reminder → `scheduled_task` loại `notify`               |
 | **Cowork tasks**      | Task có deadline → hiện trên Calendar view                       |

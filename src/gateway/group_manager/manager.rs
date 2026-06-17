@@ -69,6 +69,7 @@ impl GroupManager {
             allowed_work_dirs: merge_opt_opt(updates.allowed_work_dirs, existing.allowed_work_dirs),
             bot_token: merge_opt_opt(updates.bot_token, existing.bot_token),
             max_messages: merge_opt_opt(updates.max_messages, existing.max_messages),
+            llm_config_id: merge_opt_opt(updates.llm_config_id, existing.llm_config_id),
             last_active: existing.last_active,
             added_at: existing.added_at,
         };
@@ -321,6 +322,7 @@ pub fn ensure_admin_group(db: &Db, gm: &GroupManager, config: &Config, bot_user_
         },
         bot_token: existing.as_ref().and_then(|e| e.bot_token.clone()),
         max_messages: existing.as_ref().and_then(|e| e.max_messages),
+        llm_config_id: existing.as_ref().and_then(|e| e.llm_config_id.clone()),
         last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
         added_at: existing
             .as_ref()
@@ -392,6 +394,7 @@ pub fn ensure_wechat_admin_group(
         allowed_work_dirs: existing.as_ref().and_then(|e| e.allowed_work_dirs.clone()),
         bot_token: None,
         max_messages: existing.as_ref().and_then(|e| e.max_messages),
+        llm_config_id: existing.as_ref().and_then(|e| e.llm_config_id.clone()),
         last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
         added_at: existing
             .as_ref()
@@ -449,6 +452,7 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
         allowed_work_dirs: existing.as_ref().and_then(|e| e.allowed_work_dirs.clone()),
         bot_token: None,
         max_messages: existing.as_ref().and_then(|e| e.max_messages),
+        llm_config_id: existing.as_ref().and_then(|e| e.llm_config_id.clone()),
         last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
         added_at: existing
             .as_ref()

@@ -1127,9 +1127,24 @@ pub mod parser {
     pub fn parse_value(s: &str) -> (Value, &str) {
         let s = s.trim_start();
 
+        // String wrapped in the gemma4 quote token. Some quants additionally
+        // wrap the inner value in standard JSON quotes (e.g. the 4-bit Gemma-4
+        // emits `<|"|>"google"<|"|>`), so trim any redundant `"` from the span.
         if let Some(r) = s.strip_prefix(QUOTE) {
             return match r.find(QUOTE) {
-                Some(end) => (Value::String(r[..end].to_string()), &r[end + QUOTE.len()..]),
+                Some(end) => (
+                    Value::String(r[..end].trim_matches('"').to_string()),
+                    &r[end + QUOTE.len()..],
+                ),
+                None => (Value::String(r.trim_matches('"').to_string()), ""),
+            };
+        }
+
+        // Plain JSON-style string `"value"` — model emitted standard double
+        // quotes with no gemma4 quote token at all.
+        if let Some(r) = s.strip_prefix('"') {
+            return match r.find('"') {
+                Some(end) => (Value::String(r[..end].to_string()), &r[end + 1..]),
                 None => (Value::String(r.to_string()), ""),
             };
         }
@@ -1145,11 +1160,15 @@ pub mod parser {
                 let Some(colon) = rest.find(':') else {
                     return (Value::Object(obj), rest);
                 };
+                // Keys may arrive bare (`engine:`), quote-token-wrapped, or —
+                // in the 4-bit Gemma-4 — JSON-quoted (`"engine":`). Strip both
+                // the gemma4 quote token and standard `"` so the map key is clean.
                 let key = rest[..colon]
                     .trim()
                     .trim_start_matches(QUOTE)
                     .trim_end_matches(QUOTE)
                     .trim()
+                    .trim_matches('"')
                     .to_string();
                 let (val, after) = parse_value(&rest[colon + 1..]);
                 obj.insert(key, val);
@@ -1243,6 +1262,36 @@ pub mod parser {
         fn returns_none_for_empty_or_nameless_body() {
             assert!(parse_tool_call_body("", 0).is_none());
             assert!(parse_tool_call_body("call:{x:1}", 0).is_none());
+        }
+
+        #[test]
+        fn parses_json_quoted_keys_and_doubled_quote_values() {
+            // Exact shape emitted by mlx-community/gemma-4-e2b-it-4bit: JSON-quoted
+            // keys (`"engine"`) and values wrapped in BOTH the gemma4 quote token
+            // and standard quotes (`<|"|>"google"<|"|>`). Previously the literal
+            // `"` survived, so keys became `"query"` and the browser tool reported
+            // `Missing required field: query`.
+            let body = "call:mcp__browser__search{\"engine\":<|\"|>\"google\"<|\"|>,\
+                \"language\":<|\"|>\"vi\"<|\"|>,\"num_results\":10,\
+                \"query\":<|\"|>\"giá vàng hôm nay\"<|\"|>}";
+            let tc = parse_tool_call_body(body, 0).unwrap();
+            assert_eq!(tc["function"]["name"], "mcp__browser__search");
+            let args: Value =
+                serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["query"], "giá vàng hôm nay");
+            assert_eq!(args["engine"], "google");
+            assert_eq!(args["language"], "vi");
+            assert_eq!(args["num_results"], 10);
+        }
+
+        #[test]
+        fn parses_pure_json_string_args() {
+            // No gemma4 quote token at all — plain JSON quotes on both sides.
+            let tc = parse_tool_call_body("call:f{\"q\":\"vàng\",\"n\":3}", 0).unwrap();
+            let args: Value =
+                serde_json::from_str(tc["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["q"], "vàng");
+            assert_eq!(args["n"], 3);
         }
     }
 }

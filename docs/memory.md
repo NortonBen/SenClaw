@@ -1,6 +1,6 @@
 # Memory & Wiki — Kiến trúc và Luồng dữ liệu
 
-Tài liệu chi tiết về hệ thống Memory (bộ nhớ ngữ nghĩa) và Wiki (kho tri thức git-backed) trong SemaClaw.
+Tài liệu chi tiết về hệ thống Memory (bộ nhớ ngữ nghĩa) và Wiki (kho tri thức git-backed) trong SenClaw.
 
 ## Mục lục
 
@@ -459,10 +459,10 @@ flowchart TD
         GITDIR[.git/]
     end
 
-    AGENT -->|"semaclaw wiki save --path --tags"| WRITE
+    AGENT -->|"senclaw wiki save --path --tags"| WRITE
     WEB -->|"PUT /api/wiki/file"| WRITE
     WEB -->|"GET /api/wiki/*"| READ & SEARCH & TREE & STATS & TAGS
-    AGENT -->|"semaclaw wiki search/tree/stats"| SEARCH & TREE & STATS
+    AGENT -->|"senclaw wiki search/tree/stats"| SEARCH & TREE & STATS
 
     WRITE --> |"inject_frontmatter()"| MD
     WRITE --> ADD
@@ -618,11 +618,11 @@ sequenceDiagram
     AP->>MM: hybrid_search(folder, "Rust memory")
     MM-->>AP: SearchResult[]
 
-    LLM->>AP: Tool call: bash("semaclaw wiki search Rust")
+    LLM->>AP: Tool call: bash("senclaw wiki search Rust")
     AP->>WM: search("Rust")
     WM-->>AP: Wiki SearchResult[]
 
-    LLM->>AP: Tool call: bash("semaclaw wiki save --path rust/memory.md")
+    LLM->>AP: Tool call: bash("senclaw wiki save --path rust/memory.md")
     AP->>WM: write_file(...)
     WM->>WM: git add + commit
     WM-->>AP: OK
@@ -644,7 +644,7 @@ sequenceDiagram
 | AgentPool sau compaction | Gọi `MemoryManager::mark_dirty()` đánh dấu file thay đổi |
 | MCP Tool `memory_search` | Agent gọi trực tiếp qua MCP — hybrid search |
 | MCP Tool `memory_get` | Agent đọc file memory cụ thể |
-| Skill `wiki` | Agent gọi `semaclaw wiki save/search/tree/stats` qua shell |
+| Skill `wiki` | Agent gọi `senclaw wiki save/search/tree/stats` qua shell |
 
 ### Cấu hình Memory
 

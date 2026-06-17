@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-SemaClaw is a general-purpose framework for personal AI agents — multi-channel messaging gateway, agent orchestration, memory, scheduling, wiki, and Web UI. It runs on the [sema-code-core](https://github.com/midea-ai/sema-code-core) agent runtime.
+SenClaw is a general-purpose framework for personal AI agents — multi-channel messaging gateway, agent orchestration, memory, scheduling, wiki, and Web UI. It runs on the [sema-code-core](https://github.com/midea-ai/sema-code-core) agent runtime.
 
-The repo is mid-rewrite: the original TypeScript codebase (`src-old/`) is being ported to Rust (`src/`). The TypeScript source is still the functional reference. The Rust port renames the binary to **senclaw** and uses the `SENCLAW_*` env-var prefix (vs. `SEMACLAW_*`).
+The repo is mid-rewrite: the original TypeScript codebase (`src-old/`) is being ported to Rust (`src/`). The TypeScript source is still the functional reference. The Rust port renames the binary to **senclaw** and uses the `SENCLAW_*` env-var prefix (vs. `SENCLAW_*`).
 
 ## Build & run
 

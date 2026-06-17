@@ -19,6 +19,7 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           allowed_work_dirs    TEXT,
           bot_token            TEXT,
           max_messages         INTEGER,
+          llm_config_id        TEXT,
           last_active          TEXT,
           added_at             TEXT NOT NULL
         );
@@ -184,6 +185,24 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_tool_exec_chat_ts
           ON tool_executions(chat_jid, timestamp);
+
+        CREATE TABLE IF NOT EXISTS dispatch_activity (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id       TEXT NOT NULL,
+          parent_id     TEXT NOT NULL DEFAULT '',
+          entry_type    TEXT NOT NULL DEFAULT 'tool',
+          tool_name     TEXT,
+          title         TEXT,
+          summary       TEXT,
+          content_json  TEXT,
+          ok            INTEGER,
+          text          TEXT,
+          ts            TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_dispatch_activity_task
+          ON dispatch_activity(task_id, ts);
+        CREATE INDEX IF NOT EXISTS idx_dispatch_activity_parent
+          ON dispatch_activity(parent_id, ts);
 
         CREATE TABLE IF NOT EXISTS scheduled_tasks (
           id             TEXT PRIMARY KEY,
@@ -351,6 +370,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             "ALTER TABLE groups ADD COLUMN group_type TEXT NOT NULL DEFAULT 'chat'",
             [],
         )?;
+    }
+    if !group_cols.iter().any(|c| c == "llm_config_id") {
+        conn.execute("ALTER TABLE groups ADD COLUMN llm_config_id TEXT", [])?;
     }
 
     let task_cols = column_names(conn, "scheduled_tasks")?;

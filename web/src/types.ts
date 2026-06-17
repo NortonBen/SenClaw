@@ -10,6 +10,8 @@ export interface GroupInfo {
   allowedPaths: string[] | null;
   allowedWorkDirs: string[] | null;
   maxMessages: number | null;
+  /** Per-group LLM override (id of an entry in the global LLM config list). */
+  modelId?: string | null;
   agentId?: number;
   channelId?: number;
 }
@@ -24,6 +26,8 @@ export interface RegisterGroupPayload {
   allowedTools?: string[] | null;
   allowedPaths?: string[] | null;
   allowedWorkDirs?: string[] | null;
+  /** Per-group LLM override (id of an entry in the global LLM config list). */
+  modelId?: string | null;
 }
 
 export interface UpdateGroupPayload {
@@ -36,6 +40,8 @@ export interface UpdateGroupPayload {
   allowedPaths?: string[] | null;
   allowedWorkDirs?: string[] | null;
   maxMessages?: number | null;
+  /** Per-group LLM override; null/'' clears it (→ global active model). */
+  modelId?: string | null;
 }
 
 // ===== Message types =====
@@ -156,6 +162,18 @@ export interface DispatchParent {
   createdAt: string;
   completedAt: string | null;
   tasks: DispatchTask[];
+}
+
+/** A single activity event from a virtual sub-agent (tool call, message). */
+export interface SubAgentActivityEntry {
+  entryType: 'tool' | 'think' | 'message';
+  toolName?: string;
+  title?: string;
+  summary?: string;
+  content?: unknown;
+  ok?: boolean;
+  text?: string;
+  ts: string;
 }
 
 export interface AgentTodoItem {

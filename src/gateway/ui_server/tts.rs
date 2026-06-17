@@ -10,9 +10,10 @@
 //!   PUT    /api/tts/settings                — persist selection
 //!   POST   /api/tts/synthesize              — JSON { text, language?, voice?, speed? } → WAV bytes
 //!
-//! Synthesis uses `mlx-audio` Python CLI as a sidecar:
-//!   python -m mlx_audio.tts.generate --model <dir> --text "<text>" --output <wav>
-//! Users need `pip install mlx-audio` once. If not found, /synthesize returns 503.
+//! Synthesis is **pure Rust** — no Python, no external runtimes. The actual
+//! backends live in [`crate::tts`]; this module's [`synthesize_blocking`] is a
+//! thin wrapper that adapts the trait's error type to the HTTP layer's
+//! `(StatusCode, String)` convention.
 //!
 //! Download follows the same composite HF pattern as `whisper.rs`: tree API →
 //! stream each file into the model dir with resume support.
@@ -57,19 +58,35 @@ struct TtsCatalogEntry {
 static CATALOG: &[TtsCatalogEntry] = &[
     TtsCatalogEntry {
         id: "macos-speech",
-        label: "System Speech Synthesis (macOS Native)",
+        label: "System Speech (macOS) — Vietnamese (Linh)",
         approx_size_gb: 0.0,
-        languages: &["vi", "en"],
+        languages: &["vi"],
         default_language: "vi",
-        description: "Zero-dependency macOS system voice synthesis. Supports Vietnamese (Linh voice) and English (Samantha/default).",
+        description: "Zero-dependency macOS native voice. Vietnamese (Linh).",
+    },
+    TtsCatalogEntry {
+        id: "macos-speech-en",
+        label: "System Speech (macOS) — English (Samantha)",
+        approx_size_gb: 0.0,
+        languages: &["en"],
+        default_language: "en",
+        description: "Zero-dependency macOS native voice. English (Samantha).",
+    },
+    TtsCatalogEntry {
+        id: "facebook/mms-tts-vie",
+        label: "MMS-VITS Vietnamese (Meta, WIP)",
+        approx_size_gb: 0.3,
+        languages: &["vi"],
+        default_language: "vi",
+        description: "Meta Massively Multilingual Speech VITS (Vietnamese). Smaller (~145 MB safetensors) and simpler architecture than ZipVoice. Pure-Rust port in progress; until then requests transparently fall back to macOS native voice (signalled via X-TTS-Fallback header).",
     },
     TtsCatalogEntry {
         id: "mlx-community/zipvoice-vietnamese",
-        label: "ZipVoice Vietnamese (MLX)",
+        label: "ZipVoice Vietnamese (MLX, WIP)",
         approx_size_gb: 0.4,
         languages: &["vi", "en"],
         default_language: "vi",
-        description: "Flow-matching TTS model (disabled in pure-Rust mode).",
+        description: "Flow-matching TTS — pure-Rust port in progress; until it lands, requests transparently fall back to macOS native voice (signalled via X-TTS-Fallback header).",
     },
 ];
 
@@ -93,9 +110,10 @@ fn model_dir(state: &UiState, id: &str) -> PathBuf {
     state.config.paths.tts_models_dir.join(safe_dirname(id))
 }
 
-/// A TTS model is considered installed if it is the built-in system voice or if the directory contains weights.
+/// A TTS model is considered installed if it is a built-in system voice
+/// (any `macos-speech*` preset) or if the directory contains weights.
 fn is_installed(state: &UiState, id: &str) -> bool {
-    if id == "macos-speech" {
+    if id.starts_with("macos-speech") {
         return true;
     }
     let dir = model_dir(state, id);
@@ -429,16 +447,11 @@ pub(crate) async fn tts_synthesize(
 
     // Resolve model.
     let settings = load_tts_settings(&state.config.paths.global_config_path);
-    let mut model_id = body
+    let model_id = body
         .model_id
         .clone()
         .or_else(|| settings.model_id.clone())
         .unwrap_or_else(|| "macos-speech".to_string());
-
-    // Auto-fallback to macOS native speech in pure-Rust mode.
-    if model_id != "macos-speech" {
-        model_id = "macos-speech".to_string();
-    }
 
     if !is_installed(&state, &model_id) {
         return Err(AppError(
@@ -455,15 +468,18 @@ pub(crate) async fn tts_synthesize(
     let speed = body.speed.or(settings.speed).unwrap_or(1.0);
     let text = body.text.clone();
 
-    let model_path = if model_id == "macos-speech" {
+    let model_path = if model_id.starts_with("macos-speech") {
         None
     } else {
         Some(model_dir(&state, &model_id))
     };
 
-    // Run synthesis in a blocking task.
-    let wav_bytes = tokio::task::spawn_blocking(move || {
-        synthesize_blocking(
+    // Run synthesis in a blocking task. Uses honest auto-fallback to
+    // macos-speech if the requested backend is still NotImplemented (e.g.
+    // ZipVoice native port is WIP) — UI never gets a silent swap because
+    // we surface the fallback via the `X-TTS-Fallback` response header.
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::tts::synthesize_with_fallback(
             &model_id,
             model_path.as_deref(),
             &text,
@@ -476,16 +492,32 @@ pub(crate) async fn tts_synthesize(
     .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e| AppError(e.0, e.1))?;
 
-    // Return raw WAV bytes.
-    let response = Response::builder()
+    // Return raw WAV bytes with backend/fallback metadata in headers.
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static("audio/wav"))
         .header(
             "Content-Disposition",
             HeaderValue::from_static("inline; filename=\"speech.wav\""),
         )
-        .header("Content-Length", wav_bytes.len().to_string())
-        .body(Body::from(wav_bytes))
+        .header("Content-Length", outcome.wav.len().to_string())
+        .header(
+            "X-TTS-Backend",
+            HeaderValue::from_str(&outcome.used_backend)
+                .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+        );
+    if let Some(reason) = &outcome.fallback_reason {
+        // Strip control chars / non-ASCII so the header value stays valid.
+        let ascii: String = reason
+            .chars()
+            .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' })
+            .collect();
+        if let Ok(v) = HeaderValue::from_str(&ascii) {
+            builder = builder.header("X-TTS-Fallback", v);
+        }
+    }
+    let response = builder
+        .body(Body::from(outcome.wav))
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(response)
@@ -595,23 +627,14 @@ async fn run_tts_download(
     Ok(())
 }
 
-// ── Synthesis (mlx-audio CLI sidecar) ────────────────────────────────────────
+// ── Synthesis dispatch (thin wrapper around `crate::tts`) ────────────────────
 
-/// Synthesize text to WAV bytes using the `mlx-audio` Python package.
+/// Synthesize text to WAV bytes — pure Rust, no Python.
 ///
-/// Invokes:
-/// ```
-/// python -m mlx_audio.tts.generate \
-///   --model <model_dir> \
-///   --text  "<text>" \
-///   --output <tmp>.wav \
-///   [--lang <language>] \
-///   [--voice <voice>] \
-///   [--speed <speed>]
-/// ```
-///
-/// Returns `Err((StatusCode, String))` on failure so the caller can map to AppError.
-fn synthesize_blocking(
+/// All backend logic lives in [`crate::tts`]; this function exists so the HTTP
+/// handler keeps its existing `(StatusCode, String)` error shape and can be
+/// called from `tokio::task::spawn_blocking` without re-exporting the trait.
+pub fn synthesize_blocking(
     model_id: &str,
     model_path: Option<&std::path::Path>,
     text: &str,
@@ -619,82 +642,102 @@ fn synthesize_blocking(
     voice: Option<&str>,
     speed: f32,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    if model_id == "macos-speech" {
-        #[cfg(target_os = "macos")]
-        {
-            // Build a unique temp output path.
-            let nonce = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default();
-            let tmp = std::env::temp_dir()
-                .join(format!("senclaw-tts-{}-{nonce}.wav", std::process::id()));
+    crate::tts::synthesize(model_id, model_path, text, language, voice, speed)
+}
 
-            // Select native macOS voice.
-            let effective_voice =
-                voice.unwrap_or_else(|| if language == "vi" { "Linh" } else { "Samantha" });
+#[cfg(test)]
+mod synth_tests {
+    use super::*;
 
-            // Speech rate for `say` baseline is around 175 words per minute.
-            let rate = (175.0 * speed) as u32;
+    /// A valid WAV file starts with "RIFF" + 4 size bytes + "WAVE".
+    fn looks_like_wav(bytes: &[u8]) -> bool {
+        bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
+    }
 
-            let mut cmd = std::process::Command::new("/usr/bin/say");
-            cmd.args([
-                "-o",
-                &tmp.to_string_lossy(),
-                "--file-format=WAVE",
-                "--data-format=LEI16",
-                "-v",
-                effective_voice,
-                "-r",
-                &rate.to_string(),
-                text,
-            ]);
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_speech_produces_valid_wav() {
+        let wav = synthesize_blocking(
+            "macos-speech",
+            None,
+            "Xin chào, đây là một kiểm tra.",
+            "vi",
+            Some("Linh"),
+            1.0,
+        )
+        .expect("macos-speech synthesis should succeed");
+        assert!(wav.len() > 1024, "wav suspiciously small: {} bytes", wav.len());
+        assert!(looks_like_wav(&wav), "output is not a RIFF/WAVE file");
+    }
 
-            let output = cmd.output().map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to execute macOS say utility: {e}"),
-                )
-            })?;
+    /// Empty text should be rejected by the caller, but if it slips through the
+    /// macOS `say` utility still emits a short valid WAV — guard the contract.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_speech_speed_changes_output_size() {
+        let fast = synthesize_blocking("macos-speech", None, "Một hai ba bốn năm sáu bảy.", "vi", None, 1.5)
+            .expect("fast synth");
+        let slow = synthesize_blocking("macos-speech", None, "Một hai ba bốn năm sáu bảy.", "vi", None, 0.75)
+            .expect("slow synth");
+        // Slower rate ⇒ longer audio ⇒ bigger WAV.
+        assert!(
+            slow.len() > fast.len(),
+            "expected slow ({}) > fast ({}) bytes",
+            slow.len(),
+            fast.len()
+        );
+    }
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("macOS say synthesis failed: {}", stderr.trim()),
-                ));
-            }
-
-            // Read output WAV.
-            let wav = std::fs::read(&tmp).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to read synthesized WAV file: {e}"),
-                )
-            })?;
-            let _ = std::fs::remove_file(&tmp);
-
-            if wav.is_empty() {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "macOS say produced an empty WAV file".into(),
-                ));
-            }
-
-            return Ok(wav);
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            return Err((
-                StatusCode::NOT_IMPLEMENTED,
-                "Native system speech synthesis is currently only supported on macOS.".into(),
-            ));
+    /// Direct-backend stub contract: invoking `ZipVoiceBackend` returns
+    /// `NotImplemented` until the native synthesis path lands. Complements the
+    /// dispatch-level test below.
+    #[test]
+    fn zipvoice_backend_is_not_implemented_stub() {
+        use crate::tts::{SynthesisRequest, TtsBackend, TtsError};
+        let r = crate::tts::zipvoice::ZipVoiceBackend.synthesize(&SynthesisRequest {
+            text: "Xin chào.",
+            language: "vi",
+            voice: None,
+            speed: 1.0,
+            model_dir: None,
+        });
+        match r {
+            Err(TtsError::NotImplemented(_)) => {}
+            Err(other) => panic!("expected NotImplemented, got {other:?}"),
+            Ok(_) => panic!("ZipVoice stub should error until implemented"),
         }
     }
 
-    // Call our pure-Rust MLX implementation for ZipVoice (Phase 1 placeholder)
-    crate::memory::cognitive::tts_mlx::synthesize(
-        model_id, model_path, text, language, voice, speed,
-    )
+    /// Synthesis must be pure Rust — no external runtime should ever be spawned
+    /// for a non-`macos-speech` model. Calling `synthesize_blocking` with the HF
+    /// model returns `501` (the foundation-only stub) rather than a `503` from
+    /// a Python fallback.
+    #[test]
+    fn hf_path_is_pure_rust_no_sidecar_503() {
+        let r = synthesize_blocking(
+            "mlx-community/zipvoice-vietnamese",
+            Some(std::path::Path::new("/nonexistent/senclaw/whatever")),
+            "Xin chào.",
+            "vi",
+            None,
+            1.0,
+        );
+        match r {
+            Err((code, msg)) => {
+                assert_eq!(
+                    code,
+                    StatusCode::NOT_IMPLEMENTED,
+                    "expected 501 from pure-Rust stub, got {code}: {msg}"
+                );
+                let lower = msg.to_lowercase();
+                assert!(
+                    !lower.contains("python")
+                        && !lower.contains("pip ")
+                        && !lower.contains("mlx-audio"),
+                    "error message must not mention a Python sidecar runtime; got: {msg}"
+                );
+            }
+            Ok(_) => panic!("HF stub should error until the native port is wired"),
+        }
+    }
 }

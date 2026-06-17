@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, SubAgentActivityEntry, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -84,6 +84,7 @@ export interface WsHook {
   unregisterGroup: (jid: string) => void;
   updateGroup: (jid: string, updates: UpdateGroupPayload) => void;
   dispatchParents: DispatchParent[];
+  dispatchActivity: Record<string, SubAgentActivityEntry[]>; // keyed by taskId
   agentTodos: Record<string, AgentTodosEntry>; // keyed by agentJid
   agentUsage: Record<string, UsageData>; // keyed by agentJid
   subscribeAll: () => void;
@@ -206,6 +207,7 @@ export function useWebSocket(): WsHook {
   const [agentCompacting, setAgentCompacting] = useState<Record<string, boolean>>({});
   const [subscribed, setSubscribed]   = useState<Set<string>>(new Set());
   const [dispatchParents, setDispatchParents] = useState<DispatchParent[]>([]);
+  const [dispatchActivity, setDispatchActivity] = useState<Record<string, SubAgentActivityEntry[]>>({});
   const [agentTodos, setAgentTodos]           = useState<Record<string, AgentTodosEntry>>({});
   const [agentUsage, setAgentUsage]           = useState<Record<string, UsageData>>(loadAgentUsage);
   const [coworkChanged, setCoworkChanged]     = useState(0);
@@ -870,6 +872,32 @@ export function useWebSocket(): WsHook {
             });
             break;
           }
+          case 'dispatch:activity': {
+            const taskId = msg.taskId as string;
+            const entry = msg.entry as SubAgentActivityEntry;
+            if (taskId && entry) {
+              setDispatchActivity(prev => {
+                const existing = prev[taskId] ?? [];
+                const next = existing.length >= 500
+                  ? [...existing.slice(-499), entry]
+                  : [...existing, entry];
+                return { ...prev, [taskId]: next };
+              });
+            }
+            break;
+          }
+          case 'dispatch:activity:batch': {
+            // Bulk replay of persisted activity on subscribe/reconnect.
+            const taskId = msg.taskId as string;
+            const entries = msg.entries as SubAgentActivityEntry[];
+            if (taskId && Array.isArray(entries) && entries.length > 0) {
+              setDispatchActivity(prev => ({
+                ...prev,
+                [taskId]: [...(prev[taskId] ?? []), ...entries].slice(-500),
+              }));
+            }
+            break;
+          }
           case 'workbench:new': {
             const wbJid = msg.groupJid as string;
             const artifact = msg.artifact as WorkbenchArtifact;
@@ -1225,7 +1253,7 @@ export function useWebSocket(): WsHook {
   }, []);
 
   return useMemo(() => ({
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
@@ -1239,7 +1267,7 @@ export function useWebSocket(): WsHook {
     workbench, workbenchLatest, activeJid, setActiveJid,
     workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
   }), [
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,

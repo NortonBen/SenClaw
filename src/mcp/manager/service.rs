@@ -535,6 +535,24 @@ impl McpManager {
                     t("browser_stop_task", "Stop an ongoing task on a tab"),
                 ],
             },
+            BuiltInServerInfo {
+                name: "senclaw-ocr".into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "On-device OCR (PaddleOCR + MNN). Extracts text from images and scans."
+                        .into(),
+                ),
+                tools: vec![
+                    t(
+                        "ocr_recognize",
+                        "Extract text from an image file (png/jpg/webp/bmp/gif)",
+                    ),
+                    t(
+                        "ocr_batch",
+                        "Run OCR on every image in a directory and aggregate results",
+                    ),
+                ],
+            },
         ]
     }
 

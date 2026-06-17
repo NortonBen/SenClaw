@@ -18,7 +18,7 @@ export function DashboardPage({ ws }: Props) {
       <Content style={{ maxWidth: 1200, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 32 }}>
           <Title level={2} style={{ color: 'rgba(255,255,255,0.85)', margin: 0 }}>Dashboard</Title>
-          <Text style={{ color: 'rgba(255,255,255,0.45)' }}>Overview of your SemaClaw agents and activity.</Text>
+          <Text style={{ color: 'rgba(255,255,255,0.45)' }}>Overview of your SenClaw agents and activity.</Text>
         </div>
 
         <Row gutter={[24, 24]}>
