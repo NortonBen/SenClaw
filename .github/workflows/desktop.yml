@@ -2,11 +2,47 @@ name: Desktop build
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
+  # ── Quick CI check on every push/PR ─────────────────────────────────────────
+  check:
+    name: Cargo check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Cargo check
+        run: cargo check --all
+
+      - name: Cargo test
+        run: cargo test --all -- --test-threads=1
+
+  # ── Full desktop bundle — only on tags or workflow_dispatch ─────────────────
   build:
+    name: Build ${{ matrix.target }}
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -46,14 +82,12 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      # Frontend: build with vite directly (the repo's `tsc -b` gate is WIP-broken).
       - name: Build web UI
         working-directory: web
         run: |
           npm ci
           npx vite build
 
-      # Build the senclaw CLI so it can ship as the MCP-subprocess sidecar.
       - name: Build senclaw CLI (sidecar)
         run: cargo build --release --bin senclaw --target ${{ matrix.target }}
 
@@ -76,19 +110,55 @@ jobs:
       - name: Build desktop bundle
         run: cargo tauri build --target ${{ matrix.target }}
         env:
-          # Slot in signing/notarization secrets here when available.
-          # APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD ...
-          # WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD ...
           TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-artifacts
+          find "target/${{ matrix.target }}/release/bundle" \
+            \( -name "*.dmg" -o -name "*.app" -o -name "*.AppImage" \
+               -o -name "*.deb" -o -name "*.exe" -o -name "*.msi" \) \
+            -exec cp {} dist-artifacts/ \; 2>/dev/null || true
+          # Also include the bare CLI binary
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/senclaw.exe" "dist-artifacts/senclaw-${{ matrix.target }}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: senclaw-${{ matrix.target }}
           if-no-files-found: ignore
-          path: |
-            target/${{ matrix.target }}/release/bundle/**/*.dmg
-            target/${{ matrix.target }}/release/bundle/**/*.app
-            target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            target/${{ matrix.target }}/release/bundle/**/*.deb
-            target/${{ matrix.target }}/release/bundle/**/*.exe
-            target/${{ matrix.target }}/release/bundle/**/*.msi
+          path: dist-artifacts/
+
+  # ── Create GitHub Release and attach artifacts ───────────────────────────────
+  release:
+    name: Create release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh release-artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: SenClaw ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: release-artifacts/*

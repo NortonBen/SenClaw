@@ -9,8 +9,9 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/midea-ai/SenClaw/releases/latest"><img src="https://img.shields.io/github/v/release/midea-ai/SenClaw?label=release" alt="Latest Release" /></a>
+  <a href="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml"><img src="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml/badge.svg" alt="Build" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node.js Version" /></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
@@ -18,7 +19,7 @@
   <strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-[SenClaw](https://github.com/midea-ai/SenClaw) is a general-purpose engineering harness for building personal AI agents. It is built on top of a reusable agent runtime ([sema-code-core](https://github.com/midea-ai/sema-code-core)) and provides the surrounding machinery — permissions, memory, scheduling, multi-agent orchestration, channel adapters, and a Web UI — that turns a raw runtime into a usable personal AI system. It is also a reference implementation and starting point for the community to evaluate and improve on the engineering decisions behind it.
+SenClaw is a general-purpose engineering harness for building personal AI agents. It provides the surrounding machinery — permissions, memory, scheduling, multi-agent orchestration, channel adapters, and a Web UI — that turns a raw LLM runtime into a usable personal AI system.
 
 ---
 
@@ -26,7 +27,7 @@
   <img src="https://github.com/midea-ai/SenClaw/releases/download/v0.1.1-preview/SenClaw-demo.GIF" alt="SenClaw Demo" width="720" />
 </p>
 
-*SenClaw analyzed its own source code and generated the intro video above — powered by [frontend-slides](https://github.com/zarazhangrui/frontend-slides) and [remotion](https://github.com/remotion-dev/remotion) skills (DeepSeek-Chat for all preceding steps, Claude Sonnet 4.6 for Remotion animation coding).* [Watch full demo video](https://midea-ai.github.io/SenClaw/assets/SenClaw-demo.mp4)
+*SenClaw analyzed its own source code and generated the intro video above — powered by [frontend-slides](https://github.com/zarazhangrui/frontend-slides) and [remotion](https://github.com/remotion-dev/remotion) skills.* [Watch full demo video](https://midea-ai.github.io/SenClaw/assets/SenClaw-demo.mp4)
 
 ## Highlights
 
@@ -37,51 +38,57 @@
 - **Four-mode scheduled tasks** — Pure notification, pure script, pure agent, and hybrid script-plus-agent execution — matching mode to task complexity so token consumption stays proportional to reasoning work.
 - **Agentic Wiki** — Transforms task outputs into structured, retrievable wiki entries indexed alongside agent memory, creating a compounding personal knowledge base that feeds back into future agent sessions.
 - **Multi-channel & Web UI** — Telegram, Feishu (Lark), and QQ adapters out of the box, plus a WebSocket gateway and a React-based Web UI.
+- **Space Apps** — Isolated micro-apps (SSH manager, Email, Google Workspace, Browser control) that register as MCP servers and appear as first-class tools inside the agent.
+- **Local model support** — Native MLX inference (Gemma 4, Qwen, Mamba) and local TTS (ZipVoice / macOS) run entirely on-device.
 
 ---
 
 ## Quick Start
 
-### Option A — Install from npm (recommended)
+### Option A — Download pre-built binary
+
+Download the latest release for your platform from [Releases](https://github.com/midea-ai/SenClaw/releases/latest), then:
 
 ```bash
-# 1. Install globally
-npm install -g senclaw
+# macOS / Linux
+./senclaw
 
-# 2. Run
-senclaw
+# Open Web UI
+open http://127.0.0.1:18788
 ```
 
-That's it. Open the Web UI at **<http://127.0.0.1:18788/>**.
-
-> **Configure an LLM on first launch.** SenClaw starts without a built-in model. Open the Web UI → **Settings → LLM**, add a provider profile (OpenAI / Anthropic / DeepSeek / Qwen / …) with `baseURL`, `apiKey`, `modelName`. The profile is persisted to `~/.senclaw/config.json` and synced to `~/.senclaw/senclaw-model.conf` — until at least one active profile exists, agent runs that call an LLM will fail.
-
-To enable messaging channels (Telegram / Feishu / QQ / WeChat), create a `.env` file in your working directory before starting `senclaw`. See [docs/QUICK_START.md](docs/QUICK_START.md) for the full list of environment variables.
-
-### Option B — Build from source
+### Option B — Build from source (Rust)
 
 ```bash
 # 1. Clone
 git clone https://github.com/midea-ai/SenClaw.git
 cd SenClaw
 
-# 2. Install and build
-npm install
-npm run build
-npm run build:web
+# 2. Build daemon + Web UI
+cargo build --release
+cd web && npm ci && npx vite build && cd ..
 
-# 3. Configure (optional)
+# 3. Configure (optional — channels)
 cp .env.example .env
-# Edit .env to enable channels (Telegram / Feishu / QQ / WeChat).
+# Edit .env to enable Telegram / Feishu / QQ / WeChat.
 # If left unset, SenClaw starts in Web UI–only mode.
 
 # 4. Run
-npm start
+./target/release/senclaw
 ```
 
-Once started, open the Web UI at **<http://127.0.0.1:18788/>**, then go to **Settings → LLM** and add at least one active provider profile (see the note in Option A).
+### Option C — Desktop app (Tauri)
 
-For a complete walkthrough including environment variables, CLI usage, runtime layout, and architecture details, see **[docs/QUICK_START.md](docs/QUICK_START.md)** *(currently in Chinese)*.
+Pre-built `.dmg` / `.exe` / `.AppImage` bundles are attached to each tagged release.  
+To build locally:
+
+```bash
+cargo tauri build
+```
+
+---
+
+> **Configure an LLM on first launch.** SenClaw starts without a built-in model. Open the Web UI → **Settings → LLM**, add a provider profile (OpenAI / Anthropic / DeepSeek / Qwen / …) with `baseURL`, `apiKey`, `modelName`. The profile is persisted to `~/.senclaw/config.json` — until at least one active profile exists, agent runs that call an LLM will fail.
 
 ---
 
@@ -90,8 +97,10 @@ For a complete walkthrough including environment variables, CLI usage, runtime l
 | Document | Description |
 |---|---|
 | [Quick Start & Usage Guide](docs/QUICK_START.md) | Installation, configuration, CLI commands, runtime layout, MCP tools |
+| [Architecture](docs/ARCHITECTURE.md) | Layer breakdown, startup sequence, data flow |
+| [Space Apps](docs/workspace-feature-design.md) | How to build and register a Space App |
+| [Memory](docs/memory.md) | FTS5 + vector hybrid memory, daily log, cognify pipeline |
 | [Remote Access Guide](docs/REMOTE_ACCESS.md) | Expose the Web UI securely via reverse proxy (Nginx / Caddy) |
-| Technical Report | *Coming soon* |
 | [Contributing](CONTRIBUTING.md) | *Coming soon* |
 
 ---
@@ -100,18 +109,23 @@ For a complete walkthrough including environment variables, CLI usage, runtime l
 
 ```
 senclaw/
-├── src/
-│   ├── agent/          # Agent lifecycle, bridges, permission routing
-│   ├── channels/       # Telegram / Feishu / QQ adapters
-│   ├── gateway/        # Group manager, message router, WebSocket gateway
-│   ├── mcp/            # MCP servers (admin, schedule, memory, dispatch, ...)
-│   ├── memory/         # FTS5 + vector hybrid search, daily logger
-│   ├── scheduler/      # Cron / interval / once scheduler
-│   ├── wiki/           # Git-driven personal knowledge base
-│   └── clawhub/        # ClaWHub skill marketplace integration
-├── web/                # React + Vite Web UI
-├── skills/             # Bundled skills
-└── docs/               # Detailed documentation
+├── src/                    # Rust daemon (primary)
+│   ├── agent/              # Agent lifecycle, bridges, permission routing
+│   ├── channels/           # Telegram / Feishu / QQ adapters
+│   ├── gateway/            # Group manager, message router, WebSocket + HTTP server
+│   ├── mcp/                # MCP servers (admin, schedule, memory, dispatch, OCR, …)
+│   ├── memory/             # FTS5 + vector hybrid search, cognify pipeline
+│   ├── scheduler/          # Cron / interval / once task scheduler
+│   ├── tts/                # Text-to-speech backends (ZipVoice, macOS)
+│   ├── local_model/        # MLX inference (Gemma 4, Qwen, Mamba, OCR)
+│   ├── wiki/               # Git-driven personal knowledge base
+│   └── clawhub/            # ClaWHub skill marketplace integration
+├── web/                    # React + Vite Web UI
+├── src-tauri/              # Tauri desktop shell
+├── apps/                   # Space Apps (ssh-manager, email, google-workspace, …)
+├── skills/                 # Bundled skills
+├── examples/               # Example Space Apps and SDK usage
+└── docs/                   # Detailed documentation
 ```
 
 ---
@@ -130,13 +144,13 @@ Contributions are welcome. SenClaw exists to advance the shared engineering foun
 
 ## About the Logo
 
-The SenClaw logo depicts a horse with **claw-shaped wings** rising from its back. The imagery is inspired by the Chinese phrase *以梦为马* — *"to ride one's dreams as a horse"* — capturing the spirit of an AI harness that carries the user wherever their imagination leads. The name itself blends *Sema* (from *semantic*) and *Claw*, while *harness* nods to the literal meaning of the word: the gear used to control and restrain a horse.
+The SenClaw logo depicts a horse with **claw-shaped wings** rising from its back. The imagery is inspired by the Chinese phrase *以梦为马* — *"to ride one's dreams as a horse"* — capturing the spirit of an AI harness that carries the user wherever their imagination leads. The name itself blends *Sema* (from *semantic*) and *Claw*.
 
 ---
 
 ## Acknowledgments
 
-SenClaw is built on top of [sema-code-core](https://github.com/midea-ai/sema-code-core), which provides the underlying agent runtime. Its product form is also inspired by [OpenClaw](https://github.com/openclaw/openclaw), and it integrates with the [ClaWHub](https://github.com/openclaw/clawhub) plugin marketplace from the same project. Thanks also to the broader open-source ecosystem this project depends on — including the [Model Context Protocol](https://modelcontextprotocol.io), [grammY](https://grammy.dev), and many others.
+SenClaw integrates with the [ClaWHub](https://github.com/openclaw/clawhub) plugin marketplace and is inspired by [OpenClaw](https://github.com/openclaw/openclaw). Thanks to the broader open-source ecosystem this project depends on — including the [Model Context Protocol](https://modelcontextprotocol.io), [grammY](https://grammy.dev), and many others.
 
 ---
 
