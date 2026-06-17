@@ -1,0 +1,61 @@
+name: Chrome extension build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "senclaw-extension-chrome/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "senclaw-extension-chrome/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build extension
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: senclaw-extension-chrome
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: senclaw-extension-chrome/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Chrome extension
+        run: npm run build
+
+      - name: Build Firefox extension
+        run: npm run build:firefox
+
+      - name: Package (zip) — Chrome
+        run: npm run zip
+
+      - name: Package (zip) — Firefox
+        run: npm run zip:firefox
+
+      - name: Upload Chrome artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: senclaw-extension-chrome
+          path: senclaw-extension-chrome/.output/
+          if-no-files-found: warn
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: senclaw-extension-chrome/.output/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
