@@ -686,25 +686,49 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             match result {
                 Ok(Ok(event)) => match event {
                     EngineEvent::MessageComplete(data) => {
-                        if data.agent_id == crate::agent::agent_pool::MAIN_AGENT_ID
-                            && !data.content.trim().is_empty()
-                        {
-                            last_message = Some(data.content.clone());
-                            // Forward main agent messages as activity entries
-                            if let Some(ref notify) = activity_notify {
-                                notify(
-                                    instance_id,
-                                    SubAgentActivityEntry {
-                                        entry_type: "message".into(),
-                                        tool_name: None,
-                                        title: None,
-                                        summary: None,
-                                        content: None,
-                                        ok: None,
-                                        text: Some(data.content),
-                                        ts: chrono::Utc::now().to_rfc3339(),
-                                    },
-                                );
+                        if data.agent_id == crate::agent::agent_pool::MAIN_AGENT_ID {
+                            // Forward the worker's reasoning (think) as its own
+                            // activity entry. Many turns of a small model are
+                            // think-only → tool-call (no user-visible content),
+                            // and the old code skipped the whole block when
+                            // content was empty, hiding the worker's trace from
+                            // the inline DAG view. Emit think and message as
+                            // separate entries so the chat-side activity feed
+                            // shows the full step-by-step like the side panel.
+                            if !data.reasoning.trim().is_empty() {
+                                if let Some(ref notify) = activity_notify {
+                                    notify(
+                                        instance_id,
+                                        SubAgentActivityEntry {
+                                            entry_type: "think".into(),
+                                            tool_name: None,
+                                            title: None,
+                                            summary: None,
+                                            content: None,
+                                            ok: None,
+                                            text: Some(data.reasoning.clone()),
+                                            ts: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                }
+                            }
+                            if !data.content.trim().is_empty() {
+                                last_message = Some(data.content.clone());
+                                if let Some(ref notify) = activity_notify {
+                                    notify(
+                                        instance_id,
+                                        SubAgentActivityEntry {
+                                            entry_type: "message".into(),
+                                            tool_name: None,
+                                            title: None,
+                                            summary: None,
+                                            content: None,
+                                            ok: None,
+                                            text: Some(data.content),
+                                            ts: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
