@@ -358,10 +358,22 @@ impl AgentPool {
         }
     }
 
-    /// Virtual agents inherit the main-agent permission flags.
+    /// Permission policy for virtual workers (DAG sub-agents).
+    ///
+    /// Workers are NOT the main agent — so they MUST NOT inherit
+    /// `skip_main_agent_permissions`, which by name applies only to the
+    /// orchestrator. Previously this method OR'd both flags together, which
+    /// meant a user who toggled "skip main agent permissions" on the
+    /// orchestrator also silently disabled permission gates for every DAG
+    /// worker spawned underneath — workers would write files, run shell
+    /// commands, etc. with no prompt.
+    ///
+    /// Now: workers only skip permissions when the user explicitly toggled
+    /// the global "skip ALL agents" master switch. The narrower
+    /// "skip MAIN agent" flag stays scoped to the main agent.
     pub fn get_skip_perms_for_virtual(&self) -> bool {
         let s = self.state.lock().unwrap();
-        s.skip_all_agents_permissions || s.skip_main_agent_permissions
+        s.skip_all_agents_permissions
     }
 
     /// Hot-update permission flags across every active core.
