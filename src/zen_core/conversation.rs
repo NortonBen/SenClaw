@@ -504,22 +504,83 @@ fn max_completion_nudges() -> u8 {
         .unwrap_or(2)
 }
 
-/// Nudge text injected when a Plan-mode or DAG-mode agent ends its turn with
-/// text only instead of signaling completion. `{N}` / `{MAX}` are filled at
-/// runtime.
-const COMPLETION_NUDGE_TEMPLATE: &str = "You ended your turn with a text-only reply, but this is \
-{MODE} mode — every turn must end with either a tool call or `task_done(summary=\"...\")`. If \
-the work is fully complete (plan finalized, sub-task delivered, all artifacts produced), call \
-`task_done(summary=\"...\")` to confirm. Otherwise, call the NEXT tool to continue. Do NOT stop \
-with text — there is no user available to type 'continue'. (Nudge {N}/{MAX})";
-
-/// Returns true when the agent's current mode requires explicit `task_done`
-/// signalling instead of accepting a text-only response as the final answer.
-/// Plain `Agent` mode keeps the legacy "text = done" behavior so ordinary chat
-/// is unaffected.
-fn task_done_enforced(mode: AgentMode) -> bool {
-    matches!(mode, AgentMode::Plan | AgentMode::Dag)
+/// Each mode has a different "natural completion" signal. A text-only response
+/// without that signal is a premature stop — `completion_status()` returns the
+/// nudge to inject for that mode. The three modes:
+///
+/// - `Agent`: single conversational loop. Text = done. Nothing to nudge.
+/// - `Plan` (set by `EnterPlanMode`): single agent researches, writes a plan
+///   file under `<plans_dir>/<title>.md`, then calls `ExitPlanMode(plan=...)`
+///   for user approval. `ExitPlanMode` is the canonical exit; nothing else
+///   counts as plan-mode completion. See `prompt::plan_mode_reminder`.
+/// - `Dag` (set by `update_agent_mode(Dag)`): orchestrator. Researches with
+///   read-only tools, designs a task graph, then calls
+///   `DispatchCreateParentAndRun` (which BLOCKS until every sub-agent in the
+///   DAG completes). Workers spawned by the dispatch bridge themselves run in
+///   plain `AgentMode::Agent`, not `Dag`. After dispatch returns, the
+///   orchestrator's text report IS the natural completion — so post-dispatch
+///   text-only is fine. Pre-dispatch text-only is a premature stop.
+///
+/// `task_done` is accepted as a generic completion signal in any mode (handled
+/// by the short-circuit further below), but the mode-specific tool is always
+/// the preferred exit.
+fn completion_nudge_for(
+    mode: AgentMode,
+    exit_plan_mode_called: bool,
+    dispatch_executed: bool,
+    nudge_count: u8,
+    nudge_cap: u8,
+) -> Option<String> {
+    let header = format!(" (Nudge {nudge_count}/{nudge_cap})");
+    match mode {
+        AgentMode::Agent => None,
+        AgentMode::Plan => {
+            if exit_plan_mode_called {
+                // ExitPlanMode already ran this session — a follow-up
+                // text-only turn is a legitimate end of plan-mode work
+                // (e.g. user rejected the plan and the model is wrapping up).
+                None
+            } else {
+                Some(format!(
+                    "Plan mode requires you to finish by calling `ExitPlanMode(plan=\"...\")` to \
+                     request approval — a text-only reply does not exit Plan mode. If your plan \
+                     file is ready, call `ExitPlanMode` now. If the plan needs more work, call \
+                     the next research tool (Read/Grep/Glob/Task). To abandon planning entirely, \
+                     call `task_done(summary=\"...\")`. Do NOT stop with text only — there is no \
+                     user to type 'continue'.{header}"
+                ))
+            }
+        }
+        AgentMode::Dag => {
+            if dispatch_executed {
+                // Dispatch already ran (and returned, since the orchestrator
+                // is back in the loop). The text-only reply is the orchestrator
+                // reporting results to the user — that's the natural completion
+                // path per the DAG mode reminder. Don't nudge.
+                None
+            } else {
+                Some(format!(
+                    "DAG mode requires you to orchestrate via the dispatch tools — text alone \
+                     does not delegate any work. If you have enough context, call \
+                     `DispatchCreateParentAndRun` with the task graph (it blocks until every \
+                     sub-agent finishes). If you still need to research, call a read-only tool \
+                     (Read/Grep/Glob). If the work is actually trivial and needs no dispatch, \
+                     call `task_done(summary=\"...\")`. Do NOT stop with text only.{header}"
+                ))
+            }
+        }
+    }
 }
+
+/// Tool names that, when called by the model, satisfy a mode's natural
+/// completion. Used to track per-session whether the model has reached the
+/// mode's "checkpoint" yet — see `completion_nudge_for`.
+const EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
+/// Dispatch tools whose execution counts as "DAG orchestration started". Tools
+/// like `DispatchListAgents` and bare `DispatchCreateParent` (without Run) are
+/// informational and do not actually delegate work, so they are excluded.
+const EXECUTING_DISPATCH_TOOLS: &[&str] =
+    &["DispatchCreateParentAndRun", "DispatchAllTasks", "DispatchTask"];
 
 /// Sorted, deduped set of tool names in a batch — a coarse signature used to
 /// detect the model re-invoking the same tool turn after turn (args may vary
@@ -584,11 +645,13 @@ pub async fn query(
     // Resilience: retry transient EMPTY_COMPLETION before failing the session.
     let max_empty_retries_cap = max_empty_retries();
     let mut empty_retries: u8 = 0;
-    // Completion enforcement: only active in Plan / Dag modes. Plain Agent
-    // mode (ordinary chat) keeps the legacy "text = done" behavior.
+    // Mode-specific completion tracking. Plain Agent mode keeps the legacy
+    // "text = done" behavior; Plan tracks `ExitPlanMode`, Dag tracks dispatch.
+    // See `completion_nudge_for` for the per-mode semantics.
     let max_completion_nudges_cap = max_completion_nudges();
     let mut completion_nudges: u8 = 0;
-    let require_task_done = task_done_enforced(config.agent_mode);
+    let mut exit_plan_mode_called: bool = false;
+    let mut dispatch_executed: bool = false;
 
     loop {
         // Check cancellation before each LLM call
@@ -999,33 +1062,36 @@ pub async fn query(
                 }));
         }
 
-        // 4. No tools → maybe done
+        // 4. No tools → maybe done. Per-mode handling:
+        //    - Agent: text = done (always).
+        //    - Plan: text is done iff `ExitPlanMode` already ran this session,
+        //      otherwise nudge toward it (a text-only reply doesn't exit Plan
+        //      mode per the plan_mode_reminder).
+        //    - Dag: text is done iff a real dispatch tool already ran, otherwise
+        //      nudge toward it (text without delegating any work isn't progress).
+        //    Capped at `max_completion_nudges_cap` to avoid text↔nudge loops.
         if tool_uses.is_empty() {
-            // Completion enforcement (Plan / Dag mode only): a weak model
-            // often emits a text-only "intermediate report" mid-task
-            // ("Tôi đã làm xong bước 1, đây là kết quả...") instead of
-            // chaining to the next tool. Without a present user to type
-            // "tiếp tục", that aborts the workflow. In Plan or Dag mode,
-            // nudge the model to either call `task_done` or continue with
-            // the next tool. Capped at `max_completion_nudges_cap` to avoid
-            // text↔nudge loops. Agent mode skips this entirely — ordinary
-            // chat behavior is unchanged.
-            if require_task_done && completion_nudges < max_completion_nudges_cap {
-                completion_nudges += 1;
-                info!(
-                    "[{}] text-only response in {} mode — nudging task_done ({}/{})",
-                    config.agent_id,
-                    config.agent_mode.as_str(),
-                    completion_nudges,
-                    max_completion_nudges_cap
-                );
-                let nudge = COMPLETION_NUDGE_TEMPLATE
-                    .replace("{MODE}", config.agent_mode.as_str())
-                    .replace("{N}", &completion_nudges.to_string())
-                    .replace("{MAX}", &max_completion_nudges_cap.to_string());
-                messages.push(assistant_msg);
-                messages.push(create_user_message(vec![ContentBlock::Text { text: nudge }]));
-                continue;
+            if let Some(nudge) = completion_nudge_for(
+                config.agent_mode,
+                exit_plan_mode_called,
+                dispatch_executed,
+                completion_nudges + 1,
+                max_completion_nudges_cap,
+            ) {
+                if completion_nudges < max_completion_nudges_cap {
+                    completion_nudges += 1;
+                    info!(
+                        "[{}] text-only response in {} mode without natural completion signal — \
+                         nudging ({}/{})",
+                        config.agent_id,
+                        config.agent_mode.as_str(),
+                        completion_nudges,
+                        max_completion_nudges_cap
+                    );
+                    messages.push(assistant_msg);
+                    messages.push(create_user_message(vec![ContentBlock::Text { text: nudge }]));
+                    continue;
+                }
             }
             messages.push(assistant_msg);
             info!(
@@ -1034,6 +1100,19 @@ pub async fn query(
                 messages.len()
             );
             return Ok(messages);
+        }
+
+        // Per-mode completion tracking: note which mode-defining tools the
+        // model called this turn so the "no tools" branch above can tell
+        // whether a future text-only reply is the natural end of the mode.
+        for tu in &tool_uses {
+            if let ContentBlock::ToolUse { name, .. } = tu {
+                if name == EXIT_PLAN_MODE_TOOL {
+                    exit_plan_mode_called = true;
+                } else if EXECUTING_DISPATCH_TOOLS.contains(&name.as_str()) {
+                    dispatch_executed = true;
+                }
+            }
         }
 
         // 5. Run tools
@@ -1448,16 +1527,63 @@ mod tests {
     }
 
     #[test]
-    fn task_done_enforced_only_in_plan_and_dag() {
+    fn agent_mode_never_nudges() {
         // Plain Agent mode (ordinary chat / scheduled tasks) keeps the legacy
-        // "text = done" behavior so nothing nudges the user-facing conversation.
-        assert!(!task_done_enforced(AgentMode::Agent));
-        // Plan and Dag are the two modes that explicitly require a completion
-        // signal — Plan mode is a step-by-step planner that exits on commit,
-        // Dag mode is a sub-task worker whose finish must be visible to the
-        // orchestrator.
-        assert!(task_done_enforced(AgentMode::Plan));
-        assert!(task_done_enforced(AgentMode::Dag));
+        // "text = done" behavior — no nudge regardless of session state.
+        assert!(completion_nudge_for(AgentMode::Agent, false, false, 1, 2).is_none());
+        assert!(completion_nudge_for(AgentMode::Agent, true, true, 1, 2).is_none());
+    }
+
+    #[test]
+    fn plan_mode_nudges_until_exit_plan_mode_called() {
+        // Plan mode's natural completion is ExitPlanMode. Until that tool runs
+        // this session, a text-only response is a premature stop.
+        let pre = completion_nudge_for(AgentMode::Plan, false, false, 1, 2);
+        assert!(pre.is_some(), "Plan mode should nudge before ExitPlanMode");
+        let pre_text = pre.unwrap();
+        assert!(pre_text.contains("ExitPlanMode"));
+        assert!(pre_text.contains("(Nudge 1/2)"));
+
+        // After ExitPlanMode runs, a follow-up text-only reply is a legitimate
+        // wrap-up — no further nudge needed.
+        let post = completion_nudge_for(AgentMode::Plan, true, false, 1, 2);
+        assert!(post.is_none(), "Plan mode should NOT nudge after ExitPlanMode");
+    }
+
+    #[test]
+    fn dag_mode_nudges_until_dispatch_executes() {
+        // DAG orchestrator's natural completion path: dispatch (which blocks
+        // until workers finish) → text report. Pre-dispatch text is premature.
+        let pre = completion_nudge_for(AgentMode::Dag, false, false, 1, 2);
+        assert!(pre.is_some(), "DAG mode should nudge before any dispatch");
+        let pre_text = pre.unwrap();
+        assert!(pre_text.contains("DispatchCreateParentAndRun"));
+        assert!(pre_text.contains("(Nudge 1/2)"));
+
+        // After dispatch returns, the orchestrator's job is to report results
+        // — text-only is the natural exit. No nudge.
+        let post = completion_nudge_for(AgentMode::Dag, false, true, 1, 2);
+        assert!(post.is_none(), "DAG mode should NOT nudge after dispatch executed");
+    }
+
+    #[test]
+    fn plan_and_dag_track_independent_flags() {
+        // Cross-flag: an ExitPlanMode call from a prior Plan session doesn't
+        // satisfy DAG mode, and vice-versa.
+        assert!(completion_nudge_for(AgentMode::Dag, true, false, 1, 2).is_some());
+        assert!(completion_nudge_for(AgentMode::Plan, false, true, 1, 2).is_some());
+    }
+
+    #[test]
+    fn executing_dispatch_tools_excludes_informational_ones() {
+        // The list of tools that "count" as DAG progress must not include
+        // read-only / setup-only dispatch helpers — those don't delegate work.
+        assert!(EXECUTING_DISPATCH_TOOLS.contains(&"DispatchCreateParentAndRun"));
+        assert!(EXECUTING_DISPATCH_TOOLS.contains(&"DispatchAllTasks"));
+        assert!(EXECUTING_DISPATCH_TOOLS.contains(&"DispatchTask"));
+        // These DON'T count — calling them alone doesn't kick off any work.
+        assert!(!EXECUTING_DISPATCH_TOOLS.contains(&"DispatchListAgents"));
+        assert!(!EXECUTING_DISPATCH_TOOLS.contains(&"DispatchCreateParent"));
     }
 
     #[test]
