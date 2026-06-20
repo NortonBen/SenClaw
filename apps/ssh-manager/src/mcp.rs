@@ -198,7 +198,79 @@ pub async fn mcp_message(
     if req.method == "tools/call" {
         let params = req.params.unwrap_or_default();
         let name = params["name"].as_str().unwrap_or("");
-        
+        let args = &params["arguments"];
+
+        // Resolve a friendly host label.
+        // Priority: explicit host_id (look up name in HostStore) → host:port → connection_id (look up its host_id).
+        let host_label: Option<String> = {
+            let resolve_by_id = |id: &str| -> Option<String> {
+                state.hosts
+                    .get_all()
+                    .into_iter()
+                    .find(|h| h.id == id)
+                    .map(|h| format!("{} ({}@{}:{})", h.name, h.user, h.host, h.port))
+            };
+
+            if let Some(hid) = args["host_id"].as_str() {
+                resolve_by_id(hid).or_else(|| Some(hid.to_string()))
+            } else if let (Some(h), Some(u)) = (args["host"].as_str(), args["user"].as_str()) {
+                let p = args["port"].as_u64().unwrap_or(22);
+                Some(format!("{}@{}:{}", u, h, p))
+            } else if let Some(h) = args["host"].as_str() {
+                Some(h.to_string())
+            } else if let Some(cid) = args["connection_id"].as_str() {
+                // connection_id → look up host_id via the active client → resolve name
+                let host_id_opt: Option<String> = if let Some(client_arc) = state.connections.get(cid).await {
+                    client_arc.lock().await.host_id.clone()
+                } else {
+                    None
+                };
+                host_id_opt
+                    .and_then(|hid| resolve_by_id(&hid))
+                    .or_else(|| Some(format!("conn:{}", &cid[..8.min(cid.len())])))
+            } else {
+                None
+            }
+        };
+
+        // Build a tool-specific message body.
+        let detail = match name {
+            "ssh_execute_command" => {
+                let cmd = args["command"].as_str().unwrap_or("");
+                format!("exec: {}", cmd)
+            }
+            "ssh_start_connect" => "open connection".to_string(),
+            "ssh_close_connect" => {
+                let cid = args["connection_id"].as_str().unwrap_or("?");
+                format!("close connection_id={}", cid)
+            }
+            "ssh_check_connect" => {
+                let cid = args["connection_id"].as_str().unwrap_or("?");
+                format!("check connection_id={}", cid)
+            }
+            "ssh_list_connected" => "list active connections".to_string(),
+            "ssh_list_hosts" => "list saved hosts".to_string(),
+            "ssh_add_host" => format!("add host: {}", args["name"].as_str().unwrap_or("?")),
+            "ssh_update_host" => format!("update host: {}", args["name"].as_str().unwrap_or("?")),
+            "ssh_remove_host" => format!("remove host id={}", args["id"].as_str().unwrap_or("?")),
+            "sftp_list_directory" => format!("ls {}", args["path"].as_str().unwrap_or("/")),
+            "sftp_read_file" => format!("read {}", args["path"].as_str().unwrap_or("?")),
+            "sftp_write_file" => {
+                let bytes = args["content"].as_str().map(|s| s.len()).unwrap_or(0);
+                format!("write {} ({} bytes)", args["path"].as_str().unwrap_or("?"), bytes)
+            }
+            _ => format!("call: {}", name),
+        };
+
+        crate::logs::info(
+            &state.log_store,
+            "mcp",
+            name,
+            host_label,
+            detail,
+        );
+
+
         if name == "ssh_list_hosts" {
             let hosts = state.hosts.get_all();
             // Security: never expose secrets to the agent. Strip `password` and
@@ -391,7 +463,26 @@ pub async fn mcp_message(
         if name == "ssh_execute_command" {
             let args = &params["arguments"];
             let command = args["command"].as_str().unwrap_or("").to_string();
-            
+
+            // Apply user-configured command policy.
+            if let crate::settings::CmdVerdict::Deny(reason) = state.settings.check_ssh_command(&command) {
+                crate::logs::warn(
+                    &state.log_store,
+                    "mcp",
+                    "ssh_execute_command",
+                    None,
+                    format!("Blocked command '{}': {}", command, reason),
+                );
+                let result = json!({
+                    "isError": true,
+                    "content": [{ "type": "text",
+                        "text": format!("Command '{}' blocked by user settings: {}", command, reason) }]
+                });
+                let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
+                let _ = state.mcp_tx.send(resp.to_string());
+                return Json(resp);
+            }
+
             if let Some(conn_id) = args["connection_id"].as_str() {
                 if let Some(client_arc) = state.connections.get(conn_id).await {
                     let mut client = client_arc.lock().await;

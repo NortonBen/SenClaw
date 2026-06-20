@@ -6,6 +6,8 @@ mod security;
 mod mcp;
 mod keychain;
 mod sftp_api;
+mod logs;
+mod settings;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;

@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Form, Input, InputNumber, Button, Space, Typography, Divider } from 'antd';
+import { CloseOutlined } from '@ant-design/icons';
 import type { Host, KeychainItem } from '../types';
 import { Select } from 'antd';
 
@@ -10,9 +11,10 @@ interface HostDetailsProps {
   onSave: (host: Host) => void;
   onDelete: (id: string) => void;
   onConnect: (host: Host) => void;
+  onClose?: () => void;
 }
 
-export const HostDetails: React.FC<HostDetailsProps> = ({ host, onSave, onDelete, onConnect }) => {
+export const HostDetails: React.FC<HostDetailsProps> = ({ host, onSave, onDelete, onConnect, onClose }) => {
   const [form] = Form.useForm();
   const [keychainItems, setKeychainItems] = React.useState<KeychainItem[]>([]);
 
@@ -42,9 +44,20 @@ export const HostDetails: React.FC<HostDetailsProps> = ({ host, onSave, onDelete
 
   return (
     <div style={{ padding: '24px', height: '100%', backgroundColor: '#1f2937', color: '#fff' }}>
-      <Title level={4} style={{ color: '#fff', marginTop: 0 }}>
-        {host ? 'Edit Host' : 'New Host'}
-      </Title>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Title level={4} style={{ color: '#fff', margin: 0 }}>
+          {host ? 'Edit Host' : 'New Host'}
+        </Title>
+        {onClose && (
+          <Button
+            type="text"
+            icon={<CloseOutlined />}
+            onClick={onClose}
+            aria-label="Close"
+            style={{ color: '#9ca3af' }}
+          />
+        )}
+      </div>
       
       <Form
         form={form}

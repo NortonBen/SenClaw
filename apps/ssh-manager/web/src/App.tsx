@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { ConfigProvider, Layout, Menu, Button, Row, Col, Empty, message, Input, Tabs } from 'antd';
-import { DesktopOutlined, KeyOutlined, SwapOutlined, CodeOutlined, PlusOutlined, HomeOutlined, FolderOutlined } from '@ant-design/icons';
+import { DesktopOutlined, KeyOutlined, SwapOutlined, CodeOutlined, PlusOutlined, HomeOutlined, FolderOutlined, SettingOutlined } from '@ant-design/icons';
 import type { Host, AppTab } from './types';
 import { HostCard } from './components/HostCard';
 import { HostDetails } from './components/HostDetails';
 import { KeychainView } from './components/KeychainView';
 import { PortForwardingView } from './components/PortForwardingView';
+import { LogsView } from './components/LogsView';
+import { SettingsModal } from './components/SettingsModal';
 import { TerminalView } from './TerminalView';
 import { SftpView } from './components/SftpView';
 import './App.css';
@@ -31,6 +33,7 @@ function App() {
   });
   const [activeTabId, setActiveTabId] = useState<string>('home');
   const [currentMenu, setCurrentMenu] = useState<string>('hosts');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('ssh-tabs', JSON.stringify(tabs));
@@ -120,7 +123,9 @@ function App() {
     const newTabs = tabs.filter(tab => tab.id !== targetKey);
     setTabs(newTabs);
     if (activeTabId === targetKey) {
-      setActiveTabId(newTabs[newTabs.length - 1].id);
+      // Prefer the most recent remaining terminal tab; if none, fall back to home.
+      const lastTerminal = [...newTabs].reverse().find(t => t.type === 'terminal');
+      setActiveTabId(lastTerminal ? lastTerminal.id : 'home');
     }
   };
 
@@ -163,13 +168,14 @@ function App() {
                 <Row gutter={[16, 16]}>
                   {hosts.map(host => (
                     <Col xs={24} sm={12} md={8} lg={6} key={host.id}>
-                      <HostCard 
-                        host={host} 
+                      <HostCard
+                        host={host}
                         selected={selectedHost?.id === host.id}
                         onClick={(h) => {
                           setSelectedHost(h);
                           setIsEditing(true);
                         }}
+                        onDoubleClick={(h) => handleConnect(h)}
                       />
                     </Col>
                   ))}
@@ -183,7 +189,7 @@ function App() {
       case 'port-forwarding':
         return <PortForwardingView />;
       case 'logs':
-        return <div style={{ padding: 24, color: '#fff' }}>Logs feature coming soon...</div>;
+        return <LogsView />;
       default:
         return null;
     }
@@ -224,12 +230,22 @@ function App() {
     >
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1e1e1e' }}>
         {/* Top Tab Bar - Termius Style */}
-        <div className="termius-tab-bar" style={{ 
-          background: '#111827', 
+        <div className="termius-tab-bar" style={{
+          background: '#111827',
           borderBottom: '1px solid #1e1e1e',
           paddingTop: 8,
           paddingLeft: 80, // Space for window controls if any
+          paddingRight: 8,
+          display: 'flex',
+          alignItems: 'center',
         }}>
+          <Button
+            type="text"
+            icon={<SettingOutlined />}
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            style={{ color: '#9ca3af', marginRight: 8, alignSelf: 'center' }}
+          />
           <Tabs
             hideAdd
             type="editable-card"
@@ -246,7 +262,7 @@ function App() {
               key: tab.id,
               closable: tab.type !== 'home' && tab.type !== 'sftp',
             }))}
-            style={{ marginBottom: -1 }} // Hide bottom border
+            style={{ marginBottom: -1, flex: 1 }} // Hide bottom border, expand
           />
         </div>
 
@@ -290,11 +306,15 @@ function App() {
               </Layout>
               {isEditing && currentMenu === 'hosts' && activeTabId === 'home' && (
                 <Sider width={350} style={{ borderLeft: '1px solid #374151', background: '#1f2937' }}>
-                  <HostDetails 
-                    host={selectedHost} 
+                  <HostDetails
+                    host={selectedHost}
                     onSave={handleSaveHost}
                     onDelete={handleDeleteHost}
                     onConnect={handleConnect}
+                    onClose={() => {
+                      setIsEditing(false);
+                      setSelectedHost(null);
+                    }}
                   />
                 </Sider>
               )}
@@ -329,6 +349,7 @@ function App() {
           </div>
         </div>
       </div>
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </ConfigProvider>
   );
 }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Card, Space } from 'antd';
 import { DesktopOutlined } from '@ant-design/icons';
 import type { Host } from '../types';
@@ -7,13 +7,41 @@ interface HostCardProps {
   host: Host;
   selected: boolean;
   onClick: (host: Host) => void;
+  onDoubleClick?: (host: Host) => void;
 }
 
-export const HostCard: React.FC<HostCardProps> = ({ host, selected, onClick }) => {
+const DBLCLICK_DELAY_MS = 250;
+
+export const HostCard: React.FC<HostCardProps> = ({ host, selected, onClick, onDoubleClick }) => {
+  const clickTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (clickTimer.current !== null) {
+      window.clearTimeout(clickTimer.current);
+    }
+  }, []);
+
+  const handleClick = () => {
+    if (clickTimer.current !== null) return;
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null;
+      onClick(host);
+    }, DBLCLICK_DELAY_MS);
+  };
+
+  const handleDoubleClick = () => {
+    if (clickTimer.current !== null) {
+      window.clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+    }
+    onDoubleClick?.(host);
+  };
+
   return (
     <Card
       hoverable
-      onClick={() => onClick(host)}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       style={{
         backgroundColor: selected ? '#1f2937' : '#111827',
         borderColor: selected ? '#3b82f6' : '#374151',
