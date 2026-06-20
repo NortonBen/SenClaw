@@ -90,10 +90,13 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
       ? `linear-gradient(90deg, ${token.colorPrimaryBg} 0%, ${token.colorBgContainer} 80%)`
       : token.colorBgContainer;
 
-  // Pick the most recent activity entry across tasks for a one-line summary
+  // Pick the most recent activity entry across tasks for a one-line summary.
+  // IMPORTANT: dispatchActivity is keyed by task.id (e.g. "d-12"), not task
+  // label — see useWebSocket type annotation. Matching on label gave an
+  // always-empty activity panel.
   const recentActivityLine = (() => {
     if (!activity) return null;
-    const all = parent.tasks.flatMap(t => (activity[t.label] ?? []).map(e => ({ task: t.label, ...e })));
+    const all = parent.tasks.flatMap(t => (activity[t.id] ?? []).map(e => ({ task: t.label, ...e })));
     if (!all.length) return null;
     const sorted = all.sort((a, b) => (a.ts < b.ts ? 1 : -1));
     const e = sorted[0];
@@ -269,14 +272,14 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
                   : 'default'}>
                   {openTask.status}
                 </Tag>
-                <Text style={{ fontSize: 11, color: token.colorTextSecondary }}>
-                  {openTask.personaName ?? openTask.agentId}
-                </Text>
                 {taskDuration(openTask) && (
                   <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>
                     · {taskDuration(openTask)}
                   </Text>
                 )}
+                <Text style={{ fontSize: 11, color: token.colorTextTertiary, fontFamily: 'ui-monospace, monospace' }}>
+                  {openTask.id}
+                </Text>
                 <span style={{ flex: 1 }} />
                 <Button
                   size="small"
@@ -286,6 +289,23 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
                 >
                   ×
                 </Button>
+              </div>
+
+              {/* Agent row — explicit "Agent:" label like the side-panel
+                  Task Details card, so the persona/folder is unambiguous
+                  (especially for virtual personas like "persona:architect"). */}
+              <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                <Text strong style={{ fontSize: 11 }}>Agent: </Text>
+                <Text style={{ fontSize: 11 }}>
+                  {openTask.isVirtual
+                    ? (openTask.personaName ?? openTask.agentId)
+                    : openTask.agentId}
+                </Text>
+                {openTask.isVirtual && (
+                  <Tag style={{ marginLeft: 6, fontSize: 9, lineHeight: '14px', padding: '0 4px' }} color="purple">
+                    virtual
+                  </Tag>
+                )}
               </div>
 
               {openTask.dependsOn.length > 0 && (
@@ -359,8 +379,10 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
                   level of detail without flipping panels: per-tool icon +
                   verb + title + summary + error tag, message rows for free-
                   text outputs, and a collapsed one-line summary
-                  ("Write x7, Read x3") when not expanded. */}
-              {activity?.[openTask.label]?.length ? (
+                  ("Write x7, Read x3") when not expanded.
+                  IMPORTANT: dispatchActivity is keyed by task.id (see
+                  useWebSocket type annotation), not task.label. */}
+              {activity?.[openTask.id]?.length ? (
                 <div>
                   <Text strong style={{ fontSize: 11, color: token.colorTextSecondary }}>
                     Activity
@@ -368,7 +390,7 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
                   <div style={{ marginTop: 4 }}>
                     <SubAgentActivityCard
                       task={openTask}
-                      entries={activity[openTask.label]}
+                      entries={activity[openTask.id]}
                     />
                   </div>
                 </div>
