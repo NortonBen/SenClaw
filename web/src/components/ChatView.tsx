@@ -563,9 +563,30 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
             the timeline by their `createdAt`, so each DAG renders right
             where it was actually launched — not lumped at the bottom. */}
         {(() => {
+          // Backend emits two different timestamp shapes — DispatchParent
+          // uses RFC3339 UTC (`2026-06-20T17:40:30.274184+00:00`), but chat
+          // text messages persisted through the DB come back as naive local
+          // time (`2026-06-21 00:34:28`). String-compare on those mixes
+          // formats and puts every DAG at the top of the chat. Parse both
+          // through Date so the comparison is numeric and timezone-correct.
+          const toMs = (s: string | undefined | null): number => {
+            if (!s) return 0;
+            const t = Date.parse(s);
+            if (!Number.isNaN(t)) return t;
+            // Naive `YYYY-MM-DD HH:MM:SS` from the DB layer — treat as local
+            // time. Date.parse on that is non-portable; wrap in ISO with the
+            // local offset so the comparison still works.
+            const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(:\d{2})?)/.exec(s);
+            if (m) {
+              const guess = Date.parse(`${m[1]}T${m[2]}`);
+              if (!Number.isNaN(guess)) return guess;
+            }
+            return 0;
+          };
+
           const myParents = (ws.dispatchParents ?? [])
             .filter(p => p.adminFolder === group.folder)
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+            .sort((a, b) => toMs(a.createdAt) - toMs(b.createdAt));
           if (myParents.length === 0) {
             return renderMessagesWithToolGroups(
               visibleMessages,
@@ -574,17 +595,19 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
             );
           }
           // Build a chronological segment list: messages-before-DAG, DAG,
-          // messages-between-DAGs, …, messages-after-last-DAG.
+          // messages-between-DAGs, …, messages-after-last-DAG. Compares are
+          // numeric ms via `toMs` to survive the mixed-format gotcha above.
           const segments: Array<
             | { kind: 'msgs'; items: ChatMessage[] }
             | { kind: 'dag'; parent: typeof myParents[number] }
           > = [];
           let cursor = 0;
           for (const dag of myParents) {
+            const dagMs = toMs(dag.createdAt);
             const before: ChatMessage[] = [];
             while (
               cursor < visibleMessages.length &&
-              (visibleMessages[cursor].timestamp ?? '') <= dag.createdAt
+              toMs(visibleMessages[cursor].timestamp) <= dagMs
             ) {
               before.push(visibleMessages[cursor]);
               cursor++;
