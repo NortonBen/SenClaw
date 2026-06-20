@@ -10,6 +10,7 @@ import { AudioMutedOutlined, AudioOutlined, LoadingOutlined, ThunderboltOutlined
 import { AgentCommandInput, CommonChatInput } from './chat-common';
 import { ModelPicker } from './ModelPicker';
 import { ProfileBadge } from './ProfileBadge';
+import { InlineDispatchCard } from './InlineDispatchCard';
 import { useAppContext } from '../contexts/AppContext';
 
 const { Text } = Typography;
@@ -563,6 +564,26 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           onResolvePermission,
           onResolveQuestion,
         )}
+
+        {/* Inline DAG orchestration cards — render any DispatchParent owned by
+            this group's admin folder right here in the chat stream, so users
+            see sub-agent progress claude-code-style without opening the
+            Agent Console side panel. Done parents stay visible (collapsed)
+            until the conversation moves on. */}
+        {(() => {
+          const myParents = (ws.dispatchParents ?? []).filter(
+            p => p.adminFolder === group.folder,
+          );
+          if (myParents.length === 0) return null;
+          return myParents.map(p => (
+            <InlineDispatchCard
+              key={p.id}
+              parent={p}
+              activity={ws.dispatchActivity}
+            />
+          ));
+        })()}
+
         {isProcessing && <TypingIndicator />}
         <div ref={bottomRef} />
       </div>

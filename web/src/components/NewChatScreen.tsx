@@ -253,11 +253,7 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKey}
-            placeholder={
-              chatType === 'Plan' ? 'Plan: describe the goal — agent will write a plan first…' :
-              chatType === 'DAG'  ? 'DAG: describe a multi-agent task — sub-agents will be dispatched…' :
-                                    'Ask anything, or describe a task…'
-            }
+            placeholder="Ask anything, or describe a task…"
             rows={3}
             className="w-full resize-none outline-none text-sm px-5 pt-4 pb-2 bg-transparent"
             style={{ color: token.colorText, lineHeight: 1.55 }}

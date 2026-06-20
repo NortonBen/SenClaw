@@ -20,9 +20,11 @@ export function AppLayout({ sidebar, children, status }: Props) {
   const { token } = theme.useToken();
 
   // ===== Right-dock: mutually-exclusive AgentConsole / Workbench =====
-  const [expandedDock, setExpandedDock] = useState<ExpandedDock>(() =>
-    ws.dispatchParents.some(p => p.status === 'active' || p.status === 'queued') ? 'agent' : null,
-  );
+  // Default collapsed. DAG orchestration now renders inline in the chat via
+  // InlineDispatchCard, so the side-panel Agent Console is opt-in for users
+  // who want the deep sub-agent activity log. Click the dock rail badge to
+  // open it manually.
+  const [expandedDock, setExpandedDock] = useState<ExpandedDock>(null);
   // After the user manually collapses, suppress this latest's auto-foreground.
   const [suppressedLatestAt, setSuppressedLatestAt] = useState<number | null>(null);
 

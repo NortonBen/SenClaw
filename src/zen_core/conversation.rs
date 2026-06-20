@@ -537,17 +537,15 @@ fn completion_nudge_for(
         AgentMode::Plan => {
             if exit_plan_mode_called {
                 // ExitPlanMode already ran this session — a follow-up
-                // text-only turn is a legitimate end of plan-mode work
-                // (e.g. user rejected the plan and the model is wrapping up).
+                // text-only turn is a legitimate wrap-up after planning.
                 None
             } else {
                 Some(format!(
-                    "Plan mode requires you to finish by calling `ExitPlanMode(plan=\"...\")` to \
-                     request approval — a text-only reply does not exit Plan mode. If your plan \
-                     file is ready, call `ExitPlanMode` now. If the plan needs more work, call \
-                     the next research tool (Read/Grep/Glob/Task). To abandon planning entirely, \
-                     call `task_done(summary=\"...\")`. Do NOT stop with text only — there is no \
-                     user to type 'continue'.{header}"
+                    "You must finish by calling `ExitPlanMode(plan=\"...\")` to request approval \
+                     — a text-only reply does not satisfy this. If your plan file is ready, call \
+                     `ExitPlanMode` now. If the plan needs more work, call the next research tool \
+                     (Read/Grep/Glob/Task). To abandon entirely, call `task_done(summary=\"...\")`. \
+                     Do NOT stop with text only — there is no user to type 'continue'.{header}"
                 ))
             }
         }
@@ -556,16 +554,16 @@ fn completion_nudge_for(
                 // Dispatch already ran (and returned, since the orchestrator
                 // is back in the loop). The text-only reply is the orchestrator
                 // reporting results to the user — that's the natural completion
-                // path per the DAG mode reminder. Don't nudge.
+                // path per the orchestration reminder. Don't nudge.
                 None
             } else {
                 Some(format!(
-                    "DAG mode requires you to orchestrate via the dispatch tools — text alone \
-                     does not delegate any work. If you have enough context, call \
-                     `DispatchCreateParentAndRun` with the task graph (it blocks until every \
-                     sub-agent finishes). If you still need to research, call a read-only tool \
-                     (Read/Grep/Glob). If the work is actually trivial and needs no dispatch, \
-                     call `task_done(summary=\"...\")`. Do NOT stop with text only.{header}"
+                    "You must orchestrate via the dispatch tools — text alone does not delegate \
+                     any work. If you have enough context, call `DispatchCreateParentAndRun` with \
+                     the task graph (it blocks until every sub-agent finishes). If you still need \
+                     to research, call a read-only tool (Read/Grep/Glob). If the work is \
+                     genuinely trivial and needs no dispatch, call `task_done(summary=\"...\")`. \
+                     Do NOT stop with text only.{header}"
                 ))
             }
         }
