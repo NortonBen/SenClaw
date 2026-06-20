@@ -27,6 +27,16 @@ function statusBadge(status: DispatchParent['status']) {
   return <Tag icon={<CheckCircleFilled />} color="success">done</Tag>;
 }
 
+/** Hour-minute timestamp formatter matching the rest of the chat surfaces. */
+function formatTime(iso?: string | null): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 function taskStatusIcon(t: DispatchTask) {
   if (t.status === 'done') return <CheckCircleFilled style={{ color: '#10b981' }} />;
   if (t.status === 'error' || t.status === 'timeout')
@@ -114,6 +124,16 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
         <Text style={{ fontSize: 12, color: token.colorTextSecondary }}>
           {done}/{total}
           {failed > 0 && <span style={{ color: '#ef4444', marginLeft: 6 }}>· {failed} failed</span>}
+        </Text>
+        {/* Timestamp on the right — matches the per-message time displayed
+            by MessageBubble / TextMessage so the DAG card slots cleanly into
+            the chronological timeline of the conversation. Shows creation
+            time, and (when done) the completion time too. */}
+        <Text style={{ fontSize: 11, color: token.colorTextTertiary, whiteSpace: 'nowrap', marginLeft: 4 }}>
+          {formatTime(parent.createdAt)}
+          {parent.status === 'done' && parent.completedAt
+            ? ` → ${formatTime(parent.completedAt)}`
+            : ''}
         </Text>
       </div>
 

@@ -558,30 +558,58 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           </div>
         )}
         {/* Render with consecutive ToolMessages collapsed into one card —
-            claude-code style "Read 3 files, edited 1, ran 1 command ›". */}
-        {renderMessagesWithToolGroups(
-          visibleMessages,
-          onResolvePermission,
-          onResolveQuestion,
-        )}
-
-        {/* Inline DAG orchestration cards — render any DispatchParent owned by
-            this group's admin folder right here in the chat stream, so users
-            see sub-agent progress claude-code-style without opening the
-            Agent Console side panel. Done parents stay visible (collapsed)
-            until the conversation moves on. */}
+            claude-code style "Read 3 files, edited 1, ran 1 command ›".
+            DispatchParent cards (DAG orchestration) are interleaved into
+            the timeline by their `createdAt`, so each DAG renders right
+            where it was actually launched — not lumped at the bottom. */}
         {(() => {
-          const myParents = (ws.dispatchParents ?? []).filter(
-            p => p.adminFolder === group.folder,
+          const myParents = (ws.dispatchParents ?? [])
+            .filter(p => p.adminFolder === group.folder)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          if (myParents.length === 0) {
+            return renderMessagesWithToolGroups(
+              visibleMessages,
+              onResolvePermission,
+              onResolveQuestion,
+            );
+          }
+          // Build a chronological segment list: messages-before-DAG, DAG,
+          // messages-between-DAGs, …, messages-after-last-DAG.
+          const segments: Array<
+            | { kind: 'msgs'; items: ChatMessage[] }
+            | { kind: 'dag'; parent: typeof myParents[number] }
+          > = [];
+          let cursor = 0;
+          for (const dag of myParents) {
+            const before: ChatMessage[] = [];
+            while (
+              cursor < visibleMessages.length &&
+              (visibleMessages[cursor].timestamp ?? '') <= dag.createdAt
+            ) {
+              before.push(visibleMessages[cursor]);
+              cursor++;
+            }
+            if (before.length) segments.push({ kind: 'msgs', items: before });
+            segments.push({ kind: 'dag', parent: dag });
+          }
+          if (cursor < visibleMessages.length) {
+            segments.push({ kind: 'msgs', items: visibleMessages.slice(cursor) });
+          }
+          return segments.flatMap((seg, i) =>
+            seg.kind === 'msgs'
+              ? renderMessagesWithToolGroups(
+                  seg.items,
+                  onResolvePermission,
+                  onResolveQuestion,
+                )
+              : [
+                  <InlineDispatchCard
+                    key={`dag-${seg.parent.id}-${i}`}
+                    parent={seg.parent}
+                    activity={ws.dispatchActivity}
+                  />,
+                ],
           );
-          if (myParents.length === 0) return null;
-          return myParents.map(p => (
-            <InlineDispatchCard
-              key={p.id}
-              parent={p}
-              activity={ws.dispatchActivity}
-            />
-          ));
         })()}
 
         {isProcessing && <TypingIndicator />}
