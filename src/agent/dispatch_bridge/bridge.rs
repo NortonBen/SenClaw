@@ -1045,18 +1045,7 @@ impl DispatchBridge {
                 workspace.clone()
             };
 
-            // Shared workspace `memory/` + SQLite folder key (see `cowork::cowork_shared_memory_from_path`)
-            let (custom_memory_dir, memory_folder_override) = if workspace.is_empty() {
-                (None, None)
-            } else {
-                std::path::Path::new(&workspace)
-                    .canonicalize()
-                    .ok()
-                    .as_ref()
-                    .and_then(|p| crate::cowork::cowork_shared_memory_from_path(p))
-                    .map(|(mem, key)| (Some(mem), Some(key)))
-                    .unwrap_or((None, None))
-            };
+            let (custom_memory_dir, memory_folder_override): (Option<String>, Option<String>) = (None, None);
 
             tokio::spawn(async move {
                 let outcome = pool

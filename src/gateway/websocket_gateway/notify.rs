@@ -19,7 +19,29 @@ impl WebSocketGateway {
         self.broadcast(&msg.chat_jid, &payload).await;
     }
 
+    /// Emit an incremental agent reply delta. The frontend accumulates these
+    /// into a streaming bubble keyed by `groupJid`; the final `agent:reply`
+    /// drops the streaming bubble and replaces it with the completed message.
+    pub async fn notify_agent_delta(&self, chat_jid: &str, delta: &str) {
+        let payload = serde_json::json!({
+            "type": "agent:delta",
+            "groupJid": chat_jid,
+            "delta": delta,
+            "ts": chrono::Utc::now().to_rfc3339(),
+        });
+        self.broadcast(chat_jid, &payload).await;
+    }
+
     pub async fn notify_agent_reply(&self, chat_jid: &str, text: &str, tokens: u32) {
+        // Cowork hook: mark the manager's pending task done + save reply
+        // as result_output. Mirrors legacy CoworkManager's "task complete
+        // on message_complete" path.
+        if let Some(team_id) = chat_jid.strip_prefix("cowork:") {
+            if let Some(db) = self.db.read().unwrap().clone() {
+                crate::gateway::ui_server::cowork_runtime::on_agent_reply(&db, team_id, text);
+            }
+        }
+
         // Stamp at emit time so the client can chronologically interleave
         // agent:reply with tool:execution events (both carry `ts`).
         // Without this, agent:reply used the client's WS-arrival clock and
@@ -37,6 +59,16 @@ impl WebSocketGateway {
     }
 
     pub async fn notify_agent_state(&self, chat_jid: &str, state: &str) {
+        // Cowork hook: transition the manager's task to in_progress when
+        // the agent starts processing this turn.
+        if state == "processing" {
+            if let Some(team_id) = chat_jid.strip_prefix("cowork:") {
+                if let Some(db) = self.db.read().unwrap().clone() {
+                    crate::gateway::ui_server::cowork_runtime::on_agent_processing(&db, team_id);
+                }
+            }
+        }
+
         self.last_known_states
             .lock()
             .await

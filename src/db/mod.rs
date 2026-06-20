@@ -35,6 +35,8 @@ mod agents;
 mod bindings;
 mod channels;
 mod chat_events;
+pub mod cowork_tasks;
+pub mod cowork_teams;
 mod dispatch_activity;
 mod embedding;
 pub(crate) mod event_notifications;
@@ -45,8 +47,6 @@ mod router_state;
 mod scheduled_tasks;
 mod tool_executions;
 mod tool_rules;
-
-pub mod cowork;
 
 #[cfg(test)]
 mod tests;
@@ -124,9 +124,7 @@ impl Db {
         schema::apply_schema(conn)?;
         schema::apply_memory_tables(conn, config)?;
         schema::apply_space_tables(conn)?;
-        schema::apply_code_tables(conn)?;
         schema::apply_marketplace_tables(conn)?;
-        crate::code_graph::schema::apply_code_graph_schema(conn)?;
         Ok(())
     }
 

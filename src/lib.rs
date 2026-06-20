@@ -16,10 +16,7 @@ pub mod browser;
 pub mod channels;
 pub mod clawhub;
 pub mod cli;
-pub mod code_engine;
-pub mod code_graph;
 pub mod config;
-pub mod cowork;
 pub mod db;
 pub mod gateway;
 pub mod local_model;
@@ -591,14 +588,6 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         });
     }
 
-    fn notify_cowork_changed(&self) {
-        let gw = Arc::clone(&self.gateway);
-        tokio::spawn(async move {
-            gw.broadcast_to_all(&serde_json::json!({"type": "cowork:changed"}))
-                .await;
-        });
-    }
-
     fn notify_agent_compacting(&self, chat_jid: &str, is_compacting: bool) {
         let gw = Arc::clone(&self.gateway);
         let jid = chat_jid.to_string();
@@ -954,8 +943,6 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let am = Arc::new(gateway::agent_manager::AgentManager::new());
     let bm = Arc::new(gateway::binding_manager::BindingManager::new());
     let cm = Arc::new(gateway::channel_manager::ChannelManager::new());
-    let cowork_mgr = Arc::new(cowork::CoworkManager::new());
-    cowork_mgr.ensure_builtin_templates(&cfg);
     // Sync groups from config.json into DB on startup
     let (sync_added, sync_updated, sync_removed) =
         gateway::group_manager::sync_groups_from_config(&db, &gm, &cfg);
@@ -1235,11 +1222,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let channels: Arc<tokio::sync::Mutex<Vec<Box<dyn Channel>>>> =
         Arc::new(tokio::sync::Mutex::new(channels));
 
-    // ===== 3e. ensure admin group =====
-    // Creates admin group (JID depends on configured admin IDs — Telegram > Feishu > web:main).
-    // Must happen after channels connect so bot userId is known.
-    gateway::group_manager::ensure_admin_group(&db, &gm, &cfg, None);
-    tracing::info!("[SenClaw] Admin group ensured");
+    // (admin group auto-creation removed — was 3e. Profiles & bindings are
+    // now managed explicitly via Settings → Profile UI.)
 
     // ===== 3f. MCP Manager =====
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1611,7 +1595,6 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             agent_manager: Arc::clone(&am),
             binding_manager: Arc::clone(&bm),
             channel_manager: Arc::clone(&cm),
-            cowork_manager: Arc::clone(&cowork_mgr),
             api: ws_api,
             agent_api: Some(agent_pool.clone() as Arc<dyn types::AgentApi>),
             browser_relay,
@@ -1621,6 +1604,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             cfg.ws_port,
             cfg.ui_server.ws_token.clone(),
         ));
+        gw.set_db_for_cowork(Arc::clone(&db));
 
         // Wire full event sink: AgentPool → WebSocket gateway.
         // Forwards reply / state / todos / permission / ask-question events,
@@ -1662,35 +1646,6 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 app_channels.len()
             );
 
-            // Forward live code-chat updates (the web's `/api/code/ws` push) to
-            // mobile app channels so the Code chat doesn't have to poll.
-            let code_app_chs = app_channels.clone();
-            let mut code_rx = gateway::ui_server::subscribe_code_chat();
-            tokio::spawn(async move {
-                use channels::app::CTRL_API_EVENT;
-                loop {
-                    match code_rx.recv().await {
-                        Ok(raw) => {
-                            let data: serde_json::Value =
-                                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-                            let meta = serde_json::json!({
-                                "topic": "code:chat:update",
-                                "data": data,
-                            })
-                            .to_string();
-                            for app in &code_app_chs {
-                                let app = Arc::clone(app);
-                                let meta = meta.clone();
-                                tokio::spawn(async move {
-                                    let _ = app.send_control(CTRL_API_EVENT, meta).await;
-                                });
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
         }
 
         // Wire MessageRouter → WebSocket gateway for real-time incoming messages.
@@ -1860,85 +1815,6 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }
 
         // Wire CoworkManager → WebSocket gateway. Every mutation fires
-        // a cowork:changed event so the Cowork UI auto-refreshes.
-        {
-            let gw_for_cowork = Arc::clone(&gw);
-            cowork_mgr.set_on_changed(Box::new(move || {
-                let gw = Arc::clone(&gw_for_cowork);
-                tokio::spawn(async move {
-                    gw.broadcast_to_all(&serde_json::json!({
-                        "type": "cowork:changed",
-                    }))
-                    .await;
-                });
-            }));
-        }
-
-        // Wire task result event — broadcast cowork:task:result with full payload.
-        {
-            let gw_for_result = Arc::clone(&gw);
-            cowork_mgr.set_on_task_result(Box::new(move |evt| {
-                let gw = Arc::clone(&gw_for_result);
-                let payload = serde_json::json!({
-                    "type": "cowork:task:result",
-                    "taskId": evt.task_id,
-                    "workspaceId": evt.workspace_id,
-                    "title": evt.title,
-                    "inputSummary": evt.input_summary,
-                    "resultOutput": evt.result_output,
-                    "references": evt.references,
-                    "artifacts": evt.artifacts,
-                    "completedAt": evt.completed_at,
-                });
-                tokio::spawn(async move {
-                    gw.broadcast_to_all(&payload).await;
-                });
-            }));
-        }
-
-        // Wire resource-changed event — broadcast cowork:resource:changed.
-        {
-            let gw_for_res = Arc::clone(&gw);
-            cowork_mgr.set_on_resource_changed(Box::new(move |workspace_id| {
-                let gw = Arc::clone(&gw_for_res);
-                let payload = serde_json::json!({
-                    "type": "cowork:resource:changed",
-                    "workspaceId": workspace_id,
-                });
-                tokio::spawn(async move {
-                    gw.broadcast_to_all(&payload).await;
-                });
-            }));
-        }
-
-        // Wire DispatchBridge → CoworkManager. Routes cowork tasks through the
-        // DAG dispatch system instead of direct process_and_wait. A lifecycle
-        // callback keeps CoworkTask status in sync with DispatchTask transitions.
-        cowork_mgr.set_dispatch_bridge(Arc::clone(&dispatch_bridge));
-        {
-            let mgr = Arc::clone(&cowork_mgr);
-            let db = Arc::clone(&db);
-            let api = Arc::clone(&agent_pool) as Arc<dyn types::AgentApi>;
-            dispatch_bridge.set_task_lifecycle_callback(Arc::new(
-                move |task_id: &str,
-                      status: &str,
-                      label: &str,
-                      goal: &str,
-                      result: Option<String>| {
-                    mgr.on_dispatch_task_lifecycle(
-                        &db,
-                        task_id,
-                        status,
-                        label,
-                        goal,
-                        result.as_deref(),
-                        Some(Arc::clone(&api)),
-                        Arc::clone(&mgr),
-                    );
-                },
-            ));
-        }
-
         // Wire DispatchBridge → AgentPool. The scheduler hands off augmented
         // prompts to sub-agents via GroupQueue + process_and_wait, mirroring
         // the inbound message path. Workspace overrides are applied before
@@ -1957,39 +1833,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     let binding: types::GroupBinding = match gm.get(&db, jid) {
                         Some(b) => b,
                         None => {
-                            // Cowork agents don't have GroupManager entries — their
-                            // JID is synthetic (cowork:{ws_id}:{member_id}). Build a
-                            // GroupBinding on the fly so the agent can execute.
-                            if jid.starts_with("cowork:") {
-                                let parts: Vec<&str> = jid.splitn(3, ':').collect();
-                                let member_id = parts.get(2).unwrap_or(&"agent");
-                                types::GroupBinding {
-                                    jid: jid.to_string(),
-                                    folder: member_id.to_string(),
-                                    name: format!("cowork-{member_id}"),
-                                    channel: "web".to_string(),
-                                    group_type: "cowork".to_string(),
-                                    is_admin: false,
-                                    requires_trigger: false,
-                                    allowed_tools: None,
-                                    allowed_paths: None,
-                                    allowed_work_dirs: if workspace_dir.is_empty() {
-                                        None
-                                    } else {
-                                        Some(vec![workspace_dir.to_string()])
-                                    },
-                                    bot_token: None,
-                                    max_messages: None,
-                                    llm_config_id: None,
-                                    last_active: None,
-                                    added_at: chrono::Utc::now().to_rfc3339(),
-                                }
-                            } else {
-                                tracing::warn!(
-                                    "[DispatchBridge] send_to_agent: no binding for {jid}, dropping task {task_id}"
-                                );
-                                return;
-                            }
+                            tracing::warn!(
+                                "[DispatchBridge] send_to_agent: no binding for {jid}, dropping task {task_id}"
+                            );
+                            return;
                         }
                     };
                     if !workspace_dir.is_empty() {
@@ -2275,13 +2122,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         let ui_state = Arc::new(gateway::ui_server::UiState {
             config: Arc::new(cfg.clone()),
             db: Some(Arc::clone(&db)),
-            cowork_manager: Some(Arc::clone(&cowork_mgr)),
+            group_manager: Some(Arc::clone(&gm)),
             wiki_manager: Some(Arc::clone(&wiki_mgr)),
             persona_registry: Some(Arc::clone(&persona_registry)),
             agent_api: Some(Arc::new(RealUiApi {
                 agent_pool: agent_pool.clone(),
             })),
-            cowork_agent_api: Some(agent_pool.clone() as Arc<dyn types::AgentApi>),
             mcp_manager: Some(Arc::clone(&mcp_manager)),
             marketplace_manager: Some(Arc::new(std::sync::Mutex::new(
                 marketplace::manager::MarketplaceManager::new()

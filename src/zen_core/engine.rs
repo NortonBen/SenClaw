@@ -387,16 +387,6 @@ impl ZenEngine {
             });
         }
 
-        // Cowork agents use synthetic JIDs (`cowork:{workspace}:{member}`). Interactive
-        // ask tools block on WS `question:request`; dispatch often has no subscriber
-        // answering for that JID, so tasks appear "stuck" until timeout.
-        if self.instance_id.starts_with("cowork:") {
-            filtered.retain(|t| {
-                let n = t.name();
-                n != "AskUser" && n != "AskUserQuestion"
-            });
-        }
-
         // Layer 5 — defer filter. Deferred tools are excluded unless either:
         //   - they opted into `always_load()` (e.g. ToolSearch itself), OR
         //   - the model has already discovered them via a prior `ToolSearch`
@@ -440,11 +430,6 @@ impl ZenEngine {
                     && !name.starts_with("Dispatch")
                     && !name.starts_with("mcp__senclaw-dispatch__")
                     && !name.starts_with("mcp__senclaw-virtual__")
-                {
-                    return false;
-                }
-                if self.instance_id.starts_with("cowork:")
-                    && (name == "AskUser" || name == "AskUserQuestion")
                 {
                     return false;
                 }
@@ -1988,13 +1973,8 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
     /// regular chat agents (`web:*`, `app:*`, `virtual:*`) skip it to save
     /// ~2k tokens per turn and avoid polluting attention with project docs
     /// irrelevant to the chat query.
-    fn instance_uses_workspace(instance_id: &str) -> bool {
-        // Convention from `code_engine::agent_builder::code_session_jid`:
-        // `code-chat:<group>`. Cowork agents (`cowork:<workspace>:<member>`)
-        // also operate inside a workspace.
-        instance_id.starts_with("code-chat:")
-            || instance_id.starts_with("cowork:")
-            || instance_id.starts_with("code:")
+    fn instance_uses_workspace(_instance_id: &str) -> bool {
+        false
     }
 
     /// Read `SENCLAW.md` (walks up from `working_dir`) and current date.
@@ -2528,19 +2508,6 @@ mod tests {
         );
         // Cancel → stays in Plan mode.
         assert_eq!(engine.options.read().unwrap().agent_mode, AgentMode::Plan);
-    }
-
-    #[test]
-    fn tools_for_main_agent_cowork_drops_ask_tools() {
-        let opts = ZenCoreOptions {
-            instance_id: "cowork:ws1:alice".into(),
-            ..Default::default()
-        };
-        let engine = ZenEngine::new(opts, None);
-        let tools = engine.tools_for_main_agent();
-        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(!names.contains(&"AskUser"));
-        assert!(!names.contains(&"AskUserQuestion"));
     }
 
     #[test]

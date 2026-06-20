@@ -167,7 +167,6 @@ pub fn dispatch_mcp_config(
     state_path: &str,
     admin_folder: &str,
     agents_config_dir: Option<&str>,
-    cowork_agents_json: Option<&str>,
 ) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-dispatch", "dispatch-server");
     cfg.env
@@ -177,10 +176,6 @@ pub fn dispatch_mcp_config(
     if let Some(d) = agents_config_dir {
         cfg.env
             .insert("SENCLAW_AGENTS_CONFIG_DIR".into(), d.to_owned());
-    }
-    if let Some(j) = cowork_agents_json {
-        cfg.env
-            .insert("SENCLAW_DISPATCH_COWORK_AGENTS_JSON".into(), j.to_owned());
     }
     cfg
 }
@@ -225,29 +220,6 @@ pub fn ocr_mcp_config(ui_port: u16) -> McpServerConfig {
         "SENCLAW_OCR_BRIDGE_URL".into(),
         format!("http://127.0.0.1:{ui_port}"),
     );
-    cfg
-}
-
-// ===== Code Knowledge Graph =====
-
-pub fn code_graph_mcp_config(db_path: &str, project_id: &str, workspace: &str) -> McpServerConfig {
-    let mut cfg = McpServerConfig::new("senclaw-code-graph", "code-graph-server");
-    cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
-    cfg.env
-        .insert("SENCLAW_PROJECT_ID".into(), project_id.to_owned());
-    cfg.env
-        .insert("SENCLAW_WORKSPACE".into(), workspace.to_owned());
-    cfg
-}
-
-// ===== Code Server =====
-
-pub fn code_server_mcp_config(workspace: &str, project_id: &str) -> McpServerConfig {
-    let mut cfg = McpServerConfig::new("senclaw-code", "code-server");
-    cfg.env
-        .insert("SENCLAW_CODE_WORKSPACE".into(), workspace.to_owned());
-    cfg.env
-        .insert("SENCLAW_CODE_PROJECT_ID".into(), project_id.to_owned());
     cfg
 }
 

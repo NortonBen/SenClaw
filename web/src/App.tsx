@@ -3,15 +3,15 @@ import { Routes, Route } from 'react-router-dom';
 import { ConfigProvider, theme } from 'antd';
 import { useWebSocket } from './hooks/useWebSocket';
 import { AppContext } from './contexts/AppContext';
-import { PlanExitDialog } from './components/PlanExitDialog';
 import { ChatPage } from './pages/ChatPage';
 import { WikiPage } from './pages/WikiPage';
 import { PluginsPage } from './pages/PluginsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { CoworkPage } from './pages/CoworkPage';
-import { CodePage } from './pages/CodePage';
 import { SpacePage } from './pages/SpacePage';
 import { CognitivePage } from './pages/CognitivePage';
+import { CoworkPage } from './pages/CoworkPage';
+import { CoworkTeamDetailPage } from './pages/CoworkTeamDetailPage';
+import { PlanExitDialog } from './components/PlanExitDialog';
 
 const SEARCH = new URLSearchParams(window.location.search);
 const EMBED = SEARCH.get('embed') === '1';
@@ -30,8 +30,6 @@ export function App() {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
-  // Desktop app (Tauri): native-feel tweaks — no rubber-band scroll, no
-  // browser right-click menu, no image/content dragging.
   useEffect(() => {
     if (!DESKTOP) return;
     document.documentElement.classList.add('desktop-app');
@@ -64,12 +62,16 @@ export function App() {
         <Routes>
           <Route index element={<ChatPage />} />
           <Route path="chats" element={<ChatPage />} />
+          {/* Direct-link chat URL with the JID in the path — fastest way
+              into a specific chat (no query parsing, no client-side redirect).
+              Used by the cowork "Open chat" button and copyable links. */}
+          <Route path="chat/:jid" element={<ChatPage />} />
           <Route path="wiki/*" element={<WikiPage />} />
           <Route path="plugins" element={<PluginsPage />} />
           <Route path="settings" element={<SettingsPage />} />
-          <Route path="cowork" element={<CoworkPage />} />
-          <Route path="code" element={<CodePage />} />
           <Route path="space/*" element={<SpacePage />} />
+          <Route path="cowork" element={<CoworkPage />} />
+          <Route path="cowork/:id" element={<CoworkTeamDetailPage />} />
           <Route path="cognitive" element={<CognitivePage />} />
         </Routes>
         {/* Global Plan-mode approval modal — surfaces when any agent calls ExitPlanMode. */}

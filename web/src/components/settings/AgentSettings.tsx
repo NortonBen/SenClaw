@@ -97,25 +97,57 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       name: agent.name,
       folder: agent.folder,
       requiresTrigger: agent.requiresTrigger,
-      workDirs: agent.allowedWorkDirs?.join('\n') ?? '',
+      workDirsList: agent.allowedWorkDirs ?? [],
       corePrompt: agent.corePrompt ?? '',
+      memory: '',  // populated by fetch below
       modelId: agent.modelId ?? undefined,
       bindChannelIds: currentChannelIds,
     });
     setIsModalOpen(true);
+
+    // Pull live SOUL.md + MEMORY.md from disk. The agent record's
+    // `corePrompt` is the DB copy; SOUL.md may have drifted via direct edits
+    // or the persona_update tool, so re-fetch and trust the file.
+    fetch(`/api/agents/${encodeURIComponent(agent.folder)}/files`)
+      .then(r => r.json())
+      .then((data: { soul: string; memory: string }) => {
+        form.setFieldsValue({
+          corePrompt: data.soul || agent.corePrompt || '',
+          memory: data.memory ?? '',
+        });
+      })
+      .catch(() => { /* file-fetch failure is non-fatal — keep DB defaults */ });
+  };
+
+  const writeFiles = async (folder: string, soul?: string, memory?: string) => {
+    try {
+      await fetch(`/api/agents/${encodeURIComponent(folder)}/files`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ soul, memory }),
+      });
+    } catch { /* non-fatal */ }
   };
 
   const onFinish = (values: any) => {
-    const workDirs = values.workDirs?.trim() ? values.workDirs.split('\n').map((s: string) => s.trim()).filter(Boolean) : null;
+    const rawList = Array.isArray(values.workDirsList) ? values.workDirsList : [];
+    const workDirs = rawList.map((s: string) => (s ?? '').trim()).filter(Boolean);
+    const workDirsPayload: string[] | null = workDirs.length > 0 ? workDirs : null;
+    const memoryContent: string = values.memory ?? '';
 
     if (editingAgent) {
       onUpdate(editingAgent.id, {
         name: values.name,
         requiresTrigger: values.requiresTrigger,
-        allowedWorkDirs: workDirs,
+        allowedWorkDirs: workDirsPayload,
         corePrompt: values.corePrompt ?? '',
         modelId: values.modelId || null,
       });
+
+      // MEMORY.md isn't part of the WS update payload (it lives only on
+      // disk), so persist it separately. SOUL.md was already written by the
+      // backend's agent update via corePrompt; we don't need to PUT soul.
+      writeFiles(editingAgent.folder, undefined, memoryContent);
 
       // Sync channel bindings: add new, remove removed
       const currentBindings = bindings.filter(b => (b.agent?.id ?? b.agentId) === editingAgent.id);
@@ -129,24 +161,31 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
         if (!currentChannelIds.has(channelId)) onRegisterBinding({ agentId: editingAgent.id, channelId });
       });
 
-      message.success('Agent updated');
+      message.success('Profile updated · SOUL.md & MEMORY.md saved, memory re-ingested');
     } else {
       onRegister({
         name: values.name,
         folder: values.folder,
         requiresTrigger: values.requiresTrigger,
-        allowedWorkDirs: workDirs,
+        allowedWorkDirs: workDirsPayload,
         corePrompt: values.corePrompt ?? '',
         modelId: values.modelId || null,
       });
-      
+
+      // After backend scaffolds the directory, write the initial MEMORY.md
+      // if the user provided any. Folder is known at create time so we can
+      // PUT directly without waiting for an agent:registered event.
+      if (memoryContent.trim()) {
+        writeFiles(values.folder.trim(), undefined, memoryContent);
+      }
+
       if (values.bindChannelIds?.length) {
         pendingBindings.current = {
           folder: values.folder.trim(),
           channelIds: values.bindChannelIds.map(Number),
         };
       }
-      message.success('Agent created');
+      message.success('Profile created · SOUL.md + MEMORY.md scaffolded, cognitive memory ingested');
     }
     setIsModalOpen(false);
   };
@@ -165,7 +204,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
 
   const columns = [
     {
-      title: 'Agent',
+      title: 'Profile',
       key: 'agent',
       render: (_: any, record: AgentInfo) => {
         const ab = agentBindings(record.id);
@@ -240,7 +279,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
             </Tooltip>
             {!isAdmin && (
               <Popconfirm
-                title="Delete agent?"
+                title="Delete profile?"
                 description="Are you sure? This will remove the agent and all its data."
                 onConfirm={() => onUnregister(record.id)}
                 okText="Yes"
@@ -266,8 +305,11 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
     <div style={{ maxWidth: 1000 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32 }}>
         <div>
-          <Title level={4} style={{ margin: 0 }}>Agents</Title>
-          <Text type="secondary">Define and configure your AI agents and their access.</Text>
+          <Title level={4} style={{ margin: 0 }}>Profile</Title>
+          <Text type="secondary">
+            Each profile owns its own SOUL.md (persona) and MEMORY.md (aggregated memory).
+            Editing this form rewrites SOUL.md and re-ingests it into cognitive memory.
+          </Text>
         </div>
         <Button 
           type="primary" 
@@ -275,7 +317,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
           onClick={handleAdd}
           style={{ borderRadius: 8, height: 40 }}
         >
-          New Agent
+          New Profile
         </Button>
       </div>
 
@@ -288,12 +330,12 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
           dataSource={agents} 
           rowKey="id"
           pagination={false}
-          locale={{ emptyText: 'No agents created yet.' }}
+          locale={{ emptyText: 'No profiles created yet.' }}
         />
       </Card>
 
       <Modal
-        title={editingAgent ? 'Edit Agent' : 'Create New Agent'}
+        title={editingAgent ? 'Edit Profile' : 'Create New Profile'}
         open={isModalOpen}
         onCancel={() => setIsModalOpen(false)}
         footer={null}
@@ -314,7 +356,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
               rules={[{ required: true, message: 'Required' }]}
             >
               <Input 
-                placeholder="Team Assistant" 
+                placeholder="My Profile"
                 onChange={e => {
                   if (!editingAgent) {
                     const currentFolder = form.getFieldValue('folder');
@@ -328,11 +370,11 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
 
             <Form.Item
               name="folder"
-              label="Agent ID (Folder)"
+              label="Profile ID (Folder)"
               rules={[{ required: true, message: 'Required' }]}
             >
               <Input 
-                placeholder="team-assistant" 
+                placeholder="my-profile"
                 disabled={!!editingAgent}
                 style={{ fontFamily: 'monospace' }}
               />
@@ -348,25 +390,74 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
           </Form.Item>
 
           <Form.Item
-            name="workDirs"
             label="Allowed Working Directories"
-            tooltip="Restrict agent to these paths (one per line). Leave empty for no restriction."
+            tooltip="Restrict the profile to these paths. Leave empty for no restriction (full filesystem access)."
+          >
+            <Form.List name="workDirsList">
+              {(fields, { add, remove }) => (
+                <div className="space-y-2">
+                  {fields.map(({ key, name, ...rest }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <Form.Item
+                        {...rest}
+                        name={name}
+                        rules={[
+                          { required: true, message: 'Path required' },
+                          { whitespace: true, message: 'Path required' },
+                        ]}
+                        style={{ marginBottom: 0, flex: 1 }}
+                      >
+                        <Input
+                          placeholder="/Users/name/projects/my-app or ~/code/project"
+                          style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 12 }}
+                        />
+                      </Form.Item>
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        icon={<DeleteOutlined />}
+                        onClick={() => remove(name)}
+                        aria-label="Remove path"
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    type="dashed"
+                    size="small"
+                    icon={<PlusOutlined />}
+                    onClick={() => add('')}
+                    block
+                  >
+                    Add directory
+                  </Button>
+                </div>
+              )}
+            </Form.List>
+          </Form.Item>
+
+          <Form.Item
+            name="corePrompt"
+            label="Persona (SOUL.md)"
+            tooltip="The profile's persona — written to agents/<folder>/SOUL.md on save and re-ingested into cognitive memory. Describe identity, expertise, tone, and any behaviour-shaping rules."
+            extra="Saved to SOUL.md; cognitive memory will re-aggregate this content automatically."
           >
             <TextArea
-              rows={3}
-              placeholder="/Users/name/projects/my-app"
+              rows={6}
+              placeholder="You are a helpful assistant that specializes in..."
               style={{ fontFamily: 'monospace' }}
             />
           </Form.Item>
 
           <Form.Item
-            name="corePrompt"
-            label="Core Prompt"
-            tooltip="Instructions describing what this agent does and how it should behave. Appended to every conversation."
+            name="memory"
+            label="Aggregated Memory (MEMORY.md)"
+            tooltip="Free-form long-term memory for this profile — facts, references, conventions, prior conclusions. Written to agents/<folder>/MEMORY.md and indexed by the memory manager."
+            extra="Saved to MEMORY.md. The agent reads from this file across sessions; edit freely between conversations."
           >
             <TextArea
-              rows={4}
-              placeholder="You are a helpful assistant that specializes in..."
+              rows={6}
+              placeholder={'# Memory\n\n## Facts\n- ...\n\n## Conventions\n- ...'}
               style={{ fontFamily: 'monospace' }}
             />
           </Form.Item>
@@ -413,7 +504,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
             <Space>
               <Button onClick={() => setIsModalOpen(false)}>Cancel</Button>
               <Button type="primary" htmlType="submit">
-                {editingAgent ? 'Save Changes' : 'Create Agent'}
+                {editingAgent ? 'Save Profile' : 'Create Profile'}
               </Button>
             </Space>
           </Form.Item>

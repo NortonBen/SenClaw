@@ -1,1205 +1,837 @@
-use std::fs;
-use std::path::PathBuf;
+//! Cowork team REST API — minimal multi-agent team management.
+//!
+//! A team is a (manager profile + member specialists + workspace) tuple.
+//! Opening a team materialises it as a regular chat group keyed
+//! `cowork:<team_id>` with `groupType="cowork"` and `folder=manager_folder`,
+//! so the rest of the chat plumbing (engine, messages, history, broadcast)
+//! works unchanged. The manager profile uses the existing dispatch MCP
+//! tools to delegate to member specialists.
+
 use std::sync::Arc;
 
 use axum::{
-    body::Body,
-    extract::{Path as AxumPath, Query, State},
-    http::{header, StatusCode},
-    response::{Json, Response},
+    extract::{Path as AxumPath, State},
+    http::StatusCode,
+    Json,
 };
-use axum_extra::extract::Multipart;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::cowork::CoworkManager;
-use crate::db::Db;
+use crate::db::cowork_tasks::CoworkTeamTask;
+use crate::db::cowork_teams::{CoworkTeam, TeamMember};
+use crate::types::GroupBinding;
+use crate::util::local_time::local_iso_string_now;
+
+// ─── Built-in team templates ────────────────────────────────────────────────
+//
+// Pre-defined squad blueprints using the 8 builtin personas installed by
+// `install_builtin_personas`. Each template names the manager + members
+// the user can spin up with one click on the Cowork page.
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TemplateMemberSpec {
+    pub folder: &'static str,
+    pub role: &'static str,
+    pub responsibilities: &'static str,
+    /// Pre-built typed trigger JSON (Vec<TriggerRule>).
+    pub triggers_json: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TeamTemplate {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub manager: &'static str,
+    pub manager_role: &'static str,
+    pub members: &'static [TemplateMemberSpec],
+    pub icon: &'static str,
+}
+
+// Cowork-specific templates: each one is a DAG team — a lead that PLANS +
+// DELEGATES + SYNTHESIZES, never doing the underlying work itself. Members
+// are specialists with concrete trigger rules so the lead knows when to
+// hand off. The templates are deliberately small (1 lead + 2-3 members) so
+// the dispatch graph stays comprehensible.
+
+const T_USER_MSG: &str = r#"[{"type":"task_assigned"}]"#;
+
+const BUILTIN_TEMPLATES: &[TeamTemplate] = &[
+    TeamTemplate {
+        id: "research-bureau",
+        name: "Research Bureau",
+        description: "Lead delegates web research → fact-checking → digest. Final answer is a cited summary.",
+        manager: "research-lead",
+        manager_role: "lead",
+        icon: "🔬",
+        members: &[
+            TemplateMemberSpec {
+                folder: "web-scout",
+                role: "scout",
+                responsibilities: "Browse the web, fetch URLs, collect raw evidence.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "fact-checker",
+                role: "verifier",
+                responsibilities: "Cross-check claims against sources; flag uncited assertions.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "digest-writer",
+                role: "synthesizer",
+                responsibilities: "Compose the final summary with inline citations.",
+                triggers_json: T_USER_MSG,
+            },
+        ],
+    },
+    TeamTemplate {
+        id: "code-squad",
+        name: "Code Squad",
+        description: "Tech lead splits the request → writer implements → reviewer audits → tester verifies.",
+        manager: "tech-lead",
+        manager_role: "lead",
+        icon: "⌨️",
+        members: &[
+            TemplateMemberSpec {
+                folder: "code-writer",
+                role: "implementer",
+                responsibilities: "Implement the smallest change that satisfies the task.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "code-reviewer",
+                role: "reviewer",
+                responsibilities: "Audit the diff for correctness, security, and style.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "test-engineer",
+                role: "verifier",
+                responsibilities: "Add/extend tests; confirm the change is exercised.",
+                triggers_json: T_USER_MSG,
+            },
+        ],
+    },
+    TeamTemplate {
+        id: "writing-studio",
+        name: "Writing Studio",
+        description: "Editor coordinates research → drafting → proofreading. Output is publication-ready copy.",
+        manager: "editor-in-chief",
+        manager_role: "lead",
+        icon: "✍️",
+        members: &[
+            TemplateMemberSpec {
+                folder: "researcher",
+                role: "researcher",
+                responsibilities: "Gather sources and angles for the piece.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "drafter",
+                role: "drafter",
+                responsibilities: "Write the first draft based on research.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "proofreader",
+                role: "proofreader",
+                responsibilities: "Catch typos, grammar, voice inconsistencies.",
+                triggers_json: T_USER_MSG,
+            },
+        ],
+    },
+    TeamTemplate {
+        id: "product-council",
+        name: "Product Council",
+        description: "Product lead frames the call → UX, engineering, and data weigh in. Output is a single decision memo.",
+        manager: "product-lead",
+        manager_role: "lead",
+        icon: "🎯",
+        members: &[
+            TemplateMemberSpec {
+                folder: "ux-designer",
+                role: "designer",
+                responsibilities: "Argue the user-experience perspective.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "engineer-rep",
+                role: "engineer",
+                responsibilities: "Argue the feasibility / cost perspective.",
+                triggers_json: T_USER_MSG,
+            },
+            TemplateMemberSpec {
+                folder: "data-analyst",
+                role: "analyst",
+                responsibilities: "Argue the data / impact perspective.",
+                triggers_json: T_USER_MSG,
+            },
+        ],
+    },
+    TeamTemplate {
+        id: "solo-pro",
+        name: "Solo Pro",
+        description: "Just a general-purpose assistant — no dispatch, no delegation. Use when the task fits one mind.",
+        manager: "general-assistant",
+        manager_role: "solo",
+        icon: "🤖",
+        members: &[],
+    },
+];
 
 use super::core::{AppError, UiState};
-use super::types::path_to_mime;
 
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
+#[derive(Debug, Serialize)]
+pub(crate) struct TeamView {
+    pub id: String,
+    pub name: String,
+    pub manager_folder: String,
+    pub members: Vec<TeamMember>,
+    pub workspace_dir: Option<String>,
+    pub created_at: String,
+    /// jid of the auto-materialised chat group (always `cowork:<id>`).
+    pub jid: String,
 }
 
-/// Format bytes as a hex dump preview (similar to xxd command)
-fn format_hex_preview(bytes: &[u8], max_bytes: usize) -> String {
-    let bytes_to_show = &bytes[..bytes.len().min(max_bytes)];
-    let mut lines = Vec::new();
-
-    for (i, chunk) in bytes_to_show.chunks(16).enumerate() {
-        let offset = i * 16;
-
-        // Hex part
-        let hex_part: Vec<String> = chunk.iter().map(|b| format!("{:02x}", b)).collect();
-        let hex_str = hex_part.join(" ");
-        let hex_padded = format!("{:48}", hex_str); // Pad to align columns
-
-        // ASCII part
-        let ascii_part: String = chunk
-            .iter()
-            .map(|&b| {
-                if b.is_ascii_graphic() || b == b' ' {
-                    b as char
-                } else {
-                    '.'
-                }
-            })
-            .collect();
-
-        lines.push(format!("{:08x}: {}  {}", offset, hex_padded, ascii_part));
-    }
-
-    lines.join("\n")
-}
-
-/// OS filesystem root (e.g. `/` or `C:\`).
-fn filesystem_root() -> PathBuf {
-    #[cfg(windows)]
-    {
-        std::env::var("SystemDrive")
-            .map(|d| {
-                let d = d.trim_end_matches('\\').to_string();
-                PathBuf::from(format!(r"{}\", d))
-            })
-            .unwrap_or_else(|_| PathBuf::from(r"C:\"))
-    }
-    #[cfg(not(windows))]
-    {
-        PathBuf::from("/")
+fn to_view(t: CoworkTeam) -> TeamView {
+    let jid = format!("cowork:{}", t.id);
+    TeamView {
+        id: t.id,
+        name: t.name,
+        manager_folder: t.manager_folder,
+        members: t.members,
+        workspace_dir: t.workspace_dir,
+        created_at: t.created_at,
+        jid,
     }
 }
 
-/// Shortcuts to common system directories (only returned if they exist).
-fn system_quick_paths() -> Vec<(String, PathBuf)> {
-    #[cfg(target_os = "macos")]
-    {
-        vec![
-            ("System".to_string(), PathBuf::from("/System")),
-            ("Applications".to_string(), PathBuf::from("/Applications")),
-            ("Library".to_string(), PathBuf::from("/Library")),
-            ("usr/local".to_string(), PathBuf::from("/usr/local")),
-        ]
-    }
-    #[cfg(target_os = "linux")]
-    {
-        vec![
-            ("opt".to_string(), PathBuf::from("/opt")),
-            ("usr".to_string(), PathBuf::from("/usr")),
-            ("etc".to_string(), PathBuf::from("/etc")),
-            ("var".to_string(), PathBuf::from("/var")),
-        ]
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
-        let sys = sys.trim_end_matches('\\').to_string();
-        vec![
-            (
-                "Program Files".to_string(),
-                PathBuf::from(format!(r"{}\Program Files", sys)),
-            ),
-            (
-                "Program Files (x86)".to_string(),
-                PathBuf::from(format!(r"{}\Program Files (x86)", sys)),
-            ),
-            (
-                "Windows".to_string(),
-                PathBuf::from(format!(r"{}\Windows", sys)),
-            ),
-        ]
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        vec![]
-    }
-}
-
-// ===== Cowork helpers =====
-
-pub(crate) fn cowork_mgr(s: &UiState) -> Result<&CoworkManager, AppError> {
-    s.cowork_manager
-        .as_ref()
-        .map(|m| m.as_ref())
-        .ok_or_else(|| {
-            AppError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Cowork not initialized".into(),
-            )
-        })
-}
-
-pub(crate) fn cowork_db(s: &UiState) -> Result<&Db, AppError> {
-    s.db.as_ref()
-        .map(|d| d.as_ref())
+fn db(s: &UiState) -> Result<Arc<crate::db::Db>, AppError> {
+    s.db.clone()
         .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))
 }
 
-// ===== Cowork Working Dir Browser =====
-
-#[derive(Deserialize)]
-pub(crate) struct BrowseQuery {
-    pub(crate) path: Option<String>,
-}
-
-/// Browse the workspace's workingDir — returns a flat list of children under the given path.
-pub(crate) async fn cowork_ws_browse(
+/// GET /api/cowork/teams
+pub(crate) async fn list_teams(
     State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Query(q): Query<BrowseQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let ws = mgr
-        .get_workspace(db, &ws_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
-
-    let working_dir = ws.working_dir.as_deref().unwrap_or(&ws.root_dir);
-    let base = PathBuf::from(working_dir);
-
-    if !base.exists() {
-        return Ok(Json(
-            serde_json::json!({ "entries": [], "path": "", "error": "Working directory does not exist" }),
-        ));
-    }
-
-    let target = match q.path.as_deref() {
-        Some(p) if !p.is_empty() => base.join(p),
-        _ => base.clone(),
-    };
-
-    // Security: must stay within working_dir
-    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.clone());
-    let canonical_target = target.canonicalize().unwrap_or_else(|_| target.clone());
-    if !canonical_target.starts_with(&canonical_base) {
-        return Err(AppError(
-            StatusCode::FORBIDDEN,
-            "Path outside working directory".into(),
-        ));
-    }
-
-    let rel = canonical_target
-        .strip_prefix(&canonical_base)
-        .unwrap_or(&canonical_target)
-        .to_string_lossy()
-        .to_string();
-
-    // If target is a file, return its content
-    if canonical_target.is_file() {
-        let mime = path_to_mime(&canonical_target.to_string_lossy());
-        let size = canonical_target.metadata().map(|m| m.len()).unwrap_or(0);
-
-        // Try reading as text first - a file is binary if:
-        // 1. It can't be read as valid UTF-8, OR
-        // 2. Its content contains null bytes
-        let content_result = fs::read_to_string(&canonical_target);
-        let is_binary = match &content_result {
-            Ok(text) => text.contains('\0'),
-            Err(_) => true, // Failed to read as UTF-8, treat as binary
-        };
-
-        let content = if is_binary {
-            // Read bytes and create hex preview
-            let bytes = fs::read(&canonical_target).unwrap_or_default();
-            let hex_preview = format_hex_preview(&bytes, 256); // First 256 bytes
-            format!(
-                "[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
-                size,
-                bytes.len().min(256),
-                hex_preview
-            )
-        } else {
-            content_result.unwrap_or_default()
-        };
-
-        return Ok(Json(serde_json::json!({
-            "path": rel,
-            "content": content,
-            "mime": mime,
-            "isBinary": is_binary,
-            "size": size,
-            "isFile": true,
-            "workingDir": working_dir,
-        })));
-    }
-
-    let mut entries = Vec::new();
-    if let Ok(read_dir) = fs::read_dir(&canonical_target) {
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let is_dir = path.is_dir();
-            if let Ok(meta) = path.metadata() {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                // Skip hidden files/dirs
-                if name.starts_with('.') {
-                    continue;
-                }
-                entries.push(serde_json::json!({
-                    "name": name,
-                    "path": if rel.is_empty() { name.clone() } else { format!("{}/{}", rel, name) },
-                    "isDir": is_dir,
-                    "size": meta.len(),
-                    "modified": meta.modified().ok().map(|t| {
-                        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-                    }),
-                }));
-            }
-        }
-    }
-
-    // dirs first, then alphabetical
-    entries.sort_by(|a, b| {
-        let a_dir = a["isDir"].as_bool().unwrap_or(false);
-        let b_dir = b["isDir"].as_bool().unwrap_or(false);
-        b_dir.cmp(&a_dir).then_with(|| {
-            a["name"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["name"].as_str().unwrap_or(""))
-        })
-    });
-
-    Ok(Json(serde_json::json!({
-        "entries": entries,
-        "path": canonical_target.to_string_lossy(),
-        "workingDir": working_dir,
-    })))
+) -> Result<Json<Vec<TeamView>>, AppError> {
+    let db = db(&s)?;
+    let teams = db
+        .list_cowork_teams()
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(teams.into_iter().map(to_view).collect()))
 }
 
-/// Browse filesystem for folder picking (Create Workspace) — local UI only; starts at user home.
-pub(crate) async fn cowork_fs_browse(
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateTeamBody {
+    pub name: String,
+    pub manager_folder: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
+}
+
+/// POST /api/cowork/teams
+///
+/// Creates the team row AND materialises a corresponding chat group so
+/// `cowork:<id>` is reachable immediately. Members must be agent folders
+/// that already exist; the manager + member personas drive the chat.
+pub(crate) async fn create_team(
     State(s): State<Arc<UiState>>,
-    Query(q): Query<BrowseQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let _ = cowork_mgr(&s)?;
-
-    let home = dirs::home_dir().ok_or_else(|| {
-        AppError(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Could not resolve home directory".into(),
-        )
-    })?;
-
-    let target = match q.path.as_deref() {
-        Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => home.clone(),
-    };
-
-    let canonical = target.canonicalize().map_err(|_| {
-        AppError(
-            StatusCode::NOT_FOUND,
-            format!(
-                "Path not found or inaccessible: {}",
-                target.to_string_lossy()
-            ),
-        )
-    })?;
-
-    if !canonical.is_dir() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "Not a directory".into()));
-    }
-
-    let home_canon = home.canonicalize().unwrap_or_else(|_| home.clone());
-
-    let root_base = filesystem_root();
-    let root_canon = root_base.canonicalize().unwrap_or(root_base);
-
-    let quick_paths: Vec<serde_json::Value> = system_quick_paths()
-        .into_iter()
-        .filter_map(|(label, p)| {
-            let c = p.canonicalize().ok()?;
-            if c.is_dir() {
-                Some(serde_json::json!({
-                    "label": label,
-                    "path": c.to_string_lossy(),
-                }))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let parent_path = canonical.parent().map(|p| p.to_string_lossy().to_string());
-
-    let mut entries = Vec::new();
-    if let Ok(read_dir) = fs::read_dir(&canonical) {
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            if let Ok(meta) = path.metadata() {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if name.starts_with('.') {
-                    continue;
-                }
-                let abs = path.to_string_lossy().to_string();
-                entries.push(serde_json::json!({
-                    "name": name,
-                    "path": abs,
-                    "isDir": true,
-                    "size": meta.len(),
-                    "modified": meta.modified().ok().map(|t| {
-                        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-                    }),
-                }));
-            }
-        }
-    }
-
-    entries.sort_by(|a, b| {
-        a["name"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["name"].as_str().unwrap_or(""))
-    });
-
-    Ok(Json(serde_json::json!({
-        "entries": entries,
-        "absolutePath": canonical.to_string_lossy(),
-        "parentPath": parent_path,
-        "homePath": home_canon.to_string_lossy(),
-        "rootPath": root_canon.to_string_lossy(),
-        "quickPaths": quick_paths,
-    })))
-}
-
-// ===== Cowork Templates =====
-
-pub(crate) async fn cowork_templates_list(
-    State(s): State<Arc<UiState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    mgr.ensure_builtin_templates(&s.config);
-    let templates = mgr
-        .list_templates(&s.config)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "templates": templates })))
-}
-
-pub(crate) async fn cowork_templates_get(
-    State(s): State<Arc<UiState>>,
-    AxumPath(name): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    mgr.ensure_builtin_templates(&s.config);
-    let tmpl = mgr
-        .get_template(&s.config, &name)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Template not found".into()))?;
-    Ok(Json(serde_json::to_value(&tmpl).unwrap_or_default()))
-}
-
-// ===== Cowork Workspaces =====
-
-pub(crate) async fn cowork_ws_list(
-    State(s): State<Arc<UiState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let wss = mgr
-        .list_workspaces(db)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "workspaces": wss })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CreateWorkspaceBody {
-    name: String,
-    description: Option<String>,
-    #[serde(rename = "workingDir")]
-    working_dir: Option<String>,
-    template: Option<String>,
-}
-
-pub(crate) async fn cowork_ws_create(
-    State(s): State<Arc<UiState>>,
-    Json(body): Json<CreateWorkspaceBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    let ws = mgr
-        .create_workspace_with_template(
-            db,
-            &s.config,
-            &body.name,
-            body.description.as_deref(),
-            body.working_dir.as_deref(),
-            body.template.as_deref(),
-            &now,
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::to_value(&ws).unwrap_or_default()))
-}
-
-pub(crate) async fn cowork_ws_get(
-    State(s): State<Arc<UiState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let ws = mgr
-        .get_workspace(db, &id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
-    Ok(Json(serde_json::to_value(&ws).unwrap_or_default()))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateWorkspaceBody {
-    name: Option<String>,
-    description: Option<String>,
-    status: Option<String>,
-    #[serde(rename = "workingDir")]
-    working_dir: Option<String>,
-}
-
-pub(crate) async fn cowork_ws_update(
-    State(s): State<Arc<UiState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(body): Json<UpdateWorkspaceBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    mgr.update_workspace(
-        db,
-        &id,
-        body.name.as_deref(),
-        body.description.as_deref(),
-        body.status.as_deref(),
-        body.working_dir.as_deref(),
-        &now,
-    )
-    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let ws = mgr
-        .get_workspace(db, &id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
-    Ok(Json(serde_json::to_value(&ws).unwrap_or_default()))
-}
-
-pub(crate) async fn cowork_ws_delete(
-    State(s): State<Arc<UiState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    mgr.delete_workspace(db, &id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
-}
-
-// ===== Cowork Members =====
-
-pub(crate) async fn cowork_members_list(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let members = mgr
-        .list_members(db, &ws_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "members": members })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct AddMemberBody {
-    #[serde(rename = "memberId")]
-    member_id: String,
-    #[serde(default = "default_role")]
-    role: String,
-    jid: Option<String>,
-    subdir: Option<String>,
-}
-
-fn default_role() -> String {
-    "worker".into()
-}
-
-pub(crate) async fn cowork_members_add(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Json(body): Json<AddMemberBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    let m = mgr
-        .add_member(
-            db,
-            &s.config,
-            &ws_id,
-            &body.member_id,
-            &body.role,
-            body.jid.as_deref(),
-            body.subdir.as_deref(),
-            &now,
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::to_value(&m).unwrap_or_default()))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateMemberBody {
-    role: Option<String>,
-    persona: Option<String>,
-    responsibilities: Option<String>,
-    triggers: Option<String>,
-    #[serde(rename = "handoffRules")]
-    handoff_rules: Option<String>,
-    #[serde(rename = "acceptanceCriteria")]
-    acceptance_criteria: Option<String>,
-    #[serde(rename = "outputFormat")]
-    output_format: Option<String>,
-    sla: Option<String>,
-    limits: Option<String>,
-}
-
-pub(crate) async fn cowork_members_update(
-    State(s): State<Arc<UiState>>,
-    AxumPath((ws_id, member_id)): AxumPath<(String, String)>,
-    Json(body): Json<UpdateMemberBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    mgr.update_member_spec(
-        db,
-        &ws_id,
-        &member_id,
-        body.role.as_deref(),
-        body.persona.as_deref(),
-        body.responsibilities.as_deref(),
-        body.triggers.as_deref(),
-        body.handoff_rules.as_deref(),
-        body.acceptance_criteria.as_deref(),
-        body.output_format.as_deref(),
-        body.sla.as_deref(),
-        body.limits.as_deref(),
-        &now,
-    )
-    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let m = mgr
-        .get_member(db, &ws_id, &member_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Member not found".into()))?;
-    Ok(Json(serde_json::to_value(&m).unwrap_or_default()))
-}
-
-pub(crate) async fn cowork_members_remove(
-    State(s): State<Arc<UiState>>,
-    AxumPath((ws_id, member_id)): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    mgr.remove_member(db, &ws_id, &member_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
-}
-
-// ===== Cowork Board =====
-
-#[derive(Deserialize)]
-pub(crate) struct BoardQuery {
-    section: Option<String>,
-}
-
-pub(crate) async fn cowork_board_get(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Query(q): Query<BoardQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let entries = mgr
-        .get_board(db, &ws_id, q.section.as_deref())
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "entries": entries })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateBoardBody {
-    title: Option<String>,
-    content: Option<String>,
-    author: Option<String>,
-}
-
-pub(crate) async fn cowork_board_update(
-    State(s): State<Arc<UiState>>,
-    AxumPath((ws_id, section)): AxumPath<(String, String)>,
-    Json(body): Json<UpdateBoardBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    let author = body.author.as_deref().unwrap_or("system");
-    let content = body.content.as_deref().unwrap_or("");
-    let entry = mgr
-        .upsert_board_entry(
-            db,
-            &ws_id,
-            &section,
-            body.title.as_deref(),
-            content,
-            author,
-            &now,
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::to_value(&entry).unwrap_or_default()))
-}
-
-// ===== Cowork Tasks =====
-
-#[derive(Deserialize)]
-pub(crate) struct TasksQuery {
-    status: Option<String>,
-}
-
-pub(crate) async fn cowork_tasks_list(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Query(q): Query<TasksQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let tasks = mgr
-        .list_tasks(db, &ws_id, q.status.as_deref())
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "tasks": tasks })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CreateTaskBody {
-    title: String,
-    description: Option<String>,
-    assignee: Option<String>,
-    reviewer: Option<String>,
-    priority: Option<String>,
-    #[serde(rename = "dependsOn")]
-    depends_on: Option<String>,
-    #[serde(rename = "createdBy")]
-    created_by: Option<String>,
-    attachments: Option<Vec<String>>,
-}
-
-pub(crate) async fn cowork_tasks_create(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Json(body): Json<CreateTaskBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    let created_by = body.created_by.as_deref().unwrap_or("user");
-    let attachments_json = body
-        .attachments
-        .as_ref()
-        .and_then(|v| serde_json::to_string(v).ok());
-    let task = mgr
-        .create_task(
-            db,
-            &ws_id,
-            &body.title,
-            body.description.as_deref(),
-            body.assignee.as_deref(),
-            body.reviewer.as_deref(),
-            body.priority.as_deref(),
-            body.depends_on.as_deref(),
-            created_by,
-            attachments_json.as_deref(),
-            &now,
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::to_value(&task).unwrap_or_default()))
-}
-
-pub(crate) async fn cowork_tasks_get(
-    State(s): State<Arc<UiState>>,
-    AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let task = mgr
-        .get_task(db, &task_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Task not found".into()))?;
-    Ok(Json(serde_json::to_value(&task).unwrap_or_default()))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateTaskBody {
-    title: Option<String>,
-    description: Option<String>,
-    status: Option<String>,
-    assignee: Option<String>,
-    reviewer: Option<String>,
-    priority: Option<String>,
-    #[serde(rename = "dependsOn")]
-    depends_on: Option<String>,
-    attachments: Option<String>,
-}
-
-pub(crate) async fn cowork_tasks_update(
-    State(s): State<Arc<UiState>>,
-    AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
-    Json(body): Json<UpdateTaskBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = s.cowork_manager.as_ref().ok_or_else(|| {
-        AppError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Cowork not initialized".into(),
-        )
-    })?;
-    let db =
-        s.db.as_ref()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "DB not available".into()))?;
-    let now = now_iso();
-    let agent_api = s.cowork_agent_api.clone();
-
-    if let Some(api) = agent_api {
-        mgr.update_task_with_triggers(
-            db,
-            &task_id,
-            body.title.as_deref(),
-            body.description.as_deref(),
-            body.status.as_deref(),
-            body.assignee.as_deref(),
-            body.reviewer.as_deref(),
-            body.priority.as_deref(),
-            body.depends_on.as_deref(),
-            body.attachments.as_deref(),
-            &now,
-            Some(api),
-            Arc::clone(mgr),
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    } else {
-        mgr.update_task(
-            db,
-            &task_id,
-            body.title.as_deref(),
-            body.description.as_deref(),
-            body.status.as_deref(),
-            body.assignee.as_deref(),
-            body.reviewer.as_deref(),
-            body.priority.as_deref(),
-            body.depends_on.as_deref(),
-            body.attachments.as_deref(),
-            &now,
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-
-    let task = mgr
-        .get_task(db, &task_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Task not found".into()))?;
-    Ok(Json(serde_json::to_value(&task).unwrap_or_default()))
-}
-
-pub(crate) async fn cowork_tasks_delete(
-    State(s): State<Arc<UiState>>,
-    AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    mgr.delete_task(db, &task_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
-}
-
-// ===== Cowork Task Comments =====
-
-pub(crate) async fn cowork_task_comments_list(
-    State(s): State<Arc<UiState>>,
-    AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let comments = mgr
-        .list_task_comments(db, &task_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "comments": comments })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct AddCommentBody {
-    author: String,
-    content: String,
-}
-
-pub(crate) async fn cowork_task_comments_add(
-    State(s): State<Arc<UiState>>,
-    AxumPath((_ws_id, task_id)): AxumPath<(String, String)>,
-    Json(body): Json<AddCommentBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    let id = mgr
-        .add_task_comment(db, &task_id, &body.author, &body.content, &now)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "id": id })))
-}
-
-// ===== Cowork Messages =====
-
-#[derive(Deserialize)]
-pub(crate) struct MessagesQuery {
-    limit: Option<u32>,
-    since: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SendMessageBody {
-    from_member: String,
-    content: String,
-    #[serde(default = "default_message_type")]
-    message_type: String,
-}
-
-fn default_message_type() -> String {
-    "status".to_string()
-}
-
-pub(crate) async fn cowork_messages_send(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    axum::extract::Json(body): axum::extract::Json<SendMessageBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let now = now_iso();
-    let mgr_arc = s
-        .cowork_manager
-        .as_ref()
-        .ok_or_else(|| {
-            AppError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Cowork not initialized".into(),
-            )
-        })?
-        .clone();
-    let agent_api = s
-        .cowork_agent_api
-        .as_ref()
-        .map(|api| (Arc::clone(api), Arc::clone(s.db.as_ref().unwrap())));
-    let (msg, tasks) = mgr
-        .process_user_message(
-            db,
-            &ws_id,
-            &body.from_member,
-            &body.content,
-            Some(body.message_type.as_str()),
-            &now,
-            agent_api,
-            mgr_arc,
-        )
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "message": msg, "tasks": tasks })))
-}
-
-pub(crate) async fn cowork_messages_list(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Query(q): Query<MessagesQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db = cowork_db(&s)?;
-    let limit = q.limit.unwrap_or(50);
-    let msgs = db
-        .list_cowork_messages(&ws_id, limit, q.since.as_deref())
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "messages": msgs })))
-}
-
-// ===== Cowork Documents =====
-
-pub(crate) async fn cowork_documents_upload(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    mut multipart: Multipart,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-
-    // Verify workspace exists
-    let ws = mgr
-        .get_workspace(db, &ws_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
-
-    let mut saved = Vec::new();
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = match field.file_name() {
-            Some(n) => n.to_string(),
-            None => field.name().unwrap_or("document").to_string(),
-        };
-        let data = field.bytes().await.map_err(|e| {
-            AppError(
-                StatusCode::BAD_REQUEST,
-                format!("Failed to read field: {e}"),
-            )
-        })?;
-
-        let docs_dir = PathBuf::from(&ws.root_dir).join("shared");
-        fs::create_dir_all(&docs_dir).ok();
-
-        let safe_name = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-        let path = docs_dir.join(&safe_name);
-        fs::write(&path, &data).map_err(|e| {
-            AppError(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to save: {e}"),
-            )
-        })?;
-        saved.push(serde_json::json!({
-            "name": safe_name,
-            "size": data.len(),
-            "path": path.to_string_lossy(),
-        }));
-    }
-
-    Ok(Json(serde_json::json!({ "documents": saved })))
-}
-
-// ===== Cowork Files =====
-
-#[derive(Deserialize)]
-pub(crate) struct FilesQuery {
-    pub(crate) path: Option<String>,
-}
-
-pub(crate) async fn cowork_files_list(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Query(q): Query<FilesQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let ws = mgr
-        .get_workspace(db, &ws_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
-
-    let base = PathBuf::from(&ws.root_dir);
-
-    if let Some(ref file_path) = q.path {
-        // Read specific file content
-        let full_path = if file_path.starts_with('/') {
-            // Absolute path — resolve relative to workspace root
-            let relative = file_path.trim_start_matches('/');
-            base.join(relative)
-        } else {
-            base.join(file_path)
-        };
-
-        // Security: must be within workspace root
-        if !full_path.starts_with(&base) {
-            return Err(AppError(
-                StatusCode::FORBIDDEN,
-                "Path outside workspace".into(),
-            ));
-        }
-        if !full_path.exists() {
-            return Err(AppError(StatusCode::NOT_FOUND, "File not found".into()));
-        }
-        if !full_path.is_file() {
-            return Err(AppError(StatusCode::BAD_REQUEST, "Not a file".into()));
-        }
-
-        let mime = path_to_mime(&full_path.to_string_lossy());
-        let size = full_path.metadata().map(|m| m.len()).unwrap_or(0);
-
-        // Try reading as text first - a file is binary if:
-        // 1. It can't be read as valid UTF-8, OR
-        // 2. Its content contains null bytes
-        let content_result = fs::read_to_string(&full_path);
-        let is_binary = match &content_result {
-            Ok(text) => text.contains('\0'),
-            Err(_) => true, // Failed to read as UTF-8, treat as binary
-        };
-
-        let content = if is_binary {
-            // Read bytes and create hex preview
-            let bytes = fs::read(&full_path).map_err(|e| {
-                AppError(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to read: {e}"),
-                )
-            })?;
-            let hex_preview = format_hex_preview(&bytes, 256); // First 256 bytes
-            format!(
-                "[Binary file - {} bytes]\n\nHex preview (first {} bytes):\n{}",
-                size,
-                bytes.len().min(256),
-                hex_preview
-            )
-        } else {
-            content_result.map_err(|e| {
-                AppError(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to read: {e}"),
-                )
-            })?
-        };
-
-        Ok(Json(serde_json::json!({
-            "path": full_path.strip_prefix(&base).unwrap_or(&full_path).to_string_lossy(),
-            "content": content,
-            "mime": mime,
-            "isBinary": is_binary,
-            "size": size,
-        })))
-    } else {
-        // List files recursively
-        let mut files = Vec::new();
-        list_files_recursive(&base, &base, &mut files);
-        Ok(Json(serde_json::json!({ "files": files })))
-    }
-}
-
-fn list_files_recursive(dir: &PathBuf, base: &PathBuf, out: &mut Vec<serde_json::Value>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let relative = path.strip_prefix(base).unwrap_or(&path).to_string_lossy();
-            let is_dir = path.is_dir();
-            if let Ok(meta) = path.metadata() {
-                out.push(serde_json::json!({
-                    "name": path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-                    "path": relative,
-                    "isDir": is_dir,
-                    "size": meta.len(),
-                    "modified": meta.modified().ok().map(|t| {
-                        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-                    }),
-                }));
-            }
-            if is_dir {
-                list_files_recursive(&path, base, out);
-            }
-        }
-    }
-}
-
-pub(crate) async fn cowork_files_download(
-    State(s): State<Arc<UiState>>,
-    AxumPath(ws_id): AxumPath<String>,
-    Query(q): Query<FilesQuery>,
-) -> Result<Response, AppError> {
-    let mgr = cowork_mgr(&s)?;
-    let db = cowork_db(&s)?;
-    let ws = mgr
-        .get_workspace(db, &ws_id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Workspace not found".into()))?;
-
-    let file_path = q
-        .path
-        .as_deref()
-        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "Missing ?path=".into()))?;
-    let base = PathBuf::from(&ws.root_dir);
-    let full_path = if file_path.starts_with('/') {
-        base.join(file_path.trim_start_matches('/'))
-    } else {
-        base.join(file_path)
-    };
-
-    if !full_path.starts_with(&base) || !full_path.exists() || !full_path.is_file() {
-        return Err(AppError(StatusCode::NOT_FOUND, "File not found".into()));
-    }
-
-    let content = fs::read(&full_path).map_err(|e| {
-        AppError(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read: {e}"),
-        )
-    })?;
-    let filename = full_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "download".into());
-    let mime = path_to_mime(&filename);
-
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime)
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename),
-        )
-        .header(header::CONTENT_LENGTH, content.len().to_string())
-        .body(Body::from(content))
-        .unwrap())
-}
-
-// ── Workspace Resources ──────────────────────────────────────────────────────
-
-pub async fn cowork_ws_resources_list(
-    State(s): State<Arc<UiState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db =
-        s.db.as_ref()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
-    let resources = db
-        .list_workspace_resources(&id)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "resources": resources })))
-}
-
-#[derive(Deserialize)]
-pub struct UpsertResourceBody {
-    kind: String,
-    path: String,
-}
-
-pub async fn cowork_ws_resource_upsert(
-    State(s): State<Arc<UiState>>,
-    AxumPath(id): AxumPath<String>,
-    Json(body): Json<UpsertResourceBody>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let db =
-        s.db.as_ref()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
-    let mgr = cowork_mgr(&s)?;
-    let valid_kinds = ["raw", "wiki", "reference", "workdir"];
-    if !valid_kinds.contains(&body.kind.as_str()) {
+    Json(body): Json<CreateTeamBody>,
+) -> Result<Json<TeamView>, AppError> {
+    if body.name.trim().is_empty() || body.manager_folder.trim().is_empty() {
         return Err(AppError(
             StatusCode::BAD_REQUEST,
-            format!(
-                "invalid kind '{}', must be one of: raw, wiki, reference, workdir",
-                body.kind
-            ),
+            "name and manager_folder are required".into(),
         ));
     }
-    fs::create_dir_all(&body.path).ok();
-    mgr.upsert_resource(db, &id, &body.kind, &body.path)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(
-        serde_json::json!({ "workspaceId": id, "kind": body.kind, "path": body.path }),
-    ))
+    let db = db(&s)?;
+
+    // Helper: ensure agent profile exists for a folder slug.
+    // If the agent isn't in DB, try to bootstrap from PersonaRegistry
+    // (built-in or user-defined persona md). Returns true if usable.
+    let ensure_agent = |slug: &str| -> bool {
+        if slug.trim().is_empty() {
+            return false;
+        }
+        if db.get_agent_by_folder(slug).map(|o| o.is_some()).unwrap_or(false) {
+            return true;
+        }
+        // Try to seed from persona file.
+        let core_prompt = s
+            .persona_registry
+            .as_ref()
+            .and_then(|r| r.lock().ok().and_then(|g| g.get(slug).map(|p| p.system_prompt.clone())))
+            .unwrap_or_default();
+        let now = local_iso_string_now();
+        if db
+            .insert_agent(slug, slug, false, None, None, &core_prompt, None, &now)
+            .is_err()
+        {
+            return false;
+        }
+        crate::gateway::group_manager::ensure_agent_dirs(&s.config, slug, slug);
+        if !core_prompt.trim().is_empty() {
+            crate::gateway::group_manager::write_soul_md(&s.config, slug, slug, &core_prompt);
+        }
+        true
+    };
+
+    // Manager must resolve (existing agent OR known persona we can seed).
+    if !ensure_agent(&body.manager_folder) {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            format!("manager not found and no persona named {}", body.manager_folder),
+        ));
+    }
+
+    // Members are PERSONAS — independent of the Profile/agent table.
+    // We DO NOT auto-create agent rows here. Instead we accept any
+    // non-empty slug; if a persona file with that slug doesn't yet exist,
+    // the user can author one via the cowork persona endpoint. The
+    // dispatch path runs members via PersonaRegistry, not AgentPool.
+    let mut members: Vec<TeamMember> = Vec::new();
+    for m in body.members.iter() {
+        let slug = m.trim();
+        if !slug.is_empty() {
+            members.push(TeamMember::from_folder(slug.to_string()));
+        }
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let now = local_iso_string_now();
+    let team = CoworkTeam {
+        id: id.clone(),
+        name: body.name.trim().to_string(),
+        manager_folder: body.manager_folder.trim().to_string(),
+        members: members.clone(),
+        workspace_dir: body
+            .workspace_dir
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        created_at: now.clone(),
+    };
+
+    db.insert_cowork_team(&team)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+
+    // Materialise the chat group so the team is immediately reachable.
+    // Uses the existing group_manager.register path (creates SOUL.md /
+    // MEMORY.md if missing for the manager folder, broadcasts to clients).
+    let jid = format!("cowork:{id}");
+    let binding = GroupBinding {
+        jid: jid.clone(),
+        folder: team.manager_folder.clone(),
+        name: team.name.clone(),
+        channel: String::new(),
+        group_type: "cowork".to_string(),
+        is_admin: false,
+        requires_trigger: false,
+        allowed_tools: None,
+        allowed_paths: None,
+        allowed_work_dirs: team.workspace_dir.as_ref().map(|w| vec![w.clone()]),
+        bot_token: None,
+        max_messages: None,
+        llm_config_id: None,
+        last_active: None,
+        added_at: now,
+    };
+    s.group_manager
+        .as_ref()
+        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "group_manager not wired".into()))?
+        .register(&db, &s.config, &binding);
+
+    Ok(Json(to_view(team)))
 }
 
-pub async fn cowork_ws_resource_delete(
+/// GET /api/cowork/templates
+///
+/// Returns the built-in team templates the user can spin up with one click.
+/// Members reference persona files (built-in or user-defined) — the create
+/// flow turns each persona into a regular agent profile if it doesn't
+/// already exist.
+pub(crate) async fn list_templates(
+    State(_s): State<Arc<UiState>>,
+) -> Json<Vec<TeamTemplate>> {
+    Json(BUILTIN_TEMPLATES.to_vec())
+}
+
+/// GET /api/cowork/personas
+///
+/// Returns the names of personas available for picking as members. Sourced
+/// from the live PersonaRegistry so both built-in and user-defined
+/// personas surface in the picker.
+#[derive(Debug, Serialize)]
+pub(crate) struct PersonaView {
+    pub name: String,
+    pub description: String,
+}
+
+pub(crate) async fn list_personas(
     State(s): State<Arc<UiState>>,
-    AxumPath((id, kind)): AxumPath<(String, String)>,
+) -> Result<Json<Vec<PersonaView>>, AppError> {
+    let reg = s
+        .persona_registry
+        .as_ref()
+        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "persona_registry not wired".into()))?;
+    let guard = reg
+        .lock()
+        .map_err(|_| AppError(StatusCode::INTERNAL_SERVER_ERROR, "persona_registry poisoned".into()))?;
+    let personas = guard
+        .list()
+        .into_iter()
+        .map(|p| PersonaView {
+            name: p.name.clone(),
+            description: p.description.clone(),
+        })
+        .collect();
+    Ok(Json(personas))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct InstantiateTemplateBody {
+    pub template_id: String,
+    /// Optional user-provided name override.
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
+}
+
+/// POST /api/cowork/teams/from-template
+///
+/// Spin up a team from a built-in template. The template's persona names
+/// are mapped to agent folders — if an agent for a persona doesn't exist
+/// yet, this auto-creates one with the persona's SOUL.md as core_prompt.
+pub(crate) async fn create_from_template(
+    State(s): State<Arc<UiState>>,
+    Json(body): Json<InstantiateTemplateBody>,
+) -> Result<Json<TeamView>, AppError> {
+    let tmpl = BUILTIN_TEMPLATES
+        .iter()
+        .find(|t| t.id == body.template_id)
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::NOT_FOUND,
+                format!("template not found: {}", body.template_id),
+            )
+        })?;
+
+    let db = db(&s)?;
+
+    // Ensure each persona has a corresponding agent profile (folder).
+    // The persona name itself becomes the folder slug.
+    let ensure_agent = |slug: &str| -> Result<(), AppError> {
+        if db
+            .get_agent_by_folder(slug)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        // Look up persona content via the registry to seed SOUL.md.
+        let core_prompt = s
+            .persona_registry
+            .as_ref()
+            .and_then(|r| r.lock().ok().and_then(|g| g.get(slug).map(|p| p.system_prompt.clone())))
+            .unwrap_or_default();
+        let now = local_iso_string_now();
+        // Use the agent_manager via UiState's existing path if available;
+        // otherwise insert directly.
+        db.insert_agent(slug, slug, false, None, None, &core_prompt, None, &now)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("agent create {slug}: {e}")))?;
+        // Write SOUL.md + scaffold dirs.
+        crate::gateway::group_manager::ensure_agent_dirs(&s.config, slug, slug);
+        if !core_prompt.trim().is_empty() {
+            crate::gateway::group_manager::write_soul_md(&s.config, slug, slug, &core_prompt);
+        }
+        Ok(())
+    };
+    ensure_agent(tmpl.manager)?;
+    // Seed persona files for each member into virtual-agents/ (no agent
+    // row created — members are personas, not Profiles, per v0.7).
+    let seed_persona = |slug: &str, role: &str, resp: &str| {
+        let dest = s.config.paths.virtual_agents_dir.join(format!("{slug}.md"));
+        if dest.exists() {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&s.config.paths.virtual_agents_dir);
+        let body = format!(
+            "---\nname: {slug}\ndescription: {role} — {resp}\nrole: {role}\n---\n\n# Responsibilities\n\n{resp}\n\n# How you work\n\n\
+             You are a specialist member of a cowork team. Take the task the lead delegates to you, \
+             do exactly that scope, and report results concisely. Do not branch into other roles.\n"
+        );
+        let _ = std::fs::write(dest, body);
+    };
+    for m in tmpl.members.iter() {
+        seed_persona(m.folder, m.role, m.responsibilities);
+    }
+
+    // Reuse create_team via direct CoworkTeam construction. Members carry
+    // their template-supplied role / responsibilities / triggers so the
+    // freshly minted team is dispatch-ready without manual edits.
+    let id = Uuid::new_v4().to_string();
+    let now = local_iso_string_now();
+    let team = CoworkTeam {
+        id: id.clone(),
+        name: body
+            .name
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| tmpl.name.to_string()),
+        manager_folder: tmpl.manager.to_string(),
+        members: tmpl
+            .members
+            .iter()
+            .map(|m| TeamMember {
+                folder: m.folder.to_string(),
+                role: Some(m.role.to_string()),
+                responsibilities: Some(m.responsibilities.to_string()),
+                triggers: Some(m.triggers_json.to_string()),
+                ..Default::default()
+            })
+            .collect(),
+        workspace_dir: body
+            .workspace_dir
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        created_at: now.clone(),
+    };
+    db.insert_cowork_team(&team)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    let jid = format!("cowork:{id}");
+    let binding = GroupBinding {
+        jid: jid.clone(),
+        folder: team.manager_folder.clone(),
+        name: team.name.clone(),
+        channel: String::new(),
+        group_type: "cowork".to_string(),
+        is_admin: false,
+        requires_trigger: false,
+        allowed_tools: None,
+        allowed_paths: None,
+        allowed_work_dirs: team.workspace_dir.as_ref().map(|w| vec![w.clone()]),
+        bot_token: None,
+        max_messages: None,
+        llm_config_id: None,
+        last_active: None,
+        added_at: now,
+    };
+    if let Some(gm) = s.group_manager.as_ref() {
+        gm.register(&db, &s.config, &binding);
+    }
+    Ok(Json(to_view(team)))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateMemberBody {
+    /// Folder slug of the member to upsert. Required.
+    pub folder: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub responsibilities: Option<String>,
+    /// Trigger config — free-form text (cron expression, keyword list,
+    /// JSON event matcher) the manager uses to decide when to delegate.
+    #[serde(default)]
+    pub triggers: Option<String>,
+    #[serde(default)]
+    pub handoff_rules: Option<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Option<String>,
+    #[serde(default)]
+    pub output_format: Option<String>,
+    #[serde(default)]
+    pub sla: Option<String>,
+    #[serde(default)]
+    pub limits: Option<String>,
+}
+
+/// PUT /api/cowork/teams/:id/members
+///
+/// Upsert a single member's rich metadata (trigger, role, responsibilities,
+/// handoff rules, etc.). If a member with this folder is not in the team
+/// yet, it's appended; otherwise its fields are replaced. Returns the
+/// updated team view.
+pub(crate) async fn update_team_member(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<UpdateMemberBody>,
+) -> Result<Json<TeamView>, AppError> {
+    if body.folder.trim().is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "folder is required".into()));
+    }
+    let db = db(&s)?;
+    let mut team = db
+        .get_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("team not found: {id}")))?;
+
+    let folder = body.folder.trim().to_string();
+    let new_member = TeamMember {
+        folder: folder.clone(),
+        role: body.role.filter(|s| !s.trim().is_empty()),
+        responsibilities: body.responsibilities.filter(|s| !s.trim().is_empty()),
+        triggers: body.triggers.filter(|s| !s.trim().is_empty()),
+        handoff_rules: body.handoff_rules.filter(|s| !s.trim().is_empty()),
+        acceptance_criteria: body.acceptance_criteria.filter(|s| !s.trim().is_empty()),
+        output_format: body.output_format.filter(|s| !s.trim().is_empty()),
+        sla: body.sla.filter(|s| !s.trim().is_empty()),
+        limits: body.limits.filter(|s| !s.trim().is_empty()),
+    };
+
+    if let Some(existing) = team.members.iter_mut().find(|m| m.folder == folder) {
+        *existing = new_member;
+    } else {
+        team.members.push(new_member);
+    }
+
+    db.update_cowork_team_members(&id, &team.members)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+
+    Ok(Json(to_view(team)))
+}
+
+/// DELETE /api/cowork/teams/:id/members/:folder
+///
+/// Remove a member from the team. The agent profile (and its SOUL.md /
+/// MEMORY.md / chat history) is preserved — only the team membership row
+/// goes away. Returns the updated team view.
+pub(crate) async fn remove_team_member(
+    State(s): State<Arc<UiState>>,
+    AxumPath((id, folder)): AxumPath<(String, String)>,
+) -> Result<Json<TeamView>, AppError> {
+    let db = db(&s)?;
+    let mut team = db
+        .get_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("team not found: {id}")))?;
+
+    team.members.retain(|m| m.folder != folder);
+    db.update_cowork_team_members(&id, &team.members)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(to_view(team)))
+}
+
+/// DELETE /api/cowork/teams/:id
+///
+/// Removes the team row AND its materialised chat group so the sidebar
+/// stops showing it. Messages persisted to the group's history stay in
+/// the DB (deliberate — same as deleting any regular chat).
+pub(crate) async fn delete_team(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db =
-        s.db.as_ref()
-            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db not available".into()))?;
-    let mgr = cowork_mgr(&s)?;
-    mgr.delete_resource(db, &id, &kind)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let db = db(&s)?;
+    let jid = format!("cowork:{id}");
+    db.delete_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    // Cascade: tasks owned by this team go away with it.
+    let _ = db.delete_cowork_team_tasks_for_team(&id);
+    if let Some(gm) = s.group_manager.as_ref() {
+        gm.unregister(&db, &s.config, &jid);
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ─── Cowork-only persona files ───────────────────────────────────────────────
+//
+// Cowork team MEMBERS are independent of user-facing Profiles. Each member
+// is just a persona file living under `virtual_agents_dir/<name>.md`. These
+// endpoints let the cowork UI read/write those files without touching the
+// `agents` DB table (which is reserved for user Profiles).
+//
+// The same flat namespace is shared by all teams — `name` is a slug like
+// `browser-agent` or `mvp-reviewer`. New names auto-create a fresh persona
+// file (so the cowork "add member" flow can spawn brand-new specialists).
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PersonaFileView {
+    pub name: String,
+    pub content: String,
+    pub exists: bool,
+}
+
+fn persona_file_path(s: &UiState, name: &str) -> Result<std::path::PathBuf, AppError> {
+    let slug = name.trim();
+    if slug.is_empty()
+        || slug.contains('/')
+        || slug.contains("..")
+        || slug.contains('\\')
+    {
+        return Err(AppError(StatusCode::BAD_REQUEST, "invalid persona name".into()));
+    }
+    Ok(s.config.paths.virtual_agents_dir.join(format!("{slug}.md")))
+}
+
+/// GET /api/cowork/personas/:name/file
+pub(crate) async fn get_persona_file(
+    State(s): State<Arc<UiState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<PersonaFileView>, AppError> {
+    let path = persona_file_path(&s, &name)?;
+    let (content, exists) = match std::fs::read_to_string(&path) {
+        Ok(c) => (c, true),
+        Err(_) => (String::new(), false),
+    };
+    Ok(Json(PersonaFileView { name, content, exists }))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PutPersonaFileBody {
+    pub content: String,
+}
+
+/// PUT /api/cowork/personas/:name/file
+///
+/// Writes the persona markdown to disk. Creates the file if it didn't exist.
+/// PersonaRegistry's hot-reload watcher will pick the change up within ~1.5s.
+pub(crate) async fn put_persona_file(
+    State(s): State<Arc<UiState>>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<PutPersonaFileBody>,
+) -> Result<Json<PersonaFileView>, AppError> {
+    let path = persona_file_path(&s, &name)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir: {e}")))?;
+    }
+    std::fs::write(&path, &body.content)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("write: {e}")))?;
+    Ok(Json(PersonaFileView {
+        name,
+        content: body.content,
+        exists: true,
+    }))
+}
+
+// ─── Tasks ──────────────────────────────────────────────────────────────────
+
+/// GET /api/cowork/teams/:id/tasks
+pub(crate) async fn list_team_tasks(
+    State(s): State<Arc<UiState>>,
+    AxumPath(team_id): AxumPath<String>,
+) -> Result<Json<Vec<CoworkTeamTask>>, AppError> {
+    let db = db(&s)?;
+    let tasks = db
+        .list_cowork_team_tasks(&team_id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(tasks))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateTaskBody {
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub reviewer: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+    #[serde(default)]
+    pub due_at: Option<String>,
+}
+
+/// POST /api/cowork/teams/:id/tasks
+pub(crate) async fn create_team_task(
+    State(s): State<Arc<UiState>>,
+    AxumPath(team_id): AxumPath<String>,
+    Json(body): Json<CreateTaskBody>,
+) -> Result<Json<CoworkTeamTask>, AppError> {
+    if body.title.trim().is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "title is required".into()));
+    }
+    let db = db(&s)?;
+    // Verify team exists.
+    db.get_cowork_team(&team_id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("team not found: {team_id}")))?;
+
+    let now = local_iso_string_now();
+    let task = CoworkTeamTask {
+        id: Uuid::new_v4().to_string(),
+        team_id: team_id.clone(),
+        title: body.title.trim().to_string(),
+        description: body.description.filter(|s| !s.trim().is_empty()),
+        status: body
+            .status
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "todo".into()),
+        assignee: body.assignee.filter(|s| !s.trim().is_empty()),
+        reviewer: body.reviewer.filter(|s| !s.trim().is_empty()),
+        priority: body
+            .priority
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "medium".into()),
+        depends_on: body.depends_on.unwrap_or_default(),
+        result_output: None,
+        created_at: now.clone(),
+        updated_at: now,
+        due_at: body.due_at.filter(|s| !s.trim().is_empty()),
+        completed_at: None,
+    };
+    db.insert_cowork_team_task(&task)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(task))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateTaskBody {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub assignee: Option<String>,
+    pub reviewer: Option<String>,
+    pub priority: Option<String>,
+    pub depends_on: Option<Vec<String>>,
+    pub result_output: Option<String>,
+    pub due_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+/// PATCH /api/cowork/teams/:team_id/tasks/:task_id
+pub(crate) async fn update_team_task(
+    State(s): State<Arc<UiState>>,
+    AxumPath((_team_id, task_id)): AxumPath<(String, String)>,
+    Json(body): Json<UpdateTaskBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    let now = local_iso_string_now();
+    db.update_cowork_team_task(
+        &task_id,
+        body.title.as_deref(),
+        body.description.as_deref(),
+        body.status.as_deref(),
+        body.assignee.as_deref(),
+        body.reviewer.as_deref(),
+        body.priority.as_deref(),
+        body.depends_on.as_deref(),
+        body.result_output.as_deref(),
+        body.due_at.as_deref(),
+        body.completed_at.as_deref(),
+        &now,
+    )
+    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// DELETE /api/cowork/teams/:team_id/tasks/:task_id
+pub(crate) async fn delete_team_task(
+    State(s): State<Arc<UiState>>,
+    AxumPath((_team_id, task_id)): AxumPath<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    db.delete_cowork_team_task(&task_id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

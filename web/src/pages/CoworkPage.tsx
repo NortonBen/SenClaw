@@ -1,2242 +1,628 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Typography, Button, Card, Space, Tag, Modal, Form, Input, Select,
-  Breadcrumb, Layout, Flex, Tabs, Badge, Avatar, Tooltip, Popconfirm,
-  Empty, Dropdown, List, Divider, message, Spin, Segmented, Upload, Statistic,
-  Row, Col, Progress, Steps, Timeline, Collapse, AutoComplete
+  TriggerEditor, parseTriggerJson, stringifyTriggers, summarizeTriggers,
+  type TriggerRule,
+} from '../components/cowork/TriggerEditor';
+import {
+  Layout, theme, Empty, Button, Modal, Form, Input, Select, message, Card, Tag, Popconfirm, Typography,
 } from 'antd';
 import {
-  PlusOutlined, TeamOutlined, ProjectOutlined, MessageOutlined,
-  AppstoreOutlined, DeleteOutlined, EditOutlined, HomeOutlined,
-  CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined,
-  PauseCircleOutlined, ThunderboltOutlined, UserOutlined,
-  RobotOutlined, ReloadOutlined, MoreOutlined,
-  BugOutlined, ArrowRightOutlined, InboxOutlined,
-  FileOutlined, FileTextOutlined, FolderOutlined, FolderOpenOutlined, DownloadOutlined, UploadOutlined, PaperClipOutlined,
-  LaptopOutlined, CloudOutlined, BranchesOutlined, LoadingOutlined,
-  NodeIndexOutlined, ApartmentOutlined, CrownOutlined
+  CoffeeOutlined, PlusOutlined, DeleteOutlined, TeamOutlined, UserOutlined, FolderOpenOutlined,
 } from '@ant-design/icons';
-import type { DispatchParent, DispatchTask as DTask } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
-import { CoworkSidebar } from '../components/CoworkSidebar';
-import { CommonChatInput } from '../components/chat-common';
-import { ResourcePanel } from '../components/cowork/ResourcePanel';
-import { TaskResultCard } from '../components/cowork/TaskResultCard';
-import { WorkspaceChatPanel } from '../components/cowork/WorkspaceChatPanel';
-import { AgentCard } from '../components/cowork/AgentCard';
-import type {
-  CoworkWorkspace, CoworkBoardEntry,
-  CoworkTask, CoworkMessage, CoworkTemplate, CoworkMember,
-  ToolMessage, ChatMessage,
-} from '../types';
+import { SessionList } from '../components/Sidebar';
 
-const { Title, Text, Paragraph } = Typography;
 const { Content } = Layout;
-const { TextArea } = Input;
+const { Title, Text, Paragraph } = Typography;
 
-const STATUS_COLORS: Record<string, string> = {
-  backlog: '#8c8c8c', todo: '#1890ff', in_progress: '#faad14',
-  review: '#722ed1', done: '#52c41a', blocked: '#ff4d4f',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  backlog: 'Backlog', todo: 'To Do', in_progress: 'In Progress',
-  review: 'Review', done: 'Done', blocked: 'Blocked',
-};
-
-const PRIORITY_COLORS: Record<string, string> = {
-  low: '#8c8c8c', medium: '#1890ff', high: '#fa8c16', critical: '#ff4d4f',
-};
-
-const BOARD_SECTIONS = ['brief', 'guidelines', 'progress', 'reference', 'decisions'];
-
-const KANBAN_COLUMNS: CoworkTask['status'][] = ['backlog', 'todo', 'in_progress', 'done', 'blocked'];
-
-/** Form rows for Handoff tab — persisted as JSON array in `handoffRules`. */
-interface HandoffRuleFormRow {
-  when: string;
-  to: string;
-  type: string;
-  messageTemplate?: string;
+const PINNED_KEY = 'senclaw:pinned-jids';
+function loadPinned(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(PINNED_KEY) ?? '[]')); } catch { return new Set(); }
 }
 
-const HANDOFF_WHEN_PRESETS = [
-  { value: 'task_complete', label: 'Task complete' },
-  { value: 'task_blocked', label: 'Task blocked' },
-];
-
-const HANDOFF_TYPE_OPTIONS = [
-  { value: 'handoff', label: 'Handoff' },
-  { value: 'review_request', label: 'Review request' },
-  { value: 'result', label: 'Result' },
-  { value: 'status', label: 'Status' },
-  { value: 'alert', label: 'Alert' },
-];
-
-function normalizeHandoffRuleFromJson(r: Record<string, unknown>): HandoffRuleFormRow {
-  return {
-    when: typeof r.when === 'string' ? r.when : '',
-    to: typeof r.to === 'string' ? r.to : '',
-    type: typeof r.type === 'string' ? r.type : 'handoff',
-    messageTemplate: typeof r.messageTemplate === 'string' ? r.messageTemplate : '',
-  };
+interface TeamMember {
+  folder: string;
+  role?: string;
+  responsibilities?: string;
+  triggers?: string;
+  handoff_rules?: string;
+  acceptance_criteria?: string;
+  output_format?: string;
+  sla?: string;
+  limits?: string;
 }
 
-function serializeHandoffRulesList(list: HandoffRuleFormRow[]): string {
-  const cleaned = list
-    .map((r) => ({
-      when: String(r.when || '').trim(),
-      to: String(r.to || '').trim(),
-      type: String(r.type || '').trim(),
-      messageTemplate: (() => {
-        const t = r.messageTemplate != null ? String(r.messageTemplate).trim() : '';
-        return t.length > 0 ? t : null;
-      })(),
-    }))
-    .filter((r) => r.when && r.to && r.type);
-  return JSON.stringify(cleaned);
+interface CoworkTeam {
+  id: string;
+  name: string;
+  manager_folder: string;
+  members: TeamMember[];
+  workspace_dir: string | null;
+  created_at: string;
+  jid: string;
 }
 
-/** Form rows for Triggers tab — persisted as JSON array in `triggers`. */
-interface TriggerFormRow {
-  type: string;
-  condition?: string;
-  from?: string;
-  messageType?: string;
-  status?: string;
-  assignee?: string;
-  to?: string;
-  cron?: string;
-  section?: string;
-  only_if_result_contains?: string;
-  unless_result_contains?: string;
+interface TemplateMemberSpec {
+  folder: string;
+  role: string;
+  responsibilities: string;
+  triggers_json: string;
 }
 
-const TRIGGER_TYPE_PRESETS = [
-  { value: 'task_assigned', label: 'Task assigned' },
-  { value: 'message_received', label: 'Message received' },
-  { value: 'task_status_changed', label: 'Task status changed' },
-  { value: 'board_updated', label: 'Board updated' },
-  { value: 'schedule', label: 'Schedule (cron)' },
-];
-
-const TRIGGER_STATUS_OPTIONS = [
-  { value: 'done', label: 'Done' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'blocked', label: 'Blocked' },
-];
-
-function normalizeTriggerFromJson(r: Record<string, unknown>): TriggerFormRow {
-  return {
-    type: typeof r.type === 'string' ? r.type : '',
-    condition: typeof r.condition === 'string' ? r.condition : '',
-    from: typeof r.from === 'string' ? r.from : '',
-    messageType: typeof r.messageType === 'string' ? r.messageType : '',
-    status: typeof r.status === 'string' ? r.status : '',
-    assignee: typeof r.assignee === 'string' ? r.assignee : '',
-    to: typeof r.to === 'string' ? r.to : '',
-    cron: typeof r.cron === 'string' ? r.cron : '',
-    section: typeof r.section === 'string' ? r.section : '',
-    only_if_result_contains: typeof r.only_if_result_contains === 'string' ? r.only_if_result_contains : '',
-    unless_result_contains: typeof r.unless_result_contains === 'string' ? r.unless_result_contains : '',
-  };
-}
-
-function serializeTriggersList(list: TriggerFormRow[]): string {
-  const cleaned = list
-    .map((r) => {
-      const obj: Record<string, unknown> = {
-        type: String(r.type || '').trim(),
-      };
-      
-      // Add fields based on trigger type
-      if (r.condition) obj.condition = String(r.condition).trim();
-      if (r.from) obj.from = String(r.from).trim();
-      if (r.messageType) obj.messageType = String(r.messageType).trim();
-      if (r.status) obj.status = String(r.status).trim();
-      if (r.assignee) obj.assignee = String(r.assignee).trim();
-      if (r.to) obj.to = String(r.to).trim();
-      if (r.cron) obj.cron = String(r.cron).trim();
-      if (r.section) obj.section = String(r.section).trim();
-      if (r.only_if_result_contains) obj.only_if_result_contains = String(r.only_if_result_contains).trim();
-      if (r.unless_result_contains) obj.unless_result_contains = String(r.unless_result_contains).trim();
-      
-      return obj;
-    })
-    .filter((r) => r.type);
-  return JSON.stringify(cleaned);
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function renderMarkdown(md: string): string {
-  let html = md
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Headers
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    // Bold and italic
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Inline code
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // Code blocks
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-    // Links
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    // Line breaks
-    .replace(/\n/g, '<br/>');
-  return html;
+interface TeamTemplate {
+  id: string;
+  name: string;
+  description: string;
+  manager: string;
+  manager_role: string;
+  members: TemplateMemberSpec[];
+  icon: string;
 }
 
 export function CoworkPage() {
   const { ws } = useAppContext();
   const navigate = useNavigate();
-  const { lastTaskResult, coworkResourceChanged, messages: wsMessages } = ws;
-  const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
-
-  // State
-  const [workspaces, setWorkspaces] = useState<CoworkWorkspace[]>([]);
-  const [selectedWs, setSelectedWs] = useState<CoworkWorkspace | null>(null);
-  const [tasks, setTasks] = useState<CoworkTask[]>([]);
-  const [board, setBoard] = useState<CoworkBoardEntry[]>([]);
-  const [messages, setMessages] = useState<CoworkMessage[]>([]);
-  const [templates, setTemplates] = useState<CoworkTemplate[]>([]);
+  const { token } = theme.useToken();
+  const [pinnedJids] = useState<Set<string>>(loadPinned);
+  const [teams, setTeams] = useState<CoworkTeam[]>([]);
+  const [templates, setTemplates] = useState<TeamTemplate[]>([]);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState<string>('tasks');
-  const [wsFiles, setWsFiles] = useState<any[]>([]);
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string | null>(null);
-  const [fileIsBinary, setFileIsBinary] = useState(false);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [members, setMembers] = useState<CoworkMember[]>([]);
-
-  // Working directory browser state
-  const [resTab, setResTab] = useState<string>('workspace');
-  const [wdEntries, setWdEntries] = useState<any[]>([]);
-  const [wdPath, setWdPath] = useState<string>('');
-  const [wdLoading, setWdLoading] = useState(false);
-  const [wdContent, setWdContent] = useState<string | null>(null);
-  const [wdFilePath, setWdFilePath] = useState<string | null>(null);
-  // Workspace file tree navigation
-  const [wsNavPath, setWsNavPath] = useState<string>('');
-
-  // Modal states
-  const [wsModalOpen, setWsModalOpen] = useState(false);
-  const [taskModalOpen, setTaskModalOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState<CoworkTask | null>(null);
-  const [memberModalOpen, setMemberModalOpen] = useState(false);
-  const [editingMember, setEditingMember] = useState<CoworkMember | null>(null);
-  const [msgText, setMsgText] = useState('');
-  const [wsForm] = Form.useForm();
-  const [taskForm] = Form.useForm();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form] = Form.useForm();
+  // Member-trigger edit modal state
+  const [memberEditTeam, setMemberEditTeam] = useState<CoworkTeam | null>(null);
+  const [memberEditTarget, setMemberEditTarget] = useState<TeamMember | null>(null);
   const [memberForm] = Form.useForm();
+  const [editingTriggers, setEditingTriggers] = useState<TriggerRule[]>([]);
 
-  // Board edit dialog state
-  const [boardEditModalOpen, setBoardEditModalOpen] = useState(false);
-  const [boardEditSection, setBoardEditSection] = useState('');
-  const [boardEditContent, setBoardEditContent] = useState('');
-
-  // API helpers
-  const api = useCallback(async (path: string, opts?: RequestInit) => {
-    const resp = await fetch(path, opts);
-    if (!resp.ok) throw new Error(await resp.text());
-    return resp.json();
-  }, []);
-
-  const loadWorkspaces = useCallback(async () => {
-    try {
-      const data = await api('/api/cowork/workspaces');
-      setWorkspaces(data.workspaces || []);
-    } catch { /* ignore */ }
-  }, [api]);
-
-  const loadTemplates = useCallback(async () => {
-    try {
-      const data = await api('/api/cowork/templates');
-      setTemplates(data.templates || []);
-    } catch { /* ignore */ }
-  }, [api]);
-
-  const loadTasks = useCallback(async (wsId: string) => {
-    try {
-      const data = await api(`/api/cowork/workspaces/${wsId}/tasks`);
-      setTasks(data.tasks || []);
-    } catch { /* ignore */ }
-  }, [api]);
-
-  const loadBoard = useCallback(async (wsId: string) => {
-    try {
-      const data = await api(`/api/cowork/workspaces/${wsId}/board`);
-      setBoard(data.entries || []);
-    } catch { /* ignore */ }
-  }, [api]);
-
-  const loadMessages = useCallback(async (wsId: string) => {
-    try {
-      const data = await api(`/api/cowork/workspaces/${wsId}/messages?limit=100`);
-      const raw: CoworkMessage[] = data.messages || [];
-      setMessages(
-        [...raw].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-        ),
-      );
-    } catch { /* ignore */ }
-  }, [api]);
-
-  const loadFiles = useCallback(async (wsId: string) => {
-    try {
-      const data = await api(`/api/cowork/workspaces/${wsId}/files`);
-      setWsFiles(data.files || []);
-    } catch { /* ignore */ }
-  }, [api]);
-
-  const loadFileContent = useCallback(async (wsId: string, filePath: string) => {
-    setFileLoading(true);
-    try {
-      const data = await api(`/api/cowork/workspaces/${wsId}/files?path=${encodeURIComponent(filePath)}`);
-      setSelectedFilePath(filePath);
-      setFileContent(data.content || '');
-      setFileIsBinary(data.isBinary || false);
-    } catch { /* ignore */ }
-    finally { setFileLoading(false); }
-  }, [api]);
-
-  const loadWorkingDir = useCallback(async (wsId: string, dirPath?: string) => {
-    setWdLoading(true);
-    try {
-      const query = dirPath ? `?path=${encodeURIComponent(dirPath)}` : '';
-      const data = await api(`/api/cowork/workspaces/${wsId}/browse${query}`);
-      if (data.isFile) {
-        setWdFilePath(data.path);
-        setWdContent(data.content || '');
-      } else {
-        setWdEntries(data.entries || []);
-        setWdPath(data.path || '');
-        setWdFilePath(null);
-        setWdContent(null);
-      }
-    } catch { /* ignore */ }
-    finally { setWdLoading(false); }
-  }, [api]);
-
-  const loadMembers = useCallback(async (wsId: string) => {
-    try {
-      const data = await api(`/api/cowork/workspaces/${wsId}/members`);
-      setMembers(data.members || []);
-    } catch { /* ignore */ }
-  }, [api]);
-
-  useEffect(() => { loadWorkspaces(); loadTemplates(); }, [loadWorkspaces, loadTemplates]);
-
-  // Auto-refresh when cowork:changed events arrive via WebSocket
-  useEffect(() => {
-    if (selectedWs) {
-      loadTasks(selectedWs.id);
-      loadMessages(selectedWs.id);
-      loadBoard(selectedWs.id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.coworkChanged]);
-
-  // Highlight task when a result arrives via WS
-  useEffect(() => {
-    if (!lastTaskResult || !selectedWs || lastTaskResult.workspaceId !== selectedWs.id) return;
-    setHighlightTaskId(lastTaskResult.taskId);
-    loadTasks(selectedWs.id);
-    const t = setTimeout(() => setHighlightTaskId(null), 4000);
-    return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastTaskResult]);
-
-  // Tool execution events for THIS workspace, gathered from the WS hook
-  // for every member that has a JID assigned. Sorted chronologically and
-  // passed to WorkspaceChatPanel so it can interleave the same diff /
-  // command cards as the main ChatView (per claude-code parity).
-  const workspaceToolMessages = useMemo<ToolMessage[]>(() => {
-    const out: ToolMessage[] = [];
-    for (const m of members) {
-      if (!m.jid) continue;
-      const stream = wsMessages[m.jid] as ChatMessage[] | undefined;
-      if (!stream) continue;
-      for (const msg of stream) {
-        if (msg.role === 'tool') out.push(msg as ToolMessage);
-      }
-    }
-    out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    return out;
-  }, [members, wsMessages]);
-
-  // Compute workspace file entries at current navigation depth
-  const wsEntries = useMemo(() => {
-    const prefix = wsNavPath ? wsNavPath + '/' : '';
-    const children: any[] = [];
-    const seen = new Set<string>();
-    for (const f of wsFiles) {
-      if (!f.path.startsWith(prefix)) continue;
-      const rest = f.path.slice(prefix.length);
-      const slash = rest.indexOf('/');
-      const name = slash === -1 ? rest : rest.slice(0, slash);
-      if (seen.has(name)) continue;
-      seen.add(name);
-      if (slash === -1) {
-        // Direct child
-        children.push({ ...f, name });
-      } else {
-        // Directory
-        children.push({ name, path: prefix + name, isDir: true, size: 0 });
-      }
-    }
-    children.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-      return a.name.localeCompare(b.name);
+  const openEditMember = (team: CoworkTeam, member: TeamMember) => {
+    setMemberEditTeam(team);
+    setMemberEditTarget(member);
+    setEditingTriggers(parseTriggerJson(member.triggers));
+    memberForm.setFieldsValue({
+      folder: member.folder,
+      role: member.role ?? '',
+      responsibilities: member.responsibilities ?? '',
+      handoff_rules: member.handoff_rules ?? '',
+      acceptance_criteria: member.acceptance_criteria ?? '',
+      output_format: member.output_format ?? '',
+      sla: member.sla ?? '',
+      limits: member.limits ?? '',
     });
-    return children;
-  }, [wsFiles, wsNavPath]);
+  };
 
-  const selectWorkspace = useCallback((ws: CoworkWorkspace) => {
-    setSelectedWs(ws);
-    setLoading(true);
-    setSelectedFilePath(null);
-    setFileContent(null);
-    setFileIsBinary(false);
-    setWdEntries([]); setWdPath(''); setWdFilePath(null); setWdContent(null);
-    setWsNavPath('');
-    Promise.all([
-      loadTasks(ws.id), loadBoard(ws.id), loadMessages(ws.id), loadFiles(ws.id), loadMembers(ws.id), loadWorkingDir(ws.id)
-    ]).finally(() => setLoading(false));
-  }, [loadTasks, loadBoard, loadMessages, loadFiles, loadMembers, loadWorkingDir]);
-
-  // Create workspace
-  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const [creating, setCreating] = useState(false);
-  const [wsFsPickerOpen, setWsFsPickerOpen] = useState(false);
-  const [wsFsPickerLoading, setWsFsPickerLoading] = useState(false);
-  const [wsFsPickerAbsPath, setWsFsPickerAbsPath] = useState('');
-  const [wsFsPickerHome, setWsFsPickerHome] = useState('');
-  const [wsFsPickerRoot, setWsFsPickerRoot] = useState('');
-  const [wsFsQuickPaths, setWsFsQuickPaths] = useState<{ label: string; path: string }[]>([]);
-  const [wsFsPickerParent, setWsFsPickerParent] = useState<string | null>(null);
-  const [wsFsPickerEntries, setWsFsPickerEntries] = useState<any[]>([]);
-
-  const loadWsFsBrowse = useCallback(async (path?: string) => {
-    setWsFsPickerLoading(true);
+  const handleMemberSave = async (values: any) => {
+    if (!memberEditTeam || !memberEditTarget) return;
     try {
-      const q = path ? `?path=${encodeURIComponent(path)}` : '';
-      const data = await api(`/api/cowork/fs-browse${q}`);
-      setWsFsPickerAbsPath(String(data.absolutePath ?? ''));
-      setWsFsPickerHome(String(data.homePath ?? ''));
-      setWsFsPickerRoot(String(data.rootPath ?? ''));
-      setWsFsQuickPaths(Array.isArray(data.quickPaths) ? data.quickPaths : []);
-      setWsFsPickerParent(data.parentPath != null ? String(data.parentPath) : null);
-      setWsFsPickerEntries(data.entries || []);
-    } catch (e: any) {
-      message.error(e.message || 'Could not open folder');
-    } finally {
-      setWsFsPickerLoading(false);
+      const res = await fetch(`/api/cowork/teams/${memberEditTeam.id}/members`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder: memberEditTarget.folder,
+          role: values.role || null,
+          responsibilities: values.responsibilities || null,
+          triggers: stringifyTriggers(editingTriggers),
+          handoff_rules: values.handoff_rules || null,
+          acceptance_criteria: values.acceptance_criteria || null,
+          output_format: values.output_format || null,
+          sla: values.sla || null,
+          limits: values.limits || null,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      message.success(`Member "${memberEditTarget.folder}" updated`);
+      setMemberEditTeam(null);
+      setMemberEditTarget(null);
+      await loadTeams();
+    } catch (e) {
+      message.error(`Save failed: ${String((e as Error)?.message ?? e)}`);
     }
-  }, [api]);
+  };
 
-  const handleCreateWorkspace = async (values: any) => {
+  const handleMemberRemove = async () => {
+    if (!memberEditTeam || !memberEditTarget) return;
     try {
-      setCreating(true);
-      const resp = await api('/api/cowork/workspaces', {
+      const res = await fetch(
+        `/api/cowork/teams/${memberEditTeam.id}/members/${encodeURIComponent(memberEditTarget.folder)}`,
+        { method: 'DELETE' }
+      );
+      if (!res.ok) throw new Error(await res.text());
+      message.success(`Removed ${memberEditTarget.folder} from team`);
+      setMemberEditTeam(null);
+      setMemberEditTarget(null);
+      await loadTeams();
+    } catch (e) {
+      message.error(`Remove failed: ${String((e as Error)?.message ?? e)}`);
+    }
+  };
+
+  // Filter sidebar to cowork-type groups so users can return to active team chats.
+  const coworkGroups = ws.groups.filter(g => g.groupType === 'cowork');
+
+  // Profile choices (skip schedule_* — those aren't user-facing).
+  const profiles = ws.agents.filter(a => !a.folder.startsWith('schedule_'));
+
+  const loadTeams = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/cowork/teams');
+      if (!res.ok) throw new Error(await res.text());
+      setTeams(await res.json());
+    } catch (e) {
+      message.error(`Failed to load teams: ${String((e as Error)?.message ?? e)}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadTemplates = async () => {
+    try {
+      const res = await fetch('/api/cowork/templates');
+      if (res.ok) setTemplates(await res.json());
+    } catch {}
+  };
+
+  useEffect(() => { loadTeams(); loadTemplates(); }, []);
+
+  const instantiateTemplate = async (tmpl: TeamTemplate) => {
+    try {
+      const res = await fetch('/api/cowork/teams/from-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: values.name, description: values.description, workingDir: values.workingDir || null, template: values.template || null }),
+        body: JSON.stringify({ template_id: tmpl.id }),
       });
-
-      // If files selected, upload to the new workspace
-      if (uploadFiles.length > 0) {
-        const formData = new FormData();
-        uploadFiles.forEach(f => formData.append('file', f));
-        await fetch(`/api/cowork/workspaces/${resp.id}/documents`, {
-          method: 'POST',
-          body: formData,
-        });
-      }
-
-      setWsModalOpen(false);
-      wsForm.resetFields();
-      setUploadFiles([]);
-      await loadWorkspaces();
-      message.success(uploadFiles.length > 0
-        ? 'Workspace created with documents'
-        : 'Workspace created');
-    } catch (e: any) { message.error(e.message); } finally { setCreating(false); }
+      if (!res.ok) throw new Error(await res.text());
+      const team: CoworkTeam = await res.json();
+      message.success(`Spun up "${team.name}" — opening chat`);
+      await loadTeams();
+      navigate(`/chat/${encodeURIComponent(team.jid)}`);
+    } catch (e) {
+      message.error(`Template failed: ${String((e as Error)?.message ?? e)}`);
+    }
   };
 
-  // Delete workspace
-  const handleDeleteWorkspace = async (id: string) => {
+  const handleCreate = async (values: any) => {
     try {
-      await api(`/api/cowork/workspaces/${id}`, { method: 'DELETE' });
-      if (selectedWs?.id === id) setSelectedWs(null);
-      await loadWorkspaces();
-      message.success('Workspace deleted');
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Create task
-  const handleCreateTask = async (values: any) => {
-    if (!selectedWs) return;
-    try {
-      await api(`/api/cowork/workspaces/${selectedWs.id}/tasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      setTaskModalOpen(false);
-      taskForm.resetFields();
-      await loadTasks(selectedWs.id);
-      message.success('Task created');
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Update task status
-  const handleUpdateTaskStatus = async (task: CoworkTask, newStatus: string) => {
-    try {
-      await api(`/api/cowork/workspaces/${task.workspaceId}/tasks/${task.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      await loadTasks(task.workspaceId);
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Delete task
-  const handleDeleteTask = async (task: CoworkTask) => {
-    try {
-      await api(`/api/cowork/workspaces/${task.workspaceId}/tasks/${task.id}`, { method: 'DELETE' });
-      await loadTasks(task.workspaceId);
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Update board
-  const handleUpdateBoard = async (section: string, content: string) => {
-    if (!selectedWs) return;
-    try {
-      await api(`/api/cowork/workspaces/${selectedWs.id}/board/${section}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, author: 'user' }),
-      });
-      await loadBoard(selectedWs.id);
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Send message
-  const handleSendMessage = async () => {
-    if (!selectedWs || !msgText.trim()) return;
-    try {
-      await fetch('/api/cowork/workspaces/' + selectedWs.id + '/messages', {
+      const res = await fetch('/api/cowork/teams', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          from_member: 'user',
-          content: msgText,
-          message_type: 'status',
+          name: values.name,
+          manager_folder: values.manager_folder,
+          members: values.members ?? [],
+          workspace_dir: values.workspace_dir || null,
         }),
       });
-      setMsgText('');
-      await Promise.all([loadMessages(selectedWs.id), loadTasks(selectedWs.id)]);
-    } catch { /* ignore */ }
-  };
-
-  // Add member
-  const handleAddMember = async (values: any) => {
-    if (!selectedWs) return;
-    try {
-      const payload: any = {};
-      if (values.memberId) payload.memberId = values.memberId;
-      if (values.role) payload.role = values.role;
-      if (values.subdir) payload.subdir = values.subdir;
-      if (values.persona) payload.persona = values.persona;
-
-      // Responsibilities: newline-separated → JSON array string
-      if (values.responsibilities) {
-        const lines = values.responsibilities.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        payload.responsibilities = JSON.stringify(lines);
-      }
-      // Acceptance criteria: newline-separated → JSON array string
-      if (values.acceptanceCriteria) {
-        const lines = values.acceptanceCriteria.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        payload.acceptanceCriteria = JSON.stringify(lines);
-      }
-      // Triggers: structured list → JSON array string
-      if (Array.isArray(values.triggersList)) {
-        const serialized = serializeTriggersList(values.triggersList);
-        if (serialized !== '[]') payload.triggers = serialized;
-      }
-      // Handoff rules: structured list → JSON array string
-      if (Array.isArray(values.handoffRulesList)) {
-        const serialized = serializeHandoffRulesList(values.handoffRulesList);
-        if (serialized !== '[]') payload.handoffRules = serialized;
-      }
-
-      await api(`/api/cowork/workspaces/${selectedWs.id}/members`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      setMemberModalOpen(false);
-      memberForm.resetFields();
-      await loadMembers(selectedWs.id);
-      message.success('Member added');
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Edit member
-  const handleEditMember = async (values: any) => {
-    if (!selectedWs || !editingMember) return;
-    try {
-      const payload: any = {};
-      if (values.role) payload.role = values.role;
-      if (values.persona) payload.persona = values.persona;
-
-      // Responsibilities: newline-separated → JSON array string
-      if (values.responsibilities) {
-        const lines = values.responsibilities.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        payload.responsibilities = JSON.stringify(lines);
-      }
-      // Acceptance criteria: newline-separated → JSON array string
-      if (values.acceptanceCriteria) {
-        const lines = values.acceptanceCriteria.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        payload.acceptanceCriteria = JSON.stringify(lines);
-      }
-      // Triggers: structured list → JSON array string (chỉ gửi khi thay đổi so với DB, tránh ghi [] lên record chưa từng có triggers)
-      if (Array.isArray(values.triggersList)) {
-        const serialized = serializeTriggersList(values.triggersList);
-        const hadStored = editingMember.triggers && editingMember.triggers.trim() !== '';
-        if (hadStored) {
-          let prevSerialized = '[]';
-          try {
-            let p: unknown = JSON.parse(editingMember.triggers!);
-            if (!Array.isArray(p)) p = [p];
-            prevSerialized = serializeTriggersList((p as Record<string, unknown>[]).map(normalizeTriggerFromJson));
-          } catch { /* giữ '[]' */ }
-          if (serialized !== prevSerialized) payload.triggers = serialized;
-        } else if (serialized !== '[]') {
-          payload.triggers = serialized;
-        }
-      }
-      // Handoff rules: structured list → JSON array string (chỉ gửi khi thay đổi so với DB, tránh ghi [] lên record chưa từng có handoff)
-      if (Array.isArray(values.handoffRulesList)) {
-        const serialized = serializeHandoffRulesList(values.handoffRulesList);
-        const hadStored = editingMember.handoffRules && editingMember.handoffRules.trim() !== '';
-        if (hadStored) {
-          let prevSerialized = '[]';
-          try {
-            let p: unknown = JSON.parse(editingMember.handoffRules!);
-            if (!Array.isArray(p)) p = [p];
-            prevSerialized = serializeHandoffRulesList((p as Record<string, unknown>[]).map(normalizeHandoffRuleFromJson));
-          } catch { /* giữ '[]' */ }
-          if (serialized !== prevSerialized) payload.handoffRules = serialized;
-        } else if (serialized !== '[]') {
-          payload.handoffRules = serialized;
-        }
-      }
-
-      // Output: structured → JSON object string
-      const outputParts: string[] = [];
-      if (values.outputFormat) outputParts.push(`"format":"${values.outputFormat}"`);
-      if (values.outputAttachDiff && values.outputAttachDiff !== '') outputParts.push(`"attachDiff":${values.outputAttachDiff === 'true'}`);
-      if (values.outputRequiredSections) {
-        const secs = values.outputRequiredSections.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        outputParts.push(`"requiredSections":${JSON.stringify(secs)}`);
-      }
-      if (outputParts.length > 0) payload.outputFormat = `{${outputParts.join(',')}}`;
-
-      // SLA: structured → JSON object string
-      const slaParts: string[] = [];
-      if (values.slaMaxDuration) slaParts.push(`"maxDurationPerTaskMinutes":${values.slaMaxDuration}`);
-      if (values.slaMaxTokens) slaParts.push(`"maxTokenPerTask":${values.slaMaxTokens}`);
-      if (values.slaEscalateAfter) slaParts.push(`"escalateAfterBlockedMinutes":${values.slaEscalateAfter}`);
-      if (slaParts.length > 0) payload.sla = `{${slaParts.join(',')}}`;
-
-      // Limits: structured → JSON object string
-      const limitParts: string[] = [];
-      if (values.limitsMaxFileSize) limitParts.push(`"maxFileSizeWriteKb":${values.limitsMaxFileSize}`);
-      if (values.limitsAllowedBash) {
-        const cmds = values.limitsAllowedBash.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        limitParts.push(`"allowedBashCommands":${JSON.stringify(cmds)}`);
-      }
-      if (values.limitsDeniedTools) {
-        const tools = values.limitsDeniedTools.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        limitParts.push(`"deniedTools":${JSON.stringify(tools)}`);
-      }
-      if (limitParts.length > 0) payload.limits = `{${limitParts.join(',')}}`;
-
-      await api(`/api/cowork/workspaces/${selectedWs.id}/members/${editingMember.memberId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      setMemberModalOpen(false);
-      setEditingMember(null);
-      memberForm.resetFields();
-      await loadMembers(selectedWs.id);
-      message.success('Member updated');
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  // Remove member
-  const handleRemoveMember = async (memberId: string) => {
-    if (!selectedWs) return;
-    try {
-      await api(`/api/cowork/workspaces/${selectedWs.id}/members/${memberId}`, { method: 'DELETE' });
-      await loadMembers(selectedWs.id);
-      message.success('Member removed');
-    } catch (e: any) { message.error(e.message); }
-  };
-
-  const tasksByStatus = (status: string) => {
-    if (status === 'in_progress') {
-      return tasks.filter(t => t.status === 'in_progress' || t.status === 'review');
+      if (!res.ok) throw new Error(await res.text());
+      message.success('Team created — chat group materialised');
+      setModalOpen(false);
+      form.resetFields();
+      await loadTeams();
+    } catch (e) {
+      message.error(`Create failed: ${String((e as Error)?.message ?? e)}`);
     }
-    return tasks.filter(t => t.status === status);
   };
 
-  // Stats
-  const activeWSCount = workspaces.filter(w => w.status === 'active').length;
-  const totalTasks = tasks.length;
-  const doneTasks = tasks.filter(t => t.status === 'done').length;
-  const taskProgress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+  const handleDelete = async (id: string) => {
+    try {
+      const res = await fetch(`/api/cowork/teams/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await res.text());
+      message.success('Team deleted');
+      await loadTeams();
+    } catch (e) {
+      message.error(`Delete failed: ${String((e as Error)?.message ?? e)}`);
+    }
+  };
 
-  // ---- Dashboard (home) ----
-  if (!selectedWs) {
-    return (
-      <AppLayout sidebar={
-        <CoworkSidebar
-          workspaces={workspaces}
-          selectedWs={null}
-          onSelectWorkspace={selectWorkspace}
-          onCreateWorkspace={() => setWsModalOpen(true)}
-          onDeleteWorkspace={handleDeleteWorkspace}
-          onRefresh={loadWorkspaces}
-          loading={loading}
+  const openTeamChat = (team: CoworkTeam) => {
+    navigate(`/chat/${encodeURIComponent(team.jid)}`);
+  };
+
+  return (
+    <AppLayout
+      sidebar={
+        <SessionList
+          groups={coworkGroups}
+          selectedJid={null}
+          agentStates={ws.agentStates}
+          pinnedJids={pinnedJids}
+          onSelect={(jid) => navigate(`/chat/${encodeURIComponent(jid)}`)}
+          onNewChat={() => setModalOpen(true)}
+          onPin={() => { /* no-op */ }}
+          onRename={(jid, name) => ws.updateGroup(jid, { name })}
+          onDelete={(jid) => {
+            const team = teams.find(t => t.jid === jid);
+            if (team) handleDelete(team.id); else ws.unregisterGroup(jid);
+          }}
         />
-      }>
-        <Layout style={{ background: 'transparent', height: '100%', display: 'flex', flexDirection: 'column' }}>
-          <header style={{ padding: '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0', background: '#fff', flexShrink: 0 }}>
-            <Breadcrumb items={[
-              { title: <Space onClick={() => navigate('/chats')} style={{ cursor: 'pointer' }}><HomeOutlined /><span>Home</span></Space> },
-              { title: <Text strong>Cowork Space</Text> }
-            ]} />
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setWsModalOpen(true)}>
-              New Workspace
-            </Button>
-          </header>
-          <Content style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
-            <div style={{ maxWidth: 900, margin: '0 auto' }}>
-              {/* Dashboard header */}
-              <Flex justify="space-between" align="center" style={{ marginBottom: 24 }}>
-                <div>
-                  <Title level={3} style={{ margin: 0 }}>Cowork Dashboard</Title>
-                  <Text type="secondary">Multi-agent collaborative workspaces</Text>
-                </div>
-              </Flex>
-
-              {/* Stats row */}
-              <Row gutter={16} style={{ marginBottom: 24 }}>
-                <Col span={6}>
-                  <Card size="small" style={{ borderRadius: 10 }}>
-                    <Statistic title="Workspaces" value={workspaces.length} suffix={<Text type="secondary" style={{ fontSize: 12 }}>/ {activeWSCount} active</Text>} />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small" style={{ borderRadius: 10 }}>
-                    <Statistic title="Total Tasks" value={totalTasks} />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small" style={{ borderRadius: 10 }}>
-                    <Statistic title="Done" value={doneTasks} suffix={totalTasks > 0 ? <Progress percent={taskProgress} size="small" style={{ width: 80 }} /> : undefined} />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small" style={{ borderRadius: 10 }}>
-                    <Statistic title="Templates" value={templates.length} suffix={<Text type="secondary" style={{ fontSize: 12 }}>available</Text>} />
-                  </Card>
-                </Col>
-              </Row>
-
-              {workspaces.length === 0 ? (
-                <Card style={{ textAlign: 'center', padding: 48, borderRadius: 12 }}>
-                  <ProjectOutlined style={{ fontSize: 48, color: '#d9d9d9', marginBottom: 16 }} />
-                  <Title level={4} type="secondary">No workspaces yet</Title>
-                  <Text type="secondary">Create a shared workspace for multi-agent collaboration</Text>
-                  <br />
-                  <Button type="primary" icon={<PlusOutlined />} onClick={() => setWsModalOpen(true)} style={{ marginTop: 16 }}>
-                    Create Workspace
-                  </Button>
-                </Card>
-              ) : (
-                <>
-                  <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
-                    <Title level={5} style={{ margin: 0 }}>Recent Workspaces</Title>
-                  </Flex>
-                  <List
-                    grid={{ gutter: 16, column: 2 }}
-                    dataSource={workspaces}
-                    renderItem={ws => (
-                      <List.Item>
-                        <Card
-                          hoverable
-                          style={{ borderRadius: 12 }}
-                          onClick={() => selectWorkspace(ws)}
-                        >
-                          <Flex justify="space-between" align="center">
-                            <Space>
-                              <Avatar
-                                icon={<ProjectOutlined />}
-                                style={{ backgroundColor: ws.status === 'active' ? '#52c41a' : '#d9d9d9' }}
-                              />
-                              <div>
-                                <Text strong style={{ fontSize: 15 }}>{ws.name}</Text>
-                                <br />
-                                <Text type="secondary" style={{ fontSize: 12 }}>
-                                  {ws.description || 'No description'}
-                                </Text>
-                              </div>
-                            </Space>
-                            <Space>
-                              <Tag color={ws.status === 'active' ? 'green' : 'default'}>{ws.status}</Tag>
-                              <Popconfirm
-                                title="Delete this workspace?"
-                                onConfirm={(e) => { e?.stopPropagation(); handleDeleteWorkspace(ws.id); }}
-                                onCancel={e => e?.stopPropagation()}
-                              >
-                                <Button type="text" danger icon={<DeleteOutlined />} onClick={e => e.stopPropagation()} />
-                              </Popconfirm>
-                            </Space>
-                          </Flex>
-                          <Divider style={{ margin: '8px 0' }} />
-                          <Flex gap={16} vertical style={{ marginTop: 4 }}>
-                            <Text type="secondary" style={{ fontSize: 11 }}>Created: {new Date(ws.createdAt).toLocaleDateString()}</Text>
-                            {ws.workingDir && <Text type="secondary" style={{ fontSize: 11 }}>Project: {ws.workingDir}</Text>}
-                          </Flex>
-                        </Card>
-                      </List.Item>
-                    )}
-                  />
-                </>
-              )}
-
-              {/* Templates quick reference */}
-              {templates.length > 0 && workspaces.length > 0 && (
-                <>
-                  <Title level={5} style={{ marginTop: 24, marginBottom: 12 }}>Available Templates</Title>
-                  <Row gutter={12}>
-                    {templates.slice(0, 4).map(t => (
-                      <Col span={6} key={t.name}>
-                        <Card
-                          size="small"
-                          hoverable
-                          style={{ borderRadius: 10, textAlign: 'center' }}
-                          onClick={() => { setWsModalOpen(true); wsForm.setFieldsValue({ template: t.name }); }}
-                        >
-                          <Text strong style={{ fontSize: 13 }}>{t.name}</Text>
-                          <br />
-                          <Text type="secondary" style={{ fontSize: 11 }}>{t.members.length} members</Text>
-                        </Card>
-                      </Col>
-                    ))}
-                  </Row>
-                </>
-              )}
-            </div>
-          </Content>
-
-          {/* Create Workspace Modal */}
-          <Modal title="Create Workspace" open={wsModalOpen} onCancel={() => { setWsModalOpen(false); setUploadFiles([]); }} footer={null} destroyOnClose width={580}>
-            <Form form={wsForm} layout="vertical" onFinish={handleCreateWorkspace} style={{ marginTop: 16 }}>
-              <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-                <Input placeholder="project-alpha" />
-              </Form.Item>
-              <Form.Item name="description" label="Description">
-                <TextArea rows={3} placeholder="What is this workspace for?" />
-              </Form.Item>
-              <Form.Item name="workingDir" label="Working Directory (project folder)">
-                <Input
-                  placeholder="/path/to/project — agent work dir"
-                  addonAfter={
-                    <Button
-                      type="text"
-                      icon={<FolderOpenOutlined />}
-                      onClick={() => {
-                        setWsFsPickerOpen(true);
-                        loadWsFsBrowse();
-                      }}
-                      title="Chọn thư mục trên máy chạy Senclaw (Home, gốc hệ thống, …)"
-                      style={{ height: 30 }}
-                    />
-                  }
-                />
-              </Form.Item>
-              <Form.Item name="template" label="Template (optional)">
-                <Select
-                  allowClear
-                  placeholder="No template — start from scratch"
-                  options={templates.map(t => ({ value: t.name, label: t.name }))}
-                  optionRender={opt => (
-                    <Flex vertical gap={2}>
-                      <Text strong>{opt.label}</Text>
-                      <Text type="secondary" style={{ fontSize: 11 }}>{templates.find(t => t.name === opt.value)?.description}</Text>
-                    </Flex>
-                  )}
-                />
-              </Form.Item>
-              <Form.Item label="Reference Documents">
-                <Upload.Dragger
-                  multiple
-                  beforeUpload={file => { setUploadFiles(prev => [...prev, file]); return false; }}
-                  onRemove={file => { setUploadFiles(prev => prev.filter(f => f.name !== file.name && f.size !== file.size)); }}
-                  fileList={uploadFiles.map(f => ({ uid: `${f.name}-${f.size}`, name: f.name, status: 'done' as const }))}
-                  accept=".md,.txt,.pdf,.json,.yaml,.yml,.toml,.csv,.ts,.js,.py,.rs,.html,.css"
-                >
-                  <p className="ant-upload-drag-icon">
-                    <InboxOutlined />
-                  </p>
-                  <p className="ant-upload-text" style={{ fontSize: 13 }}>Drop files here or click to browse</p>
-                  <p className="ant-upload-hint" style={{ fontSize: 11 }}>
-                    Upload workspace reference docs (.md, .pdf, .txt, etc.)
-                  </p>
-                </Upload.Dragger>
-              </Form.Item>
-              <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-                <Space>
-                  <Button onClick={() => { setWsModalOpen(false); setUploadFiles([]); }}>Cancel</Button>
-                  <Button type="primary" htmlType="submit" loading={creating}>Create</Button>
-                </Space>
-              </Form.Item>
-            </Form>
-          </Modal>
-
-          <Modal
-            title={<Space><FolderOpenOutlined />Working directory — pick folder</Space>}
-            open={wsFsPickerOpen}
-            onCancel={() => setWsFsPickerOpen(false)}
-            footer={
-              <Flex justify="space-between" align="center" style={{ width: '100%' }}>
-                <Text type="secondary" style={{ fontSize: 11, flex: 1, marginRight: 12 }} ellipsis>
-                  {wsFsPickerHome ? <>Home: {wsFsPickerHome}</> : null}
+      }
+    >
+      <Layout style={{ background: 'transparent', height: '100%' }}>
+        <Content className="overflow-y-auto p-8">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <Title level={3} style={{ margin: 0 }}>
+                  <TeamOutlined style={{ marginRight: 10, color: token.colorPrimary }} />
+                  Cowork Teams
+                </Title>
+                <Text type="secondary">
+                  A manager profile leads specialist members to collaborate on a shared workspace.
+                  Open a team to chat with the manager — it delegates to members via dispatch tools.
                 </Text>
-                <Space>
-                  <Button onClick={() => setWsFsPickerOpen(false)}>Cancel</Button>
-                  <Button
-                    type="primary"
-                    disabled={!wsFsPickerAbsPath}
-                    onClick={() => {
-                      wsForm.setFieldsValue({ workingDir: wsFsPickerAbsPath });
-                      setWsFsPickerOpen(false);
-                    }}
-                  >
-                    Use this folder
-                  </Button>
-                </Space>
-              </Flex>
-            }
-            width={560}
-            destroyOnClose
-          >
-            <div style={{ marginBottom: 12 }}>
-              <Flex gap={8} wrap="wrap" align="center" style={{ marginBottom: 8 }}>
-                <Button
-                  size="small"
-                  icon={<HomeOutlined />}
-                  onClick={() => loadWsFsBrowse()}
-                >
-                  Home
-                </Button>
-                <Button
-                  size="small"
-                  disabled={!wsFsPickerRoot}
-                  onClick={() => wsFsPickerRoot && loadWsFsBrowse(wsFsPickerRoot)}
-                  title={wsFsPickerRoot || 'Filesystem root'}
-                >
-                  Gốc hệ thống
-                </Button>
-                <Button
-                  size="small"
-                  disabled={!wsFsPickerParent}
-                  onClick={() => wsFsPickerParent && loadWsFsBrowse(wsFsPickerParent)}
-                >
-                  Lên một cấp
-                </Button>
-              </Flex>
-              {wsFsQuickPaths.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
-                    Thư mục hệ thống
-                  </Text>
-                  <Space size={[4, 4]} wrap>
-                    {wsFsQuickPaths.map((q) => (
-                      <Button
-                        key={q.path}
-                        size="small"
-                        type="default"
-                        onClick={() => loadWsFsBrowse(q.path)}
-                      >
-                        {q.label}
-                      </Button>
-                    ))}
-                  </Space>
-                </div>
-              )}
-              <Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                {wsFsPickerAbsPath || '—'}
-              </Text>
+              </div>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+                New Team
+              </Button>
             </div>
-            {wsFsPickerLoading ? (
-              <Spin style={{ display: 'block', padding: 48, textAlign: 'center' }} />
-            ) : (
-              <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                <List
-                  size="small"
-                  dataSource={wsFsPickerEntries}
-                  locale={{ emptyText: <Empty description="No subfolders" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-                  renderItem={(e: any) => (
-                    <List.Item
-                      style={{ cursor: 'pointer', padding: '8px 12px' }}
-                      onClick={() => loadWsFsBrowse(e.path)}
+
+            {/* Pre-defined templates — one-click team spinup using built-in personas */}
+            {templates.length > 0 && (
+              <div className="mb-8">
+                <div className="mb-3 flex items-center gap-2">
+                  <Text strong style={{ fontSize: 13 }}>Quick start templates</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Pre-defined squads using built-in personas. Click to spin up + open chat.
+                  </Text>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                  {templates.map(tmpl => (
+                    <Card
+                      key={tmpl.id}
+                      hoverable
+                      onClick={() => instantiateTemplate(tmpl)}
+                      style={{
+                        borderRadius: 10,
+                        borderColor: token.colorBorderSecondary,
+                        background: token.colorBgContainer,
+                      }}
+                      styles={{ body: { padding: 12 } }}
                     >
-                      <FolderOutlined style={{ color: '#faad14', marginRight: 10 }} />
-                      <Text style={{ fontSize: 13 }}>{e.name}</Text>
-                    </List.Item>
-                  )}
-                />
+                      <div className="flex items-start gap-2">
+                        <div style={{ fontSize: 22 }}>{tmpl.icon}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm" style={{ color: token.colorText }}>
+                            {tmpl.name}
+                          </div>
+                          <div className="text-[11px] mt-0.5 line-clamp-2" style={{ color: token.colorTextSecondary }}>
+                            {tmpl.description}
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            <Tag color="blue" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                              {tmpl.manager}
+                            </Tag>
+                            {tmpl.members.map(m => (
+                              <Tag key={m.folder} style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                {m.folder}
+                              </Tag>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
               </div>
             )}
-            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>
-              Duyệt thư mục trên máy chạy Senclaw. Home = thư mục người dùng; Gốc hệ thống = ổ / đĩa gốc (ví dụ <code>/</code> hoặc <code>C:\</code>). Chọn thư mục rồi bấm "Use this folder".
-            </Text>
-          </Modal>
-        </Layout>
-      </AppLayout>
-    );
-  }
 
-  // ---- Workspace view ----
-  return (
-    <AppLayout sidebar={
-      <CoworkSidebar
-        workspaces={workspaces}
-        selectedWs={selectedWs}
-        onSelectWorkspace={selectWorkspace}
-        onCreateWorkspace={() => setWsModalOpen(true)}
-        onDeleteWorkspace={handleDeleteWorkspace}
-        onRefresh={loadWorkspaces}
-        loading={loading}
-      />
-    }>
-      <Layout style={{ background: 'transparent', height: '100%', display: 'flex', flexDirection: 'column' }}>
-        {/* Header */}
-        <header style={{ padding: '0 24px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0', background: '#fff', flexShrink: 0 }}>
-          <Flex align="center" gap={12}>
-            <Breadcrumb items={[
-              { title: <Space onClick={() => navigate('/chats')} style={{ cursor: 'pointer' }}><HomeOutlined /><span>Home</span></Space> },
-              { title: <Space onClick={() => { setSelectedWs(null); setTasks([]); setBoard([]); }} style={{ cursor: 'pointer' }}>Cowork</Space> },
-              { title: <Text strong>{selectedWs.name}</Text> }
-            ]} />
-            <Tag color={selectedWs.status === 'active' ? 'green' : 'default'}>{selectedWs.status}</Tag>
-          </Flex>
-          <Space>
-            <Button size="small" icon={<ReloadOutlined />} onClick={() => selectWorkspace(selectedWs)}>Refresh</Button>
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setEditingTask(null); taskForm.resetFields(); setTaskModalOpen(true); }}>New Task</Button>
-            <Popconfirm
-              title="Delete this workspace? All data will be lost."
-              onConfirm={() => { handleDeleteWorkspace(selectedWs.id); setSelectedWs(null); }}
-            >
-              <Button size="small" danger icon={<DeleteOutlined />}>Delete</Button>
-            </Popconfirm>
-          </Space>
-        </header>
-
-        <Content style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-          {/* Main content area */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <Tabs
-              activeKey={tab}
-              onChange={setTab}
-              style={{ padding: '0 16px', margin: 0 }}
-              tabBarStyle={{ marginBottom: 0 }}
-              items={[
-                {
-                  key: 'tasks',
-                  label: <Space><ProjectOutlined />Tasks ({tasks.length})</Space>,
-                  children: (
-                    <div style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', padding: '12px 4px', height: 'calc(100vh - 180px)' }}>
-                      {loading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                        <Flex gap={12} style={{ minWidth: 900 }}>
-                          {KANBAN_COLUMNS.map(col => (
-                            <div key={col} style={{ flex: 1, minWidth: 160, background: '#f5f5f5', borderRadius: 8, padding: 8 }}>
-                              <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
-                                <Tag color={STATUS_COLORS[col]}>{STATUS_LABELS[col]}</Tag>
-                                <Text type="secondary" style={{ fontSize: 12 }}>{tasksByStatus(col).length}</Text>
-                              </Flex>
-                              {tasksByStatus(col).map(task => (
-                                task.status === 'done' ? (
-                                  <div key={task.id} style={{ marginBottom: 8 }}>
-                                    <TaskResultCard task={task} highlight={task.id === highlightTaskId} />
-                                  </div>
-                                ) : (
-                                <Card
-                                  key={task.id}
-                                  size="small"
-                                  style={{
-                                    marginBottom: 8, borderRadius: 8, cursor: 'pointer',
-                                    border: task.id === highlightTaskId ? '2px solid #faad14' : undefined,
-                                    transition: 'border-color 0.3s',
-                                  }}
-                                  onClick={() => {
-                                    setEditingTask(task);
-                                    let attachments: string[] = [];
-                                    if (task.attachments) {
-                                      try { attachments = JSON.parse(task.attachments); } catch { /* ignore */ }
-                                    }
-                                    taskForm.setFieldsValue({ ...task, attachments });
-                                    setTaskModalOpen(true);
-                                  }}
-                                >
-                                  <Text style={{ fontSize: 13 }}>{task.title}</Text>
-                                  <Flex justify="space-between" align="center" style={{ marginTop: 4 }}>
-                                    <Space size={4}>
-                                      {task.status === 'review' && (
-                                        <Tag style={{ fontSize: 10, lineHeight: '16px' }} color="purple">Review</Tag>
-                                      )}
-                                      {task.priority !== 'medium' && (
-                                        <Tag style={{ fontSize: 10, lineHeight: '16px' }} color={PRIORITY_COLORS[task.priority]}>{task.priority}</Tag>
-                                      )}
-                                      {task.assignee && (
-                                        <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>{task.assignee}</Tag>
-                                      )}
-                                    </Space>
-                                    <Dropdown menu={{ items: KANBAN_COLUMNS.filter(c => c !== task.status).map(c => ({ key: c, label: STATUS_LABELS[c], onClick: () => handleUpdateTaskStatus(task, c) })) }}>
-                                      <Button type="text" size="small" icon={<MoreOutlined />} onClick={e => e.stopPropagation()} />
-                                    </Dropdown>
-                                  </Flex>
-                                </Card>
-                                )
-                              ))}
-                            </div>
-                          ))}
-                        </Flex>
-                      )}
+            {teams.length === 0 && !loading ? (
+              <Empty
+                image={<CoffeeOutlined style={{ fontSize: 56, color: token.colorPrimary, opacity: 0.6 }} />}
+                description={
+                  <div className="space-y-1 mt-3">
+                    <div style={{ color: token.colorText, fontSize: 16, fontWeight: 500 }}>
+                      No teams yet
                     </div>
-                  ),
-                },
-                {
-                  key: 'board',
-                  label: <Space><AppstoreOutlined />Board</Space>,
-                  children: (
-                    <div style={{ overflowY: 'auto', padding: 16, height: 'calc(100vh - 180px)' }}>
-                      {loading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                        <>
-                          {BOARD_SECTIONS.map(section => {
-                            const entry = board.find(e => e.section === section);
-                            return (
-                              <Card
-                                key={section}
-                                size="small"
-                                title={<Text strong style={{ textTransform: 'capitalize' }}>{section}</Text>}
-                                style={{ marginBottom: 12, borderRadius: 8 }}
-                                extra={
-                                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => {
-                                    setBoardEditSection(section);
-                                    setBoardEditContent(entry?.content || '');
-                                    setBoardEditModalOpen(true);
-                                  }}>Edit</Button>
-                                }
-                              >
-                                <Text style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>
-                                  {entry?.content || <Text type="secondary" italic>Not set yet</Text>}
-                                </Text>
-                                {entry && <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8 }}>Updated by {entry.author} at {new Date(entry.updatedAt).toLocaleString()}</Text>}
-                              </Card>
-                            );
-                          })}
-                        </>
-                      )}
+                    <div style={{ color: token.colorTextSecondary, fontSize: 12 }}>
+                      Create your first team — pick a manager profile and a few specialists.
                     </div>
-                  ),
-                },
-                {
-                  key: 'workflow',
-                  label: <Space><BranchesOutlined />Active Workflow {
-                    (() => {
-                      const wsDispatchParents = (ws.dispatchParents || []).filter(p =>
-                        p.sharedWorkspace && selectedWs && p.sharedWorkspace.includes(selectedWs.id));
-                      const activeCount = wsDispatchParents.filter(p => p.status === 'active' || p.status === 'queued').length;
-                      return activeCount > 0 ? <Badge count={activeCount} size="small" style={{ marginLeft: 4 }} /> : null;
-                    })()
-                  }</Space>,
-                  children: (
-                    <div style={{ overflowY: 'auto', padding: 16, height: 'calc(100vh - 180px)' }}>
-                      {loading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                        (() => {
-                          // Show dispatch parents whose shared workspace matches the selected workspace
-                          const wsDispatchParents = (ws.dispatchParents || []).filter(p => {
-                            if (!p.sharedWorkspace || !selectedWs) return false;
-                            return p.sharedWorkspace.includes(selectedWs.id) || p.sharedWorkspace === selectedWs.rootDir;
-                          });
-                          if (wsDispatchParents.length === 0) {
-                            return (
-                              <Empty description={
-                                <Space direction="vertical" size={4}>
-                                  <Text>No active workflows</Text>
-                                  <Text type="secondary" style={{ fontSize: 11 }}>
-                                    Send a message to kick off a multi-agent workflow
-                                  </Text>
-                                </Space>
-                              } />
-                            );
-                          }
-                          const STATUS_TAG: Record<string, string> = {
-                            queued: 'default', active: 'processing', done: 'success',
-                          };
-                          const TASK_STATUS_TAG: Record<string, string> = {
-                            registered: 'default', processing: 'processing',
-                            done: 'success', error: 'error', timeout: 'warning',
-                          };
-                          return wsDispatchParents.map((parent: DispatchParent) => (
-                            <Card
-                              key={parent.id}
-                              size="small"
-                              title={
-                                <Space>
-                                  <Tag color={STATUS_TAG[parent.status] || 'default'}>{parent.status}</Tag>
-                                  <Text strong style={{ fontSize: 13 }}>{parent.goal.slice(0, 80)}{parent.goal.length > 80 ? '...' : ''}</Text>
-                                </Space>
-                              }
-                              extra={
-                                <Space size={4}>
-                                  <Text type="secondary" style={{ fontSize: 10 }}>
-                                    {parent.tasks.filter(t => t.status === 'done').length}/{parent.tasks.length} done
-                                  </Text>
-                                  <Progress
-                                    percent={parent.tasks.length > 0 ? Math.round(parent.tasks.filter(t => t.status === 'done').length / parent.tasks.length * 100) : 0}
-                                    size="small"
-                                    style={{ width: 60 }}
-                                    showInfo={false}
-                                  />
-                                </Space>
-                              }
-                              style={{ marginBottom: 12, borderRadius: 10 }}
-                            >
-                              <Timeline
-                                items={parent.tasks.map((task: DTask) => {
-                                  let color: string = 'gray';
-                                  let dot: React.ReactNode = <ClockCircleOutlined />;
-                                  if (task.status === 'processing') { color = '#1890ff'; dot = <LoadingOutlined />; }
-                                  if (task.status === 'done') { color = '#52c41a'; dot = <CheckCircleOutlined />; }
-                                  if (task.status === 'error') { color = '#ff4d4f'; dot = <ExclamationCircleOutlined />; }
-                                  if (task.status === 'timeout') { color = '#faad14'; dot = <ClockCircleOutlined />; }
-                                  return {
-                                    color,
-                                    dot,
-                                    children: (
-                                      <div key={task.id} style={{ marginLeft: 4 }}>
-                                        <Flex justify="space-between" align="center">
-                                          <Space size={4}>
-                                            <Text style={{ fontSize: 12 }}>{task.label}</Text>
-                                            <Tag color={TASK_STATUS_TAG[task.status] || 'default'} style={{ fontSize: 10, lineHeight: '16px' }}>
-                                              {task.status}
-                                            </Tag>
-                                          </Space>
-                                          <Space size={4}>
-                                            {task.agentId && (
-                                              <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
-                                                <RobotOutlined style={{ fontSize: 9 }} /> {task.agentId}
-                                              </Tag>
-                                            )}
-                                            {task.dependsOn.length > 0 && (
-                                              <Tooltip title={`Depends on: ${task.dependsOn.join(', ')}`}>
-                                                <Tag color="purple" style={{ fontSize: 10, lineHeight: '16px' }}>
-                                                  <ApartmentOutlined style={{ fontSize: 9 }} /> {task.dependsOn.length}
-                                                </Tag>
-                                              </Tooltip>
-                                            )}
-                                          </Space>
-                                        </Flex>
-                                        {task.result && (
-                                          <Text type="secondary" style={{ fontSize: 11, marginTop: 2, display: 'block' }}>
-                                            {task.result.slice(0, 120)}{task.result.length > 120 ? '...' : ''}
-                                          </Text>
-                                        )}
-                                      </div>
-                                    ),
-                                  };
-                                })}
-                              />
-                              <div style={{ marginTop: 4 }}>
-                                <Text type="secondary" style={{ fontSize: 10 }}>
-                                  Parent: {parent.id} | Admin: {parent.adminFolder} | Created: {parent.createdAt ? new Date(parent.createdAt).toLocaleTimeString() : '-'}
-                                </Text>
-                              </div>
-                            </Card>
-                          ));
-                        })()
-                      )}
-                    </div>
-                  ),
-                },
-                {
-                  key: 'workspace-chat',
-                  label: <Space><MessageOutlined />Chat</Space>,
-                  children: (
-                    <div style={{ height: 'calc(100vh - 180px)' }}>
-                      <WorkspaceChatPanel
-                        workspaceId={selectedWs.id}
-                        tasks={tasks}
-                        lastTaskResult={lastTaskResult}
-                        toolMessages={workspaceToolMessages}
-                        onSend={(content) => {
-                          if (!selectedWs) return;
-                          fetch(`/api/cowork/workspaces/${selectedWs.id}/messages`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ fromMember: 'user', content, messageType: 'status' }),
-                          }).then(() => loadTasks(selectedWs.id));
-                        }}
-                      />
-                    </div>
-                  ),
-                },
-                {
-                  key: 'agents',
-                  label: <Space><RobotOutlined />Agents ({members.length})</Space>,
-                  children: (
-                    <div style={{ overflowY: 'auto', padding: 16, height: 'calc(100vh - 180px)' }}>
-                      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-                        <Text type="secondary" style={{ fontSize: 13 }}>{members.length} agent{members.length !== 1 ? 's' : ''} in workspace</Text>
-                        <Button
-                          type="primary"
-                          size="small"
-                          icon={<PlusOutlined />}
-                          onClick={() => { setEditingMember(null); memberForm.resetFields(); setMemberModalOpen(true); }}
+                  </div>
+                }
+              >
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+                  Create Team
+                </Button>
+              </Empty>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {teams.map(t => {
+                  const managerProfile = profiles.find(p => p.folder === t.manager_folder);
+                  return (
+                    <Card
+                      key={t.id}
+                      hoverable
+                      onClick={() => navigate(`/cowork/${t.id}`)}
+                      style={{ borderRadius: 12, borderColor: token.colorBorderSecondary }}
+                      title={
+                        <div className="flex items-center gap-2">
+                          <TeamOutlined style={{ color: token.colorPrimary }} />
+                          <span>{t.name}</span>
+                        </div>
+                      }
+                      extra={
+                        <Popconfirm
+                          title="Delete this team?"
+                          description="Chat history is preserved in the DB."
+                          onConfirm={(e) => { e?.stopPropagation(); handleDelete(t.id); }}
+                          onCancel={(e) => e?.stopPropagation()}
+                          okText="Delete"
+                          cancelText="Cancel"
                         >
-                          Add Agent
-                        </Button>
-                      </Flex>
-                      {loading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                        members.length === 0 ? <Empty description="No agent members" /> : (
-                          <List
-                            grid={{ gutter: 16, column: 2 }}
-                            dataSource={members}
-                            renderItem={(m: CoworkMember) => (
-                              <List.Item>
-                                <AgentCard
-                                  member={m}
-                                  onRemove={handleRemoveMember}
-                                  onEdit={(member) => {
-                                          setEditingMember(member);
-                                          const vals: any = { role: member.role, subdir: member.subdir || '' };
-                                          if (member.persona) vals.persona = member.persona;
-                                          if (member.responsibilities) {
-                                            try { vals.responsibilities = (JSON.parse(member.responsibilities) as string[]).join('\n'); } catch { vals.responsibilities = member.responsibilities; }
-                                          }
-                                          if (member.acceptanceCriteria) {
-                                            try { vals.acceptanceCriteria = (JSON.parse(member.acceptanceCriteria) as string[]).join('\n'); } catch { vals.acceptanceCriteria = member.acceptanceCriteria; }
-                                          }
-                                          if (member.triggers) {
-                                            try {
-                                              let parsed: unknown = JSON.parse(member.triggers);
-                                              if (!Array.isArray(parsed)) parsed = [parsed];
-                                              vals.triggersList = (parsed as Record<string, unknown>[]).map(normalizeTriggerFromJson);
-                                            } catch { vals.triggersList = []; }
-                                          } else { vals.triggersList = []; }
-                                          if (member.handoffRules) {
-                                            try {
-                                              let parsed: unknown = JSON.parse(member.handoffRules);
-                                              if (!Array.isArray(parsed)) parsed = [parsed];
-                                              vals.handoffRulesList = (parsed as Record<string, unknown>[]).map(normalizeHandoffRuleFromJson);
-                                            } catch { vals.handoffRulesList = []; }
-                                          } else { vals.handoffRulesList = []; }
-                                          if (member.outputFormat) {
-                                            try {
-                                              const o = JSON.parse(member.outputFormat);
-                                              if (o.format) vals.outputFormat = o.format;
-                                              if (o.requiredSections) vals.outputRequiredSections = (o.requiredSections as string[]).join('\n');
-                                              if (o.attachDiff !== undefined) vals.outputAttachDiff = o.attachDiff ? 'true' : 'false';
-                                            } catch { vals.outputFormat = member.outputFormat; }
-                                          }
-                                          if (member.sla) {
-                                            try {
-                                              const s = JSON.parse(member.sla);
-                                              if (s.maxDurationPerTaskMinutes) vals.slaMaxDuration = s.maxDurationPerTaskMinutes;
-                                              if (s.maxTokenPerTask) vals.slaMaxTokens = s.maxTokenPerTask;
-                                              if (s.escalateAfterBlockedMinutes) vals.slaEscalateAfter = s.escalateAfterBlockedMinutes;
-                                            } catch { /* ignore */ }
-                                          }
-                                          if (member.limits) {
-                                            try {
-                                              const l = JSON.parse(member.limits);
-                                              if (l.maxFileSizeWriteKb) vals.limitsMaxFileSize = l.maxFileSizeWriteKb;
-                                              if (l.allowedBashCommands) vals.limitsAllowedBash = (l.allowedBashCommands as string[]).join('\n');
-                                              if (l.deniedTools) vals.limitsDeniedTools = (l.deniedTools as string[]).join('\n');
-                                            } catch { /* ignore */ }
-                                          }
-                                          memberForm.setFieldsValue(vals);
-                                          setMemberModalOpen(true);
-                                        }}
-                                />
-                              </List.Item>
-                            )}
+                          <Button
+                            type="text" danger size="small" icon={<DeleteOutlined />}
+                            onClick={e => e.stopPropagation()}
                           />
-                        )
-                      )}
-                    </div>
-                  ),
-                },
-                {
-                  key: 'resources',
-                  label: <Space><FolderOpenOutlined />Resources</Space>,
-                  children: (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)' }}>
-                      <div style={{ padding: '4px 0 8px', borderBottom: '1px solid #f0f0f0' }}>
-                        <Segmented
-                          size="small"
-                          value={resTab}
-                          onChange={val => {
-                            setResTab(val as string);
-                            setSelectedFilePath(null); setFileContent(null); setFileIsBinary(false);
-                            setWdFilePath(null); setWdContent(null);
-                          }}
-                          options={[
-                            { label: <Space><LaptopOutlined />Working Dir</Space>, value: 'working-dir' },
-                            { label: <Space><CloudOutlined />Workspace ({wsFiles.length})</Space>, value: 'workspace' },
-                          ]}
-                        />
+                        </Popconfirm>
+                      }
+                      styles={{ body: { padding: 14 } }}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <UserOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>Manager:</Text>
+                        <Tag color="blue">{managerProfile?.name ?? t.manager_folder}</Tag>
                       </div>
-                      {/* Working Dir browser */}
-                      {resTab === 'working-dir' ? (
-                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-                          <div style={{ width: 280, borderRight: '1px solid #f0f0f0', overflowY: 'auto', padding: 8, flexShrink: 0 }}>
-                            {/* Breadcrumb */}
-                            {wdPath ? (
-                              <Flex align="center" gap={4} style={{ marginBottom: 6, flexWrap: 'wrap' }}>
-                                <Button type="link" size="small" onClick={() => loadWorkingDir(selectedWs!.id)}
-                                  icon={<HomeOutlined />} style={{ padding: 0, fontSize: 11 }} />
-                                {wdPath.split('/').map((seg, i, arr) => {
-                                  const partial = arr.slice(0, i + 1).join('/');
-                                  return (
-                                    <React.Fragment key={partial}>
-                                      <Text type="secondary" style={{ fontSize: 11 }}>/</Text>
-                                      <Button type="link" size="small"
-                                        onClick={() => loadWorkingDir(selectedWs!.id, partial)}
-                                        style={{ padding: 0, fontSize: 11 }}>
-                                        {seg}
-                                      </Button>
-                                    </React.Fragment>
-                                  );
-                                })}
-                              </Flex>
-                            ) : (
-                              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
-                                <HomeOutlined /> {selectedWs?.workingDir || '(no working dir)'}
-                              </Text>
-                            )}
-                            {wdLoading ? <Spin size="small" style={{ display: 'block', marginTop: 32, textAlign: 'center' }} /> : (
-                              wdEntries.length === 0 ? (
-                                <Empty description="Empty directory" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                              ) : (
-                                <List
-                                  size="small"
-                                  dataSource={wdEntries}
-                                  renderItem={(e: any) => (
-                                    <div
-                                      key={e.path}
-                                      onClick={() => {
-                                        if (e.isDir) {
-                                          loadWorkingDir(selectedWs!.id, e.path);
-                                        } else {
-                                          loadWorkingDir(selectedWs!.id, e.path);
-                                        }
-                                      }}
-                                      style={{
-                                        padding: '4px 8px', cursor: 'pointer', borderRadius: 4,
-                                        background: wdFilePath === e.path ? '#e6f7ff' : 'transparent',
-                                        fontSize: 12, display: 'flex', alignItems: 'center', gap: 6,
-                                      }}
-                                    >
-                                      {e.isDir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileTextOutlined style={{ color: '#1890ff' }} />}
-                                      <Text style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{e.name}</Text>
-                                      {!e.isDir && <Text type="secondary" style={{ fontSize: 10 }}>{formatSize(e.size)}</Text>}
-                                    </div>
-                                  )}
-                                />
-                              )
-                            )}
-                          </div>
-                          {/* Working dir file content */}
-                          <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-                            {wdLoading && wdFilePath ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                              wdFilePath && wdContent !== null ? (
-                                <div>
-                                  <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
-                                    <Text strong>{wdFilePath.split('/').pop()}</Text>
-                                    <Text type="secondary" style={{ fontSize: 11 }}>{wdFilePath}</Text>
-                                  </Flex>
-                                  <Card style={{ borderRadius: 8 }}>
-                                    {wdFilePath.endsWith('.md') || wdFilePath.endsWith('.markdown') ? (
-                                      <div
-                                        style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}
-                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(wdContent) }}
-                                      />
-                                    ) : (
-                                      <pre style={{
-                                        whiteSpace: 'pre-wrap', fontFamily: 'Menlo, Monaco, monospace',
-                                        fontSize: 12, lineHeight: 1.5, margin: 0, padding: 12,
-                                        background: '#f6f8fa', borderRadius: 6,
-                                        maxHeight: 'calc(100vh - 340px)', overflow: 'auto',
-                                      }}>{wdContent}</pre>
-                                    )}
-                                  </Card>
-                                </div>
-                              ) : (
-                                <div style={{ textAlign: 'center', marginTop: 64, color: '#8c8c8c' }}>
-                                  <LaptopOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-                                  <br /><Text type="secondary">Select a file to preview</Text>
-                                </div>
-                              )
-                            )}
-                          </div>
+                      <div className="flex items-start gap-2 mb-2">
+                        <TeamOutlined style={{ color: token.colorTextTertiary, fontSize: 12, marginTop: 4 }} />
+                        <Text type="secondary" style={{ fontSize: 12, marginTop: 2 }}>Members:</Text>
+                        <div className="flex flex-wrap gap-1">
+                          {t.members.length === 0
+                            ? <Text type="secondary" style={{ fontSize: 11 }}>(solo manager)</Text>
+                            : t.members.map(m => {
+                              const p = profiles.find(p => p.folder === m.folder);
+                              const label = p?.name ?? m.folder;
+                              const triggerCount = parseTriggerJson(m.triggers).length;
+                              const summary = summarizeTriggers(m.triggers);
+                              return (
+                                <Tag
+                                  key={m.folder}
+                                  color={triggerCount > 0 ? 'gold' : undefined}
+                                  style={{ cursor: 'pointer' }}
+                                  onClick={(e) => { e.stopPropagation(); openEditMember(t, m); }}
+                                  title={triggerCount > 0 ? `Triggers (${triggerCount}): ${summary}` : 'Click to edit triggers'}
+                                >
+                                  {label}{triggerCount > 0 ? ` ⚡${triggerCount}` : ''}
+                                </Tag>
+                              );
+                            })}
                         </div>
-                      ) : (
-                        /* Workspace file viewer */
-                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-                          <div style={{ width: 280, borderRight: '1px solid #f0f0f0', overflowY: 'auto', padding: 8, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
-                            {/* Breadcrumb */}
-                            {wsNavPath ? (
-                              <Flex align="center" gap={4} style={{ marginBottom: 6, flexWrap: 'wrap' }}>
-                                <Button type="link" size="small" onClick={() => setWsNavPath('')}
-                                  icon={<HomeOutlined />} style={{ padding: 0, fontSize: 11 }} />
-                                {wsNavPath.split('/').map((seg, i, arr) => {
-                                  const partial = arr.slice(0, i + 1).join('/');
-                                  return (
-                                    <React.Fragment key={partial}>
-                                      <Text type="secondary" style={{ fontSize: 11 }}>/</Text>
-                                      <Button type="link" size="small"
-                                        onClick={() => setWsNavPath(partial)}
-                                        style={{ padding: 0, fontSize: 11 }}>
-                                        {seg}
-                                      </Button>
-                                    </React.Fragment>
-                                  );
-                                })}
-                              </Flex>
-                            ) : (
-                              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
-                                <HomeOutlined /> shared
-                              </Text>
-                            )}
-                            <Upload
-                              multiple
-                              showUploadList={false}
-                              beforeUpload={file => {
-                                const fd = new FormData();
-                                fd.append('file', file);
-                                fetch(`/api/cowork/workspaces/${selectedWs!.id}/documents`, { method: 'POST', body: fd })
-                                  .then(() => { loadFiles(selectedWs!.id); message.success(`Uploaded ${file.name}`); })
-                                  .catch(() => message.error(`Failed to upload ${file.name}`));
-                                return false;
-                              }}
-                              accept=".md,.txt,.pdf,.json,.yaml,.yml,.toml,.csv,.ts,.js,.py,.rs,.html,.css"
-                            >
-                              <Button block size="small" icon={<UploadOutlined />} style={{ marginBottom: 8, fontSize: 12 }}>
-                                Upload files
-                              </Button>
-                            </Upload>
-                            {loading ? <Spin size="small" style={{ display: 'block', marginTop: 32, textAlign: 'center' }} /> : (
-                              wsFiles.length === 0 ? <Empty description="No files" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
-                                <List
-                                  size="small"
-                                  dataSource={wsEntries}
-                                  renderItem={(f: any) => (
-                                    <div
-                                      key={f.path}
-                                      onClick={() => {
-                                        if (f.isDir) {
-                                          setWsNavPath(f.path);
-                                          setSelectedFilePath(null); setFileContent(null); setFileIsBinary(false);
-                                        } else {
-                                          loadFileContent(selectedWs!.id, f.path);
-                                        }
-                                      }}
-                                      style={{
-                                        padding: '4px 8px', cursor: 'pointer', borderRadius: 4,
-                                        background: selectedFilePath === f.path ? '#e6f7ff' : 'transparent',
-                                        fontSize: 12, display: 'flex', alignItems: 'center', gap: 6,
-                                      }}
-                                    >
-                                      {f.isDir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileTextOutlined style={{ color: '#1890ff' }} />}
-                                      <Text style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{f.name}</Text>
-                                      {!f.isDir && <Text type="secondary" style={{ fontSize: 10 }}>{formatSize(f.size)}</Text>}
-                                    </div>
-                                  )}
-                                />
-                              )
-                            )}
-                          </div>
-                          <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-                            {fileLoading ? <Spin style={{ display: 'block', marginTop: 64 }} /> : (
-                              selectedFilePath && fileContent !== null ? (
-                                <div>
-                                  <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
-                                    <Space>
-                                      <Text strong>{selectedFilePath.split('/').pop()}</Text>
-                                      {fileIsBinary && <Tag color="orange">Binary</Tag>}
-                                    </Space>
-                                    <Space>
-                                      <Text type="secondary" style={{ fontSize: 11 }}>{selectedFilePath}</Text>
-                                      <a href={`/api/cowork/workspaces/${selectedWs!.id}/files/download?path=${encodeURIComponent(selectedFilePath)}`} download>
-                                        <Button size="small" icon={<DownloadOutlined />} type="link">Download</Button>
-                                      </a>
-                                    </Space>
-                                  </Flex>
-                                  <Card
-                                    style={{
-                                      borderRadius: 8,
-                                      background: fileIsBinary ? '#fffbe6' : undefined,
-                                      borderColor: fileIsBinary ? '#ffd591' : undefined,
-                                    }}
-                                  >
-                                    {selectedFilePath.endsWith('.md') || selectedFilePath.endsWith('.markdown') ? (
-                                      <div
-                                        style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}
-                                        dangerouslySetInnerHTML={{ __html: renderMarkdown(fileContent) }}
-                                      />
-                                    ) : (
-                                      <pre style={{
-                                        whiteSpace: 'pre-wrap', fontFamily: 'Menlo, Monaco, monospace',
-                                        fontSize: fileIsBinary ? 11 : 12, lineHeight: 1.5, margin: 0, padding: 12,
-                                        background: fileIsBinary ? '#fff7e6' : '#f6f8fa',
-                                        borderRadius: 6,
-                                        maxHeight: 'calc(100vh - 340px)', overflow: 'auto',
-                                        color: fileIsBinary ? '#8c6b1f' : undefined,
-                                      }}>{fileContent}</pre>
-                                    )}
-                                  </Card>
-                                </div>
-                              ) : (
-                                <div style={{ textAlign: 'center', marginTop: 64, color: '#8c8c8c' }}>
-                                  <FileTextOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-                                  <br /><Text type="secondary">Select a file to preview</Text>
-                                </div>
-                              )
-                            )}
-                          </div>
+                      </div>
+                      {t.workspace_dir && (
+                        <div className="flex items-center gap-2">
+                          <FolderOpenOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
+                          <Text type="secondary" style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                            {t.workspace_dir}
+                          </Text>
                         </div>
                       )}
-                    </div>
-                  ),
-                },
-              ]}
-            />
+                      <div className="flex items-center gap-2 mt-3 pt-2" style={{ borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+                        <Button
+                          size="small"
+                          icon={<TeamOutlined />}
+                          onClick={(e) => { e.stopPropagation(); navigate(`/cowork/${t.id}`); }}
+                          block
+                        >
+                          Manage tasks & members
+                        </Button>
+                        <Button
+                          size="small"
+                          type="primary"
+                          onClick={(e) => { e.stopPropagation(); openTeamChat(t); }}
+                          block
+                        >
+                          Open chat
+                        </Button>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </Content>
-
-        {/* Task Create/Edit Modal */}
-        <Modal
-          title={editingTask ? `Edit: ${editingTask.title}` : 'New Task'}
-          open={taskModalOpen}
-          onCancel={() => { setTaskModalOpen(false); setEditingTask(null); }}
-          footer={null}
-          destroyOnClose
-          width={560}
-        >
-          <Form form={taskForm} layout="vertical" onFinish={editingTask ? (values) => {
-            const payload = { ...values };
-            // Serialize attachments array to JSON string for update
-            if (Array.isArray(values.attachments)) {
-              payload.attachments = JSON.stringify(values.attachments);
-            }
-            api(`/api/cowork/workspaces/${selectedWs.id}/tasks/${editingTask.id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            }).then(() => { setTaskModalOpen(false); setEditingTask(null); loadTasks(selectedWs.id); });
-          } : handleCreateTask} style={{ marginTop: 16 }}>
-            <Form.Item name="title" label="Title" rules={[{ required: true }]}>
-              <Input placeholder="Implement auth module" />
-            </Form.Item>
-            <Form.Item name="description" label="Description">
-              <TextArea rows={3} placeholder="Describe the task..." />
-            </Form.Item>
-            <Form.Item name="attachments" label={<Space><PaperClipOutlined />Attach workspace files</Space>}>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Select files to attach..."
-                options={wsFiles.filter((f: any) => !f.isDir).map((f: any) => ({ value: f.path, label: f.name }))}
-                optionRender={opt => (
-                  <Flex gap={8} align="center">
-                    <FileTextOutlined style={{ color: '#1890ff', fontSize: 12 }} />
-                    <Text style={{ fontSize: 12 }}>{opt.label}</Text>
-                  </Flex>
-                )}
-              />
-            </Form.Item>
-            <Flex gap={12}>
-              <Form.Item name="assignee" label="Assignee" style={{ flex: 1 }}>
-                <Select
-                  allowClear
-                  placeholder="Select agent..."
-                  options={members.map(m => ({ value: m.memberId, label: m.memberId }))}
-                  optionRender={opt => (
-                    <Space>
-                      <RobotOutlined style={{ fontSize: 11, color: '#1890ff' }} />
-                      <span>{opt.label}</span>
-                      {(() => {
-                        const role = members.find(m => m.memberId === opt.value)?.role;
-                        return role ? (
-                          <Tag
-                            color={role === 'lead' ? 'gold' : role === 'reviewer' ? 'purple' : 'blue'}
-                            icon={role === 'lead' ? <CrownOutlined /> : undefined}
-                            style={{ fontSize: 10, lineHeight: '16px' }}
-                          >
-                            {role}
-                          </Tag>
-                        ) : null;
-                      })()}
-                    </Space>
-                  )}
-                />
-              </Form.Item>
-              <Form.Item name="priority" label="Priority" style={{ flex: 1 }} initialValue="medium">
-                <Select options={['low', 'medium', 'high', 'critical'].map(p => ({ value: p, label: p }))} />
-              </Form.Item>
-            </Flex>
-            {editingTask && (
-              <Form.Item name="status" label="Status">
-                <Select options={['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked'].map(s => ({ value: s, label: STATUS_LABELS[s] ?? s }))} />
-              </Form.Item>
-            )}
-            <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-              <Space>
-                {editingTask && (
-                  <Popconfirm title="Delete this task?" onConfirm={() => { handleDeleteTask(editingTask); setTaskModalOpen(false); }}>
-                    <Button danger>Delete</Button>
-                  </Popconfirm>
-                )}
-                <Button onClick={() => { setTaskModalOpen(false); setEditingTask(null); }}>Cancel</Button>
-                <Button type="primary" htmlType="submit">{editingTask ? 'Save' : 'Create'}</Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        </Modal>
-
-        {/* Board Section Edit Modal */}
-        <Modal
-          title={
-            <Space>
-              <AppstoreOutlined />
-              <span style={{ textTransform: 'capitalize' }}>Edit — {boardEditSection}</span>
-            </Space>
-          }
-          open={boardEditModalOpen}
-          onCancel={() => setBoardEditModalOpen(false)}
-          onOk={async () => {
-            const original = board.find(e => e.section === boardEditSection)?.content || '';
-            if (boardEditContent !== original) {
-              await handleUpdateBoard(boardEditSection, boardEditContent);
-            }
-            setBoardEditModalOpen(false);
-          }}
-          okText="Save"
-          cancelText="Cancel"
-          destroyOnClose
-          width={640}
-        >
-          <div style={{ marginTop: 12 }}>
-            <TextArea
-              value={boardEditContent}
-              onChange={e => setBoardEditContent(e.target.value)}
-              rows={12}
-              placeholder={`Enter ${boardEditSection} content (supports Markdown)...`}
-              style={{ fontFamily: 'Menlo, Monaco, monospace', fontSize: 13 }}
-            />
-            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-              Markdown được hỗ trợ. Nội dung sẽ được lưu vào board section "{boardEditSection}".
-            </Text>
-          </div>
-        </Modal>
-
-        {/* Member Add/Edit Modal */}
-        <Modal
-          title={editingMember ? `Edit Agent: ${editingMember.memberId}` : 'Add Agent'}
-          open={memberModalOpen}
-          onCancel={() => { setMemberModalOpen(false); setEditingMember(null); memberForm.resetFields(); }}
-          footer={null}
-          destroyOnClose
-          width={640}
-        >
-          <Form
-            form={memberForm}
-            layout="vertical"
-            onFinish={editingMember ? handleEditMember : handleAddMember}
-            style={{ marginTop: 16 }}
-          >
-            {!editingMember ? (
-              <>
-                <Form.Item name="memberId" label="Agent Folder" rules={[{ required: true, message: 'Required' }]}>
-                  <Input placeholder="e.g. code-agent, review-agent, test-agent" />
-                </Form.Item>
-                <Flex gap={12}>
-                  <Form.Item name="role" label="Role" style={{ flex: 1 }} initialValue="worker">
-                    <Select options={[
-                      { value: 'lead', label: 'Lead — orchestrates, assigns tasks' },
-                      { value: 'worker', label: 'Worker — executes implementation' },
-                      { value: 'reviewer', label: 'Reviewer — reviews and approves' },
-                    ]} />
-                  </Form.Item>
-                  <Form.Item name="subdir" label="Subdir" style={{ flex: 1 }}>
-                    <Input placeholder="e.g. impl, review, tests" />
-                  </Form.Item>
-                </Flex>
-              </>
-            ) : (
-              <Tabs
-                defaultActiveKey="core"
-                style={{ minHeight: 360 }}
-                items={[
-                  {
-                    key: 'core',
-                    label: 'Core',
-                    children: (
-                      <>
-                        <Flex gap={12}>
-                          <Form.Item name="role" label="Role" style={{ flex: 1 }}>
-                            <Select options={[
-                              { value: 'lead', label: 'Lead — orchestrates, assigns tasks' },
-                              { value: 'worker', label: 'Worker — executes implementation' },
-                              { value: 'reviewer', label: 'Reviewer — reviews and approves' },
-                            ]} />
-                          </Form.Item>
-                          <Form.Item name="subdir" label="Subdir" style={{ flex: 1 }}>
-                            <Input placeholder="e.g. impl" />
-                          </Form.Item>
-                        </Flex>
-                        <Form.Item name="persona" label="Persona">
-                          <TextArea rows={3} placeholder="Senior backend engineer. Prioritize correctness and performance. Always write unit tests for public functions." />
-                        </Form.Item>
-                        <Form.Item name="responsibilities" label="Responsibilities" help="One per line">
-                          <TextArea rows={3} placeholder={'Implement tasks tagged "backend" or "feature"\nWrite unit tests and integration tests for your code\nFix bugs assigned after review cycle'} />
-                        </Form.Item>
-                        <Form.Item name="acceptanceCriteria" label="Acceptance Criteria" help="One per line">
-                          <TextArea rows={3} placeholder={'cargo test passes\ncargo clippy has no warnings\nNo new unwrap() in production paths'} />
-                        </Form.Item>
-                      </>
-                    ),
-                  },
-                  {
-                    key: 'triggers',
-                    label: 'Triggers',
-                    children: (
-                      <>
-                        <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
-                          Define when this agent automatically starts working. Add multiple triggers for different conditions. Fields vary by trigger type.
-                        </Text>
-                        <Form.List name="triggersList">
-                          {(fields, { add, remove }) => (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                              {fields.map(({ key, name }) => (
-                                <Card
-                                  key={key}
-                                  size="small"
-                                  styles={{ body: { padding: 12 } }}
-                                  style={{ borderRadius: 10 }}
-                                  extra={(
-                                    <Button
-                                      type="text"
-                                      danger
-                                      size="small"
-                                      icon={<DeleteOutlined />}
-                                      onClick={() => remove(name)}
-                                      aria-label="Delete trigger"
-                                    />
-                                  )}
-                                >
-                                  <Row gutter={[12, 8]}>
-                                    <Col xs={24} md={8}>
-                                      <Form.Item
-                                        label="Type"
-                                        name={[name, 'type']}
-                                        rules={[{ required: true, message: 'Required' }]}
-                                        style={{ marginBottom: 0 }}
-                                      >
-                                        <Select
-                                          placeholder="Select trigger type"
-                                          options={TRIGGER_TYPE_PRESETS}
-                                        />
-                                      </Form.Item>
-                                    </Col>
-                                    <Col xs={24} md={16}>
-                                      <Form.Item
-                                        noStyle
-                                        shouldUpdate={(prevValues, currentValues) => 
-                                          prevValues.triggersList?.[name]?.type !== currentValues.triggersList?.[name]?.type
-                                        }
-                                      >
-                                        {({ getFieldValue }) => {
-                                          const triggerType = getFieldValue(['triggersList', name, 'type']);
-                                          
-                                          // task_assigned: condition field
-                                          if (triggerType === 'task_assigned') {
-                                            return (
-                                              <Form.Item
-                                                label="Condition"
-                                                name={[name, 'condition']}
-                                                style={{ marginBottom: 0 }}
-                                              >
-                                                <Input placeholder='e.g. "assignee == me"' />
-                                              </Form.Item>
-                                            );
-                                          }
-                                          
-                                          // message_received: from, messageType fields
-                                          if (triggerType === 'message_received') {
-                                            return (
-                                              <>
-                                                <Form.Item
-                                                  label="From"
-                                                  name={[name, 'from']}
-                                                  style={{ marginBottom: 8 }}
-                                                >
-                                                  <AutoComplete
-                                                    placeholder="e.g. review-agent"
-                                                    options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
-                                                    filterOption={(input, opt) =>
-                                                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                                                    }
-                                                  />
-                                                </Form.Item>
-                                                <Form.Item
-                                                  label="Message type"
-                                                  name={[name, 'messageType']}
-                                                  style={{ marginBottom: 0 }}
-                                                >
-                                                  <Input placeholder="e.g. handoff" />
-                                                </Form.Item>
-                                              </>
-                                            );
-                                          }
-                                          
-                                          // task_status_changed: status, to, assignee, result conditions
-                                          if (triggerType === 'task_status_changed') {
-                                            return (
-                                              <>
-                                                <Form.Item
-                                                  label="Status"
-                                                  name={[name, 'status']}
-                                                  rules={[{ required: true, message: 'Required' }]}
-                                                  style={{ marginBottom: 8 }}
-                                                >
-                                                  <Select
-                                                    placeholder="Select status"
-                                                    options={TRIGGER_STATUS_OPTIONS}
-                                                  />
-                                                </Form.Item>
-                                                <Form.Item
-                                                  label="To"
-                                                  name={[name, 'to']}
-                                                  rules={[{ required: true, message: 'Required' }]}
-                                                  style={{ marginBottom: 8 }}
-                                                >
-                                                  <AutoComplete
-                                                    placeholder="e.g. review-agent"
-                                                    options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
-                                                    filterOption={(input, opt) =>
-                                                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                                                    }
-                                                  />
-                                                </Form.Item>
-                                                <Form.Item
-                                                  label="Assignee filter"
-                                                  name={[name, 'assignee']}
-                                                  help="Optional: only trigger when task assigned to this member"
-                                                  style={{ marginBottom: 8 }}
-                                                >
-                                                  <AutoComplete
-                                                    placeholder="e.g. code-agent"
-                                                    options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
-                                                    filterOption={(input, opt) =>
-                                                      String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                                                    }
-                                                  />
-                                                </Form.Item>
-                                                <Form.Item
-                                                  label="Only if result contains"
-                                                  name={[name, 'only_if_result_contains']}
-                                                  help="Optional: only trigger if result contains this text"
-                                                  style={{ marginBottom: 8 }}
-                                                >
-                                                  <Input placeholder="e.g. fix" />
-                                                </Form.Item>
-                                                <Form.Item
-                                                  label="Unless result contains"
-                                                  name={[name, 'unless_result_contains']}
-                                                  help="Optional: skip trigger if result contains this text"
-                                                  style={{ marginBottom: 0 }}
-                                                >
-                                                  <Input placeholder="e.g. complete" />
-                                                </Form.Item>
-                                              </>
-                                            );
-                                          }
-                                          
-                                          // board_updated: section field
-                                          if (triggerType === 'board_updated') {
-                                            return (
-                                              <Form.Item
-                                                label="Section"
-                                                name={[name, 'section']}
-                                                rules={[{ required: true, message: 'Required' }]}
-                                                style={{ marginBottom: 0 }}
-                                              >
-                                                <Select
-                                                  placeholder="Select section"
-                                                  options={BOARD_SECTIONS.map((s) => ({ value: s, label: s }))}
-                                                />
-                                              </Form.Item>
-                                            );
-                                          }
-                                          
-                                          // schedule: cron field
-                                          if (triggerType === 'schedule') {
-                                            return (
-                                              <Form.Item
-                                                label="Cron expression"
-                                                name={[name, 'cron']}
-                                                rules={[{ required: true, message: 'Required' }]}
-                                                help="e.g. 0 9 * * * for daily at 9 AM"
-                                                style={{ marginBottom: 0 }}
-                                              >
-                                                <Input placeholder="0 9 * * *" />
-                                              </Form.Item>
-                                            );
-                                          }
-                                          
-                                          return null;
-                                        }}
-                                      </Form.Item>
-                                    </Col>
-                                  </Row>
-                                </Card>
-                              ))}
-                              <Button
-                                type="dashed"
-                                onClick={() => add({
-                                  type: 'task_assigned',
-                                  condition: '',
-                                })}
-                                block
-                                icon={<PlusOutlined />}
-                              >
-                                Add trigger
-                              </Button>
-                            </div>
-                          )}
-                        </Form.List>
-                      </>
-                    ),
-                  },
-                  {
-                    key: 'handoff',
-                    label: 'Handoff',
-                    children: (
-                      <>
-                        <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
-                          Đặt luật chuyển tiếp: khi điều kiện khớp, agent sẽ gửi tin tới agent đích với kiểu message tương ứng. Có thể thêm nhiều rule; giá trị &quot;When&quot; / agent đích cũng có thể gõ tay nếu không nằm trong gợi ý.
-                        </Text>
-                        <Form.List name="handoffRulesList">
-                          {(fields, { add, remove }) => (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                              {fields.map(({ key, name }) => (
-                                <Card
-                                  key={key}
-                                  size="small"
-                                  styles={{ body: { padding: 12 } }}
-                                  style={{ borderRadius: 10 }}
-                                  extra={(
-                                    <Button
-                                      type="text"
-                                      danger
-                                      size="small"
-                                      icon={<DeleteOutlined />}
-                                      onClick={() => remove(name)}
-                                      aria-label="Xóa rule"
-                                    />
-                                  )}
-                                >
-                                  <Row gutter={[12, 8]}>
-                                    <Col xs={24} md={8}>
-                                      <Form.Item
-                                        label="When"
-                                        name={[name, 'when']}
-                                        rules={[{ required: true, message: 'Không được để trống' }]}
-                                        style={{ marginBottom: 0 }}
-                                      >
-                                        <AutoComplete
-                                          placeholder="vd. task_complete"
-                                          options={HANDOFF_WHEN_PRESETS.map((p) => ({ value: p.value, label: `${p.label} (${p.value})` }))}
-                                          filterOption={(input, opt) =>
-                                            String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase()) ||
-                                            String(opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                                          }
-                                        />
-                                      </Form.Item>
-                                    </Col>
-                                    <Col xs={24} md={8}>
-                                      <Form.Item
-                                        label="Tới agent"
-                                        name={[name, 'to']}
-                                        rules={[{ required: true, message: 'Chọn hoặc nhập agent đích' }]}
-                                        style={{ marginBottom: 0 }}
-                                      >
-                                        <AutoComplete
-                                          placeholder="vd. code-agent"
-                                          options={members.map((mm) => ({ value: mm.memberId, label: mm.memberId }))}
-                                          filterOption={(input, opt) =>
-                                            String(opt?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                                          }
-                                        />
-                                      </Form.Item>
-                                    </Col>
-                                    <Col xs={24} md={8}>
-                                      <Form.Item
-                                        label="Kiểu (type)"
-                                        name={[name, 'type']}
-                                        rules={[{ required: true, message: 'Chọn kiểu' }]}
-                                        style={{ marginBottom: 0 }}
-                                      >
-                                        <Select options={HANDOFF_TYPE_OPTIONS} placeholder="Kiểu" />
-                                      </Form.Item>
-                                    </Col>
-                                    <Col span={24}>
-                                      <Form.Item
-                                        label="Message template"
-                                        name={[name, 'messageTemplate']}
-                                        help="Tuỳ chọn. Để trống sẽ lưu là null trong JSON."
-                                        style={{ marginBottom: 0 }}
-                                      >
-                                        <TextArea rows={2} placeholder="Nội dung tin kèm handoff (nếu có)…" />
-                                      </Form.Item>
-                                    </Col>
-                                  </Row>
-                                </Card>
-                              ))}
-                              <Button
-                                type="dashed"
-                                onClick={() => add({
-                                  when: 'task_complete',
-                                  to: members.find((mm) => !editingMember || mm.memberId !== editingMember.memberId)?.memberId ?? '',
-                                  type: 'handoff',
-                                  messageTemplate: '',
-                                })}
-                                block
-                                icon={<PlusOutlined />}
-                              >
-                                Thêm handoff rule
-                              </Button>
-                            </div>
-                          )}
-                        </Form.List>
-                      </>
-                    ),
-                  },
-                  {
-                    key: 'output',
-                    label: 'Output',
-                    children: (
-                      <>
-                        <Flex gap={12}>
-                          <Form.Item name="outputFormat" label="Format" style={{ flex: 1 }}>
-                            <Select
-                              allowClear
-                              placeholder="None"
-                              options={[
-                                { value: 'markdown', label: 'Markdown' },
-                                { value: 'text', label: 'Plain Text' },
-                                { value: 'json', label: 'JSON' },
-                              ]}
-                            />
-                          </Form.Item>
-                          <Form.Item name="outputAttachDiff" label="Attach Diff" style={{ flex: 1 }} valuePropName="checked">
-                            <Select
-                              allowClear
-                              placeholder="Default"
-                              options={[
-                                { value: 'true', label: 'Yes' },
-                                { value: 'false', label: 'No' },
-                              ]}
-                            />
-                          </Form.Item>
-                        </Flex>
-                        <Form.Item name="outputRequiredSections" label="Required Sections" help="One per line">
-                          <TextArea rows={3} placeholder={'Summary\nFiles Changed\nTest Results\nNotes'} />
-                        </Form.Item>
-                      </>
-                    ),
-                  },
-                  {
-                    key: 'sla',
-                    label: 'SLA',
-                    children: (
-                      <>
-                        <Flex gap={12}>
-                          <Form.Item name="slaMaxDuration" label="Max Duration (min)" style={{ flex: 1 }}>
-                            <Input type="number" placeholder="60" />
-                          </Form.Item>
-                          <Form.Item name="slaMaxTokens" label="Max Tokens" style={{ flex: 1 }}>
-                            <Input type="number" placeholder="50000" />
-                          </Form.Item>
-                          <Form.Item name="slaEscalateAfter" label="Escalate After Blocked (min)" style={{ flex: 1 }}>
-                            <Input type="number" placeholder="30" />
-                          </Form.Item>
-                        </Flex>
-                      </>
-                    ),
-                  },
-                  {
-                    key: 'limits',
-                    label: 'Limits',
-                    children: (
-                      <>
-                        <Form.Item name="limitsMaxFileSize" label="Max File Write (KB)">
-                          <Input type="number" placeholder="500" />
-                        </Form.Item>
-                        <Form.Item name="limitsAllowedBash" label="Allowed Bash Commands" help="One per line. Empty = allow all safe commands">
-                          <TextArea rows={3} placeholder={'cargo build\ncargo test\ncargo clippy\ngit diff'} />
-                        </Form.Item>
-                        <Form.Item name="limitsDeniedTools" label="Denied Tools" help="One per line">
-                          <TextArea rows={2} placeholder={'Write\nEdit\nBash'} />
-                        </Form.Item>
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            )}
-            <Divider style={{ margin: '12px 0' }} />
-            <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-              <Space>
-                <Button onClick={() => { setMemberModalOpen(false); setEditingMember(null); memberForm.resetFields(); }}>Cancel</Button>
-                <Button type="primary" htmlType="submit">{editingMember ? 'Save' : 'Add'}</Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        </Modal>
-
       </Layout>
+
+      <Modal
+        title="Create Cowork Team"
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        footer={null}
+        destroyOnHidden
+        width={560}
+      >
+        <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
+          {/* Template picker — autofill name/manager/members from a built-in template */}
+          <Form.Item
+            name="template_id"
+            label="Start from template (optional)"
+            extra="Pick a template to auto-fill the form. You can still edit any field below."
+          >
+            <Select
+              allowClear
+              placeholder="No template — fill in manually"
+              options={templates.map(t => ({
+                value: t.id,
+                label: `${t.icon} ${t.name}`,
+              }))}
+              optionRender={(opt) => {
+                const tmpl = templates.find(x => x.id === opt.value);
+                if (!tmpl) return opt.label;
+                return (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{tmpl.icon} {tmpl.name}</div>
+                    <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                      {tmpl.description}
+                    </div>
+                    <div style={{ fontSize: 10, color: token.colorTextTertiary, marginTop: 2 }}>
+                      Manager: <code>{tmpl.manager}</code>
+                      {tmpl.members.length > 0 && (
+                        <> · Members: {tmpl.members.map(m => <code key={m.folder} style={{ marginLeft: 4 }}>{m.folder}</code>)}</>
+                      )}
+                    </div>
+                  </div>
+                );
+              }}
+              onChange={(templateId: string | undefined) => {
+                if (!templateId) return;
+                const tmpl = templates.find(t => t.id === templateId);
+                if (!tmpl) return;
+                // Auto-fill from template; user can still override.
+                form.setFieldsValue({
+                  name: tmpl.name,
+                  manager_folder: tmpl.manager,
+                  members: tmpl.members.map(m => m.folder),
+                });
+              }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="name"
+            label="Team name"
+            rules={[{ required: true, message: 'Required' }]}
+          >
+            <Input placeholder="Frontend squad" autoFocus />
+          </Form.Item>
+
+          <Form.Item
+            name="manager_folder"
+            label="Manager"
+            rules={[{ required: true, message: 'Required' }]}
+            extra={
+              <span>
+                The lead agent you'll chat with. It delegates to members via dispatch tools.{' '}
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  You can pick any existing agent — not limited to user profiles.
+                </Text>
+              </span>
+            }
+          >
+            <Select
+              placeholder="Pick an agent (or template will auto-fill)"
+              showSearch
+              optionFilterProp="label"
+              options={ws.agents.map(a => ({
+                value: a.folder,
+                label: `${a.name} (${a.folder})`,
+              }))}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="members"
+            label="Members"
+            extra={
+              <span>
+                Agents the manager can delegate sub-tasks to.{' '}
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  Type a folder slug + Enter to add a custom agent not in the list.
+                </Text>
+              </span>
+            }
+          >
+            <Select
+              mode="tags"
+              placeholder="Pick agents — or type a custom folder slug"
+              showSearch
+              optionFilterProp="label"
+              options={ws.agents.map(a => ({
+                value: a.folder,
+                label: `${a.name} (${a.folder})`,
+              }))}
+              tokenSeparators={[',']}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="workspace_dir"
+            label="Shared workspace (optional)"
+            extra="Absolute path. All members run in this working directory."
+          >
+            <Input placeholder="/Users/you/code/my-project" style={{ fontFamily: 'monospace' }} />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right', marginTop: 8 }}>
+            <Button onClick={() => setModalOpen(false)} style={{ marginRight: 8 }}>Cancel</Button>
+            <Button type="primary" htmlType="submit">Create Team</Button>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Member trigger editor — pops up when user clicks a member tag */}
+      <Modal
+        title={
+          memberEditTarget
+            ? <span>Edit member · <code>{memberEditTarget.folder}</code></span>
+            : 'Edit member'
+        }
+        open={!!memberEditTarget}
+        onCancel={() => { setMemberEditTeam(null); setMemberEditTarget(null); }}
+        footer={null}
+        destroyOnHidden
+        width={600}
+      >
+        <Form form={memberForm} layout="vertical" onFinish={handleMemberSave} style={{ marginTop: 12 }}>
+          <Form.Item name="role" label="Role" tooltip="Short label (e.g. 'reviewer', 'researcher').">
+            <Input placeholder="reviewer" />
+          </Form.Item>
+          <Form.Item
+            name="responsibilities"
+            label="Responsibilities"
+            tooltip="What this member is expected to do when activated. Free text — bullet list or paragraph."
+          >
+            <Input.TextArea rows={2} placeholder="- review PRs and flag risks\n- verify migrations are safe" />
+          </Form.Item>
+          <Form.Item
+            label={<span>Triggers ⚡</span>}
+            tooltip="Structured rules — when this member auto-activates. Stored as a JSON array of typed trigger objects, matching the legacy CoworkManager schema."
+            extra="Add one or more rules. Empty = manual-dispatch only."
+          >
+            <TriggerEditor value={editingTriggers} onChange={setEditingTriggers} />
+          </Form.Item>
+          <Form.Item
+            name="handoff_rules"
+            label="Handoff rules"
+            tooltip="When this member should pass control to someone else."
+          >
+            <Input.TextArea rows={2} placeholder="if blocked by infra → handoff to ops" />
+          </Form.Item>
+          <Form.Item
+            name="acceptance_criteria"
+            label="Acceptance criteria"
+            tooltip="How to know the work is done."
+          >
+            <Input.TextArea rows={2} placeholder="all tests pass; no critical issues" />
+          </Form.Item>
+          <div className="grid grid-cols-2 gap-3">
+            <Form.Item name="output_format" label="Output format" tooltip="Markdown / JSON / table / etc.">
+              <Input placeholder="markdown with sections: summary, findings, next" />
+            </Form.Item>
+            <Form.Item name="sla" label="SLA" tooltip="Time/cost budget.">
+              <Input placeholder="< 5 min, < 10k tokens" />
+            </Form.Item>
+          </div>
+          <Form.Item name="limits" label="Limits" tooltip="Tool / file / scope restrictions.">
+            <Input placeholder="read-only; no Bash" />
+          </Form.Item>
+
+          <div className="flex items-center justify-between pt-2">
+            <Popconfirm
+              title="Remove this member from the team?"
+              description="The agent profile and its history stay; only this team membership is removed."
+              onConfirm={handleMemberRemove}
+              okText="Remove"
+              cancelText="Cancel"
+            >
+              <Button danger icon={<DeleteOutlined />}>Remove from team</Button>
+            </Popconfirm>
+            <div>
+              <Button onClick={() => { setMemberEditTeam(null); setMemberEditTarget(null); }} style={{ marginRight: 8 }}>Cancel</Button>
+              <Button type="primary" htmlType="submit">Save</Button>
+            </div>
+          </div>
+        </Form>
+      </Modal>
     </AppLayout>
   );
 }

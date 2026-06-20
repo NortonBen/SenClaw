@@ -20,9 +20,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::mcp::dispatch_server::{
-    BuiltinAwarePersonaResolver, CoworkDispatchAgentRow, CreateParentParams,
-    DispatchAllTasksParams, DispatchServer, DispatchTaskInput, DispatchTaskParams,
-    FsPersonaResolver, PersonaResolver,
+    BuiltinAwarePersonaResolver, CreateParentParams, DispatchAllTasksParams, DispatchServer,
+    DispatchTaskInput, DispatchTaskParams, FsPersonaResolver, PersonaResolver,
 };
 use crate::mcp::schedule_server::ToolResult;
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};
@@ -38,7 +37,6 @@ pub struct DispatchToolsConfig {
     pub state_path: PathBuf,
     pub admin_folder: String,
     pub agents_config_dir: Option<String>,
-    pub cowork_agents_json: Option<String>,
 }
 
 impl DispatchToolsConfig {
@@ -53,19 +51,7 @@ impl DispatchToolsConfig {
                 .map(|dir| FsPersonaResolver::from_dir(Path::new(dir)));
             Some(Box::new(BuiltinAwarePersonaResolver::new(fs)) as Box<dyn PersonaResolver>)
         };
-        let cowork_agents = self.cowork_agents_json.as_ref().and_then(|raw| {
-            let raw = raw.trim();
-            if raw.is_empty() {
-                return None;
-            }
-            serde_json::from_str::<Vec<CoworkDispatchAgentRow>>(raw).ok()
-        });
-        DispatchServer::new(
-            &self.state_path,
-            &self.admin_folder,
-            persona_resolver,
-            cowork_agents,
-        )
+        DispatchServer::new(&self.state_path, &self.admin_folder, persona_resolver)
     }
 }
 
@@ -599,7 +585,6 @@ mod tests {
             state_path: path,
             admin_folder: "test-agent".into(),
             agents_config_dir: None,
-            cowork_agents_json: None,
         })
     }
 
@@ -669,20 +654,6 @@ mod tests {
             }
             _ => panic!("Expected Result output"),
         }
-    }
-
-    #[test]
-    fn make_server_with_cowork_agents() {
-        let cfg = DispatchToolsConfig {
-            state_path: PathBuf::from("/tmp/nonexistent-dispatch-state.json"),
-            admin_folder: "test".into(),
-            agents_config_dir: None,
-            cowork_agents_json: Some(
-                r#"[{"memberId":"coder","role":"code","jid":"cowork:ws:coder"}]"#.into(),
-            ),
-        };
-        // Should not panic
-        let _server = cfg.make_server();
     }
 
     #[test]

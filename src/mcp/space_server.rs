@@ -1413,6 +1413,43 @@ impl SpaceServer {
         ToolResult::ok(item.to_string())
     }
 
+    /// Force a recurring schedule to fire on the next scheduler tick by
+    /// rewinding `next_run` to "now". The scheduler poll loop (1-10 s
+    /// cadence) picks it up like any other due task — same code path, same
+    /// run-log entry. The original `next_run` is then recomputed normally
+    /// after the executor finishes.
+    pub fn recurring_run_now(&self, id: &str) -> ToolResult {
+        let tasks = match self.db.list_all_tasks() {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("list tasks: {e}")),
+        };
+        let task = match tasks
+            .into_iter()
+            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+        {
+            Some(t) => t,
+            None => return ToolResult::err(format!("schedule not found: {id}")),
+        };
+
+        // Subtract 1 second so the comparison in the poller (next_run <= now)
+        // is strictly true even on the same wall-clock tick.
+        let now = chrono::Utc::now()
+            .checked_sub_signed(chrono::Duration::seconds(1))
+            .unwrap_or_else(chrono::Utc::now)
+            .to_rfc3339();
+
+        if let Err(e) = self.db.advance_task_next_run(
+            &task.id,
+            Some(&now),
+            crate::types::TaskStatus::Active,
+        ) {
+            return ToolResult::err(format!("set next_run: {e}"));
+        }
+        ToolResult::ok(
+            serde_json::json!({ "id": task.id, "queued_at": now }).to_string(),
+        )
+    }
+
     pub fn recurring_update(
         &self,
         id: &str,

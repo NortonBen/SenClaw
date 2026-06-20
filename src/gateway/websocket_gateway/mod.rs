@@ -27,7 +27,6 @@
 
 mod browser;
 mod connection;
-mod cowork_handlers;
 mod entity_handlers;
 mod gateway;
 mod handlers;

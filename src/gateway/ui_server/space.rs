@@ -683,6 +683,16 @@ pub(crate) async fn space_schedules_update(
     tool_result_to_response(r, StatusCode::BAD_REQUEST)
 }
 
+pub(crate) async fn space_schedules_run_now(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tool_result_to_response(
+        space_server(&s)?.recurring_run_now(&id),
+        StatusCode::NOT_FOUND,
+    )
+}
+
 pub(crate) async fn space_schedules_cancel(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,

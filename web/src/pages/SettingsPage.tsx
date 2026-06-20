@@ -6,7 +6,6 @@ import {
   ApiOutlined,
   UserOutlined,
   ThunderboltOutlined,
-  TeamOutlined,
   FilterOutlined,
   DatabaseOutlined,
   CloudDownloadOutlined,
@@ -19,12 +18,10 @@ import {
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
-import { AgentSidebar } from '../components/AgentSidebar';
 import { GeneralSettings } from '../components/settings/GeneralSettings';
 import { ChannelSettings } from '../components/settings/ChannelSettings';
 import { AgentSettings } from '../components/settings/AgentSettings';
 import { AgentBehaviorSettings } from '../components/settings/AgentBehaviorSettings';
-import { GroupSettings } from '../components/settings/GroupSettings';
 import { LLMSettings } from '../components/settings/LLMSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
 import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
@@ -41,7 +38,6 @@ type SettingsSection =
   | 'general'
   | 'tool-rules'
   | 'channels'
-  | 'groups'
   | 'agents'
   | 'llm'
   | 'embedding'
@@ -68,8 +64,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'general', icon: <SafetyOutlined />, label: 'Permissions' },
       { key: 'tool-rules', icon: <FilterOutlined />, label: 'Tool Rules' },
       { key: 'channels', icon: <ApiOutlined />, label: 'Channels' },
-      { key: 'groups', icon: <TeamOutlined />, label: 'Groups' },
-      { key: 'agents', icon: <UserOutlined />, label: 'Agents' },
+      { key: 'agents', icon: <UserOutlined />, label: 'Profile' },
       { key: 'agent-behavior', icon: <ControlOutlined />, label: 'Agent Behavior' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
@@ -95,17 +90,6 @@ export const SettingsPage: React.FC = () => {
             onRegister={ws.registerChannel}
             onUnregister={ws.unregisterChannel}
             onUpdate={ws.updateChannel}
-          />
-        );
-      case 'groups':
-        return (
-          <GroupSettings
-            groups={ws.groups}
-            agents={ws.agents}
-            channels={ws.channels}
-            onRegisterGroup={ws.registerGroup}
-            onUpdateGroup={ws.updateGroup}
-            onUnregisterGroup={ws.unregisterGroup}
           />
         );
       case 'agents':

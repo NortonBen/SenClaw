@@ -6,36 +6,19 @@ use async_trait::async_trait;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
 use crate::config::Config;
-use crate::cowork::CoworkManager;
 use crate::db::Db;
 use crate::mcp::manager::McpManager;
 use crate::wiki::manager::WikiManager;
 
 use super::chat::{chat_permission_respond, chat_plan_respond, chat_question_respond};
-use super::code::{
-    code_chat_group_messages, code_chat_group_stop_current, code_chat_groups_create,
-    code_chat_groups_list, code_chat_ws, code_sessions_archive, code_sessions_chat,
-    code_sessions_create, code_sessions_file_content, code_sessions_files, code_sessions_get,
-    code_sessions_git_log, code_sessions_list, code_sessions_rollback, fs_ls,
-};
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
-use super::cowork::{
-    cowork_board_get, cowork_board_update, cowork_documents_upload, cowork_files_download,
-    cowork_files_list, cowork_fs_browse, cowork_members_add, cowork_members_list,
-    cowork_members_remove, cowork_members_update, cowork_messages_list, cowork_messages_send,
-    cowork_task_comments_add, cowork_task_comments_list, cowork_tasks_create, cowork_tasks_delete,
-    cowork_tasks_get, cowork_tasks_list, cowork_tasks_update, cowork_templates_get,
-    cowork_templates_list, cowork_ws_browse, cowork_ws_create, cowork_ws_delete, cowork_ws_get,
-    cowork_ws_list, cowork_ws_resource_delete, cowork_ws_resource_upsert, cowork_ws_resources_list,
-    cowork_ws_update,
-};
 use super::embedding_config::{embedding_config_get, embedding_config_save};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
@@ -78,7 +61,7 @@ use super::space::{
     space_events_delete, space_events_list, space_events_search, space_events_set_reminder,
     space_events_update, space_notes_create, space_notes_delete, space_notes_list,
     space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
-    space_schedules_detail, space_schedules_list, space_schedules_update,
+    space_schedules_detail, space_schedules_list, space_schedules_run_now, space_schedules_update,
     space_sync_apple_calendar, space_sync_apple_notes,
     space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
 };
@@ -148,11 +131,10 @@ pub trait UiApi: Send + Sync {
 pub struct UiState {
     pub config: Arc<Config>,
     pub db: Option<Arc<Db>>,
-    pub cowork_manager: Option<Arc<CoworkManager>>,
+    pub group_manager: Option<Arc<crate::gateway::group_manager::GroupManager>>,
     pub wiki_manager: Option<Arc<WikiManager>>,
     pub persona_registry: Option<Arc<Mutex<crate::agent::persona_registry::PersonaRegistry>>>,
     pub agent_api: Option<Arc<dyn UiApi>>,
-    pub cowork_agent_api: Option<Arc<dyn crate::types::AgentApi>>,
     pub mcp_manager: Option<Arc<McpManager>>,
     pub marketplace_manager: Option<Arc<Mutex<crate::marketplace::manager::MarketplaceManager>>>,
     pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
@@ -188,9 +170,16 @@ fn resolve_dist_dir() -> PathBuf {
 pub fn build_router(state: Arc<UiState>) -> Router {
     let dist_dir = resolve_dist_dir();
 
+    // SPA fallback for client-side routes: if ServeDir can't resolve a
+    // path to a real file, hand back index.html with HTTP 200 so
+    // React-Router takes over. Without this any deep-link URL like
+    // /chat/cowork:abc returns a hard 404 and the bundle never loads.
+    let index_path = dist_dir.join("index.html");
+    let spa_index = tower_http::services::ServeFile::new(&index_path);
     let serve_dir = ServeDir::new(&dist_dir)
         .precompressed_gzip()
-        .precompressed_br();
+        .precompressed_br()
+        .fallback(spa_index);
 
     Router::new()
         // API endpoints
@@ -267,6 +256,57 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(admin_perms_get).post(admin_perms_set),
         )
         .route("/api/quicknotes", post(quicknotes_save))
+        // Workspace file discovery
+        .route(
+            "/api/workspace/files",
+            get(super::workspace::list_files),
+        )
+        // Profile file editor — SOUL.md + MEMORY.md per agent folder
+        .route(
+            "/api/agents/:folder/files",
+            get(super::profile_files::get_files).put(super::profile_files::put_files),
+        )
+        // Cowork teams (multi-agent dispatch)
+        .route(
+            "/api/cowork/teams",
+            get(super::cowork::list_teams).post(super::cowork::create_team),
+        )
+        .route(
+            "/api/cowork/teams/:id",
+            delete(super::cowork::delete_team),
+        )
+        .route(
+            "/api/cowork/teams/:id/members",
+            put(super::cowork::update_team_member),
+        )
+        .route(
+            "/api/cowork/teams/:id/members/:folder",
+            delete(super::cowork::remove_team_member),
+        )
+        .route(
+            "/api/cowork/teams/:id/tasks",
+            get(super::cowork::list_team_tasks).post(super::cowork::create_team_task),
+        )
+        .route(
+            "/api/cowork/teams/:team_id/tasks/:task_id",
+            patch(super::cowork::update_team_task).delete(super::cowork::delete_team_task),
+        )
+        .route(
+            "/api/cowork/teams/from-template",
+            post(super::cowork::create_from_template),
+        )
+        .route(
+            "/api/cowork/templates",
+            get(super::cowork::list_templates),
+        )
+        .route(
+            "/api/cowork/personas",
+            get(super::cowork::list_personas),
+        )
+        .route(
+            "/api/cowork/personas/:name/file",
+            get(super::cowork::get_persona_file).put(super::cowork::put_persona_file),
+        )
         // LLM config (specific routes before parameterized)
         .route(
             "/api/llm-config",
@@ -381,69 +421,6 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/mcp-servers/:name/enabled", post(mcp_servers_enabled))
         // Hooks config
         .route("/api/hooks", get(hooks_get).put(hooks_put))
-        // Cowork API
-        .route("/api/cowork/templates", get(cowork_templates_list))
-        .route("/api/cowork/templates/:name", get(cowork_templates_get))
-        .route("/api/cowork/fs-browse", get(cowork_fs_browse))
-        .route(
-            "/api/cowork/workspaces",
-            get(cowork_ws_list).post(cowork_ws_create),
-        )
-        .route(
-            "/api/cowork/workspaces/:id",
-            get(cowork_ws_get)
-                .patch(cowork_ws_update)
-                .delete(cowork_ws_delete),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/members",
-            get(cowork_members_list).post(cowork_members_add),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/members/:mid",
-            patch(cowork_members_update).delete(cowork_members_remove),
-        )
-        .route("/api/cowork/workspaces/:id/board", get(cowork_board_get))
-        .route(
-            "/api/cowork/workspaces/:id/board/:section",
-            patch(cowork_board_update),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/tasks",
-            get(cowork_tasks_list).post(cowork_tasks_create),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/tasks/:tid",
-            get(cowork_tasks_get)
-                .patch(cowork_tasks_update)
-                .delete(cowork_tasks_delete),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/tasks/:tid/comments",
-            get(cowork_task_comments_list).post(cowork_task_comments_add),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/messages",
-            get(cowork_messages_list).post(cowork_messages_send),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/documents",
-            post(cowork_documents_upload),
-        )
-        .route("/api/cowork/workspaces/:id/files", get(cowork_files_list))
-        .route(
-            "/api/cowork/workspaces/:id/files/download",
-            get(cowork_files_download),
-        )
-        .route("/api/cowork/workspaces/:id/browse", get(cowork_ws_browse))
-        .route(
-            "/api/cowork/workspaces/:id/resources",
-            get(cowork_ws_resources_list).post(cowork_ws_resource_upsert),
-        )
-        .route(
-            "/api/cowork/workspaces/:id/resources/:kind",
-            axum::routing::delete(cowork_ws_resource_delete),
-        )
         // ── Space API ─────────────────────────────────────────────────────────
         // Notes
         .route(
@@ -483,6 +460,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(space_schedules_detail)
                 .patch(space_schedules_update)
                 .delete(space_schedules_cancel),
+        )
+        .route(
+            "/api/space/schedules/:id/run-now",
+            post(space_schedules_run_now),
         )
         // Apps
         .route("/api/space/apps", get(space_apps_list))
@@ -555,41 +536,6 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route("/api/chat/question/respond", post(chat_question_respond))
         .route("/api/chat/plan/respond", post(chat_plan_respond))
-        // ── Filesystem browser ───────────────────────────────────────────────
-        .route("/api/fs/ls", get(fs_ls))
-        // ── Code Engine API ──────────────────────────────────────────────────
-        .route(
-            "/api/code/sessions",
-            get(code_sessions_list).post(code_sessions_create),
-        )
-        .route(
-            "/api/code/sessions/:id",
-            get(code_sessions_get).delete(code_sessions_archive),
-        )
-        .route("/api/code/sessions/:id/files", get(code_sessions_files))
-        .route(
-            "/api/code/sessions/:id/file-content",
-            get(code_sessions_file_content),
-        )
-        .route("/api/code/sessions/:id/chat", post(code_sessions_chat))
-        .route(
-            "/api/code/projects/:id/groups",
-            get(code_chat_groups_list).post(code_chat_groups_create),
-        )
-        .route(
-            "/api/code/groups/:id/messages",
-            get(code_chat_group_messages),
-        )
-        .route(
-            "/api/code/groups/:id/stop-current",
-            post(code_chat_group_stop_current),
-        )
-        .route("/api/code/ws", get(code_chat_ws))
-        .route("/api/code/sessions/:id/git-log", get(code_sessions_git_log))
-        .route(
-            "/api/code/sessions/:id/rollback",
-            post(code_sessions_rollback),
-        )
         // Workbench reverse ops (artifacts published by tools)
         .route(
             "/api/workbench/:jid/:id/mark-viewed",
@@ -665,11 +611,13 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/embedding/download-model",
             post(super::embedding_models::embedding_download_model),
         )
-        // Static files
+        // Static files. ServeDir handles real assets (/assets/*, favicon,
+        // etc.); paths it can't resolve fall through to the SPA fallback
+        // which serves the right HTML shell with HTTP 200.
         .nest_service("/", serve_dir)
-        // SPA fallback
-        .fallback(get(move |headers: HeaderMap| {
-            spa_fallback(dist_dir.clone(), headers)
+        // SPA fallback — must return 200 so React-Router can take over.
+        .fallback(get(move |uri: axum::http::Uri| {
+            spa_fallback(dist_dir.clone(), uri)
         }))
         .layer(CorsLayer::permissive())
         .with_state(state)

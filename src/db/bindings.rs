@@ -126,6 +126,7 @@ impl super::Db {
         jid: Option<&str>,
         bot_token_override: Option<&str>,
         max_messages: Option<u32>,
+        agent_id: Option<i64>,
     ) -> Result<()> {
         self.with_conn(|c| {
             if let Some(j) = jid {
@@ -141,6 +142,12 @@ impl super::Db {
                 c.execute(
                     "UPDATE bindings SET max_messages=?1 WHERE id=?2",
                     params![mm, id],
+                )?;
+            }
+            if let Some(aid) = agent_id {
+                c.execute(
+                    "UPDATE bindings SET agent_id=?1 WHERE id=?2",
+                    params![aid, id],
                 )?;
             }
             Ok(())

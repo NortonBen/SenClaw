@@ -106,13 +106,16 @@ export function CommonChatInput({
           </button>
         </div>
       )}
-      {(agentMode && onModeChange) || helperText ? (
+      {agentMode || helperText ? (
         <div
           className="flex items-center justify-between gap-2 mt-1.5 px-1"
           style={{ color: token.colorTextTertiary, fontSize: 11 }}
         >
           {agentMode && onModeChange ? (
             <AgentModeSelector mode={agentMode} onChange={onModeChange} disabled={disabled} />
+          ) : agentMode ? (
+            // Locked mode (e.g. cowork chats are DAG-only).
+            <AgentModeSelector mode={agentMode} onChange={() => { /* locked */ }} disabled readOnly />
           ) : (
             <span />
           )}

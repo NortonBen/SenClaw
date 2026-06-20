@@ -115,6 +115,9 @@ pub struct WebSocketGateway {
     pub(crate) pending_interactions: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     /// Optional forwarder for `app:*` chat events → mobile relay clients.
     pub(crate) app_event_sink: std::sync::RwLock<Option<AppEventSink>>,
+    /// Optional DB handle for the cowork runtime hooks. Filled by
+    /// `set_db_for_cowork`; when absent the hooks are no-ops.
+    pub(crate) db: std::sync::RwLock<Option<Arc<crate::db::Db>>>,
 }
 
 impl WebSocketGateway {
@@ -126,7 +129,15 @@ impl WebSocketGateway {
             last_known_states: Arc::new(Mutex::new(HashMap::new())),
             pending_interactions: Arc::new(Mutex::new(HashMap::new())),
             app_event_sink: std::sync::RwLock::new(None),
+            db: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Give the gateway a DB handle so cowork notify hooks can update
+    /// task rows when agent state transitions. Optional — without it the
+    /// hooks short-circuit cleanly.
+    pub fn set_db_for_cowork(&self, db: Arc<crate::db::Db>) {
+        *self.db.write().unwrap() = Some(db);
     }
 
     /// Install the forwarder that mirrors `app:*` chat events to mobile relay

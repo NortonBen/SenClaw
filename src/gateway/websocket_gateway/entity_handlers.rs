@@ -539,11 +539,15 @@ pub(crate) async fn handle_update_binding(
     let jid = msg["jid"].as_str();
     let bot_token_override = msg["botTokenOverride"].as_str();
     let max_messages = msg["maxMessages"].as_u64().map(|n| n as u32);
-    if let Err(e) =
-        state
-            .binding_manager
-            .update(&state.db, id, jid, bot_token_override, max_messages)
-    {
+    let agent_id = msg["agentId"].as_i64();
+    if let Err(e) = state.binding_manager.update(
+        &state.db,
+        id,
+        jid,
+        bot_token_override,
+        max_messages,
+        agent_id,
+    ) {
         send_json(
             sender,
             &serde_json::json!({"type": "error", "message": format!("{e}")}),

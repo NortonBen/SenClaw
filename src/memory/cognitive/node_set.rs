@@ -7,7 +7,6 @@
 //! |------------|-----------------------|-------------------|
 //! | `group`    | group jid             | L1 / L2           |
 //! | `persona`  | persona slug          | L2                |
-//! | `cowork`   | workspace id          | L2                |
 //! | `global`   | `""` (empty)          | L3                |
 //! | `custom`   | free-form tag         | any               |
 //!
@@ -20,7 +19,6 @@ use serde::{Deserialize, Serialize};
 pub enum ScopeKind {
     Group,
     Persona,
-    Cowork,
     Global,
     Custom,
 }
@@ -30,7 +28,6 @@ impl ScopeKind {
         match self {
             Self::Group => "group",
             Self::Persona => "persona",
-            Self::Cowork => "cowork",
             Self::Global => "global",
             Self::Custom => "custom",
         }
@@ -40,7 +37,6 @@ impl ScopeKind {
         match s {
             "group" => Self::Group,
             "persona" => Self::Persona,
-            "cowork" => Self::Cowork,
             "custom" => Self::Custom,
             _ => Self::Global,
         }
@@ -66,13 +62,6 @@ impl NodeSet {
         Self {
             scope_kind: ScopeKind::Persona,
             scope_id: slug.into(),
-            tag: tag.into(),
-        }
-    }
-    pub fn cowork(workspace_id: impl Into<String>, tag: impl Into<String>) -> Self {
-        Self {
-            scope_kind: ScopeKind::Cowork,
-            scope_id: workspace_id.into(),
             tag: tag.into(),
         }
     }

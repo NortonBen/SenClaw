@@ -3,7 +3,6 @@
 
 pub mod agent_pool;
 pub mod builtin_agents;
-pub mod code_session;
 pub mod dispatch_bridge;
 pub mod group_queue;
 pub mod hook_config_loader;

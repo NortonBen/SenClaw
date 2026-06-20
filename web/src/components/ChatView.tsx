@@ -5,10 +5,11 @@ import type { AgentMode } from '../hooks/useWebSocket';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
 import { ToolGroupCard } from './ToolGroupCard';
-import { Progress, Tooltip, Typography, Drawer, Badge, message } from 'antd';
-import { AudioMutedOutlined, AudioOutlined, FileTextOutlined, LoadingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Progress, Tooltip, Typography, Drawer, message } from 'antd';
+import { AudioMutedOutlined, AudioOutlined, LoadingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { AgentCommandInput, CommonChatInput } from './chat-common';
-import { PlanHistoryPanel } from './PlanHistoryPanel';
+import { ModelPicker } from './ModelPicker';
+import { ProfileBadge } from './ProfileBadge';
 import { useAppContext } from '../contexts/AppContext';
 
 const { Text } = Typography;
@@ -68,13 +69,11 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   const [input, setInput]           = useState('');
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
-  const [plansOpen, setPlansOpen]   = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [compacting, setCompacting] = useState(false);
   const [recording, setRecording]   = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [recordElapsed, setRecordElapsed] = useState(0);
-  const planCount = (ws.plansByJid[group.jid] ?? []).length;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const bottomRef                   = useRef<HTMLDivElement>(null);
   const scrollRef                   = useRef<HTMLDivElement>(null);
@@ -485,20 +484,19 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           </Tooltip>
 
           {/* Plan history — browse past plans this agent produced via ExitPlanMode */}
-          <Tooltip title="Plan history">
-            <button
-              onClick={() => setPlansOpen(true)}
-              className="w-7 h-7 rounded-full flex items-center justify-center transition-colors"
-              style={{ color: token.colorTextDescription }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = token.colorPrimary; e.currentTarget.style.background = `${token.colorPrimary}1a`; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = token.colorTextDescription; e.currentTarget.style.background = 'transparent'; }}
-              aria-label="Plan history"
-            >
-              <Badge count={planCount} size="small" offset={[2, -2]} styles={{ indicator: { fontSize: 9 } }}>
-                <FileTextOutlined style={{ fontSize: 15 }} />
-              </Badge>
-            </button>
-          </Tooltip>
+          <ProfileBadge
+            profiles={ws.agents}
+            activeProfileId={group.agentId}
+            onChange={(profileId) => {
+              if (profileId == null) return;
+              const binding = ws.bindings.find(b => b.jid === group.jid);
+              if (binding) ws.updateBinding(binding.id, { agentId: profileId });
+            }}
+          />
+          <ModelPicker
+            modelId={group.modelId}
+            onChange={(id) => ws.updateGroup(group.jid, { modelId: id })}
+          />
           {/* Stop / reset — always shown; in idle clears session context */}
           <button
             onClick={() => setShowStopConfirm(true)}
@@ -597,8 +595,8 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
         helperText={isPaused
           ? 'Press ▶ to resume · / @ # gợi ý · Shift+Enter xuống dòng'
           : 'Enter để gửi · Shift+Enter xuống dòng · / @ # gợi ý'}
-        agentMode={agentMode}
-        onModeChange={onModeChange}
+        agentMode={group.groupType === 'cowork' ? 'Dag' : agentMode}
+        onModeChange={group.groupType === 'cowork' ? undefined : onModeChange}
       >
         <AgentCommandInput
           value={input}
@@ -742,24 +740,6 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           </div>
         </div>
       )}
-
-      {/* Plan history drawer */}
-      <Drawer
-        title="Plan history"
-        placement="right"
-        width={460}
-        open={plansOpen}
-        onClose={() => setPlansOpen(false)}
-        styles={{ body: { padding: 0 } }}
-      >
-        <PlanHistoryPanel
-          groupJid={group.jid}
-          plansByJid={ws.plansByJid}
-          planById={ws.planById}
-          requestPlanList={ws.requestPlanList}
-          requestPlan={ws.requestPlan}
-        />
-      </Drawer>
 
       {/* ── View Context drawer ──────────────────────────────────── */}
       <Drawer

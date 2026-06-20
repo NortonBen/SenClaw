@@ -108,8 +108,9 @@ impl BindingManager {
         jid: Option<&str>,
         bot_token_override: Option<&str>,
         max_messages: Option<u32>,
+        agent_id: Option<i64>,
     ) -> Result<()> {
-        db.update_binding(id, jid, bot_token_override, max_messages)?;
+        db.update_binding(id, jid, bot_token_override, max_messages, agent_id)?;
         self.fire_changed();
         Ok(())
     }

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, StatusCode, Uri},
     response::Response,
 };
 use std::fs;
@@ -8,11 +8,13 @@ use std::path::PathBuf;
 
 use super::types::path_to_mime;
 
-pub(crate) async fn spa_fallback(dist_dir: PathBuf, headers: HeaderMap) -> Response {
-    let path = headers
-        .get("x-original-uri")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("/");
+/// SPA fallback: for any client-side route (e.g. `/chat/cowork:abc`) we
+/// serve the right HTML shell so React-Router can take over on the
+/// client. The Uri extractor reads the actual request path (the old
+/// `x-original-uri` header trick required a reverse proxy), so direct
+/// browser navigation works without nginx in the loop.
+pub(crate) async fn spa_fallback(dist_dir: PathBuf, uri: Uri) -> Response {
+    let path = uri.path();
 
     let is_wiki = path == "/wiki" || path.starts_with("/wiki/");
     let is_plugins = path == "/plugins" || path.starts_with("/plugins/");

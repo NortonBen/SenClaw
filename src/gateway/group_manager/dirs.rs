@@ -42,3 +42,27 @@ pub fn write_soul_md(config: &Config, folder: &str, name: &str, core_prompt: &st
     };
     fs::write(&soul_md, content).ok();
 }
+
+/// Read SOUL.md content for an agent folder (empty string if missing).
+pub fn read_soul_md(config: &Config, folder: &str) -> String {
+    let soul_md = config.paths.agents_dir.join(folder).join("SOUL.md");
+    fs::read_to_string(&soul_md).unwrap_or_default()
+}
+
+/// Write (or overwrite) MEMORY.md with the given content.
+/// Empty content writes the default header so the file always exists.
+pub fn write_memory_md(config: &Config, folder: &str, content: &str) {
+    let memory_md = config.paths.agents_dir.join(folder).join("MEMORY.md");
+    let body = if content.trim().is_empty() {
+        "# Memory\n\n".to_string()
+    } else {
+        content.to_string()
+    };
+    fs::write(&memory_md, body).ok();
+}
+
+/// Read MEMORY.md content for an agent folder (empty string if missing).
+pub fn read_memory_md(config: &Config, folder: &str) -> String {
+    let memory_md = config.paths.agents_dir.join(folder).join("MEMORY.md");
+    fs::read_to_string(&memory_md).unwrap_or_default()
+}

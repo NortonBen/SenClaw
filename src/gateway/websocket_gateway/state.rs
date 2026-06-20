@@ -24,7 +24,6 @@ pub struct WsState {
     pub agent_manager: Arc<crate::gateway::agent_manager::AgentManager>,
     pub binding_manager: Arc<crate::gateway::binding_manager::BindingManager>,
     pub channel_manager: Arc<crate::gateway::channel_manager::ChannelManager>,
-    pub cowork_manager: Arc<crate::cowork::CoworkManager>,
     pub api: Arc<dyn super::gateway::WsGatewayApi>,
     pub agent_api: Option<Arc<dyn AgentApi>>,
     pub browser_relay: Arc<BrowserRelay>,

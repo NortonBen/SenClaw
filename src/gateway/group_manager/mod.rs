@@ -17,7 +17,7 @@ pub use apps::{
     delete_feishu_app, delete_qq_app, get_feishu_apps, get_qq_apps, save_feishu_app, save_qq_app,
 };
 pub use chat::{delete_telegram_bot, get_telegram_bots, get_wechat_accounts, save_telegram_bot};
-pub use dirs::{ensure_agent_dirs, write_soul_md};
+pub use dirs::{ensure_agent_dirs, read_memory_md, read_soul_md, write_memory_md, write_soul_md};
 pub use llm::{
     get_admin_permissions_config, get_after_process_enabled, get_pre_cognitive_enabled,
     get_pre_trigger_skill_enabled, get_thinking_enabled, load_cognitive_config,
@@ -28,7 +28,7 @@ pub use llm::{
     save_thinking_enabled, save_tts_settings, save_whisper_settings,
     set_active_cognitive_llm_config, set_active_llm_config, set_active_quick_llm_config,
 };
-pub use manager::{ensure_admin_group, ensure_app_group, ensure_wechat_admin_group, GroupManager};
+pub use manager::{ensure_app_group, ensure_wechat_admin_group, GroupManager};
 pub use types::{
     AdminPermissions, EmbeddingConfig, FeishuAppConfig, GroupBindingUpdate, LlmConfig,
     LlmConfigResult, OcrSettings, PersistedCognitiveConfig, QqAppConfig, TelegramBotConfig,

@@ -162,7 +162,7 @@ impl Default for AgentManager {
 /// cognitive system is dormant (no embedding provider). Re-runs always
 /// hit content-hash dedupe in the cognify pipeline, so frequent writes
 /// only strengthen edges via Hebbian instead of bloating the graph.
-fn spawn_soul_ingest(agents_dir: std::path::PathBuf, folder: String) {
+pub fn spawn_soul_ingest(agents_dir: std::path::PathBuf, folder: String) {
     tokio::spawn(async move {
         let Some(sys) = crate::memory::cognitive::try_get_instance() else {
             return; // cognitive dormant — silent skip

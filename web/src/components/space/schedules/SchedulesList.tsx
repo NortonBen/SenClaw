@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button, Modal, Form, Input, Tag, Empty, Spin, Popconfirm,
-  Typography, theme, Tooltip, Radio, TimePicker, Collapse, InputNumber, Alert,
+  Typography, theme, Tooltip, Radio, TimePicker, Collapse, InputNumber, Alert, message,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, ClockCircleOutlined, MessageOutlined,
-  ReloadOutlined, CheckCircleTwoTone, CloseCircleTwoTone, RobotOutlined,
+  ReloadOutlined, CheckCircleTwoTone, CloseCircleTwoTone, RobotOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useNavigate } from 'react-router-dom';
@@ -80,7 +80,7 @@ export function SchedulesList({ hook }: Props) {
     [hook.schedules],
   );
 
-  const openChat = (jid: string) => navigate(`/chats?jid=${encodeURIComponent(jid)}`);
+  const openChat = (jid: string) => navigate(`/chat/${encodeURIComponent(jid)}`);
 
   return (
     <div className="flex flex-col h-full">
@@ -157,6 +157,15 @@ export function SchedulesList({ hook }: Props) {
                 onOpen={() => setOpenDetailId(s.id)}
                 onOpenChat={() => openChat(s.chat_jid)}
                 onCancel={() => hook.cancelSchedule(s.id)}
+                onRunNow={async () => {
+                  const ok = await hook.runScheduleNow(s.id);
+                  if (ok) {
+                    message.success('Đã thêm vào hàng đợi — sẽ chạy trong vài giây');
+                    hook.loadSchedules();
+                  } else {
+                    message.error('Không thể chạy ngay — kiểm tra log');
+                  }
+                }}
               />
             ))}
           </Section>
@@ -172,6 +181,15 @@ export function SchedulesList({ hook }: Props) {
                 onOpen={() => setOpenDetailId(s.id)}
                 onOpenChat={() => openChat(s.chat_jid)}
                 onCancel={() => hook.cancelSchedule(s.id)}
+                onRunNow={async () => {
+                  const ok = await hook.runScheduleNow(s.id);
+                  if (ok) {
+                    message.success('Đã thêm vào hàng đợi — sẽ chạy trong vài giây');
+                    hook.loadSchedules();
+                  } else {
+                    message.error('Không thể chạy ngay — kiểm tra log');
+                  }
+                }}
               />
             ))}
           </Section>
@@ -187,6 +205,15 @@ export function SchedulesList({ hook }: Props) {
                 onOpen={() => setOpenDetailId(s.id)}
                 onOpenChat={() => openChat(s.chat_jid)}
                 onCancel={() => hook.cancelSchedule(s.id)}
+                onRunNow={async () => {
+                  const ok = await hook.runScheduleNow(s.id);
+                  if (ok) {
+                    message.success('Đã thêm vào hàng đợi — sẽ chạy trong vài giây');
+                    hook.loadSchedules();
+                  } else {
+                    message.error('Không thể chạy ngay — kiểm tra log');
+                  }
+                }}
               />
             ))}
           </Section>
@@ -232,11 +259,12 @@ function relativeNextRun(v: string | null): string {
 }
 
 function ScheduleCard({
-  schedule, onOpen, onOpenChat, onCancel, token,
+  schedule, onOpen, onOpenChat, onCancel, onRunNow, token,
 }: {
   schedule: SpaceSchedule;
   onOpen: () => void;
   onOpenChat: () => void;
+  onRunNow?: () => void;
   onCancel: () => void;
   token: ReturnType<typeof theme.useToken>['token'];
 }) {
@@ -304,6 +332,15 @@ function ScheduleCard({
               onClick={e => { e.stopPropagation(); onOpenChat(); }}
             />
           </Tooltip>
+          {onRunNow && schedule.status === 'active' && (
+            <Tooltip title="Chạy ngay (bỏ qua lịch)">
+              <Button
+                type="text" size="small"
+                icon={<ThunderboltOutlined style={{ color: token.colorPrimary }} />}
+                onClick={e => { e.stopPropagation(); onRunNow(); }}
+              />
+            </Tooltip>
+          )}
           {schedule.status !== 'completed' && (
             <Popconfirm
               title="Xoá lịch này? Cả chat session đi kèm sẽ bị xoá."

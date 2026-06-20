@@ -597,10 +597,16 @@ export function useWebSocket(): WsHook {
                   timestamp:  m.timestamp as string,
                 } as TextMessage;
               });
-              setMessages(prev => ({
-                ...prev,
-                [hjid]: hydrated,
-              }));
+              setMessages(prev => {
+                // Defensive: if BE has nothing for this JID (e.g. we just
+                // created the group and the subscribe race fired
+                // history:load BEFORE the first user message was persisted),
+                // don't wipe out the optimistic local bubbles we just added
+                // via sendMessage. Empty history only replaces empty state.
+                const local = prev[hjid] ?? [];
+                if (hydrated.length === 0 && local.length > 0) return prev;
+                return { ...prev, [hjid]: hydrated };
+              });
             }
             break;
           }
@@ -693,7 +699,47 @@ export function useWebSocket(): WsHook {
             });
             break;
           }
+          case 'agent:delta': {
+            // Live token streaming: append delta to a pending agent bubble.
+            // The pending bubble is identified by id `agent-stream-<groupJid>`
+            // and is replaced (timestamp refreshed) on each delta. When the
+            // final `agent:reply` arrives, it lands as a separate completed
+            // bubble — this delta bubble is then dropped from the next render
+            // cycle by id collision (we use a stable streaming id).
+            const jid = msg.groupJid as string;
+            const delta = (msg.delta as string) ?? '';
+            const streamId = `agent-stream-${jid}`;
+            setMessages(prev => {
+              const list = prev[jid] ?? [];
+              const idx = list.findIndex(m => m.id === streamId);
+              if (idx >= 0) {
+                const existing = list[idx] as TextMessage;
+                const next = [...list];
+                next[idx] = { ...existing, text: existing.text + delta };
+                return { ...prev, [jid]: next };
+              }
+              const newMsg: TextMessage = {
+                id: streamId,
+                role: 'agent',
+                text: delta,
+                timestamp: (msg.ts as string) ?? new Date().toISOString(),
+              };
+              return { ...prev, [jid]: [...list, newMsg] };
+            });
+            break;
+          }
           case 'agent:reply':
+            // When a final reply arrives, drop any in-flight stream bubble so
+            // the completed agent message replaces it cleanly.
+            setMessages(prev => {
+              const jid = msg.groupJid as string;
+              const list = prev[jid];
+              if (!list) return prev;
+              const streamId = `agent-stream-${jid}`;
+              const filtered = list.filter(m => m.id !== streamId);
+              if (filtered.length === list.length) return prev;
+              return { ...prev, [jid]: filtered };
+            });
             // Prefer server-stamped `ts` so this bubble interleaves with
             // tool:execution events (which also carry server `ts`).
             // Falls back to client clock only when the server didn't send one,

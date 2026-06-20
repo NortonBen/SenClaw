@@ -280,6 +280,8 @@ export interface UpdateBindingPayload {
   jid?: string;
   botTokenOverride?: string;
   maxMessages?: number | null;
+  /** Re-link this binding to a different Agent (profile) by id. */
+  agentId?: number;
 }
 
 // ===== Cowork entity types =====

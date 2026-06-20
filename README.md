@@ -1,157 +1,334 @@
 <p align="center">
-  <img src="docs/images/senclaw-logo.png" alt="SenClaw logo" width="200" />
+  <img src="docs/images/semaclaw-logo.png" alt="SenClaw logo" width="200" />
 </p>
 
 <h1 align="center">SenClaw</h1>
 
 <p align="center">
-  <em>A general-purpose, open-source framework for personal AI agents.</em>
+  <em>A general-purpose framework for personal AI agents.</em><br />
+  <em>Một framework đa năng để xây dựng AI agent cá nhân.</em>
 </p>
 
 <p align="center">
-  <a href="https://github.com/midea-ai/SenClaw/releases/latest"><img src="https://img.shields.io/github/v/release/midea-ai/SenClaw?label=release" alt="Latest Release" /></a>
-  <a href="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml"><img src="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml/badge.svg" alt="Build" /></a>
+  <a href="https://github.com/midea-ai/SenClaw/releases/latest"><img src="https://img.shields.io/github/v/release/midea-ai/SenClaw?label=release" alt="Latest release" /></a>
+  <a href="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml"><img src="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml/badge.svg" alt="Build status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
 </p>
 
 <p align="center">
-  <strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a>
+  <strong>English</strong> · <strong>Tiếng Việt</strong>
 </p>
 
-SenClaw is a general-purpose engineering harness for building personal AI agents. It provides the surrounding machinery — permissions, memory, scheduling, multi-agent orchestration, channel adapters, and a Web UI — that turns a raw LLM runtime into a usable personal AI system.
+SenClaw provides the runtime machinery around large language models: permissions, memory, scheduling, multi-agent orchestration, channel adapters, Space Apps, local model support, and a Web UI. It turns a raw model provider or local model into a practical personal AI system.
+
+SenClaw cung cấp lớp hạ tầng chạy quanh mô hình ngôn ngữ lớn: phân quyền, bộ nhớ, tác vụ định kỳ, điều phối nhiều agent, kết nối nhiều kênh chat, Space Apps, mô hình chạy cục bộ và Web UI. Mục tiêu là biến một model provider hoặc local model thành một hệ thống AI cá nhân có thể dùng hằng ngày.
 
 ---
 
-<p align="center">
-  <img src="https://github.com/midea-ai/SenClaw/releases/download/v0.1.1-preview/SenClaw-demo.GIF" alt="SenClaw Demo" width="720" />
-</p>
+## Highlights / Điểm nổi bật
 
-*SenClaw analyzed its own source code and generated the intro video above — powered by [frontend-slides](https://github.com/zarazhangrui/frontend-slides) and [remotion](https://github.com/remotion-dev/remotion) skills.* [Watch full demo video](https://midea-ai.github.io/SenClaw/assets/SenClaw-demo.mp4)
-
-## Highlights
-
-- **Three-layer context management** — Unifies working context, long-term memory retrieval, and per-agent persona partitioning into a single coherent model.
-- **Human-in-the-Loop permissions** — `PermissionBridge` is a native harness primitive supporting both explicit user authorization for high-risk tool actions and agent-initiated clarification requests.
-- **Four-layer plugin architecture** — MCP tools, subagents, skills, and hooks — each anchored to a distinct engineering concern, forming a principled extension surface.
-- **DAG Teams** — A two-stage hybrid orchestration framework combining LLM-based dynamic task decomposition with deterministic DAG execution grounded in persistent agent personas.
-- **Four-mode scheduled tasks** — Pure notification, pure script, pure agent, and hybrid script-plus-agent execution — matching mode to task complexity so token consumption stays proportional to reasoning work.
-- **Agentic Wiki** — Transforms task outputs into structured, retrievable wiki entries indexed alongside agent memory, creating a compounding personal knowledge base that feeds back into future agent sessions.
-- **Multi-channel & Web UI** — Telegram, Feishu (Lark), and QQ adapters out of the box, plus a WebSocket gateway and a React-based Web UI.
-- **Space Apps** — Isolated micro-apps (SSH manager, Email, Google Workspace, Browser control) that register as MCP servers and appear as first-class tools inside the agent.
-- **Local model support** — Native MLX inference (Gemma 4, Qwen, Mamba) and local TTS (ZipVoice / macOS) run entirely on-device.
+- **Personal agent runtime**: agent lifecycle, tool permissions, clarification flow, workspace state, and per-agent personas.
+  **Runtime cho agent cá nhân**: quản lý vòng đời agent, quyền dùng tool, luồng hỏi lại người dùng, trạng thái workspace và persona riêng cho từng agent.
+- **Memory and knowledge**: hybrid FTS/vector memory, daily logs, and a Git-backed personal wiki.
+  **Bộ nhớ và tri thức**: bộ nhớ lai FTS/vector, nhật ký hằng ngày và wiki cá nhân quản lý bằng Git.
+- **Multi-agent orchestration**: DAG team execution, virtual workers, dispatch bridge, and subagent support.
+  **Điều phối nhiều agent**: chạy team theo DAG, virtual workers, dispatch bridge và hỗ trợ subagent.
+- **Scheduled work**: notification, script, agent, and script-plus-agent task modes.
+  **Tác vụ định kỳ**: hỗ trợ chế độ thông báo, script, agent và script kết hợp agent.
+- **Multi-channel gateway**: Telegram, Feishu/Lark, QQ, WeChat, WebSocket, HTTP API, and Web UI.
+  **Gateway đa kênh**: Telegram, Feishu/Lark, QQ, WeChat, WebSocket, HTTP API và Web UI.
+- **Space Apps**: isolated micro-apps such as SSH Manager, Email, Google Workspace, Browser, and Test Manager that expose tools through MCP.
+  **Space Apps**: các micro-app tách biệt như SSH Manager, Email, Google Workspace, Browser và Test Manager, cung cấp tool qua MCP.
+- **Local AI options**: MLX/Candle local inference, local embeddings, OCR, Whisper-style audio, and local TTS features.
+  **Tùy chọn AI cục bộ**: inference bằng MLX/Candle, embedding cục bộ, OCR, audio kiểu Whisper và TTS local.
+- **Desktop app**: Tauri shell for packaging SenClaw as a desktop application.
+  **Ứng dụng desktop**: dùng Tauri để đóng gói SenClaw thành app desktop.
 
 ---
 
-## Quick Start
+## Quick Start / Chạy nhanh
 
-### Option A — Download pre-built binary
-
-Download the latest release for your platform from [Releases](https://github.com/midea-ai/SenClaw/releases/latest), then:
+### 1. Clone / Tải mã nguồn
 
 ```bash
-# macOS / Linux
-./senclaw
-
-# Open Web UI
-open http://127.0.0.1:18788
-```
-
-### Option B — Build from source (Rust)
-
-```bash
-# 1. Clone
 git clone https://github.com/midea-ai/SenClaw.git
 cd SenClaw
+```
 
-# 2. Build daemon + Web UI
+### 2. Build the Web UI / Build giao diện Web
+
+```bash
+cd web
+npm install
+npm run build
+cd ..
+```
+
+### 3. Build and run the daemon / Build và chạy daemon
+
+```bash
+cargo run
+```
+
+For an optimized build:
+
+Để build bản tối ưu:
+
+```bash
 cargo build --release
-cd web && npm ci && npx vite build && cd ..
-
-# 3. Configure (optional — channels)
-cp .env.example .env
-# Edit .env to enable Telegram / Feishu / QQ / WeChat.
-# If left unset, SenClaw starts in Web UI–only mode.
-
-# 4. Run
 ./target/release/senclaw
 ```
 
-### Option C — Desktop app (Tauri)
+Then open the Web UI:
 
-Pre-built `.dmg` / `.exe` / `.AppImage` bundles are attached to each tagged release.  
-To build locally:
+Sau đó mở Web UI:
 
 ```bash
-cargo tauri build
+open http://127.0.0.1:18788
+```
+
+On Linux, open the same URL in your browser manually if `open` is unavailable.
+
+Trên Linux, nếu không có lệnh `open`, hãy mở URL trên bằng trình duyệt.
+
+---
+
+## Configuration / Cấu hình
+
+SenClaw can start in Web UI-only mode, but agent runs need at least one LLM profile. On first launch, open:
+
+SenClaw có thể chạy ở chế độ chỉ Web UI, nhưng các phiên agent cần ít nhất một cấu hình LLM. Sau khi chạy lần đầu, mở:
+
+```text
+Settings -> LLM
+```
+
+Add a provider profile such as OpenAI, Anthropic, DeepSeek, Qwen, OpenRouter, Ollama, or a compatible API endpoint. The profile is stored in:
+
+Thêm một provider như OpenAI, Anthropic, DeepSeek, Qwen, OpenRouter, Ollama hoặc endpoint tương thích. Cấu hình được lưu tại:
+
+```text
+~/.senclaw/config.json
+```
+
+Channel and runtime settings can be configured through `.env`:
+
+Các thiết lập kênh chat và runtime có thể cấu hình qua `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Common values:
+
+Một số giá trị thường dùng:
+
+```env
+TELEGRAM_BOT_TOKEN=
+ADMIN_TELEGRAM_USER_ID=
+FEISHU_APP_ID=
+FEISHU_APP_SECRET=
+QQ_APP_ID=
+QQ_APP_SECRET=
+GATEWAY_UI_PORT=18788
+GATEWAY_PORT=18789
+MAX_CONCURRENT_AGENTS=5
+MAX_MESSAGES_PER_GROUP=100
+SCHEDULER_INTERVAL_SEC=60
+```
+
+If channel tokens are left empty, SenClaw can still be used from the Web UI.
+
+Nếu không cấu hình token cho các kênh chat, SenClaw vẫn có thể dùng qua Web UI.
+
+---
+
+## Common Commands / Lệnh thường dùng
+
+```bash
+# Check Rust code
+cargo check
+
+# Run Rust tests
+cargo test
+
+# Run the daemon
+cargo run
+
+# Run with local model features used by the Makefile
+make run
+
+# Run an optimized local-model build
+make run-release
+
+# Start the Web UI dev server
+make run-web
+
+# Build the browser extension
+make build-extension
+```
+
+```bash
+# Kiểm tra code Rust
+cargo check
+
+# Chạy test Rust
+cargo test
+
+# Chạy daemon
+cargo run
+
+# Chạy với các feature local model theo Makefile
+make run
+
+# Chạy bản tối ưu cho local model
+make run-release
+
+# Chạy Web UI ở chế độ dev
+make run-web
+
+# Build browser extension
+make build-extension
 ```
 
 ---
 
-> **Configure an LLM on first launch.** SenClaw starts without a built-in model. Open the Web UI → **Settings → LLM**, add a provider profile (OpenAI / Anthropic / DeepSeek / Qwen / …) with `baseURL`, `apiKey`, `modelName`. The profile is persisted to `~/.senclaw/config.json` — until at least one active profile exists, agent runs that call an LLM will fail.
+## Desktop App / Ứng dụng desktop
 
----
+SenClaw includes a Tauri desktop shell in `src-tauri/`.
 
-## Documentation
+SenClaw có desktop shell Tauri trong `src-tauri/`.
 
-| Document | Description |
-|---|---|
-| [Quick Start & Usage Guide](docs/QUICK_START.md) | Installation, configuration, CLI commands, runtime layout, MCP tools |
-| [Architecture](docs/ARCHITECTURE.md) | Layer breakdown, startup sequence, data flow |
-| [Space Apps](docs/workspace-feature-design.md) | How to build and register a Space App |
-| [Memory](docs/memory.md) | FTS5 + vector hybrid memory, daily log, cognify pipeline |
-| [Remote Access Guide](docs/REMOTE_ACCESS.md) | Expose the Web UI securely via reverse proxy (Nginx / Caddy) |
-| [Contributing](CONTRIBUTING.md) | *Coming soon* |
+```bash
+# Development
+make app-dev
 
----
-
-## Project Structure
-
+# Production bundle
+make app-build
 ```
-senclaw/
-├── src/                    # Rust daemon (primary)
-│   ├── agent/              # Agent lifecycle, bridges, permission routing
-│   ├── channels/           # Telegram / Feishu / QQ adapters
-│   ├── gateway/            # Group manager, message router, WebSocket + HTTP server
-│   ├── mcp/                # MCP servers (admin, schedule, memory, dispatch, OCR, …)
-│   ├── memory/             # FTS5 + vector hybrid search, cognify pipeline
-│   ├── scheduler/          # Cron / interval / once task scheduler
-│   ├── tts/                # Text-to-speech backends (ZipVoice, macOS)
-│   ├── local_model/        # MLX inference (Gemma 4, Qwen, Mamba, OCR)
-│   ├── wiki/               # Git-driven personal knowledge base
-│   └── clawhub/            # ClaWHub skill marketplace integration
+
+`make app-build` builds the Web UI, builds the `senclaw` sidecar binary, places it under `src-tauri/binaries/`, and runs `cargo tauri build`.
+
+`make app-build` sẽ build Web UI, build binary sidecar `senclaw`, đặt nó vào `src-tauri/binaries/`, rồi chạy `cargo tauri build`.
+
+---
+
+## Runtime Layout / Cấu trúc dữ liệu runtime
+
+By default, SenClaw stores runtime data under the user's home directory:
+
+Mặc định SenClaw lưu dữ liệu runtime trong home directory:
+
+```text
+~/.senclaw/
+├── senclaw.db
+├── config.json
+├── dispatch-state.json
+└── workspace-state-{folder}.json
+
+~/senclaw/
+├── agents/{folder}/
+│   ├── SOUL.md
+│   ├── memory/
+│   └── .sema/sessions/
+├── workspace/{folder}/
+└── wiki/
+```
+
+Most paths can be overridden through `.env` or `~/.senclaw/config.json`.
+
+Hầu hết đường dẫn có thể ghi đè qua `.env` hoặc `~/.senclaw/config.json`.
+
+---
+
+## Project Structure / Cấu trúc dự án
+
+```text
+SenClaw/
+├── src/                    # Rust daemon and core runtime
+│   ├── agent/              # Agent lifecycle, permissions, personas, dispatch
+│   ├── channels/           # Telegram, Feishu/Lark, QQ, WeChat adapters
+│   ├── gateway/            # HTTP, WebSocket, routing, UI server
+│   ├── mcp/                # MCP servers exposed to agents
+│   ├── memory/             # FTS/vector memory and daily logs
+│   ├── scheduler/          # Cron, interval, and one-shot tasks
+│   ├── local_model/        # MLX/Candle local model support
+│   ├── code_graph/         # Tree-sitter code indexing
+│   ├── code_engine/        # Code-oriented agent runtime
+│   ├── plugins/            # Plugin support
+│   └── wiki/               # Git-backed knowledge base
 ├── web/                    # React + Vite Web UI
-├── src-tauri/              # Tauri desktop shell
-├── apps/                   # Space Apps (ssh-manager, email, google-workspace, …)
+├── src-tauri/              # Tauri desktop app
+├── apps/                   # Space Apps
+├── app-space-sdk/          # SDK for building Space Apps
+├── examples/               # Example apps and SDK usage
 ├── skills/                 # Bundled skills
-├── examples/               # Example Space Apps and SDK usage
-└── docs/                   # Detailed documentation
+├── docs/                   # Architecture and feature docs
+└── senclaw-extension-chrome/ # Chrome extension
 ```
 
 ---
 
-## Contributing
+## Documentation / Tài liệu
 
-Contributions are welcome. SenClaw exists to advance the shared engineering foundation for personal AI agents — issues, pull requests, and design discussions are all valuable. See [CONTRIBUTING.md](CONTRIBUTING.md) *(coming soon)* for guidelines.
+| Document | English | Tiếng Việt |
+|---|---|---|
+| [Quick Start](docs/QUICK_START.md) | Setup, runtime layout, and usage notes. | Cài đặt, cấu trúc runtime và ghi chú sử dụng. |
+| [Architecture](docs/ARCHITECTURE.md) | System layers, startup flow, and data flow. | Các lớp hệ thống, luồng khởi động và luồng dữ liệu. |
+| [Memory](docs/memory.md) | Memory design and retrieval flow. | Thiết kế bộ nhớ và luồng truy xuất. |
+| [DAG Team](docs/DAG_Team.md) | Multi-agent task decomposition and execution. | Phân rã và thực thi tác vụ nhiều agent. |
+| [Space Apps](docs/workspace-feature-design.md) | How Space Apps are designed and registered. | Cách thiết kế và đăng ký Space Apps. |
+| [Code Knowledge Graph](docs/code-knowledge-graph.md) | Tree-sitter based code indexing. | Lập chỉ mục code bằng Tree-sitter. |
+| [Prompt Injection Security](docs/prompt-injection-security.md) | Security notes for tool and prompt boundaries. | Ghi chú bảo mật cho ranh giới tool và prompt. |
 
 ---
 
-## License
+## Development Notes / Ghi chú phát triển
+
+SenClaw is primarily a Rust workspace. The Web UI is a React/Vite application under `web/`, and several Space Apps have their own package manifests under `apps/`.
+
+SenClaw chủ yếu là một Rust workspace. Web UI là ứng dụng React/Vite trong `web/`, còn một số Space Apps có manifest riêng trong `apps/`.
+
+Useful feature builds:
+
+Một số build feature hữu ích:
+
+```bash
+# Local embeddings
+cargo build --features local-embed
+
+# Local embeddings with Apple Silicon Metal
+cargo build --features local-embed-metal
+
+# Local Candle runtime
+cargo build --features local-candle
+
+# Local MLX runtime
+cargo build --features local-mlx
+```
+
+Some local model, OCR, audio, and TTS features require platform-specific dependencies. Start with `cargo check` or the default `cargo run` path before enabling optional heavy features.
+
+Một số feature cho local model, OCR, audio và TTS cần dependency riêng theo nền tảng. Nên bắt đầu bằng `cargo check` hoặc `cargo run` mặc định trước khi bật các feature nặng.
+
+---
+
+## Contributing / Đóng góp
+
+Issues, pull requests, experiments, and design discussions are welcome. Please keep changes focused, document behavior that affects users, and include tests for risky runtime changes.
+
+Bạn có thể đóng góp bằng issue, pull request, thử nghiệm hoặc thảo luận thiết kế. Hãy giữ thay đổi gọn theo mục tiêu, ghi lại hành vi có ảnh hưởng tới người dùng và thêm test cho các thay đổi runtime có rủi ro.
+
+---
+
+## License / Giấy phép
 
 [MIT](LICENSE) © AIRC Sema Team
 
 ---
 
-## About the Logo
+## Acknowledgments / Ghi nhận
 
-The SenClaw logo depicts a horse with **claw-shaped wings** rising from its back. The imagery is inspired by the Chinese phrase *以梦为马* — *"to ride one's dreams as a horse"* — capturing the spirit of an AI harness that carries the user wherever their imagination leads. The name itself blends *Sema* (from *semantic*) and *Claw*.
+SenClaw integrates with the [ClaWHub](https://github.com/openclaw/clawhub) plugin marketplace and is inspired by [OpenClaw](https://github.com/openclaw/openclaw), the [Model Context Protocol](https://modelcontextprotocol.io), and the broader open-source agent tooling ecosystem.
 
----
-
-## Acknowledgments
-
-SenClaw integrates with the [ClaWHub](https://github.com/openclaw/clawhub) plugin marketplace and is inspired by [OpenClaw](https://github.com/openclaw/openclaw). Thanks to the broader open-source ecosystem this project depends on — including the [Model Context Protocol](https://modelcontextprotocol.io), [grammY](https://grammy.dev), and many others.
-
----
-
-> SenClaw's ambition is not to define the final architecture of personal AI agents — it is to advance the shared engineering foundation on which better architectures can be built.
+SenClaw tích hợp với marketplace plugin [ClaWHub](https://github.com/openclaw/clawhub), lấy cảm hứng từ [OpenClaw](https://github.com/openclaw/openclaw), [Model Context Protocol](https://modelcontextprotocol.io) và hệ sinh thái công cụ agent mã nguồn mở.

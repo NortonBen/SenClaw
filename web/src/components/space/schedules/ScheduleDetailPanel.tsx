@@ -132,7 +132,7 @@ export function ScheduleDetailPanel({ scheduleId, hook, onClose }: Props) {
 
   const openChat = () => {
     if (!detail) return;
-    navigate(`/chats?jid=${encodeURIComponent(detail.chat_jid)}`);
+    navigate(`/chat/${encodeURIComponent(detail.chat_jid)}`);
   };
 
   const formatTs = (v: string | null) => {

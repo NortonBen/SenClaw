@@ -1061,6 +1061,25 @@ pub(crate) async fn handle_message_send(
         return;
     };
 
+    // Auto-subscribe the sending client to this JID. Without this, a client
+    // that just registered a new group and sent its first message would not
+    // receive the resulting agent:reply / tool:execution events — broadcast()
+    // only delivers to clients with prior subscriptions. Subscribing here
+    // closes the register → send → reply race for free.
+    {
+        let mut guard = clients.lock().await;
+        if let Some(client) = guard.get_mut(client_idx) {
+            if client.subscriptions.insert(group_jid.clone()) {
+                tracing::info!(
+                    "[WsGateway] client #{client_idx} auto-subscribed to {group_jid} on first send"
+                );
+                if group.is_admin {
+                    client.is_admin = true;
+                }
+            }
+        }
+    }
+
     // Persist user message to conversation history so it appears in history:load.
     let attachments_json = if attachments.is_empty() {
         None
@@ -1095,9 +1114,33 @@ pub(crate) async fn handle_message_send(
         })
         .collect();
 
+    // Cowork hook: when a user message lands in a cowork group, persist
+    // the message AND create a task in the team's task list so the manager
+    // has a tracked work item. We ALSO prepend a team-context preamble to
+    // the prompt before sending it on to the agent — this is what turns
+    // the chat into a real DAG team session: the manager sees its
+    // members + dispatch instructions every turn.
+    let effective_text = if group.group_type == "cowork" {
+        if let Some(team_id) = group_jid.strip_prefix("cowork:") {
+            crate::gateway::ui_server::cowork_runtime::on_user_message(
+                &state.db,
+                team_id,
+                &text,
+            );
+            match crate::gateway::ui_server::cowork_runtime::team_context_preamble(&state.db, team_id) {
+                Some(preamble) => format!("{preamble}{text}"),
+                None => text.clone(),
+            }
+        } else {
+            text.clone()
+        }
+    } else {
+        text.clone()
+    };
+
     state
         .api
-        .enqueue_and_process(&group_jid, &group, &text, &agent_attachments);
+        .enqueue_and_process(&group_jid, &group, &effective_text, &agent_attachments);
 }
 
 pub(crate) async fn handle_permission_response(

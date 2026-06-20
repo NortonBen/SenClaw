@@ -9,7 +9,12 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         r#"
         CREATE TABLE IF NOT EXISTS groups (
           jid                  TEXT PRIMARY KEY,
-          folder               TEXT UNIQUE NOT NULL,
+          -- folder is NOT unique: multiple chat sessions can share the same
+          -- agent profile (folder). The old UNIQUE constraint silently broke
+          -- every new chat after the first per profile (insert violated
+          -- constraint → error swallowed → FE saw a phantom group → user
+          -- never got a reply). Migrated away in apply_schema below.
+          folder               TEXT NOT NULL,
           name                 TEXT NOT NULL DEFAULT '',
           channel              TEXT NOT NULL DEFAULT 'telegram',
           is_admin             INTEGER NOT NULL DEFAULT 0,
@@ -240,118 +245,44 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           value TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS cowork_workspaces (
-          id          TEXT PRIMARY KEY,
-          name        TEXT NOT NULL UNIQUE,
-          description TEXT,
-          status      TEXT NOT NULL DEFAULT 'active',
-          root_dir    TEXT NOT NULL,
-          working_dir TEXT,
-          owner       TEXT NOT NULL,
-          created_at  TEXT NOT NULL,
-          updated_at  TEXT NOT NULL
+        -- Cowork teams (multi-agent dispatch): a named team with one
+        -- "manager" profile (agent folder) plus a JSON list of "member"
+        -- profile folders the manager can delegate to via the dispatch
+        -- MCP tools. Maps 1:1 to a chat group (jid = "cowork:<id>")
+        -- created on first open.
+        CREATE TABLE IF NOT EXISTS cowork_teams (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          manager_folder  TEXT NOT NULL,
+          members_json    TEXT NOT NULL DEFAULT '[]',
+          workspace_dir   TEXT,
+          created_at      TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS cowork_members (
-          workspace_id        TEXT NOT NULL,
-          member_id           TEXT NOT NULL,
-          member_type         TEXT NOT NULL,
-          role                TEXT NOT NULL,
-          jid                 TEXT,
-          subdir              TEXT,
-          persona             TEXT,
-          responsibilities    TEXT,
-          triggers            TEXT,
-          handoff_rules       TEXT,
-          acceptance_criteria TEXT,
-          output_format       TEXT,
-          sla                 TEXT,
-          limits              TEXT,
-          joined_at           TEXT NOT NULL,
-          updated_at          TEXT NOT NULL,
-          PRIMARY KEY (workspace_id, member_id)
+        -- Cowork tasks (manager-tracked work items): one row per task the
+        -- team is working on. Status moves through a small kanban — backlog
+        -- / todo / in_progress / review / done / blocked. `assignee` and
+        -- `reviewer` reference a member folder. `depends_on` is a JSON
+        -- array of task ids (free-form dependency graph).
+        CREATE TABLE IF NOT EXISTS cowork_team_tasks (
+          id               TEXT PRIMARY KEY,
+          team_id          TEXT NOT NULL,
+          title            TEXT NOT NULL,
+          description      TEXT,
+          status           TEXT NOT NULL DEFAULT 'todo',
+          assignee         TEXT,
+          reviewer         TEXT,
+          priority         TEXT NOT NULL DEFAULT 'medium',
+          depends_on       TEXT NOT NULL DEFAULT '[]',
+          result_output    TEXT,
+          created_at       TEXT NOT NULL,
+          updated_at       TEXT NOT NULL,
+          due_at           TEXT,
+          completed_at     TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_cowork_team_tasks_team
+          ON cowork_team_tasks(team_id);
 
-        CREATE TABLE IF NOT EXISTS cowork_board_entries (
-          id           TEXT PRIMARY KEY,
-          workspace_id TEXT NOT NULL,
-          section      TEXT NOT NULL,
-          title        TEXT,
-          content      TEXT NOT NULL,
-          author       TEXT NOT NULL,
-          pinned       INTEGER DEFAULT 0,
-          tags         TEXT,
-          created_at   TEXT NOT NULL,
-          updated_at   TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_cowork_board_ws
-          ON cowork_board_entries(workspace_id, section);
-
-        CREATE TABLE IF NOT EXISTS cowork_workspace_resources (
-          workspace_id  TEXT NOT NULL,
-          kind          TEXT NOT NULL CHECK(kind IN ('raw','wiki','reference','workdir')),
-          path          TEXT NOT NULL,
-          PRIMARY KEY (workspace_id, kind)
-        );
-
-        CREATE TABLE IF NOT EXISTS cowork_tasks (
-          id             TEXT PRIMARY KEY,
-          workspace_id   TEXT NOT NULL,
-          title          TEXT NOT NULL,
-          description    TEXT,
-          status         TEXT NOT NULL DEFAULT 'todo',
-          assignee       TEXT,
-          reviewer       TEXT,
-          priority       TEXT NOT NULL DEFAULT 'medium',
-          depends_on     TEXT,
-          attachments    TEXT,
-          created_by     TEXT NOT NULL,
-          created_at     TEXT NOT NULL,
-          updated_at     TEXT NOT NULL,
-          due_at         TEXT,
-          completed_at   TEXT,
-          input_summary  TEXT,
-          result_output  TEXT,
-          refs           TEXT,
-          artifacts      TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_cowork_task_ws
-          ON cowork_tasks(workspace_id, status);
-
-        CREATE TABLE IF NOT EXISTS cowork_task_comments (
-          id         INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id    TEXT NOT NULL,
-          author     TEXT NOT NULL,
-          content    TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_cowork_task_comment
-          ON cowork_task_comments(task_id);
-
-        CREATE TABLE IF NOT EXISTS cowork_messages (
-          id           TEXT PRIMARY KEY,
-          workspace_id TEXT NOT NULL,
-          from_member  TEXT NOT NULL,
-          to_member    TEXT,
-          message_type TEXT NOT NULL,
-          content      TEXT NOT NULL,
-          attachments  TEXT,
-          task_id      TEXT,
-          is_read      INTEGER DEFAULT 0,
-          created_at   TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_cowork_msg_ws
-          ON cowork_messages(workspace_id, created_at);
-
-        CREATE TABLE IF NOT EXISTS cowork_recording_sessions (
-          id            TEXT PRIMARY KEY,
-          workspace_id  TEXT NOT NULL,
-          started_at    TEXT NOT NULL,
-          ended_at      TEXT,
-          event_count   INTEGER DEFAULT 0,
-          total_tokens  INTEGER DEFAULT 0,
-          agents        TEXT
-        );
         "#,
     )?;
 
@@ -373,6 +304,60 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if !group_cols.iter().any(|c| c == "llm_config_id") {
         conn.execute("ALTER TABLE groups ADD COLUMN llm_config_id TEXT", [])?;
+    }
+
+    // Drop the legacy UNIQUE constraint on `groups.folder`.
+    // Old behaviour: only one chat per agent profile (folder), so a new chat
+    // for the same profile silently failed on insert and the web UI showed
+    // a "Group not found" reply.
+    // SQLite can't ALTER a column to drop a constraint — we rebuild the
+    // table only when the legacy UNIQUE index is still present.
+    // Detect the legacy UNIQUE column by inspecting the table's CREATE
+    // statement directly. (Auto-generated UNIQUE indexes are hidden from
+    // sqlite_master's `sql` column, so searching for the index doesn't work.)
+    let folder_unique: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='groups'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .map(|sql| sql.to_uppercase().contains("FOLDER") && sql.to_uppercase().contains("UNIQUE"))
+        .unwrap_or(false);
+    if folder_unique {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+            CREATE TABLE groups_new (
+              jid                  TEXT PRIMARY KEY,
+              folder               TEXT NOT NULL,
+              name                 TEXT NOT NULL DEFAULT '',
+              channel              TEXT NOT NULL DEFAULT 'telegram',
+              group_type           TEXT NOT NULL DEFAULT 'chat',
+              is_admin             INTEGER NOT NULL DEFAULT 0,
+              requires_trigger     INTEGER NOT NULL DEFAULT 1,
+              allowed_tools        TEXT,
+              allowed_paths        TEXT,
+              allowed_work_dirs    TEXT,
+              bot_token            TEXT,
+              max_messages         INTEGER,
+              llm_config_id        TEXT,
+              last_active          TEXT,
+              added_at             TEXT NOT NULL
+            );
+            INSERT INTO groups_new (jid, folder, name, channel, group_type, is_admin,
+              requires_trigger, allowed_tools, allowed_paths, allowed_work_dirs,
+              bot_token, max_messages, llm_config_id, last_active, added_at)
+            SELECT jid, folder, name, channel,
+              COALESCE(group_type, 'chat'),
+              is_admin, requires_trigger, allowed_tools, allowed_paths,
+              allowed_work_dirs, bot_token, max_messages, llm_config_id,
+              last_active, added_at
+            FROM groups;
+            DROP TABLE groups;
+            ALTER TABLE groups_new RENAME TO groups;
+            COMMIT;
+            "#,
+        )?;
     }
 
     let task_cols = column_names(conn, "scheduled_tasks")?;
@@ -398,40 +383,6 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
     if !agent_cols.iter().any(|c| c == "model_id") {
         conn.execute("ALTER TABLE agents ADD COLUMN model_id TEXT", [])?;
-    }
-
-    let ws_cols = column_names(conn, "cowork_workspaces")?;
-    if !ws_cols.iter().any(|c| c == "working_dir") {
-        conn.execute(
-            "ALTER TABLE cowork_workspaces ADD COLUMN working_dir TEXT",
-            [],
-        )?;
-    }
-
-    // cowork_workspace_resources table (new resource model)
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS cowork_workspace_resources (
-          workspace_id  TEXT NOT NULL,
-          kind          TEXT NOT NULL CHECK(kind IN ('raw','wiki','reference','workdir')),
-          path          TEXT NOT NULL,
-          PRIMARY KEY (workspace_id, kind)
-        );",
-    )?;
-
-    // cowork_tasks — add result/io fields
-    let task_cols = column_names(conn, "cowork_tasks")?;
-    for (col, def) in &[
-        ("input_summary", "TEXT"),
-        ("result_output", "TEXT"),
-        ("refs", "TEXT"),
-        ("artifacts", "TEXT"),
-    ] {
-        if !task_cols.iter().any(|c| c == col) {
-            conn.execute(
-                &format!("ALTER TABLE cowork_tasks ADD COLUMN {col} {def}"),
-                [],
-            )?;
-        }
     }
 
     // space_events — add notification tracking columns
@@ -533,62 +484,6 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
             updated_at  INTEGER NOT NULL,
             PRIMARY KEY (app_id, key)
         );
-        "#,
-    )?;
-    Ok(())
-}
-
-/// Apply Code Engine session tables.
-pub(crate) fn apply_code_tables(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS code_sessions (
-            id          TEXT PRIMARY KEY,
-            name        TEXT NOT NULL DEFAULT '',
-            workspace   TEXT NOT NULL,
-            language    TEXT,
-            status      TEXT NOT NULL DEFAULT 'active',
-            git_enabled INTEGER NOT NULL DEFAULT 1,
-            created_at  INTEGER NOT NULL,
-            updated_at  INTEGER NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_code_sessions_status
-            ON code_sessions(status, updated_at DESC);
-
-        CREATE TABLE IF NOT EXISTS code_session_files (
-            id          INTEGER PRIMARY KEY,
-            session_id  TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
-            file_path   TEXT NOT NULL,
-            edited_at   INTEGER NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_code_session_files_session
-            ON code_session_files(session_id, edited_at DESC);
-
-        CREATE TABLE IF NOT EXISTS code_chat_groups (
-            id          TEXT PRIMARY KEY,
-            project_id  TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
-            name        TEXT NOT NULL,
-            created_at  INTEGER NOT NULL,
-            updated_at  INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_code_chat_groups_project
-            ON code_chat_groups(project_id, updated_at DESC);
-
-        CREATE TABLE IF NOT EXISTS code_chat_messages (
-            id            TEXT PRIMARY KEY,
-            group_id       TEXT NOT NULL REFERENCES code_chat_groups(id) ON DELETE CASCADE,
-            role           TEXT NOT NULL, -- user | agent
-            content        TEXT NOT NULL,
-            status         TEXT NOT NULL DEFAULT 'done', -- queued | processing | done | failed
-            queue_position INTEGER,
-            dag_plan       TEXT,
-            created_at     INTEGER NOT NULL,
-            processed_at   INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS idx_code_chat_messages_group
-            ON code_chat_messages(group_id, created_at ASC);
         "#,
     )?;
     Ok(())

@@ -28,9 +28,9 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, code_graph_mcp_config, code_server_mcp_config, dispatch_mcp_config, ocr_mcp_config,
-    litho_mcp_config, memory_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config,
-    wiki_mcp_config, workspace_mcp_config, McpServerConfig,
+    browser_mcp_config, dispatch_mcp_config, ocr_mcp_config, litho_mcp_config, memory_mcp_config,
+    schedule_mcp_config, send_mcp_config, space_mcp_config, wiki_mcp_config, workspace_mcp_config,
+    McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -964,32 +964,8 @@ impl AgentPool {
             }
         }
 
-        // Resolve custom memory directory for cowork agents
-        let custom_memory_dir = if binding.group_type == "cowork" {
-            crate::cowork::workspace_id_from_cowork_jid(&binding.jid)
-                .and_then(|workspace_id| {
-                    self.db
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .and_then(|db| db.get_cowork_workspace(workspace_id).ok())
-                })
-                .and_then(|workspace_opt| workspace_opt)
-                .map(|workspace| {
-                    let workspace_root = PathBuf::from(&workspace.root_dir);
-                    workspace_root.join("memory").to_string_lossy().to_string()
-                })
-        } else {
-            None
-        };
-
-        let shared_workspace_memory = custom_memory_dir.is_some();
-        let memory_index_folder = crate::cowork::cowork_memory_index_folder(
-            &binding.jid,
-            &binding.group_type,
-            &binding.folder,
-            shared_workspace_memory,
-        );
+        let custom_memory_dir: Option<String> = None;
+        let memory_index_folder = binding.folder.clone();
 
         // Inject MCP servers (mirrors TS 546-624) through CoreApi abstraction.
         // Each registration is best-effort: on failure we keep agent creation alive.
@@ -1019,30 +995,11 @@ impl AgentPool {
                 binding.bot_token.as_deref(),
                 &db_path_s,
             ));
-            if binding.is_admin || binding.group_type == "cowork" || binding.group_type == "code" {
-                let cowork_dispatch_json: Option<String> = if binding.group_type == "cowork" {
-                    crate::cowork::workspace_id_from_cowork_jid(&binding.jid).and_then(|ws_id| {
-                        self.db.lock().unwrap().as_ref().and_then(|db| {
-                            match crate::cowork::dispatch_cowork_agents_json_for_mcp(db, ws_id) {
-                                Ok(j) => Some(j),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "[AgentPool] Cowork dispatch agent list for {}: {e}",
-                                        binding.jid
-                                    );
-                                    None
-                                }
-                            }
-                        })
-                    })
-                } else {
-                    None
-                };
+            if binding.is_admin {
                 mcp_servers.push(dispatch_mcp_config(
                     &dispatch_state_s,
                     &binding.folder,
                     Some(&virtual_agents_dir_s),
-                    cowork_dispatch_json.as_deref(),
                 ));
             }
 
@@ -1073,12 +1030,6 @@ impl AgentPool {
                 cfg.paths.wiki_dir.to_string_lossy().as_ref(),
             ));
             mcp_servers.push(space_mcp_config(&db_path_s, &binding.folder, &binding.jid));
-            mcp_servers.push(code_graph_mcp_config(
-                &db_path_s,
-                &binding.folder,
-                &workspace_s,
-            ));
-            mcp_servers.push(code_server_mcp_config(&workspace_s, &binding.folder));
             mcp_servers.push(litho_mcp_config(
                 cfg.mcp.litho_binary.as_str(),
                 if cfg.memory.openai_base_url.is_empty() {
@@ -1178,28 +1129,41 @@ impl AgentPool {
         }
 
         // Init memory index for this agent folder — mirrors TS 628-639.
-        // Register custom memory directory for cowork agents
-        if let Some(ref custom_dir) = custom_memory_dir {
-            crate::memory::manager::get_instance()
-                .register_custom_memory_dir(&memory_index_folder, PathBuf::from(custom_dir));
-        }
+        let _ = &custom_memory_dir;
         crate::memory::manager::get_instance()
             .init_agent(&memory_index_folder)
             .await;
 
         // Compute use_tools whitelist — mirrors TS AgentPool.ts:514-523.
-        // Task is always excluded (sub-agent spawning not allowed in pool agents).
-        // Empty allowed_tools = all tools available (TS: null → ALL_POOLED_TOOLS).
-        const EXCLUDED_TOOLS: &[&str] = &["Task"];
-        let use_tools: Vec<String> = match &binding.allowed_tools {
-            Some(list) => list
-                .iter()
-                .filter(|t| !EXCLUDED_TOOLS.contains(&t.as_str()))
-                .cloned()
-                .collect(),
-            None => Vec::new(), // empty = no filter (all tools)
+        // Task is excluded for normal chat groups (sub-agent spawning is
+        // not the right tool there). For COWORK groups we INVERT this:
+        // the lead MUST delegate via Task, so we force the toolset down
+        // to [Task, TodoWrite] regardless of what the binding said.
+        let is_cowork = binding.group_type == "cowork";
+        let use_tools: Vec<String> = if is_cowork {
+            // Hard enforcement: lead can only Task-delegate + manage todos.
+            // Any browser/web/code-edit tool is blocked, so the model has
+            // no path forward except calling Task → forces real DAG flow.
+            vec!["Task".into(), "TodoWrite".into()]
+        } else {
+            const EXCLUDED_TOOLS: &[&str] = &["Task"];
+            match &binding.allowed_tools {
+                Some(list) => list
+                    .iter()
+                    .filter(|t| !EXCLUDED_TOOLS.contains(&t.as_str()))
+                    .cloned()
+                    .collect(),
+                None => Vec::new(), // empty = no filter (all tools)
+            }
         };
         if !use_tools.is_empty() {
+            if is_cowork {
+                tracing::info!(
+                    "[AgentPool] cowork tool-lockdown jid={} use_tools={:?}",
+                    binding.jid,
+                    use_tools
+                );
+            }
             self.core_api.set_use_tools(&binding.jid, use_tools);
         }
 
@@ -1277,7 +1241,6 @@ impl AgentPool {
                 agents_config_dir: Some(
                     cfg.paths.virtual_agents_dir.to_string_lossy().to_string(),
                 ),
-                cowork_agents_json: None, // set by Cowork wiring if applicable
             });
             self.core_api.register_tools(
                 &binding.jid,
@@ -1346,23 +1309,6 @@ impl AgentPool {
         retries_left: u32,
     ) -> Result<()> {
         self.get_or_create(group).await?;
-        if group.group_type == "code" {
-            if let Some(code_ws) = group
-                .allowed_work_dirs
-                .as_ref()
-                .and_then(|dirs| dirs.first())
-                .cloned()
-            {
-                self.core_api.set_working_dir(jid, &code_ws);
-                let code_mcp = code_server_mcp_config(&code_ws, &group.folder);
-                if let Err(e) = self.core_api.add_or_update_mcp_server(jid, &code_mcp) {
-                    tracing::warn!(
-                        "[AgentPool] Failed to refresh code MCP workspace for {jid}: {e}"
-                    );
-                }
-            }
-        }
-
         // ---- Pre-process stage 1: pre-trigger-skill (global toggle) ----
         // Push the current `preTriggerSkill` flag to the engine before dispatch
         // so a confident keyword/trigger match force-loads the skill instead of
@@ -2511,7 +2457,7 @@ impl AgentPool {
                             .map(|c| c.todos.clone())
                             .unwrap_or_default()
                     };
-                    let transitions = diff_todo_transitions(&prev_snapshot, &todos);
+                    let _ = diff_todo_transitions(&prev_snapshot, &todos);
                     {
                         let mut s = pool.state.lock().unwrap();
                         s.cached_todos.insert(
@@ -2528,22 +2474,6 @@ impl AgentPool {
                         tracing::warn!(
                             "[AgentPool] todos_update handler for {jid}: NO agent_event_sink set"
                         );
-                    }
-                    // Surface progress milestones (in_progress / completed) as
-                    // messages in the cowork workspace chat so the user can see
-                    // what the agent has been doing without staring at the
-                    // Agent Console todos panel.
-                    if !transitions.is_empty() {
-                        if let Some(db) = pool.db.lock().unwrap().clone() {
-                            let inserted =
-                                persist_todo_transitions_to_cowork(&db, &jid, &name, &transitions);
-                            // If any rows landed, ping the web UI to reload.
-                            if inserted > 0 {
-                                if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
-                                    sink.notify_cowork_changed();
-                                }
-                            }
-                        }
                     }
                 }),
             );
@@ -2925,66 +2855,6 @@ pub(crate) fn diff_todo_transitions(
         }
     }
     out
-}
-
-/// Persist meaningful todo transitions (in_progress / completed) into the
-/// cowork workspace's chat history so the user sees what the agent has been
-/// doing without watching the right-hand Agent Console.
-///
-/// `agent_jid` must follow the `cowork:{workspace_id}:{member_id}` pattern
-/// — non-cowork jids are ignored.
-pub(crate) fn persist_todo_transitions_to_cowork(
-    db: &Arc<Db>,
-    agent_jid: &str,
-    agent_name: &str,
-    transitions: &[TodoTransition],
-) -> usize {
-    let Some(workspace_id) = crate::cowork::workspace_id_from_cowork_jid(agent_jid) else {
-        return 0;
-    };
-    let member_id = agent_jid.splitn(3, ':').nth(2).unwrap_or(agent_name);
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut inserted = 0usize;
-    for t in transitions {
-        let (label, msg_type) = match t.to.as_str() {
-            "in_progress" => {
-                let verb = t.active_form.as_deref().unwrap_or(&t.content);
-                (format!("• {verb}…"), "status")
-            }
-            "completed" => {
-                // Strike-through-style "Done" with the original content.
-                (format!("✓ {}", t.content), "result")
-            }
-            _ => continue, // ignore "pending" + any future variants
-        };
-        let msg = crate::types::CoworkMessage {
-            id: format!(
-                "cwmsg-{}",
-                uuid::Uuid::new_v4()
-                    .to_string()
-                    .split('-')
-                    .next()
-                    .unwrap_or("0")
-            ),
-            workspace_id: workspace_id.to_string(),
-            from_member: member_id.to_string(),
-            to_member: None,
-            message_type: msg_type.to_string(),
-            content: label,
-            attachments: None,
-            task_id: None,
-            is_read: false,
-            created_at: now.clone(),
-        };
-        match db.insert_cowork_message(&msg) {
-            Ok(_) => inserted += 1,
-            Err(e) => tracing::warn!(
-                error = %e, jid = %agent_jid,
-                "[AgentPool] failed to persist todo transition to cowork_messages"
-            ),
-        }
-    }
-    inserted
 }
 
 /// Cognitive-memory pre-retrieval. Spreading-activation recall scoped to the

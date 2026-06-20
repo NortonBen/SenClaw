@@ -9,12 +9,10 @@
 
 mod agent_behavior_config;
 mod chat;
-mod code;
 mod cognitive;
 mod cognitive_config;
 mod config_handler;
 pub mod core;
-mod cowork;
 mod embedding_config;
 mod embedding_models;
 mod llm_config;
@@ -35,10 +33,13 @@ pub mod types;
 mod whisper;
 mod ocr;
 mod wiki;
+mod cowork;
+pub mod cowork_runtime;
+mod profile_files;
 mod workbench;
+mod workspace;
 
 // Re-exports for external use
-pub use code::subscribe_code_chat;
 pub use core::{build_router, start_ui_server, AppError, UiApi, UiState};
 pub use relay_bridge::{dispatch as dispatch_api, ApiBridgeState, ApiRequest, ApiResponse};
 pub use types::AdminPermissionsConfig;

@@ -111,6 +111,7 @@ export interface UseSpaceHook {
   updateSchedule: (id: string, payload: ScheduleUpdatePayload) => Promise<SpaceSchedule | null>;
   getScheduleDetail: (id: string) => Promise<SpaceScheduleDetail | null>;
   cancelSchedule: (id: string) => Promise<void>;
+  runScheduleNow: (id: string) => Promise<boolean>;
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -281,6 +282,15 @@ export function useSpace(): UseSpaceHook {
     } catch {}
   }, []);
 
+  const runScheduleNow = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      await apiFetch(`/api/space/schedules/${id}/run-now`, { method: 'POST' });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   // Load today summary on mount
   useEffect(() => {
     loadTodaySummary();
@@ -290,6 +300,6 @@ export function useSpace(): UseSpaceHook {
     notes, notesLoading, loadNotes, createNote, updateNote, deleteNote, searchNotes,
     events, eventsLoading, loadEvents, createEvent, updateEvent, deleteEvent, todaySummary, loadTodaySummary,
     schedules, schedulesLoading,
-    loadSchedules, createSchedule, updateSchedule, getScheduleDetail, cancelSchedule,
+    loadSchedules, createSchedule, updateSchedule, getScheduleDetail, cancelSchedule, runScheduleNow,
   };
 }

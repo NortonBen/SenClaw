@@ -33,7 +33,18 @@ impl GroupManager {
 
     pub fn register(&self, db: &Db, config: &Config, binding: &GroupBinding) {
         ensure_agent_dirs(config, &binding.folder, &binding.name);
-        let _ = db.upsert_group(binding);
+        if let Err(e) = db.upsert_group(binding) {
+            // Loud failure: silently swallowing here means the WS handler
+            // broadcasts a `group:registered` event for a row that doesn't
+            // exist, and the next message to that JID 404s with "Group not
+            // found". Log so future schema regressions surface immediately.
+            tracing::error!(
+                jid = %binding.jid,
+                folder = %binding.folder,
+                error = %e,
+                "[GroupManager] upsert_group failed — group will not be reachable"
+            );
+        }
         save_group_to_config(&config.paths.global_config_path, binding);
         self.fire_changed();
     }
@@ -227,121 +238,6 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-// ===== ensure_admin_group =====
-
-pub fn ensure_admin_group(db: &Db, gm: &GroupManager, config: &Config, bot_user_id: Option<u64>) {
-    let admin_user_id = &config.admin.telegram_user_id;
-    let admin_feishu_open_id = &config.admin.feishu_open_id;
-
-    let (mut jid, mut channel) = if !admin_user_id.is_empty() {
-        let j = if let Some(bot_id) = bot_user_id {
-            format!("tg:{bot_id}:user:{admin_user_id}")
-        } else {
-            format!("tg:user:{admin_user_id}")
-        };
-        (j, "telegram")
-    } else if !admin_feishu_open_id.is_empty() {
-        (format!("feishu:user:{admin_feishu_open_id}"), "feishu")
-    } else {
-        ("web:main".to_string(), "")
-    };
-
-    let folder = &config.telegram.agent_folder;
-    let now = chrono_now();
-
-    // folder UNIQUE constraint
-    let existing_by_folder = gm
-        .list(db)
-        .ok()
-        .and_then(|all| all.into_iter().find(|g| g.folder == *folder));
-
-    // When Telegram is disconnected, keep existing bot-aware jid
-    if bot_user_id.is_none() && !admin_user_id.is_empty() {
-        if let Some(ref existing) = existing_by_folder {
-            let re = Regex::new(r"^tg:\d+:user:").unwrap();
-            if re.is_match(&existing.jid) {
-                jid = existing.jid.clone();
-                channel = "telegram";
-                tracing::info!("[GroupManager] Telegram disconnected; keeping existing jid {jid}");
-            }
-        }
-    }
-
-    // Migrate if folder occupied by different jid
-    if let Some(ref existing) = existing_by_folder {
-        if existing.jid != jid {
-            gm.unregister(db, config, &existing.jid);
-            tracing::info!(
-                "[GroupManager] Migrated admin group from {} to {jid}",
-                existing.jid
-            );
-        }
-    }
-
-    // Clean up legacy jid
-    if !admin_user_id.is_empty() {
-        let legacy_jid = format!("tg:user:{admin_user_id}");
-        if jid != legacy_jid {
-            if gm.get(db, &legacy_jid).is_some() {
-                gm.unregister(db, config, &legacy_jid);
-                tracing::info!(
-                    "[GroupManager] Removed legacy jid {legacy_jid} (superseded by {jid})"
-                );
-            }
-        }
-    }
-
-    let existing = gm.get(db, &jid).or(existing_by_folder);
-    let config_allowed_work_dirs =
-        get_agent_allowed_work_dirs(&config.paths.global_config_path, folder);
-
-    let binding = GroupBinding {
-        jid,
-        folder: folder.clone(),
-        name: existing
-            .as_ref()
-            .map(|e| e.name.clone())
-            .unwrap_or_else(|| {
-                format!(
-                    "{folder} ({})",
-                    if channel.is_empty() { "web" } else { channel }
-                )
-            }),
-        channel: channel.to_string(),
-        group_type: existing
-            .as_ref()
-            .map(|e| e.group_type.clone())
-            .unwrap_or_else(|| "chat".to_string()),
-        is_admin: folder == "main",
-        requires_trigger: false,
-        allowed_tools: None,
-        allowed_paths: existing.as_ref().and_then(|e| e.allowed_paths.clone()),
-        allowed_work_dirs: match config_allowed_work_dirs {
-            None => existing.as_ref().and_then(|e| e.allowed_work_dirs.clone()),
-            Some(work_dirs) => work_dirs,
-        },
-        bot_token: existing.as_ref().and_then(|e| e.bot_token.clone()),
-        max_messages: existing.as_ref().and_then(|e| e.max_messages),
-        llm_config_id: existing.as_ref().and_then(|e| e.llm_config_id.clone()),
-        last_active: existing.as_ref().and_then(|e| e.last_active.clone()),
-        added_at: existing
-            .as_ref()
-            .map(|e| e.added_at.clone())
-            .unwrap_or_else(|| now.clone()),
-    };
-
-    gm.register(db, config, &binding);
-
-    let action = if existing.is_some() {
-        "updated"
-    } else {
-        "registered"
-    };
-    tracing::info!(
-        "[GroupManager] Admin group {action}: {} → agents/{folder}/",
-        binding.jid
-    );
-}
 
 pub fn ensure_wechat_admin_group(
     db: &Db,
