@@ -995,13 +995,20 @@ impl AgentPool {
                 binding.bot_token.as_deref(),
                 &db_path_s,
             ));
-            if binding.is_admin {
-                mcp_servers.push(dispatch_mcp_config(
-                    &dispatch_state_s,
-                    &binding.folder,
-                    Some(&virtual_agents_dir_s),
-                ));
-            }
+            // Dispatch MCP — register for every group, not just admin ones.
+            // DAG mode is now a first-class workflow any chat can opt into via
+            // the AgentModeSelector, so the dispatch tools must be available
+            // wherever a user might switch to DAG. The engine's per-mode tool
+            // filter (zen_core/engine.rs `is_dag` branch) is what actually
+            // exposes dispatch tools to the model — they're stripped out of
+            // Plan mode, and in Agent mode they're available but unused
+            // unless the model explicitly calls them. State is per-folder, so
+            // groups don't share dispatch state.
+            mcp_servers.push(dispatch_mcp_config(
+                &dispatch_state_s,
+                &binding.folder,
+                Some(&virtual_agents_dir_s),
+            ));
 
             mcp_servers.push(memory_mcp_config(
                 &db_path_s,
