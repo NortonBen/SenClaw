@@ -21,6 +21,7 @@ pub mod read;
 pub mod skill;
 pub mod stop_bg_job;
 pub mod task;
+pub mod task_done;
 pub mod time;
 pub mod todo_write;
 pub mod tool_search;
@@ -52,6 +53,7 @@ pub use read::ReadTool;
 pub use skill::SkillTool;
 pub use stop_bg_job::StopBgJobTool;
 pub use task::{AgentConfig, TaskTool};
+pub use task_done::{TaskDoneTool, TASK_DONE_TOOL_NAME};
 pub use time::TimeTool;
 pub use todo_write::TodoWriteTool;
 pub use tool_search::{DeferredToolsFn, ToolSearchTool};
@@ -77,6 +79,9 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(ExitPlanModeTool),
         Arc::new(PeekBgJobTool),
         Arc::new(StopBgJobTool),
+        // ReAct-style "submit" signal — when called, conversation loop exits.
+        // Lets the engine distinguish intermediate status from final answer.
+        Arc::new(TaskDoneTool),
         // Cognitive memory — direct in-process access to the knowledge graph.
         // Was previously exposed via the senclaw-cognitive MCP server (P6).
         // Now built-in so every agent gets them by default with zero IPC

@@ -1130,6 +1130,9 @@ impl ZenCore for ZenEngine {
                 hook_profile: Some(profile.clone()),
                 session_id: session_id_spawn.clone(),
                 enable_cache: false,
+                // Pass through the current agent_mode so the conversation loop
+                // knows whether to enforce task_done (Plan/Dag only).
+                agent_mode: opts.agent_mode,
             };
 
             let result = conversation::query(messages, &config, &cancel).await;

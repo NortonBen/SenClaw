@@ -298,6 +298,10 @@ impl Tool for TaskTool {
             hook_profile: None,
             session_id: String::new(),
             enable_cache: false,
+            // Subagents spawned via the Task tool run as plain Agent mode —
+            // they're best-effort one-shot helpers, not Plan/Dag-style
+            // workflows that need task_done enforcement.
+            agent_mode: crate::zen_core::AgentMode::Agent,
         };
 
         let result = conversation::query(messages, &query_config, &abort).await;

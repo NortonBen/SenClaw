@@ -448,6 +448,11 @@ pub struct QueryConfig {
     pub session_id: String,
     /// Enable prompt caching (Anthropic only — cache_control on system + last tool).
     pub enable_cache: bool,
+    /// Current agent mode (Agent / Plan / Dag). Drives `task_done` enforcement:
+    /// Plan and Dag modes nudge the model toward `task_done` when it stops with
+    /// text only. Agent mode keeps legacy "text = done" behavior so ordinary
+    /// chat is unaffected.
+    pub agent_mode: AgentMode,
 }
 
 /// Absolute cap on LLM turns per user input — a backstop against runaway
@@ -476,6 +481,45 @@ fn stall_tool_turns() -> usize {
 const STALL_NUDGE: &str = "You have called the same tool several times in a row \
 without producing an answer. You already have enough information. Stop calling tools now \
 and write your final answer to the user, in the user's language, based on what you have gathered.";
+
+/// Max retries for silent empty completions (LLM returned 200 OK with 0 blocks
+/// and 0 tool calls — observed with MLX 4-bit / qwen3.5-4b-optiq under heavy
+/// tool counts). Each retry backs off 500ms × attempt. Override with
+/// `SENCLAW_EMPTY_RETRIES`. Set to 0 to disable retries.
+fn max_empty_retries() -> u8 {
+    std::env::var("SENCLAW_EMPTY_RETRIES")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(2)
+}
+
+/// Max times to nudge the model with a "call task_done or continue next tool"
+/// prompt when the conversation looks like a multi-step task and the model
+/// replied with text only. Cap protects against text↔nudge ping-pong on weak
+/// models. Override with `SENCLAW_COMPLETION_NUDGES`. Set to 0 to disable.
+fn max_completion_nudges() -> u8 {
+    std::env::var("SENCLAW_COMPLETION_NUDGES")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(2)
+}
+
+/// Nudge text injected when a Plan-mode or DAG-mode agent ends its turn with
+/// text only instead of signaling completion. `{N}` / `{MAX}` are filled at
+/// runtime.
+const COMPLETION_NUDGE_TEMPLATE: &str = "You ended your turn with a text-only reply, but this is \
+{MODE} mode — every turn must end with either a tool call or `task_done(summary=\"...\")`. If \
+the work is fully complete (plan finalized, sub-task delivered, all artifacts produced), call \
+`task_done(summary=\"...\")` to confirm. Otherwise, call the NEXT tool to continue. Do NOT stop \
+with text — there is no user available to type 'continue'. (Nudge {N}/{MAX})";
+
+/// Returns true when the agent's current mode requires explicit `task_done`
+/// signalling instead of accepting a text-only response as the final answer.
+/// Plain `Agent` mode keeps the legacy "text = done" behavior so ordinary chat
+/// is unaffected.
+fn task_done_enforced(mode: AgentMode) -> bool {
+    matches!(mode, AgentMode::Plan | AgentMode::Dag)
+}
 
 /// Sorted, deduped set of tool names in a batch — a coarse signature used to
 /// detect the model re-invoking the same tool turn after turn (args may vary
@@ -537,6 +581,14 @@ pub async fn query(
     // Exact (name+args) tool-call signatures already executed this user input,
     // so identical re-issues can be short-circuited instead of re-run.
     let mut seen_tool_sigs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Resilience: retry transient EMPTY_COMPLETION before failing the session.
+    let max_empty_retries_cap = max_empty_retries();
+    let mut empty_retries: u8 = 0;
+    // Completion enforcement: only active in Plan / Dag modes. Plain Agent
+    // mode (ordinary chat) keeps the legacy "text = done" behavior.
+    let max_completion_nudges_cap = max_completion_nudges();
+    let mut completion_nudges: u8 = 0;
+    let require_task_done = task_done_enforced(config.agent_mode);
 
     loop {
         // Check cancellation before each LLM call
@@ -848,33 +900,48 @@ pub async fn query(
         );
 
         // Guard against silent empty completions. Some custom OpenAI-compat
-        // endpoints (observed with `qwen3.5-4b-optiq` under heavy tool counts)
-        // return 200 OK with zero blocks and zero tool calls — model didn't
-        // actually generate anything. Treat as a session error rather than
-        // accepting an empty assistant message into history, which would
-        // poison every subsequent turn.
+        // endpoints (observed with `qwen3.5-4b-optiq` and MLX 4-bit under
+        // heavy tool counts) return 200 OK with zero blocks and zero tool
+        // calls — model didn't generate anything. This is often transient
+        // (quant-pressure / stop-token edge case), so retry with backoff a few
+        // times before surfacing as a session error. The empty assistant
+        // message is dropped from history either way to avoid poisoning the
+        // next turn.
         if text_content.trim().is_empty() && reasoning.trim().is_empty() && tool_uses.is_empty() {
+            if empty_retries < max_empty_retries_cap {
+                empty_retries += 1;
+                let backoff_ms = 500u64 * empty_retries as u64;
+                warn!(
+                    "[{}] empty LLM completion — retry {}/{} in {}ms",
+                    config.agent_id, empty_retries, max_empty_retries_cap, backoff_ms
+                );
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                continue;
+            }
             warn!(
-                "[{}] empty LLM completion (blocks=0, tool_calls=0). \
-                 Likely upstream endpoint issue (auth, rate-limit, malformed SSE). \
-                 Dropping empty assistant message to preserve history.",
-                config.agent_id
+                "[{}] empty LLM completion persists after {} retries — surfacing as session error.",
+                config.agent_id, max_empty_retries_cap
             );
             config.event_bus.emit(EngineEvent::SessionError(
                 crate::zen_core::SessionErrorData {
                     error_type: "empty_completion".to_string(),
                     error: crate::zen_core::SessionErrorDetail {
                         code: "EMPTY_COMPLETION".to_string(),
-                        message: "LLM returned empty response (no text / reasoning / tool calls). \
-                                 Check endpoint logs — common causes: auth failure, model overload, \
-                                 tool count exceeds endpoint limit."
-                            .to_string(),
+                        message: format!(
+                            "LLM returned empty response after {} retries (no text / reasoning / tool calls). \
+                             Check endpoint logs — common causes: auth failure, model overload, \
+                             tool count exceeds endpoint limit.",
+                            max_empty_retries_cap
+                        ),
                         details: None,
                     },
                 },
             ));
             return Ok(messages);
         }
+        // Got a non-empty turn — reset the empty-completion retry budget so
+        // a future hiccup later in the same session gets its own fresh allowance.
+        empty_retries = 0;
         let tool_call_infos: Option<Vec<ToolCallInfo>> = if has_tool_calls {
             Some(
                 tool_uses
@@ -932,8 +999,34 @@ pub async fn query(
                 }));
         }
 
-        // 4. No tools → done
+        // 4. No tools → maybe done
         if tool_uses.is_empty() {
+            // Completion enforcement (Plan / Dag mode only): a weak model
+            // often emits a text-only "intermediate report" mid-task
+            // ("Tôi đã làm xong bước 1, đây là kết quả...") instead of
+            // chaining to the next tool. Without a present user to type
+            // "tiếp tục", that aborts the workflow. In Plan or Dag mode,
+            // nudge the model to either call `task_done` or continue with
+            // the next tool. Capped at `max_completion_nudges_cap` to avoid
+            // text↔nudge loops. Agent mode skips this entirely — ordinary
+            // chat behavior is unchanged.
+            if require_task_done && completion_nudges < max_completion_nudges_cap {
+                completion_nudges += 1;
+                info!(
+                    "[{}] text-only response in {} mode — nudging task_done ({}/{})",
+                    config.agent_id,
+                    config.agent_mode.as_str(),
+                    completion_nudges,
+                    max_completion_nudges_cap
+                );
+                let nudge = COMPLETION_NUDGE_TEMPLATE
+                    .replace("{MODE}", config.agent_mode.as_str())
+                    .replace("{N}", &completion_nudges.to_string())
+                    .replace("{MAX}", &max_completion_nudges_cap.to_string());
+                messages.push(assistant_msg);
+                messages.push(create_user_message(vec![ContentBlock::Text { text: nudge }]));
+                continue;
+            }
             messages.push(assistant_msg);
             info!(
                 "[{}] query complete — no tool calls, {} messages",
@@ -1077,6 +1170,26 @@ pub async fn query(
                     agent_id: config.agent_id.to_string(),
                     content: INTERRUPT_MESSAGE.to_string(),
                 }));
+            return Ok(messages);
+        }
+
+        // 5a. task_done short-circuit: the model explicitly signaled task
+        //     completion via the ReAct-style `task_done` tool. Exit now
+        //     instead of recursing for one more LLM turn (which would just
+        //     produce a text summary the user already has from task_done's
+        //     own summary field).
+        let task_done_called = tool_uses.iter().any(|b| matches!(b,
+            ContentBlock::ToolUse { name, .. } if name == crate::tools::TASK_DONE_TOOL_NAME
+        ));
+        if task_done_called {
+            info!(
+                "[{}] task_done called by model — completing query",
+                config.agent_id
+            );
+            messages.push(assistant_msg);
+            if !tool_results.is_empty() {
+                messages.push(create_user_message(tool_results));
+            }
             return Ok(messages);
         }
 
@@ -1326,8 +1439,25 @@ mod tests {
     fn loop_guard_defaults_are_sane() {
         std::env::remove_var("SENCLAW_MAX_AGENT_TURNS");
         std::env::remove_var("SENCLAW_STALL_TOOL_TURNS");
+        std::env::remove_var("SENCLAW_EMPTY_RETRIES");
+        std::env::remove_var("SENCLAW_COMPLETION_NUDGES");
         assert_eq!(max_agent_turns(), 30);
         assert_eq!(stall_tool_turns(), 4);
+        assert_eq!(max_empty_retries(), 2);
+        assert_eq!(max_completion_nudges(), 2);
+    }
+
+    #[test]
+    fn task_done_enforced_only_in_plan_and_dag() {
+        // Plain Agent mode (ordinary chat / scheduled tasks) keeps the legacy
+        // "text = done" behavior so nothing nudges the user-facing conversation.
+        assert!(!task_done_enforced(AgentMode::Agent));
+        // Plan and Dag are the two modes that explicitly require a completion
+        // signal — Plan mode is a step-by-step planner that exits on commit,
+        // Dag mode is a sub-task worker whose finish must be visible to the
+        // orchestrator.
+        assert!(task_done_enforced(AgentMode::Plan));
+        assert!(task_done_enforced(AgentMode::Dag));
     }
 
     #[test]
