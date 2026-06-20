@@ -1250,24 +1250,70 @@ pub async fn query(
             return Ok(messages);
         }
 
-        // 5a. task_done short-circuit: the model explicitly signaled task
-        //     completion via the ReAct-style `task_done` tool. Exit now
-        //     instead of recursing for one more LLM turn (which would just
-        //     produce a text summary the user already has from task_done's
-        //     own summary field).
-        let task_done_called = tool_uses.iter().any(|b| matches!(b,
-            ContentBlock::ToolUse { name, .. } if name == crate::tools::TASK_DONE_TOOL_NAME
-        ));
-        if task_done_called {
-            info!(
-                "[{}] task_done called by model — completing query",
-                config.agent_id
-            );
-            messages.push(assistant_msg);
-            if !tool_results.is_empty() {
-                messages.push(create_user_message(tool_results));
+        // 5a. task_done short-circuit — accepted per-mode:
+        //     - Agent: always honored (one-shot generic completion signal).
+        //     - Plan: ONLY honored after ExitPlanMode has actually fired, so
+        //       a model trying to bail out of planning without writing the
+        //       plan file + requesting approval cannot escape via task_done.
+        //       If task_done is called early in Plan mode, its tool result
+        //       is rewritten to a rejection note ("you must write the plan
+        //       and call ExitPlanMode first") so the next LLM turn retries
+        //       the proper path.
+        //     - Dag: ONLY honored after a real dispatch tool fired, so an
+        //       orchestrator trying to skip delegation can't escape via
+        //       task_done. Same rejection pattern as Plan mode.
+        let task_done_call_id: Option<String> = tool_uses.iter().find_map(|b| match b {
+            ContentBlock::ToolUse { name, id, .. }
+                if name == crate::tools::TASK_DONE_TOOL_NAME =>
+            {
+                Some(id.clone())
             }
-            return Ok(messages);
+            _ => None,
+        });
+        if let Some(td_id) = task_done_call_id {
+            let accepted = match config.agent_mode {
+                AgentMode::Agent => true,
+                AgentMode::Plan => exit_plan_mode_called,
+                AgentMode::Dag => dispatch_executed,
+            };
+            if accepted {
+                info!(
+                    "[{}] task_done called by model — completing query",
+                    config.agent_id
+                );
+                messages.push(assistant_msg);
+                if !tool_results.is_empty() {
+                    messages.push(create_user_message(tool_results));
+                }
+                return Ok(messages);
+            }
+            // Rejected: rewrite the task_done result so the model sees an
+            // error and is forced to take the mode's canonical exit path.
+            let reject_msg = match config.agent_mode {
+                AgentMode::Plan => "task_done was NOT accepted: in Plan mode the only valid exit \
+                    is to write your plan file to the plans_dir and then call \
+                    `ExitPlanMode(plan=\"...\")`. Do that now — task_done is reserved for \
+                    abandoning the planning task entirely, not for finishing the plan.",
+                AgentMode::Dag => "task_done was NOT accepted: in this mode you must first \
+                    delegate work via `DispatchCreateParentAndRun(...)` (which blocks until \
+                    sub-agents finish), then report results to the user. Calling task_done \
+                    before any dispatch means no work was actually done.",
+                AgentMode::Agent => unreachable!(),
+            };
+            for r in tool_results.iter_mut() {
+                if let ContentBlock::ToolResult { tool_use_id, content, is_error } = r {
+                    if *tool_use_id == td_id {
+                        *content = reject_msg.to_string();
+                        *is_error = true;
+                    }
+                }
+            }
+            info!(
+                "[{}] task_done rejected in {} mode (canonical signal not yet fired) — rewrote \
+                 tool result, conversation continues",
+                config.agent_id,
+                config.agent_mode.as_str()
+            );
         }
 
         // 5b. Answer-and-stop: the model produced a real answer this turn AND
@@ -1570,6 +1616,33 @@ mod tests {
         // satisfy DAG mode, and vice-versa.
         assert!(completion_nudge_for(AgentMode::Dag, true, false, 1, 2).is_some());
         assert!(completion_nudge_for(AgentMode::Plan, false, true, 1, 2).is_some());
+    }
+
+    #[test]
+    fn task_done_acceptance_matrix() {
+        // Mirror of the per-mode gate in the short-circuit branch. Documenting
+        // here as a unit test so future tweaks have a single place to flip.
+        fn accepted(mode: AgentMode, exit_plan: bool, dispatched: bool) -> bool {
+            match mode {
+                AgentMode::Agent => true,
+                AgentMode::Plan => exit_plan,
+                AgentMode::Dag => dispatched,
+            }
+        }
+
+        // Agent: always accepted.
+        assert!(accepted(AgentMode::Agent, false, false));
+        assert!(accepted(AgentMode::Agent, true, true));
+
+        // Plan: rejected until ExitPlanMode fired.
+        assert!(!accepted(AgentMode::Plan, false, false));
+        assert!(!accepted(AgentMode::Plan, false, true)); // dispatch is irrelevant here
+        assert!(accepted(AgentMode::Plan, true, false));
+
+        // Dag: rejected until dispatch fired.
+        assert!(!accepted(AgentMode::Dag, false, false));
+        assert!(!accepted(AgentMode::Dag, true, false)); // ExitPlanMode is irrelevant
+        assert!(accepted(AgentMode::Dag, false, true));
     }
 
     #[test]
