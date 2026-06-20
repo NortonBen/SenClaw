@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { DispatchParent, DispatchTask, SubAgentActivityEntry } from '../types';
 import { DispatchTree } from './DispatchTree';
+import { SubAgentActivityCard } from './SubAgentActivityCard';
 
 const { Text } = Typography;
 
@@ -352,69 +353,23 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
                 </div>
               )}
 
-              {/* Sub-agent activity for this task — the tool calls / thinks /
-                  messages emitted while the worker was running. Compact list
-                  ordered chronologically so the user can scroll the worker's
-                  step-by-step trace. */}
+              {/* Sub-agent activity feed — full Agent-Console-quality trace
+                  embedded inline. Re-uses `SubAgentActivityCard` (the same
+                  component the side panel renders) so the user sees the same
+                  level of detail without flipping panels: per-tool icon +
+                  verb + title + summary + error tag, message rows for free-
+                  text outputs, and a collapsed one-line summary
+                  ("Write x7, Read x3") when not expanded. */}
               {activity?.[openTask.label]?.length ? (
                 <div>
                   <Text strong style={{ fontSize: 11, color: token.colorTextSecondary }}>
-                    Activity ({activity[openTask.label].length})
+                    Activity
                   </Text>
-                  <div
-                    style={{
-                      marginTop: 4,
-                      maxHeight: 180,
-                      overflowY: 'auto',
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      borderRadius: 6,
-                      background: token.colorBgContainer,
-                    }}
-                  >
-                    {activity[openTask.label].map((e, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          padding: '4px 8px',
-                          borderBottom: i < activity[openTask.label].length - 1
-                            ? `1px solid ${token.colorBorderSecondary}`
-                            : 'none',
-                          fontSize: 11,
-                          display: 'flex',
-                          gap: 6,
-                          alignItems: 'flex-start',
-                        }}
-                      >
-                        <span style={{
-                          fontSize: 10,
-                          color: token.colorTextTertiary,
-                          fontFamily: 'ui-monospace, monospace',
-                          flexShrink: 0,
-                        }}>
-                          {formatTime(e.ts)}
-                        </span>
-                        <span style={{
-                          fontSize: 10,
-                          padding: '0 4px',
-                          borderRadius: 3,
-                          background: e.entryType === 'tool'
-                            ? '#dbeafe'
-                            : e.entryType === 'think'
-                              ? '#f3e8ff'
-                              : '#dcfce7',
-                          color: '#374151',
-                          flexShrink: 0,
-                        }}>
-                          {e.entryType}
-                        </span>
-                        <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
-                          {e.toolName ? <code>{e.toolName}</code> : ''}
-                          {e.title ? <span style={{ marginLeft: 4 }}>{e.title}</span> : ''}
-                          {e.summary ? <span style={{ marginLeft: 4, color: token.colorTextSecondary }}>{e.summary}</span> : ''}
-                          {e.text ? <span style={{ marginLeft: 4 }}>{previewText(e.text, 120)}</span> : ''}
-                        </span>
-                      </div>
-                    ))}
+                  <div style={{ marginTop: 4 }}>
+                    <SubAgentActivityCard
+                      task={openTask}
+                      entries={activity[openTask.label]}
+                    />
                   </div>
                 </div>
               ) : null}
