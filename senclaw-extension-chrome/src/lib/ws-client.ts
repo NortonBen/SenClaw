@@ -1,25 +1,52 @@
-// WebSocket client with auto-reconnect and heartbeat.
+// WebSocket client with auto-reconnect, heartbeat, and lifecycle events.
 import type { DaemonMessage, ExtensionMessage } from '../types/protocol';
 
-const DEFAULT_WS_PORT = 18789;
 const HEARTBEAT_INTERVAL = 15_000;
 const RECONNECT_BACKOFF = [1, 2, 4, 8, 16, 30]; // seconds
 
+export type ConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'reconnecting';
+
 type MessageHandler = (msg: DaemonMessage) => void;
-type StatusHandler = (connected: boolean) => void;
+type StatusHandler = (state: ConnectionState, detail?: string) => void;
 
 export class WSClient {
   private ws: WebSocket | null = null;
-  private wsUrl: string;
+  private host: string;
+  private port: number;
   private messageHandler: MessageHandler | null = null;
   private statusHandler: StatusHandler | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private activeTabId: string | null = null;
+  private state: ConnectionState = 'idle';
+  private disposed = false;
 
-  constructor(port?: number) {
-    this.wsUrl = `ws://127.0.0.1:${port ?? DEFAULT_WS_PORT}/browser`;
+  constructor(host: string, port: number) {
+    this.host = host;
+    this.port = port;
+  }
+
+  private get wsUrl(): string {
+    return `ws://${this.host}:${this.port}/browser`;
+  }
+
+  /** Returns true if the WebSocket is OPEN. */
+  isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  getState(): ConnectionState {
+    return this.state;
+  }
+
+  getEndpoint(): string {
+    return this.wsUrl;
   }
 
   onMessage(handler: MessageHandler): void {
@@ -34,55 +61,103 @@ export class WSClient {
     this.activeTabId = tabId;
   }
 
-  connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+  /** Update endpoint and force a fresh connection. */
+  setEndpoint(host: string, port: number): void {
+    const same = host === this.host && port === this.port;
+    this.host = host;
+    this.port = port;
+    if (same) return;
+    this.reconnectAttempt = 0;
+    this.disconnect(/* permanent */ false);
+    this.connect();
+  }
 
+  /** Open (or no-op if already opening/open). */
+  connect(): void {
+    if (this.disposed) return;
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+    // Cancel any pending reconnect — we're acting now.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.setState('connecting', this.wsUrl);
+
+    let socket: WebSocket;
     try {
-      this.ws = new WebSocket(this.wsUrl);
-    } catch {
+      socket = new WebSocket(this.wsUrl);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.setState('disconnected', `construct failed: ${msg}`);
       this.scheduleReconnect();
       return;
     }
+    this.ws = socket;
 
-    this.ws.onopen = () => {
-      console.log('[SenClaw] WebSocket connected');
+    socket.onopen = () => {
       this.reconnectAttempt = 0;
-      this.statusHandler?.(true);
+      this.setState('connected', this.wsUrl);
       this.startHeartbeat();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
       try {
         const msg: DaemonMessage = JSON.parse(event.data as string);
         this.messageHandler?.(msg);
       } catch (e) {
-        console.warn('[SenClaw] Failed to parse WS message:', e);
+        const detail = e instanceof Error ? e.message : String(e);
+        this.statusHandler?.(this.state, `parse error: ${detail}`);
       }
     };
 
-    this.ws.onclose = () => {
-      console.log('[SenClaw] WebSocket disconnected');
+    socket.onclose = (event) => {
       this.stopHeartbeat();
-      this.statusHandler?.(false);
+      this.ws = null;
+      const wasConnected = this.state === 'connected';
+      const reason =
+        event.reason ||
+        (event.code === 1006
+          ? 'abnormal close (daemon down or network)'
+          : `code ${event.code}`);
+      this.setState('disconnected', wasConnected ? `closed: ${reason}` : reason);
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = (e) => {
-      console.error('[SenClaw] WebSocket error:', e);
+    socket.onerror = () => {
+      // onerror fires before onclose with no detail in MV3; flag and let close handle reconnect.
+      this.statusHandler?.(this.state, 'socket error');
     };
   }
 
-  send(msg: ExtensionMessage): void {
+  send(msg: ExtensionMessage): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-    } else {
-      console.warn('[SenClaw] Cannot send, WS not connected');
+      try {
+        this.ws.send(JSON.stringify(msg));
+        return true;
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        this.statusHandler?.(this.state, `send failed: ${detail}`);
+        return false;
+      }
     }
+    this.statusHandler?.(this.state, 'send dropped: not connected');
+    return false;
   }
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat();
+        return;
+      }
       chrome.tabs.query({}, (allTabs) => {
         this.send({
           type: 'Heartbeat',
@@ -101,23 +176,47 @@ export class WSClient {
   }
 
   private scheduleReconnect(): void {
+    if (this.disposed) return;
     if (this.reconnectTimer) return;
-    const delay = RECONNECT_BACKOFF[Math.min(this.reconnectAttempt, RECONNECT_BACKOFF.length - 1)] * 1000;
-    console.log(`[SenClaw] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt + 1})`);
+    const idx = Math.min(this.reconnectAttempt, RECONNECT_BACKOFF.length - 1);
+    const delayMs = RECONNECT_BACKOFF[idx] * 1000;
     this.reconnectAttempt++;
+    this.setState(
+      'reconnecting',
+      `retry #${this.reconnectAttempt} in ${delayMs / 1000}s`,
+    );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, delay);
+    }, delayMs);
   }
 
-  disconnect(): void {
+  private setState(next: ConnectionState, detail?: string): void {
+    if (this.state === next && !detail) return;
+    this.state = next;
+    this.statusHandler?.(next, detail);
+  }
+
+  disconnect(permanent = true): void {
+    if (permanent) this.disposed = true;
     this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.ws?.close();
-    this.ws = null;
+    if (this.ws) {
+      try {
+        // Drop handlers BEFORE closing so onclose doesn't trigger a reconnect.
+        this.ws.onopen = null;
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
+        this.ws.close();
+      } catch {
+        /* ignore */
+      }
+      this.ws = null;
+    }
+    if (permanent) this.setState('disconnected', 'disposed');
   }
 }

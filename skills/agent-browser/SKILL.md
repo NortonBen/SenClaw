@@ -79,7 +79,7 @@ triggers:
 
 # Agent Browser Skill
 
-A connected Chrome instance is exposed through the **`senclaw-browser`** MCP server (~30 tools). The browser runs in the user's actual session — pages they're logged in to are accessible.
+A connected Chrome instance is exposed through the **`senclaw-browser`** MCP server (backed by `src/mcp/browser_server.rs` + the `senclaw-extension-chrome` WebSocket bridge). The browser runs in the user's actual session — pages they're logged in to are accessible.
 
 ---
 
@@ -126,28 +126,36 @@ Use this skill whenever the task requires **information or interaction that only
 
 ## Tool names
 
-Always call the browser tools by their **stripped bridge name**:
+The MCP server registers under the name **`senclaw-browser`**, so each tool's full identifier is:
 
 ```
-mcp__browser__<verb>      e.g. mcp__browser__search, mcp__browser__navigate, mcp__browser__snapshot
+mcp__senclaw-browser__browser_<verb>
 ```
 
-> The MCP server registers these as `mcp__senclaw-browser__browser_<verb>` (full server + tool prefix). The tool resolver normalizes both directions, so the short `mcp__browser__<verb>` form always resolves to the registered tool — for `select:` loading and for direct calls alike. Prefer the short form everywhere; the long form also works if you ever need it.
+Examples: `mcp__senclaw-browser__browser_search`, `mcp__senclaw-browser__browser_navigate`, `mcp__senclaw-browser__browser_snapshot`.
+
+If the bridge exposes a normalized short form, the prefix `mcp__browser__<verb>` (e.g. `mcp__browser__search`) resolves to the same tool. Prefer the full `mcp__senclaw-browser__browser_<verb>` form — it's the canonical name and works regardless of normalization.
 
 ## Step 0 — Load the tools FIRST (required)
 
-These tools are **deferred** to save tokens. Their schemas are NOT in the prompt, so **calling one before loading it fails with `InputValidationError`**. Always run `ToolSearch` first, in the same turn, before any `mcp__browser__*` call.
+These tools are **deferred** to save tokens. Their schemas are NOT in the prompt, so **calling one before loading it fails with `InputValidationError`**. Always run `ToolSearch` first, in the same turn, before any `senclaw-browser` call.
 
-Bulk-load the common set by exact name (most reliable):
+Bulk-load by exact name (most reliable):
 
 ```
 ToolSearch {
-  "query": "select:mcp__browser__search,mcp__browser__navigate,mcp__browser__snapshot,mcp__browser__click,mcp__browser__type,mcp__browser__extract_text,mcp__browser__extract_structured,mcp__browser__screenshot,mcp__browser__fill_form,mcp__browser__click_and_wait,mcp__browser__wait,mcp__browser__new_tab,mcp__browser__close_tab",
+  "query": "select:mcp__senclaw-browser__browser_search,mcp__senclaw-browser__browser_navigate,mcp__senclaw-browser__browser_snapshot,mcp__senclaw-browser__browser_click,mcp__senclaw-browser__browser_type,mcp__senclaw-browser__browser_extract_text,mcp__senclaw-browser__browser_extract_structured,mcp__senclaw-browser__browser_screenshot,mcp__senclaw-browser__browser_fill_form,mcp__senclaw-browser__browser_click_and_wait,mcp__senclaw-browser__browser_wait,mcp__senclaw-browser__browser_new_tab,mcp__senclaw-browser__browser_close_tab",
   "max_results": 30
 }
 ```
 
-Need a tool not in that list (e.g. `crawl`, `extract_table`)? Load it the same way: `ToolSearch { query: "select:mcp__browser__crawl,mcp__browser__crawl_status" }`. Keyword search also works: `ToolSearch { query: "browser search web", max_results: 10 }`.
+Or load by keyword (matches the server name substring in every tool name, so one query returns the whole toolkit):
+
+```
+ToolSearch { "query": "senclaw-browser", "max_results": 30 }
+```
+
+Need a tool not in the common set (e.g. `crawl`, `extract_table`)? Load it the same way: `ToolSearch { query: "select:mcp__senclaw-browser__browser_crawl,mcp__senclaw-browser__browser_crawl_status" }`.
 
 Only after ToolSearch returns the matched schemas may you call the tool directly.
 
@@ -155,10 +163,10 @@ Only after ToolSearch returns the matched schemas may you call the tool directly
 
 ### 1. Quick web search + detail extraction (preferred for "find/search X")
 
-Use **`mcp__browser__search`** — returns ranked SERP results without opening a tab. Cheapest path for fact-finding.
+Use **`browser_search`** — returns ranked SERP results without opening a tab. Cheapest path for fact-finding.
 
 ```
-mcp__browser__search {
+mcp__senclaw-browser__browser_search {
   "query": "<user query in the user's language>",
   "engine": "google",            // or "bing"; default "google"
   "num_results": 10,             // default 10
@@ -171,8 +179,8 @@ Returns structured results (`title`, `url`, `snippet`, …). Treat snippets as a
 After search:
 
 1. Pick the most relevant 1-3 result URLs. Prefer official, primary, or high-authority sources.
-2. Navigate to each selected URL with `mcp__browser__navigate`.
-3. Extract the page content with `mcp__browser__extract_text` or `mcp__browser__extract_structured`.
+2. Navigate to each selected URL with `browser_navigate`.
+3. Extract the page content with `browser_extract_text` or `browser_extract_structured`.
 4. Pull out the concrete facts, numbers, timestamps, source names, and any disagreement between sources.
 5. Close tabs you opened if the task is done.
 6. Answer from the extracted page content, citing each URL.
@@ -182,21 +190,21 @@ Only answer directly from snippets when the user explicitly asks for search-resu
 ### 2. Open a page + read content
 
 ```
-mcp__browser__navigate { "url": "https://example.com/article" }
+mcp__senclaw-browser__browser_navigate { "url": "https://example.com/article" }
 ↓ (response includes a tab_id)
-mcp__browser__snapshot { "tab_id": "<from navigate response>" }
+mcp__senclaw-browser__browser_snapshot { "tab_id": "<from navigate response>" }
 ↓ pick element indices from the snapshot
-mcp__browser__extract_text { "tab_id": "...", "selector": "article" }   // selector is optional CSS; omit for whole page
+mcp__senclaw-browser__browser_extract_text { "tab_id": "...", "selector": "article" }   // selector is optional CSS; omit for whole page
 ```
 
-`mcp__browser__snapshot` returns a compact accessibility tree with **numbered indices** for every interactive element. Those indices are the `index` values passed to `click`, `type`, `hover`, `click_and_wait`, etc. `tab_id` is optional on most tools — omit it to act on the active tab.
+`browser_snapshot` returns a compact accessibility tree with **numbered indices** for every interactive element. Those indices are the `index` values passed to `click`, `type`, `hover`, `click_and_wait`, etc. `tab_id` is optional on most tools — omit it to act on the active tab.
 
 ### 3. Structured data extraction
 
 When the page has tabular / list data, skip manual parsing — let the model map it via schema:
 
 ```
-mcp__browser__extract_structured {
+mcp__senclaw-browser__browser_extract_structured {
   "tab_id": "...",
   "schema": {
     "type": "array",
@@ -214,12 +222,12 @@ mcp__browser__extract_structured {
 }
 ```
 
-For HTML tables specifically use `mcp__browser__extract_table` — faster, no schema needed.
+For HTML tables specifically use `browser_extract_table` — faster, no schema needed.
 
 ### 4. Fill forms / interact
 
 ```
-mcp__browser__fill_form {
+mcp__senclaw-browser__browser_fill_form {
   "tab_id": "...",
   "fields": [
     { "target": "Email",    "value": "alice@example.com", "type": "text" },
@@ -229,14 +237,14 @@ mcp__browser__fill_form {
 }
 ```
 
-Each field's `target` auto-matches by label / placeholder / name / CSS selector. For a single field, use `mcp__browser__type { "tab_id": "...", "index": <n>, "text": "...", "submit": false }` after a snapshot.
+Each field's `target` auto-matches by label / placeholder / name / CSS selector. For a single field, use `browser_type { "tab_id": "...", "index": <n>, "text": "...", "submit": false }` after a snapshot.
 
-For navigation-triggering clicks (login, submit), prefer **`mcp__browser__click_and_wait { "index": <n> }`** so the next step doesn't race the new page load.
+For navigation-triggering clicks (login, submit), prefer **`browser_click_and_wait { "index": <n> }`** so the next step doesn't race the new page load.
 
 ### 5. Screenshot
 
 ```
-mcp__browser__screenshot {
+mcp__senclaw-browser__browser_screenshot {
   "tab_id": "...",
   "full_page": false,                 // false = viewport (default); true = full page
   "element_selector": "#hero",        // optional: shoot just one element
@@ -249,7 +257,7 @@ Returns image data via the workbench (not inlined, to save tokens). Tell the use
 ### 6. Crawl multiple pages
 
 ```
-mcp__browser__crawl {
+mcp__senclaw-browser__browser_crawl {
   "start_url": "https://blog.example.com",
   "max_pages": 20,                    // default 50
   "depth": 2,                         // default 2
@@ -260,36 +268,36 @@ mcp__browser__crawl {
 }
 ```
 
-Returns a `job_id`. Poll with `mcp__browser__crawl_status { "job_id": "..." }`. Stop a stuck per-tab task with `mcp__browser__stop_task { "tab_id": "..." }`.
+Returns a `job_id`. Poll with `browser_crawl_status { "job_id": "..." }`. Stop a stuck per-tab task with `browser_stop_task { "tab_id": "..." }`.
 
 ## Decision tree
 
 ```
 User asks for…
 ├── A specific fact / list / "current X today"
-│       → mcp__browser__search (fastest)
+│       → browser_search (fastest)
 ├── Content of a known URL
-│       → mcp__browser__navigate + mcp__browser__extract_text
+│       → browser_navigate + browser_extract_text
 ├── Structured data from a page
-│       → mcp__browser__extract_structured (schema) or mcp__browser__extract_table
+│       → browser_extract_structured (schema) or browser_extract_table
 ├── Multi-page sweep of a site
-│       → mcp__browser__crawl + mcp__browser__crawl_status
+│       → browser_crawl + browser_crawl_status
 ├── Login / sign-up / form submission
-│       → mcp__browser__fill_form (submit: true)
+│       → browser_fill_form (submit: true)
 ├── Visual proof / share with user
-│       → mcp__browser__screenshot
+│       → browser_screenshot
 └── Page state debug
-        → mcp__browser__snapshot
+        → browser_snapshot
 ```
 
 ## Rules
 
-- **ToolSearch before the first call** (Step 0). A direct call to a not-yet-loaded `mcp__browser__*` tool fails with `InputValidationError`.
-- **Search first** for general questions — use `mcp__browser__search` before navigating blindly.
+- **ToolSearch before the first call** (Step 0). A direct call to a not-yet-loaded `senclaw-browser` tool fails with `InputValidationError`.
+- **Search first** for general questions — use `browser_search` before navigating blindly.
 - **Do not stop at SERP snippets for synthesis/current data** — after search, open the selected result URLs and extract page content before answering.
-- **Single tab per task** — open with `mcp__browser__new_tab`, close with `mcp__browser__close_tab` when done. `tab_id` is optional elsewhere (defaults to the active tab).
-- **Indices come from the snapshot** — never invent element numbers. If you need to click and don't have a current snapshot, run `mcp__browser__snapshot` first; re-snapshot after the DOM changes.
-- **Wait when navigating** — use `mcp__browser__click_and_wait` for nav-triggering clicks; `mcp__browser__wait` after manual navigation if the page is slow.
+- **Single tab per task** — open with `browser_new_tab`, close with `browser_close_tab` when done. `tab_id` is optional elsewhere (defaults to the active tab).
+- **Indices come from the snapshot** — never invent element numbers. If you need to click and don't have a current snapshot, run `browser_snapshot` first; re-snapshot after the DOM changes.
+- **Wait when navigating** — use `browser_click_and_wait` for nav-triggering clicks; `browser_wait` after manual navigation if the page is slow.
 - **Respect login boundaries** — the browser uses the user's real cookies. Don't post / pay / send messages without explicit user confirmation.
 - **Report the URL** in the final response so the user can verify the source.
 - **No emojis** in tool-output relays unless the user asks.
@@ -299,25 +307,26 @@ User asks for…
 | Symptom | Cause | Fix |
 |---|---|---|
 | `InputValidationError` on a browser tool | Tool not loaded yet | Run the Step 0 `ToolSearch` first, then retry |
+| `senclaw-browser` server not in the MCP list | Daemon not running, or extension not connected | Start the SenClaw daemon and open the SenClaw browser tab in Chrome |
 | `Extension not connected` | Chrome extension offline | Ask user to open the SenClaw browser tab |
-| `Tab not found` after navigate | Tab closed mid-task | Re-create with `mcp__browser__new_tab` |
-| `Element not found` | Index stale after DOM change | Re-run `mcp__browser__snapshot` then retry |
+| `Tab not found` after navigate | Tab closed mid-task | Re-create with `browser_new_tab` |
+| `Element not found` | Index stale after DOM change | Re-run `browser_snapshot` then retry |
 | Search returns empty | Engine rate-limited | Switch `engine` to the other (google ↔ bing) |
-| Crawl stuck | Task hung | `mcp__browser__stop_task { tab_id }`, then narrow `link_patterns` and re-crawl |
+| Crawl stuck | Task hung | `browser_stop_task { tab_id }`, then narrow `link_patterns` and re-crawl |
 
 ## Examples
 
 **Query**: "tìm giá vàng hôm nay"
 
 ```
-1. ToolSearch { query: "select:mcp__browser__search,mcp__browser__navigate,mcp__browser__extract_text,mcp__browser__close_tab" }
-2. mcp__browser__search {
+1. ToolSearch { query: "select:mcp__senclaw-browser__browser_search,mcp__senclaw-browser__browser_navigate,mcp__senclaw-browser__browser_extract_text,mcp__senclaw-browser__browser_close_tab" }
+2. mcp__senclaw-browser__browser_search {
      "query": "giá vàng hôm nay",
      "num_results": 5
    }
 3. Pick the top relevant source URLs (for example 24h, PNJ, SJC/DOJI/BTMC if present).
-4. mcp__browser__navigate { "url": "<selected result URL>" }
-5. mcp__browser__extract_text { "tab_id": "<from navigate response>" }
+4. mcp__senclaw-browser__browser_navigate { "url": "<selected result URL>" }
+5. mcp__senclaw-browser__browser_extract_text { "tab_id": "<from navigate response>" }
 6. Repeat for 1-2 additional high-value sources if the figures need corroboration.
 7. Summarize the extracted prices, units, update time/source, and cite each URL. Mention if sources disagree.
 ```
@@ -325,10 +334,10 @@ User asks for…
 **Query**: "screenshot github.com/trending"
 
 ```
-1. ToolSearch { query: "select:mcp__browser__navigate,mcp__browser__screenshot" }
-2. mcp__browser__navigate { "url": "https://github.com/trending" }
+1. ToolSearch { query: "select:mcp__senclaw-browser__browser_navigate,mcp__senclaw-browser__browser_screenshot" }
+2. mcp__senclaw-browser__browser_navigate { "url": "https://github.com/trending" }
    → { tab_id: "tab-1", ... }
-3. mcp__browser__screenshot { "tab_id": "tab-1", "full_page": false }
+3. mcp__senclaw-browser__browser_screenshot { "tab_id": "tab-1", "full_page": false }
    → "screenshot saved to workbench"
 4. Reply: "Screenshot of github.com/trending saved. [workbench link]"
 ```
@@ -336,9 +345,9 @@ User asks for…
 **Query**: "extract top 10 hacker news front-page posts as JSON"
 
 ```
-1. ToolSearch { query: "select:mcp__browser__navigate,mcp__browser__extract_structured" }
-2. mcp__browser__navigate { "url": "https://news.ycombinator.com" }
-3. mcp__browser__extract_structured {
+1. ToolSearch { query: "select:mcp__senclaw-browser__browser_navigate,mcp__senclaw-browser__browser_extract_structured" }
+2. mcp__senclaw-browser__browser_navigate { "url": "https://news.ycombinator.com" }
+3. mcp__senclaw-browser__browser_extract_structured {
      "tab_id": "...",
      "schema": {
        "type": "array",
@@ -360,7 +369,7 @@ User asks for…
 
 ## Tools available (full list)
 
-All called as `mcp__browser__<name>`:
+All registered as `mcp__senclaw-browser__browser_<name>` (see `src/mcp/browser_server.rs`):
 
 Navigation: `navigate`, `new_tab`, `close_tab`, `list_tabs`, `switch_tab`, `go_back`, `go_forward`, `reload`
 
