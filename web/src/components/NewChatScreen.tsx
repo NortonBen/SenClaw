@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
-import { theme, Input, Spin, message, Select, Segmented } from 'antd';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { theme, Input, message, Select, Segmented, Dropdown, Modal } from 'antd';
+import type { MenuProps } from 'antd';
 import {
-  FolderOpenOutlined, FileOutlined, FolderFilled,
+  FolderOpenOutlined,
   UserOutlined, ThunderboltOutlined, BulbOutlined, ApartmentOutlined,
+  CheckOutlined, FolderAddOutlined, FolderOutlined, SearchOutlined, MinusCircleOutlined,
 } from '@ant-design/icons';
 import type { AgentInfo } from '../types';
 
@@ -45,7 +47,6 @@ const CODE_SUGGESTIONS = [
   'Write documentation',
 ];
 
-interface WorkspaceEntry { name: string; path: string; is_dir: boolean; size?: number; }
 interface LlmConfig { id: string; label: string; provider: string; modelName: string; }
 
 declare global {
@@ -73,9 +74,6 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
   const { token } = theme.useToken();
   const [input, setInput] = useState('');
   const [workDir, setWorkDir] = useState('');
-  const [showDirInput, setShowDirInput] = useState(false);
-  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [loadingFiles, setLoadingFiles] = useState(false);
   const [profileId, setProfileId] = useState<number | undefined>(undefined);
   const [modelId, setModelId] = useState<string | undefined>(undefined);
   const [chatType, setChatType] = useState<ChatType>('Agent');
@@ -83,10 +81,12 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [recentPaths, setRecentPaths] = useState<string[]>(loadRecentPaths);
   const [kind, setKind] = useState<ChatKind>('chat');
-  // Create-folder state — small inline form revealed by the "+ New folder"
-  // button so the user doesn't need to drop to a shell to scaffold a fresh
-  // project root before starting a code chat.
-  const [showCreateForm, setShowCreateForm] = useState(false);
+  // Project-picker dropdown + path modal (Codex-style flow).
+  //   - `pickerSearch` filters the recent-projects list.
+  //   - `pathModalMode` opens a small modal for either creating a new folder
+  //     (mkdir) or pointing at an existing absolute path.
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [pathModalMode, setPathModalMode] = useState<null | 'create' | 'open'>(null);
   const [newFolderPath, setNewFolderPath] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
 
@@ -97,91 +97,181 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!workDir) { setEntries([]); return; }
-    const handle = setTimeout(() => {
-      setLoadingFiles(true);
-      fetch(`/api/workspace/files?path=${encodeURIComponent(workDir)}&depth=1`)
-        .then(async r => { if (!r.ok) throw new Error((await r.text()) || 'Failed to list files'); return r.json(); })
-        .then((data: { root: string; entries: WorkspaceEntry[] }) => setEntries(data.entries))
-        .catch(err => { setEntries([]); if (workDir.length > 2) message.error(String(err?.message ?? err), 2); })
-        .finally(() => setLoadingFiles(false));
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [workDir]);
+  // Note: live file-preview fetch on `workDir` was removed when the inline
+  // panel was replaced by the Codex-style dropdown. The "Use an existing
+  // folder" modal still validates the path via `/api/workspace/files` at
+  // submit time (see `submitPathModal`), so an invalid path can't sneak in.
 
-  // Toggle the inline path input. Native picker (showDirectoryPicker) is
-  // best-effort — even when supported it returns only the folder NAME, not
-  // an absolute path, so we always need the user to confirm/type the path.
-  const togglePicker = () => {
-    setShowDirInput(v => !v);
-  };
-
-  const tryNativePicker = async () => {
-    if (!window.showDirectoryPicker) {
-      message.info('Browser-native picker unavailable. Paste an absolute path below.', 3);
-      return;
-    }
+  /** Try the OS file picker. Best-effort — Chrome's `showDirectoryPicker`
+   *  only returns the folder *name*, not its absolute path, so it's not
+   *  enough on its own. Use it to seed the modal's path input when present,
+   *  then let the user confirm/edit the full path before submitting. */
+  const seedPathFromNativePicker = async (): Promise<string | null> => {
+    if (!window.showDirectoryPicker) return null;
     try {
       const handle = await window.showDirectoryPicker();
-      // The API only exposes the folder name. Prefill it as a hint, but the
-      // user must still type the absolute path because the backend needs one.
-      setWorkDir(handle.name);
-      message.info(`Picked "${handle.name}" — edit below to add the absolute path.`, 4);
-    } catch { /* user cancelled */ }
-  };
-
-  // Open the create-folder mini-form. Prefill the path with a sensible
-  // default: `{workDir}/new-folder` when a workspace is already selected
-  // (subfolder use-case), otherwise `~/projects/new-project` so the user
-  // doesn't start from scratch.
-  const openCreateForm = () => {
-    if (!showCreateForm) {
-      setNewFolderPath(
-        workDir
-          ? `${workDir.replace(/\/+$/, '')}/new-folder`
-          : '~/projects/new-project',
-      );
+      return handle.name;
+    } catch {
+      return null;
     }
-    setShowCreateForm(v => !v);
   };
 
-  const createFolder = async () => {
+  /** Submit the modal — either `mkdir` (create) or just `setWorkDir` (open).
+   *  Both flows validate the path and push it onto the recents list. */
+  const submitPathModal = async () => {
     const path = newFolderPath.trim();
     if (!path) {
-      message.warning('Enter the folder path to create.', 2);
+      message.warning('Enter the folder path.', 2);
       return;
     }
-    setCreatingFolder(true);
-    try {
-      const res = await fetch('/api/workspace/mkdir', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, recursive: true }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error ?? data?.message ?? `HTTP ${res.status}`);
+    if (pathModalMode === 'create') {
+      setCreatingFolder(true);
+      try {
+        const res = await fetch('/api/workspace/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, recursive: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error ?? data?.message ?? `HTTP ${res.status}`);
+        const canonical = data.path ?? path;
+        setWorkDir(canonical);
+        pushRecentPath(canonical);
+        setRecentPaths(loadRecentPaths());
+        message.success(
+          data.created === false ? `Already exists — using ${canonical}` : `Created ${canonical}`,
+          2,
+        );
+        setPathModalMode(null);
+        setNewFolderPath('');
+      } catch (e: unknown) {
+        message.error(`Create failed: ${String((e as Error)?.message ?? e)}`, 3);
+      } finally {
+        setCreatingFolder(false);
       }
-      // Backend echoes the canonical (tilde-expanded) absolute path.
-      const created = data.path ?? path;
-      setWorkDir(created);
-      pushRecentPath(created);
-      setRecentPaths(loadRecentPaths());
-      setShowCreateForm(false);
-      setNewFolderPath('');
-      message.success(
-        data.created === false
-          ? `Folder already exists — using ${created}`
-          : `Created ${created}`,
-        2,
-      );
-    } catch (e: unknown) {
-      message.error(`Create failed: ${String((e as Error)?.message ?? e)}`, 3);
-    } finally {
-      setCreatingFolder(false);
+    } else if (pathModalMode === 'open') {
+      // Verify the folder exists by hitting the list endpoint before committing.
+      try {
+        const res = await fetch(`/api/workspace/files?path=${encodeURIComponent(path)}&depth=1`);
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          throw new Error(txt || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const canonical = data.root ?? path;
+        setWorkDir(canonical);
+        pushRecentPath(canonical);
+        setRecentPaths(loadRecentPaths());
+        message.success(`Workspace set to ${canonical}`, 2);
+        setPathModalMode(null);
+        setNewFolderPath('');
+      } catch (e: unknown) {
+        message.error(`Open failed: ${String((e as Error)?.message ?? e)}`, 3);
+      }
     }
   };
+
+  /** Build the Dropdown menu items for the Codex-style project picker.
+   *  Layout: search input → recent projects → divider → "Add new project"
+   *  submenu → "Don't work in a project". Search filters the recent list
+   *  in-place; clicking a project sets it as the active workDir. */
+  const projectMenuItems: MenuProps['items'] = useMemo(() => {
+    const items: MenuProps['items'] = [];
+    const basename = (p: string): string => p.split('/').filter(Boolean).pop() || p;
+
+    items.push({
+      key: 'search',
+      type: 'group',
+      label: (
+        <Input
+          size="small"
+          prefix={<SearchOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />}
+          placeholder="Search projects"
+          value={pickerSearch}
+          onChange={e => setPickerSearch(e.target.value)}
+          onClick={e => e.stopPropagation()}
+          onKeyDown={e => e.stopPropagation()}
+          style={{ borderRadius: 6 }}
+          allowClear
+        />
+      ),
+    });
+
+    const filtered = recentPaths.filter(p =>
+      !pickerSearch || p.toLowerCase().includes(pickerSearch.toLowerCase()),
+    );
+    if (filtered.length === 0) {
+      items.push({
+        key: 'empty',
+        disabled: true,
+        label: (
+          <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+            {pickerSearch ? 'No matches' : 'No recent projects yet'}
+          </span>
+        ),
+      });
+    } else {
+      for (const p of filtered) {
+        const isCurrent = workDir === p;
+        items.push({
+          key: `path:${p}`,
+          icon: <FolderOpenOutlined style={{ color: token.colorPrimary }} />,
+          onClick: () => { setWorkDir(p); setPickerSearch(''); },
+          label: (
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <span title={p} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>
+                {basename(p)}
+              </span>
+              {isCurrent && <CheckOutlined style={{ marginLeft: 8, color: token.colorPrimary }} />}
+            </span>
+          ),
+        });
+      }
+    }
+
+    items.push({ type: 'divider' });
+
+    items.push({
+      key: 'add',
+      icon: <FolderAddOutlined />,
+      label: 'Add new project',
+      children: [
+        {
+          key: 'add-scratch',
+          icon: <FolderAddOutlined />,
+          label: 'Start from scratch',
+          onClick: () => {
+            setNewFolderPath(
+              workDir
+                ? `${workDir.replace(/\/+$/, '')}/new-folder`
+                : '~/projects/new-project',
+            );
+            setPathModalMode('create');
+          },
+        },
+        {
+          key: 'add-existing',
+          icon: <FolderOutlined />,
+          label: 'Use an existing folder',
+          onClick: async () => {
+            const seed = await seedPathFromNativePicker();
+            setNewFolderPath(seed ? `~/${seed}` : (workDir || ''));
+            setPathModalMode('open');
+          },
+        },
+      ],
+    });
+
+    items.push({
+      key: 'none',
+      icon: <MinusCircleOutlined />,
+      label: "Don't work in a project",
+      disabled: !workDir,
+      onClick: () => { setWorkDir(''); message.info('Workspace cleared — chatting without a folder.', 2); },
+    });
+
+    return items;
+  }, [recentPaths, pickerSearch, workDir, token]);
 
   const handleSubmit = () => {
     const text = input.trim();
@@ -273,7 +363,7 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
               setKind(v);
               // Reset workspace state when switching to plain Chat so it's
               // not silently carried over to the next code session.
-              if (v === 'chat') { setWorkDir(''); setShowDirInput(false); }
+              if (v === 'chat') { setWorkDir(''); }
             }}
             options={[
               { value: 'chat', label: <span style={{ padding: '0 8px' }}>💬 Chat</span> },
@@ -317,205 +407,44 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
             style={{ color: token.colorText, lineHeight: 1.55 }}
           />
 
-          {showDirInput && (
-            <div className="px-4 pb-2 space-y-2">
-              <div className="flex items-center gap-2">
-                <Input
-                  size="small"
-                  placeholder="Absolute path (e.g. /Users/you/code/my-project) or ~/code/my-project"
-                  value={workDir}
-                  onChange={e => setWorkDir(e.target.value)}
-                  onPressEnter={() => setShowDirInput(false)}
-                  style={{ borderRadius: 8, fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 12 }}
-                  autoFocus
-                  allowClear
-                />
-                {!!window.showDirectoryPicker && (
-                  <button
-                    type="button"
-                    onClick={tryNativePicker}
-                    className="px-2 py-1 rounded-md text-xs flex-shrink-0"
-                    style={{
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      background: token.colorBgContainer,
-                      color: token.colorTextSecondary,
-                      cursor: 'pointer',
-                    }}
-                    title="Open native folder picker (folder name only — you'll still need to confirm the absolute path)"
-                  >
-                    Browse…
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={openCreateForm}
-                  className="px-2 py-1 rounded-md text-xs flex-shrink-0"
-                  style={{
-                    border: `1px solid ${showCreateForm ? token.colorPrimary : token.colorBorderSecondary}`,
-                    background: showCreateForm ? `${token.colorPrimary}10` : token.colorBgContainer,
-                    color: showCreateForm ? token.colorPrimary : token.colorTextSecondary,
-                    cursor: 'pointer',
-                  }}
-                  title="Create a new folder on disk and use it as the workspace root"
-                >
-                  + New folder
-                </button>
-              </div>
-
-              {/* Create-folder mini-form — POSTs /api/workspace/mkdir then
-                  sets the new path as the active workDir. Prefilled with
-                  either `{workDir}/new-folder` (subfolder case) or
-                  `~/projects/new-project` so the user only edits the name. */}
-              {showCreateForm && (
-                <div
-                  className="flex items-center gap-2 px-2 py-2 rounded-md"
-                  style={{
-                    background: token.colorFillAlter,
-                    border: `1px dashed ${token.colorBorderSecondary}`,
-                  }}
-                >
-                  <Input
-                    size="small"
-                    placeholder="/absolute/path/to/new-folder (parents are auto-created)"
-                    value={newFolderPath}
-                    onChange={e => setNewFolderPath(e.target.value)}
-                    onPressEnter={createFolder}
-                    style={{
-                      borderRadius: 6,
-                      fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-                      fontSize: 12,
-                    }}
-                    autoFocus
-                    disabled={creatingFolder}
-                  />
-                  <button
-                    type="button"
-                    onClick={createFolder}
-                    disabled={creatingFolder || !newFolderPath.trim()}
-                    className="px-3 py-1 rounded-md text-xs flex-shrink-0"
-                    style={{
-                      background: creatingFolder || !newFolderPath.trim()
-                        ? token.colorFillSecondary
-                        : token.colorPrimary,
-                      color: creatingFolder || !newFolderPath.trim()
-                        ? token.colorTextTertiary
-                        : token.colorTextLightSolid,
-                      border: 'none',
-                      cursor: creatingFolder || !newFolderPath.trim() ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    {creatingFolder ? 'Creating…' : 'Create'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setShowCreateForm(false); setNewFolderPath(''); }}
-                    disabled={creatingFolder}
-                    className="px-2 py-1 rounded-md text-xs flex-shrink-0"
-                    style={{
-                      background: 'transparent',
-                      color: token.colorTextSecondary,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      cursor: creatingFolder ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[10px] uppercase tracking-widest" style={{ color: token.colorTextTertiary }}>Recent:</span>
-                {recentPaths.length === 0 ? (
-                  <span className="text-[11px]" style={{ color: token.colorTextQuaternary }}>
-                    no recent folders yet
-                  </span>
-                ) : (
-                  recentPaths.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => { setWorkDir(p); }}
-                      className="text-[11px] px-2 py-0.5 rounded-full"
-                      style={{
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                        background: workDir === p ? `${token.colorPrimary}15` : 'transparent',
-                        color: workDir === p ? token.colorPrimary : token.colorTextSecondary,
-                        cursor: 'pointer',
-                        fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-                      }}
-                      title={p}
-                    >
-                      {p.split('/').slice(-2).join('/') || p}
-                    </button>
-                  ))
-                )}
-              </div>
-
-              {/* Live file preview directly under the path input */}
-              <div className="rounded-md overflow-hidden" style={{ border: `1px solid ${token.colorBorderSecondary}` }}>
-                <div
-                  className="px-2 py-1 text-[10px] uppercase tracking-widest flex items-center justify-between"
-                  style={{ color: token.colorTextTertiary, background: token.colorFillAlter }}
-                >
-                  <span>
-                    {workDir
-                      ? `Preview · ${entries.length} item${entries.length === 1 ? '' : 's'}`
-                      : 'Preview'}
-                  </span>
-                  {loadingFiles && <Spin size="small" />}
-                </div>
-                <div className="max-h-40 overflow-y-auto">
-                  {!workDir ? (
-                    <div className="px-2 py-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
-                      Type or paste an absolute path above to preview files.
-                    </div>
-                  ) : entries.length === 0 && !loadingFiles ? (
-                    <div className="px-2 py-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
-                      No files (or path invalid).
-                    </div>
-                  ) : (
-                    entries.slice(0, 100).map(e => (
-                      <div
-                        key={e.path}
-                        className="px-2 py-0.5 text-[11px] flex items-center gap-2"
-                        style={{ color: token.colorTextSecondary }}
-                      >
-                        {e.is_dir
-                          ? <FolderFilled style={{ color: token.colorPrimary, fontSize: 11 }} />
-                          : <FileOutlined style={{ fontSize: 11 }} />}
-                        <span className="truncate">{e.name}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {/* The Codex-style project dropdown is rendered on the toolbar pill
+              below — no inline panel here. The path picker / create-folder
+              flow opens in a small modal triggered from the dropdown so it
+              doesn't push the textarea around. */}
 
           {/* Toolbar row */}
           <div
             className="flex items-center gap-1.5 px-2 py-1.5"
             style={{ borderTop: `1px solid ${token.colorBorderSecondary}` }}
           >
-            {/* Folder pill — only meaningful for Code chats */}
+            {/* Folder pill — only meaningful for Code chats. Codex-style
+                dropdown: search + recent projects + "Add new project" submenu
+                (Start from scratch / Use an existing folder) + "Don't work in
+                a project". Selection sets workDir and closes the dropdown. */}
             {kind === 'code' && (
-              <button
-                type="button"
-                onClick={togglePicker}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors"
-                style={{
-                  color: workDir ? token.colorPrimary : token.colorTextSecondary,
-                  background: workDir ? `${token.colorPrimary}10` : 'transparent',
-                  border: 'none', cursor: 'pointer',
-                }}
-                onMouseEnter={e => { if (!workDir) (e.currentTarget as HTMLButtonElement).style.background = token.colorFillAlter; }}
-                onMouseLeave={e => { if (!workDir) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
-                title={workDir || 'Pick a workspace folder'}
+              <Dropdown
+                trigger={['click']}
+                menu={{ items: projectMenuItems }}
+                placement="topLeft"
               >
-                <FolderOpenOutlined style={{ fontSize: 13 }} />
-                <span className="truncate" style={{ maxWidth: 160 }}>
-                  {workDir ? workDir.split('/').pop() || workDir : 'Folder'}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors"
+                  style={{
+                    color: workDir ? token.colorPrimary : token.colorTextSecondary,
+                    background: workDir ? `${token.colorPrimary}10` : 'transparent',
+                    border: 'none', cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => { if (!workDir) (e.currentTarget as HTMLButtonElement).style.background = token.colorFillAlter; }}
+                  onMouseLeave={e => { if (!workDir) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                  title={workDir || 'Pick a workspace folder'}
+                >
+                  <FolderOpenOutlined style={{ fontSize: 13 }} />
+                  <span className="truncate" style={{ maxWidth: 160 }}>
+                    {workDir ? workDir.split('/').filter(Boolean).pop() || workDir : 'Folder'}
+                  </span>
+                </button>
+              </Dropdown>
             )}
 
             {kind === 'code' && (
@@ -610,6 +539,59 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
           ))}
         </div>
       </div>
+
+      {/* Path modal — opened from the project dropdown's "Add new project"
+          submenu. Single modal handles both flows:
+            • mode='create' → POST /api/workspace/mkdir, then set as workDir
+            • mode='open'   → GET /api/workspace/files to validate existence,
+                              then set as workDir
+          Keeps the New Chat screen quiet — no inline panel pushes the
+          textarea around mid-flow. */}
+      <Modal
+        title={pathModalMode === 'create' ? 'Start a new project folder' : 'Use an existing folder'}
+        open={pathModalMode !== null}
+        onCancel={() => { setPathModalMode(null); setNewFolderPath(''); }}
+        onOk={submitPathModal}
+        okText={pathModalMode === 'create' ? (creatingFolder ? 'Creating…' : 'Create') : 'Open'}
+        okButtonProps={{ disabled: creatingFolder || !newFolderPath.trim() }}
+        cancelButtonProps={{ disabled: creatingFolder }}
+        confirmLoading={creatingFolder}
+        width={520}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Input
+            size="middle"
+            placeholder={
+              pathModalMode === 'create'
+                ? '/absolute/path/to/new-folder (parents are auto-created)'
+                : '/absolute/path/to/existing-folder'
+            }
+            value={newFolderPath}
+            onChange={e => setNewFolderPath(e.target.value)}
+            onPressEnter={submitPathModal}
+            autoFocus
+            disabled={creatingFolder}
+            style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+              fontSize: 13,
+            }}
+          />
+          <div style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1.6 }}>
+            {pathModalMode === 'create' ? (
+              <>
+                Path must be absolute (e.g. <code>/Users/you/projects/my-app</code>) or
+                <code> ~/path</code> (tilde-expanded). Missing parent directories will be
+                created automatically.
+              </>
+            ) : (
+              <>
+                Path must be absolute or <code>~/</code>-prefixed. Folder must already exist —
+                use <strong>Start from scratch</strong> if you need to create it first.
+              </>
+            )}
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
