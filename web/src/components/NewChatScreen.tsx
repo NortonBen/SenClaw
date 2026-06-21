@@ -83,6 +83,12 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [recentPaths, setRecentPaths] = useState<string[]>(loadRecentPaths);
   const [kind, setKind] = useState<ChatKind>('chat');
+  // Create-folder state — small inline form revealed by the "+ New folder"
+  // button so the user doesn't need to drop to a shell to scaffold a fresh
+  // project root before starting a code chat.
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newFolderPath, setNewFolderPath] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
 
   useEffect(() => {
     fetch('/api/llm-config')
@@ -123,6 +129,58 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
       setWorkDir(handle.name);
       message.info(`Picked "${handle.name}" — edit below to add the absolute path.`, 4);
     } catch { /* user cancelled */ }
+  };
+
+  // Open the create-folder mini-form. Prefill the path with a sensible
+  // default: `{workDir}/new-folder` when a workspace is already selected
+  // (subfolder use-case), otherwise `~/projects/new-project` so the user
+  // doesn't start from scratch.
+  const openCreateForm = () => {
+    if (!showCreateForm) {
+      setNewFolderPath(
+        workDir
+          ? `${workDir.replace(/\/+$/, '')}/new-folder`
+          : '~/projects/new-project',
+      );
+    }
+    setShowCreateForm(v => !v);
+  };
+
+  const createFolder = async () => {
+    const path = newFolderPath.trim();
+    if (!path) {
+      message.warning('Enter the folder path to create.', 2);
+      return;
+    }
+    setCreatingFolder(true);
+    try {
+      const res = await fetch('/api/workspace/mkdir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, recursive: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error ?? data?.message ?? `HTTP ${res.status}`);
+      }
+      // Backend echoes the canonical (tilde-expanded) absolute path.
+      const created = data.path ?? path;
+      setWorkDir(created);
+      pushRecentPath(created);
+      setRecentPaths(loadRecentPaths());
+      setShowCreateForm(false);
+      setNewFolderPath('');
+      message.success(
+        data.created === false
+          ? `Folder already exists — using ${created}`
+          : `Created ${created}`,
+        2,
+      );
+    } catch (e: unknown) {
+      message.error(`Create failed: ${String((e as Error)?.message ?? e)}`, 3);
+    } finally {
+      setCreatingFolder(false);
+    }
   };
 
   const handleSubmit = () => {
@@ -288,7 +346,82 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
                     Browse…
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={openCreateForm}
+                  className="px-2 py-1 rounded-md text-xs flex-shrink-0"
+                  style={{
+                    border: `1px solid ${showCreateForm ? token.colorPrimary : token.colorBorderSecondary}`,
+                    background: showCreateForm ? `${token.colorPrimary}10` : token.colorBgContainer,
+                    color: showCreateForm ? token.colorPrimary : token.colorTextSecondary,
+                    cursor: 'pointer',
+                  }}
+                  title="Create a new folder on disk and use it as the workspace root"
+                >
+                  + New folder
+                </button>
               </div>
+
+              {/* Create-folder mini-form — POSTs /api/workspace/mkdir then
+                  sets the new path as the active workDir. Prefilled with
+                  either `{workDir}/new-folder` (subfolder case) or
+                  `~/projects/new-project` so the user only edits the name. */}
+              {showCreateForm && (
+                <div
+                  className="flex items-center gap-2 px-2 py-2 rounded-md"
+                  style={{
+                    background: token.colorFillAlter,
+                    border: `1px dashed ${token.colorBorderSecondary}`,
+                  }}
+                >
+                  <Input
+                    size="small"
+                    placeholder="/absolute/path/to/new-folder (parents are auto-created)"
+                    value={newFolderPath}
+                    onChange={e => setNewFolderPath(e.target.value)}
+                    onPressEnter={createFolder}
+                    style={{
+                      borderRadius: 6,
+                      fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                      fontSize: 12,
+                    }}
+                    autoFocus
+                    disabled={creatingFolder}
+                  />
+                  <button
+                    type="button"
+                    onClick={createFolder}
+                    disabled={creatingFolder || !newFolderPath.trim()}
+                    className="px-3 py-1 rounded-md text-xs flex-shrink-0"
+                    style={{
+                      background: creatingFolder || !newFolderPath.trim()
+                        ? token.colorFillSecondary
+                        : token.colorPrimary,
+                      color: creatingFolder || !newFolderPath.trim()
+                        ? token.colorTextTertiary
+                        : token.colorTextLightSolid,
+                      border: 'none',
+                      cursor: creatingFolder || !newFolderPath.trim() ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {creatingFolder ? 'Creating…' : 'Create'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowCreateForm(false); setNewFolderPath(''); }}
+                    disabled={creatingFolder}
+                    className="px-2 py-1 rounded-md text-xs flex-shrink-0"
+                    style={{
+                      background: 'transparent',
+                      color: token.colorTextSecondary,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      cursor: creatingFolder ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[10px] uppercase tracking-widest" style={{ color: token.colorTextTertiary }}>Recent:</span>
                 {recentPaths.length === 0 ? (

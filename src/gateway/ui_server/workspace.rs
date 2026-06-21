@@ -106,3 +106,82 @@ pub(crate) async fn list_files(
         entries,
     }))
 }
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WorkspaceMkdirRequest {
+    /// Absolute or `~`-prefixed path of the folder to create.
+    pub path: String,
+    /// When true, also create any missing parent directories (mkdir -p).
+    /// Defaults to true — the New Chat picker calls this for fresh project
+    /// roots where the parent may also be new.
+    #[serde(default = "default_recursive")]
+    pub recursive: bool,
+}
+
+fn default_recursive() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct WorkspaceMkdirResponse {
+    pub path: String,
+    /// True if this call actually created the directory; false if it was
+    /// already present (idempotent — also success).
+    pub created: bool,
+}
+
+/// POST /api/workspace/mkdir
+/// Body: { path: "/abs/path", recursive?: true }
+/// Creates a new workspace folder so the user can pick a fresh project root
+/// directly from the New Chat picker without dropping to a shell.
+pub(crate) async fn mkdir(
+    State(_s): State<Arc<UiState>>,
+    Json(body): Json<WorkspaceMkdirRequest>,
+) -> Result<Json<WorkspaceMkdirResponse>, AppError> {
+    let target = expand_tilde(body.path.trim());
+    if !target.is_absolute() {
+        return Err(AppError(
+            axum::http::StatusCode::BAD_REQUEST,
+            "path must be absolute".into(),
+        ));
+    }
+    // Refuse paths under known system roots — a misclick shouldn't be able to
+    // try `mkdir /` or `mkdir /System/...`. The picker is a developer tool but
+    // the input box is freeform, so guard the obvious footguns.
+    let s = target.to_string_lossy();
+    for bad in ["/System", "/Library", "/usr", "/bin", "/sbin", "/etc", "/var", "/private"] {
+        if s == bad || s.starts_with(&format!("{bad}/")) {
+            return Err(AppError(
+                axum::http::StatusCode::FORBIDDEN,
+                format!("refusing to create folder under system root {bad}"),
+            ));
+        }
+    }
+    if target.exists() {
+        if target.is_dir() {
+            return Ok(Json(WorkspaceMkdirResponse {
+                path: target.to_string_lossy().to_string(),
+                created: false,
+            }));
+        }
+        return Err(AppError(
+            axum::http::StatusCode::CONFLICT,
+            "path exists and is not a directory".into(),
+        ));
+    }
+    let res = if body.recursive {
+        std::fs::create_dir_all(&target)
+    } else {
+        std::fs::create_dir(&target)
+    };
+    res.map_err(|e| {
+        AppError(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("mkdir failed: {e}"),
+        )
+    })?;
+    Ok(Json(WorkspaceMkdirResponse {
+        path: target.to_string_lossy().to_string(),
+        created: true,
+    }))
+}

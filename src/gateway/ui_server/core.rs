@@ -256,11 +256,12 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(admin_perms_get).post(admin_perms_set),
         )
         .route("/api/quicknotes", post(quicknotes_save))
-        // Workspace file discovery
+        // Workspace file discovery + folder creation
         .route(
             "/api/workspace/files",
             get(super::workspace::list_files),
         )
+        .route("/api/workspace/mkdir", post(super::workspace::mkdir))
         // Profile file editor — SOUL.md + MEMORY.md per agent folder
         .route(
             "/api/agents/:folder/files",
