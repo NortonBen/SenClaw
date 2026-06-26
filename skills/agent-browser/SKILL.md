@@ -134,7 +134,7 @@ mcp__senclaw-browser__browser_<verb>
 
 Examples: `mcp__senclaw-browser__browser_search`, `mcp__senclaw-browser__browser_navigate`, `mcp__senclaw-browser__browser_snapshot`.
 
-If the bridge exposes a normalized short form, the prefix `mcp__browser__<verb>` (e.g. `mcp__browser__search`) resolves to the same tool. Prefer the full `mcp__senclaw-browser__browser_<verb>` form — it's the canonical name and works regardless of normalization.
+`mcp__senclaw-browser__browser_<verb>` is the canonical and **only** form that resolves. There is **no** `mcp__browser__*` resolver in plain Claude Code — never use a "short" tool name, and never substitute another browser MCP (Playwright, Claude-in-Chrome) for `senclaw-browser`.
 
 ## Step 0 — Load the tools FIRST (required)
 

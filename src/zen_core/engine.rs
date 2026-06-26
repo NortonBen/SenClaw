@@ -144,31 +144,19 @@ impl ZenEngine {
 
         // Register engine-dependent tools
         engine.register_tool(Arc::new(TodoWriteTool::new(state)));
+        // When ANY skill is loaded via the `Skill` tool, run the generic skill
+        // activation: pre-discover (un-defer) the deferred MCP tools the skill's
+        // instructions reference, and inject its configured env. This mirrors the
+        // `#name` / `/name` force-load path (`force_skill_reminder`). Previously
+        // this callback was hardcoded to `agent-browser` only, so every Space-App
+        // skill (ssh-connect, email-reporting, google-workspace, …) loaded its
+        // instructions but left its MCP tools deferred — the model then called
+        // e.g. `ssh_list_hosts` and hit "No such tool available".
         let engine_for_skill = Arc::downgrade(&engine);
         let on_skill_load: crate::tools::skill::OnSkillLoadFn = Arc::new(move |skill_name| {
-            if skill_name != "agent-browser" {
-                return;
-            }
             if let Some(e) = engine_for_skill.upgrade() {
-                const BROWSER_TOOLS: &[&str] = &[
-                    "mcp__browser__search",
-                    "mcp__browser__navigate",
-                    "mcp__browser__snapshot",
-                    "mcp__browser__click",
-                    "mcp__browser__type",
-                    "mcp__browser__extract_text",
-                    "mcp__browser__extract_structured",
-                    "mcp__browser__screenshot",
-                    "mcp__browser__fill_form",
-                    "mcp__browser__click_and_wait",
-                    "mcp__browser__wait",
-                    "mcp__browser__new_tab",
-                    "mcp__browser__close_tab",
-                ];
-                let mut set = e.discovered_tools.lock().unwrap();
-                for name in BROWSER_TOOLS {
-                    set.insert((*name).to_string());
-                    tracing::info!("[Skill] pre-discovered browser tool: {name}");
+                if let Some(skill) = e.skill_registry.find(skill_name) {
+                    e.apply_skill_activation(&skill);
                 }
             }
         });
@@ -321,9 +309,26 @@ impl ZenEngine {
         let mut filtered: Vec<Arc<dyn Tool>> = if use_tools.is_empty() {
             tools.clone()
         } else {
+            // Resolve each whitelist entry against the live tool list so a bare or
+            // alternate MCP name (`ssh_list_hosts`, the same form skill docs use)
+            // still matches the registered full name
+            // (`mcp__ssh-manager-mcp__ssh_list_hosts`). A naive `t.name()` exact
+            // match silently drops every MCP tool an admin whitelisted by short
+            // name — the classic `allowed_tools` trap.
+            let mut keep: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for entry in use_tools.iter() {
+                if let Some(t) =
+                    crate::tools::tool_search::resolve_tool_by_name(entry, tools.as_slice())
+                {
+                    keep.insert(t.name().to_string());
+                }
+            }
             tools
                 .iter()
-                .filter(|t| use_tools.contains(&t.name().to_string()))
+                // `always_load()` tools (e.g. `ToolSearch`) bypass the whitelist
+                // entirely: stripping the discovery tool would strand the agent
+                // with no way to load any deferred tool it still needs.
+                .filter(|t| t.always_load() || keep.contains(t.name()))
                 .cloned()
                 .collect()
         };
@@ -385,6 +390,14 @@ impl ZenEngine {
                     || name.starts_with("Dispatch")
                     || name.starts_with("mcp__senclaw-dispatch__")
             });
+        }
+
+        // `task_done` is the completion-enforcement "submit" signal for Plan and
+        // Dag workflows only. In Agent mode there is no enforced final-step, so
+        // the tool must NOT be offered — otherwise the model may call it and hit
+        // a confusing "Missing required field: summary" error mid-conversation.
+        if !is_plan && !is_dag {
+            filtered.retain(|t| t.name() != crate::tools::TASK_DONE_TOOL_NAME);
         }
 
         // Layer 5 — defer filter. Deferred tools are excluded unless either:
@@ -2388,6 +2401,27 @@ mod tests {
     }
 
     #[test]
+    fn use_tools_whitelist_never_strips_toolsearch() {
+        // A group `allowed_tools` whitelist that forgets to list `ToolSearch`
+        // must NOT strip it: it is `always_load()`, the agent's only path to
+        // load any deferred tool. Stripping it strands the agent with
+        // "No such tool available: ToolSearch".
+        let opts = ZenCoreOptions {
+            instance_id: "test-tools-keepsearch".into(),
+            use_tools: vec!["Bash".into()],
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        let tools = engine.tools_for_main_agent();
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"Bash"));
+        assert!(
+            names.contains(&"ToolSearch"),
+            "ToolSearch must survive a use_tools whitelist that omits it"
+        );
+    }
+
+    #[test]
     fn tools_for_main_agent_empty_use_tools_returns_all() {
         let opts = ZenCoreOptions {
             instance_id: "test-tools-2".into(),
@@ -2399,6 +2433,55 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"Bash"));
         assert!(names.contains(&"TodoWrite"));
+    }
+
+    #[test]
+    fn task_done_only_in_plan_and_dag_modes() {
+        use crate::tools::TASK_DONE_TOOL_NAME;
+        // Agent mode: task_done must NOT be offered (no enforced submit step).
+        let agent = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: "td-agent".into(),
+                agent_mode: AgentMode::Agent,
+                ..Default::default()
+            },
+            None,
+        );
+        let agent_tools = agent.tools_for_main_agent();
+        assert!(
+            !agent_tools.iter().any(|t| t.name() == TASK_DONE_TOOL_NAME),
+            "task_done must be stripped in Agent mode"
+        );
+
+        // Plan mode: task_done is the abandon/completion signal — keep it.
+        let plan = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: "td-plan".into(),
+                agent_mode: AgentMode::Plan,
+                ..Default::default()
+            },
+            None,
+        );
+        let plan_tools = plan.tools_for_main_agent();
+        assert!(
+            plan_tools.iter().any(|t| t.name() == TASK_DONE_TOOL_NAME),
+            "task_done must be available in Plan mode"
+        );
+
+        // Dag mode: task_done is the trivial-completion signal — keep it.
+        let dag = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: "td-dag".into(),
+                agent_mode: AgentMode::Dag,
+                ..Default::default()
+            },
+            None,
+        );
+        let dag_tools = dag.tools_for_main_agent();
+        assert!(
+            dag_tools.iter().any(|t| t.name() == TASK_DONE_TOOL_NAME),
+            "task_done must be available in Dag mode"
+        );
     }
 
     #[test]
