@@ -7,14 +7,13 @@ use std::sync::Arc;
 use super::workspace::WorkspaceStateFile;
 use super::{AgentPool, PermissionsConfig, ZenCoreApi};
 
-fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
+fn fake_binding(jid: &str) -> GroupBinding {
     GroupBinding {
         jid: jid.into(),
         folder: "test".into(),
         name: "Test".into(),
         channel: "web".into(),
         group_type: "chat".into(),
-        is_admin,
         requires_trigger: false,
         allowed_tools: None,
         allowed_paths: None,
@@ -31,7 +30,7 @@ fn fake_binding(jid: &str, is_admin: bool) -> GroupBinding {
 // #[tokio::test]
 // async fn zen_core_api_process_message_dispatches() {
 //     let api = ZenCoreApi::new(None);
-//     let result = api.process_message("test:1", "hello", &fake_binding("test:1", false));
+//     let result = api.process_message("test:1", "hello", &fake_binding("test:1"));
 //     assert!(result.is_ok());
 // }
 
@@ -68,32 +67,23 @@ fn thinking_default_on() {
 }
 
 #[test]
-fn skip_perms_admin_with_main_flag() {
+fn skip_perms_main_flag_applies_uniformly() {
+    // Every chat is admin now: `skip_main_agent_permissions` skips prompts for
+    // all agents, with no per-binding or dispatch distinction.
     let opts = PermissionsConfig {
         skip_main_agent_permissions: true,
         skip_all_agents_permissions: false,
     };
-    let admin = fake_binding("admin:1", true);
-    let regular = fake_binding("group:1", false);
-    let dispatch_set = HashSet::new();
-    assert!(AgentPool::compute_skip_perms(&opts, &admin, &dispatch_set));
-    assert!(!AgentPool::compute_skip_perms(
-        &opts,
-        &regular,
-        &dispatch_set
-    ));
+    assert!(AgentPool::compute_skip_perms(&opts));
 }
 
 #[test]
-fn skip_perms_dispatch_subagent_inherits_main() {
+fn skip_perms_none_set_requires_prompts() {
     let opts = PermissionsConfig {
-        skip_main_agent_permissions: true,
+        skip_main_agent_permissions: false,
         skip_all_agents_permissions: false,
     };
-    let sub = fake_binding("sub:1", false);
-    let mut dispatch_set = HashSet::new();
-    dispatch_set.insert("sub:1".to_string());
-    assert!(AgentPool::compute_skip_perms(&opts, &sub, &dispatch_set));
+    assert!(!AgentPool::compute_skip_perms(&opts));
 }
 
 #[test]
@@ -102,13 +92,7 @@ fn skip_perms_skip_all_overrides_everything() {
         skip_main_agent_permissions: false,
         skip_all_agents_permissions: true,
     };
-    let regular = fake_binding("g:1", false);
-    let dispatch_set = HashSet::new();
-    assert!(AgentPool::compute_skip_perms(
-        &opts,
-        &regular,
-        &dispatch_set
-    ));
+    assert!(AgentPool::compute_skip_perms(&opts));
 }
 
 #[test]

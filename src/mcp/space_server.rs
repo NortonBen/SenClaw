@@ -1309,7 +1309,6 @@ impl SpaceServer {
             name: label.clone(),
             channel: String::new(),
             group_type: "chat".into(),
-            is_admin: true,
             requires_trigger: false,
             allowed_tools: None,
             allowed_paths: None,

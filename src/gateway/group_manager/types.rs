@@ -345,7 +345,6 @@ pub struct GroupBindingUpdate {
     pub name: Option<String>,
     pub channel: Option<String>,
     pub group_type: Option<String>,
-    pub is_admin: Option<bool>,
     pub requires_trigger: Option<bool>,
     pub allowed_tools: Option<Option<Vec<String>>>,
     pub allowed_paths: Option<Option<Vec<String>>>,

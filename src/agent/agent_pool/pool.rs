@@ -1,6 +1,6 @@
 //! AgentPool — core agent lifecycle management and dispatch coordination.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -382,17 +382,11 @@ impl AgentPool {
             let mut s = self.state.lock().unwrap();
             s.skip_main_agent_permissions = opts.skip_main_agent_permissions;
             s.skip_all_agents_permissions = opts.skip_all_agents_permissions;
-            let dispatch_set: HashSet<String> =
-                s.dispatch_workspace_overrides.keys().cloned().collect();
+            let skip = Self::compute_skip_perms(&opts);
             s.bindings
                 .iter()
                 .filter(|(jid, _)| s.cores.contains(*jid))
-                .map(|(jid, b)| {
-                    (
-                        jid.clone(),
-                        Self::compute_skip_perms(&opts, b, &dispatch_set),
-                    )
-                })
+                .map(|(jid, _b)| (jid.clone(), skip))
                 .collect()
         };
         let n = updates.len();
@@ -429,33 +423,25 @@ impl AgentPool {
         self.state.lock().unwrap().thinking_enabled
     }
 
-    pub(crate) fn compute_skip_perms(
-        opts: &super::types::PermissionsConfig,
-        binding: &GroupBinding,
-        dispatch_set: &HashSet<String>,
-    ) -> bool {
-        if opts.skip_all_agents_permissions {
-            return true;
-        }
-        let is_dispatch_agent = dispatch_set.contains(&binding.jid);
-        if (binding.is_admin || is_dispatch_agent) && opts.skip_main_agent_permissions {
-            return true;
-        }
-        false
+    /// Whether to skip human-in-the-loop permission prompts for an agent run.
+    ///
+    /// Every chat is a full-privilege agent now (no admin/non-admin split), so
+    /// `skip_main_agent_permissions` applies uniformly — there is no longer a
+    /// per-binding or dispatch-agent distinction to consider.
+    pub(crate) fn compute_skip_perms(opts: &super::types::PermissionsConfig) -> bool {
+        opts.skip_all_agents_permissions || opts.skip_main_agent_permissions
     }
 
     /// Compute effective skip-perms for one binding using current flags.
     /// Used by Phase 2 `get_or_create` and `set_dispatch_workspace`.
     #[allow(dead_code)]
-    pub(crate) fn resolve_skip_perms(&self, binding: &GroupBinding) -> bool {
+    pub(crate) fn resolve_skip_perms(&self, _binding: &GroupBinding) -> bool {
         let s = self.state.lock().unwrap();
         let opts = super::types::PermissionsConfig {
             skip_main_agent_permissions: s.skip_main_agent_permissions,
             skip_all_agents_permissions: s.skip_all_agents_permissions,
         };
-        let dispatch_set: HashSet<String> =
-            s.dispatch_workspace_overrides.keys().cloned().collect();
-        Self::compute_skip_perms(&opts, binding, &dispatch_set)
+        Self::compute_skip_perms(&opts)
     }
 
     pub fn permission_bridge(&self) -> Option<Arc<PermissionBridge>> {
@@ -594,9 +580,6 @@ impl AgentPool {
         };
         if !self.state.lock().unwrap().cores.contains(jid) {
             return;
-        }
-        if !binding.is_admin {
-            self.core_api.update_skip_permissions(jid, false);
         }
         let state_file = self.workspace_state_file(&binding.folder);
         match std::fs::read_to_string(&state_file) {
@@ -1003,7 +986,6 @@ impl AgentPool {
             mcp_servers.push(send_mcp_config(
                 18081,
                 &binding.jid,
-                binding.is_admin,
                 binding.bot_token.as_deref(),
                 &db_path_s,
             ));

@@ -19,7 +19,6 @@ fn sample_group() -> GroupBinding {
         name: "Team A".into(),
         channel: "telegram".into(),
         group_type: "chat".into(),
-        is_admin: true,
         requires_trigger: false,
         allowed_tools: Some(vec!["Read".into(), "Grep".into()]),
         allowed_paths: None,

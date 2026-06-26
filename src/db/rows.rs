@@ -42,7 +42,6 @@ pub(crate) fn row_to_binding(row: &Row<'_>) -> Result<Binding> {
         jid: row.get("jid")?,
         agent_id: row.get("agent_id")?,
         channel_id: row.get("channel_id")?,
-        is_admin: row.get::<_, i64>("is_admin")? != 0,
         bot_token_override: row.get("bot_token_override")?,
         max_messages: row.get::<_, Option<i64>>("max_messages")?.map(|n| n as u32),
         last_active: row.get("last_active")?,
@@ -57,7 +56,8 @@ pub(crate) fn row_to_binding_with_relations(row: &Row<'_>) -> Result<BindingWith
             jid: row.get(1)?,
             agent_id: row.get(2)?,
             channel_id: row.get(3)?,
-            is_admin: row.get::<_, i64>(4)? != 0,
+            // column 4 (`b.is_admin`) is a dead/defaulted DB column — kept in the
+            // SELECT for positional stability but no longer mapped to a field.
             bot_token_override: row.get(5)?,
             max_messages: row.get::<_, Option<i64>>(6)?.map(|n| n as u32),
             last_active: row.get(7)?,
@@ -97,7 +97,6 @@ pub(crate) fn row_to_group(row: &Row<'_>) -> Result<GroupBinding> {
         group_type: row
             .get::<_, Option<String>>("group_type")?
             .unwrap_or_else(|| "chat".to_string()),
-        is_admin: row.get::<_, i64>("is_admin")? != 0,
         requires_trigger: row.get::<_, i64>("requires_trigger")? != 0,
         allowed_tools: parse_json_array(row.get("allowed_tools")?),
         allowed_paths: parse_json_array(row.get("allowed_paths")?),

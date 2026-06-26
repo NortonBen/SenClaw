@@ -177,19 +177,14 @@ pub(crate) async fn handle_subscribe(
         let mut guard = clients.lock().await;
         if let Some(client) = guard.get_mut(client_idx) {
             client.subscriptions.insert(jid.clone());
-            // Upgrade to admin client when subscribing to admin group.
-            if let Some(group) = state.group_manager.get(&state.db, &jid) {
-                if group.is_admin {
-                    client.is_admin = true;
-                    tracing::info!(
-                        "[WsGateway] client #{client_idx} subscribed to {jid} (admin) — \
-                         will receive dispatch:update / agent:todos"
-                    );
-                } else {
-                    tracing::info!(
-                        "[WsGateway] client #{client_idx} subscribed to {jid} (non-admin)"
-                    );
-                }
+            // Every chat is a full-privilege admin now, so subscribing to any
+            // registered group upgrades the web client to admin (it then
+            // receives dispatch:update / agent:todos).
+            if state.group_manager.get(&state.db, &jid).is_some() {
+                client.is_admin = true;
+                tracing::info!(
+                    "[WsGateway] client #{client_idx} subscribed to {jid} (admin)"
+                );
             }
         }
     }
@@ -557,7 +552,6 @@ pub(crate) async fn handle_list_groups(
                 jid: jid.clone(),
                 folder: br.agent.folder.clone(),
                 name: format!("{} ({})", br.channel.name, br.agent.name),
-                is_admin: br.binding.is_admin,
                 channel: br.channel.platform_type.clone(),
                 group_type: "chat".to_string(),
                 requires_trigger: br.agent.requires_trigger,
@@ -705,7 +699,6 @@ pub(crate) async fn handle_register_group(
             resolved_channel.clone()
         },
         group_type: msg["groupType"].as_str().unwrap_or("chat").to_string(),
-        is_admin: false,
         requires_trigger: msg["requiresTrigger"].as_bool().unwrap_or(
             existing
                 .as_ref()
@@ -815,10 +808,11 @@ pub(crate) async fn handle_unregister_group(
         );
         return;
     };
-    if group.is_admin {
+    // The implicit "main" group is structural and cannot be unregistered.
+    if group.folder == "main" {
         send_json(
             sender,
-            &serde_json::json!({"type": "error", "message": "Cannot unregister admin group"}),
+            &serde_json::json!({"type": "error", "message": "Cannot unregister the main group"}),
         );
         return;
     }
@@ -901,9 +895,6 @@ pub(crate) async fn handle_update_group(
     }
     if let Some(v) = msg["requiresTrigger"].as_bool() {
         updates.requires_trigger = Some(v);
-    }
-    if let Some(v) = msg["isAdmin"].as_bool() {
-        updates.is_admin = Some(v);
     }
     if msg.get("allowedTools").is_some() {
         updates.allowed_tools = Some(msg["allowedTools"].as_array().map(|a| {
@@ -1073,9 +1064,8 @@ pub(crate) async fn handle_message_send(
                 tracing::info!(
                     "[WsGateway] client #{client_idx} auto-subscribed to {group_jid} on first send"
                 );
-                if group.is_admin {
-                    client.is_admin = true;
-                }
+                // Every chat is admin now — auto-subscribe grants admin.
+                client.is_admin = true;
             }
         }
     }

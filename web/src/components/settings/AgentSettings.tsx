@@ -207,20 +207,19 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       title: 'Profile',
       key: 'agent',
       render: (_: any, record: AgentInfo) => {
-        const ab = agentBindings(record.id);
-        const isAdmin = ab.some(b => b.isAdmin);
+        const isMain = record.folder === 'main';
         return (
           <Space>
-            <Avatar 
-              style={{ backgroundColor: isAdmin ? '#faad14' : '#5BBFE8' }} 
-              icon={<RobotOutlined />} 
+            <Avatar
+              style={{ backgroundColor: isMain ? '#faad14' : '#5BBFE8' }}
+              icon={<RobotOutlined />}
             />
             <div>
               <Text strong>{record.name}</Text>
               <br />
               <Text type="secondary" style={{ fontSize: 12 }}>ID: {record.folder}</Text>
             </div>
-            {isAdmin && <Tag color="gold" style={{ borderRadius: 4 }}>Main</Tag>}
+            {isMain && <Tag color="gold" style={{ borderRadius: 4 }}>Main</Tag>}
           </Space>
         );
       },
@@ -231,14 +230,15 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       render: (_: any, record: AgentInfo) => {
         const ab = agentBindings(record.id);
         if (ab.length === 0) return <Text type="secondary" italic>Web only</Text>;
+        const isMain = record.folder === 'main';
         return (
           <Space wrap size={[0, 4]}>
             {ab.map(b => (
               <Tag
                 key={b.id}
-                color={b.isAdmin ? 'orange' : 'blue'}
+                color={isMain ? 'orange' : 'blue'}
                 style={{ borderRadius: 6 }}
-                closable={!b.isAdmin}
+                closable={!isMain}
                 onClose={() => onUnregisterBinding(b.id)}
               >
                 <Space size={4}>
@@ -266,8 +266,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       title: 'Actions',
       key: 'actions',
       render: (_: any, record: AgentInfo) => {
-        const ab = agentBindings(record.id);
-        const isAdmin = ab.some(b => b.isAdmin);
+        const isMain = record.folder === 'main';
         return (
           <Space size="middle">
             <Tooltip title="Edit">
@@ -277,7 +276,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
                 onClick={() => handleEdit(record)}
               />
             </Tooltip>
-            {!isAdmin && (
+            {!isMain && (
               <Popconfirm
                 title="Delete profile?"
                 description="Are you sure? This will remove the agent and all its data."

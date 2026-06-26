@@ -10,7 +10,6 @@ fn group_info_conversion() {
         name: "Team A".into(),
         channel: "telegram".into(),
         group_type: "group".into(),
-        is_admin: false,
         requires_trigger: true,
         allowed_tools: Some(vec!["Read".into(), "Write".into()]),
         allowed_paths: None,
@@ -24,7 +23,6 @@ fn group_info_conversion() {
     let info = wire::to_group_info(&g);
     assert_eq!(info.jid, "tg:group:1");
     assert_eq!(info.folder, "team-a");
-    assert!(!info.is_admin);
     assert_eq!(
         info.allowed_tools.as_deref(),
         Some(&["Read".into(), "Write".into()][..])

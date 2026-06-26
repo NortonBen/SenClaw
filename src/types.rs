@@ -61,7 +61,6 @@ pub struct GroupBinding {
     pub channel: String,
     /// "chat" | "cowork" | "code"
     pub group_type: String,
-    pub is_admin: bool,
     pub requires_trigger: bool,
     /// `None` = all tools allowed.
     pub allowed_tools: Option<Vec<String>>,
@@ -114,7 +113,6 @@ pub struct Binding {
     pub jid: Option<String>,
     pub agent_id: i64,
     pub channel_id: i64,
-    pub is_admin: bool,
     pub bot_token_override: Option<String>,
     pub max_messages: Option<u32>,
     pub last_active: Option<String>,

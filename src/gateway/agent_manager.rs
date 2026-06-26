@@ -73,7 +73,6 @@ impl AgentManager {
             name: name.to_string(),
             channel: String::new(),
             group_type: "chat".to_string(),
-            is_admin: false,
             requires_trigger,
             allowed_tools: allowed_tools.cloned(),
             allowed_paths: None,

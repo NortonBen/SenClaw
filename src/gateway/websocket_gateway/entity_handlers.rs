@@ -225,7 +225,6 @@ pub(crate) async fn handle_register_binding(
         return;
     }
     let jid = msg["jid"].as_str();
-    let is_admin = msg["isAdmin"].as_bool().unwrap_or(false);
     let bot_token_override = msg["botTokenOverride"].as_str();
     let max_messages = msg["maxMessages"].as_u64().map(|n| n as u32);
     let now = local_iso_string_now();
@@ -234,7 +233,6 @@ pub(crate) async fn handle_register_binding(
         jid,
         agent_id,
         channel_id,
-        is_admin,
         bot_token_override,
         max_messages,
         &now,

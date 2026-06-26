@@ -13,8 +13,6 @@ pub(crate) struct GroupInfo {
     pub(crate) jid: String,
     pub(crate) folder: String,
     pub(crate) name: String,
-    #[serde(rename = "isAdmin")]
-    pub(crate) is_admin: bool,
     pub(crate) channel: String,
     #[serde(rename = "groupType")]
     pub(crate) group_type: String,
@@ -41,7 +39,6 @@ pub(crate) fn to_group_info(g: &crate::types::GroupBinding) -> GroupInfo {
         jid: g.jid.clone(),
         folder: g.folder.clone(),
         name: g.name.clone(),
-        is_admin: g.is_admin,
         channel: g.channel.clone(),
         group_type: g.group_type.clone(),
         requires_trigger: g.requires_trigger,
@@ -129,8 +126,6 @@ pub(crate) struct BindingWithRelationsWire {
     pub(crate) agent_id: i64,
     #[serde(rename = "channelId")]
     pub(crate) channel_id: i64,
-    #[serde(rename = "isAdmin")]
-    pub(crate) is_admin: bool,
     #[serde(rename = "botTokenOverride")]
     pub(crate) bot_token_override: Option<String>,
     #[serde(rename = "maxMessages")]
@@ -151,7 +146,6 @@ pub(crate) fn to_binding_with_relations(
         jid: br.binding.jid.clone(),
         agent_id: br.binding.agent_id,
         channel_id: br.binding.channel_id,
-        is_admin: br.binding.is_admin,
         bot_token_override: br.binding.bot_token_override.clone(),
         max_messages: br.binding.max_messages,
         last_active: br.binding.last_active.clone(),

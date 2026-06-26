@@ -15,13 +15,12 @@ impl super::Db {
         jid: Option<&str>,
         agent_id: i64,
         channel_id: i64,
-        is_admin: bool,
         bot_token_override: Option<&str>,
         max_messages: Option<u32>,
         now: &str,
     ) -> Result<i64> {
         self.with_conn(|c| {
-            c.execute("INSERT INTO bindings (jid,agent_id,channel_id,is_admin,bot_token_override,max_messages,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![jid,agent_id,channel_id,is_admin as i64,bot_token_override,max_messages,now])?;
+            c.execute("INSERT INTO bindings (jid,agent_id,channel_id,bot_token_override,max_messages,created_at) VALUES (?1,?2,?3,?4,?5,?6)", params![jid,agent_id,channel_id,bot_token_override,max_messages,now])?;
             Ok(c.last_insert_rowid())
         })
     }

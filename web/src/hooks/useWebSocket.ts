@@ -557,9 +557,11 @@ export function useWebSocket(): WsHook {
           case 'groups': {
             const incoming = (msg.groups as GroupInfo[]) ?? [];
             setGroups(incoming);
-            // Auto-subscribe to admin groups so requireAdmin checks pass for settings operations
+            // Every chat is a full-privilege admin now. Subscribe to all groups
+            // so the client is granted admin (settings/dispatch operations) and
+            // receives their events.
             for (const g of incoming) {
-              if (g.isAdmin) subscribe(g.jid);
+              subscribe(g.jid);
             }
             break;
           }
@@ -692,7 +694,6 @@ export function useWebSocket(): WsHook {
                 jid:             inJid,
                 folder:          '',
                 name:            msg.senderName as string || inJid,
-                isAdmin:         false,
                 channel:         inJid.split(':')[0] ?? 'unknown',
                 requiresTrigger: false,
               } as GroupInfo];

@@ -9,7 +9,7 @@ use std::time::Duration;
 use super::dag::{build_augmented_prompt, is_ready};
 use super::locks::{acquire_lock, lock_path_for};
 use super::types::{
-    AdminActivityCallback, DispatchAgent, DispatchParent, DispatchState, DispatchTask,
+    AdminActivityCallback, DispatchParent, DispatchState, DispatchTask,
     DispatchTaskStatus, FileChange,
 };
 use super::verification::{verify_parent_checklist, verify_task_checklist};
@@ -484,21 +484,16 @@ impl DispatchBridge {
 
     // ---- Public-ish helpers used by AgentPool / MCP layer ----
 
-    /// Sync the persisted `agents[]` list from current group bindings. Called
-    /// whenever GroupManager mutates its set of registered groups.
-    pub fn update_agents(&self, groups: &[GroupBinding]) {
-        let agents: Vec<DispatchAgent> = groups
-            .iter()
-            .filter(|g| !g.is_admin)
-            .map(|g| DispatchAgent {
-                name: g.name.clone(),
-                id: g.folder.clone(),
-                jid: g.jid.clone(),
-                channel: g.channel.clone(),
-            })
-            .collect();
+    /// Clear the persisted chat-group `agents[]` list. Called whenever
+    /// GroupManager mutates its set of registered groups.
+    ///
+    /// Chat groups are no longer dispatchable workers: every chat is a
+    /// full-privilege admin, so DAG dispatch targets **only** virtual personas
+    /// (resolved separately via the persona registry). The persistent
+    /// chat-group agent pool is intentionally left empty.
+    pub fn update_agents(&self, _groups: &[GroupBinding]) {
         let _ = self.modify_state(|state| {
-            state.agents = agents;
+            state.agents = Vec::new();
         });
     }
 

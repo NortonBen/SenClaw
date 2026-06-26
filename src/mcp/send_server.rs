@@ -33,7 +33,6 @@ struct SendFileParams {
 struct McpSendServer {
     bridge_port: u16,
     own_chat_jid: String,
-    is_admin: bool,
     bot_token: Option<String>,
     db_path: Option<String>,
 }
@@ -62,16 +61,12 @@ pub async fn run_stdio_server() -> Result<()> {
         .parse()
         .context("invalid SENCLAW_SEND_BRIDGE_PORT")?;
     let chat_jid = std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
-    let is_admin = std::env::var("SENCLAW_IS_ADMIN")
-        .map(|v| v == "1")
-        .unwrap_or(false);
     let bot_token = std::env::var("SENCLAW_BOT_TOKEN").ok();
     let db_path = std::env::var("SENCLAW_DB_PATH").ok();
 
     let server = McpSendServer {
         bridge_port,
         own_chat_jid: chat_jid,
-        is_admin,
         bot_token,
         db_path,
     };
@@ -93,7 +88,6 @@ impl McpSendServer {
         let srv = SendServer::new(
             self.bridge_port,
             &self.own_chat_jid,
-            self.is_admin,
             self.bot_token.as_deref(),
             self.open_db(),
         );
@@ -112,7 +106,6 @@ impl McpSendServer {
         let srv = SendServer::new(
             self.bridge_port,
             &self.own_chat_jid,
-            self.is_admin,
             self.bot_token.as_deref(),
             self.open_db(),
         );
@@ -143,7 +136,6 @@ struct SendPayload {
 pub struct SendServer {
     bridge_port: u16,
     own_chat_jid: String,
-    is_admin: bool,
     bot_token: Option<String>,
     db: Option<Db>,
 }
@@ -152,14 +144,12 @@ impl SendServer {
     pub fn new(
         bridge_port: u16,
         own_chat_jid: &str,
-        is_admin: bool,
         bot_token: Option<&str>,
         db: Option<Db>,
     ) -> Self {
         Self {
             bridge_port,
             own_chat_jid: own_chat_jid.to_owned(),
-            is_admin,
             bot_token: bot_token.map(|s| s.to_owned()),
             db,
         }
@@ -174,12 +164,8 @@ impl SendServer {
         if target_jid == self.own_chat_jid {
             return None;
         }
-        if !self.is_admin {
-            return Some(format!(
-                "Non-admin groups can only send to themselves ({})",
-                self.own_chat_jid
-            ));
-        }
+        // Every chat is a full-privilege admin now — any registered group is a
+        // valid send target (no self-only restriction).
         let db = self.db.as_ref()?;
         match db.get_group(target_jid) {
             Ok(Some(_)) => None,

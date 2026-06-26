@@ -155,15 +155,14 @@ impl MessageRouter {
             return;
         }
 
-        // 4. Admin command interception
-        if group.is_admin {
-            if let Some(result) = dispatch_command(&self.db, &msg.content, Some(&msg.chat_jid)) {
-                tracing::info!("[MessageRouter] Command handled for {}", msg.chat_jid);
-                self.agent_api
-                    .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())
-                    .await;
-                return;
-            }
+        // 4. Command interception — every chat has full (admin) privileges now,
+        // so slash-commands are honored in all groups, not just a "main" one.
+        if let Some(result) = dispatch_command(&self.db, &msg.content, Some(&msg.chat_jid)) {
+            tracing::info!("[MessageRouter] Command handled for {}", msg.chat_jid);
+            self.agent_api
+                .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())
+                .await;
+            return;
         }
 
         tracing::info!("[MessageRouter] Triggering agent for {}", msg.chat_jid);
@@ -428,7 +427,6 @@ fn to_group_binding(br: &BindingWithRelations) -> GroupBinding {
         name: br.agent.name.clone(),
         channel: br.channel.platform_type.clone(),
         group_type: "chat".into(),
-        is_admin: br.binding.is_admin,
         requires_trigger: br.agent.requires_trigger,
         allowed_tools: br.agent.allowed_tools.clone(),
         allowed_paths: br.agent.allowed_paths.clone(),

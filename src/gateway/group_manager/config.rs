@@ -31,7 +31,10 @@ pub(super) fn save_global_config(path: &Path, cfg: &GlobalConfig) -> Result<()> 
 }
 
 pub(super) fn save_group_to_config(config_path: &Path, binding: &GroupBinding) {
-    if binding.is_admin {
+    // The implicit "main" group is never persisted to config.json — it is
+    // recreated on boot. (Previously gated on `is_admin`, which only ever meant
+    // `folder == "main"`.)
+    if binding.folder == "main" {
         return;
     }
     let mut cfg = load_global_config(config_path);
@@ -64,6 +67,17 @@ pub(super) fn remove_group_from_config(config_path: &Path, jid: &str) {
         groups.retain(|g| g.jid != jid);
     }
     let _ = save_global_config(config_path, &cfg);
+}
+
+/// Reserved jid prefixes for dynamic, DB-only chat sessions that are created at
+/// runtime (not via config.json) and must never be deleted by config
+/// reconciliation: recurring schedules, cowork teams, web chat sessions, and
+/// virtual agents.
+fn is_dynamic_system_jid(jid: &str) -> bool {
+    jid.starts_with("schedule:")
+        || jid.starts_with("cowork:")
+        || jid.starts_with("web:")
+        || jid.starts_with("virtual:")
 }
 
 pub fn sync_groups_from_config(
@@ -100,7 +114,6 @@ pub fn sync_groups_from_config(
                 .group_type
                 .clone()
                 .unwrap_or_else(|| "chat".to_string()),
-            is_admin: false,
             requires_trigger: entry.requires_trigger.unwrap_or(true),
             allowed_tools: entry.allowed_tools.clone(),
             allowed_paths: None,
@@ -127,10 +140,16 @@ pub fn sync_groups_from_config(
         }
     }
 
-    // Delete non-admin DB groups not in config
+    // Delete config-managed channel groups that the user removed from
+    // config.json. Dynamic, DB-only system groups are NEVER written to
+    // config.json and must survive reconciliation — otherwise e.g. a recurring
+    // schedule's chat session (`schedule:<id>`) gets wiped on boot and the
+    // scheduler later fails with "chat session not found". (These were
+    // previously protected by `is_admin`; that flag is gone, so match on the
+    // reserved jid prefixes / the implicit "main" folder instead.)
     if let Ok(all) = gm.list(db) {
         for db_group in &all {
-            if db_group.is_admin {
+            if db_group.folder == "main" || is_dynamic_system_jid(&db_group.jid) {
                 continue;
             }
             if !config_jids.contains(db_group.jid.as_str()) {
@@ -151,5 +170,23 @@ pub fn get_agent_allowed_work_dirs(
     match cfg.agents.and_then(|a| a.get(folder).cloned()) {
         None => None,                                 // not present in config
         Some(entry) => Some(entry.allowed_work_dirs), // null = switching disallowed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_dynamic_system_jid;
+
+    #[test]
+    fn dynamic_system_jids_are_protected_from_reconciliation() {
+        // Must survive config reconciliation (DB-only, never in config.json).
+        assert!(is_dynamic_system_jid("schedule:21843f68-1449-4a4d-b273"));
+        assert!(is_dynamic_system_jid("cowork:736ef25b-98d3-4938"));
+        assert!(is_dynamic_system_jid("web:main:mquiu8os-osyxge"));
+        assert!(is_dynamic_system_jid("virtual:code-reviewer"));
+        // Config-managed channel groups are NOT dynamic — they may be reconciled.
+        assert!(!is_dynamic_system_jid("tg:group:12345"));
+        assert!(!is_dynamic_system_jid("feishu:oc_abc"));
+        assert!(!is_dynamic_system_jid("app:ch_x:user:y"));
     }
 }

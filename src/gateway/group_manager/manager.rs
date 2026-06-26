@@ -71,7 +71,6 @@ impl GroupManager {
             name: updates.name.unwrap_or(existing.name),
             channel: updates.channel.unwrap_or(existing.channel),
             group_type: updates.group_type.unwrap_or(existing.group_type),
-            is_admin: updates.is_admin.unwrap_or(existing.is_admin),
             requires_trigger: updates
                 .requires_trigger
                 .unwrap_or(existing.requires_trigger),
@@ -265,7 +264,6 @@ pub fn ensure_wechat_admin_group(
     }
 
     let existing = gm.get(db, owner_jid).or(existing_by_folder);
-    let is_admin = folder == "main";
 
     let binding = GroupBinding {
         jid: owner_jid.to_string(),
@@ -279,13 +277,10 @@ pub fn ensure_wechat_admin_group(
             .as_ref()
             .map(|e| e.group_type.clone())
             .unwrap_or_else(|| "chat".to_string()),
-        is_admin,
         requires_trigger: false,
-        allowed_tools: if is_admin {
-            None
-        } else {
-            existing.as_ref().and_then(|e| e.allowed_tools.clone())
-        },
+        // Every chat has full privileges now — no admin/non-admin split, so all
+        // tools are allowed by default.
+        allowed_tools: None,
         allowed_paths: existing.as_ref().and_then(|e| e.allowed_paths.clone()),
         allowed_work_dirs: existing.as_ref().and_then(|e| e.allowed_work_dirs.clone()),
         bot_token: None,
@@ -306,7 +301,7 @@ pub fn ensure_wechat_admin_group(
         "registered"
     };
     tracing::info!(
-        "[GroupManager] WeChat group {action}: {owner_jid} → agents/{folder}/ (isAdmin={is_admin})"
+        "[GroupManager] WeChat group {action}: {owner_jid} → agents/{folder}/"
     );
 }
 
@@ -341,7 +336,6 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
             .as_ref()
             .map(|e| e.group_type.clone())
             .unwrap_or_else(|| "chat".to_string()),
-        is_admin: false,
         requires_trigger: false,
         allowed_tools: existing.as_ref().and_then(|e| e.allowed_tools.clone()),
         allowed_paths: existing.as_ref().and_then(|e| e.allowed_paths.clone()),

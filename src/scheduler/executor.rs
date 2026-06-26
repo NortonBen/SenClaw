@@ -186,7 +186,36 @@ impl DefaultTaskExecutor {
         };
         let group = match self.db.get_group(&task.chat_jid) {
             Ok(Some(g)) => g,
-            Ok(None) => anyhow::bail!("chat session not found: {}", task.chat_jid),
+            Ok(None) => {
+                // Self-heal: the schedule's chat session can go missing (e.g. an
+                // older build's config reconciliation wiped it). Recreate a
+                // minimal binding from the task so the recurring schedule keeps
+                // running instead of failing forever with "chat session not found".
+                warn!(
+                    task_id = %task.id,
+                    chat_jid = %task.chat_jid,
+                    "[TaskScheduler] group task: chat session missing — recreating from task"
+                );
+                let now = chrono::Utc::now().to_rfc3339();
+                let binding = crate::types::GroupBinding {
+                    jid: task.chat_jid.clone(),
+                    folder: task.group_folder.clone(),
+                    name: task.prompt.chars().take(60).collect::<String>(),
+                    channel: String::new(),
+                    group_type: "chat".into(),
+                    requires_trigger: false,
+                    allowed_tools: None,
+                    allowed_paths: None,
+                    allowed_work_dirs: None,
+                    bot_token: None,
+                    max_messages: None,
+                    llm_config_id: None,
+                    last_active: Some(now.clone()),
+                    added_at: now,
+                };
+                self.db.upsert_group(&binding)?;
+                binding
+            }
             Err(e) => anyhow::bail!("db error: {e}"),
         };
         info!(

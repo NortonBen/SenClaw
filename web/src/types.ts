@@ -2,7 +2,6 @@ export interface GroupInfo {
   jid: string;
   folder: string;
   name: string;
-  isAdmin: boolean;
   channel: string;
   groupType: string;
   requiresTrigger: boolean;
@@ -34,7 +33,6 @@ export interface UpdateGroupPayload {
   name?: string;
   channel?: string;
   groupType?: string;
-  isAdmin?: boolean;
   requiresTrigger?: boolean;
   allowedTools?: string[] | null;
   allowedPaths?: string[] | null;
@@ -224,7 +222,6 @@ export interface BindingInfo {
   jid: string | null;
   agentId: number;
   channelId: number;
-  isAdmin: boolean;
   botTokenOverride: string | null;
   maxMessages: number | null;
   lastActive: string | null;
@@ -256,7 +253,6 @@ export interface RegisterBindingPayload {
   agentId: number;
   channelId: number;
   jid?: string;
-  isAdmin?: boolean;
   botTokenOverride?: string;
   maxMessages?: number | null;
 }

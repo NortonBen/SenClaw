@@ -1,4 +1,5 @@
-//! Parse and execute admin commands (is_admin groups only).
+//! Parse and execute slash commands (honored in every group — every chat has
+//! full admin privileges).
 //! Mirrors `src-old/gateway/CommandDispatcher.ts`.
 
 use std::sync::LazyLock;

@@ -682,7 +682,6 @@ fn wire_app_channel_controls(
                             serde_json::json!({
                                 "folder":  bwr.agent.folder,
                                 "name":    bwr.agent.name,
-                                "isAdmin": bwr.binding.is_admin,
                             })
                         })
                         .collect();
@@ -928,7 +927,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 1c. Ensure main agent directory =====
     // Ensure main agent skeleton exists (missing dirs + SOUL.md/MEMORY.md templates),
-    // avoiding the case where user accidentally deletes it and no group has isAdmin permissions.
+    // avoiding the case where the user accidentally deletes the main group.
     // Matches TypeScript: ensureAgentDirs('main') before GroupManager creation.
     gateway::group_manager::ensure_agent_dirs(
         &cfg,

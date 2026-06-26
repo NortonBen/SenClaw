@@ -10,7 +10,7 @@ interface Props {
 }
 
 export function DashboardPage({ ws }: Props) {
-  const activeAgents = ws.groups.filter(g => !g.isAdmin).length;
+  const activeAgents = ws.groups.filter(g => g.folder !== 'main').length;
   const totalChats = ws.groups.length;
 
   return (

@@ -231,7 +231,7 @@ impl WebSocketGateway {
         {
             tracing::warn!(
                 "[WsGateway] {msg_type} fired but NO admin clients connected — \
-                 web client must subscribe to an is_admin group first"
+                 web client must subscribe to a group first"
             );
         }
     }

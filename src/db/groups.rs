@@ -16,16 +16,15 @@ impl super::Db {
             c.execute(
                 r#"
                 INSERT INTO groups
-                  (jid, folder, name, channel, group_type, is_admin, requires_trigger,
+                  (jid, folder, name, channel, group_type, requires_trigger,
                    allowed_tools, allowed_paths, allowed_work_dirs,
                    bot_token, max_messages, llm_config_id, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 ON CONFLICT(jid) DO UPDATE SET
                   folder            = excluded.folder,
                   name              = excluded.name,
                   channel           = excluded.channel,
                   group_type        = excluded.group_type,
-                  is_admin          = excluded.is_admin,
                   requires_trigger  = excluded.requires_trigger,
                   allowed_tools     = excluded.allowed_tools,
                   allowed_paths     = excluded.allowed_paths,
@@ -41,7 +40,6 @@ impl super::Db {
                     g.name,
                     g.channel,
                     g.group_type,
-                    g.is_admin as i64,
                     g.requires_trigger as i64,
                     json_or_null(&g.allowed_tools)?,
                     json_or_null(&g.allowed_paths)?,
@@ -112,17 +110,16 @@ impl super::Db {
             tx.execute(
                 r#"
                 INSERT INTO groups
-                  (jid, folder, name, channel, is_admin, requires_trigger,
+                  (jid, folder, name, channel, requires_trigger,
                    allowed_tools, allowed_paths, allowed_work_dirs,
                    bot_token, max_messages, llm_config_id, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
                 "#,
                 params![
                     binding.jid,
                     binding.folder,
                     binding.name,
                     binding.channel,
-                    binding.is_admin as i64,
                     binding.requires_trigger as i64,
                     json_or_null(&binding.allowed_tools)?,
                     json_or_null(&binding.allowed_paths)?,

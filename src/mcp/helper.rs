@@ -141,7 +141,6 @@ pub fn memory_mcp_config(
 pub fn send_mcp_config(
     bridge_port: u16,
     chat_jid: &str,
-    is_admin: bool,
     bot_token: Option<&str>,
     db_path: &str,
 ) -> McpServerConfig {
@@ -150,10 +149,6 @@ pub fn send_mcp_config(
         .insert("SENCLAW_SEND_BRIDGE_PORT".into(), bridge_port.to_string());
     cfg.env
         .insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
-    cfg.env.insert(
-        "SENCLAW_IS_ADMIN".into(),
-        if is_admin { "1".into() } else { "0".into() },
-    );
     if let Some(tok) = bot_token {
         cfg.env.insert("SENCLAW_BOT_TOKEN".into(), tok.to_owned());
     }
