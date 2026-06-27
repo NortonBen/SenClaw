@@ -245,6 +245,23 @@ impl PermissionManager {
         opts
     }
 
+    /// Resolve the `content` attached to a permission request.
+    ///
+    /// Uses a tool's custom `gen_tool_permission` content when present (e.g.
+    /// `Bash` → `{"command": …}`), otherwise the raw tool `input`. The fallback
+    /// matters for tools with no custom permission info — notably `Skill`: the
+    /// auto-accept matcher reads the skill name from `content.get("skill")`
+    /// (permission_bridge `SkillExact`), so a `Value::Null` here meant per-skill
+    /// "Auto Accept" rules never matched and the prompt fired anyway (showing
+    /// `null`). The input carries `{"skill": "<name>", …}`, restoring both the
+    /// rule match and a meaningful prompt body.
+    fn resolve_permission_content(
+        permission_info: Option<ToolPermissionInfo>,
+        input: &serde_json::Value,
+    ) -> serde_json::Value {
+        permission_info.map_or_else(|| input.clone(), |p| p.content)
+    }
+
     /// Request permission via event and wait for response.
     async fn request_permission(
         &self,
@@ -264,7 +281,7 @@ impl PermissionManager {
             title: permission_info
                 .as_ref()
                 .map_or(name.clone(), |p| p.title.clone()),
-            content: permission_info.map_or(serde_json::Value::Null, |p| p.content),
+            content: Self::resolve_permission_content(permission_info, input),
             options,
         };
 
@@ -602,5 +619,30 @@ mod tests {
             .check(&tool, &serde_json::json!({}), &cancel, "main")
             .await
             .unwrap());
+    }
+
+    #[test]
+    fn resolve_permission_content_falls_back_to_input_for_skill() {
+        // Regression: the `Skill` tool has no `gen_tool_permission` → `None`.
+        // The request content MUST then become the raw input so the auto-accept
+        // matcher can read `content["skill"]`. Previously this was `Value::Null`,
+        // so per-skill "Auto Accept" rules never matched and the prompt fired
+        // anyway, displaying `null`.
+        let input = serde_json::json!({ "skill": "ssh-guide", "args": "connect" });
+        let content = PermissionManager::resolve_permission_content(None, &input);
+        assert_eq!(
+            content.get("skill").and_then(|v| v.as_str()),
+            Some("ssh-guide"),
+            "skill name must survive so SkillExact auto-accept rules match"
+        );
+        assert_eq!(content, input);
+
+        // A tool WITH custom permission content keeps it (e.g. Bash's display body).
+        let info = ToolPermissionInfo {
+            title: "Run command".into(),
+            content: serde_json::json!({ "command": "ls" }),
+        };
+        let content = PermissionManager::resolve_permission_content(Some(info), &input);
+        assert_eq!(content, serde_json::json!({ "command": "ls" }));
     }
 }
