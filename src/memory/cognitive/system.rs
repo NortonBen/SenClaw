@@ -181,9 +181,13 @@ static DECAY_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 /// to call multiple times — subsequent calls are no-ops returning the
 /// existing instance.
 ///
-/// Returns `None` when no embedding provider is configured (FTS-only mode);
-/// in that mode the cognitive layer cannot embed nodes and is intentionally
-/// left dormant.
+/// Boots the cognitive system. When an embedding provider is configured the
+/// full vector + graph + FTS stack comes up. When none is configured but
+/// `cognitive.enabled` is on, it boots in **FTS-only mode** (a [`NullEmbedder`]
+/// stand-in): keyword/FTS search, file ingestion, recall, and graph browsing
+/// all work at zero embedding cost; vector-based search modes return empty
+/// until a provider is added. Returns `None` only when the system is
+/// explicitly disabled (`cognitive.enabled = false`) and has no provider.
 pub fn init_daemon(
     db: Arc<Db>,
     config: &Config,
@@ -192,8 +196,21 @@ pub fn init_daemon(
     if let Some(existing) = INSTANCE.get() {
         return Some(Arc::clone(existing));
     }
-    let provider_box = create_embedding_provider(config, Arc::clone(&db))?;
-    let provider: Arc<dyn EmbeddingProvider> = Arc::from(provider_box);
+    let provider: Arc<dyn EmbeddingProvider> =
+        match create_embedding_provider(config, Arc::clone(&db)) {
+            Some(b) => Arc::from(b),
+            None => {
+                if !config.cognitive.enabled {
+                    // Explicitly disabled and nothing to embed with → dormant.
+                    return None;
+                }
+                tracing::info!(
+                    "[cognitive] no embedding provider configured — booting in FTS-only mode \
+                     (keyword search + ingestion work; vector modes return empty)"
+                );
+                Arc::new(super::embed::NullEmbedder)
+            }
+        };
     // Pull the governance knobs from CognitiveConfig so the daemon-built
     // system respects user-tuned `enabled` + `max_concurrent`. Tests still
     // get the defaults via `new()`.
@@ -317,10 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn init_daemon_returns_none_without_embedder() {
-        // Default Config::from_env has provider = None unless env vars set, so
-        // init_daemon should bail out cleanly and not poison the singleton.
-        let cfg = Config::from_env();
+    fn init_daemon_dormant_when_disabled_without_embedder() {
+        // With cognitive DISABLED and no embedding provider, init_daemon stays
+        // dormant (returns None, never installs the process-global singleton).
+        // The FTS-only boot path (enabled + no provider) is exercised by the
+        // retriever tests instead — we avoid it here because it would set the
+        // global INSTANCE and race sibling tests.
+        let mut cfg = Config::from_env();
+        cfg.cognitive.enabled = false;
         let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
 
         struct NoopLlm;
@@ -335,8 +356,8 @@ mod tests {
         if cfg.memory.embedding_provider == crate::config::EmbeddingProvider::None {
             assert!(init_daemon(db, &cfg, llm).is_none());
         }
-        // If a real provider was wired (CI env), we don't try to poke the
-        // singleton here — it'd race with other tests that may have set it.
+        // If a real provider was wired (CI env), we don't poke the singleton
+        // here — it'd race with other tests that may have set it.
     }
 
     #[test]

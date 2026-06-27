@@ -21,11 +21,19 @@ import {
   ClockCircleOutlined,
   ApartmentOutlined,
   ClusterOutlined,
+  BulbOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
-export type CognitiveSection = 'search' | 'explorer' | 'datapoints' | 'decay';
+export type CognitiveSection =
+  | 'search'
+  | 'recall'
+  | 'ingest'
+  | 'explorer'
+  | 'datapoints'
+  | 'decay';
 
 interface NavItem {
   key: CognitiveSection;
@@ -78,6 +86,8 @@ export function CognitiveSidebar({ activeSection, onSelect, refreshKey = 0 }: Pr
 
   const navItems: NavItem[] = [
     { key: 'search', icon: <SearchOutlined />, label: 'Search & Graph' },
+    { key: 'recall', icon: <BulbOutlined />, label: 'Recall (answer)' },
+    { key: 'ingest', icon: <CloudUploadOutlined />, label: 'Add knowledge' },
     { key: 'explorer', icon: <ClusterOutlined />, label: 'Graph explorer' },
     { key: 'datapoints', icon: <DatabaseOutlined />, label: 'Data memory' },
     { key: 'decay', icon: <ClockCircleOutlined />, label: 'Decay log' },

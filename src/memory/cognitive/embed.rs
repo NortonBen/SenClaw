@@ -21,12 +21,37 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 
 use crate::memory::embedding::EmbeddingProvider;
 
 use super::data_point::{DataPoint, NodeKind};
 use super::graph_store::GraphStore;
 use super::vector_store::VectorStore;
+
+/// Null-object embedder for **FTS-only mode** — installed when no embedding
+/// provider is configured. Its `dimensions()` is `0`, which the cognitive
+/// layer treats as the sentinel "no embeddings": [`CognitiveEmbedder::add_node`]
+/// stores nodes without vectors and the retriever skips vector seeding. This
+/// lets keyword/FTS search, file ingestion, and graph browsing all work at
+/// zero embedding cost. No real provider reports 0 dimensions.
+pub struct NullEmbedder;
+
+#[async_trait]
+impl EmbeddingProvider for NullEmbedder {
+    fn name(&self) -> &str {
+        "none"
+    }
+    fn model(&self) -> &str {
+        "none"
+    }
+    fn dimensions(&self) -> u32 {
+        0
+    }
+    async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        Ok(Vec::new())
+    }
+}
 
 /// Pick the embedding-input text for a DataPoint.
 pub fn text_for_embedding(node: &DataPoint) -> String {
@@ -99,8 +124,15 @@ impl CognitiveEmbedder {
 
     /// Upsert the node, then embed + index it. Convenience for `add()`-style
     /// flows (cognee `cognee.add(text)`).
+    ///
+    /// FTS-only mode ([`NullEmbedder`], `dimensions() == 0`): the node is still
+    /// stored (and indexed into `cog_nodes_fts` by the schema triggers), but
+    /// embedding is skipped so ingestion works without a provider.
     pub async fn add_node(&self, node: &DataPoint) -> Result<Vec<f32>> {
         self.graph.upsert_node(node)?;
+        if self.provider.dimensions() == 0 {
+            return Ok(Vec::new());
+        }
         embed_node(&*self.provider, &*self.vector, node).await
     }
 }

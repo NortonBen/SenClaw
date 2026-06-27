@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Layout, Card, Row, Col, Input, Button, Select, Table, Tag, Statistic,
-  Switch, Space, Empty, message, theme,
+  Switch, Space, Empty, Alert, Upload, message, theme,
 } from 'antd';
+import { CloudUploadOutlined } from '@ant-design/icons';
 import { AppLayout } from '../components/AppLayout';
 import { GraphView, type SubgraphPayload } from '../components/cognitive/GraphView';
 import {
@@ -49,7 +50,42 @@ interface DecayRunRow {
   duration_ms: number;
 }
 
-type SearchMode = 'graph' | 'chunks' | 'triplet' | 'spreading';
+type SearchMode = 'graph' | 'chunks' | 'triplet' | 'spreading' | 'fts' | 'hybrid';
+
+const MODE_OPTIONS: { value: SearchMode; label: string }[] = [
+  { value: 'graph', label: 'GraphCompletion' },
+  { value: 'hybrid', label: 'Hybrid (vec+FTS)' },
+  { value: 'fts', label: 'FTS (keyword)' },
+  { value: 'chunks', label: 'Chunks' },
+  { value: 'triplet', label: 'Triplet' },
+  { value: 'spreading', label: 'Spreading' },
+];
+
+interface RecallSource {
+  index: number;
+  id: string;
+  kind: string;
+  name: string;
+  summary: string;
+  score: number;
+}
+
+interface RecallResponse {
+  answer: string;
+  grounded: boolean;
+  note?: string;
+  model?: string;
+  sources: RecallSource[];
+}
+
+interface IngestResult {
+  filename?: string | null;
+  chunks_added: number;
+  chunks_deduped: number;
+  entities_added: number;
+  edges_added: number;
+  llm_skipped: boolean;
+}
 
 // =====================================================================
 // Page
@@ -82,6 +118,19 @@ export function CognitivePage() {
   const [graphHops, setGraphHops] = useState(2);
   const [graph, setGraph] = useState<SubgraphPayload | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
+
+  // Recall (LLM synthesis) state
+  const [recallQuery, setRecallQuery] = useState('');
+  const [recallMode, setRecallMode] = useState<SearchMode>('hybrid');
+  const [recallLoading, setRecallLoading] = useState(false);
+  const [recall, setRecall] = useState<RecallResponse | null>(null);
+
+  // Ingest (add text / upload file) state
+  const [ingestText, setIngestText] = useState('');
+  const [ingestTags, setIngestTags] = useState('');
+  const [ingestLoading, setIngestLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [ingestResult, setIngestResult] = useState<IngestResult | null>(null);
 
   const loadSubgraph = useCallback(
     async (seed: string, hops: number) => {
@@ -182,6 +231,85 @@ export function CognitivePage() {
     }
   }, [loadStats, bumpRefresh]);
 
+  const runRecall = useCallback(async () => {
+    if (!recallQuery.trim()) return;
+    setRecallLoading(true);
+    try {
+      const r = await fetch('/api/cognitive/recall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: recallQuery, mode: recallMode, limit: 6, hops: 2 }),
+      });
+      if (r.status === 503) {
+        setDormant(true);
+        return;
+      }
+      if (!r.ok) throw new Error(await r.text());
+      setRecall(await r.json());
+    } catch (e) {
+      message.error(`recall failed: ${e}`);
+    } finally {
+      setRecallLoading(false);
+    }
+  }, [recallQuery, recallMode]);
+
+  const tagList = useCallback(
+    () => ingestTags.split(',').map(s => s.trim()).filter(Boolean),
+    [ingestTags],
+  );
+
+  const addText = useCallback(async () => {
+    if (!ingestText.trim()) return;
+    setIngestLoading(true);
+    try {
+      const r = await fetch('/api/cognitive/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: ingestText, tags: tagList() }),
+      });
+      if (r.status === 503) {
+        setDormant(true);
+        return;
+      }
+      if (!r.ok) throw new Error(await r.text());
+      const body = (await r.json()) as IngestResult;
+      setIngestResult(body);
+      setIngestText('');
+      message.success(`added ${body.chunks_added} chunks, ${body.entities_added} entities`);
+      loadStats();
+      bumpRefresh();
+    } catch (e) {
+      message.error(`add failed: ${e}`);
+    } finally {
+      setIngestLoading(false);
+    }
+  }, [ingestText, tagList, loadStats, bumpRefresh]);
+
+  const uploadFile = useCallback(async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const tags = tagList().join(',');
+      if (tags) fd.append('tags', tags);
+      const r = await fetch('/api/cognitive/upload', { method: 'POST', body: fd });
+      if (r.status === 503) {
+        setDormant(true);
+        return;
+      }
+      if (!r.ok) throw new Error(await r.text());
+      const body = (await r.json()) as IngestResult;
+      setIngestResult(body);
+      message.success(`${file.name}: ${body.chunks_added} chunks, ${body.entities_added} entities`);
+      loadStats();
+      bumpRefresh();
+    } catch (e) {
+      message.error(`upload failed: ${e}`);
+    } finally {
+      setUploading(false);
+    }
+  }, [tagList, loadStats, bumpRefresh]);
+
   const hitColumns = useMemo(() => [
     {
       title: 'Score',
@@ -279,13 +407,8 @@ export function CognitivePage() {
                 <Select
                   value={mode}
                   onChange={setMode}
-                  style={{ width: 140 }}
-                  options={[
-                    { value: 'graph', label: 'GraphCompletion' },
-                    { value: 'chunks', label: 'Chunks' },
-                    { value: 'triplet', label: 'Triplet' },
-                    { value: 'spreading', label: 'Spreading' },
-                  ]}
+                  style={{ width: 160 }}
+                  options={MODE_OPTIONS}
                 />
                 <Select
                   value={limit}
@@ -409,6 +532,157 @@ export function CognitivePage() {
     />
   );
 
+  const recallSection = (
+    <Row gutter={[16, 16]}>
+      <Col span={24}>
+        <Card title="Recall — grounded answer" size="small">
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              placeholder="ask a question…"
+              value={recallQuery}
+              onChange={e => setRecallQuery(e.target.value)}
+              onPressEnter={runRecall}
+            />
+            <Select
+              value={recallMode}
+              onChange={setRecallMode}
+              style={{ width: 160 }}
+              options={MODE_OPTIONS}
+            />
+            <Button type="primary" loading={recallLoading} onClick={runRecall}>
+              Ask
+            </Button>
+          </Space.Compact>
+
+          <div style={{ marginTop: 16 }}>
+            {!recall ? (
+              <Empty description="Ask a question to synthesize an answer from memory" />
+            ) : (
+              <>
+                {recall.note && !recall.grounded && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message={recall.note}
+                  />
+                )}
+                {recall.answer && (
+                  <Card
+                    size="small"
+                    style={{ marginBottom: 12 }}
+                    title={
+                      <Space>
+                        <span>Answer</span>
+                        {recall.grounded && <Tag color="green">grounded</Tag>}
+                        {recall.model && <Tag>{recall.model}</Tag>}
+                      </Space>
+                    }
+                  >
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{recall.answer}</div>
+                  </Card>
+                )}
+                {recall.sources?.length > 0 && (
+                  <Card size="small" title={`Sources (${recall.sources.length})`}>
+                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      {recall.sources.map(s => (
+                        <div key={s.id} style={{ display: 'flex', gap: 8 }}>
+                          <Tag>{`[${s.index}]`}</Tag>
+                          <div style={{ flex: 1 }}>
+                            <Space size={4} wrap>
+                              <Tag>{s.kind}</Tag>
+                              {s.name && <strong>{s.name}</strong>}
+                              <span style={{ opacity: 0.5, fontSize: 12 }}>
+                                {s.score.toFixed(3)}
+                              </span>
+                            </Space>
+                            {s.summary && (
+                              <div style={{ opacity: 0.7, fontSize: 12 }}>{s.summary}</div>
+                            )}
+                            <Button
+                              size="small"
+                              type="link"
+                              style={{ padding: 0 }}
+                              onClick={() => {
+                                setSeedId(s.id);
+                                setSection('search');
+                              }}
+                            >
+                              open in graph
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </Space>
+                  </Card>
+                )}
+              </>
+            )}
+          </div>
+        </Card>
+      </Col>
+    </Row>
+  );
+
+  const ingestSection = (
+    <Row gutter={[16, 16]}>
+      <Col span={24}>
+        <Card title="Add knowledge" size="small">
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Input
+              placeholder="tags (comma-separated, optional) — map to knowledge-base scopes"
+              value={ingestTags}
+              onChange={e => setIngestTags(e.target.value)}
+            />
+            <Input.TextArea
+              placeholder="paste text to remember…"
+              rows={6}
+              value={ingestText}
+              onChange={e => setIngestText(e.target.value)}
+            />
+            <Space wrap>
+              <Button
+                type="primary"
+                loading={ingestLoading}
+                onClick={addText}
+                disabled={!ingestText.trim()}
+              >
+                Add text
+              </Button>
+              <Upload
+                showUploadList={false}
+                multiple
+                beforeUpload={file => {
+                  uploadFile(file as File);
+                  return false; // prevent antd's default XHR upload
+                }}
+              >
+                <Button icon={<CloudUploadOutlined />} loading={uploading}>
+                  Upload file
+                </Button>
+              </Upload>
+              <span style={{ fontSize: 12, opacity: 0.6 }}>
+                txt · md · html · json · csv · yaml · ≤10MB
+              </span>
+            </Space>
+            {ingestResult && (
+              <Alert
+                type="success"
+                showIcon
+                message={`Ingested${ingestResult.filename ? ' ' + ingestResult.filename : ''}`}
+                description={
+                  `chunks +${ingestResult.chunks_added} (deduped ${ingestResult.chunks_deduped}) · ` +
+                  `entities +${ingestResult.entities_added} · edges +${ingestResult.edges_added}` +
+                  (ingestResult.llm_skipped ? ' · LLM dormant (no triplets extracted)' : '')
+                }
+              />
+            )}
+          </Space>
+        </Card>
+      </Col>
+    </Row>
+  );
+
   return (
     <AppLayout
       sidebar={
@@ -430,6 +704,8 @@ export function CognitivePage() {
         )}
 
         {section === 'search' && searchSection}
+        {section === 'recall' && recallSection}
+        {section === 'ingest' && ingestSection}
         {section === 'explorer' && <GraphExplorerView />}
         {section === 'datapoints' && datapointsSection}
         {section === 'decay' && decaySection}

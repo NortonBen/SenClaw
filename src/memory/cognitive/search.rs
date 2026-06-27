@@ -23,6 +23,12 @@ pub enum SearchType {
     /// BFS with Hebbian write-back — strengthens activated edges so
     /// frequently-recalled paths become more salient over time.
     SpreadingActivation,
+    /// BM25 full-text recall over node name + summary. No embeddings —
+    /// the zero-cost path, available even when the embedder is dormant.
+    Fts,
+    /// Vector + FTS seeds merged (0.7 vector / 0.3 FTS), deduped by node.
+    /// Degrades to FTS-only when the embedder is unavailable.
+    Hybrid,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +95,30 @@ impl SearchQuery {
             query_type: SearchType::Triplet,
             limit,
             hops: 1,
+            decay_per_hop: 1.0,
+            node_sets: Vec::new(),
+            rerank: false,
+            rerank_alpha: 0.5,
+        }
+    }
+    pub fn fts(text: impl Into<String>, limit: usize) -> Self {
+        Self {
+            query_text: text.into(),
+            query_type: SearchType::Fts,
+            limit,
+            hops: 0,
+            decay_per_hop: 1.0,
+            node_sets: Vec::new(),
+            rerank: false,
+            rerank_alpha: 0.5,
+        }
+    }
+    pub fn hybrid(text: impl Into<String>, limit: usize) -> Self {
+        Self {
+            query_text: text.into(),
+            query_type: SearchType::Hybrid,
+            limit,
+            hops: 0,
             decay_per_hop: 1.0,
             node_sets: Vec::new(),
             rerank: false,

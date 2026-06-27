@@ -580,6 +580,19 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(super::cognitive::cognitive_search),
         )
         .route(
+            "/api/cognitive/recall",
+            post(super::cognitive::cognitive_recall),
+        )
+        .route(
+            "/api/cognitive/add",
+            post(super::cognitive::cognitive_add),
+        )
+        .route(
+            "/api/cognitive/upload",
+            post(super::cognitive::cognitive_upload)
+                .layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
+        )
+        .route(
             "/api/cognitive/subgraph",
             get(super::cognitive::cognitive_subgraph),
         )

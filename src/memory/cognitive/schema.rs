@@ -198,10 +198,73 @@ pub fn apply_cognitive_schema(conn: &Connection) -> Result<()> {
             edges_promoted INTEGER NOT NULL DEFAULT 0,
             duration_ms    INTEGER NOT NULL DEFAULT 0
         );
+
+        -- ============================================================
+        -- Full-text index over node name + summary (FTS5 / BM25)
+        -- ============================================================
+        -- Zero-embedding retrieval path (`SearchType::Fts` / `Hybrid`),
+        -- mirroring `memory_chunks_fts`. Standalone (non-external-content)
+        -- so DELETE-by-`node_id` is cheap; `node_id` stores `hex(id)` of the
+        -- node UUID for join-back (no `unhex()` dependency — callers decode
+        -- the hex in Rust). The AFTER triggers keep the index in lockstep
+        -- with every write path (cognify, merge, re-extract, forget) so no
+        -- ingest code needs to know FTS exists.
+        CREATE VIRTUAL TABLE IF NOT EXISTS cog_nodes_fts USING fts5(
+            node_id UNINDEXED,
+            text
+        );
+
+        CREATE TRIGGER IF NOT EXISTS cog_nodes_fts_ai
+        AFTER INSERT ON cog_nodes BEGIN
+            INSERT INTO cog_nodes_fts(node_id, text)
+            VALUES (hex(new.id), TRIM(new.name || ' ' || new.summary));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS cog_nodes_fts_ad
+        AFTER DELETE ON cog_nodes BEGIN
+            DELETE FROM cog_nodes_fts WHERE node_id = hex(old.id);
+        END;
+
+        -- Fires on upsert-as-update too (ON CONFLICT DO UPDATE SET summary=…),
+        -- but only when name/summary are assigned — salience/last_seen churn
+        -- does not re-index.
+        CREATE TRIGGER IF NOT EXISTS cog_nodes_fts_au
+        AFTER UPDATE OF name, summary ON cog_nodes BEGIN
+            DELETE FROM cog_nodes_fts WHERE node_id = hex(old.id);
+            INSERT INTO cog_nodes_fts(node_id, text)
+            VALUES (hex(new.id), TRIM(new.name || ' ' || new.summary));
+        END;
         "#,
     )?;
     // Migrations for older cog_nodes that pre-date extraction_state cols.
     migrate_extraction_state(conn)?;
+    // Backfill the FTS index for DBs created before `cog_nodes_fts` existed.
+    // Only when the index is empty but nodes are present (fresh table on an
+    // upgrade) — on a clean DB both counts are 0 and this is a no-op.
+    backfill_nodes_fts(conn)?;
+    Ok(())
+}
+
+/// One-time backfill of `cog_nodes_fts` from existing `cog_nodes` rows. Safe
+/// to call on every boot: it indexes nothing once the FTS table is populated.
+fn backfill_nodes_fts(conn: &Connection) -> Result<()> {
+    let fts_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cog_nodes_fts", [], |r| r.get(0))
+        .unwrap_or(0);
+    if fts_count > 0 {
+        return Ok(());
+    }
+    let node_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cog_nodes", [], |r| r.get(0))
+        .unwrap_or(0);
+    if node_count == 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO cog_nodes_fts(node_id, text)
+         SELECT hex(id), TRIM(name || ' ' || summary) FROM cog_nodes",
+        [],
+    )?;
     Ok(())
 }
 
@@ -254,5 +317,58 @@ mod tests {
         assert!(tables.iter().any(|t| t == "cog_node_sets"));
         assert!(tables.iter().any(|t| t == "cog_node_tags"));
         assert!(tables.iter().any(|t| t == "cog_decay_log"));
+        assert!(tables.iter().any(|t| t == "cog_nodes_fts"));
+    }
+
+    #[test]
+    fn nodes_fts_trigger_syncs_on_insert_and_delete() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_cognitive_schema(&conn).unwrap();
+
+        let now = 100i64;
+        let id = uuid::Uuid::new_v4();
+        let id_blob = id.as_bytes().to_vec();
+        conn.execute(
+            "INSERT INTO cog_nodes
+                (id, kind, name, summary, created_at, updated_at, last_seen_at)
+             VALUES (?1, 'entity', 'Ada Lovelace', 'first programmer', ?2, ?2, ?2)",
+            rusqlite::params![id_blob, now],
+        )
+        .unwrap();
+
+        // AFTER INSERT trigger indexed name + summary.
+        let found: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cog_nodes_fts WHERE text MATCH 'lovelace'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(found, 1, "insert trigger should index the node");
+
+        // node_id round-trips as uppercase hex of the UUID bytes.
+        let nid: String = conn
+            .query_row(
+                "SELECT node_id FROM cog_nodes_fts WHERE text MATCH 'lovelace'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(nid, hex::encode_upper(id.as_bytes()));
+
+        // AFTER DELETE trigger removed it from the index.
+        conn.execute(
+            "DELETE FROM cog_nodes WHERE id = ?1",
+            rusqlite::params![id.as_bytes().to_vec()],
+        )
+        .unwrap();
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cog_nodes_fts WHERE text MATCH 'lovelace'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 0, "delete trigger should remove the node");
     }
 }

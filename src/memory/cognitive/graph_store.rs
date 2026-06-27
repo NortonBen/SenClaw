@@ -35,6 +35,20 @@ pub trait GraphStore: Send + Sync {
     fn find_entity_by_name(&self, name: &str) -> Result<Option<DataPoint>>;
     fn delete_node(&self, id: Uuid) -> Result<()>;
 
+    /// BM25 full-text search over the `cog_nodes_fts` index (node name +
+    /// summary). `fts_match` is a ready-built FTS5 MATCH expression — the
+    /// caller (retriever) owns tokenisation so storage stays NLP-free.
+    /// `kind` optionally restricts results to one [`NodeKind`] string.
+    /// Returns `(node, score)` with score normalised to `[0, 1]` (1 = best
+    /// BM25 rank), mirroring `memory::fts_search`. Needs no embedder — this
+    /// is the zero-cost retrieval path.
+    fn fts_search_nodes(
+        &self,
+        fts_match: &str,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(DataPoint, f32)>>;
+
     fn upsert_edge(&self, edge: &RelationshipEdge) -> Result<()>;
     fn delete_edge(&self, src: Uuid, dst: Uuid, predicate: &str) -> Result<()>;
     fn neighbors(&self, node: Uuid, max: usize) -> Result<Vec<RelationshipEdge>>;
@@ -200,6 +214,20 @@ fn bytes_uuid(b: Vec<u8>) -> Result<Uuid> {
         .try_into()
         .context("uuid blob must be 16 bytes")?;
     Ok(Uuid::from_bytes(arr))
+}
+
+/// Decode the 32-char uppercase hex string `cog_nodes_fts.node_id` (produced
+/// by SQLite `hex(id)` in the FTS triggers) back into a [`Uuid`]. Returns
+/// `None` on any malformed value so a stray FTS row can't poison a search.
+fn hex_to_uuid(hex: &str) -> Option<Uuid> {
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut bytes = [0u8; 16];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(Uuid::from_bytes(bytes))
 }
 
 fn row_to_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<DataPoint> {
@@ -377,10 +405,20 @@ impl GraphStore for SqliteGraphStore {
     }
 
     fn find_entity_by_name(&self, name: &str) -> Result<Option<DataPoint>> {
+        // Case-insensitive + trimmed match, using the SAME `LOWER(TRIM(name))`
+        // identity that `merge_duplicate_entities` collapses on. Resolving on
+        // this key at ingest time means edges attach to one canonical entity
+        // immediately instead of accreting "Ada"/"ada"/" Ada " variants that
+        // the maintenance sweep later has to merge. (SQLite LOWER is ASCII-
+        // only — matching the existing merge behaviour; full-Unicode folding
+        // would need a stored normalised column, a future enhancement.)
         self.db.with_cog_conn(|conn| {
             let row = conn
                 .query_row(
-                    "SELECT * FROM cog_nodes WHERE kind = 'entity' AND name = ?1 LIMIT 1",
+                    "SELECT * FROM cog_nodes
+                     WHERE kind = 'entity' AND LOWER(TRIM(name)) = LOWER(TRIM(?1))
+                     ORDER BY mention_count DESC, created_at ASC
+                     LIMIT 1",
                     params![name],
                     row_to_node,
                 )
@@ -394,6 +432,80 @@ impl GraphStore for SqliteGraphStore {
         self.db.with_cog_conn(|conn| {
             conn.execute("DELETE FROM cog_nodes WHERE id = ?1", params![id_blob])?;
             Ok(())
+        })
+    }
+
+    fn fts_search_nodes(
+        &self,
+        fts_match: &str,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(DataPoint, f32)>> {
+        if fts_match.trim().is_empty() || limit == 0 {
+            return Ok(vec![]);
+        }
+        // Over-fetch when kind-filtering so we still reach `limit` after the
+        // Rust-side filter (mirrors `vector_seeds`). The join back to
+        // cog_nodes is done per-id rather than in SQL so the FTS query stays
+        // index-only and we avoid an `unhex()` version dependency.
+        let fetch = if kind.is_some() {
+            (limit * 4).max(8)
+        } else {
+            limit
+        };
+        self.db.with_cog_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT node_id, bm25(cog_nodes_fts) AS rank
+                 FROM cog_nodes_fts
+                 WHERE text MATCH ?1
+                 ORDER BY rank
+                 LIMIT ?2",
+            )?;
+            let raw: Vec<(String, f64)> = stmt
+                .query_map(params![fts_match, fetch as i64], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+            if raw.is_empty() {
+                return Ok(vec![]);
+            }
+            // BM25: smaller rank = better. Normalise to [0,1], 1 = best.
+            let ranks: Vec<f64> = raw.iter().map(|(_, r)| *r).collect();
+            let min = ranks.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = ranks.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let range = max - min;
+
+            let mut out: Vec<(DataPoint, f32)> = Vec::with_capacity(raw.len().min(limit));
+            for (hex_id, rank) in raw {
+                let Some(id) = hex_to_uuid(&hex_id) else {
+                    continue;
+                };
+                let id_blob = uuid_bytes(id).to_vec();
+                let node: Option<DataPoint> = conn
+                    .query_row(
+                        "SELECT * FROM cog_nodes WHERE id = ?1",
+                        params![id_blob],
+                        row_to_node,
+                    )
+                    .optional()?;
+                let Some(node) = node else { continue };
+                if let Some(k) = kind {
+                    if node.kind.as_str() != k {
+                        continue;
+                    }
+                }
+                let score = if range == 0.0 {
+                    1.0
+                } else {
+                    ((max - rank) / range) as f32
+                };
+                out.push((node, score));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+            Ok(out)
         })
     }
 
@@ -1092,6 +1204,58 @@ mod tests {
         // The lonely node lands last with degree 0.
         assert_eq!(top[4].node.name, "lonely");
         assert_eq!(top[4].degree, 0);
+    }
+
+    #[test]
+    fn find_entity_by_name_is_case_insensitive_and_trimmed() {
+        let store = SqliteGraphStore::new(test_db());
+        let ada = DataPoint::entity("Ada Lovelace", 100);
+        store.upsert_node(&ada).unwrap();
+
+        // Different casing + surrounding whitespace still resolves to the
+        // same node (so ingest reuses it instead of creating a duplicate).
+        for variant in ["ada lovelace", "ADA LOVELACE", "  Ada Lovelace  "] {
+            let hit = store.find_entity_by_name(variant).unwrap();
+            assert_eq!(
+                hit.map(|n| n.id),
+                Some(ada.id),
+                "variant {variant:?} should resolve to the canonical entity"
+            );
+        }
+
+        // A genuinely different name does not match.
+        assert!(store.find_entity_by_name("Charles Babbage").unwrap().is_none());
+    }
+
+    #[test]
+    fn fts_search_nodes_finds_filters_and_removes() {
+        let store = SqliteGraphStore::new(test_db());
+
+        let ada = DataPoint::entity("Ada Lovelace", 100);
+        store.upsert_node(&ada).unwrap();
+        let mut chunk = DataPoint::chunk("Ada designed an early compiler", Some("h1".into()), 1);
+        chunk.id = uuid::Uuid::new_v4();
+        store.upsert_node(&chunk).unwrap();
+
+        // Matches across both kinds; scores normalised into [0, 1].
+        let hits = store.fts_search_nodes("ada", None, 10).unwrap();
+        assert!(hits.iter().any(|(n, _)| n.id == ada.id));
+        assert!(hits.iter().any(|(n, _)| n.id == chunk.id));
+        assert!(hits.iter().all(|(_, s)| (0.0..=1.0).contains(s)));
+
+        // Kind filter keeps only the entity.
+        let ents = store.fts_search_nodes("ada", Some("entity"), 10).unwrap();
+        assert!(!ents.is_empty());
+        assert!(ents.iter().all(|(n, _)| n.kind == NodeKind::Entity));
+        assert!(ents.iter().any(|(n, _)| n.id == ada.id));
+
+        // Empty match string short-circuits.
+        assert!(store.fts_search_nodes("  ", None, 10).unwrap().is_empty());
+
+        // Delete cascades to the FTS index via trigger.
+        store.delete_node(ada.id).unwrap();
+        let after = store.fts_search_nodes("lovelace", None, 10).unwrap();
+        assert!(after.iter().all(|(n, _)| n.id != ada.id));
     }
 
     #[test]

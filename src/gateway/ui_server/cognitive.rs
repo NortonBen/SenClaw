@@ -20,6 +20,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
+use axum_extra::extract::Multipart;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -47,6 +48,19 @@ fn require_system() -> Result<Arc<CognitiveSystem>, AppError> {
 fn parse_uuid(raw: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(raw)
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("invalid uuid: {e}")))
+}
+
+/// Map a wire `mode` string to a [`SearchType`]. Shared by search + recall.
+/// Unknown / missing modes default to graph completion.
+fn search_type_from_mode(mode: Option<&str>) -> SearchType {
+    match mode.unwrap_or("graph") {
+        "chunks" => SearchType::Chunks,
+        "triplet" => SearchType::Triplet,
+        "spreading" => SearchType::SpreadingActivation,
+        "fts" => SearchType::Fts,
+        "hybrid" => SearchType::Hybrid,
+        _ => SearchType::GraphCompletion,
+    }
 }
 
 // =====================================================================
@@ -574,7 +588,7 @@ pub(crate) async fn cognitive_subgraph(
 #[derive(Debug, Deserialize)]
 pub struct SearchBody {
     pub query: String,
-    /// chunks | triplet | graph | spreading. Default: graph.
+    /// chunks | triplet | graph | spreading | fts | hybrid. Default: graph.
     #[serde(default)]
     pub mode: Option<String>,
     #[serde(default = "default_search_limit")]
@@ -602,12 +616,7 @@ pub(crate) async fn cognitive_search(
     Json(body): Json<SearchBody>,
 ) -> Result<Json<SearchResponse>, AppError> {
     let sys = require_system()?;
-    let query_type = match body.mode.as_deref().unwrap_or("graph") {
-        "chunks" => SearchType::Chunks,
-        "triplet" => SearchType::Triplet,
-        "spreading" => SearchType::SpreadingActivation,
-        _ => SearchType::GraphCompletion,
-    };
+    let query_type = search_type_from_mode(body.mode.as_deref());
     let limit = body.limit.clamp(1, 50);
     let mut q = SearchQuery::chunks(body.query, limit);
     q.query_type = query_type;
@@ -754,6 +763,266 @@ pub(crate) async fn cognitive_forget(
 }
 
 // =====================================================================
+// Ingestion: POST /api/cognitive/add (text) + /api/cognitive/upload (file)
+// =====================================================================
+//
+// The Web UI's path into the cognify pipeline. Knowledge bases map onto
+// NodeSet tags (the KB→NodeSet decision): every upload is tagged
+// `global:default_memory` plus any caller-supplied tags, so the same graph
+// can be partitioned without a parallel multi-KB table system.
+
+/// Build the node-set tags for a UI ingestion. Always includes the default
+/// memory scope; extra non-empty tags become additional `global` scopes.
+fn ingest_node_sets(tags: &[String]) -> Vec<cognitive::NodeSet> {
+    let mut sets = vec![cognitive::NodeSet::global("default_memory")];
+    for t in tags {
+        let t = t.trim();
+        if !t.is_empty() && t != "default_memory" {
+            sets.push(cognitive::NodeSet::global(t));
+        }
+    }
+    sets
+}
+
+fn report_json(r: &cognitive::CognifyReport, filename: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "filename": filename,
+        "chunks_added": r.chunks_added,
+        "chunks_deduped": r.chunks_deduped,
+        "entities_added": r.entities_added,
+        "entities_reused": r.entities_reused,
+        "edges_added": r.edges_added,
+        "edges_strengthened": r.edges_strengthened,
+        "llm_skipped": r.llm_skipped,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddTextBody {
+    pub text: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Knowledge-base tags (NodeSet scopes). Empty = default memory only.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+pub(crate) async fn cognitive_add(
+    State(_s): State<Arc<UiState>>,
+    Json(body): Json<AddTextBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    if body.text.trim().is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "text is empty".into()));
+    }
+    let opts = cognitive::CognifyOptions {
+        node_sets: ingest_node_sets(&body.tags),
+        ..Default::default()
+    };
+    let source = body.source.as_deref().unwrap_or("ui:add");
+    let report = sys
+        .cognify(&body.text, source, &opts)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(report_json(&report, None)))
+}
+
+pub(crate) async fn cognitive_upload(
+    State(_s): State<Arc<UiState>>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+
+    let mut file: Option<(String, String, Vec<u8>)> = None; // (name, content_type, bytes)
+    let mut tags: Vec<String> = Vec::new();
+    let mut source: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("read multipart: {e}")))?
+    {
+        match field.name().unwrap_or("") {
+            "tags" => {
+                if let Ok(t) = field.text().await {
+                    tags.extend(
+                        t.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                    );
+                }
+            }
+            "source" => {
+                source = field.text().await.ok().filter(|s| !s.is_empty());
+            }
+            _ => {
+                // Any other field is treated as the file payload.
+                let filename = field.file_name().unwrap_or("upload.txt").to_string();
+                let content_type = field.content_type().unwrap_or("").to_string();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("read file: {e}")))?;
+                file = Some((filename, content_type, bytes.to_vec()));
+            }
+        }
+    }
+
+    let (filename, content_type, bytes) =
+        file.ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "no file field in upload".into()))?;
+
+    let text = cognitive::extract_text(&filename, &content_type, &bytes)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    if text.trim().is_empty() {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            format!("no extractable text in `{filename}`"),
+        ));
+    }
+
+    let opts = cognitive::CognifyOptions {
+        node_sets: ingest_node_sets(&tags),
+        ..Default::default()
+    };
+    let src = source.unwrap_or_else(|| format!("upload:{filename}"));
+    let report = sys
+        .cognify(&text, &src, &opts)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(report_json(&report, Some(&filename))))
+}
+
+// =====================================================================
+// POST /api/cognitive/recall  { query, mode, limit, hops }
+// =====================================================================
+//
+// Retrieve + LLM synthesis (cognee GRAPH_COMPLETION / "recall" pattern).
+// Runs the configured search, numbers the hits `[1]`,`[2]`,… into a context
+// block, and asks the cognitive LLM for a grounded answer that cites sources
+// as `[n]`. Degrades gracefully: with no LLM configured (or on LLM error) it
+// returns the raw matches with `grounded=false` so the UI still shows
+// evidence instead of failing.
+
+const RECALL_SYSTEM: &str = "You are a precise retrieval assistant. Answer the user's question \
+using ONLY the numbered context provided. Cite the sources you use inline as [n]. If the context \
+does not contain the answer, say so plainly — do not invent facts. Keep the answer concise and \
+in the same language as the question.";
+
+#[derive(Debug, Deserialize)]
+pub struct RecallBody {
+    pub query: String,
+    /// chunks | triplet | graph | spreading | fts | hybrid. Default: graph.
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub hops: Option<u8>,
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    if s.chars().count() > n {
+        let mut out: String = s.chars().take(n).collect();
+        out.push('…');
+        out
+    } else {
+        s.to_string()
+    }
+}
+
+pub(crate) async fn cognitive_recall(
+    State(s): State<Arc<UiState>>,
+    Json(body): Json<RecallBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    if body.query.trim().is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "query is empty".into()));
+    }
+
+    let limit = body.limit.unwrap_or(6).clamp(1, 30);
+    let mut q = SearchQuery::chunks(body.query.clone(), limit);
+    q.query_type = search_type_from_mode(body.mode.as_deref());
+    q.hops = body.hops.unwrap_or(2).clamp(1, 6);
+    q.decay_per_hop = 0.6;
+
+    let hits = sys
+        .search(&q)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let sources: Vec<serde_json::Value> = hits
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let label = if h.node.name.trim().is_empty() {
+                truncate_chars(&h.node.summary, 80)
+            } else {
+                h.node.name.clone()
+            };
+            serde_json::json!({
+                "index": i + 1,
+                "id": h.node.id.to_string(),
+                "kind": h.node.kind.as_str(),
+                "name": label,
+                "summary": truncate_chars(&h.node.summary, 400),
+                "score": h.score,
+            })
+        })
+        .collect();
+
+    if hits.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "answer": "",
+            "grounded": false,
+            "note": "no matching memories",
+            "sources": [],
+        })));
+    }
+
+    // Build the numbered context fed to the LLM.
+    let context = hits
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let text = if h.node.summary.trim().is_empty() {
+                h.node.name.clone()
+            } else {
+                h.node.summary.clone()
+            };
+            format!("[{}] {}", i + 1, text.trim())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let Some(llm) = cognitive::create_cognitive_llm(s.config.as_ref()) else {
+        return Ok(Json(serde_json::json!({
+            "answer": "",
+            "grounded": false,
+            "note": "no cognitive LLM configured — showing raw matches",
+            "sources": sources,
+        })));
+    };
+
+    let user = format!(
+        "Context:\n{context}\n\nQuestion: {}\n\nAnswer using only the context above, citing sources as [n].",
+        body.query.trim()
+    );
+    match llm.complete(RECALL_SYSTEM, &user).await {
+        Ok(answer) => Ok(Json(serde_json::json!({
+            "answer": answer.trim(),
+            "grounded": true,
+            "sources": sources,
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "answer": "",
+            "grounded": false,
+            "note": format!("LLM synthesis failed: {e}"),
+            "sources": sources,
+        }))),
+    }
+}
+
+// =====================================================================
 // Tests — direct handler invocation (no axum boot)
 // =====================================================================
 
@@ -770,6 +1039,36 @@ mod tests {
         assert_eq!(v.kind, "entity");
         assert_eq!(v.name, "Ada");
         assert_eq!(v.summary, "pioneer");
+    }
+
+    #[test]
+    fn mode_string_maps_to_search_type() {
+        assert_eq!(search_type_from_mode(Some("fts")), SearchType::Fts);
+        assert_eq!(search_type_from_mode(Some("hybrid")), SearchType::Hybrid);
+        assert_eq!(search_type_from_mode(Some("chunks")), SearchType::Chunks);
+        // unknown / missing → graph completion
+        assert_eq!(search_type_from_mode(None), SearchType::GraphCompletion);
+        assert_eq!(search_type_from_mode(Some("???")), SearchType::GraphCompletion);
+    }
+
+    #[test]
+    fn ingest_node_sets_always_includes_default_and_dedupes() {
+        let sets = ingest_node_sets(&["kb-a".into(), " ".into(), "default_memory".into()]);
+        // default + kb-a (blank and explicit default are dropped)
+        assert_eq!(sets.len(), 2);
+        assert!(sets.iter().any(|s| s.tag == "default_memory"));
+        assert!(sets.iter().any(|s| s.tag == "kb-a"));
+        assert!(sets
+            .iter()
+            .all(|s| s.scope_kind == crate::memory::cognitive::ScopeKind::Global));
+    }
+
+    #[test]
+    fn truncate_chars_is_unicode_safe() {
+        assert_eq!(truncate_chars("abc", 5), "abc");
+        assert_eq!(truncate_chars("abcdef", 3), "abc…");
+        // multibyte must not panic / split a char
+        assert_eq!(truncate_chars("càphê", 2), "cà…");
     }
 
     #[test]

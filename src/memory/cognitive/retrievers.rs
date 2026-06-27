@@ -22,6 +22,37 @@ use super::embed::CognitiveEmbedder;
 use super::gnn::GraphScorer;
 use super::search::{SearchHit, SearchQuery, SearchType};
 use super::triplet::RelationshipEdge;
+use crate::memory::query_rewrite::{expand_query_tokens, smart_rewrite_query};
+use crate::memory::tokenizer::tokenize_optimized;
+
+/// Build an FTS5 MATCH expression from a natural-language query, reusing the
+/// same pipeline as `memory::fts_search`: rewrite → tokenize → expand → strip
+/// FTS metacharacters → OR-join. Returns `None` when nothing usable remains
+/// (caller treats that as "no FTS hits").
+fn build_fts_match(query: &str) -> Option<String> {
+    let rewritten = smart_rewrite_query(query);
+    let tokens = tokenize_optimized(&rewritten, true);
+    if tokens.is_empty() {
+        return None;
+    }
+    let expanded = expand_query_tokens(&tokens);
+    let sanitize = |t: &str| -> String {
+        t.chars()
+            .filter(|c| !matches!(c, '"' | '\'' | '`' | '(' | ')' | '*' | '^' | '-'))
+            .collect()
+    };
+    let joined = expanded
+        .iter()
+        .map(|t| sanitize(t))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
 
 pub struct CognitiveRetriever {
     pub embedder: Arc<CognitiveEmbedder>,
@@ -49,6 +80,8 @@ impl CognitiveRetriever {
             SearchType::Triplet => self.search_triplet(query).await?,
             SearchType::GraphCompletion => self.search_graph_completion(query).await?,
             SearchType::SpreadingActivation => self.search_spreading(query).await?,
+            SearchType::Fts => self.search_fts(query)?,
+            SearchType::Hybrid => self.search_hybrid(query).await?,
         };
         if query.rerank {
             self.apply_rerank(query, hits).await
@@ -70,6 +103,10 @@ impl CognitiveRetriever {
             return Ok(hits);
         };
         if hits.is_empty() {
+            return Ok(hits);
+        }
+        // No embedder (FTS-only) → can't compare query against node vectors.
+        if self.embedder.provider.dimensions() == 0 {
             return Ok(hits);
         }
 
@@ -141,6 +178,13 @@ impl CognitiveRetriever {
         limit: usize,
         kind_filter: Option<NodeKind>,
     ) -> Result<Vec<(DataPoint, f32)>> {
+        // FTS-only mode (NullEmbedder): no vectors exist, so vector recall
+        // yields nothing. Hybrid degrades to its FTS half; pure vector modes
+        // (Chunks/Triplet/Graph/Spreading) come back empty until a provider
+        // is configured.
+        if self.embedder.provider.dimensions() == 0 {
+            return Ok(Vec::new());
+        }
         let mut emb = self
             .embedder
             .provider
@@ -175,6 +219,26 @@ impl CognitiveRetriever {
             }
         }
         Ok(out)
+    }
+
+    // ---- shared: seed by full-text (BM25) ----
+
+    /// Top-K nodes by BM25 over `name + summary`. No embedding call — usable
+    /// even when the provider is dormant. Returns `(node, score)` with score
+    /// in `[0, 1]`. Empty when the query yields no FTS tokens or no matches.
+    fn fts_seeds(
+        &self,
+        query_text: &str,
+        limit: usize,
+        kind_filter: Option<NodeKind>,
+    ) -> Result<Vec<(DataPoint, f32)>> {
+        let Some(m) = build_fts_match(query_text) else {
+            return Ok(Vec::new());
+        };
+        self.embedder
+            .graph
+            .fts_search_nodes(&m, kind_filter.map(|k| k.as_str()), limit)
+            .context("fts_search_nodes")
     }
 
     // ---- Chunks ----
@@ -268,6 +332,68 @@ impl CognitiveRetriever {
             .vector_seeds(&query.query_text, query.limit, None)
             .await?;
         self.walk(seeds, query, true).await
+    }
+
+    // ---- Fts (BM25, no embeddings) ----
+
+    fn search_fts(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        // No kind filter: both entities and chunks are useful surface hits.
+        let seeds = self.fts_seeds(&query.query_text, query.limit, None)?;
+        Ok(seeds
+            .into_iter()
+            .map(|(node, score)| SearchHit {
+                node,
+                score,
+                path: Vec::new(),
+            })
+            .collect())
+    }
+
+    // ---- Hybrid (vector 0.7 + FTS 0.3, deduped) ----
+
+    async fn search_hybrid(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        let over = (query.limit * 2).max(query.limit);
+        // Vector half is best-effort: if the provider is dormant or errors,
+        // we degrade to FTS-only rather than failing the whole search.
+        let vec_seeds = self
+            .vector_seeds(&query.query_text, over, None)
+            .await
+            .unwrap_or_default();
+        let fts_seeds = self.fts_seeds(&query.query_text, over, None)?;
+
+        // Merge by node id, weighting vector 0.7 / FTS 0.3 (mirrors
+        // `memory::fts_search::mixed_search`). The two score scales aren't
+        // calibrated, so this is best-effort blending, not a true RRF.
+        let mut combined: HashMap<Uuid, SearchHit> = HashMap::new();
+        for (node, score) in vec_seeds {
+            combined.insert(
+                node.id,
+                SearchHit {
+                    node,
+                    score: score * 0.7,
+                    path: Vec::new(),
+                },
+            );
+        }
+        for (node, score) in fts_seeds {
+            combined
+                .entry(node.id)
+                .and_modify(|h| h.score += score * 0.3)
+                .or_insert(SearchHit {
+                    node,
+                    score: score * 0.3,
+                    path: Vec::new(),
+                });
+        }
+
+        let mut out: Vec<SearchHit> = combined.into_values().collect();
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.truncate(query.limit);
+        Ok(out)
     }
 
     /// Shared k-hop BFS used by GraphCompletion (read_only=true) and
@@ -467,6 +593,85 @@ mod tests {
             names.iter().any(|n| n == "machine"),
             "expected to reach 'machine'; got {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn fts_retriever_returns_hits() {
+        let (embedder, _) = fixture().await;
+        let r = CognitiveRetriever::new(embedder);
+        let hits = r.search(&SearchQuery::fts("compiler", 5)).await.unwrap();
+        assert!(!hits.is_empty(), "expected FTS hits for 'compiler'");
+        assert!(hits.iter().all(|h| h.path.is_empty()));
+        assert!(hits.iter().any(|h| {
+            h.node.name.to_lowercase().contains("compiler")
+                || h.node.summary.to_lowercase().contains("compiler")
+        }));
+    }
+
+    #[tokio::test]
+    async fn hybrid_retriever_merges_vector_and_fts() {
+        let (embedder, _) = fixture().await;
+        let r = CognitiveRetriever::new(embedder);
+        let hits = r
+            .search(&SearchQuery::hybrid("compiler", 5))
+            .await
+            .unwrap();
+        assert!(!hits.is_empty(), "expected hybrid hits");
+        // Scores stay sorted descending after the merge.
+        assert!(hits
+            .windows(2)
+            .all(|w| w[0].score >= w[1].score - 1e-6));
+    }
+
+    #[tokio::test]
+    async fn fts_only_mode_works_without_embeddings() {
+        use crate::memory::cognitive::embed::NullEmbedder;
+
+        // Build the whole pipeline around a NullEmbedder (dimensions() == 0):
+        // the FTS-only boot path. No vectors are ever written.
+        let cfg = Config::from_env();
+        let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
+        let graph: Arc<dyn GraphStore> = Arc::new(SqliteGraphStore::new(Arc::clone(&db)));
+        let vector: Arc<dyn VectorStore> = Arc::new(SqliteVectorStore::new(Arc::clone(&db)));
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(NullEmbedder);
+        let embedder = Arc::new(CognitiveEmbedder::new(graph, vector, provider));
+        let canned =
+            r#"{"triplets":[{"subject":"Ada","predicate":"invented","object":"compiler"}]}"#
+                .to_string();
+        let llm = Arc::new(StubLlm::new(vec![canned]));
+        let pipe = CognifyPipeline::new(
+            CognitiveEmbedder::new(
+                Arc::clone(&embedder.graph),
+                Arc::clone(&embedder.vector),
+                Arc::clone(&embedder.provider),
+            ),
+            llm,
+        );
+        // Ingest succeeds with no embedder — nodes are stored + FTS-indexed.
+        pipe.cognify(
+            "Ada invented the compiler.",
+            "doc",
+            &CognifyOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let r = CognitiveRetriever::new(embedder);
+
+        // FTS recall works at zero embedding cost.
+        let fts = r.search(&SearchQuery::fts("compiler", 5)).await.unwrap();
+        assert!(!fts.is_empty(), "FTS must find 'compiler' without an embedder");
+
+        // Hybrid degrades to its FTS half (vector half is empty).
+        let hybrid = r
+            .search(&SearchQuery::hybrid("compiler", 5))
+            .await
+            .unwrap();
+        assert!(!hybrid.is_empty(), "hybrid should fall back to FTS results");
+
+        // Pure vector modes return empty — no vectors were written.
+        let chunks = r.search(&SearchQuery::chunks("compiler", 5)).await.unwrap();
+        assert!(chunks.is_empty(), "vector search must be empty in FTS-only mode");
     }
 
     #[tokio::test]

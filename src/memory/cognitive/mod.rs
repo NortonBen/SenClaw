@@ -21,6 +21,7 @@ pub mod cognify;
 pub mod data_point;
 pub mod decay_tick;
 pub mod embed;
+pub mod extract;
 pub mod gnn;
 pub mod gnn_sage;
 pub mod graph_store;
@@ -46,7 +47,8 @@ pub mod vector_store;
 pub use cognify::{sanitize_for_cognify, CognifyOptions, CognifyPipeline, CognifyReport};
 pub use data_point::{DataPoint, ExtractionState, NodeKind};
 pub use decay_tick::{run_decay, start_decay_ticker, DecayConfig, DecayReport};
-pub use embed::{embed_node, CognitiveEmbedder};
+pub use embed::{embed_node, CognitiveEmbedder, NullEmbedder};
+pub use extract::{extract_text, MAX_FILE_SIZE_BYTES};
 pub use gnn::{GraphScorer, LightGcnScorer};
 pub use gnn_sage::{
     forward_inference as sage_forward, train as sage_train, GraphSageScorer, SageModel,

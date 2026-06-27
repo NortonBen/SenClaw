@@ -61,7 +61,9 @@ struct CognifyParams {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SearchParams {
     query: String,
-    /// One of: chunks | triplet | graph | spreading. Defaults to "graph".
+    /// One of: chunks | triplet | graph | spreading | fts | hybrid.
+    /// Defaults to "graph". `fts` needs no embeddings; `hybrid` blends
+    /// vector + FTS.
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -171,7 +173,7 @@ impl McpCognitiveServer {
     }
 
     #[rmcp::tool(
-        description = "Search cognitive memory. mode: chunks | triplet | graph | spreading"
+        description = "Search cognitive memory. mode: chunks | triplet | graph | spreading | fts | hybrid"
     )]
     async fn cog_search(
         &self,
@@ -356,6 +358,8 @@ impl CognitiveServer {
             "chunks" => SearchType::Chunks,
             "triplet" => SearchType::Triplet,
             "spreading" => SearchType::SpreadingActivation,
+            "fts" => SearchType::Fts,
+            "hybrid" => SearchType::Hybrid,
             _ => SearchType::GraphCompletion,
         };
         let mut q = SearchQuery::chunks(query, limit.unwrap_or(8));

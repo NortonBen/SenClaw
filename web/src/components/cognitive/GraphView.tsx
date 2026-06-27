@@ -71,7 +71,11 @@ interface Props {
   onNodeClick?: (node: GraphNode) => void;
   /** Highlight a node (e.g. current seed) by ID. */
   highlightId?: string | null;
+  /** Show the node-kind / edge-tier legend overlay. Default true. */
+  showLegend?: boolean;
 }
+
+const TIER_LABELS = ['L1 working', 'L2 episodic', 'L3 semantic'];
 
 interface SimNode extends GraphNode {
   x: number;
@@ -174,6 +178,7 @@ export function GraphView({
   height = 520,
   onNodeClick,
   highlightId = null,
+  showLegend = true,
 }: Props) {
   // Pan + zoom state.
   const [tx, setTx] = useState(0);
@@ -251,12 +256,64 @@ export function GraphView({
   };
 
   return (
-    <div ref={wrapperRef} style={{ width: '100%', lineHeight: 0 }}>
+    <div ref={wrapperRef} style={{ width: '100%', lineHeight: 0, position: 'relative' }}>
       {/*
         SVG takes 100% of the wrapper. The wrapper is what ResizeObserver
         watches; setting `lineHeight: 0` strips the inline-baseline gap
         browsers add below inline SVGs so the parent card hugs the canvas.
       */}
+      {showLegend && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            background: 'rgba(0,0,0,0.45)',
+            color: '#fff',
+            borderRadius: 6,
+            padding: '6px 8px',
+            fontSize: 10,
+            lineHeight: 1.6,
+            pointerEvents: 'none',
+            zIndex: 1,
+          }}
+        >
+          <div style={{ opacity: 0.7, marginBottom: 2 }}>Nodes</div>
+          {Object.entries(KIND_COLORS).map(([k, c]) => (
+            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: c,
+                  display: 'inline-block',
+                }}
+              />
+              {k}
+            </div>
+          ))}
+          <div style={{ opacity: 0.7, margin: '4px 0 2px' }}>Edges (tier)</div>
+          {TIER_LABELS.map((label, i) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span
+                style={{
+                  width: 12,
+                  borderTop: `2px solid ${TIER_COLORS[i]}`,
+                  display: 'inline-block',
+                }}
+              />
+              {label}
+            </div>
+          ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span
+              style={{ width: 12, borderTop: '2px dashed #888', display: 'inline-block' }}
+            />
+            inferred
+          </div>
+        </div>
+      )}
       <svg
         width="100%"
         height={height}
