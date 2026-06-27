@@ -274,7 +274,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route(
             "/api/cowork/teams/:id",
-            delete(super::cowork::delete_team),
+            patch(super::cowork::update_team).delete(super::cowork::delete_team),
         )
         .route(
             "/api/cowork/teams/:id/members",
@@ -298,7 +298,15 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route(
             "/api/cowork/templates",
-            get(super::cowork::list_templates),
+            get(super::cowork::list_templates).post(super::cowork::create_template),
+        )
+        .route(
+            "/api/cowork/templates/:id",
+            put(super::cowork::update_template).delete(super::cowork::delete_template),
+        )
+        .route(
+            "/api/cowork/teams/:id/save-as-template",
+            post(super::cowork::save_team_as_template),
         )
         .route(
             "/api/cowork/personas",

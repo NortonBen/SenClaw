@@ -18,8 +18,18 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::db::cowork_tasks::CoworkTeamTask;
-use crate::db::cowork_teams::{CoworkTeam, TeamMember};
+use crate::db::cowork_teams::{CoworkTeam, CoworkTeamSettings, TeamMember};
+use crate::db::cowork_templates::CoworkTemplate;
 use crate::types::GroupBinding;
+
+/// Owned, source-agnostic view of a template (built-in or custom) used by the
+/// instantiation flow.
+struct ResolvedTemplate {
+    name: String,
+    manager: String,
+    members: Vec<TeamMember>,
+    settings: CoworkTeamSettings,
+}
 use crate::util::local_time::local_iso_string_now;
 
 // ─── Built-in team templates ────────────────────────────────────────────────
@@ -192,6 +202,7 @@ pub(crate) struct TeamView {
     pub created_at: String,
     /// jid of the auto-materialised chat group (always `cowork:<id>`).
     pub jid: String,
+    pub settings: CoworkTeamSettings,
 }
 
 fn to_view(t: CoworkTeam) -> TeamView {
@@ -204,6 +215,7 @@ fn to_view(t: CoworkTeam) -> TeamView {
         workspace_dir: t.workspace_dir,
         created_at: t.created_at,
         jid,
+        settings: t.settings,
     }
 }
 
@@ -314,6 +326,7 @@ pub(crate) async fn create_team(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         created_at: now.clone(),
+        settings: Default::default(),
     };
 
     db.insert_cowork_team(&team)
@@ -349,14 +362,276 @@ pub(crate) async fn create_team(
 
 /// GET /api/cowork/templates
 ///
-/// Returns the built-in team templates the user can spin up with one click.
-/// Members reference persona files (built-in or user-defined) — the create
-/// flow turns each persona into a regular agent profile if it doesn't
-/// already exist.
+/// Unified template shape returned to the UI — covers both built-in blueprints
+/// and user-authored custom templates. `builtin` templates are read-only.
+#[derive(Debug, Serialize)]
+pub(crate) struct TemplateView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub manager: String,
+    pub manager_role: String,
+    pub members: Vec<TeamMember>,
+    pub settings: CoworkTeamSettings,
+    pub builtin: bool,
+}
+
+fn builtin_to_view(t: &TeamTemplate) -> TemplateView {
+    TemplateView {
+        id: t.id.to_string(),
+        name: t.name.to_string(),
+        description: t.description.to_string(),
+        icon: t.icon.to_string(),
+        manager: t.manager.to_string(),
+        manager_role: t.manager_role.to_string(),
+        members: t
+            .members
+            .iter()
+            .map(|m| TeamMember {
+                folder: m.folder.to_string(),
+                role: Some(m.role.to_string()),
+                responsibilities: Some(m.responsibilities.to_string()),
+                triggers: Some(m.triggers_json.to_string()),
+                ..Default::default()
+            })
+            .collect(),
+        settings: Default::default(),
+        builtin: true,
+    }
+}
+
+fn custom_to_view(t: CoworkTemplate) -> TemplateView {
+    TemplateView {
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        icon: t.icon,
+        manager: t.manager_folder,
+        manager_role: t.manager_role,
+        members: t.members,
+        settings: t.settings,
+        builtin: false,
+    }
+}
+
+/// GET /api/cowork/templates
+///
+/// Returns built-in blueprints followed by user-authored custom templates.
+/// Both can be instantiated; only custom ones can be edited/deleted.
 pub(crate) async fn list_templates(
-    State(_s): State<Arc<UiState>>,
-) -> Json<Vec<TeamTemplate>> {
-    Json(BUILTIN_TEMPLATES.to_vec())
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<Vec<TemplateView>>, AppError> {
+    let mut out: Vec<TemplateView> = BUILTIN_TEMPLATES.iter().map(builtin_to_view).collect();
+    if let Some(db) = s.db.as_ref() {
+        if let Ok(customs) = db.list_cowork_templates() {
+            out.extend(customs.into_iter().map(custom_to_view));
+        }
+    }
+    Ok(Json(out))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct TemplateBody {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    pub manager_folder: String,
+    #[serde(default)]
+    pub manager_role: Option<String>,
+    #[serde(default)]
+    pub members: Vec<TeamMember>,
+    #[serde(default)]
+    pub settings: Option<CoworkTeamSettings>,
+}
+
+/// POST /api/cowork/templates — create a custom template.
+pub(crate) async fn create_template(
+    State(s): State<Arc<UiState>>,
+    Json(body): Json<TemplateBody>,
+) -> Result<Json<TemplateView>, AppError> {
+    let db = db(&s)?;
+    if body.name.trim().is_empty() || body.manager_folder.trim().is_empty() {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "name and manager_folder are required".into(),
+        ));
+    }
+    let now = local_iso_string_now();
+    let tmpl = CoworkTemplate {
+        id: Uuid::new_v4().to_string(),
+        name: body.name.trim().to_string(),
+        description: body.description.unwrap_or_default(),
+        icon: body.icon.filter(|i| !i.trim().is_empty()).unwrap_or_else(|| "🧩".into()),
+        manager_folder: body.manager_folder.trim().to_string(),
+        manager_role: body.manager_role.filter(|r| !r.trim().is_empty()).unwrap_or_else(|| "lead".into()),
+        members: body.members,
+        settings: body.settings.unwrap_or_default(),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    db.insert_cowork_template(&tmpl)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(custom_to_view(tmpl)))
+}
+
+/// PUT /api/cowork/templates/:id — update a custom template. Built-in ids 404.
+pub(crate) async fn update_template(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<TemplateBody>,
+) -> Result<Json<TemplateView>, AppError> {
+    let db = db(&s)?;
+    let existing = db
+        .get_cowork_template(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("template not found: {id}")))?;
+    let tmpl = CoworkTemplate {
+        id,
+        name: body.name.trim().to_string(),
+        description: body.description.unwrap_or_default(),
+        icon: body.icon.filter(|i| !i.trim().is_empty()).unwrap_or(existing.icon),
+        manager_folder: body.manager_folder.trim().to_string(),
+        manager_role: body.manager_role.filter(|r| !r.trim().is_empty()).unwrap_or(existing.manager_role),
+        members: body.members,
+        settings: body.settings.unwrap_or_default(),
+        created_at: existing.created_at,
+        updated_at: local_iso_string_now(),
+    };
+    db.update_cowork_template(&tmpl)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(custom_to_view(tmpl)))
+}
+
+/// DELETE /api/cowork/templates/:id — delete a custom template.
+pub(crate) async fn delete_template(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    db.delete_cowork_template(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SaveAsTemplateBody {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// POST /api/cowork/teams/:id/save-as-template — snapshot an existing team
+/// (manager + members + settings) into a reusable custom template.
+pub(crate) async fn save_team_as_template(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<SaveAsTemplateBody>,
+) -> Result<Json<TemplateView>, AppError> {
+    let db = db(&s)?;
+    let team = db
+        .get_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("team not found: {id}")))?;
+    let now = local_iso_string_now();
+    let tmpl = CoworkTemplate {
+        id: Uuid::new_v4().to_string(),
+        name: body
+            .name
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| format!("{} (template)", team.name)),
+        description: body.description.unwrap_or_default(),
+        icon: body.icon.filter(|i| !i.trim().is_empty()).unwrap_or_else(|| "🧩".into()),
+        manager_folder: team.manager_folder,
+        manager_role: "lead".into(),
+        members: team.members,
+        settings: team.settings,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    db.insert_cowork_template(&tmpl)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(custom_to_view(tmpl)))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateTeamBody {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub manager_folder: Option<String>,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub settings: Option<CoworkTeamSettings>,
+}
+
+/// PATCH /api/cowork/teams/:id — update team name / manager / workspace /
+/// behaviour settings. Members are managed via the members endpoints.
+pub(crate) async fn update_team(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<UpdateTeamBody>,
+) -> Result<Json<TeamView>, AppError> {
+    let db = db(&s)?;
+    let team = db
+        .get_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("team not found: {id}")))?;
+
+    let name = body
+        .name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or(team.name);
+    let manager_folder = body
+        .manager_folder
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or(team.manager_folder);
+    let workspace_dir = match body.workspace_dir {
+        // explicit empty string clears it; absent keeps existing
+        Some(w) if w.trim().is_empty() => None,
+        Some(w) => Some(w.trim().to_string()),
+        None => team.workspace_dir,
+    };
+    let settings = body.settings.unwrap_or(team.settings);
+
+    db.update_cowork_team(&id, &name, &manager_folder, workspace_dir.as_deref(), &settings)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+
+    // Keep the materialised chat group's name/folder in sync.
+    if let Some(gm) = s.group_manager.as_ref() {
+        let jid = format!("cowork:{id}");
+        let binding = GroupBinding {
+            jid,
+            folder: manager_folder.clone(),
+            name: name.clone(),
+            channel: String::new(),
+            group_type: "cowork".to_string(),
+            requires_trigger: false,
+            allowed_tools: None,
+            allowed_paths: None,
+            allowed_work_dirs: workspace_dir.as_ref().map(|w| vec![w.clone()]),
+            bot_token: None,
+            max_messages: None,
+            llm_config_id: None,
+            last_active: None,
+            added_at: local_iso_string_now(),
+        };
+        gm.register(&db, &s.config, &binding);
+    }
+
+    let updated = db
+        .get_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "team vanished".into()))?;
+    Ok(Json(to_view(updated)))
 }
 
 /// GET /api/cowork/personas
@@ -410,17 +685,44 @@ pub(crate) async fn create_from_template(
     State(s): State<Arc<UiState>>,
     Json(body): Json<InstantiateTemplateBody>,
 ) -> Result<Json<TeamView>, AppError> {
-    let tmpl = BUILTIN_TEMPLATES
-        .iter()
-        .find(|t| t.id == body.template_id)
-        .ok_or_else(|| {
-            AppError(
-                StatusCode::NOT_FOUND,
-                format!("template not found: {}", body.template_id),
-            )
-        })?;
-
     let db = db(&s)?;
+
+    // Resolve the template: prefer a user-authored custom template (DB), then
+    // fall back to a built-in blueprint. Both collapse to the same owned shape.
+    let resolved: ResolvedTemplate = if let Some(custom) = db
+        .get_cowork_template(&body.template_id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+    {
+        ResolvedTemplate {
+            name: custom.name,
+            manager: custom.manager_folder,
+            members: custom.members,
+            settings: custom.settings,
+        }
+    } else if let Some(tmpl) = BUILTIN_TEMPLATES.iter().find(|t| t.id == body.template_id) {
+        ResolvedTemplate {
+            name: tmpl.name.to_string(),
+            manager: tmpl.manager.to_string(),
+            members: tmpl
+                .members
+                .iter()
+                .map(|m| TeamMember {
+                    folder: m.folder.to_string(),
+                    role: Some(m.role.to_string()),
+                    responsibilities: Some(m.responsibilities.to_string()),
+                    triggers: Some(m.triggers_json.to_string()),
+                    ..Default::default()
+                })
+                .collect(),
+            settings: Default::default(),
+        }
+    } else {
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            format!("template not found: {}", body.template_id),
+        ));
+    };
+    let tmpl = &resolved;
 
     // Ensure each persona has a corresponding agent profile (folder).
     // The persona name itself becomes the folder slug.
@@ -450,7 +752,7 @@ pub(crate) async fn create_from_template(
         }
         Ok(())
     };
-    ensure_agent(tmpl.manager)?;
+    ensure_agent(&tmpl.manager)?;
     // Seed persona files for each member into virtual-agents/ (no agent
     // row created — members are personas, not Profiles, per v0.7).
     let seed_persona = |slug: &str, role: &str, resp: &str| {
@@ -467,7 +769,11 @@ pub(crate) async fn create_from_template(
         let _ = std::fs::write(dest, body);
     };
     for m in tmpl.members.iter() {
-        seed_persona(m.folder, m.role, m.responsibilities);
+        seed_persona(
+            &m.folder,
+            m.role.as_deref().unwrap_or("member"),
+            m.responsibilities.as_deref().unwrap_or(""),
+        );
     }
 
     // Reuse create_team via direct CoworkTeam construction. Members carry
@@ -480,25 +786,16 @@ pub(crate) async fn create_from_template(
         name: body
             .name
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| tmpl.name.to_string()),
-        manager_folder: tmpl.manager.to_string(),
-        members: tmpl
-            .members
-            .iter()
-            .map(|m| TeamMember {
-                folder: m.folder.to_string(),
-                role: Some(m.role.to_string()),
-                responsibilities: Some(m.responsibilities.to_string()),
-                triggers: Some(m.triggers_json.to_string()),
-                ..Default::default()
-            })
-            .collect(),
+            .unwrap_or_else(|| tmpl.name.clone()),
+        manager_folder: tmpl.manager.clone(),
+        members: tmpl.members.clone(),
         workspace_dir: body
             .workspace_dir
             .as_ref()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         created_at: now.clone(),
+        settings: tmpl.settings.clone(),
     };
     db.insert_cowork_team(&team)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;

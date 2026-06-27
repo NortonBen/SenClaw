@@ -413,13 +413,12 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               borderTop: `1px solid ${token.colorBorderSecondary}`,
             }} />
 
-            {/* ─── Cowork (under development) ─── */}
+            {/* ─── Cowork ─── */}
             <StaticNavItem
               icon={<CoffeeOutlined />}
               label="Cowork"
               isSelected={activeNav === 'cowork'}
               onClick={() => onSelect('cowork')}
-              badge={devBadge}
             />
 
             {/* ─── Code Executor (under development) ─── */}

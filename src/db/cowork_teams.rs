@@ -47,6 +47,31 @@ impl TeamMember {
     }
 }
 
+/// Team-level behaviour settings (stored as JSON in `cowork_teams.settings_json`
+/// and reused as the template's `settings_json`). All fields optional; absent =
+/// use the built-in defaults.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoworkTeamSettings {
+    /// Override the manager's PLAN→DELEGATE→SYNTHESIZE preamble. Empty = default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager_preamble: Option<String>,
+    /// Override the manager's allowed tool list. None = default (Task + TodoWrite).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager_tools: Option<Vec<String>>,
+    /// Auto-create kanban tasks when a user message lands. None/true = enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_create_tasks: Option<bool>,
+}
+
+impl CoworkTeamSettings {
+    pub fn from_json(raw: &str) -> Self {
+        serde_json::from_str(raw).unwrap_or_default()
+    }
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoworkTeam {
     pub id: String,
@@ -60,6 +85,9 @@ pub struct CoworkTeam {
     /// Optional absolute path of the shared workspace.
     pub workspace_dir: Option<String>,
     pub created_at: String,
+    /// Team behaviour settings (manager preamble/tools, auto-task toggle).
+    #[serde(default)]
+    pub settings: CoworkTeamSettings,
 }
 
 /// Parse the `members_json` column, accepting either the legacy
@@ -79,11 +107,12 @@ fn parse_members(raw: &str) -> Vec<TeamMember> {
 impl Db {
     pub fn insert_cowork_team(&self, t: &CoworkTeam) -> Result<()> {
         let members_json = serde_json::to_string(&t.members).unwrap_or_else(|_| "[]".into());
+        let settings_json = t.settings.to_json();
         self.with_conn(|c| {
             c.execute(
-                "INSERT INTO cowork_teams (id, name, manager_folder, members_json, workspace_dir, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![t.id, t.name, t.manager_folder, members_json, t.workspace_dir, t.created_at],
+                "INSERT INTO cowork_teams (id, name, manager_folder, members_json, workspace_dir, created_at, settings_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![t.id, t.name, t.manager_folder, members_json, t.workspace_dir, t.created_at, settings_json],
             )?;
             Ok(())
         })
@@ -92,20 +121,21 @@ impl Db {
     pub fn list_cowork_teams(&self) -> Result<Vec<CoworkTeam>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare(
-                "SELECT id, name, manager_folder, members_json, workspace_dir, created_at \
+                "SELECT id, name, manager_folder, members_json, workspace_dir, created_at, settings_json \
                  FROM cowork_teams ORDER BY created_at DESC",
             )?;
             let rows = stmt
                 .query_map([], |r| {
                     let members_json: String = r.get(3)?;
-                    let members = parse_members(&members_json);
+                    let settings_json: String = r.get(6).unwrap_or_else(|_| "{}".into());
                     Ok(CoworkTeam {
                         id: r.get(0)?,
                         name: r.get(1)?,
                         manager_folder: r.get(2)?,
-                        members,
+                        members: parse_members(&members_json),
                         workspace_dir: r.get(4)?,
                         created_at: r.get(5)?,
+                        settings: CoworkTeamSettings::from_json(&settings_json),
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -117,24 +147,45 @@ impl Db {
         self.with_conn(|c| {
             let row = c
                 .query_row(
-                    "SELECT id, name, manager_folder, members_json, workspace_dir, created_at \
+                    "SELECT id, name, manager_folder, members_json, workspace_dir, created_at, settings_json \
                      FROM cowork_teams WHERE id = ?1",
                     params![id],
                     |r| {
                         let members_json: String = r.get(3)?;
-                        let members = parse_members(&members_json);
+                        let settings_json: String = r.get(6).unwrap_or_else(|_| "{}".into());
                         Ok(CoworkTeam {
                             id: r.get(0)?,
                             name: r.get(1)?,
                             manager_folder: r.get(2)?,
-                            members,
+                            members: parse_members(&members_json),
                             workspace_dir: r.get(4)?,
                             created_at: r.get(5)?,
+                            settings: CoworkTeamSettings::from_json(&settings_json),
                         })
                     },
                 )
                 .ok();
             Ok(row)
+        })
+    }
+
+    /// Update a team's editable fields (name, manager, workspace, settings).
+    /// Members are updated separately via `update_cowork_team_members`.
+    pub fn update_cowork_team(
+        &self,
+        id: &str,
+        name: &str,
+        manager_folder: &str,
+        workspace_dir: Option<&str>,
+        settings: &CoworkTeamSettings,
+    ) -> Result<()> {
+        let settings_json = settings.to_json();
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE cowork_teams SET name = ?1, manager_folder = ?2, workspace_dir = ?3, settings_json = ?4 WHERE id = ?5",
+                params![name, manager_folder, workspace_dir, settings_json, id],
+            )?;
+            Ok(())
         })
     }
 

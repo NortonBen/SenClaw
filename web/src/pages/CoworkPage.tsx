@@ -236,6 +236,7 @@ export function CoworkPage() {
             const team = teams.find(t => t.jid === jid);
             if (team) handleDelete(team.id); else ws.unregisterGroup(jid);
           }}
+          onReload={ws.refreshGroups}
         />
       }
     >

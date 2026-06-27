@@ -374,6 +374,7 @@ export function CoworkTeamDetailPage() {
           onPin={() => { /* no-op */ }}
           onRename={(jid, name) => ws.updateGroup(jid, { name })}
           onDelete={() => { /* delete via team detail's own UI */ }}
+          onReload={ws.refreshGroups}
         />
       }
     >

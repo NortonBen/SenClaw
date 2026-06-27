@@ -37,6 +37,7 @@ mod channels;
 mod chat_events;
 pub mod cowork_tasks;
 pub mod cowork_teams;
+pub mod cowork_templates;
 mod dispatch_activity;
 mod embedding;
 pub(crate) mod event_notifications;

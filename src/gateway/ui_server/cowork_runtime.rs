@@ -158,6 +158,33 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
     if team.members.is_empty() {
         return None;
     }
+
+    // Custom preamble override (team settings): use it verbatim, then append the
+    // user-request footer so the model still sees the message.
+    if let Some(custom) = team
+        .settings
+        .manager_preamble
+        .as_ref()
+        .filter(|p| !p.trim().is_empty())
+    {
+        let mut s = custom.clone();
+        s.push_str("\n\n---\n\nUser request (delegate per workflow above):\n");
+        return Some(s);
+    }
+
+    // Tools the lead may use (settings override → default Task + TodoWrite).
+    let tools = team
+        .settings
+        .manager_tools
+        .clone()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| vec!["Task".into(), "TodoWrite".into()]);
+    let tools_str = tools
+        .iter()
+        .map(|t| format!("`{t}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let mut s = String::new();
     s.push_str("[Cowork DAG context — you are the LEAD of this team]\n");
     s.push_str(&format!("Team: {}\n", team.name));
@@ -171,10 +198,10 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
         let resp = m.responsibilities.as_deref().unwrap_or("—");
         s.push_str(&format!(" • `{}` ({role}) — {resp}\n", m.folder));
     }
+    s.push_str("\nMANDATORY workflow for THIS turn (NO other tools available):\n");
+    s.push_str(&format!("You are restricted to these tools: {tools_str}.\n"));
     s.push_str(
-        "\nMANDATORY workflow for THIS turn (NO other tools available):\n\
-         You are restricted to TWO tools: `Task` (delegation) and `TodoWrite` (planning).\n\
-         You CANNOT browse the web, run shell commands, or edit files yourself.\n\
+        "You CANNOT browse the web, run shell commands, or edit files yourself.\n\
          The only way to make progress is to delegate via `Task`.\n\
          \n\
          How to delegate (subagent_type must be `general-purpose` — Task does NOT route by member folder yet):\n\
@@ -208,6 +235,12 @@ pub fn on_user_message(db: &Arc<Db>, team_id: &str, content: &str) {
         tracing::debug!("[cowork_runtime] no team for id={team_id}");
         return;
     };
+
+    // Auto-task creation can be disabled per-team via settings.
+    if team.settings.auto_create_tasks == Some(false) {
+        tracing::debug!("[cowork_runtime] auto-task disabled for team={team_id}");
+        return;
+    }
 
     let now = local_iso_string_now();
     let title = truncate_chars(content.trim(), 60);

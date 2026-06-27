@@ -283,6 +283,24 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_cowork_team_tasks_team
           ON cowork_team_tasks(team_id);
 
+        -- Custom cowork templates (user-authored squad blueprints). Built-in
+        -- templates live in code (`BUILTIN_TEMPLATES`); these are the editable,
+        -- user-managed ones. `members_json` is an array of TeamMember specs and
+        -- `settings_json` holds CoworkTeamSettings (manager preamble override,
+        -- manager tool whitelist, auto-task toggle).
+        CREATE TABLE IF NOT EXISTS cowork_templates (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          description     TEXT NOT NULL DEFAULT '',
+          icon            TEXT NOT NULL DEFAULT '🧩',
+          manager_folder  TEXT NOT NULL,
+          manager_role    TEXT NOT NULL DEFAULT 'lead',
+          members_json    TEXT NOT NULL DEFAULT '[]',
+          settings_json   TEXT NOT NULL DEFAULT '{}',
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL
+        );
+
         "#,
     )?;
 
@@ -544,6 +562,18 @@ pub(crate) fn apply_marketplace_tables(conn: &Connection) -> Result<()> {
     .ok(); // Ignore error if column already exists
     conn.execute("ALTER TABLE group_messages ADD COLUMN attachments TEXT", [])
         .ok(); // Ignore error if column already exists
+
+    // Cowork team behaviour settings (manager preamble override, manager tool
+    // whitelist, auto-task toggle). Added after the table shipped, so guard it.
+    if let Ok(cols) = column_names(conn, "cowork_teams") {
+        if !cols.iter().any(|c| c == "settings_json") {
+            conn.execute(
+                "ALTER TABLE cowork_teams ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'",
+                [],
+            )
+            .ok();
+        }
+    }
 
     Ok(())
 }
