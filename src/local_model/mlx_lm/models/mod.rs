@@ -10,6 +10,9 @@ pub mod gemma4;
 pub mod gemma4_vision;
 pub mod llama;
 pub mod mamba2;
+/// Ouro looped language model (LoopLM) — ByteDance Ouro-2.6B / -Thinking.
+/// Llama-style decoder with sandwich norm, looped `total_ut_steps` times.
+pub mod ouro;
 pub mod qwen3;
 pub mod qwen3_5;
 /// Shared Qwen-family parser primitives (used by `qwen3` and `qwen3_5`).

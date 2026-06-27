@@ -788,6 +788,17 @@ pub struct LocalModelSettings {
     /// machines or when switching between models / long idle gaps are common.
     #[serde(default)]
     pub release_cache_after_session: Option<bool>,
+    /// **Looped LMs only (Ouro / LoopLM).** Number of recurrent "Universal
+    /// Transformer" sweeps to run at inference, overriding the checkpoint's
+    /// trained `total_ut_steps`. Each sweep re-applies the full shared layer
+    /// stack, so decode cost scales ~linearly with this value. The model is
+    /// trained so every step's output is usable, so lowering it trades a little
+    /// quality for proportional speed (Ouro-2.6B MMLU: R4 67.5% → R3 66.7% →
+    /// R2 60.4%). Clamped to `1..=total_ut_steps`; values above the trained
+    /// count are capped. **`None`** / **`0`** → use the trained `total_ut_steps`
+    /// (default, full quality). Ignored by non-looped architectures.
+    #[serde(default)]
+    pub recurrence_steps: Option<u32>,
 }
 
 impl Default for LocalModelSettings {
@@ -806,6 +817,7 @@ impl Default for LocalModelSettings {
             idle_unload_secs: Some(DEFAULT_IDLE_UNLOAD_SECS),
             kv_release_rss_mib: None,
             release_cache_after_session: None,
+            recurrence_steps: None,
         }
     }
 }

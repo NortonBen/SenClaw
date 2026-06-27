@@ -37,6 +37,7 @@ enum ModelKind {
     Mamba2(super::mlx_lm::models::mamba2::Model),
     FalconMamba(super::mlx_lm::models::falcon_mamba::Model),
     BonsaiQ1(super::mlx_lm::models::bonsai_q1::LoadedBonsaiQ1),
+    Ouro(super::mlx_lm::models::ouro::Model),
 }
 
 impl ModelKind {
@@ -51,6 +52,7 @@ impl ModelKind {
             Self::Mamba2(_) => "mamba2",
             Self::FalconMamba(_) => "falcon_mamba",
             Self::BonsaiQ1(_) => "bonsai_q1",
+            Self::Ouro(_) => "ouro",
         }
     }
 
@@ -73,6 +75,7 @@ impl ModelKind {
             Self::Mamba2(m) => m.resolve_special_tokens(template, tokenizer),
             Self::FalconMamba(m) => m.resolve_special_tokens(template, tokenizer),
             Self::BonsaiQ1(b) => b.resolve_special_tokens(template, tokenizer),
+            Self::Ouro(o) => o.resolve_special_tokens(template, tokenizer),
         }
     }
 
@@ -93,6 +96,7 @@ impl ModelKind {
             Self::Mamba2(m) => m.markers(),
             Self::FalconMamba(m) => m.markers(),
             Self::BonsaiQ1(b) => b.markers(),
+            Self::Ouro(o) => o.markers(),
         }
     }
 
@@ -111,6 +115,39 @@ impl ModelKind {
             Self::Mamba2(m) => m.stop_token_ids(tokenizer),
             Self::FalconMamba(m) => m.stop_token_ids(tokenizer),
             Self::BonsaiQ1(b) => b.stop_token_ids(tokenizer),
+            Self::Ouro(o) => o.stop_token_ids(tokenizer),
+        }
+    }
+
+    /// KV-cache slot multiplier for looped LMs: how many independent KV slots a
+    /// looped model keeps *per logical layer* (one per recurrent sweep). Ouro
+    /// keeps `total_ut_steps` (4) → its KV footprint is 4× a dense model at the
+    /// same window. `1` for every non-looped architecture. Used to scale the KV
+    /// window down so a looped model's total KV memory matches a dense model.
+    fn kv_recurrence_multiplier(&self) -> i32 {
+        match self {
+            Self::Ouro(o) => o.total_ut_steps().max(1),
+            _ => 1,
+        }
+    }
+
+    /// Apply a per-request recurrent-depth override (looped LMs only). `Some(n)`
+    /// runs `min(n, trained_steps)` sweeps; `None`/`Some(0)` restores the trained
+    /// depth. No-op for every non-looped architecture. Returns the effective
+    /// depth that will run for Ouro (for logging), `None` otherwise.
+    fn set_runtime_recurrence(&mut self, steps: Option<u32>) -> Option<i32> {
+        match self {
+            Self::Ouro(o) => {
+                let req = steps.and_then(|n| i32::try_from(n).ok());
+                o.set_active_ut_steps(req);
+                // Recompute the clamped effective depth for the caller's log.
+                let trained = o.total_ut_steps();
+                Some(match req {
+                    Some(n) if n >= 1 => n.min(trained),
+                    _ => trained,
+                })
+            }
+            _ => None,
         }
     }
 }
@@ -460,9 +497,35 @@ fn ensure_loaded_blocking(engine: &MlxNativeEngine) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Pin MLX's global default device to the Apple-Silicon GPU (Metal) and log it
+/// once, so "is this actually running on the GPU?" is verifiable from the daemon
+/// log rather than assumed. MLX already defaults to `gpu()` with the `metal`
+/// feature; this makes the guarantee explicit and visible (no silent CPU
+/// fallback) and is a no-op on every call after the first.
+fn ensure_mlx_gpu_default() {
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        use mlx_rs::Device;
+        Device::set_default(&Device::gpu());
+        match Device::try_default() {
+            Ok(dev) => match dev.get_type() {
+                Ok(mlx_rs::DeviceType::Gpu) => {
+                    tracing::info!("[local-mlx-native] compute device: {dev} (Metal GPU) ✓")
+                }
+                Ok(mlx_rs::DeviceType::Cpu) => tracing::warn!(
+                    "[local-mlx-native] compute device fell back to CPU ({dev}) — decode will be slow"
+                ),
+                Err(e) => tracing::warn!("[local-mlx-native] device type query failed: {e:?}"),
+            },
+            Err(e) => tracing::warn!("[local-mlx-native] default device query failed: {e:?}"),
+        }
+    });
+}
+
 fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     use super::mlx_lm_utils::tokenizer::Tokenizer;
 
+    ensure_mlx_gpu_default();
     let arch = detect_architecture(model_id, model_dir)?;
     let tokenizer_file = model_dir.join("tokenizer.json");
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
@@ -563,6 +626,21 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
                 .map_err(|_| anyhow::anyhow!("bonsai-q1 kv_heads does not fit i32"))?;
             (ModelKind::BonsaiQ1(b), n, hd, kvh)
         }
+        Arch::Ouro => {
+            if chat_template.is_none() {
+                anyhow::bail!("Ouro chat template missing in tokenizer_config.json");
+            }
+            let m = load_ouro_any(model_dir)
+                .map_err(|e| anyhow::anyhow!("load_ouro failed: {e:?}"))?;
+            // Ouro reuses `num_hidden_layers` blocks across `total_ut_steps`
+            // recurrent sweeps, with a distinct KV slot per (sweep, layer). Report
+            // the product so the engine sizes the cache vector to all 192 slots
+            // (`load_ouro_any` keeps them indexed `ut * num_hidden_layers + layer`).
+            let n = m.args.total_cache_layers();
+            let hd = m.args.head_dim;
+            let kvh = m.args.num_key_value_heads;
+            (ModelKind::Ouro(m), n, hd, kvh)
+        }
     };
     tracing::info!(
         "[local-mlx-native] cached state ready for {model_id} (arch={}, {n_layers} layers, head_dim={head_dim}, kv_heads={n_kv_heads})",
@@ -594,6 +672,18 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
         parser_config.markers.tool_call_format,
     );
 
+    // Looped LMs (Ouro) snapshot 192 KV slots per prefix entry — 4× a dense
+    // model. Cap the prefix cache to a single, tighter-budgeted entry so it
+    // can't stack multiple oversized snapshots on top of the live KV (the main
+    // driver of the daemon's RAM ballooning to ~20 GB).
+    let kv_mult = model.kv_recurrence_multiplier();
+    let prefix_cache = if kv_mult > 1 {
+        use super::mlx_lm::prefix_cache::{MAX_TOTAL_BYTES, PrefixCache};
+        PrefixCache::with_limits(1, MAX_TOTAL_BYTES / kv_mult as usize)
+    } else {
+        super::mlx_lm::prefix_cache::PrefixCache::new()
+    };
+
     Ok(Loaded {
         model,
         tokenizer,
@@ -602,7 +692,7 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
         n_layers,
         head_dim,
         n_kv_heads,
-        prefix_cache: super::mlx_lm::prefix_cache::PrefixCache::new(),
+        prefix_cache,
     })
 }
 
@@ -970,6 +1060,13 @@ fn generate_with_cache(
     let messages = preprocess_openai_messages_for_mlx(messages);
     let enable_thinking = gen_opt.enable_thinking;
 
+    // Looped-LM recurrent-depth override (Ouro / LoopLM). Applied before prefill
+    // so both prefill and decode run at the selected depth; a no-op for every
+    // other architecture. The effective (clamped) depth is logged per turn.
+    if let Some(eff) = state.model.set_runtime_recurrence(gen_opt.recurrence_steps) {
+        tracing::info!("[local-mlx-native] Ouro recurrent sweeps this turn: {eff}");
+    }
+
     let max_prompt_tokens = gen_opt
         .max_prompt_tokens
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_MLX_MAX_PROMPT_TOKENS)
@@ -982,6 +1079,38 @@ fn generate_with_cache(
         .max_kv_tokens
         .unwrap_or(crate::gateway::ui_server::local_models::DEFAULT_KV_WINDOW_TOKENS)
         .clamp(128, 262_144) as i32;
+    // Looped LMs (Ouro) keep one KV slot per (recurrent sweep, layer) → their KV
+    // footprint is `total_ut_steps`× a dense model at the same window. Honouring
+    // the 20 480-token default verbatim made Ouro-2.6B's KV reach ~30 GB
+    // (192 slots × 20 480 × 16 × 128 × 2 × 2 B). On the DEFAULT window, size the
+    // window to a fixed ~2 GB KV budget instead (window = budget / per-token-bytes
+    // over all 192 slots). An EXPLICIT `max_kv_tokens` is honoured verbatim — the
+    // user has opted into the RAM cost for more context.
+    let kv_mult = state.model.kv_recurrence_multiplier();
+    let max_kv_tokens = if kv_mult > 1 && gen_opt.max_kv_tokens.is_none() {
+        // ~4 GB live-KV target: bounds RAM hard (was ~20–30 GB) while leaving
+        // enough window (~2.4 K tokens for Ouro) for an agentic system prompt +
+        // tool schemas. Explicit `max_kv_tokens` bypasses this entirely.
+        const LOOPED_KV_BUDGET_BYTES: i64 = 4 * 1024 * 1024 * 1024;
+        // per token, summed over all KV slots: n_layers × n_kv_heads × head_dim
+        // × 2 (K+V) × 2 B (fp16). `n_layers` here is already total_ut_steps×48.
+        let per_token = (n_layers as i64)
+            * (state.head_dim.max(1) as i64)
+            * (state.n_kv_heads.max(1) as i64)
+            * 4;
+        let budget_window =
+            (LOOPED_KV_BUDGET_BYTES / per_token.max(1)).clamp(1024, max_kv_tokens as i64) as i32;
+        if budget_window < max_kv_tokens {
+            let budget_gib = LOOPED_KV_BUDGET_BYTES / (1024 * 1024 * 1024);
+            tracing::info!(
+                "[local-mlx-native] looped-LM KV window {max_kv_tokens}→{budget_window} tokens \
+                 (≈{budget_gib} GB KV budget over {n_layers} recurrent slots); set max_kv_tokens explicitly for more context"
+            );
+        }
+        budget_window
+    } else {
+        max_kv_tokens
+    };
     let max_kv_usize = max_kv_tokens as usize;
     // KV is a *sliding* window: every decode token evicts the oldest cached
     // token once the cache is full. If the prompt already fills the cache,
@@ -1364,6 +1493,31 @@ fn generate_with_cache(
                 .map(|_| Some(KvCache::fp16_with_max(max_kv_tokens)))
                 .collect()
         }
+        ModelKind::Ouro(_) => {
+            // `n_layers` here is `total_ut_steps * num_hidden_layers` — one slot
+            // per (recurrent sweep, layer). Per-slot caches are ordinary KV
+            // caches, so TurboQuant applies the same as for Llama/Qwen3.
+            if let Some(bits) = tq_bits {
+                tracing::info!(
+                    "[local-mlx-native] TurboQuant KV: TQ{bits} (activate_at={tq_activate_at}, max_kv_window {max_kv_tokens})"
+                );
+            }
+            (0..n_layers)
+                .map(|_| {
+                    Some(if let Some(bits) = tq_bits {
+                        KvCache::turboquant_with_max(
+                            bits,
+                            head_dim,
+                            n_kv_heads,
+                            max_kv_tokens,
+                            tq_activate_at,
+                        )
+                    } else {
+                        KvCache::fp16_with_max(max_kv_tokens)
+                    })
+                })
+                .collect()
+        }
     };
 
     let mut rope_offset = 0usize;
@@ -1498,7 +1652,7 @@ fn generate_with_cache(
             | ModelKind::Gemma3(_)
             | ModelKind::Gemma4(_)
             | ModelKind::BonsaiQ1(_) => 0.65_f32,
-            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) => {
+            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Ouro(_) => {
                 if gen_opt.enable_thinking.unwrap_or(false) {
                     0.6_f32
                 } else {
@@ -1520,7 +1674,7 @@ fn generate_with_cache(
             | ModelKind::Gemma3(_)
             | ModelKind::Gemma4(_)
             | ModelKind::BonsaiQ1(_) => 1.15_f32,
-            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_)
+            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_) | ModelKind::Ouro(_)
                 if decode_temperature == 0.0_f32 =>
             {
                 1.05_f32
@@ -1677,6 +1831,16 @@ fn generate_with_cache(
                 .gpu
                 .forward_all_logits_native(&prompt_tokens, &mut cache, rope_offset)
                 .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
+            ModelKind::Ouro(m) => {
+                let input = ModelInput {
+                    inputs: &prompt_tokens,
+                    mask: None,
+                    cache: &mut cache,
+                    rope_offset,
+                };
+                m.forward(input)
+                    .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
+            }
         }
     } else {
         let to_prefill = prompt.len() - prefill_start;
@@ -1766,6 +1930,21 @@ fn generate_with_cache(
                     .gpu
                     .forward_all_logits_native(&chunk_arr, &mut cache, rope_offset)
                     .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?,
+                ModelKind::Ouro(m) => {
+                    let input = ModelInput {
+                        inputs: &chunk_arr,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    if is_last_chunk {
+                        m.forward_last_token(input)
+                            .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                    } else {
+                        m.forward_hidden(input)
+                            .map_err(|e| anyhow::anyhow!("prefill chunk forward failed: {e:?}"))?
+                    }
+                }
                 // SSM paths are routed to single-shot above.
                 _ => unreachable!("chunked_supported guard excludes Mamba variants"),
             };
@@ -1972,6 +2151,14 @@ fn generate_with_cache(
                 ModelKind::BonsaiQ1(b) => b
                     .gpu
                     .forward_all_logits_native($inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Ouro(m) => m
+                    .forward(ModelInput {
+                        inputs: $inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    })
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
             }
         };
@@ -2211,6 +2398,16 @@ fn generate_with_cache(
                     .gpu
                     .forward_all_logits_native(&inputs, &mut cache, rope_offset)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::Ouro(m) => {
+                    let decode_input = ModelInput {
+                        inputs: &inputs,
+                        mask: None,
+                        cache: &mut cache,
+                        rope_offset,
+                    };
+                    m.forward(decode_input)
+                        .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?
+                }
             };
             rope_offset += 1;
             // Single sync per decode step: `y.item()` below transitively forces
@@ -2370,6 +2567,7 @@ enum Arch {
     Mamba2,
     FalconMamba,
     BonsaiQ1,
+    Ouro,
 }
 
 /// Strip the same multimodal prefix as [`load_gemma3_any`] / gemma3 model loader.
@@ -3137,6 +3335,197 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
     Ok(model)
 }
 
+/// Load an Ouro `Model` (looped LM), applying `nn::quantize` when `config.json`
+/// declares a `quantization` block. Mirrors [`load_llama_any`] — same quantized
+/// embedding workaround and `.weight`→`.inner.weight` remap — but additionally
+/// skips the checkpoint's `model.early_exit_gate.*` tensors: the early-exit gate
+/// is a no-op at inference (`early_exit_threshold == 1.0` always selects the
+/// final UT step), so it isn't modeled and we don't want it logged as a stray
+/// unmatched key.
+fn load_ouro_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ouro::Model> {
+    use super::mlx_lm::models::llama::WeightMap;
+    use super::mlx_lm::models::ouro::{Model, get_ouro_model_args};
+    use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
+    use std::collections::HashSet;
+
+    let args =
+        get_ouro_model_args(model_dir).map_err(|e| anyhow::anyhow!("read ouro args failed: {e:?}"))?;
+    let cfg_path = model_dir.join("config.json");
+    let raw = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let quant = cfg.get("quantization").and_then(|q| {
+        let g = q.get("group_size")?.as_i64()? as i32;
+        let b = q.get("bits")?.as_i64()? as i32;
+        Some((g, b))
+    });
+
+    let mut shard_files: Vec<std::path::PathBuf> = Vec::new();
+    let weights_index = model_dir.join("model.safetensors.index.json");
+    if weights_index.exists() {
+        let json = std::fs::read_to_string(&weights_index)
+            .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
+        let map: WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let files: HashSet<&String> = map.weight_map.values().collect();
+        for f in files {
+            shard_files.push(model_dir.join(f));
+        }
+    } else {
+        let single = model_dir.join("model.safetensors");
+        if !single.exists() {
+            anyhow::bail!(
+                "no model.safetensors.index.json or model.safetensors in {}",
+                model_dir.display()
+            );
+        }
+        shard_files.push(single);
+    }
+
+    let is_quant = quant.is_some();
+    let model = Model::new(args).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
+    let mut model = if let Some((group_size, bits)) = quant {
+        tracing::info!(
+            "[local-mlx-native] quantizing Ouro layers: group_size={group_size}, bits={bits}"
+        );
+        let m = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
+            .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
+        m.eval()
+            .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
+        m
+    } else {
+        model
+    };
+
+    let mut total_loaded = 0usize;
+    let mut total_missed = 0usize;
+    let mut total_skipped_gate = 0usize;
+    let mut unmatched_samples: Vec<String> = Vec::new();
+
+    // Quantized-embedding workaround (see load_llama_any): mlx-rs 0.25.3 leaves
+    // QuantizedEmbedding's inner/scales/biases without `#[param]`, so capture
+    // them directly rather than through parameters_mut().
+    let mut embed_weight: Option<mlx_rs::Array> = None;
+    let mut embed_scales: Option<mlx_rs::Array> = None;
+    let mut embed_biases: Option<mlx_rs::Array> = None;
+
+    let mut unfilled_slots: std::collections::HashSet<String> = {
+        let snap = model.parameters_mut().flatten();
+        snap.keys().map(|k| k.to_string()).collect()
+    };
+    for shard in &shard_files {
+        let loaded = mlx_rs::Array::load_safetensors(shard)
+            .map_err(|e| anyhow::anyhow!("read shard {}: {e:?}", shard.display()))?;
+        let mut params = model.parameters_mut().flatten();
+        for (raw_key, value) in loaded {
+            let key = raw_key.as_str();
+            // Early-exit gate is intentionally not modeled — skip silently.
+            if key.starts_with("model.early_exit_gate.") {
+                total_skipped_gate += 1;
+                continue;
+            }
+            match key {
+                "model.embed_tokens.weight" => {
+                    embed_weight = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens.scales" => {
+                    embed_scales = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens.biases" => {
+                    embed_biases = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(slot) = params.get_mut(key) {
+                **slot = value;
+                total_loaded += 1;
+                unfilled_slots.remove(key);
+                continue;
+            }
+            if is_quant {
+                if let Some(stripped) = key.strip_suffix(".weight") {
+                    let remapped = format!("{stripped}.inner.weight");
+                    if let Some(slot) = params.get_mut(remapped.as_str()) {
+                        **slot = value;
+                        total_loaded += 1;
+                        unfilled_slots.remove(&remapped);
+                        continue;
+                    }
+                }
+                if let Some(stripped) = key.strip_suffix(".bias") {
+                    let remapped = format!("{stripped}.inner.bias");
+                    if let Some(slot) = params.get_mut(remapped.as_str()) {
+                        **slot = value;
+                        total_loaded += 1;
+                        unfilled_slots.remove(&remapped);
+                        continue;
+                    }
+                }
+            }
+            total_missed += 1;
+            if unmatched_samples.len() < 5 {
+                unmatched_samples.push(key.to_string());
+            }
+        }
+    }
+
+    if embed_weight.is_some() || embed_scales.is_some() || embed_biases.is_some() {
+        match &mut model.model.embed_tokens {
+            mlx_rs::quantization::MaybeQuantized::Quantized(q) => {
+                if let Some(w) = embed_weight {
+                    q.inner.weight.value = w;
+                }
+                if let Some(s) = embed_scales {
+                    q.scales.value = s;
+                }
+                if let Some(b) = embed_biases {
+                    q.biases.value = b;
+                }
+            }
+            mlx_rs::quantization::MaybeQuantized::Original(e) => {
+                if let Some(w) = embed_weight {
+                    e.weight.value = w;
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "[local-mlx-native] ouro safetensor load: {total_loaded} matched, {total_missed} unmatched, {total_skipped_gate} early-exit-gate skipped (quantized={is_quant})"
+    );
+    if !unmatched_samples.is_empty() {
+        tracing::warn!(
+            "[local-mlx-native] ouro unmatched key samples: {}",
+            unmatched_samples.join(", ")
+        );
+    }
+    if !unfilled_slots.is_empty() {
+        let mut samples: Vec<&String> = unfilled_slots.iter().collect();
+        samples.sort();
+        let preview: Vec<&str> = samples.iter().take(8).map(|s| s.as_str()).collect();
+        tracing::warn!(
+            "[local-mlx-native] ouro {} parameter slot(s) NOT populated — first few: {}",
+            unfilled_slots.len(),
+            preview.join(", ")
+        );
+    }
+    if total_loaded == 0 {
+        anyhow::bail!("no safetensor keys matched the Ouro parameter tree");
+    }
+
+    model
+        .eval()
+        .map_err(|e| anyhow::anyhow!("eval after load failed: {e:?}"))?;
+    Ok(model)
+}
+
 /// Load a Qwen3 `Model`, applying `nn::quantize` when `config.json` declares a
 /// `quantization` block (mlx-community 4-bit / 8-bit variants).
 fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwen3::Model> {
@@ -3382,6 +3771,11 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
                 if mt == "mamba" {
                     return Ok(Arch::FalconMamba);
                 }
+                // Ouro looped LM (`OuroForCausalLM`, model_type `ouro`) — a
+                // Llama-style decoder applied recurrently `total_ut_steps` times.
+                if mt == "ouro" || mt.starts_with("ouro") {
+                    return Ok(Arch::Ouro);
+                }
                 if mt.contains("qwen3_moe") || mt.contains("qwen3_5_moe") {
                     anyhow::bail!(
                         "Qwen3-MoE (`model_type={mt}`) is not supported by native MLX in this build — use a dense Qwen3 checkpoint or another supported architecture."
@@ -3432,6 +3826,9 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
     if lower.contains("falcon-mamba") || lower.contains("falcon_mamba") {
         return Ok(Arch::FalconMamba);
     }
+    if lower.contains("ouro") {
+        return Ok(Arch::Ouro);
+    }
     if lower.contains("qwen3_moe") || lower.contains("qwen3_5_moe") {
         anyhow::bail!(
             "no native MLX loader for `{model_id}` — Qwen3-MoE is not supported in this build."
@@ -3467,7 +3864,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
         return Ok(Arch::BonsaiQ1);
     }
     anyhow::bail!(
-        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, gemma4, mamba2, mamba, falcon_mamba, bonsai / bonsai_q1.",
+        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, gemma4, mamba2, mamba, falcon_mamba, ouro, bonsai / bonsai_q1.",
         model_id
     )
 }
@@ -3619,5 +4016,31 @@ mod tests {
             Some(cfg_eos),
             "stopping only on config eos would miss <|im_end|>"
         );
+    }
+
+    /// `config.json::model_type == "ouro"` routes to the looped-LM loader even
+    /// when the model id carries no architecture hint.
+    #[test]
+    fn detect_architecture_routes_ouro_by_model_type() {
+        let dir = std::env::temp_dir().join(format!("senclaw-ouro-detect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mk temp dir");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"model_type":"ouro","num_hidden_layers":48,"total_ut_steps":4}"#,
+        )
+        .expect("write config");
+
+        let arch = detect_architecture("local/some-checkpoint", &dir).expect("detect");
+        assert!(matches!(arch, Arch::Ouro), "got {arch:?}");
+
+        // Id-substring fallback (no config.json on disk) also routes to Ouro.
+        let empty = std::env::temp_dir().join(format!("senclaw-ouro-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).expect("mk temp dir");
+        let arch2 =
+            detect_architecture("mlx-community/Ouro-2.6B-Thinking-4bit", &empty).expect("detect");
+        assert!(matches!(arch2, Arch::Ouro), "got {arch2:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }

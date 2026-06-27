@@ -97,12 +97,27 @@ pub struct PrefixCacheEntry {
 /// `VecDeque` walked linearly is fast enough and avoids the dependency.
 pub struct PrefixCache {
     entries: VecDeque<PrefixCacheEntry>,
+    /// Entry-count cap (defaults to [`MAX_ENTRIES`]). Lowered for looped LMs
+    /// whose snapshots each pin `total_ut_steps`× the KV of a dense model.
+    max_entries: usize,
+    /// Byte cap (defaults to [`MAX_TOTAL_BYTES`]). Lowered for looped LMs.
+    max_total_bytes: usize,
 }
 
 impl PrefixCache {
     pub fn new() -> Self {
+        Self::with_limits(MAX_ENTRIES, MAX_TOTAL_BYTES)
+    }
+
+    /// Construct with explicit caps. Used to shrink the cache for architectures
+    /// with oversized per-snapshot KV (e.g. Ouro's 192-slot looped cache), so
+    /// the prefix cache doesn't stack several 4× snapshots on top of live KV.
+    pub fn with_limits(max_entries: usize, max_total_bytes: usize) -> Self {
+        let max_entries = max_entries.max(1);
         Self {
-            entries: VecDeque::with_capacity(MAX_ENTRIES),
+            entries: VecDeque::with_capacity(max_entries),
+            max_entries,
+            max_total_bytes,
         }
     }
 
@@ -195,7 +210,7 @@ impl PrefixCache {
             );
         }
         // 3a. Count cap.
-        while self.entries.len() >= MAX_ENTRIES {
+        while self.entries.len() >= self.max_entries {
             self.entries.pop_back();
         }
         self.entries.push_front(PrefixCacheEntry {
@@ -206,12 +221,12 @@ impl PrefixCache {
         });
         // 3b. Bytes cap — evict oldest until under budget. Guard against
         //     the lone newest entry being itself over budget (don't loop forever).
-        while self.entries.len() > 1 && self.total_bytes() > MAX_TOTAL_BYTES {
+        while self.entries.len() > 1 && self.total_bytes() > self.max_total_bytes {
             if let Some(evicted) = self.entries.pop_back() {
                 tracing::info!(
                     "[prefix-cache] bytes budget exceeded ({} > {}), evicted entry of {} tokens",
                     fmt_bytes(self.total_bytes() + entry_bytes(&evicted)),
-                    fmt_bytes(MAX_TOTAL_BYTES),
+                    fmt_bytes(self.max_total_bytes),
                     evicted.tokens.len(),
                 );
             }
