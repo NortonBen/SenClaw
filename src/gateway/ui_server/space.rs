@@ -1046,9 +1046,10 @@ pub(crate) async fn space_apps_delete(
         }
     }
 
-    // Remove the app's bundled skills, stop its server process, and unregister
-    // its MCP server.
+    // Remove the app's bundled skills + personas, stop its server process, and
+    // unregister its MCP server.
     super::space_skills::remove_app_skills(&s.config, &id);
+    super::space_personas::remove_app_personas(&s.config, &id);
     if let Some(launcher) = s.space_mcp_launcher.as_ref() {
         launcher.stop_app(&id).await;
     }
@@ -1583,8 +1584,9 @@ async fn try_autoregister_app_mcp(s: &UiState, app_id: &str, manifest: &serde_js
         .or_else(|| space_app_dir(s, app_id).ok())
         .unwrap_or_default();
 
-    // Install bundled skills (read-only, tied to the app).
+    // Install bundled skills + personas (read-only, tied to the app).
     super::space_skills::install_app_skills(&s.config, app_id, &app_dir, manifest);
+    super::space_personas::install_app_personas(&s.config, app_id, &app_dir, manifest);
 
     let (Some(launcher), Some(mgr), Some(db)) = (
         s.space_mcp_launcher.as_ref(),

@@ -3,7 +3,6 @@ import { Typography, Badge, theme, Tooltip } from 'antd';
 import {
   FileTextOutlined,
   CalendarOutlined,
-  AppstoreOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import type { TodaySummary } from '../../hooks/useSpace';
@@ -23,7 +22,6 @@ interface NavItem {
   icon: React.ReactNode;
   label: string;
   badge?: number;
-  nested?: boolean;
 }
 
 interface Props {
@@ -36,7 +34,8 @@ interface Props {
 export function SpaceSidebar({ activeSection, onSelect, todaySummary, apps = [] }: Props) {
   const { token } = theme.useToken();
 
-  const navItems: NavItem[] = [
+  // Static, built-in sections.
+  const staticItems: NavItem[] = [
     { key: 'notes', icon: <FileTextOutlined />, label: 'Ghi chú' },
     {
       key: 'calendar',
@@ -45,30 +44,56 @@ export function SpaceSidebar({ activeSection, onSelect, todaySummary, apps = [] 
       badge: todaySummary?.events?.length ?? 0,
     },
     { key: 'schedules', icon: <ClockCircleOutlined />, label: 'Định kỳ' },
-    { key: 'apps', icon: <AppstoreOutlined />, label: 'Apps' },
-    ...apps.map(app => ({
-      key: `app:${app.id}` as `app:${string}`,
-      icon: (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 24,
-            height: 24,
-            borderRadius: 7,
-            background: token.colorFillSecondary,
-            fontSize: 14,
-            lineHeight: 1,
-          }}
-        >
-          {app.icon ?? '▣'}
-        </span>
-      ),
-      label: app.name,
-      nested: true,
-    })),
   ];
+
+  // Installed apps — rendered at the same level as the static items (no "Apps" parent).
+  const appItems: NavItem[] = apps.map(app => ({
+    key: `app:${app.id}` as `app:${string}`,
+    icon: (
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 24,
+          height: 24,
+          borderRadius: 7,
+          background: token.colorFillSecondary,
+          fontSize: 14,
+          lineHeight: 1,
+        }}
+      >
+        {app.icon ?? '▣'}
+      </span>
+    ),
+    label: app.name,
+  }));
+
+  const renderItem = (item: NavItem) => {
+    const active = activeSection === item.key;
+    return (
+      <button
+        key={item.key}
+        onClick={() => onSelect(item.key)}
+        className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors"
+        style={{
+          background: active ? token.colorPrimaryBg : 'transparent',
+          color: active ? token.colorPrimary : token.colorText,
+          borderLeft: active ? `3px solid ${token.colorPrimary}` : '3px solid transparent',
+          cursor: 'pointer',
+          border: 'none',
+          outline: 'none',
+          paddingLeft: 16,
+        }}
+      >
+        <span style={{ fontSize: 16 }}>{item.icon}</span>
+        <span className="flex-1 text-sm font-medium">{item.label}</span>
+        {item.badge !== undefined && item.badge > 0 && (
+          <Badge count={item.badge} size="small" />
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -100,31 +125,17 @@ export function SpaceSidebar({ activeSection, onSelect, todaySummary, apps = [] 
 
       {/* Nav items */}
       <nav className="flex-1 py-2">
-        {navItems.map(item => {
-          const active = activeSection === item.key;
-          return (
-            <button
-              key={item.key}
-              onClick={() => onSelect(item.key)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors"
-              style={{
-                background: active ? token.colorPrimaryBg : 'transparent',
-                color: active ? token.colorPrimary : token.colorText,
-                borderLeft: active ? `3px solid ${token.colorPrimary}` : '3px solid transparent',
-                cursor: 'pointer',
-                border: 'none',
-                outline: 'none',
-                paddingLeft: item.nested ? 32 : 16,
-              }}
-            >
-              <span style={{ fontSize: 16 }}>{item.icon}</span>
-              <span className="flex-1 text-sm font-medium">{item.label}</span>
-              {item.badge !== undefined && item.badge > 0 && (
-                <Badge count={item.badge} size="small" />
-              )}
-            </button>
-          );
-        })}
+        {staticItems.map(renderItem)}
+
+        {appItems.length > 0 && (
+          <>
+            <div
+              className="my-2 mx-4"
+              style={{ borderTop: `1px solid ${token.colorBorderSecondary}` }}
+            />
+            {appItems.map(renderItem)}
+          </>
+        )}
       </nav>
     </div>
   );

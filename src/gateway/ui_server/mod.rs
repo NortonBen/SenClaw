@@ -26,6 +26,7 @@ mod skills;
 mod spa;
 mod space;
 pub mod space_mcp;
+mod space_personas;
 mod space_skills;
 mod subagents;
 pub mod tts;
