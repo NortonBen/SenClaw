@@ -24,6 +24,9 @@ import {
   DownOutlined,
   RightOutlined,
   FolderOutlined,
+  ShrinkOutlined,
+  MenuOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { WsStatus, EventNotification, GroupInfo } from '../types';
@@ -115,13 +118,16 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
     >
       <div className="flex flex-col h-full">
         {/* Header */}
-        <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <div className="px-4 py-4 flex items-center gap-2" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}`, minHeight: 64 }}>
           <img src="/logo.svg" alt="SenClaw" className="w-6 h-6 object-contain" />
           <span className="font-semibold text-sm tracking-tight" style={{ color: token.colorTextHeading }}>SenClaw</span>
           <Tooltip title={status}>
             <span className={`w-1.5 h-1.5 rounded-full ml-0.5 ${animate ? 'animate-pulse' : ''}`} style={{ background: color }} />
           </Tooltip>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-0.5">
+            <Tooltip title="Toggle theme">
+              <Button type="text" size="small" icon={isDarkMode ? <BulbFilled /> : <BulbOutlined />} onClick={toggleTheme} />
+            </Tooltip>
             <Popover content={notifContent} trigger="click" placement="bottomRight" arrow={false}>
               <Badge count={unreadCount} size="small" offset={[-2, 2]}>
                 <Button type="text" size="small"
@@ -133,15 +139,15 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
         </div>
 
         {/* Top nav tabs */}
-        <div className="flex items-center justify-around px-2 py-1.5" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <div className="flex items-center justify-around gap-1.5 px-2 py-1.5" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
           <Tooltip title="Chat">
-            <Button type={isChats ? 'primary' : 'text'} size="small" icon={<MessageOutlined />} onClick={() => navigate('/chats')} className="flex-1" />
+            <Button type={isChats ? 'primary' : 'text'} icon={<MessageOutlined style={{ fontSize: 16 }} />} onClick={() => navigate('/chats')} className="flex-1" style={{ height: 38, borderRadius: 10 }} />
           </Tooltip>
           <Tooltip title="Space">
-            <Button type={isSpace ? 'primary' : 'text'} size="small" icon={<AppstoreOutlined />} onClick={() => navigate('/space')} className="flex-1" />
+            <Button type={isSpace ? 'primary' : 'text'} icon={<AppstoreOutlined style={{ fontSize: 16 }} />} onClick={() => navigate('/space')} className="flex-1" style={{ height: 38, borderRadius: 10 }} />
           </Tooltip>
           <Tooltip title="Cowork">
-            <Button type={isCowork ? 'primary' : 'text'} size="small" icon={<CoffeeOutlined />} onClick={() => navigate('/cowork')} className="flex-1" />
+            <Button type={isCowork ? 'primary' : 'text'} icon={<CoffeeOutlined style={{ fontSize: 16 }} />} onClick={() => navigate('/cowork')} className="flex-1" style={{ height: 38, borderRadius: 10 }} />
           </Tooltip>
         </div>
 
@@ -163,9 +169,6 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
             <Tooltip title="Settings">
               <Button type={isSettings ? 'primary' : 'text'} size="small" icon={<SettingOutlined />} onClick={() => navigate('/settings')} />
             </Tooltip>
-            <Tooltip title="Toggle theme">
-              <Button type="text" size="small" icon={isDarkMode ? <BulbFilled /> : <BulbOutlined />} onClick={toggleTheme} />
-            </Tooltip>
           </div>
         </div>
       </div>
@@ -177,17 +180,55 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
 
 const ACTIVE_STATES = new Set(['thinking', 'executing', 'processing', 'waiting_permission', 'waiting_question']);
 
-export type GroupByMode = 'workspace' | 'day' | 'week' | 'none';
+/** Sidebar grouping — modelled on Codex's "Organize sidebar" menu. */
+export type OrganizeMode = 'project' | 'project-recent' | 'chronological' | 'flat';
+export type SortMode = 'created' | 'updated';
 
-const GROUPBY_KEY = 'senclaw:sessionlist-groupby';
-function loadGroupBy(): GroupByMode {
+const ORGANIZE_KEY = 'senclaw:sessionlist-organize';
+const SORT_KEY = 'senclaw:sessionlist-sort';
+const LAST_SEEN_KEY = 'senclaw:chat-last-seen';
+
+function loadOrganize(): OrganizeMode {
   try {
-    const v = localStorage.getItem(GROUPBY_KEY);
-    return (v === 'day' || v === 'week' || v === 'workspace' || v === 'none') ? v : 'workspace';
-  } catch { return 'workspace'; }
+    const v = localStorage.getItem(ORGANIZE_KEY);
+    if (v === 'project' || v === 'project-recent' || v === 'chronological' || v === 'flat') return v;
+    // Back-compat with the previous 4-button toggle.
+    const legacy = localStorage.getItem('senclaw:sessionlist-groupby');
+    if (legacy === 'workspace') return 'project';
+    if (legacy === 'day' || legacy === 'week') return 'chronological';
+    if (legacy === 'none') return 'flat';
+  } catch {}
+  return 'project';
 }
-function saveGroupBy(m: GroupByMode) {
-  try { localStorage.setItem(GROUPBY_KEY, m); } catch {}
+function saveOrganize(m: OrganizeMode) { try { localStorage.setItem(ORGANIZE_KEY, m); } catch {} }
+
+function loadSort(): SortMode {
+  try {
+    const v = localStorage.getItem(SORT_KEY);
+    if (v === 'created' || v === 'updated') return v;
+  } catch {}
+  return 'updated';
+}
+function saveSort(m: SortMode) { try { localStorage.setItem(SORT_KEY, m); } catch {} }
+
+function loadLastSeen(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(LAST_SEEN_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
+}
+function saveLastSeen(m: Record<string, number>) {
+  try { localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(m)); } catch {}
+}
+
+/** Best-effort creation timestamp parsed from the JID's trailing base36 suffix. */
+function jidCreatedAt(jid: string): number {
+  const m = jid.match(/:([0-9a-z]{6,})(?:-[0-9a-z]{4,})?$/i);
+  if (!m) return 0;
+  const ms = parseInt(m[1], 36);
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+function itemTimestamp(g: GroupInfo, sort: SortMode, lastSeen: Record<string, number>): number {
+  if (sort === 'updated') return lastSeen[g.jid] ?? jidCreatedAt(g.jid);
+  return jidCreatedAt(g.jid);
 }
 
 export interface SessionListProps {
@@ -200,23 +241,53 @@ export interface SessionListProps {
   onPin: (jid: string) => void;
   onRename: (jid: string, name: string) => void;
   onDelete: (jid: string) => void;
+  /** Re-fetch the chat list from the server (reload button beside New Chat). */
+  onReload?: () => void;
 }
 
-export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSelect, onNewChat, onPin, onRename, onDelete }: SessionListProps) {
+export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSelect, onNewChat, onPin, onRename, onDelete, onReload }: SessionListProps) {
   const { token } = theme.useToken();
   const [renamingJid, setRenamingJid] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [groupBy, setGroupBy] = useState<GroupByMode>(loadGroupBy);
+  const [organize, setOrganize] = useState<OrganizeMode>(loadOrganize);
+  const [sort, setSort] = useState<SortMode>(loadSort);
+  const [lastSeen, setLastSeen] = useState<Record<string, number>>(loadLastSeen);
+  // collapseSignal/expandSignal are bumped from the menu to broadcast
+  // "collapse all" / "expand all" intents to <SessionGroups/>.
+  const [collapseSignal, setCollapseSignal] = useState(0);
+  const [expandSignal, setExpandSignal] = useState(0);
+  // Brief spin after clicking reload — the refresh is fire-and-forget over WS,
+  // so we just animate for a moment to acknowledge the click.
+  const [reloading, setReloading] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const handleReload = () => {
+    if (!onReload) return;
+    onReload();
+    setReloading(true);
+    setTimeout(() => setReloading(false), 600);
+  };
 
   useEffect(() => {
     if (renamingJid && renameInputRef.current) renameInputRef.current.focus();
   }, [renamingJid]);
 
+  // Mark a chat as "just opened" whenever it becomes the selected one — drives
+  // the Updated sort order without needing backend lastActivity data.
+  useEffect(() => {
+    if (!selectedJid) return;
+    setLastSeen(prev => {
+      const next = { ...prev, [selectedJid]: Date.now() };
+      saveLastSeen(next);
+      return next;
+    });
+  }, [selectedJid]);
+
   const pinned   = groups.filter(g => pinnedJids.has(g.jid));
   const unpinned = groups.filter(g => !pinnedJids.has(g.jid));
 
-  const setMode = (m: GroupByMode) => { setGroupBy(m); saveGroupBy(m); };
+  const setOrganizeMode = (m: OrganizeMode) => { setOrganize(m); saveOrganize(m); };
+  const setSortMode     = (m: SortMode) => { setSort(m); saveSort(m); };
 
   const renderItem = (g: GroupInfo, isPinned = false) => {
     const isSelected = g.jid === selectedJid;
@@ -308,39 +379,85 @@ export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSe
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-3 py-2">
-        <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={onNewChat} style={{ borderRadius: 8, fontSize: 12 }}>
+      <div className="px-3 py-2 flex items-center gap-1.5">
+        <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={onNewChat} style={{ borderRadius: 8, fontSize: 12 }} className="flex-1">
           New Chat
         </Button>
+        {onReload && (
+          <Tooltip title="Tải lại danh sách chat">
+            <Button
+              type="dashed" size="small"
+              icon={<ReloadOutlined spin={reloading} />}
+              onClick={handleReload}
+              style={{ borderRadius: 8 }}
+            />
+          </Tooltip>
+        )}
       </div>
 
       {pinned.length > 0 && <>{sectionLabel('Pinned')}{pinned.map(g => renderItem(g, true))}</>}
 
-      {/* Group-by toggle: Workspace · Day · Week · None */}
-      <div className="px-3 pt-2 pb-1 flex items-center gap-1">
-        {(['workspace', 'day', 'week', 'none'] as GroupByMode[]).map(m => {
-          const active = groupBy === m;
-          return (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              className="flex-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-md transition-colors"
-              style={{
-                background: active ? `${token.colorPrimary}1a` : 'transparent',
-                color: active ? token.colorPrimary : token.colorTextTertiary,
-                border: 'none', cursor: 'pointer', fontWeight: active ? 600 : 400,
-              }}
-            >
-              {m === 'workspace' ? 'WS' : m === 'day' ? 'Day' : m === 'week' ? 'Week' : 'Flat'}
-            </button>
-          );
-        })}
+      {/* Header row: section title + collapse-all + organize/sort menu (Codex style). */}
+      <div className="px-4 pt-3 pb-1 flex items-center gap-1">
+        <span
+          className="text-[10px] font-semibold tracking-widest uppercase flex-1"
+          style={{ color: token.colorTextTertiary }}
+        >
+          {organize === 'flat' ? 'Sessions' : organize === 'chronological' ? 'Chats' : 'Projects'}
+        </span>
+        <Tooltip title="Collapse all">
+          <Button
+            type="text" size="small"
+            icon={<ShrinkOutlined style={{ fontSize: 11 }} />}
+            onClick={() => setCollapseSignal(n => n + 1)}
+            style={{ width: 22, height: 22, padding: 0, color: token.colorTextTertiary }}
+          />
+        </Tooltip>
+        <Dropdown
+          trigger={['click']}
+          placement="bottomRight"
+          menu={{
+            items: [
+              {
+                key: 'organize',
+                icon: <FolderOutlined />,
+                label: 'Organize sidebar',
+                children: [
+                  { key: 'project',         label: 'By project',         icon: <FolderOutlined />,      onClick: () => setOrganizeMode('project'),         extra: organize === 'project'         ? <CheckOutlined /> : undefined },
+                  { key: 'project-recent',  label: 'Recent projects',    icon: <FolderOutlined />,      onClick: () => setOrganizeMode('project-recent'),  extra: organize === 'project-recent'  ? <CheckOutlined /> : undefined },
+                  { key: 'chronological',   label: 'Chronological list', icon: <ClockCircleOutlined />, onClick: () => setOrganizeMode('chronological'),   extra: organize === 'chronological'   ? <CheckOutlined /> : undefined },
+                  { key: 'flat',            label: 'Flat list',          icon: <MenuOutlined />,        onClick: () => setOrganizeMode('flat'),            extra: organize === 'flat'            ? <CheckOutlined /> : undefined },
+                ],
+              },
+              {
+                key: 'sort',
+                icon: <ClockCircleOutlined />,
+                label: 'Sort by',
+                children: [
+                  { key: 'updated', label: 'Updated', icon: <ClockCircleOutlined />, onClick: () => setSortMode('updated'), extra: sort === 'updated' ? <CheckOutlined /> : undefined },
+                  { key: 'created', label: 'Created', icon: <PlusOutlined />,        onClick: () => setSortMode('created'), extra: sort === 'created' ? <CheckOutlined /> : undefined },
+                ],
+              },
+              { type: 'divider' as const },
+              { key: 'expand-all',   icon: <DownOutlined />,   label: 'Expand all',   onClick: () => setExpandSignal(n => n + 1) },
+              { key: 'collapse-all', icon: <ShrinkOutlined />, label: 'Collapse all', onClick: () => setCollapseSignal(n => n + 1) },
+            ],
+          }}
+        >
+          <Button
+            type="text" size="small" icon={<MoreOutlined />}
+            style={{ width: 22, height: 22, padding: 0, color: token.colorTextTertiary }}
+          />
+        </Dropdown>
       </div>
 
       <SessionGroups
         groups={unpinned}
-        groupBy={groupBy}
+        organize={organize}
+        sort={sort}
+        lastSeen={lastSeen}
+        collapseSignal={collapseSignal}
+        expandSignal={expandSignal}
         renderItem={renderItem}
         token={token}
       />
@@ -359,92 +476,119 @@ function saveCollapsed(s: Set<string>) {
   try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s])); } catch {}
 }
 
-// Compute the bucket key + display label for a session under each mode.
-// "Day" / "Week" use the last-active timestamp if present (server-touched on
-// every message), else fall back to creation time (best-effort — frontend
-// doesn't always have created_at, so just bucket as "Recent" in that case).
-function bucketKey(g: GroupInfo, mode: GroupByMode): { key: string; sortKey: string; label: string } {
-  if (mode === 'workspace') {
+/** Bucket key + display label for a session under each organize mode. */
+function bucketKey(g: GroupInfo, mode: OrganizeMode, ts: number): { key: string; label: string } {
+  if (mode === 'project' || mode === 'project-recent') {
     const f = g.folder || '(unknown)';
-    return { key: f, sortKey: f, label: f };
+    return { key: f, label: f };
   }
-  if (mode === 'none') return { key: 'all', sortKey: '0', label: 'Sessions' };
+  if (mode === 'flat') return { key: 'all', label: 'Sessions' };
 
-  // For day/week we want recent at top → use INVERSE sort key.
-  // GroupInfo doesn't carry timestamps in the current type, so we synthesize a
-  // pseudo-timestamp from the JID's trailing base36 suffix (set by new chat
-  // creation) — for any JID that isn't `*:<base36>`, we group under "Older".
-  // JID format: web:<folder>:<base36ts>-<rand6>  (new chats)
-  //         OR:  web:<folder>:<base36ts>          (legacy / current build)
-  // Capture just the timestamp portion so the bucket key reflects creation
-  // time regardless of which suffix shape was used.
-  const m = g.jid.match(/:([0-9a-z]{6,})(?:-[0-9a-z]{4,})?$/i);
-  if (!m) return { key: 'older', sortKey: 'zzz', label: 'Older' };
-  const ms = parseInt(m[1], 36);
-  if (!Number.isFinite(ms) || ms <= 0) {
-    return { key: 'older', sortKey: 'zzz', label: 'Older' };
-  }
-  const d = new Date(ms);
+  // Chronological — bucket by recency relative to today.
+  if (!ts) return { key: 'older', label: 'Older' };
+  const d = new Date(ts);
   const now = new Date();
   const isSameDay = d.toDateString() === now.toDateString();
   const yest = new Date(now); yest.setDate(now.getDate() - 1);
   const isYesterday = d.toDateString() === yest.toDateString();
-  if (mode === 'day') {
-    if (isSameDay)     return { key: 'today',     sortKey: '0', label: 'Today' };
-    if (isYesterday)   return { key: 'yesterday', sortKey: '1', label: 'Yesterday' };
-    // last 7 days else flat
-    const diffDays = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
-    if (diffDays <= 7) return { key: 'past7',  sortKey: '2', label: 'Previous 7 days' };
-    if (diffDays <= 30) return { key: 'past30', sortKey: '3', label: 'Previous 30 days' };
-    return { key: 'older', sortKey: '4', label: 'Older' };
-  }
-  // week
-  const diffMs = now.getTime() - d.getTime();
-  if (diffMs < 7 * 86_400_000)  return { key: 'this-week', sortKey: '0', label: 'This week' };
-  if (diffMs < 14 * 86_400_000) return { key: 'last-week', sortKey: '1', label: 'Last week' };
-  if (diffMs < 30 * 86_400_000) return { key: 'past-month', sortKey: '2', label: 'Past month' };
-  return { key: 'older', sortKey: '3', label: 'Older' };
+  if (isSameDay)   return { key: 'today',     label: 'Today' };
+  if (isYesterday) return { key: 'yesterday', label: 'Yesterday' };
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+  if (diffDays <= 7)  return { key: 'past7',  label: 'Previous 7 days' };
+  if (diffDays <= 30) return { key: 'past30', label: 'Previous 30 days' };
+  return { key: 'older', label: 'Older' };
 }
 
+/** Canonical bucket ordering for the chronological view (matches Codex). */
+const CHRONO_ORDER: Record<string, number> = {
+  today: 0, yesterday: 1, past7: 2, past30: 3, older: 4,
+};
+
 function SessionGroups({
-  groups, groupBy, renderItem, token,
+  groups, organize, sort, lastSeen, collapseSignal, expandSignal, renderItem, token,
 }: {
   groups: GroupInfo[];
-  groupBy: GroupByMode;
+  organize: OrganizeMode;
+  sort: SortMode;
+  lastSeen: Record<string, number>;
+  collapseSignal: number;
+  expandSignal: number;
   renderItem: (g: GroupInfo) => React.ReactNode;
   token: ReturnType<typeof theme.useToken>['token'];
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
 
-  type Bucket = { key: string; sortKey: string; label: string; items: GroupInfo[] };
+  // Bucket sessions and compute each bucket's "freshest" timestamp so the
+  // Recent-projects mode and within-bucket sort can both reuse it.
+  type Bucket = { key: string; label: string; items: GroupInfo[]; maxTs: number };
   const buckets = new Map<string, Bucket>();
   for (const g of groups) {
-    const { key, sortKey, label } = bucketKey(g, groupBy);
+    const ts = itemTimestamp(g, sort, lastSeen);
+    const { key, label } = bucketKey(g, organize, ts);
     let b = buckets.get(key);
-    if (!b) { b = { key, sortKey, label, items: [] }; buckets.set(key, b); }
+    if (!b) { b = { key, label, items: [], maxTs: 0 }; buckets.set(key, b); }
     b.items.push(g);
+    if (ts > b.maxTs) b.maxTs = ts;
   }
-  const sorted = [...buckets.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  // Items inside each bucket sort newest-first by the active sort field.
+  for (const b of buckets.values()) {
+    b.items.sort((a, x) => itemTimestamp(x, sort, lastSeen) - itemTimestamp(a, sort, lastSeen));
+  }
+
+  // Bucket order depends on organize mode:
+  //   project          → alphabetical
+  //   project-recent   → freshest bucket first
+  //   chronological    → canonical today / yesterday / past7 / past30 / older
+  //   flat             → single bucket, no sort needed
+  const sorted = [...buckets.values()].sort((a, b) => {
+    switch (organize) {
+      case 'project-recent': return b.maxTs - a.maxTs;
+      case 'chronological':  return (CHRONO_ORDER[a.key] ?? 99) - (CHRONO_ORDER[b.key] ?? 99);
+      case 'flat':           return 0;
+      case 'project':
+      default:               return a.label.localeCompare(b.label);
+    }
+  });
+
+  // Collapse-all / Expand-all broadcasts from the parent menu.
+  useEffect(() => {
+    if (collapseSignal === 0) return;
+    const all = new Set<string>(sorted.map(b => `${organize}:${b.key}`));
+    setCollapsed(prev => {
+      const merged = new Set(prev);
+      for (const k of all) merged.add(k);
+      saveCollapsed(merged);
+      return merged;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseSignal]);
+
+  useEffect(() => {
+    if (expandSignal === 0) return;
+    setCollapsed(prev => {
+      if (prev.size === 0) return prev;
+      // Drop any key that belongs to the current organize mode.
+      const next = new Set<string>();
+      for (const k of prev) if (!k.startsWith(`${organize}:`)) next.add(k);
+      saveCollapsed(next);
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandSignal]);
 
   if (sorted.length === 0) {
     return (
-      <>
-        <div className="px-4 pt-3 pb-1">
-          <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: token.colorTextTertiary }}>
-            Sessions
-          </span>
-        </div>
-        <div className="px-4 py-1 text-xs" style={{ color: token.colorTextTertiary }}>
-          No chats yet. Click + New Chat above.
-        </div>
-      </>
+      <div className="px-4 py-1 text-xs" style={{ color: token.colorTextTertiary }}>
+        No chats yet. Click + New Chat above.
+      </div>
     );
   }
 
   const toggle = (key: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
-      const k = `${groupBy}:${key}`;
+      const k = `${organize}:${key}`;
       if (next.has(k)) next.delete(k); else next.add(k);
       saveCollapsed(next);
       return next;
@@ -454,8 +598,9 @@ function SessionGroups({
   return (
     <>
       {sorted.map(b => {
-        const collapsedKey = `${groupBy}:${b.key}`;
+        const collapsedKey = `${organize}:${b.key}`;
         const isCollapsed = collapsed.has(collapsedKey);
+        const isProjectMode = organize === 'project' || organize === 'project-recent';
         return (
           <div key={collapsedKey} className="mt-1">
             <button
@@ -467,7 +612,7 @@ function SessionGroups({
               {isCollapsed
                 ? <RightOutlined style={{ fontSize: 8, color: token.colorTextTertiary }} />
                 : <DownOutlined  style={{ fontSize: 8, color: token.colorTextTertiary }} />}
-              {groupBy === 'workspace' && <FolderOutlined style={{ fontSize: 10, color: token.colorTextTertiary }} />}
+              {isProjectMode && <FolderOutlined style={{ fontSize: 10, color: token.colorTextTertiary }} />}
               <span
                 className="text-[10px] font-semibold tracking-widest uppercase truncate flex-1"
                 style={{ color: token.colorTextTertiary }}

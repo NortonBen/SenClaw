@@ -67,6 +67,8 @@ export interface WsHook {
   agentCompacting: Record<string, boolean>;
   subscribed: Set<string>;
   subscribe: (jid: string) => void;
+  /** Re-request the chat list from the server (sidebar reload button). */
+  refreshGroups: () => void;
   sendMessage: (jid: string, text: string, attachments?: ImageAttachment[]) => void;
   /** Pause agent (sends agent:control pause) */
   pauseAgent: (jid: string) => void;
@@ -264,6 +266,13 @@ export function useWebSocket(): WsHook {
     rawSend({ type: 'subscribe', groupJid: jid });
     subscribedRef.current.add(jid);
     setSubscribed(prev => new Set([...prev, jid]));
+  }, [rawSend]);
+
+  // Re-request the group list. Drives the sidebar reload button and the
+  // silent background poll below — the `groups` handler replaces the list and
+  // subscribes to any newly-discovered chats.
+  const refreshGroups = useCallback(() => {
+    rawSend({ type: 'list:groups' });
   }, [rawSend]);
 
   const sendMessage = useCallback((jid: string, text: string, attachments: ImageAttachment[] = []) => {
@@ -1193,6 +1202,19 @@ export function useWebSocket(): WsHook {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Silent background poll — re-request the group list every 20s while the
+  // tab is visible so chats created elsewhere (other clients, inbound channel
+  // messages) surface in the sidebar without a manual reload. The `groups`
+  // handler replaces the list in place, so there's no flicker.
+  useEffect(() => {
+    if (status !== 'connected') return;
+    const tick = () => {
+      if (document.visibilityState === 'visible') refreshGroups();
+    };
+    const id = setInterval(tick, 20_000);
+    return () => clearInterval(id);
+  }, [status, refreshGroups]);
+
   // suppress unused warning — findRequestJid is available for future use
   void findRequestJid;
 
@@ -1300,7 +1322,7 @@ export function useWebSocket(): WsHook {
   }, []);
 
   return useMemo(() => ({
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, refreshGroups, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,
@@ -1314,7 +1336,7 @@ export function useWebSocket(): WsHook {
     workbench, workbenchLatest, activeJid, setActiveJid,
     workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
   }), [
-    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
+    status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, refreshGroups, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
     registerChannel, registerAgent, registerBinding,
     unregisterChannel, unregisterAgent, unregisterBinding,

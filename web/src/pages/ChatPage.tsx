@@ -211,6 +211,7 @@ export function ChatPage() {
           onPin={handlePin}
           onRename={handleRename}
           onDelete={handleDelete}
+          onReload={ws.refreshGroups}
         />
       }
     >
