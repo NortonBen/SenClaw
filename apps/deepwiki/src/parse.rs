@@ -62,30 +62,61 @@ fn text<'a>(node: Node, bytes: &'a [u8]) -> &'a str {
 }
 
 /// Symbol kind for a definition node, or None if not a definition.
-fn def_kind(lang: &str, kind: &str) -> Option<&'static str> {
-    let k = match (lang, kind) {
+fn def_kind(_lang: &str, kind: &str) -> Option<&'static str> {
+    let k = match kind {
         // Rust
-        (_, "function_item") => "function",
-        (_, "struct_item") | (_, "union_item") => "struct",
-        (_, "enum_item") => "enum",
-        (_, "trait_item") => "trait",
-        (_, "impl_item") => "impl",
-        (_, "mod_item") => "module",
-        (_, "const_item") | (_, "static_item") => "const",
-        (_, "type_item") => "type",
-        (_, "macro_definition") => "macro",
-        // Python
-        (_, "function_definition") => "function",
-        (_, "class_definition") => "class",
-        // JS/TS
-        (_, "function_declaration") | (_, "generator_function_declaration") => "function",
-        (_, "method_definition") | (_, "method_declaration") => "method",
-        (_, "class_declaration") => "class",
-        (_, "interface_declaration") => "interface",
-        (_, "type_alias_declaration") => "type",
-        (_, "enum_declaration") => "enum",
+        "function_item" => "function",
+        "struct_item" | "union_item" => "struct",
+        "enum_item" => "enum",
+        "trait_item" => "trait",
+        "impl_item" => "impl",
+        "mod_item" => "module",
+        "const_item" | "static_item" => "const",
+        "type_item" => "type",
+        "macro_definition" => "macro",
+        // Python / C-family / Scala / Julia / Bash / PHP
+        "function_definition" => "function",
+        "class_definition" => "class",
+        // JS / TS
+        "function_declaration" | "generator_function_declaration" => "function",
+        "method_definition" | "method_declaration" => "method",
+        "class_declaration" => "class",
+        "interface_declaration" => "interface",
+        "type_alias_declaration" => "type",
+        "enum_declaration" => "enum",
         // Go
-        (_, "type_spec") => "type",
+        "type_spec" => "type",
+        // C / C++
+        "struct_specifier" | "union_specifier" => "struct",
+        "enum_specifier" => "enum",
+        "class_specifier" => "class",
+        "namespace_definition" | "namespace_declaration" => "module",
+        "type_definition" => "type",
+        "preproc_function_def" => "macro",
+        // C# / Java
+        "struct_declaration" => "struct",
+        "record_declaration" => "class",
+        "constructor_declaration" => "method",
+        "delegate_declaration" => "type",
+        "annotation_type_declaration" => "interface",
+        // Ruby
+        "method" | "singleton_method" => "method",
+        "module" => "module",
+        "class" => "class",
+        // Haskell
+        "function" => "function",
+        "data_type" | "type_synonym" => "type",
+        "instance" => "impl",
+        // PHP / Scala
+        "trait_declaration" | "trait_definition" => "trait",
+        "object_definition" => "class",
+        "val_definition" | "var_definition" => "const",
+        // OCaml
+        "value_definition" => "function",
+        "module_definition" => "module",
+        // Julia
+        "struct_definition" => "struct",
+        "abstract_definition" => "type",
         _ => return None,
     };
     Some(k)
@@ -96,28 +127,70 @@ fn is_container(kind: &str) -> bool {
     matches!(kind, "class" | "impl" | "struct" | "trait" | "interface" | "enum" | "module")
 }
 
+/// First identifier-ish descendant (last resort name extraction).
+fn first_identifier(node: Node, bytes: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        let k = child.kind();
+        if k.ends_with("identifier") || k.ends_with("_name") || k == "constant" || k == "name" {
+            return Some(text(child, bytes).to_string());
+        }
+        if let Some(s) = first_identifier(child, bytes) {
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// Descend a C/C++ declarator (pointer/function/array/reference) to the name.
+fn declarator_name(mut decl: Node, bytes: &[u8]) -> Option<String> {
+    for _ in 0..8 {
+        match decl.kind() {
+            "identifier" | "field_identifier" | "type_identifier" | "destructor_name"
+            | "operator_name" | "qualified_identifier" => {
+                if decl.kind() == "qualified_identifier" {
+                    if let Some(n) = decl.child_by_field_name("name") {
+                        decl = n;
+                        continue;
+                    }
+                }
+                return Some(text(decl, bytes).to_string());
+            }
+            _ => match decl.child_by_field_name("declarator") {
+                Some(inner) => decl = inner,
+                None => return first_identifier(decl, bytes),
+            },
+        }
+    }
+    None
+}
+
 /// Extract the defined name from a definition node.
-fn def_name(lang: &str, node: Node, bytes: &[u8]) -> Option<String> {
-    // impl blocks key off the type they implement.
-    if node.kind() == "impl_item" {
-        if let Some(t) = node.child_by_field_name("type") {
+fn def_name(_lang: &str, node: Node, bytes: &[u8]) -> Option<String> {
+    // Rust impl / Haskell instance key off the implemented type.
+    if matches!(node.kind(), "impl_item" | "instance") {
+        if let Some(t) = node.child_by_field_name("type").or_else(|| node.child_by_field_name("name")) {
             return Some(text(t, bytes).to_string());
         }
     }
+    // Most grammars expose a `name` field.
     if let Some(n) = node.child_by_field_name("name") {
         return Some(text(n, bytes).to_string());
     }
-    // JS/TS arrow/function assigned to a variable: variable_declarator name + function value.
+    // JS/TS: const f = () => {}
     if node.kind() == "variable_declarator" {
-        let val = node.child_by_field_name("value")?;
-        if matches!(val.kind(), "arrow_function" | "function_expression") {
-            if let Some(n) = node.child_by_field_name("name") {
-                return Some(text(n, bytes).to_string());
-            }
+        if let Some(n) = node.child_by_field_name("name") {
+            return Some(text(n, bytes).to_string());
         }
-        let _ = lang;
     }
-    None
+    // C / C++: the name lives inside the declarator.
+    if let Some(decl) = node.child_by_field_name("declarator") {
+        if let Some(name) = declarator_name(decl, bytes) {
+            return Some(name);
+        }
+    }
+    // Last resort: first identifier-ish direct child (Scala patterns, OCaml, ...).
+    first_identifier(node, bytes)
 }
 
 /// For a JS/TS `variable_declarator`, only treat it as a definition when the
@@ -137,9 +210,30 @@ fn var_decl_kind(node: Node) -> Option<&'static str> {
 /// Extract a callee name from a call node, if this node is a call.
 fn call_target(node: Node, bytes: &[u8]) -> Option<String> {
     match node.kind() {
+        // C-family / Python / Ruby / Scala / Julia / PHP. Ruby's `call` uses a
+        // `method` field; others use `function`.
         "call_expression" | "call" => {
+            let f = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("method"))?;
+            callee_name(f, bytes)
+        }
+        // Java
+        "method_invocation" => node
+            .child_by_field_name("name")
+            .map(|n| text(n, bytes).to_string()),
+        // C#
+        "invocation_expression" => {
             let f = node.child_by_field_name("function")?;
             callee_name(f, bytes)
+        }
+        // PHP
+        "function_call_expression" => {
+            let f = node.child_by_field_name("function")?;
+            callee_name(f, bytes)
+        }
+        "member_call_expression" | "nullsafe_member_call_expression" | "scoped_call_expression" => {
+            node.child_by_field_name("name").map(|n| text(n, bytes).to_string())
         }
         "macro_invocation" => node
             .child_by_field_name("macro")
@@ -150,7 +244,7 @@ fn call_target(node: Node, bytes: &[u8]) -> Option<String> {
 
 fn callee_name(f: Node, bytes: &[u8]) -> Option<String> {
     match f.kind() {
-        "identifier" => Some(text(f, bytes).to_string()),
+        "identifier" | "constant" | "field_identifier" | "name" => Some(text(f, bytes).to_string()),
         // a.b() / obj.method()
         "field_expression" => f
             .child_by_field_name("field")
@@ -158,15 +252,19 @@ fn callee_name(f: Node, bytes: &[u8]) -> Option<String> {
         "member_expression" => f
             .child_by_field_name("property")
             .map(|n| text(n, bytes).to_string()),
+        "member_access_expression" => f
+            .child_by_field_name("name")
+            .map(|n| text(n, bytes).to_string()),
         "selector_expression" => f
             .child_by_field_name("field")
             .map(|n| text(n, bytes).to_string()),
         "attribute" => f
             .child_by_field_name("attribute")
             .map(|n| text(n, bytes).to_string()),
-        "scoped_identifier" => f
+        "scoped_identifier" | "qualified_identifier" => f
             .child_by_field_name("name")
-            .map(|n| text(n, bytes).to_string()),
+            .map(|n| text(n, bytes).to_string())
+            .or_else(|| first_identifier(f, bytes)),
         _ => None,
     }
 }
@@ -189,6 +287,12 @@ fn import_target(lang: &str, node: Node, bytes: &[u8]) -> Option<String> {
         ("go", "import_spec") => node
             .child_by_field_name("path")
             .map(|n| text(n, bytes).to_string()),
+        ("c", "preproc_include") | ("cpp", "preproc_include") => node
+            .child_by_field_name("path")
+            .map(|n| text(n, bytes).to_string()),
+        ("java", "import_declaration")
+        | ("csharp", "using_directive")
+        | ("php", "namespace_use_declaration") => first_identifier(node, bytes),
         _ => None,
     }?;
     Some(raw.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string())
@@ -354,5 +458,41 @@ impl Calc {
         assert!(names.contains(&"Add"));
         assert!(names.contains(&"main"));
         assert!(r.edges.iter().any(|e| e.target == "Add" && e.kind == "call"));
+    }
+
+    fn names_of(lang: &str, src: &str) -> Vec<String> {
+        parse(lang, src).unwrap().symbols.into_iter().map(|s| s.name).collect()
+    }
+
+    #[test]
+    fn java_symbols() {
+        let n = names_of("java", "class Calc { int add(int a){ return help(a); } int help(int a){ return a; } }");
+        assert!(n.contains(&"Calc".to_string()));
+        assert!(n.contains(&"add".to_string()));
+        assert!(n.contains(&"help".to_string()));
+    }
+
+    #[test]
+    fn c_symbols_and_calls() {
+        let r = parse("c", "int add(int a,int b){return a+b;}\nint main(){return add(1,2);}").unwrap();
+        let n: Vec<_> = r.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(n.contains(&"add"));
+        assert!(n.contains(&"main"));
+        assert!(r.edges.iter().any(|e| e.kind == "call" && e.target == "add"));
+    }
+
+    #[test]
+    fn ruby_symbols() {
+        let n = names_of("ruby", "class A\n  def run; help; end\n  def help; 1; end\nend");
+        assert!(n.contains(&"A".to_string()));
+        assert!(n.contains(&"run".to_string()));
+        assert!(n.contains(&"help".to_string()));
+    }
+
+    #[test]
+    fn php_symbols() {
+        let n = names_of("php", "<?php\nclass U { function n(){ return g(); } }\nfunction g(){ return 1; }");
+        assert!(n.contains(&"U".to_string()));
+        assert!(n.contains(&"g".to_string()));
     }
 }

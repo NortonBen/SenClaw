@@ -44,7 +44,7 @@ The DeepWiki App exposes these MCP tools (server `deepwiki-mcp`):
 
 ## Notes
 
-- Supported languages: Rust, Python, JavaScript, TypeScript/TSX, Go.
+- Supported languages (17): Rust, Python, JavaScript, TypeScript/TSX, Go, Java, C, C++, C#, Ruby, PHP, Scala, Bash, Julia, Haskell, OCaml.
 - Keep pages focused and skimmable: short intro, a structure section, and grounded detail
   with file/line citations. Prefer linking related pages over duplicating content.
 - Re-running on an updated repo: re-index, then update the affected pages with fresh context.

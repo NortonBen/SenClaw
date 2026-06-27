@@ -51,6 +51,73 @@ const STOPWORDS: &[&str] = &[
     "using", "get", "set", "with", "by", "from", "into",
 ];
 
+/// Alphanumeric query tokens (lowercased, len ≥ 2) for name-relevance scoring.
+fn query_tokens(q: &str) -> Vec<String> {
+    q.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.chars().count() >= 2)
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
+/// How well a symbol *name* matches the query tokens (exact > contains > shared prefix).
+fn name_score(name: &str, tokens: &[String]) -> i32 {
+    let n = name.to_lowercase();
+    let mut score = 0;
+    for t in tokens {
+        if &n == t {
+            score += 100;
+        } else if n.contains(t.as_str()) || t.contains(n.as_str()) {
+            score += 50;
+        } else {
+            let pre = n.chars().zip(t.chars()).take_while(|(a, b)| a == b).count();
+            if pre >= 4 {
+                score += 20;
+            }
+        }
+    }
+    score
+}
+
+fn kind_bonus(kind: &str) -> i32 {
+    match kind {
+        "function" | "method" => 5,
+        "struct" | "class" | "trait" | "interface" | "enum" => 3,
+        "type" | "const" => 1,
+        _ => 0,
+    }
+}
+
+/// Re-rank FTS candidates so the symbol whose NAME best matches the query comes
+/// first (an exact/substring name match beats a doc/signature hit). Stable, so
+/// FTS rank breaks ties.
+fn rank_matches(mut v: Vec<Symbol>, q: &str) -> Vec<Symbol> {
+    let tokens = query_tokens(q);
+    if tokens.is_empty() {
+        return v;
+    }
+    v.sort_by_key(|s| {
+        let exact = if s.name.eq_ignore_ascii_case(q) { 1000 } else { 0 };
+        std::cmp::Reverse(exact + name_score(&s.name, &tokens) + kind_bonus(&s.kind))
+    });
+    v
+}
+
+/// Drop name-irrelevant matches when at least one symbol's name matches the
+/// query — keeps Ask/Graph focus + evidence on the real subject (e.g. query
+/// "tìm luồng parser" keeps `parse`/`ParseResult`, not `timeAgo`).
+fn filter_relevant(v: Vec<Symbol>, q: &str) -> Vec<Symbol> {
+    let tokens = query_tokens(q);
+    if tokens.is_empty() {
+        return v;
+    }
+    let relevant = |s: &Symbol| name_score(&s.name, &tokens) > 0 || s.name.eq_ignore_ascii_case(q);
+    if v.iter().any(relevant) {
+        v.into_iter().filter(|s| relevant(s)).collect()
+    } else {
+        v
+    }
+}
+
 /// Tokenize a query into prefix terms (`foo*`), dropping stopwords.
 fn fts_tokens(q: &str) -> Vec<String> {
     q.split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -81,12 +148,12 @@ pub fn search(db: &Db, q: &str, limit: u32) -> Result<Vec<Symbol>> {
         if !tokens.is_empty() {
             let and_hits = run_fts(c, &tokens.join(" "), limit);
             if !and_hits.is_empty() {
-                return Ok(and_hits);
+                return Ok(rank_matches(and_hits, q));
             }
             if tokens.len() > 1 {
                 let or_hits = run_fts(c, &tokens.join(" OR "), limit);
                 if !or_hits.is_empty() {
-                    return Ok(or_hits);
+                    return Ok(rank_matches(or_hits, q));
                 }
             }
         }
@@ -94,7 +161,7 @@ pub fn search(db: &Db, q: &str, limit: u32) -> Result<Vec<Symbol>> {
         let needle = q
             .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
             .filter(|t| !STOPWORDS.contains(&t.to_ascii_lowercase().as_str()))
-            .max_by_key(|t| t.len())
+            .max_by_key(|t| t.chars().count())
             .unwrap_or(q);
         let like = format!("%{}%", needle.replace('%', ""));
         let sql = format!("{SYM_SELECT} WHERE s.name LIKE ?1 ORDER BY length(s.name) LIMIT ?2");
@@ -102,7 +169,7 @@ pub fn search(db: &Db, q: &str, limit: u32) -> Result<Vec<Symbol>> {
         let rows = stmt
             .query_map(rusqlite::params![like, limit], row_to_symbol)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        Ok(rank_matches(rows, q))
     })
 }
 
@@ -363,6 +430,248 @@ pub fn explore(db: &Db, query: &str, depth: u32) -> Result<Exploration> {
         callers: callers_v,
         callees: callees_v,
         blast_radius: blast,
+    })
+}
+
+// ===== Deep investigation (Devin-style multi-hop subgraph) =====
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub kind: String,
+    pub path: String,
+    pub line: i64,
+    /// Distance from the focus: negative = callers (upstream), 0 = focus, positive = callees.
+    pub depth: i64,
+    pub external: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Investigation {
+    pub query: String,
+    pub focus: Option<String>,
+    pub matches: Vec<Symbol>,
+    pub callers: Vec<CallLink>,
+    pub callees: Vec<CallLink>,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+fn kind_of(db: &Db, name: &str) -> String {
+    symbols_by_name(db, name)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|s| s.kind)
+        .unwrap_or_else(|| "function".into())
+}
+
+/// Trace `query` deeply through the call graph in BOTH directions — callees
+/// (what it does) and callers (who uses it) — up to `depth` hops, returning a
+/// bounded subgraph (nodes with relative depth + edges) plus matches and the
+/// focus's direct callers/callees. This is the "overview graph" for Ask mode.
+pub fn investigate(db: &Db, query: &str, depth: u32) -> Result<Investigation> {
+    use std::collections::{HashMap, HashSet};
+    const MAX_NODES: usize = 60;
+    const PER: u32 = 6;
+    let depth = depth.clamp(1, 20) as i64;
+
+    // search() already ranks by name relevance; drop name-irrelevant matches so
+    // the focus + evidence stay on the real subject of the query.
+    let matches = filter_relevant(search(db, query, 12)?, query);
+    let focus = matches.first().map(|m| m.name.clone());
+
+    let mut nodes: HashMap<String, GraphNode> = HashMap::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    let mut eset: HashSet<(String, String)> = HashSet::new();
+
+    if let Some(f) = focus.clone() {
+        let top = &matches[0];
+        nodes.insert(
+            f.clone(),
+            GraphNode { id: f.clone(), kind: top.kind.clone(), path: top.path.clone(), line: top.start_line, depth: 0, external: false },
+        );
+
+        // Downstream: callees.
+        let mut frontier = vec![f.clone()];
+        for d in 1..=depth {
+            let mut next = Vec::new();
+            for n in &frontier {
+                if nodes.len() >= MAX_NODES { break; }
+                for c in callees(db, n, PER)? {
+                    let ext = c.path == "<external>" || c.kind == "external";
+                    if !nodes.contains_key(&c.name) && nodes.len() < MAX_NODES {
+                        nodes.insert(c.name.clone(), GraphNode {
+                            id: c.name.clone(),
+                            kind: if ext { "external".into() } else { c.kind.clone() },
+                            path: c.path.clone(), line: c.start_line, depth: d, external: ext,
+                        });
+                        if !ext { next.push(c.name.clone()); }
+                    }
+                    if eset.insert((n.clone(), c.name.clone())) {
+                        edges.push(GraphEdge { from: n.clone(), to: c.name.clone() });
+                    }
+                }
+            }
+            frontier = next;
+            if frontier.is_empty() { break; }
+        }
+
+        // Upstream: callers.
+        let mut frontier = vec![f.clone()];
+        for d in 1..=depth {
+            let mut next = Vec::new();
+            for n in &frontier {
+                if nodes.len() >= MAX_NODES { break; }
+                for c in callers(db, n, PER)? {
+                    if c.name == "<file scope>" { continue; }
+                    if !nodes.contains_key(&c.name) && nodes.len() < MAX_NODES {
+                        nodes.insert(c.name.clone(), GraphNode {
+                            id: c.name.clone(), kind: kind_of(db, &c.name),
+                            path: c.path.clone(), line: c.start_line, depth: -d, external: false,
+                        });
+                        next.push(c.name.clone());
+                    }
+                    if eset.insert((c.name.clone(), n.clone())) {
+                        edges.push(GraphEdge { from: c.name.clone(), to: n.clone() });
+                    }
+                }
+            }
+            frontier = next;
+            if frontier.is_empty() { break; }
+        }
+    }
+
+    let (callers_v, callees_v) = match &focus {
+        Some(f) => (callers(db, f, 50)?, callees(db, f, 50)?),
+        None => (vec![], vec![]),
+    };
+
+    Ok(Investigation {
+        query: query.to_string(),
+        focus,
+        matches,
+        callers: callers_v,
+        callees: callees_v,
+        nodes: nodes.into_values().collect(),
+        edges,
+    })
+}
+
+// ===== Whole-codebase file dependency graph =====
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileNode {
+    pub path: String,
+    pub lang: String,
+    pub loc: i64,
+    pub symbols: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileEdge {
+    pub from: String,
+    pub to: String,
+    pub weight: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileGraph {
+    pub nodes: Vec<FileNode>,
+    pub edges: Vec<FileEdge>,
+}
+
+/// The whole repo as a graph: each indexed file is a node (sized by symbol
+/// count), and a directed edge `A -> B` means a symbol in A calls a symbol
+/// defined in B (weight = number of such cross-file calls). This is the
+/// "view the entire codebase" overview.
+pub fn file_graph(db: &Db) -> Result<FileGraph> {
+    db.with_conn(|c| {
+        let mut ns = c.prepare(
+            "SELECT f.path, f.lang, f.loc, COUNT(s.id) AS n \
+             FROM files f LEFT JOIN symbols s ON s.file_id = f.id \
+             GROUP BY f.id HAVING n > 0 ORDER BY f.path",
+        )?;
+        let nodes = ns
+            .query_map([], |r| {
+                Ok(FileNode { path: r.get(0)?, lang: r.get(1)?, loc: r.get(2)?, symbols: r.get(3)? })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Cross-file call edges, resolving each callee name to its defining file.
+        let mut es = c.prepare(
+            "SELECT f1.path, f2.path, COUNT(DISTINCT e.id) AS w \
+             FROM edges e \
+             JOIN files f1 ON f1.id = e.src_file_id \
+             JOIN symbols s ON s.name = e.target \
+             JOIN files f2 ON f2.id = s.file_id \
+             WHERE e.kind = 'call' AND f1.id <> f2.id AND f1.lang = f2.lang \
+             GROUP BY f1.id, f2.id",
+        )?;
+        let edges = es
+            .query_map([], |r| {
+                Ok(FileEdge { from: r.get(0)?, to: r.get(1)?, weight: r.get(2)? })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(FileGraph { nodes, edges })
+    })
+}
+
+// ===== Whole-codebase function call graph =====
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SymGraphNode {
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    pub line: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SymbolGraph {
+    pub nodes: Vec<SymGraphNode>,
+    pub edges: Vec<FileEdge>,
+}
+
+/// The whole repo as a FUNCTION call graph: every function/method that takes
+/// part in a call is a node; edges are in-repo function → function calls
+/// (resolved by name). Companion to `file_graph` at finer granularity.
+pub fn symbol_graph(db: &Db) -> Result<SymbolGraph> {
+    db.with_conn(|c| {
+        let mut ns = c.prepare(
+            "SELECT s.name, s.kind, MIN(f.path), MIN(s.start_line) \
+             FROM symbols s JOIN files f ON f.id = s.file_id \
+             WHERE s.kind IN ('function','method') AND s.name IN ( \
+                 SELECT src_symbol FROM edges WHERE kind='call' AND src_symbol IS NOT NULL \
+                 UNION SELECT target FROM edges WHERE kind='call' \
+             ) \
+             GROUP BY s.name",
+        )?;
+        let nodes = ns
+            .query_map([], |r| {
+                Ok(SymGraphNode { name: r.get(0)?, kind: r.get(1)?, path: r.get(2)?, line: r.get(3)? })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut es = c.prepare(
+            "SELECT DISTINCT e.src_symbol, e.target FROM edges e \
+             WHERE e.kind='call' AND e.src_symbol IS NOT NULL AND e.src_symbol <> e.target \
+             AND e.src_symbol IN (SELECT name FROM symbols WHERE kind IN ('function','method')) \
+             AND e.target     IN (SELECT name FROM symbols WHERE kind IN ('function','method'))",
+        )?;
+        let edges = es
+            .query_map([], |r| {
+                Ok(FileEdge { from: r.get(0)?, to: r.get(1)?, weight: 1 })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(SymbolGraph { nodes, edges })
     })
 }
 

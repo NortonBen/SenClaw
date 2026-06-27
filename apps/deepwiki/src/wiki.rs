@@ -14,6 +14,18 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     ord        INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL
 );
+
+-- Saved "Hỏi AI" question/answer history (with the investigation graph).
+CREATE TABLE IF NOT EXISTS ask_history (
+    id         INTEGER PRIMARY KEY,
+    question   TEXT NOT NULL,
+    model      TEXT,
+    focus      TEXT,
+    answer     TEXT NOT NULL,
+    data       TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ask_history_created ON ask_history(created_at DESC);
 "#;
 
 pub fn migrate(db: &Db) -> Result<()> {
@@ -106,6 +118,89 @@ fn map_page(r: &rusqlite::Row) -> rusqlite::Result<WikiPage> {
 
 pub fn page_count(db: &Db) -> Result<i64> {
     db.with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM wiki_pages", [], |r| r.get(0))?))
+}
+
+// ===== Ask history =====
+
+/// Persist a Q&A. `data` is the full API payload ({answer, model, focus, matches, graph}).
+pub fn save_ask(
+    db: &Db,
+    question: &str,
+    answer: &str,
+    model: Option<&str>,
+    focus: Option<&str>,
+    data: &Value,
+) -> Result<i64> {
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO ask_history(question,model,focus,answer,data,created_at) VALUES(?1,?2,?3,?4,?5,?6)",
+            rusqlite::params![question, model, focus, answer, data.to_string(), now()],
+        )?;
+        Ok(c.last_insert_rowid())
+    })
+}
+
+/// Lightweight list of past questions (newest first).
+pub fn list_ask(db: &Db, limit: u32) -> Result<Value> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, question, model, focus, created_at FROM ask_history ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map([limit], |r| {
+                Ok(json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "question": r.get::<_, String>(1)?,
+                    "model": r.get::<_, Option<String>>(2)?,
+                    "focus": r.get::<_, Option<String>>(3)?,
+                    "created_at": r.get::<_, i64>(4)?,
+                }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(json!(rows))
+    })
+}
+
+/// Full saved record by id (re-hydrates the stored payload + columns).
+pub fn get_ask(db: &Db, id: i64) -> Result<Option<Value>> {
+    db.with_conn(|c| {
+        let row = c
+            .query_row(
+                "SELECT id, question, answer, model, focus, data, created_at FROM ask_history WHERE id=?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .ok();
+        Ok(row.map(|(id, question, answer, model, focus, data, created_at)| {
+            let mut v: Value = serde_json::from_str(&data).unwrap_or_else(|_| json!({}));
+            if let Value::Object(ref mut m) = v {
+                m.insert("id".into(), json!(id));
+                m.insert("question".into(), json!(question));
+                m.insert("answer".into(), json!(answer));
+                m.insert("model".into(), json!(model));
+                m.insert("focus".into(), json!(focus));
+                m.insert("created_at".into(), json!(created_at));
+            }
+            v
+        }))
+    })
+}
+
+pub fn delete_ask(db: &Db, id: i64) -> Result<()> {
+    db.with_conn(|c| {
+        c.execute("DELETE FROM ask_history WHERE id=?1", [id])?;
+        Ok(())
+    })
 }
 
 /// A high-level structural summary of the indexed repo — the planning input an

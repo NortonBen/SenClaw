@@ -49,6 +49,7 @@ export interface Status {
   root: string | null;
   stats: Stats;
   pages: number;
+  exclude?: string[];
 }
 
 export interface RootInfo {
@@ -64,6 +65,7 @@ export interface IndexReport {
   indexed: number;
   skipped: number;
   removed: number;
+  excluded: number;
   symbols: number;
   edges: number;
   errors: string[];
@@ -100,6 +102,95 @@ export interface SymbolResult {
   definitions: Sym[];
   callers: CallLink[];
   callees: CallLink[];
+}
+
+export interface GraphNode {
+  id: string;
+  kind: string;
+  path: string;
+  line: number;
+  depth: number;
+  external: boolean;
+}
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+export interface InvestigationGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface FileNode {
+  path: string;
+  lang: string;
+  loc: number;
+  symbols: number;
+}
+export interface FileEdge {
+  from: string;
+  to: string;
+  weight: number;
+}
+export interface FileGraphData {
+  nodes: FileNode[];
+  edges: FileEdge[];
+}
+
+export interface SymGraphNode {
+  name: string;
+  kind: string;
+  path: string;
+  line: number;
+}
+export interface SymbolGraphData {
+  nodes: SymGraphNode[];
+  edges: FileEdge[];
+}
+
+export interface Investigation {
+  query: string;
+  focus: string | null;
+  matches: Sym[];
+  callers: CallLink[];
+  callees: CallLink[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface AskResult {
+  id?: number | null;
+  question: string;
+  answer: string;
+  model: string | null;
+  focus: string | null;
+  matches: Sym[];
+  graph: InvestigationGraph;
+  created_at?: number;
+}
+
+export interface Settings {
+  defaultExcludes: string[];
+  customExcludes: string[];
+  minifiedMaxLine: number;
+  factoryExcludes: string[];
+}
+
+export interface LlmInfo {
+  ok: boolean;
+  daemon: string;
+  tier?: string;
+  model?: string | null;
+  provider?: string | null;
+  error?: string;
+}
+
+export interface AskHistoryItem {
+  id: number;
+  question: string;
+  model: string | null;
+  focus: string | null;
+  created_at: number;
 }
 
 export interface ContextResult {
@@ -140,8 +231,15 @@ export const api = {
   // index + status
   status: () => apiFetch<Status>('/api/status'),
   recents: () => apiFetch<RootInfo[]>('/api/recents'),
-  index: (path: string) =>
-    apiFetch<IndexReport>('/api/index', { method: 'POST', body: JSON.stringify({ path }) }),
+  getSettings: () => apiFetch<Settings>('/api/settings'),
+  saveSettings: (s: Partial<Pick<Settings, 'defaultExcludes' | 'customExcludes' | 'minifiedMaxLine'>>) =>
+    apiFetch<{ success: boolean }>('/api/settings', { method: 'POST', body: JSON.stringify(s) }),
+  llmInfo: () => apiFetch<LlmInfo>('/api/llm-info'),
+  index: (path: string, exclude?: string[]) =>
+    apiFetch<IndexReport>('/api/index', { method: 'POST', body: JSON.stringify({ path, exclude }) }),
+  investigate: (q: string, depth = 2) => apiFetch<Investigation>(`/api/investigate?${qs({ q, depth })}`),
+  fileGraph: () => apiFetch<FileGraphData>('/api/file-graph'),
+  symbolGraph: () => apiFetch<SymbolGraphData>('/api/symbol-graph'),
 
   // wiki
   outline: () => apiFetch<Outline>('/api/outline'),
@@ -152,9 +250,14 @@ export const api = {
   deletePage: (slug: string) =>
     apiFetch<{ success: boolean }>(`/api/page?${qs({ slug })}`, { method: 'DELETE' }),
   context: (q: string, depth = 4) => apiFetch<ContextResult>(`/api/context?${qs({ q, depth })}`),
+  generateWiki: () => apiFetch<{ created: string[]; errors: string[] }>('/api/generate-wiki', { method: 'POST' }),
+  ask: (q: string) => apiFetch<AskResult>('/api/ask', { method: 'POST', body: JSON.stringify({ q }) }),
+  askHistory: () => apiFetch<AskHistoryItem[]>('/api/ask-history'),
+  getAsk: (id: number) => apiFetch<AskResult>(`/api/ask-history/${id}`),
+  deleteAsk: (id: number) => apiFetch<{ success: boolean }>(`/api/ask-history/${id}`, { method: 'DELETE' }),
 
   // code graph
-  search: (q: string, limit = 40) => apiFetch<Sym[]>(`/api/search?${qs({ q, limit })}`),
+  search: (q: string, limit = 40, path?: string) => apiFetch<Sym[]>(`/api/search?${qs({ q, limit, path })}`),
   symbol: (name: string) => apiFetch<SymbolResult>(`/api/symbol?${qs({ name })}`),
   explore: (q: string, depth = 4) => apiFetch<Exploration>(`/api/explore?${qs({ q, depth })}`),
   files: () => apiFetch<FileRec[]>('/api/files'),

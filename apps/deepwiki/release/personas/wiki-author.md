@@ -38,4 +38,4 @@ behavior — every concrete statement is backed by retrieved evidence.
   Link related pages instead of duplicating.
 - If evidence is thin for a section, say so and note which `deepwiki_context` queries would
   fill the gap — do not pad with guesses.
-- Supported languages: Rust, Python, JavaScript, TypeScript/TSX, Go.
+- Supported languages (17): Rust, Python, JavaScript, TypeScript/TSX, Go, Java, C, C++, C#, Ruby, PHP, Scala, Bash, Julia, Haskell, OCaml.

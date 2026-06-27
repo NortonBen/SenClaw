@@ -35,7 +35,7 @@ The DeepWiki App exposes these MCP tools (server `deepwiki-mcp`):
 
 ## Notes
 
-- Supported languages: Rust, Python, JavaScript, TypeScript/TSX, Go.
+- Supported languages (17): Rust, Python, JavaScript, TypeScript/TSX, Go, Java, C, C++, C#, Ruby, PHP, Scala, Bash, Julia, Haskell, OCaml.
 - Call edges are name-resolved (static), so external/overloaded calls may be approximate.
 - Prefer DeepWiki over grep/glob/read for structure questions; it is far cheaper in tokens.
 - For an autonomous pass, delegate to the **`code-explorer`** sub-agent via `run_persona`.

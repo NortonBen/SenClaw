@@ -37,4 +37,4 @@ The DeepWiki App exposes these MCP tools (server `deepwiki-mcp`):
 
 - If the repo isn't indexed yet (`deepwiki_context` returns no matches), tell the user to
   index it first (deepwiki-generate skill / `deepwiki_index`).
-- Supported languages: Rust, Python, JavaScript, TypeScript/TSX, Go.
+- Supported languages (17): Rust, Python, JavaScript, TypeScript/TSX, Go, Java, C, C++, C#, Ruby, PHP, Scala, Bash, Julia, Haskell, OCaml.

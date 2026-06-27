@@ -1,7 +1,7 @@
 {
   "id": "deepwiki",
   "name": "DeepWiki",
-  "description": "AI code intelligence for any local codebase: a tree-sitter symbol/call graph (explore, callers/callees, blast-radius impact, snippets) plus an AI-generated, source-grounded wiki with conversational Q&A. One index powers both. Live re-indexing on file changes.",
+  "description": "AI code intelligence for any local codebase: a tree-sitter symbol/call graph (17 ngôn ngữ) (explore, callers/callees, blast-radius impact, snippets) plus an AI-generated, source-grounded wiki with conversational Q&A. One index powers both. Live re-indexing on file changes.",
   "icon": "📖",
   "runtime": {
     "kind": "server",
@@ -15,7 +15,9 @@
   },
   "bridge": {
     "postMessage": true,
-    "capabilities": ["space.rest"]
+    "capabilities": [
+      "space.rest"
+    ]
   },
   "mcp": {
     "name": "deepwiki-mcp",
@@ -28,22 +30,49 @@
     {
       "name": "deepwiki-generate",
       "path": "skills/deepwiki-generate",
-      "triggers": ["generate wiki", "tạo wiki", "document codebase", "tài liệu hóa code", "deepwiki", "viết tài liệu dự án"]
+      "triggers": [
+        "generate wiki",
+        "tạo wiki",
+        "document codebase",
+        "tài liệu hóa code",
+        "deepwiki",
+        "viết tài liệu dự án"
+      ]
     },
     {
       "name": "deepwiki-ask",
       "path": "skills/deepwiki-ask",
-      "triggers": ["hỏi về code", "ask the codebase", "giải thích code", "explain this repo", "how does this work"]
+      "triggers": [
+        "hỏi về code",
+        "ask the codebase",
+        "giải thích code",
+        "explain this repo",
+        "how does this work"
+      ]
     },
     {
       "name": "deepwiki-explore",
       "path": "skills/deepwiki-explore",
-      "triggers": ["explore code", "khám phá code", "call graph", "blast radius", "ai gọi hàm", "trace callers"]
+      "triggers": [
+        "explore code",
+        "khám phá code",
+        "call graph",
+        "blast radius",
+        "ai gọi hàm",
+        "trace callers"
+      ]
     },
     {
       "name": "deepwiki-review",
       "path": "skills/deepwiki-review",
-      "triggers": ["review change", "đánh giá thay đổi", "impact review", "what breaks", "rủi ro thay đổi", "change risk"]
+      "triggers": [
+        "review change",
+        "đánh giá thay đổi",
+        "impact review",
+        "what breaks",
+        "rủi ro thay đổi",
+        "change risk"
+      ]
     }
   ],
   "personas": [

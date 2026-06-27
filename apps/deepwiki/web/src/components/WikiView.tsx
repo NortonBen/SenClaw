@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from 'react';
 import {
-  Card, Empty, Input, List, Spin, Tag, Tree, Typography, theme, App as AntApp,
+  Button, Card, Empty, Input, List, Spin, Tag, Tree, Typography, theme, App as AntApp,
 } from 'antd';
-import { FileTextOutlined, FolderOutlined } from '@ant-design/icons';
+import { DeleteOutlined, FileAddOutlined, FileTextOutlined, FolderOutlined, HistoryOutlined, PartitionOutlined, RobotOutlined } from '@ant-design/icons';
 import type { DataNode } from 'antd/es/tree';
 import ReactMarkdown from 'react-markdown';
-import { api, type ContextResult, type Edge, type FileRec, type Sym, type WikiPage } from '../api';
+import remarkGfm from 'remark-gfm';
+import { api, type AskHistoryItem, type AskResult, type Edge, type FileRec, type Sym, type WikiPage } from '../api';
 import { CodeBlock } from './CodeBlock';
-import { langFromPath } from '../lib';
+import { OverviewGraph } from './OverviewGraph';
+import { langFromPath, timeAgo } from '../lib';
 
 const { Text } = Typography;
 const { Search } = Input;
@@ -16,6 +18,7 @@ interface Props {
   reloadKey: number;
   indexed: boolean;
   isDark: boolean;
+  onOpenGraph: (name: string) => void;
 }
 
 interface FileView {
@@ -84,7 +87,7 @@ function toNodes(map: Map<string, Raw>): DataNode[] {
     );
 }
 
-export function WikiView({ reloadKey, indexed, isDark }: Props) {
+export function WikiView({ reloadKey, indexed, isDark, onOpenGraph }: Props) {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
   const [pages, setPages] = useState<WikiPage[]>([]);
@@ -94,17 +97,51 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
   const [loadingPage, setLoadingPage] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [expanded, setExpanded] = useState<string[]>([]);
-  const [asking, setAsking] = useState(false);
-  const [evidence, setEvidence] = useState<ContextResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState<AskResult | null>(null);
+  const [history, setHistory] = useState<AskHistoryItem[]>([]);
+  const [generating, setGenerating] = useState(false);
 
+  const loadHistory = async () => {
+    try { setHistory(await api.askHistory()); } catch { /* ignore */ }
+  };
   const load = async () => {
     try {
       const [pg, fl] = await Promise.all([api.pages(), api.files().catch(() => [])]);
       setPages(pg);
       setFiles(fl);
+      void loadHistory();
     } catch { /* ignore */ }
   };
   useEffect(() => { void load(); }, [reloadKey]);
+
+  const openHistory = async (id: number) => {
+    try {
+      const r = await api.getAsk(id);
+      setActive(null);
+      setActiveFile(null);
+      setAnswer(r);
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
+  const genWiki = async () => {
+    setGenerating(true);
+    try {
+      const r = await api.generateWiki();
+      message.success(`Đã sinh ${r.created.length} trang: ${r.created.join(', ')}`);
+      await load();
+      if (r.created.includes('overview')) await openPage('overview');
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+  const removeHistory = async (id: number, e: MouseEvent) => {
+    e.stopPropagation();
+    try { await api.deleteAsk(id); await loadHistory(); } catch { /* ignore */ }
+  };
 
   const pageTree: DataNode[] = useMemo(() => {
     const byParent = new Map<string | null, WikiPage[]>();
@@ -167,15 +204,16 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
   };
 
   const doAsk = async (q: string) => {
-    if (!q.trim()) return;
-    setAsking(true);
-    setEvidence(null);
+    if (!q.trim() || !indexed) return;
+    setBusy(true);
+    setAnswer(null);
     try {
-      setEvidence(await api.context(q.trim(), 4));
+      setAnswer(await api.ask(q.trim()));
+      void loadHistory();
     } catch (e) {
       message.error((e as Error).message);
     } finally {
-      setAsking(false);
+      setBusy(false);
     }
   };
 
@@ -197,7 +235,16 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
           borderRight: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, paddingInline: 8 }}>PAGES</Text>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingInline: 8 }}>
+          <Text type="secondary" style={{ fontSize: 11, fontWeight: 600 }}>PAGES</Text>
+          <Button
+            type="link" size="small" icon={<FileAddOutlined />} loading={generating}
+            disabled={!indexed} onClick={genWiki} style={{ fontSize: 12, padding: 0, height: 'auto' }}
+            title="Sinh trang wiki (Tổng quan + Kiến trúc) bằng LLM"
+          >
+            Sinh wiki
+          </Button>
+        </div>
         {pages.length ? (
           <Tree
             showIcon blockNode treeData={pageTree}
@@ -206,7 +253,7 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
             style={{ background: 'transparent', marginTop: 4 }}
           />
         ) : (
-          <div style={{ padding: 8 }}><Text type="secondary" style={{ fontSize: 12 }}>Chưa có trang nào.</Text></div>
+          <div style={{ padding: 8 }}><Text type="secondary" style={{ fontSize: 12 }}>Chưa có trang. Bấm <b>Sinh wiki</b> để tạo bằng AI.</Text></div>
         )}
 
         <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, paddingInline: 8, display: 'block', marginTop: 16 }}>
@@ -225,6 +272,37 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
         ) : (
           <div style={{ padding: 8 }}><Text type="secondary" style={{ fontSize: 12 }}>Index một repo để xem cây mã nguồn.</Text></div>
         )}
+
+        <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, paddingInline: 8, display: 'block', marginTop: 16 }}>
+          LỊCH SỬ HỎI AI {history.length ? <Text type="secondary" style={{ fontSize: 11 }}>· {history.length}</Text> : null}
+        </Text>
+        {history.length ? (
+          <div style={{ marginTop: 4 }}>
+            {history.map((h) => (
+              <div
+                key={h.id}
+                onClick={() => openHistory(h.id)}
+                style={{
+                  display: 'flex', gap: 6, alignItems: 'flex-start', padding: '5px 8px',
+                  borderRadius: 6, cursor: 'pointer',
+                  background: answer?.id === h.id ? token.colorPrimaryBg : 'transparent',
+                }}
+              >
+                <HistoryOutlined style={{ color: token.colorTextTertiary, marginTop: 3, flexShrink: 0, fontSize: 12 }} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.question}</div>
+                  <Text type="secondary" style={{ fontSize: 11 }}>{timeAgo(h.created_at)}{h.focus ? ` · ${h.focus}` : ''}</Text>
+                </div>
+                <DeleteOutlined
+                  onClick={(e) => removeHistory(h.id, e)}
+                  style={{ color: token.colorTextTertiary, flexShrink: 0, marginTop: 3, fontSize: 12 }}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding: 8 }}><Text type="secondary" style={{ fontSize: 12 }}>Chưa có câu hỏi nào.</Text></div>
+        )}
       </div>
 
       {/* Content */}
@@ -235,7 +313,7 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
           <FileViewer fv={activeFile} isDark={isDark} token={token} />
         ) : active ? (
           <div className="md" style={mdVars}>
-            <ReactMarkdown>{active.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{active.content}</ReactMarkdown>
           </div>
         ) : (
           <Empty
@@ -250,36 +328,63 @@ export function WikiView({ reloadKey, indexed, isDark }: Props) {
           />
         )}
 
-        {/* Ask box */}
+        {/* Search / Ask box */}
         <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, marginTop: 28, paddingTop: 16 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+            <Text strong style={{ fontSize: 13 }}><RobotOutlined /> Hỏi AI</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              LLM của SenClaw điều tra sâu qua call-graph rồi trả lời (có trích nguồn) — lịch sử ở sidebar.
+              Cần tìm/duyệt symbol thì dùng tab Code.
+            </Text>
+          </div>
+
           <Search
-            placeholder="Hỏi codebase… (có dẫn chứng từ source)"
-            enterButton="Hỏi" loading={asking} onSearch={doAsk} disabled={!indexed}
+            placeholder="Hỏi AI về codebase… (vd: indexing hoạt động thế nào?)"
+            enterButton="Hỏi AI"
+            loading={busy}
+            onSearch={doAsk}
+            disabled={!indexed}
           />
-          {evidence ? (
-            evidence.matches.length ? (
-              <>
-                <Text type="secondary" style={{ fontSize: 12, display: 'block', margin: '12px 0 4px' }}>
-                  {evidence.matches.length} dẫn chứng · {evidence.callers.length} callers · {evidence.callees.length} callees.
-                  Hỏi SenClaw (skill deepwiki-ask) để có câu trả lời tổng hợp.
-                </Text>
-                <List
+
+          {answer ? (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+                {answer.model ? <Tag color="blue" icon={<RobotOutlined />}>{answer.model}</Tag> : null}
+                {answer.focus ? (
+                  <Button size="small" icon={<PartitionOutlined />} onClick={() => onOpenGraph(answer.focus!)}>
+                    Xem luồng: {answer.focus}
+                  </Button>
+                ) : null}
+              </div>
+              <div className="md" style={mdVars}><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer.answer}</ReactMarkdown></div>
+              {(answer.graph?.nodes?.length ?? 0) > 1 ? (
+                <Card
                   size="small"
-                  dataSource={evidence.matches.slice(0, 8)}
-                  renderItem={(m) => (
-                    <List.Item>
-                      <div style={{ width: '100%' }}>
-                        <Text strong>{m.name}</Text> <Tag>{m.kind}</Tag>
-                        <div><Text type="secondary" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{m.path}:{m.start_line}</Text></div>
-                        {m.signature ? <div><Text type="secondary" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{m.signature}</Text></div> : null}
-                      </div>
-                    </List.Item>
-                  )}
-                />
-              </>
-            ) : (
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 12 }}>Không tìm thấy symbol khớp. Thử từ khoá khác hoặc index repo trước.</Text>
-            )
+                  title={<span style={{ fontSize: 13 }}><PartitionOutlined /> Graph tổng quan — luồng điều tra</span>}
+                  style={{ marginTop: 14 }}
+                  styles={{ body: { padding: 8 } }}
+                >
+                  <OverviewGraph graph={answer.graph} isDark={isDark} onPick={onOpenGraph} />
+                </Card>
+              ) : null}
+              {answer.matches?.length ? (
+                <>
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block', margin: '14px 0 4px' }}>Dẫn chứng:</Text>
+                  <List
+                    size="small"
+                    dataSource={answer.matches.slice(0, 6)}
+                    renderItem={(m) => (
+                      <List.Item>
+                        <div style={{ width: '100%' }}>
+                          <Text strong>{m.name}</Text> <Tag>{m.kind}</Tag>
+                          <Text type="secondary" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, marginLeft: 6 }}>{m.path}:{m.start_line}</Text>
+                        </div>
+                      </List.Item>
+                    )}
+                  />
+                </>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

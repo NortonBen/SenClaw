@@ -1,7 +1,7 @@
 use crate::{db::Db, lang, parse};
 use anyhow::Result;
 use ignore::WalkBuilder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -14,9 +14,93 @@ pub struct IndexReport {
     pub indexed: usize,
     pub skipped: usize,
     pub removed: usize,
+    pub excluded: usize,
     pub symbols: usize,
     pub edges: usize,
     pub errors: Vec<String>,
+}
+
+/// Build-artifact / generated paths skipped by default so the index reflects
+/// real source, not minified bundles or vendored deps.
+const DEFAULT_EXCLUDES: &[&str] = &[
+    "**/node_modules/**", "**/target/**", "**/dist/**", "**/build/**", "**/release/**",
+    "**/.next/**", "**/.nuxt/**", "**/.svelte-kit/**", "**/web_dist/**", "**/vendor/**",
+    "**/coverage/**", "**/out/**", "**/.git/**", "**/__pycache__/**", "**/.venv/**", "**/venv/**",
+    "**/*.min.js", "**/*.min.css", "**/*.bundle.js", "**/*.map", "**/*.d.ts", "**/*.gen.*",
+];
+
+/// The factory exclude list (what Settings seeds + the "reset" target).
+pub fn factory_excludes() -> Vec<String> {
+    DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect()
+}
+
+/// User-configurable DeepWiki indexing settings (persisted in meta `settings`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    /// The default exclude globs (seeded from `factory_excludes`, editable).
+    #[serde(default = "factory_excludes")]
+    pub default_excludes: Vec<String>,
+    /// Extra excludes added ad-hoc (e.g. from the header "Loại trừ path" field).
+    #[serde(default)]
+    pub custom_excludes: Vec<String>,
+    /// A file whose longest of the first 80 lines exceeds this is treated as
+    /// minified/generated and skipped.
+    #[serde(default = "default_minified_max_line")]
+    pub minified_max_line: usize,
+}
+
+fn default_minified_max_line() -> usize {
+    2000
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            default_excludes: factory_excludes(),
+            custom_excludes: Vec::new(),
+            minified_max_line: default_minified_max_line(),
+        }
+    }
+}
+
+pub fn load_settings(db: &Db) -> Settings {
+    db.get_meta("settings")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_settings(db: &Db, s: &Settings) -> Result<()> {
+    db.set_meta("settings", &serde_json::to_string(s)?)
+}
+
+/// Compile exclude globs. Bare names ("release") match any directory of that
+/// name (`**/release/**`).
+fn build_excluder(globs: &[String]) -> globset::GlobSet {
+    let mut b = globset::GlobSetBuilder::new();
+    for g in globs {
+        let g = g.trim();
+        if g.is_empty() {
+            continue;
+        }
+        let pat = if !g.contains('*') && !g.contains('/') {
+            format!("**/{g}/**")
+        } else {
+            g.to_string()
+        };
+        if let Ok(glob) = globset::Glob::new(&pat) {
+            b.add(glob);
+        }
+    }
+    b.build().unwrap_or_else(|_| globset::GlobSet::empty())
+}
+
+/// Heuristic: a generated/minified file (one or few enormous lines).
+fn looks_minified(src: &str, max_line_threshold: usize) -> bool {
+    let max_line = src.lines().take(80).map(|l| l.len()).max().unwrap_or(0);
+    max_line > max_line_threshold || (src.len() > 50_000 && src.lines().count() < 5)
 }
 
 fn now() -> i64 {
@@ -47,6 +131,13 @@ pub fn index_repo(db: &Db, root: &Path) -> Result<IndexReport> {
     let mut report = IndexReport { root: root_str.clone(), ..Default::default() };
     let mut seen: HashSet<String> = HashSet::new();
 
+    // Exclude globs from settings (configurable defaults + custom).
+    let settings = load_settings(db);
+    let mut all_globs = settings.default_excludes.clone();
+    all_globs.extend(settings.custom_excludes.iter().cloned());
+    let excluder = build_excluder(&all_globs);
+    let minified_max = settings.minified_max_line;
+
     let walker = WalkBuilder::new(&root)
         .hidden(false)
         .git_ignore(true)
@@ -65,6 +156,20 @@ pub fn index_repo(db: &Db, root: &Path) -> Result<IndexReport> {
         let path = dent.path();
         let rel = path.strip_prefix(&root).unwrap_or(path).to_string_lossy().to_string();
         let Some(lang_name) = lang::lang_for_path(&rel) else { continue };
+        // Skip build artifacts / minified / excluded paths. Not added to `seen`,
+        // so any previously-indexed junk is pruned below.
+        if excluder.is_match(&rel) {
+            report.excluded += 1;
+            continue;
+        }
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => continue, // binary / unreadable
+        };
+        if looks_minified(&src, minified_max) {
+            report.excluded += 1;
+            continue;
+        }
         report.scanned += 1;
         seen.insert(rel.clone());
 
@@ -88,10 +193,6 @@ pub fn index_repo(db: &Db, root: &Path) -> Result<IndexReport> {
             Ok(row)
         })?;
 
-        let src = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(_) => continue, // binary / unreadable
-        };
         let hash = hash_str(&src);
         if let Some((_, old_mtime, old_hash)) = &existing {
             if *old_mtime == mtime && *old_hash == hash {

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { App as AntApp, AutoComplete, Button, ConfigProvider, Input, Layout, Segmented, Space, Tag, Typography, theme } from 'antd';
-import { BookOutlined, DeploymentUnitOutlined, FolderOpenOutlined, PartitionOutlined, ReloadOutlined } from '@ant-design/icons';
+import { BookOutlined, DeploymentUnitOutlined, FilterOutlined, FolderOpenOutlined, PartitionOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import { api, type RootInfo, type Status } from './api';
 import { WikiView } from './components/WikiView';
 import { CodeView } from './components/CodeView';
 import { GraphView } from './components/GraphView';
+import { SettingsDrawer } from './components/SettingsDrawer';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -68,7 +69,7 @@ export default function App() {
 
 function Shell({ isDark }: { isDark: boolean }) {
   const { token } = theme.useToken();
-  const { message } = AntApp.useApp();
+  const { message, modal } = AntApp.useApp();
   const [tab, setTab] = useState<Tab>('wiki');
   const [repoPath, setRepoPath] = useState('');
   const [status, setStatus] = useState<Status | null>(null);
@@ -76,6 +77,8 @@ function Shell({ isDark }: { isDark: boolean }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [focus, setFocus] = useState<string | undefined>();
   const [recents, setRecents] = useState<RootInfo[]>([]);
+  const [exclude, setExclude] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const openGraph = (name: string) => { setFocus(name); setTab('graph'); };
 
@@ -88,6 +91,7 @@ function Shell({ isDark }: { isDark: boolean }) {
       const s = await api.status();
       setStatus(s);
       if (s.root) setRepoPath((p) => p || s.root!);
+      if (s.exclude?.length) setExclude((e) => e || s.exclude!.join(', '));
     } catch { /* ignore */ }
   };
   const loadRecents = async () => {
@@ -95,14 +99,13 @@ function Shell({ isDark }: { isDark: boolean }) {
   };
   useEffect(() => { void refreshStatus(); void loadRecents(); }, []);
 
-  const doIndex = async (override?: string) => {
-    const path = (override ?? repoPath).trim();
-    if (!path) { message.warning('Nhập đường dẫn repo'); return; }
+  const runIndex = async (path: string) => {
     setRepoPath(path);
     setIndexing(true);
     try {
-      const r = await api.index(path);
-      message.success(`Đã index ${r.indexed} files · ${r.symbols} symbols · ${r.edges} edges`);
+      const ex = exclude.split(',').map((x) => x.trim()).filter(Boolean);
+      const r = await api.index(path, ex);
+      message.success(`Đã index ${r.indexed} files · ${r.symbols} symbols${r.excluded ? ` · bỏ qua ${r.excluded}` : ''}`);
       await refreshStatus();
       await loadRecents();
       setReloadKey((k) => k + 1);
@@ -111,6 +114,33 @@ function Shell({ isDark }: { isDark: boolean }) {
     } finally {
       setIndexing(false);
     }
+  };
+
+  const doIndex = async (override?: string) => {
+    const path = (override ?? repoPath).trim();
+    if (!path) { message.warning('Nhập đường dẫn repo'); return; }
+    // Confirm before re-indexing a repo that already has an index — re-indexing
+    // rescans every file and rewrites the symbol graph for this folder.
+    const prev = recents.find((r) => r.path === path);
+    const alreadyIndexed = path === status?.root || !!prev;
+    if (alreadyIndexed) {
+      const info = prev ? `${prev.files} files · ${prev.symbols} symbols, lần cuối ${timeAgo(prev.last_indexed)} trước` : 'đã được index';
+      modal.confirm({
+        title: 'Index lại repo này?',
+        icon: <ReloadOutlined style={{ color: token.colorPrimary }} />,
+        content: (
+          <div>
+            <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12.5, wordBreak: 'break-all', marginBottom: 6 }}>{path}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{info}. Sẽ quét lại toàn bộ file và cập nhật symbol/graph.</Text>
+          </div>
+        ),
+        okText: 'Index lại',
+        cancelText: 'Huỷ',
+        onOk: () => runIndex(path),
+      });
+      return;
+    }
+    await runIndex(path);
   };
 
   // AutoComplete options: previously-indexed roots, newest first.
@@ -183,6 +213,16 @@ function Shell({ isDark }: { isDark: boolean }) {
             Index
           </Button>
         </Space.Compact>
+        <Input
+          value={exclude}
+          onChange={(e) => setExclude(e.target.value)}
+          onPressEnter={() => doIndex()}
+          prefix={<FilterOutlined style={{ color: token.colorTextTertiary }} />}
+          placeholder="Loại trừ path: release, *.test.ts"
+          allowClear
+          style={{ width: 240 }}
+          title="Bỏ qua khi index (ngoài mặc định: node_modules, dist, *.min.js…). Phân tách bằng dấu phẩy."
+        />
         {indexed ? (
           <Space size={4} wrap>
             <Tag color="blue">{status!.root!.split('/').pop()}</Tag>
@@ -193,6 +233,12 @@ function Shell({ isDark }: { isDark: boolean }) {
         ) : (
           <Text type="secondary" style={{ fontSize: 12 }}>chưa index</Text>
         )}
+        <Button
+          icon={<SettingOutlined />}
+          onClick={() => setSettingsOpen(true)}
+          style={{ marginLeft: 'auto' }}
+          title="Cài đặt DeepWiki (loại trừ, LLM)"
+        />
       </Header>
       <Content style={{ minHeight: 0, padding: 16, background: token.colorBgLayout }}>
         <div
@@ -203,11 +249,16 @@ function Shell({ isDark }: { isDark: boolean }) {
             borderRadius: token.borderRadiusLG,
           }}
         >
-          {tab === 'wiki' && <WikiView reloadKey={reloadKey} indexed={indexed} isDark={isDark} />}
+          {tab === 'wiki' && <WikiView reloadKey={reloadKey} indexed={indexed} isDark={isDark} onOpenGraph={openGraph} />}
           {tab === 'code' && <CodeView reloadKey={reloadKey} indexed={indexed} isDark={isDark} onOpenGraph={openGraph} />}
-          {tab === 'graph' && <GraphView reloadKey={reloadKey} indexed={indexed} focus={focus} onFocusChange={setFocus} />}
+          {tab === 'graph' && <GraphView reloadKey={reloadKey} indexed={indexed} isDark={isDark} focus={focus} onFocusChange={setFocus} />}
         </div>
       </Content>
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => { void refreshStatus(); }}
+      />
     </Layout>
   );
 }

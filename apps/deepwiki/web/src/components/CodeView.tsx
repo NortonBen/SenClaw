@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Empty, Input, List, Space, Spin, Tag, Typography, theme, App as AntApp } from 'antd';
-import { CodeOutlined, PartitionOutlined } from '@ant-design/icons';
-import { api, type CallLink, type Exploration, type Sym, type SymbolResult } from '../api';
+import { Button, Card, Empty, Input, List, Select, Space, Spin, Tag, Typography, theme, App as AntApp } from 'antd';
+import { CodeOutlined, FolderOutlined, PartitionOutlined } from '@ant-design/icons';
+import { api, type CallLink, type Exploration, type Investigation, type Sym, type SymbolResult } from '../api';
 import { CodeBlock } from './CodeBlock';
+import { OverviewGraph } from './OverviewGraph';
 import { langFromPath } from '../lib';
 
 const { Text, Title } = Typography;
@@ -42,16 +43,34 @@ export function CodeView({ reloadKey, indexed, isDark, onOpenGraph }: Props) {
   const [detail, setDetail] = useState<SymbolResult | null>(null);
   const [explore, setExplore] = useState<Exploration | null>(null);
   const [source, setSource] = useState<Snippet | null>(null);
+  const [graph, setGraph] = useState<Investigation | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [folder, setFolder] = useState<string | undefined>(undefined);
+  const [folders, setFolders] = useState<string[]>([]);
 
   // reset when re-indexed
-  useEffect(() => { setResults(null); setDetail(null); setExplore(null); setSource(null); }, [reloadKey]);
+  useEffect(() => { setResults(null); setDetail(null); setExplore(null); setSource(null); setGraph(null); }, [reloadKey]);
+
+  // folder options from the indexed file tree
+  useEffect(() => {
+    if (!indexed) { setFolders([]); return; }
+    api.files().then((fs) => {
+      const set = new Set<string>();
+      for (const f of fs) {
+        const parts = f.path.split('/');
+        parts.pop();
+        let pre = '';
+        for (const p of parts) { pre = pre ? `${pre}/${p}` : p; set.add(pre); }
+      }
+      setFolders([...set].sort());
+    }).catch(() => {});
+  }, [indexed, reloadKey]);
 
   const doSearch = async (q: string) => {
     if (!q.trim()) return;
     setSearching(true);
     try {
-      setResults(await api.search(q.trim(), 40));
+      setResults(await api.search(q.trim(), 40, folder));
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -64,15 +83,18 @@ export function CodeView({ reloadKey, indexed, isDark, onOpenGraph }: Props) {
     setDetail(null);
     setExplore(null);
     setSource(null);
+    setGraph(null);
     try {
-      const [d, ex, snip] = await Promise.all([
+      const [d, ex, snip, inv] = await Promise.all([
         api.symbol(name),
         api.explore(name, 4),
         api.snippet({ name, context: 0 }).catch(() => null),
+        api.investigate(name, 2).catch(() => null),
       ]);
       setDetail(d);
       setExplore(ex);
       setSource(snip);
+      setGraph(inv);
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -112,6 +134,17 @@ export function CodeView({ reloadKey, indexed, isDark, onOpenGraph }: Props) {
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', height: '100%', minHeight: 0 }}>
       {/* Search column */}
       <div style={{ overflow: 'auto', padding: 12, borderRight: `1px solid ${token.colorBorderSecondary}` }}>
+        <Select
+          allowClear
+          showSearch
+          placeholder="Mọi folder"
+          value={folder}
+          onChange={(v) => setFolder(v)}
+          options={folders.map((f) => ({ label: f, value: f }))}
+          suffixIcon={<FolderOutlined />}
+          disabled={!indexed}
+          style={{ width: '100%', marginBottom: 8 }}
+        />
         <Search
           placeholder="Tìm symbol (tên, signature, doc)…"
           enterButton
@@ -138,8 +171,20 @@ export function CodeView({ reloadKey, indexed, isDark, onOpenGraph }: Props) {
             <Space align="baseline" wrap>
               <Title level={4} style={{ margin: 0 }}>{detail.name}</Title>
               <Tag>{detail.definitions.length} def · {detail.callers.length} callers · {detail.callees.length} callees</Tag>
-              <Button size="small" icon={<PartitionOutlined />} onClick={() => onOpenGraph(detail.name)}>Graph</Button>
+              <Button size="small" icon={<PartitionOutlined />} onClick={() => onOpenGraph(detail.name)}>Mở tab Graph</Button>
             </Space>
+
+            {(graph?.nodes?.length ?? 0) > 1 ? (
+              <Card
+                size="small"
+                title={<span style={{ fontSize: 13 }}><PartitionOutlined /> Đồ thị luồng (click node để đi tiếp)</span>}
+                style={{ marginTop: 14 }}
+                styles={{ body: { padding: 8 } }}
+              >
+                <OverviewGraph graph={{ nodes: graph!.nodes, edges: graph!.edges }} isDark={isDark} onPick={loadSymbol} />
+              </Card>
+            ) : null}
+
             <Title level={5} style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: '.04em', color: token.colorTextSecondary, margin: '16px 0 6px' }}>
               Definitions
             </Title>

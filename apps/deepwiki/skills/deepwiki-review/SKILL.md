@@ -40,5 +40,5 @@ For a deeper, autonomous pass, delegate to the **`impact-analyst`** sub-agent vi
 
 - Call edges are name-resolved (static): external/dynamic/overloaded calls may be missed, so
   present the blast radius as a strong signal, not an exhaustive guarantee.
-- Supported languages: Rust, Python, JavaScript, TypeScript/TSX, Go.
+- Supported languages (17): Rust, Python, JavaScript, TypeScript/TSX, Go, Java, C, C++, C#, Ruby, PHP, Scala, Bash, Julia, Haskell, OCaml.
 - Advisory and read-only — it assesses risk; it does not make the change.

@@ -123,7 +123,10 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_file_id, src_symbol);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 
+-- Porter stemming + unicode61 so natural-language queries match identifiers:
+-- "indexing" → stem "index" matches the "index" token in "index_repo".
 CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
-    name, signature, doc, kind UNINDEXED, symbol_id UNINDEXED
+    name, signature, doc, kind UNINDEXED, symbol_id UNINDEXED,
+    tokenize = 'porter unicode61'
 );
 "#;

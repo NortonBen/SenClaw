@@ -10,7 +10,8 @@ browsable docs + conversational Q&A.
 > `codegraph` app and the shared `codeindex-core` crate were both folded in and removed —
 > the code-intelligence core now lives in this crate (`src/{db,index,lang,model,parse,query}.rs`).
 
-- **Parsing/index:** tree-sitter (Rust, Python, JavaScript, TypeScript/TSX, Go) →
+- **Parsing/index:** tree-sitter — **17 languages**: Rust, Python, JavaScript, TypeScript/TSX, Go,
+  Java, C, C++, C#, Ruby, PHP, Scala, Bash, Julia, Haskell, OCaml →
   SQLite + FTS5 graph of symbols/calls/imports. Wiki pages live in the same DB at
   `~/.senclaw/space-apps-data/deepwiki/index.db`.
 - **Live:** a file watcher incrementally re-indexes on change (debounced).
@@ -92,13 +93,45 @@ served by `GET /api/recents`.
 The Web UI (`web/`, React 19 + AntD 6, theme-synced with the SenClaw host via postMessage)
 has three tabs:
 
-- **Wiki** (`WikiView`) — page tree + react-markdown + grounded Ask box, plus a **STRUCTURE
-  file tree** built from `/api/files` (expandable folders → files with line counts); clicking a
-  file shows its **outline + syntax-highlighted source** in the content area.
+- **Wiki** (`WikiView`) — page tree + react-markdown, a **STRUCTURE file tree** (`/api/files`,
+  expandable folders → files; click a file → outline + syntax-highlighted source), and a
+  dual-mode query box:
+  - **Tìm kiếm** — returns grounded symbol evidence (`/api/context`).
+  - **Hỏi AI** (Devin-style) — `POST /api/ask` **investigates the question multi-hop through the
+    call graph** (callers + callees, both directions, `query::investigate`), sends that subgraph +
+    source excerpts to **SenClaw's configured LLM** (Space-App **bridge** `llm.request`), and
+    renders: a cited Markdown answer, the model, a **"Graph tổng quan — luồng điều tra"**
+    (`OverviewGraph` — the investigation subgraph laid out by depth), a **"Xem luồng"** button
+    (full Graph tab on the focus symbol), and the evidence. Every Q&A is **saved to history**
+    (`ask_history` table) — the **Lịch sử** panel lists past questions and reopens them (answer +
+    graph) or deletes them (`/api/ask-history`, `/api/ask-history/:id`).
+
+> **Hỏi AI requires:** (1) the SenClaw **daemon built with this repo** (the bridge `llm.request`
+> handler lives in the main crate — see `src/gateway/ui_server/{space.rs,llm_config.rs}`), and
+> (2) an **active LLM configured** in SenClaw (Settings → Models). The app calls the daemon at
+> `SENCLAW_BASE_URL` (injected when the daemon launches the app; defaults to
+> `http://127.0.0.1:18788`). FTS uses Porter stemming so NL queries match identifiers
+> (`indexing` → `index_repo`).
 - **Code** (`CodeView`) — symbol search + call-graph/blast-radius explorer, with an inline
   **syntax-highlighted source viewer** (`CodeBlock`, via `/api/snippet`) and a "Graph" button.
-- **Graph** (`GraphView`) — an interactive SVG **call-graph**: the focused symbol in the
-  centre, callers feeding in from the left and callees fanning out to the right (internal nodes
-  coloured/clickable, external nodes muted). Click any node to re-centre; filter callers/callees.
+- **Graph** (`GraphView` + `OverviewGraph`) — an interactive **multi-hop call-graph**
+  (`/api/investigate`): columns by relative depth (**callers N … focus … callees N**). Each node
+  shows **name + kind badge + file:line** so a coder reads real logic, not bare names. Controls:
+  Cả hai/Callers/Callees and **Sâu 1/2/3** (depth). Click a node to re-centre.
+
+**Path filtering + Settings.** Indexing skips build artifacts by default (`node_modules`, `target`,
+`dist`, `build`, `release`, `web_dist`, `*.min.js`, `*.map`, …) and auto-detects minified/generated
+files, so the graph reflects real source (no flood of 1-char symbols from vendored bundles). The
+header **"Loại trừ path"** field adds custom globs; the **⚙️ Settings drawer** (`SettingsDrawer`)
+edits the **full default-excludes list** (with "Khôi phục mặc định"), custom excludes, and the
+minified line-length threshold — all persisted in the `settings` meta JSON and applied on re-index
+(`/api/settings`, `index::Settings`/`load_settings`/`save_settings`). `IndexReport.excluded` counts
+skipped files.
+
+**LLM (Hỏi AI) uses SenClaw's Main model.** The bridge `chat_completion` reads SenClaw's **active
+(Main) LLM config** — same model the daemon uses. The Settings drawer shows it live via
+`GET /api/llm-info` (e.g. `deepseek-v4-flash`), proxied from the daemon's `/api/llm-config`, so you
+can confirm a real model (not a mock) is wired. Requires the daemon built from this repo (bridge
+enabled) + an active model in Settings → Models.
 
 The typed API client is `web/src/api.ts`.

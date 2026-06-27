@@ -16,6 +16,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 futures-util = "0.3"
 async-stream = "0.3"
 notify = "6"
+globset = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Code-intelligence core (formerly the codeindex-core crate). Versions MUST
 # match the main `senclaw` crate's pinned tree-sitter set (single `links`).
@@ -26,3 +28,14 @@ tree-sitter-python = "0.25"
 tree-sitter-javascript = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-go = "0.25"
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-php = "0.24"
+tree-sitter-scala = "0.26"
+tree-sitter-ocaml = "0.24"
+tree-sitter-haskell = "0.23"
+tree-sitter-julia = "0.23"
