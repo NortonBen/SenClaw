@@ -28,3 +28,11 @@ dotenvy = "0.15"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[features]
+local-mlx           = ["senclaw/local-mlx"]
+local-embed         = ["senclaw/local-embed"]
+local-embed-metal   = ["senclaw/local-embed-metal"]
+local-mlx-whisper   = ["senclaw/local-mlx-whisper"]
+local-mlx-tts       = ["senclaw/local-mlx-tts"]
+ocr-paddle-metal    = ["senclaw/ocr-paddle-metal"]

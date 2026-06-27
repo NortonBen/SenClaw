@@ -50,20 +50,25 @@ app-dev:
 # Full installer build: web UI + CLI sidecar + bundle.
 app-build:
 	cd web && npx vite build
-	cargo build --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --bin senclaw
+	MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --bin senclaw
 	mkdir -p src-tauri/binaries
 	cp target/release/senclaw src-tauri/binaries/senclaw
-	cargo tauri build
+	MACOSX_DEPLOYMENT_TARGET=26.0 cargo tauri build --features local-mlx,local-embed-metal,local-embed,local-mlx-whisper
+	@# ATS fix: allow WKWebView to load http://127.0.0.1 on macOS 26
+	@/usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" \
+	    target/release/bundle/macos/SenClaw.app/Contents/Info.plist 2>/dev/null || true
+	@/usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" \
+	    target/release/bundle/macos/SenClaw.app/Contents/Info.plist 2>/dev/null || true
 	@$(MAKE) app-clean-cache
 
 # Install the freshly-built .app into /Applications and launch it.
 app-install:
-	@test -d target/release/bundle/macos/SemaClaw.app || (echo "no .app — run 'make app-build' first" && exit 1)
-	@pkill -f "SemaClaw.app/Contents/MacOS/senclaw-app" 2>/dev/null || true
+	@test -d target/release/bundle/macos/SenClaw.app || (echo "no .app — run 'make app-build' first" && exit 1)
+	@pkill -f "SenClaw.app/Contents/MacOS/senclaw-app" 2>/dev/null || true
 	@sleep 1
-	rm -rf /Applications/SemaClaw.app
-	cp -R target/release/bundle/macos/SemaClaw.app /Applications/
-	open /Applications/SemaClaw.app
+	rm -rf /Applications/SenClaw.app
+	cp -R target/release/bundle/macos/SenClaw.app /Applications/
+	open /Applications/SenClaw.app
 
 # Reclaim disk: dev-profile artefacts + incremental caches. Safe — release
 # bundle in target/release/bundle/ and /Applications/ are untouched.

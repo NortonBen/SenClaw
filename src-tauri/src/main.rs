@@ -106,14 +106,23 @@ fn main() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 wait_for_port(UI_PORT).await;
-                for label in [CHAT_WINDOW, MAIN_WINDOW] {
+                // Use navigate() rather than eval("reload()") so the
+                // WKWebView makes a fresh request regardless of its
+                // current error/blank state (eval fails on error pages).
+                let window_urls = [
+                    (CHAT_WINDOW,  format!("http://127.0.0.1:{UI_PORT}/?embed=1&app=1")),
+                    (MAIN_WINDOW,  format!("http://127.0.0.1:{UI_PORT}/?app=1")),
+                ];
+                for (label, url_str) in &window_urls {
                     if let Some(win) = handle.get_webview_window(label) {
-                        let _ = win.eval("window.location.reload()");
+                        if let Ok(url) = url_str.parse::<tauri::Url>() {
+                            let _ = win.navigate(url);
+                        }
                     }
                 }
-                // App launch UX: auto-open the full chat window so the user
-                // lands in chat instead of a hidden menu-bar app. The chat
-                // popover stays hidden until they click the tray icon.
+                // Give React time to hydrate before the window becomes visible
+                // so the user never sees a white flash on startup.
+                tokio::time::sleep(Duration::from_millis(2000)).await;
                 show_window_named(&handle, MAIN_WINDOW);
             });
 
