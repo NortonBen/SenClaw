@@ -92,7 +92,9 @@ served by `GET /api/recents`.
 The Web UI (`web/`, React 19 + AntD 6, theme-synced with the SenClaw host via postMessage)
 has three tabs:
 
-- **Wiki** (`WikiView`) — page tree + react-markdown + grounded Ask box.
+- **Wiki** (`WikiView`) — page tree + react-markdown + grounded Ask box, plus a **STRUCTURE
+  file tree** built from `/api/files` (expandable folders → files with line counts); clicking a
+  file shows its **outline + syntax-highlighted source** in the content area.
 - **Code** (`CodeView`) — symbol search + call-graph/blast-radius explorer, with an inline
   **syntax-highlighted source viewer** (`CodeBlock`, via `/api/snippet`) and a "Graph" button.
 - **Graph** (`GraphView`) — an interactive SVG **call-graph**: the focused symbol in the
