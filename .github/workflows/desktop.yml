@@ -8,10 +8,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  FLUTTER_VERSION: "3.41.6"
+
 jobs:
   # ── Quick CI check on every push/PR ─────────────────────────────────────────
   check:
-    name: Cargo check
+    name: Cargo check + Flutter analyze
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +22,7 @@ jobs:
       - name: Install Linux system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev
+          sudo apt-get install -y libssl-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -38,6 +36,17 @@ jobs:
       - name: Cargo test
         run: cargo test --all -- --test-threads=1
 
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Flutter analyze
+        working-directory: desktop_app
+        run: |
+          flutter pub get
+          flutter analyze
+
   # ── Full desktop bundle — only on tags or workflow_dispatch ─────────────────
   build:
     name: Build ${{ matrix.target }}
@@ -49,30 +58,29 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
+            platform: macos
           - os: macos-13
             target: x86_64-apple-darwin
+            platform: macos
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            platform: windows
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            platform: linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux system deps (WebKitGTK + tray)
+      - name: Install Linux desktop deps (GTK + tray)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev \
+            libayatana-appindicator3-dev \
             libssl-dev
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -82,50 +90,46 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      - name: Build web UI
-        working-directory: web
-        run: |
-          npm ci
-          npx vite build
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
 
-      - name: Build senclaw CLI (sidecar)
+      - name: Build senclaw daemon binary
         run: cargo build --release --bin senclaw --target ${{ matrix.target }}
 
-      - name: Stage CLI sidecar
-        shell: bash
+      - name: Build Flutter desktop app
+        working-directory: desktop_app
         run: |
-          mkdir -p src-tauri/binaries
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/senclaw.exe" src-tauri/binaries/senclaw.exe
-          else
-            cp "target/${{ matrix.target }}/release/senclaw" src-tauri/binaries/senclaw
-          fi
+          flutter pub get
+          flutter build ${{ matrix.platform }} --release
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-
-      - name: Generate app icons
-        run: cargo tauri icon "senclaw_logo_simple_1_1777475846377.png"
-
-      - name: Build desktop bundle
-        run: cargo tauri build --target ${{ matrix.target }}
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ""
-
-      - name: Collect artifacts
+      - name: Bundle daemon + collect artifacts
         shell: bash
         run: |
           mkdir -p dist-artifacts
-          find "target/${{ matrix.target }}/release/bundle" \
-            \( -name "*.dmg" -o -name "*.app" -o -name "*.AppImage" \
-               -o -name "*.deb" -o -name "*.exe" -o -name "*.msi" \) \
-            -exec cp {} dist-artifacts/ \; 2>/dev/null || true
-          # Also include the bare CLI binary
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/senclaw.exe" "dist-artifacts/senclaw-${{ matrix.target }}.exe"
-          else
-            cp "target/${{ matrix.target }}/release/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
-          fi
+          BIN_DIR="target/${{ matrix.target }}/release"
+          case "${{ matrix.platform }}" in
+            macos)
+              APP="desktop_app/build/macos/Build/Products/Release/SenClaw Desktop.app"
+              cp "$BIN_DIR/senclaw" "$APP/Contents/Resources/senclaw"
+              # zip the .app for upload
+              ditto -c -k --keepParent "$APP" "dist-artifacts/SenClaw-${{ matrix.target }}.app.zip"
+              cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
+              ;;
+            windows)
+              REL="desktop_app/build/windows/x64/runner/Release"
+              cp "$BIN_DIR/senclaw.exe" "$REL/senclaw.exe"
+              powershell -Command "Compress-Archive -Path '$REL/*' -DestinationPath 'dist-artifacts/SenClaw-${{ matrix.target }}.zip'"
+              cp "$BIN_DIR/senclaw.exe" "dist-artifacts/senclaw-${{ matrix.target }}.exe"
+              ;;
+            linux)
+              REL="desktop_app/build/linux/x64/release/bundle"
+              cp "$BIN_DIR/senclaw" "$REL/senclaw"
+              tar -C "$REL" -czf "dist-artifacts/SenClaw-${{ matrix.target }}.tar.gz" .
+              cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
+              ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,6 +1,6 @@
 //! Workspace file discovery — minimal read-only tree listing for the New Chat folder picker.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
@@ -10,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::core::{AppError, UiState};
+use crate::util::paths::expand_tilde;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkspaceQuery {
@@ -34,15 +35,6 @@ pub(crate) struct WorkspaceListing {
     pub entries: Vec<WorkspaceEntry>,
 }
 
-fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix('~') {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest.trim_start_matches('/'));
-        }
-    }
-    PathBuf::from(p)
-}
-
 fn is_skipped(name: &str) -> bool {
     matches!(
         name,
@@ -50,7 +42,7 @@ fn is_skipped(name: &str) -> bool {
     ) || name.starts_with('.')
 }
 
-fn walk(root: &Path, depth_remaining: u32, out: &mut Vec<WorkspaceEntry>) {
+pub(crate) fn walk(root: &Path, depth_remaining: u32, out: &mut Vec<WorkspaceEntry>) {
     let rd = match std::fs::read_dir(root) {
         Ok(r) => r,
         Err(_) => return,
@@ -104,6 +96,45 @@ pub(crate) async fn list_files(
     Ok(Json(WorkspaceListing {
         root: root.to_string_lossy().to_string(),
         entries,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct WorkspaceFileContent {
+    pub path: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+/// GET /api/workspace/file?path=... — read a single workspace file as UTF-8
+/// text (capped at 512 KB; binary/over-size files return a notice instead).
+pub(crate) async fn read_file(
+    State(_s): State<Arc<UiState>>,
+    Query(q): Query<WorkspaceQuery>,
+) -> Result<Json<WorkspaceFileContent>, AppError> {
+    use axum::http::StatusCode;
+    let path = expand_tilde(&q.path);
+    if !path.is_absolute() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "path must be absolute".into()));
+    }
+    if !path.is_file() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "not a file".into()));
+    }
+    const MAX: u64 = 512 * 1024;
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let truncated = meta.len() > MAX;
+    let bytes = std::fs::read(&path)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let slice = if truncated { &bytes[..MAX as usize] } else { &bytes[..] };
+    let content = match std::str::from_utf8(slice) {
+        Ok(s) => s.to_string(),
+        Err(_) => "(binary file — cannot display)".to_string(),
+    };
+    Ok(Json(WorkspaceFileContent {
+        path: path.to_string_lossy().to_string(),
+        content,
+        truncated,
     }))
 }
 

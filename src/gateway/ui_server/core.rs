@@ -47,8 +47,8 @@ use super::plugins::{
 };
 use super::quicknotes::quicknotes_save;
 use super::skills::{
-    skills_install, skills_list, skills_readme, skills_readme_save, skills_remote_search,
-    skills_toggle, skills_uninstall,
+    skills_create, skills_install, skills_list, skills_readme, skills_readme_save,
+    skills_remote_search, skills_toggle, skills_uninstall,
 };
 use super::spa::spa_fallback;
 use super::space::{
@@ -82,8 +82,8 @@ use super::ocr::{
     ocr_settings_get, ocr_settings_put, ocr_status,
 };
 use super::wiki::{
-    wiki_dir_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
-    wiki_tree, wiki_write,
+    wiki_dir_delete, wiki_file_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
+    wiki_tree, wiki_upload, wiki_write,
 };
 
 // ===== Trait for AgentPool-dependent operations =====
@@ -186,6 +186,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/config", get(config_handler))
         .route("/api/skills", get(skills_list))
         .route("/api/skills/remote-search", get(skills_remote_search))
+        .route("/api/skills/create", post(skills_create))
         .route("/api/skills/install", post(skills_install))
         .route("/api/skills/:name", delete(skills_uninstall))
         .route(
@@ -261,6 +262,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/workspace/files",
             get(super::workspace::list_files),
         )
+        .route("/api/workspace/file", get(super::workspace::read_file))
+        .route("/api/ws/terminal", get(super::terminal::ws_terminal))
         .route("/api/workspace/mkdir", post(super::workspace::mkdir))
         // Profile file editor — SOUL.md + MEMORY.md per agent folder
         .route(
@@ -287,6 +290,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/cowork/teams/:id/tasks",
             get(super::cowork::list_team_tasks).post(super::cowork::create_team_task),
+        )
+        .route(
+            "/api/cowork/teams/:id/workspace",
+            get(super::cowork::browse_team_workspace),
         )
         .route(
             "/api/cowork/teams/:team_id/tasks/:task_id",
@@ -404,12 +411,19 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         // Wiki API
         .route("/api/wiki/tree", get(wiki_tree))
-        .route("/api/wiki/file", get(wiki_read).put(wiki_write))
+        .route(
+            "/api/wiki/file",
+            get(wiki_read).put(wiki_write).delete(wiki_file_delete),
+        )
         .route("/api/wiki/search", get(wiki_search))
         .route("/api/wiki/stats", get(wiki_stats))
         .route("/api/wiki/history", get(wiki_history))
         .route("/api/wiki/tags", get(wiki_tags))
         .route("/api/wiki/mkdir", post(wiki_mkdir))
+        .route(
+            "/api/wiki/upload",
+            post(wiki_upload).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
+        )
         .route("/api/wiki/dir", delete(wiki_dir_delete))
         // MCP server management
         .route(

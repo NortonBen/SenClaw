@@ -29,6 +29,7 @@ pub mod space_mcp;
 mod space_personas;
 mod space_skills;
 mod subagents;
+mod terminal;
 pub mod tts;
 pub mod types;
 mod whisper;

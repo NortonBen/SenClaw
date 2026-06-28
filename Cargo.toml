@@ -1,5 +1,5 @@
 [workspace]
-members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "src-tauri"]
+members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki"]
 resolver = "2"
 
 [package]
@@ -71,6 +71,7 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 rand = "0.8"
 
 tokio-stream = "0.1"
+portable-pty = "0.8"
 
 # Encryption / Encoding
 aes-gcm = "0.10"

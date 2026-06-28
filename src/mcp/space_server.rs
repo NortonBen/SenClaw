@@ -637,6 +637,8 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
                 p.day_of_month,
                 p.cron_advanced,
                 p.agent_mode,
+                None,
+                None,
             )
             .await
             .content
@@ -1278,6 +1280,8 @@ impl SpaceServer {
         day_of_month: Option<u32>,
         cron_advanced: Option<String>,
         agent_mode: Option<String>,
+        model_id: Option<String>,
+        agent_folder: Option<String>,
     ) -> ToolResult {
         if prompt.trim().is_empty() {
             return ToolResult::err("prompt is required".into());
@@ -1295,6 +1299,12 @@ impl SpaceServer {
         let id = Uuid::new_v4().to_string();
         let chat_jid = format!("{SCHEDULE_JID_PREFIX}{id}");
         let group_folder = format!("{SCHEDULE_FOLDER_PREFIX}{id}");
+        // The chat session can run under a chosen agent profile; the schedule
+        // itself is still tracked by its `schedule_<id>` task folder (recurring_list).
+        let binding_folder = agent_folder
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| group_folder.clone());
         let label = label
             .as_deref()
             .map(|s| s.trim())
@@ -1305,7 +1315,7 @@ impl SpaceServer {
         let now = Utc::now().to_rfc3339();
         if let Err(e) = self.db.upsert_group(&crate::types::GroupBinding {
             jid: chat_jid.clone(),
-            folder: group_folder.clone(),
+            folder: binding_folder,
             name: label.clone(),
             channel: String::new(),
             group_type: "chat".into(),
@@ -1315,7 +1325,7 @@ impl SpaceServer {
             allowed_work_dirs: None,
             bot_token: None,
             max_messages: None,
-            llm_config_id: None,
+            llm_config_id: model_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             last_active: Some(now.clone()),
             added_at: now,
         }) {
@@ -1390,7 +1400,14 @@ impl SpaceServer {
         };
         let task = match tasks
             .into_iter()
-            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+            // Accept either the task id or the schedule's JID-derived id
+            // (`schedule:<id>` → folder `schedule_<id>`); recurring_create's
+            // task id differs from the id baked into the chat JID/folder.
+            .find(|t| {
+                t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
+                    && (t.id == id
+                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            })
         {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
@@ -1424,7 +1441,14 @@ impl SpaceServer {
         };
         let task = match tasks
             .into_iter()
-            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+            // Accept either the task id or the schedule's JID-derived id
+            // (`schedule:<id>` → folder `schedule_<id>`); recurring_create's
+            // task id differs from the id baked into the chat JID/folder.
+            .find(|t| {
+                t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
+                    && (t.id == id
+                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            })
         {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
@@ -1468,7 +1492,14 @@ impl SpaceServer {
         };
         let task = match tasks
             .into_iter()
-            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+            // Accept either the task id or the schedule's JID-derived id
+            // (`schedule:<id>` → folder `schedule_<id>`); recurring_create's
+            // task id differs from the id baked into the chat JID/folder.
+            .find(|t| {
+                t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
+                    && (t.id == id
+                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            })
         {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
@@ -1592,7 +1623,14 @@ impl SpaceServer {
         };
         let task = match tasks
             .into_iter()
-            .find(|t| t.id == id && t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX))
+            // Accept either the task id or the schedule's JID-derived id
+            // (`schedule:<id>` → folder `schedule_<id>`); recurring_create's
+            // task id differs from the id baked into the chat JID/folder.
+            .find(|t| {
+                t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
+                    && (t.id == id
+                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            })
         {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),

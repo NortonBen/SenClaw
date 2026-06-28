@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The app HOSTS the SenClaw daemon: it spawns the `senclaw` binary as a
+	     child process that binds local ports, reads/writes ~/.senclaw, and
+	     launches MCP stdio subprocesses. The App Sandbox blocks all of that
+	     (even outgoing localhost connections), so it is disabled — the old
+	     Tauri shell was likewise un-sandboxed. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>

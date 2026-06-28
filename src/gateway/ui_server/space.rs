@@ -595,6 +595,10 @@ pub(crate) struct ScheduleCreateBody {
     day_of_month: Option<u32>,
     cron_advanced: Option<String>,
     agent_mode: Option<String>,
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    agent_folder: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -651,6 +655,8 @@ pub(crate) async fn space_schedules_create(
             b.day_of_month,
             b.cron_advanced,
             b.agent_mode,
+            b.model_id,
+            b.agent_folder,
         )
         .await;
     tool_result_to_response(r, StatusCode::BAD_REQUEST)
@@ -1125,6 +1131,7 @@ pub(crate) struct SpaceAppBridgeBody {
 }
 
 pub(crate) async fn space_apps_bridge(
+    State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
     Json(b): Json<SpaceAppBridgeBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1136,14 +1143,48 @@ pub(crate) async fn space_apps_bridge(
             "appId": id,
             "capabilities": ["llm.request", "mcp.call", "space.rest"],
             "status": "available",
-            "note": "Bridge contract is available. Direct LLM/MCP execution is intentionally gated and will be wired through approved backend handlers.",
         }))),
-        "llm.request" | "mcp.call" => Ok(Json(serde_json::json!({
+        // Run a one-shot completion on SenClaw's active LLM on the app's behalf.
+        // Payload: { prompt: string, system?: string, maxTokens?: number }.
+        "llm.request" => {
+            let payload = b.payload.clone().unwrap_or_default();
+            let prompt = payload
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if prompt.trim().is_empty() {
+                return Err(AppError(StatusCode::BAD_REQUEST, "prompt is required".into()));
+            }
+            let system = payload
+                .get("system")
+                .and_then(|v| v.as_str())
+                .unwrap_or("You are a helpful assistant.");
+            let max_tokens = payload
+                .get("maxTokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            match super::llm_config::chat_completion(
+                &s.config.paths.global_config_path,
+                system,
+                &prompt,
+                max_tokens,
+            )
+            .await
+            {
+                Ok((text, model)) => Ok(Json(serde_json::json!({
+                    "appId": id, "status": "ok", "text": text, "model": model,
+                }))),
+                Err(e) => Ok(Json(serde_json::json!({
+                    "appId": id, "status": "error", "message": e,
+                }))),
+            }
+        }
+        "mcp.call" => Ok(Json(serde_json::json!({
             "appId": id,
             "action": b.action,
-            "payload": b.payload,
             "status": "pending",
-            "message": "This bridge action is declared for Space Apps but execution is not enabled yet.",
+            "message": "mcp.call bridge action is not enabled yet.",
         }))),
         _ => Err(AppError(
             StatusCode::BAD_REQUEST,

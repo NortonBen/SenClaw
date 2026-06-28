@@ -45,6 +45,9 @@ pub struct SearchResult {
     pub title: String,
     pub tags: Vec<String>,
     pub updated: String,
+    /// Body excerpt around the match (FTS5 snippet), empty for tag-only listing.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub snippet: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

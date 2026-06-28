@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     Json,
 };
@@ -1129,4 +1129,57 @@ pub(crate) async fn delete_team_task(
     db.delete_cowork_team_task(&task_id)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// =====================================================================
+// GET /api/cowork/teams/:id/workspace?path=  — browse the team's workspace
+// =====================================================================
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct TeamBrowseQuery {
+    /// Relative sub-path under the team's workspace_dir. Empty = workspace root.
+    #[serde(default)]
+    pub path: String,
+}
+
+/// List files under a cowork team's `workspace_dir` (one level). The `path`
+/// query is a sanitized relative sub-path — `..` components are rejected so the
+/// browse can never escape the workspace root.
+pub(crate) async fn browse_team_workspace(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Query(q): Query<TeamBrowseQuery>,
+) -> Result<Json<super::workspace::WorkspaceListing>, AppError> {
+    let team = db(&s)?
+        .get_cowork_team(&id)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "team not found".into()))?;
+    let ws = team
+        .workspace_dir
+        .filter(|w| !w.is_empty())
+        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "team has no workspace".into()))?;
+    let root = crate::util::paths::expand_tilde(&ws);
+
+    let rel = std::path::Path::new(q.path.trim_start_matches('/'));
+    if rel
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(AppError(StatusCode::BAD_REQUEST, "invalid path".into()));
+    }
+    let target = if q.path.is_empty() {
+        root
+    } else {
+        root.join(rel)
+    };
+    if !target.exists() || !target.is_dir() {
+        return Err(AppError(StatusCode::NOT_FOUND, "path not found".into()));
+    }
+
+    let mut entries = Vec::new();
+    super::workspace::walk(&target, 1, &mut entries);
+    Ok(Json(super::workspace::WorkspaceListing {
+        root: target.to_string_lossy().to_string(),
+        entries,
+    }))
 }

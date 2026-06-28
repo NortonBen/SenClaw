@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
+use axum_extra::extract::Multipart;
 use serde::Deserialize;
 
 use crate::wiki::manager::WikiManager;
@@ -93,6 +94,133 @@ pub(crate) async fn wiki_write(
     Ok(Json(serde_json::json!({
         "path": body.path,
         "updated": chrono::Utc::now().to_rfc3339(),
+    })))
+}
+
+/// Turn a raw filename into a safe kebab-case wiki page slug (no extension).
+fn slugify_filename(name: &str) -> String {
+    // Drop any directory components and the extension.
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(name);
+    let slug: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else if c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse runs of '-' and trim edges.
+    let collapsed: String = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if collapsed.is_empty() {
+        "document".to_string()
+    } else {
+        collapsed
+    }
+}
+
+/// POST /api/wiki/upload — ingest one or more uploaded documents as wiki pages.
+///
+/// Multipart fields: `folder` (target dir, default `inbox`) and any number of
+/// `file` fields. Each text-extractable file is converted to a `.md` page;
+/// binary/unsupported files are reported as skipped rather than failing the
+/// whole request.
+pub(crate) async fn wiki_upload(
+    State(s): State<Arc<UiState>>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let wm = wiki_manager(&s)?;
+
+    let mut folder = String::from("inbox");
+    let mut files: Vec<(String, String, Vec<u8>)> = Vec::new(); // (filename, content_type, bytes)
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid multipart: {e}")))?
+    {
+        match field.name() {
+            Some("folder") => {
+                folder = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?
+                    .trim()
+                    .trim_matches('/')
+                    .to_string();
+            }
+            Some("file") => {
+                let filename = field
+                    .file_name()
+                    .unwrap_or("document.txt")
+                    .to_string();
+                let content_type = field.content_type().unwrap_or("").to_string();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
+                files.push((filename, content_type, bytes.to_vec()));
+            }
+            _ => {
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    if files.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "No files uploaded".into()));
+    }
+    if folder.is_empty() {
+        folder = "inbox".to_string();
+    }
+    if folder.contains("..") {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid folder".into()));
+    }
+
+    let mut created: Vec<String> = Vec::new();
+    let mut skipped: Vec<serde_json::Value> = Vec::new();
+
+    for (filename, content_type, bytes) in files {
+        match crate::memory::cognitive::extract_text(&filename, &content_type, &bytes) {
+            Ok(text) if !text.trim().is_empty() => {
+                let slug = slugify_filename(&filename);
+                let path = format!("{folder}/{slug}.md");
+                let source = format!("upload:{filename}");
+                match wm
+                    .write_file(&path, &text, Some(&source), None, None)
+                    .await
+                {
+                    Ok(()) => created.push(path),
+                    Err(e) => skipped.push(serde_json::json!({
+                        "file": filename, "reason": e.to_string(),
+                    })),
+                }
+            }
+            Ok(_) => skipped.push(serde_json::json!({
+                "file": filename, "reason": "no extractable text",
+            })),
+            Err(e) => skipped.push(serde_json::json!({
+                "file": filename, "reason": e.to_string(),
+            })),
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "created": created,
+        "skipped": skipped,
     })))
 }
 
@@ -196,6 +324,22 @@ pub(crate) async fn wiki_dir_delete(
         .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "Missing path".into()))?;
     let wm = wiki_manager(&s)?;
     wm.delete_empty_dir(path)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /api/wiki/file?path=... — remove a single wiki file (git-committed).
+pub(crate) async fn wiki_file_delete(
+    State(s): State<Arc<UiState>>,
+    Query(q): Query<WikiFileQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let path = q
+        .path
+        .as_deref()
+        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "Missing path".into()))?;
+    let wm = wiki_manager(&s)?;
+    wm.delete_file(path)
         .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)

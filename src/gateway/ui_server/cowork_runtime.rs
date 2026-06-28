@@ -172,61 +172,62 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
         return Some(s);
     }
 
-    // Tools the lead may use (settings override → default Task + TodoWrite).
-    let tools = team
-        .settings
-        .manager_tools
-        .clone()
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| vec!["Task".into(), "TodoWrite".into()]);
-    let tools_str = tools
-        .iter()
-        .map(|t| format!("`{t}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-
     let mut s = String::new();
-    s.push_str("[Cowork DAG context — you are the LEAD of this team]\n");
+    s.push_str("[Cowork DAG context — you are the LEAD / orchestrator of this team]\n");
     s.push_str(&format!("Team: {}\n", team.name));
-    s.push_str(&format!("Your role: lead (folder: {})\n", team.manager_folder));
+    s.push_str(&format!(
+        "Your role: lead (folder: {})\n",
+        team.manager_folder
+    ));
     if let Some(ref ws) = team.workspace_dir {
         s.push_str(&format!("Shared workspace: {ws}\n"));
     }
-    s.push_str("\nMembers you can delegate to (use the `Task` tool — `subagent_type` = member folder):\n");
+    s.push_str(
+        "\nDAG mode is active. You orchestrate by DISPATCHING work to your team \
+         members — you do NOT do the work yourself, and you do NOT use the generic \
+         `Task` tool. Delegate with `DispatchCreateParentAndRun`.\n",
+    );
+    s.push_str(
+        "\nYour team members — use each one as a DAG node's `agentName` (exactly \
+         `persona:<folder>` as shown):\n",
+    );
     for m in team.members.iter() {
         let role = m.role.as_deref().unwrap_or("specialist");
         let resp = m.responsibilities.as_deref().unwrap_or("—");
-        s.push_str(&format!(" • `{}` ({role}) — {resp}\n", m.folder));
+        s.push_str(&format!(
+            " • `persona:{}` ({role}) — {resp}\n",
+            m.folder
+        ));
+        if let Some(ac) = m.acceptance_criteria.as_deref().filter(|v| !v.trim().is_empty()) {
+            s.push_str(&format!("     acceptance: {ac}\n"));
+        }
+        if let Some(of) = m.output_format.as_deref().filter(|v| !v.trim().is_empty()) {
+            s.push_str(&format!("     output: {of}\n"));
+        }
     }
-    s.push_str("\nMANDATORY workflow for THIS turn (NO other tools available):\n");
-    s.push_str(&format!("You are restricted to these tools: {tools_str}.\n"));
     s.push_str(
-        "You CANNOT browse the web, run shell commands, or edit files yourself.\n\
-         The only way to make progress is to delegate via `Task`.\n\
+        "\nMANDATORY workflow:\n\
+         1. (optional) RESEARCH with read-only tools (Read/Grep/Glob) if you need \
+            context before planning the graph.\n\
+         2. DISPATCH — call `DispatchCreateParentAndRun` ONCE with a task graph:\n\
+            • one task per member you need to engage\n\
+            • `agentName` = `persona:<member folder>` from the list above\n\
+            • `label` = the member folder (used by `dependsOn`)\n\
+            • `prompt` = that member's slice of the work — what to do + their \
+              acceptance criteria + the relevant part of the user request\n\
+            • `dependsOn` = labels of members whose output this one needs (e.g. a \
+              fact-checker dependsOn the scout; a writer dependsOn both). Prerequisite \
+              results are auto-injected, so don't copy them into the prompt.\n\
+            This BLOCKS until every member finishes and returns all their results.\n\
+         3. SYNTHESIZE — after dispatch returns, merge the members' outputs into ONE \
+            final answer for the user, attributing which member contributed what. \
+            Do NOT stop after dispatching — the final synthesized answer is required.\n\
          \n\
-         How to delegate (subagent_type must be `general-purpose` — Task does NOT route by member folder yet):\n\
-         \n\
-         For each member you want to engage, call `Task` like this:\n\
-         \n\
-         Task(\n\
-            subagent_type: \"general-purpose\",\n\
-            description: \"<3-7 word imperative>\",\n\
-            prompt: \"You are acting as the team's <MEMBER FOLDER> (role: <ROLE>). \\n\\\n\
-                     Responsibilities: <RESPONSIBILITIES>. \\n\\\n\
-                     User request: <VERBATIM USER REQUEST>. \\n\\\n\
-                     Stay in scope of your role. Return a concise report.\"\n\
-         )\n\
-         \n\
-         Steps:\n\
-         1. PLAN — use `TodoWrite` to outline 1-N subtasks (one per member you'll engage).\n\
-         2. DELEGATE — call `Task` once per subtask. Independent calls IN PARALLEL (same turn).\n\
-         3. SYNTHESIZE — after Task results return, merge them into ONE final answer for the user, \
-            attributing which member contributed what.\n\
-         \n\
-         If the request is purely conversational (greeting, small talk), say so explicitly: \
-         \"No specialist needed — answering directly.\" and answer. Otherwise delegation is REQUIRED.\n",
+         If the request is purely conversational (greeting, small talk), say so \
+         explicitly: \"No specialist needed — answering directly.\" and answer. \
+         Otherwise delegation is REQUIRED.\n",
     );
-    s.push_str("\n---\n\nUser request (delegate per workflow above):\n");
+    s.push_str("\n---\n\nUser request (orchestrate the team per the workflow above):\n");
     Some(s)
 }
 

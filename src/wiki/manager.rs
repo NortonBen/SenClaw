@@ -173,6 +173,18 @@ impl WikiManager {
         Ok(())
     }
 
+    /// Delete a single wiki file and commit the removal.
+    pub async fn delete_file(&self, rel_path: &str) -> Result<()> {
+        let abs_path = self.safe_path(rel_path)?;
+        if !abs_path.is_file() {
+            bail!("Not a file: {rel_path}");
+        }
+        fs::remove_file(&abs_path)?;
+        self.git_commit(&format!("wiki: delete {rel_path}"), None)
+            .await?;
+        Ok(())
+    }
+
     /// Resolve a relative path, rejecting traversal attempts.
     fn safe_path(&self, rel_path: &str) -> Result<PathBuf> {
         if rel_path.contains("..") {

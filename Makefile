@@ -37,41 +37,49 @@ run-release:
 build-extension:
 	cd senclaw-extension-chrome && npm run build
 
-# ===== Desktop app (Tauri 2.0) =====
-# Requires: cargo install tauri-cli --version "^2"
-
-app-icons:
-	cargo tauri icon "senclaw_logo_simple_1_1777475846377.png"
+# ===== Desktop app (Flutter — replaces the old Tauri shell) =====
+# The app is a Flutter project in desktop_app/ that SUPERVISES the senclaw
+# daemon as a child process (it spawns the bundled `senclaw` binary, streams
+# its logs, and restarts it on demand). Multi-platform: macOS / Windows / Linux
+# / web. Requires the Flutter SDK on PATH.
+DESKTOP_DIR := desktop_app
+DAEMON_FEATURES := local-mlx,local-embed-metal,local-embed,local-mlx-whisper
 
 app-dev:
-	cd web && npx vite build
-	cargo tauri dev
+	cd $(DESKTOP_DIR) && flutter run -d macos
 
-# Full installer build: web UI + CLI sidecar + bundle.
+# Build the release .app and bundle the daemon binary into its Resources, so
+# the supervisor finds it at Contents/Resources/senclaw.
 app-build:
-	cd web && npx vite build
-	MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --bin senclaw
-	mkdir -p src-tauri/binaries
-	cp target/release/senclaw src-tauri/binaries/senclaw
-	MACOSX_DEPLOYMENT_TARGET=26.0 cargo tauri build --features local-mlx,local-embed-metal,local-embed,local-mlx-whisper
-	@# ATS fix: allow WKWebView to load http://127.0.0.1 on macOS 26
-	@/usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" \
-	    target/release/bundle/macos/SenClaw.app/Contents/Info.plist 2>/dev/null || true
-	@/usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" \
-	    target/release/bundle/macos/SenClaw.app/Contents/Info.plist 2>/dev/null || true
-	@$(MAKE) app-clean-cache
+	MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --release --features $(DAEMON_FEATURES) --bin senclaw
+	cd $(DESKTOP_DIR) && flutter build macos --release
+	cp target/release/senclaw \
+	    "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/senclaw"
+	@echo "[app-build] bundled daemon into 'SenClaw Desktop.app/Contents/Resources/senclaw'"
 
 # Install the freshly-built .app into /Applications and launch it.
 app-install:
-	@test -d target/release/bundle/macos/SenClaw.app || (echo "no .app — run 'make app-build' first" && exit 1)
-	@pkill -f "SenClaw.app/Contents/MacOS/senclaw-app" 2>/dev/null || true
+	@test -d "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app" \
+	    || (echo "no .app — run 'make app-build' first" && exit 1)
+	@pkill -f "SenClaw Desktop.app/Contents/MacOS/SenClaw Desktop" 2>/dev/null || true
 	@sleep 1
-	rm -rf /Applications/SenClaw.app
-	cp -R target/release/bundle/macos/SenClaw.app /Applications/
-	open /Applications/SenClaw.app
+	rm -rf "/Applications/SenClaw Desktop.app"
+	cp -R "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app" "/Applications/SenClaw Desktop.app"
+	open "/Applications/SenClaw Desktop.app"
 
-# Reclaim disk: dev-profile artefacts + incremental caches. Safe — release
-# bundle in target/release/bundle/ and /Applications/ are untouched.
+# Windows / Linux desktop builds (run on the matching host).
+app-build-windows:
+	cargo build --release --bin senclaw
+	cd $(DESKTOP_DIR) && flutter build windows --release
+
+app-build-linux:
+	cargo build --release --bin senclaw
+	cd $(DESKTOP_DIR) && flutter build linux --release
+
+# Web build (served by the daemon's static dir, or any static host).
+app-build-web:
+	cd $(DESKTOP_DIR) && flutter build web --release
+
 app-clean-cache:
 	@echo "[clean] removing target/debug and incremental caches"
 	@rm -rf target/debug target/release/incremental target/release/build/*-*/incremental 2>/dev/null || true

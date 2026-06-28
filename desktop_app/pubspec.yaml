@@ -1,0 +1,102 @@
+name: senclaw_desktop
+description: "SenClaw desktop & web console — Flutter replacement for the React/Tauri UI."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.6.1
+
+  # Routing
+  go_router: ^14.6.2
+
+  # Transport (direct HTTP/WS to local daemon)
+  http: ^1.2.2
+  web_socket_channel: ^3.0.1
+  # Terminal emulator widget for the dock Terminal tab (PTY over WebSocket).
+  xterm: ^4.0.0
+
+  # Local persistence (replaces localStorage)
+  shared_preferences: ^2.3.3
+
+  # Desktop window chrome (frameless title bar, traffic lights)
+  window_manager: ^0.4.3
+
+  # Second native OS window for the tray mini-chat (independent Flutter engine)
+  desktop_multi_window: ^0.2.0
+
+  # System tray / menu-bar icon (replaces Tauri tray)
+  tray_manager: ^0.2.4
+
+  # Native OS notifications (event reminders, schedule runs, messages)
+  local_notifier: ^0.1.6
+
+  # Open URLs in the default browser (replaces Tauri "Open in Browser")
+  url_launcher: ^6.3.1
+
+  # Locate bundled binary next to the executable / app resources
+  path: ^1.9.0
+  path_provider: ^2.1.5
+
+  # Native file/folder picker (replaces Tauri dialog.open)
+  file_picker: ^8.1.4
+
+  # Markdown + math + code highlighting (replaces react-markdown/remark/rehype/katex)
+  gpt_markdown: ^1.0.19
+
+  # Date/time formatting (replaces dayjs)
+  intl: ^0.20.1
+
+  # Web-only iframe embedding (HtmlElementView); harmless transitive elsewhere
+  web: ^1.1.0
+
+  # Embedded webview on desktop (macOS/Windows via WKWebView/WebView2).
+  flutter_inappwebview: ^6.1.5
+
+  # QR code for the Senclaw Connector (mobile-app pairing).
+  qr_flutter: ^4.1.0
+
+  # Voice input (mic record → Whisper) + TTS playback.
+  # record 5.x pulled a mismatched federated set (record_linux 0.7.2 vs
+  # record_platform_interface 1.6 hasPermission signature) → broke the build.
+  # 6.x uses the consistent 2.x federated packages.
+  record: ^6.0.0
+  audioplayers: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/tray_icon.png
+    - assets/tray_icon.ico
+    - assets/branding/senclaw_icon_1024.png
+
+# New SenClaw app icon (gradient squircle + claw slashes).
+flutter_launcher_icons:
+  image_path: "assets/branding/senclaw_icon_1024.png"
+  remove_alpha_ios: true
+  macos:
+    generate: true
+    image_path: "assets/branding/senclaw_icon_1024.png"
+  web:
+    generate: true
+    image_path: "assets/branding/senclaw_icon_1024.png"
+    background_color: "#0B0E14"
+    theme_color: "#5B8DEF"
+  windows:
+    generate: true
+    image_path: "assets/branding/senclaw_icon_1024.png"
+    icon_size: 256

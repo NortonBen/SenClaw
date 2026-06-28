@@ -1,0 +1,2200 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
+import '../../core/transport/connection.dart';
+import '../../models/space_models.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/app_markdown.dart';
+import '../../widgets/embedded_web.dart';
+import 'space_providers.dart';
+import '../cowork/cowork_screen.dart';
+import '../chat/agents_provider.dart';
+import '../chat/new_chat_dialog.dart' show llmConfigsProvider;
+
+/// The host theme as the Space-app bridge string ('dark' | 'light'). Passed to
+/// [embeddedWebView], which delivers it to the app via postMessage (the app's
+/// URL stays stable, so a theme switch doesn't reload the frame).
+String _embedTheme(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? 'dark' : 'light';
+
+class SpaceScreen extends ConsumerWidget {
+  const SpaceScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    // Optional deep-link: /space?tab=calendar|schedules|cowork selects a tab.
+    final tab = GoRouterState.of(context).uri.queryParameters['tab'];
+    final initialTab = switch (tab) {
+      'calendar' => 1,
+      'schedules' => 2,
+      'cowork' => 3,
+      _ => 0,
+    };
+    return DefaultTabController(
+      length: 4,
+      initialIndex: initialTab,
+      child: Column(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: c.border)),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(width: AppTokens.s24),
+                Text('Space',
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    )),
+                const SizedBox(width: AppTokens.s24),
+                Expanded(
+                  child: TabBar(
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    labelColor: c.accent,
+                    unselectedLabelColor: c.textMuted,
+                    indicatorColor: c.accent,
+                    tabs: const [
+                      Tab(text: 'Notes'),
+                      Tab(text: 'Calendar'),
+                      Tab(text: 'Schedules'),
+                      Tab(text: 'Cowork'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Expanded(
+            child: TabBarView(
+              children: [
+                _NotesTab(),
+                _CalendarTab(),
+                _SchedulesTab(),
+                CoworkScreen(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Notes ─────────────────────────────────────────────────────────────────
+class _NotesTab extends ConsumerStatefulWidget {
+  const _NotesTab();
+  @override
+  ConsumerState<_NotesTab> createState() => _NotesTabState();
+}
+
+class _NotesTabState extends ConsumerState<_NotesTab> {
+  String? _selectedId;
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final notesAsync = ref.watch(notesProvider);
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 300,
+          child: Container(
+            color: c.sidebar,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(AppTokens.s12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          decoration: const InputDecoration(
+                            hintText: 'Search notes…',
+                            prefixIcon: Icon(Icons.search, size: 16),
+                          ),
+                          onChanged: (v) => setState(() => _query = v.toLowerCase()),
+                        ),
+                      ),
+                      const SizedBox(width: AppTokens.s8),
+                      IconButton.filled(
+                        tooltip: 'New note',
+                        icon: const Icon(Icons.add, size: 18),
+                        onPressed: () => _editNote(context, ref, null),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: notesAsync.when(
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(child: Text('$e')),
+                    data: (notes) {
+                      final filtered = (_query.isEmpty
+                          ? [...notes]
+                          : notes
+                              .where((n) =>
+                                  n.title.toLowerCase().contains(_query) ||
+                                  n.body.toLowerCase().contains(_query))
+                              .toList())
+                        ..sort((a, b) =>
+                            (b.pinned ? 1 : 0).compareTo(a.pinned ? 1 : 0));
+                      if (filtered.isEmpty) {
+                        return Center(
+                          child: Text('No notes',
+                              style: TextStyle(color: c.textMuted)),
+                        );
+                      }
+                      return ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (_, i) {
+                          final n = filtered[i];
+                          final sel = n.id == _selectedId;
+                          return InkWell(
+                            onTap: () => setState(() => _selectedId = n.id),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: AppTokens.s12, vertical: AppTokens.s12),
+                              margin: const EdgeInsets.symmetric(
+                                  horizontal: AppTokens.s8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: sel ? c.accentSoft : Colors.transparent,
+                                borderRadius: BorderRadius.circular(AppTokens.rMd),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(n.title.isEmpty ? '(untitled)' : n.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: c.textPrimary,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 14,
+                                      )),
+                                  if (n.tags.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(n.tags.map((t) => '#$t').join(' '),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                              color: c.textMuted, fontSize: 12)),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Container(width: 1, color: c.border),
+        Expanded(
+          child: notesAsync.maybeWhen(
+            data: (notes) {
+              final note = notes.where((n) => n.id == _selectedId).firstOrNull;
+              if (note == null) {
+                return Center(
+                  child: Text('Select a note',
+                      style: TextStyle(color: c.textMuted)),
+                );
+              }
+              return _NoteView(
+                note: note,
+                onPin: () => ref.read(spaceApiProvider).togglePin(note),
+                onEdit: () => _editNote(context, ref, note),
+                onDelete: () async {
+                  await ref.read(spaceApiProvider).deleteNote(note.id);
+                  setState(() => _selectedId = null);
+                },
+              );
+            },
+            orElse: () => const SizedBox.shrink(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editNote(BuildContext context, WidgetRef ref, SpaceNote? note) =>
+      showDialog(context: context, builder: (_) => _NoteEditor(note: note));
+}
+
+class _NoteView extends StatelessWidget {
+  const _NoteView(
+      {required this.note,
+      required this.onPin,
+      required this.onEdit,
+      required this.onDelete});
+  final SpaceNote note;
+  final VoidCallback onPin;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(AppTokens.s16),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: c.border)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(note.title,
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    )),
+              ),
+              IconButton(
+                  tooltip: note.pinned ? 'Unpin' : 'Pin',
+                  onPressed: onPin,
+                  icon: Icon(
+                      note.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                      size: 18,
+                      color: note.pinned ? AppTokens.brand : null)),
+              IconButton(
+                  onPressed: onEdit, icon: const Icon(Icons.edit_outlined, size: 18)),
+              IconButton(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline,
+                      size: 18, color: AppTokens.danger)),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SelectionArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(AppTokens.s24),
+              child: AppMarkdown(note.body,
+                  style: TextStyle(color: c.textSecondary, height: 1.6)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NoteEditor extends ConsumerStatefulWidget {
+  const _NoteEditor({this.note});
+  final SpaceNote? note;
+  @override
+  ConsumerState<_NoteEditor> createState() => _NoteEditorState();
+}
+
+class _NoteEditorState extends ConsumerState<_NoteEditor> {
+  late final TextEditingController _title =
+      TextEditingController(text: widget.note?.title ?? '');
+  late final TextEditingController _body =
+      TextEditingController(text: widget.note?.body ?? '');
+  late final TextEditingController _tags =
+      TextEditingController(text: widget.note?.tags.join(', ') ?? '');
+  bool _preview = false;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _body.dispose();
+    _tags.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final tags = _tags.text
+        .split(',')
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    final api = ref.read(spaceApiProvider);
+    if (widget.note == null) {
+      await api.createNote(_title.text, _body.text, tags);
+    } else {
+      await api.updateNote(widget.note!.id, _title.text, _body.text, tags);
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Dialog(
+      backgroundColor: c.surface,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 560),
+        child: Padding(
+          padding: const EdgeInsets.all(AppTokens.s20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(widget.note == null ? 'New note' : 'Edit note',
+                  style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                  controller: _title,
+                  decoration: const InputDecoration(hintText: 'Title')),
+              const SizedBox(height: AppTokens.s8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: SegmentedButton<bool>(
+                  style:
+                      const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: const [
+                    ButtonSegment(
+                        value: false,
+                        icon: Icon(Icons.edit_outlined, size: 14),
+                        label: Text('Edit')),
+                    ButtonSegment(
+                        value: true,
+                        icon: Icon(Icons.visibility_outlined, size: 14),
+                        label: Text('Preview')),
+                  ],
+                  selected: {_preview},
+                  onSelectionChanged: (s) =>
+                      setState(() => _preview = s.first),
+                ),
+              ),
+              const SizedBox(height: AppTokens.s8),
+              Expanded(
+                child: _preview
+                    ? Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(AppTokens.s12),
+                        decoration: BoxDecoration(
+                          color: c.sidebar,
+                          borderRadius: BorderRadius.circular(AppTokens.rMd),
+                          border: Border.all(color: c.border),
+                        ),
+                        child: SingleChildScrollView(
+                          child: AppMarkdown(
+                            _body.text.isEmpty ? '_(empty)_' : _body.text,
+                            style: TextStyle(
+                                color: c.textPrimary, height: 1.5),
+                          ),
+                        ),
+                      )
+                    : TextField(
+                        controller: _body,
+                        expands: true,
+                        maxLines: null,
+                        textAlignVertical: TextAlignVertical.top,
+                        decoration:
+                            const InputDecoration(hintText: 'Body (markdown)…'),
+                      ),
+              ),
+              const SizedBox(height: AppTokens.s8),
+              TextField(
+                  controller: _tags,
+                  decoration:
+                      const InputDecoration(hintText: 'tags, comma, separated')),
+              const SizedBox(height: AppTokens.s16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Cancel')),
+                  const SizedBox(width: AppTokens.s8),
+                  FilledButton(onPressed: _save, child: const Text('Save')),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Calendar ────────────────────────────────────────────────────────────
+class _CalendarTab extends ConsumerStatefulWidget {
+  const _CalendarTab();
+  @override
+  ConsumerState<_CalendarTab> createState() => _CalendarTabState();
+}
+
+class _CalendarTabState extends ConsumerState<_CalendarTab> {
+  bool _monthView = true;
+  String _query = '';
+  late DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
+
+  bool _matches(SpaceEvent e) {
+    if (_query.isEmpty) return true;
+    final q = _query.toLowerCase();
+    return e.title.toLowerCase().contains(q) ||
+        (e.description ?? '').toLowerCase().contains(q) ||
+        (e.location ?? '').toLowerCase().contains(q);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final events = ref.watch(eventsProvider);
+    final fmt = DateFormat('EEE d MMM · HH:mm');
+    // Searching forces the list view (the grid can't show match context well).
+    final searching = _query.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppTokens.s16, AppTokens.s12, AppTokens.s16, 0),
+          child: Row(
+            children: [
+              if (_monthView && !searching) ...[
+                IconButton(
+                  tooltip: 'Previous month',
+                  icon: const Icon(Icons.chevron_left, size: 20),
+                  onPressed: () => setState(
+                      () => _month = DateTime(_month.year, _month.month - 1)),
+                ),
+                Text(DateFormat('MMMM yyyy').format(_month),
+                    style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700)),
+                IconButton(
+                  tooltip: 'Next month',
+                  icon: const Icon(Icons.chevron_right, size: 20),
+                  onPressed: () => setState(
+                      () => _month = DateTime(_month.year, _month.month + 1)),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _month = DateTime(
+                      DateTime.now().year, DateTime.now().month)),
+                  child: const Text('Today'),
+                ),
+              ],
+              const SizedBox(width: AppTokens.s8),
+              // Search events.
+              SizedBox(
+                width: 220,
+                child: TextField(
+                  onChanged: (v) => setState(() => _query = v.trim()),
+                  decoration: InputDecoration(
+                    hintText: 'Search events…',
+                    prefixIcon: const Icon(Icons.search, size: 16),
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close, size: 14),
+                            onPressed: () => setState(() => _query = ''),
+                          ),
+                  ),
+                ),
+              ),
+              const Spacer(),
+              SegmentedButton<bool>(
+                style:
+                    const ButtonStyle(visualDensity: VisualDensity.compact),
+                segments: const [
+                  ButtonSegment(
+                      value: true, icon: Icon(Icons.grid_view, size: 16)),
+                  ButtonSegment(
+                      value: false, icon: Icon(Icons.view_list, size: 16)),
+                ],
+                selected: {_monthView},
+                onSelectionChanged: (s) =>
+                    setState(() => _monthView = s.first),
+              ),
+              const SizedBox(width: AppTokens.s8),
+              IconButton(
+                tooltip: 'Reload events',
+                icon: const Icon(Icons.refresh, size: 18),
+                onPressed: () => ref.invalidate(eventsProvider),
+              ),
+              const SizedBox(width: AppTokens.s8),
+              FilledButton.icon(
+                onPressed: () => showDialog(
+                    context: context, builder: (_) => const _EventEditor()),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('New event'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: context.colors.accent,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppTokens.s16, vertical: AppTokens.s12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTokens.rXl)),
+                  textStyle: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: events.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('$e')),
+            data: (list) {
+              final filtered = list.where(_matches).toList();
+              if (_monthView && !searching) {
+                return _MonthGrid(month: _month, events: filtered);
+              }
+              if (filtered.isEmpty) {
+                return Center(
+                  child: Text(
+                      searching ? 'No matching events' : 'No upcoming events',
+                      style: TextStyle(color: c.textMuted)),
+                );
+              }
+              final sorted = [...filtered]
+                ..sort((a, b) => a.startAt.compareTo(b.startAt));
+              return ListView.builder(
+                padding: const EdgeInsets.all(AppTokens.s16),
+                itemCount: sorted.length,
+                itemBuilder: (_, i) {
+                  final e = sorted[i];
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: AppTokens.s8),
+                    padding: const EdgeInsets.all(AppTokens.s12),
+                    decoration: BoxDecoration(
+                      color: c.surface,
+                      border: Border.all(color: c.border),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.event, size: 16, color: c.accent),
+                        const SizedBox(width: AppTokens.s12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(e.title,
+                                  style: TextStyle(
+                                      color: c.textPrimary,
+                                      fontWeight: FontWeight.w600)),
+                              Text(e.allDay ? 'All day' : fmt.format(e.start),
+                                  style: TextStyle(
+                                      color: c.textMuted, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Edit',
+                          icon: Icon(Icons.edit_outlined,
+                              size: 16, color: c.textSecondary),
+                          onPressed: () => showDialog(
+                              context: context,
+                              builder: (_) => _EventEditor(existing: e)),
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.delete_outline,
+                              size: 16, color: AppTokens.danger),
+                          onPressed: () =>
+                              ref.read(spaceApiProvider).deleteEvent(e.id),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A month calendar grid (6 weeks × 7 days) with event chips per day. Week
+/// starts on Sunday to match the web CalendarView.
+class _MonthGrid extends StatelessWidget {
+  const _MonthGrid({required this.month, required this.events});
+  final DateTime month;
+  final List<SpaceEvent> events;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final first = DateTime(month.year, month.month);
+    // weekday(): Mon=1..Sun=7 → Sunday-first offset.
+    final lead = first.weekday % 7;
+    final gridStart = first.subtract(Duration(days: lead));
+    final today = DateTime.now();
+
+    // Bucket events by yyyy-mm-dd.
+    final byDay = <String, List<SpaceEvent>>{};
+    for (final e in events) {
+      final d = e.start;
+      byDay.putIfAbsent('${d.year}-${d.month}-${d.day}', () => []).add(e);
+    }
+
+    const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return Padding(
+      padding: const EdgeInsets.all(AppTokens.s16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              for (final d in dow)
+                Expanded(
+                  child: Center(
+                    child: Text(d,
+                        style: TextStyle(
+                            color: c.textMuted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppTokens.s4),
+          Expanded(
+            child: Column(
+              children: [
+                for (var w = 0; w < 6; w++)
+                  Expanded(
+                    child: Row(
+                      children: [
+                        for (var d = 0; d < 7; d++)
+                          Builder(builder: (_) {
+                            final day =
+                                gridStart.add(Duration(days: w * 7 + d));
+                            final inMonth = day.month == month.month;
+                            final isToday = day.year == today.year &&
+                                day.month == today.month &&
+                                day.day == today.day;
+                            final dayEvents =
+                                byDay['${day.year}-${day.month}-${day.day}'] ??
+                                    const [];
+                            return Expanded(
+                              child: InkWell(
+                                onTap: () => showDialog(
+                                  context: context,
+                                  builder: (_) => _DayEventsDialog(day: day),
+                                ),
+                                borderRadius:
+                                    BorderRadius.circular(AppTokens.rSm),
+                                child: Container(
+                                margin: const EdgeInsets.all(1),
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  color: inMonth
+                                      ? c.surface
+                                      : c.surface.withValues(alpha: 0.4),
+                                  borderRadius:
+                                      BorderRadius.circular(AppTokens.rSm),
+                                  border: Border.all(
+                                      color: isToday ? c.accent : c.border,
+                                      width: isToday ? 1.5 : 1),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text('${day.day}',
+                                        style: TextStyle(
+                                            color: inMonth
+                                                ? (isToday
+                                                    ? c.accent
+                                                    : c.textSecondary)
+                                                : c.textMuted,
+                                            fontSize: 11,
+                                            fontWeight: isToday
+                                                ? FontWeight.w700
+                                                : FontWeight.w400)),
+                                    const SizedBox(height: 2),
+                                    Expanded(
+                                      child: ListView(
+                                        padding: EdgeInsets.zero,
+                                        physics:
+                                            const ClampingScrollPhysics(),
+                                        children: [
+                                          for (final e in dayEvents.take(4))
+                                            Container(
+                                              margin: const EdgeInsets.only(
+                                                  bottom: 1),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 3,
+                                                      vertical: 1),
+                                              decoration: BoxDecoration(
+                                                color: c.accentSoft,
+                                                borderRadius:
+                                                    BorderRadius.circular(3),
+                                              ),
+                                              child: Text(e.title,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                      color: c.accent,
+                                                      fontSize: 9.5)),
+                                            ),
+                                          if (dayEvents.length > 4)
+                                            Text('+${dayEvents.length - 4}',
+                                                style: TextStyle(
+                                                    color: c.textMuted,
+                                                    fontSize: 9)),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              ),
+                            );
+                          }),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tapping a day in the month grid opens this — the events on that day with
+/// edit / delete, plus a "New event" shortcut. Stays live off [eventsProvider].
+class _DayEventsDialog extends ConsumerWidget {
+  const _DayEventsDialog({required this.day});
+  final DateTime day;
+
+  bool _sameDay(DateTime a) =>
+      a.year == day.year && a.month == day.month && a.day == day.day;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final all = ref.watch(eventsProvider).valueOrNull ?? const [];
+    final events = all.where((e) => _sameDay(e.start)).toList()
+      ..sort((a, b) => a.startAt.compareTo(b.startAt));
+    final fmt = DateFormat('HH:mm');
+    return AlertDialog(
+      backgroundColor: c.surface,
+      title: Row(children: [
+        Expanded(
+          child: Text(DateFormat('EEE, d MMM yyyy').format(day),
+              style: const TextStyle(fontSize: 16)),
+        ),
+        IconButton(
+          tooltip: 'New event',
+          icon: const Icon(Icons.add, size: 18),
+          onPressed: () => showDialog(
+              context: context,
+              builder: (_) => _EventEditor(initialDay: day)),
+        ),
+      ]),
+      content: SizedBox(
+        width: 380,
+        child: events.isEmpty
+            ? Padding(
+                padding: const EdgeInsets.symmetric(vertical: AppTokens.s16),
+                child: Text('No events on this day.',
+                    style: TextStyle(color: c.textMuted)),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final e in events)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: AppTokens.s8),
+                      padding: const EdgeInsets.all(AppTokens.s12),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: c.border),
+                        borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      ),
+                      child: Row(children: [
+                        Container(
+                            width: 4,
+                            height: 36,
+                            decoration: BoxDecoration(
+                                color: c.accent,
+                                borderRadius: BorderRadius.circular(2))),
+                        const SizedBox(width: AppTokens.s12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(e.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: c.textPrimary,
+                                      fontWeight: FontWeight.w600)),
+                              Text(
+                                  e.allDay
+                                      ? 'All day'
+                                      : '${fmt.format(e.start)} – ${fmt.format(DateTime.fromMillisecondsSinceEpoch(e.endAt))}',
+                                  style: TextStyle(
+                                      color: c.textMuted, fontSize: 12)),
+                              if (e.location != null &&
+                                  e.location!.isNotEmpty)
+                                Text(e.location!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        color: c.textMuted, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Edit',
+                          icon: Icon(Icons.edit_outlined,
+                              size: 16, color: c.textSecondary),
+                          onPressed: () => showDialog(
+                              context: context,
+                              builder: (_) => _EventEditor(existing: e)),
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.delete_outline,
+                              size: 16, color: AppTokens.danger),
+                          onPressed: () =>
+                              ref.read(spaceApiProvider).deleteEvent(e.id),
+                        ),
+                      ]),
+                    ),
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close')),
+      ],
+    );
+  }
+}
+
+/// Public entry to the new-event editor (used by the Dashboard's events panel).
+Future<void> showCreateEventDialog(BuildContext context) =>
+    showDialog(context: context, builder: (_) => const _EventEditor());
+
+/// Public entry to a day's events (used by the Dashboard mini-calendar).
+Future<void> showDayEventsDialog(BuildContext context, DateTime day) =>
+    showDialog(context: context, builder: (_) => _DayEventsDialog(day: day));
+
+/// Public entry to the new-note editor (used by the Dashboard quick actions).
+Future<void> showCreateNoteDialog(BuildContext context) =>
+    showDialog(context: context, builder: (_) => const _NoteEditor());
+
+class _EventEditor extends ConsumerStatefulWidget {
+  const _EventEditor({this.existing, this.initialDay});
+  /// When set, the dialog edits this event (PUT) instead of creating one.
+  final SpaceEvent? existing;
+  /// When creating, pre-seed the date to this day (from the calendar grid).
+  final DateTime? initialDay;
+  @override
+  ConsumerState<_EventEditor> createState() => _EventEditorState();
+}
+
+class _EventEditorState extends ConsumerState<_EventEditor> {
+  final _title = TextEditingController();
+  final _description = TextEditingController();
+  final _location = TextEditingController();
+  late DateTime _start;
+  late DateTime _end;
+  bool _allDay = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    if (e != null) {
+      _title.text = e.title;
+      _description.text = e.description ?? '';
+      _location.text = e.location ?? '';
+      _allDay = e.allDay;
+      _start = DateTime.fromMillisecondsSinceEpoch(e.startAt);
+      _end = e.endAt > e.startAt
+          ? DateTime.fromMillisecondsSinceEpoch(e.endAt)
+          : _start.add(const Duration(hours: 1));
+    } else if (widget.initialDay != null) {
+      // Creating for a specific calendar day → default 09:00–10:00 that day.
+      final d = widget.initialDay!;
+      _start = DateTime(d.year, d.month, d.day, 9);
+      _end = _start.add(const Duration(hours: 1));
+    } else {
+      final now = DateTime.now();
+      // Default to the next full hour, 1-hour duration.
+      final base = DateTime(now.year, now.month, now.day, now.hour + 1);
+      _start = base;
+      _end = base.add(const Duration(hours: 1));
+    }
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _description.dispose();
+    _location.dispose();
+    super.dispose();
+  }
+
+  Future<DateTime?> _pick(DateTime initial) async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (d == null || !mounted) return null;
+    if (_allDay) return DateTime(d.year, d.month, d.day);
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+        child: child!,
+      ),
+    );
+    return DateTime(d.year, d.month, d.day, t?.hour ?? initial.hour,
+        t?.minute ?? initial.minute);
+  }
+
+  Future<void> _editStart() async {
+    final picked = await _pick(_start);
+    if (picked == null) return;
+    setState(() {
+      final dur = _end.difference(_start);
+      _start = picked;
+      // Keep the original duration; never let end fall before start.
+      _end = _start.add(dur.isNegative ? const Duration(hours: 1) : dur);
+    });
+  }
+
+  Future<void> _editEnd() async {
+    final picked = await _pick(_end);
+    if (picked == null) return;
+    setState(() => _end =
+        picked.isBefore(_start) ? _start.add(const Duration(hours: 1)) : picked);
+  }
+
+  Future<void> _save() async {
+    if (_title.text.trim().isEmpty || _saving) return;
+    setState(() => _saving = true);
+    final start =
+        _allDay ? DateTime(_start.year, _start.month, _start.day) : _start;
+    final end = _allDay
+        ? DateTime(_end.year, _end.month, _end.day).add(const Duration(days: 1))
+        : _end;
+    try {
+      final api = ref.read(spaceApiProvider);
+      final desc =
+          _description.text.trim().isEmpty ? null : _description.text.trim();
+      final loc = _location.text.trim().isEmpty ? null : _location.text.trim();
+      if (widget.existing != null) {
+        await api.updateEvent(
+          id: widget.existing!.id,
+          title: _title.text.trim(),
+          startAt: start.millisecondsSinceEpoch,
+          endAt: end.millisecondsSinceEpoch,
+          allDay: _allDay,
+          description: desc,
+          location: loc,
+        );
+      } else {
+        await api.createEvent(
+          title: _title.text.trim(),
+          startAt: start.millisecondsSinceEpoch,
+          endAt: end.millisecondsSinceEpoch,
+          allDay: _allDay,
+          description: desc,
+          location: loc,
+        );
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final df = _allDay
+        ? DateFormat('EEE d MMM yyyy')
+        : DateFormat('EEE d MMM yyyy · HH:mm');
+    final canSave = _title.text.trim().isNotEmpty && !_saving;
+
+    return Dialog(
+      backgroundColor: c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTokens.rXl)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(AppTokens.s24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: c.accent.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    ),
+                    child: Icon(Icons.event, color: c.accent, size: 20),
+                  ),
+                  const SizedBox(width: AppTokens.s12),
+                  Text(widget.existing == null ? 'New event' : 'Edit event',
+                      style: TextStyle(
+                          color: c.textPrimary,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+              const SizedBox(height: AppTokens.s20),
+              TextField(
+                controller: _title,
+                autofocus: true,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Title',
+                  hintText: 'What is it?',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: _description,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Description',
+                  hintText: 'Optional notes…',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: _location,
+                decoration: const InputDecoration(
+                  labelText: 'Location',
+                  hintText: 'Optional',
+                  prefixIcon: Icon(Icons.place_outlined, size: 18),
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: AppTokens.s16),
+              // All-day toggle.
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppTokens.s12, vertical: AppTokens.s4),
+                decoration: BoxDecoration(
+                  color: c.surfaceAlt,
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                  border: Border.all(color: c.border),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.today_outlined, size: 16, color: c.textSecondary),
+                    const SizedBox(width: AppTokens.s8),
+                    Text('All day',
+                        style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                    const Spacer(),
+                    Switch(
+                      value: _allDay,
+                      onChanged: (v) => setState(() => _allDay = v),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              _DateField(
+                  label: 'Starts',
+                  value: df.format(_start),
+                  onTap: _editStart),
+              const SizedBox(height: AppTokens.s8),
+              _DateField(
+                  label: 'Ends', value: df.format(_end), onTap: _editEnd),
+              const SizedBox(height: AppTokens.s24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                      onPressed: _saving
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      child: const Text('Cancel')),
+                  const SizedBox(width: AppTokens.s8),
+                  FilledButton.icon(
+                    onPressed: canSave ? _save : null,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.check, size: 16),
+                    label: const Text('Create'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A tappable date/time row used by the event editor.
+class _DateField extends StatelessWidget {
+  const _DateField(
+      {required this.label, required this.value, required this.onTap});
+  final String label;
+  final String value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppTokens.rMd),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppTokens.s12, vertical: AppTokens.s12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppTokens.rMd),
+          border: Border.all(color: c.border),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 52,
+              child: Text(label,
+                  style: TextStyle(color: c.textMuted, fontSize: 13)),
+            ),
+            Icon(Icons.event, size: 16, color: c.accent),
+            const SizedBox(width: AppTokens.s8),
+            Expanded(
+              child: Text(value,
+                  style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500)),
+            ),
+            Icon(Icons.edit_outlined, size: 14, color: c.textMuted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Apps (embedded Space apps) ────────────────────────────────────────────
+/// The Apps launcher: a grid of installed apps (home). Tapping one launches it
+/// into [RunningAppsLayer], which the shell keeps mounted across navigation so
+/// apps keep running in the background (Android task model).
+class SpaceAppsScreen extends ConsumerWidget {
+  const SpaceAppsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final apps = ref.watch(spaceAppsProvider);
+    final run = ref.watch(runningAppsProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(
+              AppTokens.s24, AppTokens.s16, AppTokens.s16, AppTokens.s12),
+          decoration:
+              BoxDecoration(border: Border(bottom: BorderSide(color: c.border))),
+          child: Row(children: [
+            Text('Apps',
+                style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(width: AppTokens.s12),
+            if (run.running.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppTokens.s8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: c.accentSoft,
+                  borderRadius: BorderRadius.circular(AppTokens.rFull),
+                ),
+                child: Text('${run.running.length} running',
+                    style: TextStyle(color: c.accent, fontSize: 11)),
+              ),
+            const Spacer(),
+            IconButton(
+              tooltip: 'Reload apps',
+              icon: const Icon(Icons.refresh, size: 18),
+              onPressed: () => ref.invalidate(spaceAppsProvider),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: apps.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('$e')),
+            data: (list) => list.isEmpty
+                ? Center(
+                    child: Text('No apps installed',
+                        style: TextStyle(color: c.textMuted)))
+                : GridView.builder(
+                    padding: const EdgeInsets.all(AppTokens.s24),
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 200,
+                      mainAxisExtent: 132,
+                      crossAxisSpacing: AppTokens.s16,
+                      mainAxisSpacing: AppTokens.s16,
+                    ),
+                    itemCount: list.length,
+                    itemBuilder: (_, i) => _AppTile(app: list[i]),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One launcher tile. Shows a running badge + an inline terminate button when
+/// the app is currently mounted. Right-click (or long-press) opens a context
+/// menu: start/stop by state, pin to dashboard, app info & details.
+class _AppTile extends ConsumerWidget {
+  const _AppTile({required this.app});
+  final SpaceApp app;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final ctl = ref.read(runningAppsProvider.notifier);
+    final running = ref.watch(runningAppsProvider).isRunning(app.id);
+    final pinned = ref.watch(pinnedAppsProvider).contains(app.id);
+    return GestureDetector(
+      onSecondaryTapDown: (d) =>
+          showAppContextMenu(context, ref, app, d.globalPosition),
+      onLongPressStart: (d) =>
+          showAppContextMenu(context, ref, app, d.globalPosition),
+      child: InkWell(
+        onTap: () => ctl.open(app),
+        borderRadius: BorderRadius.circular(AppTokens.rXl),
+        child: Container(
+          decoration: BoxDecoration(
+            color: c.surface,
+            border: Border.all(
+                color: running ? c.accent : c.border, width: running ? 1.5 : 1),
+            borderRadius: BorderRadius.circular(AppTokens.rXl),
+          ),
+          padding: const EdgeInsets.all(AppTokens.s12),
+          child: Stack(
+            children: [
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(app.icon, style: const TextStyle(fontSize: 34)),
+                    const SizedBox(height: AppTokens.s8),
+                    Text(app.name,
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: c.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+              if (pinned)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  child: Icon(Icons.push_pin, size: 13, color: c.accent),
+                ),
+              if (running)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Row(children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                          color: AppTokens.success, shape: BoxShape.circle),
+                    ),
+                    InkWell(
+                      onTap: () => ctl.close(app.id),
+                      borderRadius: BorderRadius.circular(AppTokens.rFull),
+                      child: Padding(
+                        padding: const EdgeInsets.all(2),
+                        child: Icon(Icons.close, size: 15, color: c.textMuted),
+                      ),
+                    ),
+                  ]),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Right-click / long-press menu for a Space app tile. Actions adapt to the
+/// app's running state (Start vs. Stop/Restart).
+Future<void> showAppContextMenu(
+    BuildContext context, WidgetRef ref, SpaceApp app, Offset pos) async {
+  final c = context.colors;
+  final ctl = ref.read(runningAppsProvider.notifier);
+  final running = ref.read(runningAppsProvider).isRunning(app.id);
+  final pinned = ref.read(pinnedAppsProvider).contains(app.id);
+  final overlay =
+      Overlay.of(context).context.findRenderObject() as RenderBox;
+
+  final choice = await showMenu<String>(
+    context: context,
+    color: c.surface,
+    position: RelativeRect.fromRect(
+        pos & const Size(40, 40), Offset.zero & overlay.size),
+    items: [
+      if (running) ...[
+        const PopupMenuItem(
+            value: 'stop',
+            child: _MenuRow(Icons.stop_circle_outlined, 'Stop',
+                color: AppTokens.danger)),
+        const PopupMenuItem(
+            value: 'restart',
+            child: _MenuRow(Icons.restart_alt, 'Restart')),
+      ] else
+        const PopupMenuItem(
+            value: 'start', child: _MenuRow(Icons.play_arrow, 'Start')),
+      const PopupMenuDivider(),
+      PopupMenuItem(
+        value: 'pin',
+        child: _MenuRow(
+            pinned ? Icons.push_pin : Icons.push_pin_outlined,
+            pinned ? 'Unpin from dashboard' : 'Pin to dashboard'),
+      ),
+      const PopupMenuDivider(),
+      const PopupMenuItem(
+          value: 'info', child: _MenuRow(Icons.info_outline, 'App info')),
+      const PopupMenuItem(
+          value: 'details', child: _MenuRow(Icons.tune, 'Details')),
+    ],
+  );
+  if (choice == null || !context.mounted) return;
+
+  switch (choice) {
+    case 'start':
+      ctl.open(app);
+    case 'stop':
+      ctl.close(app.id);
+    case 'restart':
+      await ref
+          .read(apiClientProvider)
+          .post('/api/space/apps/${app.id}/restart');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Restarting ${app.name}…')));
+      }
+    case 'pin':
+      ref.read(pinnedAppsProvider.notifier).toggle(app.id);
+    case 'info':
+      showDialog(context: context, builder: (_) => _AppInfoDialog(app: app));
+    case 'details':
+      showDialog(context: context, builder: (_) => _AppDetailsDialog(app: app));
+  }
+}
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow(this.icon, this.label, {this.color});
+  final IconData icon;
+  final String label;
+  final Color? color;
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final fg = color ?? c.textPrimary;
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color ?? c.textSecondary),
+        const SizedBox(width: AppTokens.s12),
+        Text(label, style: TextStyle(color: fg, fontSize: 13)),
+      ],
+    );
+  }
+}
+
+/// Friendly "App info" card — icon, name, description, status.
+class _AppInfoDialog extends ConsumerWidget {
+  const _AppInfoDialog({required this.app});
+  final SpaceApp app;
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final running = ref.watch(runningAppsProvider).isRunning(app.id);
+    return Dialog(
+      backgroundColor: c.surface,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Padding(
+          padding: const EdgeInsets.all(AppTokens.s24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(app.icon, style: const TextStyle(fontSize: 40)),
+                  const SizedBox(width: AppTokens.s16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(app.name,
+                            style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: AppTokens.s4),
+                        Row(children: [
+                          _Badge(
+                            running ? 'Running' : 'Stopped',
+                            running ? AppTokens.success : c.textMuted,
+                          ),
+                          const SizedBox(width: AppTokens.s8),
+                          _Badge(
+                            app.enabled ? 'Enabled' : 'Disabled',
+                            app.enabled ? AppTokens.brand : AppTokens.danger,
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppTokens.s16),
+              Text(
+                app.description.isEmpty
+                    ? 'No description provided.'
+                    : app.description,
+                style: TextStyle(color: c.textSecondary, height: 1.5),
+              ),
+              const SizedBox(height: AppTokens.s20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Close')),
+                    const SizedBox(width: AppTokens.s8),
+                    FilledButton.icon(
+                      onPressed: () {
+                        ref.read(runningAppsProvider.notifier).open(app);
+                        Navigator.of(context).pop();
+                      },
+                      icon: Icon(running ? Icons.open_in_full : Icons.play_arrow,
+                          size: 16),
+                      label: Text(running ? 'Open' : 'Start'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Technical "Details" dialog — id, URL, integration state.
+class _AppDetailsDialog extends ConsumerWidget {
+  const _AppDetailsDialog({required this.app});
+  final SpaceApp app;
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final running = ref.watch(runningAppsProvider).isRunning(app.id);
+    return Dialog(
+      backgroundColor: c.surface,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(AppTokens.s24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${app.name} · details',
+                  style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: AppTokens.s16),
+              _DetailRow('ID', app.id),
+              if (app.version.isNotEmpty) _DetailRow('Version', app.version),
+              _DetailRow('Status', running ? 'Running' : 'Stopped'),
+              _DetailRow('Enabled', app.enabled ? 'Yes' : 'No'),
+              _DetailRow('URL', app.url),
+              if (app.permissions.isNotEmpty) ...[
+                const SizedBox(height: AppTokens.s12),
+                Text('PERMISSIONS',
+                    style: TextStyle(
+                        color: c.textMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5)),
+                const SizedBox(height: AppTokens.s6),
+                Wrap(spacing: AppTokens.s6, runSpacing: AppTokens.s6, children: [
+                  for (final p in app.permissions) _AppTag(p),
+                ]),
+              ],
+              if (app.mcpServers.isNotEmpty) ...[
+                const SizedBox(height: AppTokens.s12),
+                Text('MCP SERVERS',
+                    style: TextStyle(
+                        color: c.textMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5)),
+                const SizedBox(height: AppTokens.s6),
+                Wrap(spacing: AppTokens.s6, runSpacing: AppTokens.s6, children: [
+                  for (final s in app.mcpServers) _AppTag(s),
+                ]),
+              ],
+              const SizedBox(height: AppTokens.s20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close')),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small pill for a permission / MCP-server name in the app details dialog.
+class _AppTag extends StatelessWidget {
+  const _AppTag(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: 3),
+      decoration: BoxDecoration(
+        color: c.surfaceAlt,
+        borderRadius: BorderRadius.circular(AppTokens.rFull),
+        border: Border.all(color: c.border),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              color: c.textSecondary,
+              fontSize: 11,
+              fontFamily: AppTokens.fontMono)),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow(this.label, this.value);
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppTokens.s6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 88,
+            child: Text(label,
+                style: TextStyle(color: c.textMuted, fontSize: 13)),
+          ),
+          Expanded(
+            child: SelectableText(value,
+                style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 13,
+                    fontFamily: AppTokens.fontMono)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge(this.text, this.color);
+  final String text;
+  final Color color;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppTokens.rFull),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+/// The persistent layer of running apps, mounted by the shell. An
+/// [IndexedStack] keeps every running app's web view alive; the shell makes
+/// this visible only on /apps when an app is active, so apps keep running in
+/// the background while the user is elsewhere.
+class RunningAppsLayer extends ConsumerWidget {
+  const RunningAppsLayer({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final run = ref.watch(runningAppsProvider);
+    if (run.running.isEmpty) return const SizedBox.shrink();
+    final idx = run.activeId == null
+        ? 0
+        : run.running.indexWhere((a) => a.id == run.activeId);
+    return IndexedStack(
+      index: idx < 0 ? 0 : idx,
+      children: [for (final a in run.running) _RunningAppView(app: a)],
+    );
+  }
+}
+
+class _RunningAppView extends ConsumerWidget {
+  const _RunningAppView({required this.app});
+  final SpaceApp app;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final ctl = ref.read(runningAppsProvider.notifier);
+    return Container(
+      color: c.bg,
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppTokens.s12, vertical: AppTokens.s6),
+            decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: c.border))),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: 'Back to apps (keep running)',
+                  icon: const Icon(Icons.grid_view_outlined, size: 18),
+                  onPressed: ctl.background,
+                ),
+                const SizedBox(width: AppTokens.s4),
+                Text(app.name,
+                    style: TextStyle(
+                        color: c.textPrimary, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: () async {
+                    await ref
+                        .read(apiClientProvider)
+                        .post('/api/space/apps/${app.id}/restart');
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Restarting…')));
+                    }
+                  },
+                  icon: const Icon(Icons.restart_alt, size: 16),
+                  label: const Text('Restart'),
+                ),
+                IconButton(
+                  tooltip: 'Fullscreen',
+                  icon: const Icon(Icons.fullscreen, size: 18),
+                  onPressed: () => showDialog(
+                    context: context,
+                    barrierColor: Colors.black87,
+                    builder: (dctx) => _AppFullscreen(
+                        url: app.url,
+                        name: app.name,
+                        theme: _embedTheme(dctx)),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Run in background',
+                  icon: const Icon(Icons.minimize, size: 18),
+                  onPressed: ctl.background,
+                ),
+                IconButton(
+                  tooltip: 'Close app (terminate)',
+                  icon: const Icon(Icons.power_settings_new, size: 18),
+                  color: AppTokens.danger,
+                  onPressed: () => ctl.close(app.id),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: embeddedWebView(app.url,
+                title: app.name, theme: _embedTheme(context)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Schedules ───────────────────────────────────────────────────────────
+class _SchedulesTab extends ConsumerWidget {
+  const _SchedulesTab();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final schedules = ref.watch(schedulesProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppTokens.s16, AppTokens.s12, AppTokens.s16, 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => ref.invalidate(schedulesProvider),
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('Refresh'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: c.textSecondary,
+                  side: BorderSide(color: c.border),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppTokens.s16, vertical: AppTokens.s12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTokens.rXl)),
+                ),
+              ),
+              const SizedBox(width: AppTokens.s8),
+              FilledButton.icon(
+                onPressed: () => showDialog(
+                    context: context, builder: (_) => const _ScheduleEditor()),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('New schedule'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: c.accent,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppTokens.s16, vertical: AppTokens.s12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTokens.rXl)),
+                  textStyle: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: schedules.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('$e')),
+            data: (list) {
+              if (list.isEmpty) {
+                return Center(
+                    child: Text('No schedules',
+                        style: TextStyle(color: c.textMuted)));
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.all(AppTokens.s16),
+                itemCount: list.length,
+                itemBuilder: (_, i) {
+                  final s = list[i];
+                  final label = s.label.split('\n').first;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: AppTokens.s8),
+                    padding: const EdgeInsets.all(AppTokens.s12),
+                    decoration: BoxDecoration(
+                      color: c.surface,
+                      border: Border.all(color: c.border),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.schedule,
+                            size: 16, color: AppTokens.brandAlt),
+                        const SizedBox(width: AppTokens.s12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: c.textPrimary,
+                                      fontWeight: FontWeight.w600)),
+                              Text(
+                                  'next: ${s.nextRun ?? '—'}  ·  ${s.lastStatus ?? ''}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: c.textMuted, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Run now',
+                          icon: const Icon(Icons.play_arrow, size: 18),
+                          onPressed: () async {
+                            await ref.read(spaceApiProvider).runSchedule(s.id);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Running schedule…')),
+                              );
+                            }
+                          },
+                        ),
+                        IconButton(
+                          tooltip: 'Edit',
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          onPressed: () => showDialog(
+                              context: context,
+                              builder: (_) => _ScheduleEditor(existing: s)),
+                        ),
+                        IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.delete_outline,
+                              size: 16, color: AppTokens.danger),
+                          onPressed: () =>
+                              ref.read(spaceApiProvider).deleteSchedule(s.id),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Create/edit a scheduled task (web ScheduleDetailPanel): prompt + frequency
+/// (daily/weekly/monthly/once/advanced cron) + time + agent mode.
+class _ScheduleEditor extends ConsumerStatefulWidget {
+  const _ScheduleEditor({this.existing});
+  final SpaceSchedule? existing;
+  @override
+  ConsumerState<_ScheduleEditor> createState() => _ScheduleEditorState();
+}
+
+class _ScheduleEditorState extends ConsumerState<_ScheduleEditor> {
+  late final _prompt = TextEditingController(
+      text: widget.existing?.prompt.isNotEmpty == true
+          ? widget.existing!.prompt
+          : (widget.existing?.label ?? ''));
+  final _time = TextEditingController(text: '09:00');
+  final _cron = TextEditingController();
+  String _freq = 'daily';
+  int _weekday = 1; // 1=Mon
+  int _dom = 1;
+  late String _mode =
+      widget.existing?.agentMode.isNotEmpty == true
+          ? widget.existing!.agentMode
+          : 'agent';
+  String? _agentFolder; // profile to run as
+  String? _modelId;
+
+  static const _freqs = ['daily', 'weekly', 'monthly', 'once', 'advanced'];
+  static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  @override
+  void dispose() {
+    _prompt.dispose();
+    _time.dispose();
+    _cron.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final body = <String, dynamic>{
+      'prompt': _prompt.text.trim(),
+      'label': _prompt.text.trim().split('\n').first,
+      'agent_mode': _mode,
+      if (_agentFolder != null && _agentFolder!.isNotEmpty)
+        'agent_folder': _agentFolder,
+      if (_modelId != null && _modelId!.isNotEmpty) 'model_id': _modelId,
+    };
+    if (_freq == 'advanced') {
+      body['cron_advanced'] = _cron.text.trim();
+    } else {
+      body['frequency'] = _freq;
+      body['time_local'] = _time.text.trim();
+      if (_freq == 'weekly') body['weekday'] = _weekday;
+      if (_freq == 'monthly') body['day_of_month'] = _dom;
+    }
+    final api = ref.read(spaceApiProvider);
+    if (widget.existing != null) {
+      await api.updateSchedule(widget.existing!.id, body);
+    } else {
+      await api.createSchedule(body);
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.existing == null ? 'New schedule' : 'Edit schedule'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: _prompt,
+                minLines: 3,
+                maxLines: 8,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(fontSize: 14, height: 1.4),
+                decoration: InputDecoration(
+                  labelText: 'Prompt',
+                  alignLabelWithHint: true,
+                  hintText: 'Describe the task to run on schedule…',
+                  filled: true,
+                  fillColor: context.colors.surfaceAlt,
+                  contentPadding: const EdgeInsets.all(AppTokens.s12),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    borderSide: BorderSide(color: context.colors.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    borderSide:
+                        BorderSide(color: context.colors.accent, width: 1.5),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _freq,
+                      decoration: const InputDecoration(
+                          labelText: 'Frequency',
+                          border: OutlineInputBorder()),
+                      items: [
+                        for (final f in _freqs)
+                          DropdownMenuItem(value: f, child: Text(f)),
+                      ],
+                      onChanged: (v) => setState(() => _freq = v ?? 'daily'),
+                    ),
+                  ),
+                  const SizedBox(width: AppTokens.s8),
+                  if (_freq != 'advanced')
+                    SizedBox(
+                      width: 110,
+                      child: TextField(
+                        controller: _time,
+                        decoration: const InputDecoration(
+                            labelText: 'Time', hintText: 'HH:MM',
+                            border: OutlineInputBorder()),
+                      ),
+                    ),
+                ],
+              ),
+              if (_freq == 'weekly') ...[
+                const SizedBox(height: AppTokens.s12),
+                DropdownButtonFormField<int>(
+                  initialValue: _weekday,
+                  decoration: const InputDecoration(
+                      labelText: 'Weekday', border: OutlineInputBorder()),
+                  items: [
+                    for (var i = 0; i < 7; i++)
+                      DropdownMenuItem(
+                          value: i + 1, child: Text(_weekdays[i])),
+                  ],
+                  onChanged: (v) => setState(() => _weekday = v ?? 1),
+                ),
+              ],
+              if (_freq == 'monthly') ...[
+                const SizedBox(height: AppTokens.s12),
+                DropdownButtonFormField<int>(
+                  initialValue: _dom,
+                  decoration: const InputDecoration(
+                      labelText: 'Day of month',
+                      border: OutlineInputBorder()),
+                  items: [
+                    for (var d = 1; d <= 28; d++)
+                      DropdownMenuItem(value: d, child: Text('$d')),
+                  ],
+                  onChanged: (v) => setState(() => _dom = v ?? 1),
+                ),
+              ],
+              if (_freq == 'advanced') ...[
+                const SizedBox(height: AppTokens.s12),
+                TextField(
+                  controller: _cron,
+                  decoration: const InputDecoration(
+                      labelText: 'Cron expression',
+                      hintText: '0 9 * * *',
+                      border: OutlineInputBorder()),
+                ),
+              ],
+              const SizedBox(height: AppTokens.s12),
+              DropdownButtonFormField<String>(
+                initialValue: _mode,
+                decoration: const InputDecoration(
+                    labelText: 'Agent mode', border: OutlineInputBorder()),
+                items: const [
+                  DropdownMenuItem(value: 'agent', child: Text('Agent')),
+                  DropdownMenuItem(value: 'plan', child: Text('Plan')),
+                ],
+                onChanged: (v) => setState(() => _mode = v ?? 'agent'),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              // Profile (agent) to run the schedule.
+              DropdownButtonFormField<String>(
+                initialValue: _agentFolder,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                    labelText: 'Profile (agent)',
+                    border: OutlineInputBorder()),
+                hint: const Text('Default'),
+                items: [
+                  for (final a in ref
+                      .watch(agentsProvider)
+                      .where((a) => !a.isSchedule))
+                    DropdownMenuItem(value: a.folder, child: Text(a.name)),
+                ],
+                onChanged: (v) => setState(() => _agentFolder = v),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              // Model.
+              ref.watch(llmConfigsProvider).maybeWhen(
+                    data: (d) => DropdownButtonFormField<String?>(
+                      initialValue: _modelId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                          labelText: 'Model', border: OutlineInputBorder()),
+                      items: [
+                        const DropdownMenuItem(
+                            value: null, child: Text('Active default')),
+                        for (final m in d.configs)
+                          DropdownMenuItem(
+                              value: m.id,
+                              child: Text(m.label,
+                                  overflow: TextOverflow.ellipsis)),
+                      ],
+                      onChanged: (v) => setState(() => _modelId = v),
+                    ),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _prompt.text.trim().isEmpty ? null : _save,
+          child: Text(widget.existing == null ? 'Create' : 'Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Fullscreen overlay for a Space app's embedded view.
+class _AppFullscreen extends StatelessWidget {
+  const _AppFullscreen(
+      {required this.url, required this.name, this.theme = 'light'});
+  final String url;
+  final String name;
+  final String theme;
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Dialog(
+      insetPadding: EdgeInsets.zero,
+      backgroundColor: c.surface,
+      shape: const RoundedRectangleBorder(),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppTokens.s16, vertical: AppTokens.s8),
+            decoration:
+                BoxDecoration(border: Border(bottom: BorderSide(color: c.border))),
+            child: Row(
+              children: [
+                Text(name,
+                    style: TextStyle(
+                        color: c.textPrimary, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Exit fullscreen',
+                  icon: const Icon(Icons.fullscreen_exit, size: 20),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: embeddedWebView(url, title: name, theme: theme)),
+        ],
+      ),
+    );
+  }
+}
