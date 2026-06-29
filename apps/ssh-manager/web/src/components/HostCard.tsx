@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import { Card, Space } from 'antd';
 import { DesktopOutlined } from '@ant-design/icons';
 import type { Host } from '../types';
+import { useAppTheme } from '../theme';
 
 interface HostCardProps {
   host: Host;
@@ -13,6 +14,7 @@ interface HostCardProps {
 const DBLCLICK_DELAY_MS = 250;
 
 export const HostCard: React.FC<HostCardProps> = ({ host, selected, onClick, onDoubleClick }) => {
+  const { palette } = useAppTheme();
   const clickTimer = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -43,8 +45,8 @@ export const HostCard: React.FC<HostCardProps> = ({ host, selected, onClick, onD
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       style={{
-        backgroundColor: selected ? '#1f2937' : '#111827',
-        borderColor: selected ? '#3b82f6' : '#374151',
+        backgroundColor: selected ? palette.elevated : palette.containerBg,
+        borderColor: selected ? '#3b82f6' : palette.border,
         cursor: 'pointer',
         borderRadius: 8,
       }}
@@ -65,10 +67,10 @@ export const HostCard: React.FC<HostCardProps> = ({ host, selected, onClick, onD
           <DesktopOutlined />
         </div>
         <div>
-          <div style={{ color: '#fff', fontWeight: 600, fontSize: 16 }}>
+          <div style={{ color: palette.text, fontWeight: 600, fontSize: 16 }}>
             {host.name || host.host}
           </div>
-          <div style={{ color: '#9ca3af', fontSize: 12 }}>
+          <div style={{ color: palette.textMuted, fontSize: 12 }}>
             ssh, {host.user}
           </div>
         </div>

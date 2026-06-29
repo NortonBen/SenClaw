@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { AttachAddon } from '@xterm/addon-attach';
 import '@xterm/xterm/css/xterm.css';
 import type { Host } from './types';
+import { useAppTheme } from './theme';
 
 interface TerminalViewProps {
   host: Host;
@@ -11,6 +12,7 @@ interface TerminalViewProps {
 }
 
 export function TerminalView({ host, isActive }: TerminalViewProps) {
+  const { palette } = useAppTheme();
   const terminalRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
 
@@ -21,7 +23,7 @@ export function TerminalView({ host, isActive }: TerminalViewProps) {
 
     const term = new Terminal({
       theme: {
-        background: '#0f172a',
+        background: palette.terminalBg,
         foreground: '#e2e8f0',
         cursor: '#38bdf8',
         selectionBackground: 'rgba(56, 189, 248, 0.3)',
@@ -127,8 +129,8 @@ export function TerminalView({ host, isActive }: TerminalViewProps) {
       height: '100%', 
       display: 'flex',
       flex: 1,
-      overflow: 'hidden', 
-      backgroundColor: '#0f172a', 
+      overflow: 'hidden',
+      backgroundColor: palette.terminalBg,
     }}>
       <div ref={terminalRef} style={{ width: '100%', height: '100%', flex: 1, padding: '8px' }} />
     </div>

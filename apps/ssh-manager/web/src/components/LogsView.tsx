@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Select, Space, Tag, Tooltip, message } from 'antd';
 import { ClearOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useAppTheme } from '../theme';
 
 interface LogEntry {
   id: number;
@@ -32,6 +33,7 @@ const fmtTime = (ts: number) => {
 };
 
 export const LogsView: React.FC = () => {
+  const { palette } = useAppTheme();
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [filterSource, setFilterSource] = useState<string | undefined>();
   const [filterLevel, setFilterLevel] = useState<string | undefined>();
@@ -97,7 +99,7 @@ export const LogsView: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: 16, height: '100%', display: 'flex', flexDirection: 'column', color: '#e5e7eb' }}>
+    <div style={{ padding: 16, height: '100%', display: 'flex', flexDirection: 'column', color: palette.text }}>
       <Space style={{ marginBottom: 12, flexWrap: 'wrap' }}>
         <Input.Search
           placeholder="Search action / message / host"
@@ -136,7 +138,7 @@ export const LogsView: React.FC = () => {
         </Tooltip>
         <Button icon={<ReloadOutlined />} onClick={fetchInitial}>Reload</Button>
         <Button danger icon={<ClearOutlined />} onClick={handleClear}>Clear</Button>
-        <span style={{ color: '#9ca3af', marginLeft: 8 }}>
+        <span style={{ color: palette.textMuted, marginLeft: 8 }}>
           {visible.length} / {entries.length}
         </span>
       </Space>
@@ -146,8 +148,8 @@ export const LogsView: React.FC = () => {
         style={{
           flex: 1,
           overflowY: 'auto',
-          backgroundColor: '#0b1220',
-          border: '1px solid #374151',
+          backgroundColor: palette.consoleBg,
+          border: `1px solid ${palette.border}`,
           borderRadius: 6,
           padding: 8,
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',

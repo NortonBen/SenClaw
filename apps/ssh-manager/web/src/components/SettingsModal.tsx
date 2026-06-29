@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Modal, Form, Select, Tabs, message, Spin, Typography, Radio } from 'antd';
+import { useAppTheme } from '../theme';
 
 const { Text } = Typography;
 
@@ -32,6 +33,7 @@ const THEMES = [
 ];
 
 export const SettingsModal: React.FC<Props> = ({ open, onClose }) => {
+  const { palette } = useAppTheme();
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
 
@@ -98,7 +100,7 @@ export const SettingsModal: React.FC<Props> = ({ open, onClose }) => {
           label: 'MCP Access',
           children: (
             <div>
-              <div style={{ color: '#e5e7eb', fontWeight: 500, marginBottom: 4 }}>
+              <div style={{ color: palette.text, fontWeight: 500, marginBottom: 4 }}>
                 ssh_execute_command — per-command policy
               </div>
               <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>

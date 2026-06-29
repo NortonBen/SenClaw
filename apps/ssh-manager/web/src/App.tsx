@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ConfigProvider, Layout, Menu, Button, Row, Col, Empty, message, Input, Tabs } from 'antd';
+import { ConfigProvider, Layout, Menu, Button, Row, Col, Empty, message, Input, Tabs, theme as antdTheme } from 'antd';
 import { DesktopOutlined, KeyOutlined, SwapOutlined, CodeOutlined, PlusOutlined, HomeOutlined, FolderOutlined, SettingOutlined } from '@ant-design/icons';
 import type { Host, AppTab } from './types';
 import { HostCard } from './components/HostCard';
@@ -10,11 +10,94 @@ import { LogsView } from './components/LogsView';
 import { SettingsModal } from './components/SettingsModal';
 import { TerminalView } from './TerminalView';
 import { SftpView } from './components/SftpView';
+import { ThemeContext, PALETTES, detectInitialMode, useAppTheme, type Mode } from './theme';
 import './App.css';
 
 const { Header, Sider, Content } = Layout;
 
 function App() {
+  const [mode, setMode] = useState<Mode>(detectInitialMode);
+
+  // Follow senclaw's dark/light mode (same handshake deepwiki uses).
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data;
+      if (!d || typeof d !== 'object') return;
+      const t = d.theme ?? d.env?.theme;
+      if ((d.type === 'senclaw:init' || d.type === 'senclaw:theme') && (t === 'dark' || t === 'light')) {
+        setMode(t);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    try { window.parent?.postMessage({ type: 'senclaw:ready' }, '*'); } catch { /* ignore */ }
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem('ssh-mode', mode); } catch { /* ignore */ }
+  }, [mode]);
+
+  const isDark = mode === 'dark';
+  const palette = PALETTES[mode];
+
+  // Expose the palette to CSS (App.css / index.css use these variables).
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--app-layout-bg', palette.layoutBg);
+    root.style.setProperty('--app-container-bg', palette.containerBg);
+    root.style.setProperty('--app-elevated', palette.elevated);
+    root.style.setProperty('--app-border', palette.border);
+    root.style.setProperty('--app-text', palette.text);
+    root.style.setProperty('--app-text-muted', palette.textMuted);
+    document.body.style.backgroundColor = palette.layoutBg;
+  }, [palette]);
+
+  return (
+    <ConfigProvider
+      theme={{
+        algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+        token: {
+          colorPrimary: '#3b82f6',
+          colorBgBase: palette.layoutBg,
+          colorTextBase: palette.text,
+          colorBorder: palette.border,
+          colorBgContainer: palette.containerBg,
+          colorBgLayout: palette.layoutBg,
+          borderRadius: 8,
+        },
+        components: {
+          Layout: {
+            siderBg: palette.containerBg,
+            headerBg: palette.containerBg,
+            bodyBg: palette.layoutBg,
+          },
+          Menu: {
+            itemBg: palette.containerBg,
+            itemColor: palette.textMuted,
+            itemSelectedBg: palette.elevated,
+            itemSelectedColor: palette.text,
+          },
+          Card: {
+            colorBgContainer: palette.containerBg,
+          },
+          Tabs: {
+            itemColor: palette.textMuted,
+            itemHoverColor: palette.text,
+            itemSelectedColor: palette.text,
+            cardBg: palette.layoutBg,
+          },
+        },
+      }}
+    >
+      <ThemeContext.Provider value={{ mode, isDark, palette }}>
+        <Shell />
+      </ThemeContext.Provider>
+    </ConfigProvider>
+  );
+}
+
+function Shell() {
+  const { palette } = useAppTheme();
   const [hosts, setHosts] = useState<Host[]>([]);
   const [selectedHost, setSelectedHost] = useState<Host | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -139,8 +222,8 @@ function App() {
     switch (currentMenu) {
       case 'hosts':
         return (
-          <Layout style={{ height: '100%', backgroundColor: '#111827' }}>
-            <Header style={{ padding: '0 24px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #374151', backgroundColor: '#111827' }}>
+          <Layout style={{ height: '100%', backgroundColor: palette.layoutBg }}>
+            <Header style={{ padding: '0 24px', display: 'flex', alignItems: 'center', borderBottom: `1px solid ${palette.border}`, backgroundColor: palette.layoutBg }}>
               <Input.Search 
                 placeholder="Find a host or ssh user@hostname..." 
                 style={{ maxWidth: 400 }} 
@@ -159,11 +242,11 @@ function App() {
               </Button>
             </Header>
             <Content style={{ padding: '24px', overflowY: 'auto' }}>
-              <div style={{ marginBottom: 24, color: '#9ca3af', fontSize: 16 }}>
+              <div style={{ marginBottom: 24, color: palette.textMuted, fontSize: 16 }}>
                 Hosts ({hosts.length})
               </div>
               {hosts.length === 0 ? (
-                <Empty description={<span style={{ color: '#9ca3af' }}>No hosts found. Add one to get started.</span>} />
+                <Empty description={<span style={{ color: palette.textMuted }}>No hosts found. Add one to get started.</span>} />
               ) : (
                 <Row gutter={[16, 16]}>
                   {hosts.map(host => (
@@ -196,45 +279,14 @@ function App() {
   };
 
   return (
-    <ConfigProvider
-      theme={{
-        token: {
-          colorPrimary: '#3b82f6',
-          colorBgBase: '#111827',
-          colorTextBase: '#f9fafb',
-          colorBorder: '#374151',
-        },
-        components: {
-          Layout: {
-            siderBg: '#1f2937',
-            headerBg: '#1f2937',
-            bodyBg: '#111827',
-          },
-          Menu: {
-            itemBg: '#1f2937',
-            itemColor: '#9ca3af',
-            itemSelectedBg: '#374151',
-            itemSelectedColor: '#fff',
-          },
-          Card: {
-            colorBgContainer: '#1f2937',
-          },
-          Tabs: {
-            itemColor: '#9ca3af',
-            itemHoverColor: '#fff',
-            itemSelectedColor: '#fff',
-            cardBg: '#111827',
-          }
-        },
-      }}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1e1e1e' }}>
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: palette.layoutBg }}>
         {/* Top Tab Bar - Termius Style */}
         <div className="termius-tab-bar" style={{
-          background: '#111827',
-          borderBottom: '1px solid #1e1e1e',
+          background: palette.layoutBg,
+          borderBottom: `1px solid ${palette.border}`,
           paddingTop: 8,
-          paddingLeft: 80, // Space for window controls if any
+          paddingLeft: 8,
           paddingRight: 8,
           display: 'flex',
           alignItems: 'center',
@@ -244,7 +296,7 @@ function App() {
             icon={<SettingOutlined />}
             onClick={() => setSettingsOpen(true)}
             title="Settings"
-            style={{ color: '#9ca3af', marginRight: 8, alignSelf: 'center' }}
+            style={{ color: palette.textMuted, marginRight: 8, alignSelf: 'center' }}
           />
           <Tabs
             hideAdd
@@ -270,7 +322,7 @@ function App() {
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           {/* Sidebar */}
           <div style={{ display: activeTabId === 'home' ? 'block' : 'none' }}>
-            <Sider width={250} style={{ borderRight: '1px solid #111827', background: '#1f2937', height: '100%' }}>
+            <Sider width={250} style={{ borderRight: `1px solid ${palette.border}`, background: palette.containerBg, height: '100%' }}>
             <Menu
               mode="inline"
               selectedKeys={[activeTabId === 'home' ? currentMenu : '']}
@@ -301,11 +353,11 @@ function App() {
               width: '100%',
               height: '100%' 
             }}>
-              <Layout style={{ height: '100%', background: '#111827' }}>
+              <Layout style={{ height: '100%', background: palette.layoutBg }}>
                 {renderHomeContent()}
               </Layout>
               {isEditing && currentMenu === 'hosts' && activeTabId === 'home' && (
-                <Sider width={350} style={{ borderLeft: '1px solid #374151', background: '#1f2937' }}>
+                <Sider width={350} style={{ borderLeft: `1px solid ${palette.border}`, background: palette.containerBg }}>
                   <HostDetails
                     host={selectedHost}
                     onSave={handleSaveHost}
@@ -339,18 +391,18 @@ function App() {
                   width: '100%', 
                   height: '100%',
                   flex: 1,
-                  background: '#0f172a'
+                  background: palette.terminalBg
                 }}
               >
                 {tab.host && <TerminalView host={tab.host} isActive={activeTabId === tab.id} />}
               </div>
             ))}
-            
+
           </div>
         </div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-    </ConfigProvider>
+    </>
   );
 }
 

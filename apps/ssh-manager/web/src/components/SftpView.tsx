@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Layout, Table, Button, Input, Row, Col, Typography, Space, message } from 'antd';
 import { FolderOutlined, FileOutlined, DesktopOutlined, ArrowLeftOutlined, CloudServerOutlined } from '@ant-design/icons';
 import type { Host, FileNode } from '../types';
+import { useAppTheme } from '../theme';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -11,6 +12,7 @@ interface SftpViewProps {
 }
 
 export const SftpView: React.FC<SftpViewProps> = ({ hosts }) => {
+  const { palette } = useAppTheme();
   const [localPath, setLocalPath] = useState('/');
   const [localFiles, setLocalFiles] = useState<FileNode[]>([]);
   const [remotePath, setRemotePath] = useState('/');
@@ -151,16 +153,16 @@ export const SftpView: React.FC<SftpViewProps> = ({ hosts }) => {
   };
 
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%', background: '#111827' }}>
+    <div style={{ display: 'flex', width: '100%', height: '100%', background: palette.layoutBg }}>
       {/* Local Pane */}
-      <div style={{ flex: 1, borderRight: '1px solid #374151', display: 'flex', flexDirection: 'column' }}>
-        <Header style={{ background: '#1f2937', padding: '0 16px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #374151', height: 48 }}>
+      <div style={{ flex: 1, borderRight: `1px solid ${palette.border}`, display: 'flex', flexDirection: 'column' }}>
+        <Header style={{ background: palette.containerBg, padding: '0 16px', display: 'flex', alignItems: 'center', borderBottom: `1px solid ${palette.border}`, height: 48 }}>
           <Space>
             <DesktopOutlined style={{ color: '#3b82f6' }} />
-            <Text style={{ color: '#fff', fontWeight: 600 }}>Local</Text>
+            <Text style={{ color: palette.text, fontWeight: 600 }}>Local</Text>
           </Space>
         </Header>
-        <div style={{ padding: '8px 16px', background: '#111827', borderBottom: '1px solid #374151', display: 'flex', gap: 8 }}>
+        <div style={{ padding: '8px 16px', background: palette.layoutBg, borderBottom: `1px solid ${palette.border}`, display: 'flex', gap: 8 }}>
           <Button icon={<ArrowLeftOutlined />} size="small" onClick={() => {
             const parts = localPath.split('/').filter(Boolean);
             parts.pop();
@@ -175,10 +177,10 @@ export const SftpView: React.FC<SftpViewProps> = ({ hosts }) => {
 
       {/* Remote Pane */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <Header style={{ background: '#1f2937', padding: '0 16px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #374151', height: 48 }}>
+        <Header style={{ background: palette.containerBg, padding: '0 16px', display: 'flex', alignItems: 'center', borderBottom: `1px solid ${palette.border}`, height: 48 }}>
           <Space>
             <CloudServerOutlined style={{ color: '#f59e0b' }} />
-            <Text style={{ color: '#fff', fontWeight: 600 }}>
+            <Text style={{ color: palette.text, fontWeight: 600 }}>
               {selectedHost ? selectedHost.name || selectedHost.host : 'Remote'}
             </Text>
           </Space>
@@ -195,7 +197,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ hosts }) => {
 
         {!connId ? (
           <Content style={{ padding: 24, overflowY: 'auto' }}>
-            <div style={{ marginBottom: 16, color: '#9ca3af' }}>Select a host to connect</div>
+            <div style={{ marginBottom: 16, color: palette.textMuted }}>Select a host to connect</div>
             <Row gutter={[16, 16]}>
               {hosts.map(host => (
                 <Col span={24} key={host.id}>
@@ -203,22 +205,22 @@ export const SftpView: React.FC<SftpViewProps> = ({ hosts }) => {
                     onClick={() => handleConnect(host)}
                     style={{ 
                       padding: 12, 
-                      background: '#1f2937', 
+                      background: palette.containerBg, 
                       borderRadius: 8, 
                       cursor: 'pointer',
-                      border: '1px solid #374151',
+                      border: `1px solid ${palette.border}`,
                       display: 'flex',
                       alignItems: 'center',
                       gap: 12
                     }}
                     className="host-hover"
                   >
-                    <div style={{ background: '#f59e0b', padding: 8, borderRadius: '50%', color: '#fff' }}>
+                    <div style={{ background: '#f59e0b', padding: 8, borderRadius: '50%', color: palette.text }}>
                       <CloudServerOutlined />
                     </div>
                     <div>
-                      <div style={{ color: '#fff', fontWeight: 500 }}>{host.name || host.host}</div>
-                      <div style={{ color: '#9ca3af', fontSize: 12 }}>{host.user}@{host.host}:{host.port}</div>
+                      <div style={{ color: palette.text, fontWeight: 500 }}>{host.name || host.host}</div>
+                      <div style={{ color: palette.textMuted, fontSize: 12 }}>{host.user}@{host.host}:{host.port}</div>
                     </div>
                   </div>
                 </Col>
@@ -227,7 +229,7 @@ export const SftpView: React.FC<SftpViewProps> = ({ hosts }) => {
           </Content>
         ) : (
           <>
-            <div style={{ padding: '8px 16px', background: '#111827', borderBottom: '1px solid #374151', display: 'flex', gap: 8 }}>
+            <div style={{ padding: '8px 16px', background: palette.layoutBg, borderBottom: `1px solid ${palette.border}`, display: 'flex', gap: 8 }}>
               <Button icon={<ArrowLeftOutlined />} size="small" onClick={() => {
                 const parts = remotePath.split('/').filter(Boolean);
                 parts.pop();

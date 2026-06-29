@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Select, message, Space, Popconfirm, Tag, InputNumber } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import type { PortForwardingRule, Host } from '../types';
+import { useAppTheme } from '../theme';
 
 export const PortForwardingView: React.FC = () => {
+  const { palette } = useAppTheme();
   const [rules, setRules] = useState<PortForwardingRule[]>([]);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -151,7 +153,7 @@ export const PortForwardingView: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24, height: '100%', overflowY: 'auto', color: '#fff' }}>
+    <div style={{ padding: 24, height: '100%', overflowY: 'auto', color: palette.text }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <div style={{ fontSize: 20, fontWeight: 500 }}>Port Forwarding</div>
         <Button 
@@ -172,7 +174,7 @@ export const PortForwardingView: React.FC = () => {
         columns={columns} 
         rowKey="id"
         pagination={false}
-        style={{ background: '#1f2937', borderRadius: 8 }}
+        style={{ background: palette.containerBg, borderRadius: 8 }}
       />
 
       <Modal
@@ -180,16 +182,16 @@ export const PortForwardingView: React.FC = () => {
         open={isModalVisible}
         onCancel={() => setIsModalVisible(false)}
         footer={null}
-        styles={{ body: { backgroundColor: '#1f2937', color: '#fff' }, header: { backgroundColor: '#1f2937' } }}
+        styles={{ body: { backgroundColor: palette.containerBg, color: palette.text }, header: { backgroundColor: palette.containerBg } }}
       >
         <Form form={form} layout="vertical" onFinish={handleSave} initialValues={{ bind_address: '127.0.0.1' }}>
-          <Form.Item name="name" label={<span style={{ color: '#fff' }}>Rule Name</span>} rules={[{ required: true }]}>
-            <Input placeholder="e.g. Database Tunnel" style={{ backgroundColor: '#111827', color: '#fff', borderColor: '#374151' }} />
+          <Form.Item name="name" label={<span style={{ color: palette.text }}>Rule Name</span>} rules={[{ required: true }]}>
+            <Input placeholder="e.g. Database Tunnel" style={{ backgroundColor: palette.inputBg, color: palette.text, borderColor: palette.border }} />
           </Form.Item>
-          <Form.Item name="host_id" label={<span style={{ color: '#fff' }}>SSH Host</span>} rules={[{ required: true }]}>
+          <Form.Item name="host_id" label={<span style={{ color: palette.text }}>SSH Host</span>} rules={[{ required: true }]}>
             <Select 
               placeholder="Select an SSH host to tunnel through"
-              dropdownStyle={{ backgroundColor: '#1f2937', color: '#fff' }}
+              dropdownStyle={{ backgroundColor: palette.containerBg, color: palette.text }}
               style={{ width: '100%' }}
             >
               {hosts.map(host => (
@@ -198,23 +200,23 @@ export const PortForwardingView: React.FC = () => {
             </Select>
           </Form.Item>
           <div style={{ display: 'flex', gap: '16px' }}>
-            <Form.Item name="bind_address" label={<span style={{ color: '#fff' }}>Local Bind Address</span>} rules={[{ required: true }]} style={{ flex: 1 }}>
-              <Input placeholder="127.0.0.1" style={{ backgroundColor: '#111827', color: '#fff', borderColor: '#374151' }} />
+            <Form.Item name="bind_address" label={<span style={{ color: palette.text }}>Local Bind Address</span>} rules={[{ required: true }]} style={{ flex: 1 }}>
+              <Input placeholder="127.0.0.1" style={{ backgroundColor: palette.inputBg, color: palette.text, borderColor: palette.border }} />
             </Form.Item>
-            <Form.Item name="local_port" label={<span style={{ color: '#fff' }}>Local Port</span>} rules={[{ required: true }]} style={{ width: '120px' }}>
-              <InputNumber min={1} max={65535} style={{ width: '100%', backgroundColor: '#111827', color: '#fff', borderColor: '#374151' }} />
+            <Form.Item name="local_port" label={<span style={{ color: palette.text }}>Local Port</span>} rules={[{ required: true }]} style={{ width: '120px' }}>
+              <InputNumber min={1} max={65535} style={{ width: '100%', backgroundColor: palette.inputBg, color: palette.text, borderColor: palette.border }} />
             </Form.Item>
           </div>
           <div style={{ display: 'flex', gap: '16px' }}>
-            <Form.Item name="destination_address" label={<span style={{ color: '#fff' }}>Remote Target Address</span>} rules={[{ required: true }]} style={{ flex: 1 }}>
-              <Input placeholder="127.0.0.1" style={{ backgroundColor: '#111827', color: '#fff', borderColor: '#374151' }} />
+            <Form.Item name="destination_address" label={<span style={{ color: palette.text }}>Remote Target Address</span>} rules={[{ required: true }]} style={{ flex: 1 }}>
+              <Input placeholder="127.0.0.1" style={{ backgroundColor: palette.inputBg, color: palette.text, borderColor: palette.border }} />
             </Form.Item>
-            <Form.Item name="destination_port" label={<span style={{ color: '#fff' }}>Remote Port</span>} rules={[{ required: true }]} style={{ width: '120px' }}>
-              <InputNumber min={1} max={65535} style={{ width: '100%', backgroundColor: '#111827', color: '#fff', borderColor: '#374151' }} />
+            <Form.Item name="destination_port" label={<span style={{ color: palette.text }}>Remote Port</span>} rules={[{ required: true }]} style={{ width: '120px' }}>
+              <InputNumber min={1} max={65535} style={{ width: '100%', backgroundColor: palette.inputBg, color: palette.text, borderColor: palette.border }} />
             </Form.Item>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 24 }}>
-            <Button onClick={() => setIsModalVisible(false)} style={{ marginRight: 8, backgroundColor: 'transparent', color: '#fff' }}>Cancel</Button>
+            <Button onClick={() => setIsModalVisible(false)} style={{ marginRight: 8, backgroundColor: 'transparent', color: palette.text }}>Cancel</Button>
             <Button type="primary" htmlType="submit">Save</Button>
           </div>
         </Form>
