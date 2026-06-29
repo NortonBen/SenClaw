@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+import '../core/daemon/daemon_provider.dart';
+import '../core/daemon/port_tools.dart';
 import '../core/notifications/system_notifier.dart';
 import '../core/transport/connection.dart';
 import '../features/chat/mini_chat_screen.dart' show miniExpandRequestProvider;
@@ -151,9 +154,34 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
         await _showWindow();
         appRouter.go('/diagnostics');
       case 'quit':
-        await windowManager.setPreventClose(false);
-        await windowManager.destroy();
+        await _quitApp();
     }
+  }
+
+  /// Full shutdown: close every open window (main + mini-chat sub-windows),
+  /// stop the SenClaw daemon (the process we spawned AND, for an adopted one,
+  /// whatever still listens on the UI port), then terminate the app.
+  Future<void> _quitApp() async {
+    // 1. Close mini-chat / any sub-windows (separate Flutter engines).
+    try {
+      for (final id in await DesktopMultiWindow.getAllSubWindowIds()) {
+        await WindowController.fromWindowId(id).close();
+      }
+    } catch (_) {}
+    // 2. Stop the daemon. supervisor.stop() kills a process we spawned;
+    //    killPort also covers an adopted daemon (kill by listening port).
+    try {
+      await ref.read(daemonSupervisorProvider).stop();
+    } catch (_) {}
+    try {
+      await PortTools.killPort(ref.read(appConfigProvider).uiPort);
+    } catch (_) {}
+    // 3. Tear down the main window and exit for real.
+    try {
+      await windowManager.setPreventClose(false);
+      await windowManager.destroy();
+    } catch (_) {}
+    exit(0);
   }
 
   @override

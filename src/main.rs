@@ -62,6 +62,16 @@ enum Command {
     CognitiveServer,
     /// Start the OCR MCP server — PaddleOCR + MNN (stdio JSON-RPC)
     OcrServer,
+    /// Start the sandboxed JavaScript executor MCP server (stdio JSON-RPC)
+    JsServer,
+    /// Internal: brush (rust-bash) sandbox child — reads a script from stdin,
+    /// runs it in-process, writes output to <dir>/stdout|stderr, exits with the
+    /// script's code. Spawned by the code REPL so the timeout is kill-enforced.
+    #[command(hide = true)]
+    BrushSandbox {
+        /// Parent-provided working/output directory.
+        dir: std::path::PathBuf,
+    },
     /// Train the GraphSAGE re-ranker on the current cognitive graph.
     /// Writes weights to ~/.senclaw/cognitive/sage_<dim>.bin.
     CognitiveTrain {
@@ -107,6 +117,8 @@ async fn main() -> Result<()> {
                 | Command::LithoServer
                 | Command::CognitiveServer
                 | Command::OcrServer
+                | Command::JsServer
+                | Command::BrushSandbox { .. }
         )
     );
 
@@ -151,6 +163,10 @@ async fn main() -> Result<()> {
         Command::LithoServer => senclaw::mcp::litho_server::run_stdio_server().await,
         Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
         Command::OcrServer => senclaw::mcp::ocr_server::run_stdio_server().await,
+        Command::JsServer => senclaw::mcp::js_server::run_stdio_server().await,
+        Command::BrushSandbox { dir } => {
+            senclaw::gateway::ui_server::bash_sandbox::child_main(&dir).await
+        }
         Command::CognitiveTrain {
             epochs,
             lr,

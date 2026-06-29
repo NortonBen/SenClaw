@@ -14,6 +14,19 @@ interface Props {
   onMkdir: (path: string) => Promise<void>;
   onDeleteDir: (path: string) => Promise<void>;
   onSelectDoc: (path: string) => void;
+  onUpload: (folder: string, files: FileList | File[]) => Promise<{ created: string[]; skipped: { file: string; reason: string }[] }>;
+}
+
+/** Flatten the tree into a sorted list of folder paths (for the upload target select). */
+function collectDirs(nodes: DirNode[]): string[] {
+  const out: string[] = [];
+  const walk = (n: DirNode) => {
+    if (n.type === 'file') return;
+    out.push(n.path);
+    (n.children ?? []).forEach(walk);
+  };
+  nodes.forEach(walk);
+  return out.sort();
 }
 
 function countFiles(node: DirNode): number {
@@ -190,11 +203,32 @@ function DirRow({
   );
 }
 
-export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDeleteDir, onSelectDoc }: Props) {
+export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDeleteDir, onSelectDoc, onUpload }: Props) {
   const [addingRoot, setAddingRoot] = useState(false);
   const [rootName, setRootName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadFolder, setUploadFolder] = useState('inbox');
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ created: string[]; skipped: { file: string; reason: string }[] } | null>(null);
   const { token } = theme.useToken();
+
+  const dirs = collectDirs(tree);
+
+  const handleUpload = async () => {
+    if (!uploadFiles.length) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const res = await onUpload(uploadFolder || 'inbox', uploadFiles);
+      setUploadResult(res);
+      setUploadFiles([]);
+      onRefreshTree();
+    } finally {
+      setUploading(false);
+    }
+  };
 
   useEffect(() => {
     onRefreshTree();
@@ -234,20 +268,82 @@ export function WikiCategories({ tree, treeLoading, onRefreshTree, onMkdir, onDe
               <p style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 4 }}>{totalDirs} folders · {totalFiles} pages</p>
             )}
           </div>
-          <button
-            onClick={() => { setAddingRoot(a => !a); setRootName(''); }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12,
-              background: token.colorWarningBgHover, color: token.colorWarning, border: 'none',
-              borderRadius: 8, cursor: 'pointer', transition: 'background 0.2s'
-            }}
-          >
-            <svg style={{ width: 14, height: 14 }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            New root folder
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              onClick={() => { setUploadOpen(o => !o); setUploadResult(null); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12,
+                background: token.colorFillSecondary, color: token.colorText, border: 'none',
+                borderRadius: 8, cursor: 'pointer', transition: 'background 0.2s'
+              }}
+            >
+              <svg style={{ width: 14, height: 14 }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+              </svg>
+              Upload
+            </button>
+            <button
+              onClick={() => { setAddingRoot(a => !a); setRootName(''); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12,
+                background: token.colorWarningBgHover, color: token.colorWarning, border: 'none',
+                borderRadius: 8, cursor: 'pointer', transition: 'background 0.2s'
+              }}
+            >
+              <svg style={{ width: 14, height: 14 }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              New root folder
+            </button>
+          </div>
         </div>
+
+        {/* Upload panel */}
+        {uploadOpen && (
+          <div style={{ marginBottom: 16, padding: 16, background: token.colorFillQuaternary, borderRadius: 8, border: `1px solid ${token.colorBorderSecondary}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <label style={{ fontSize: 12, color: token.colorTextSecondary }}>Folder</label>
+              <select
+                value={uploadFolder}
+                onChange={e => setUploadFolder(e.target.value)}
+                style={{ flex: 1, padding: '6px 8px', fontSize: 13, background: token.colorBgContainer, color: token.colorText, border: `1px solid ${token.colorBorder}`, borderRadius: 4, outline: 'none' }}
+              >
+                {!dirs.includes('inbox') && <option value="inbox">inbox</option>}
+                {dirs.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+            <input
+              type="file"
+              multiple
+              accept=".txt,.text,.md,.markdown,.html,.htm,.json,.csv,.tsv,.log,.yaml,.yml,.xml,.ndjson,.jsonl"
+              onChange={e => { setUploadFiles(e.target.files ? Array.from(e.target.files) : []); setUploadResult(null); }}
+              style={{ fontSize: 13, color: token.colorTextSecondary, marginBottom: 12, display: 'block' }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={handleUpload}
+                disabled={uploading || !uploadFiles.length}
+                style={{ padding: '6px 14px', fontSize: 13, background: token.colorPrimary, color: '#fff', border: 'none', borderRadius: 4, cursor: (uploading || !uploadFiles.length) ? 'not-allowed' : 'pointer', opacity: (uploading || !uploadFiles.length) ? 0.4 : 1 }}
+              >
+                {uploading ? 'Uploading...' : `Upload ${uploadFiles.length || ''} file${uploadFiles.length === 1 ? '' : 's'}`}
+              </button>
+              <button onClick={() => { setUploadOpen(false); setUploadFiles([]); setUploadResult(null); }} style={{ color: token.colorTextTertiary, background: 'transparent', border: 'none', fontSize: 13, padding: '0 4px', cursor: 'pointer' }}>Cancel</button>
+            </div>
+            <p style={{ fontSize: 11, color: token.colorTextQuaternary, marginTop: 10, marginBottom: 0 }}>
+              Text documents only (txt, md, html, json, csv, yaml, xml…). Each file becomes a wiki page; max 10 MB each.
+            </p>
+            {uploadResult && (
+              <div style={{ marginTop: 10, fontSize: 12 }}>
+                {uploadResult.created.length > 0 && (
+                  <p style={{ color: token.colorSuccess, margin: '4px 0' }}>✓ Added {uploadResult.created.length} page{uploadResult.created.length === 1 ? '' : 's'}: {uploadResult.created.join(', ')}</p>
+                )}
+                {uploadResult.skipped.length > 0 && (
+                  <p style={{ color: token.colorError, margin: '4px 0' }}>Skipped: {uploadResult.skipped.map(s => `${s.file} (${s.reason})`).join('; ')}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* New root dir input */}
         {addingRoot && (

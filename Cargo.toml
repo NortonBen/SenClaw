@@ -133,6 +133,24 @@ tree-sitter-json     = "0.24"
 rmcp = { version = "1", features = ["transport-io"] }
 schemars = "1"
 
+# Sandboxed JavaScript engine (QuickJS) for the js-executor MCP server.
+# No host bindings are exposed → no filesystem/network/process access by
+# default; memory + wall-clock limits are enforced per evaluation.
+rquickjs = "0.12"
+
+# TypeScript → JavaScript transpiler (pure Rust). Used to run TS snippets on
+# the QuickJS sandbox: parse as TS, strip types, codegen JS. swc (not oxc) —
+# oxc 0.137 needs unstable `if let` guards; swc builds on stable.
+swc_core = { version = "71", features = [
+    "common",
+    "ecma_ast",
+    "ecma_parser",
+    "ecma_codegen",
+    "ecma_visit",
+    "ecma_transforms",
+    "ecma_transforms_typescript",
+] }
+
 # Local embedding via pure-Rust candle (no C++ runtime needed)
 candle-core = { version = "0.8", optional = true }
 candle-nn = { version = "0.8", optional = true }
@@ -182,10 +200,22 @@ image = { version = "0.25", optional = true, default-features = false, features 
 # via the additive `ocr-paddle-metal` feature. Off by default — pulls C++ MNN
 # toolchain (cmake/clang) which we don't want in the default build.
 ocr-rs = { git = "https://github.com/zibo-chen/rust-paddle-ocr.git", branch = "next", optional = true, default-features = false }
+brush-core = "0.5"
+brush-builtins = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4.5"
+# Text rasterization for the OCR round-trip harness (examples/ocr_roundtrip.rs).
+# Already in the dependency tree via `ocr-rs`, so this adds no new crates.
+imageproc = "0.25"
+ab_glyph = "0.2"
+
+# OCR round-trip verification harness. Gated so plain `cargo build --examples`
+# (without OCR support) doesn't try to compile against the MNN-backed engine.
+[[example]]
+name = "ocr_roundtrip"
+required-features = ["ocr-paddle"]
 
 [features]
 # Pure-Rust local embeddings via candle (BERT/sentence-transformers, HuggingFace Hub).

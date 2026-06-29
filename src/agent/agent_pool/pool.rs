@@ -28,9 +28,9 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, dispatch_mcp_config, ocr_mcp_config, litho_mcp_config, memory_mcp_config,
-    schedule_mcp_config, send_mcp_config, space_mcp_config, wiki_mcp_config, workspace_mcp_config,
-    McpServerConfig,
+    browser_mcp_config, dispatch_mcp_config, js_mcp_config, litho_mcp_config, memory_mcp_config,
+    ocr_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config, wiki_mcp_config,
+    workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -926,7 +926,11 @@ impl AgentPool {
             allowed_work_dirs
                 .as_ref()
                 .and_then(|dirs| dirs.first())
-                .map(PathBuf::from)
+                // The Web UI's folder picker only captures the raw path string
+                // the user typed (it never reads the filesystem), so a leading
+                // `~` reaches us unexpanded. Resolve it here — the backend owns
+                // path access.
+                .map(|p| crate::util::paths::expand_tilde(p))
                 .unwrap_or_else(|| {
                     home.parent()
                         .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
@@ -1051,6 +1055,8 @@ impl AgentPool {
             ));
             mcp_servers.push(browser_mcp_config(cfg.ws_port));
             mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
+            // Sandboxed JS executor — no shared state, just default limits.
+            mcp_servers.push(js_mcp_config(5_000, 128));
 
             // Load marketplace MCP servers from enabled plugins — mirrors TS AgentPool.ts:753-755
             if let Some(mm) = self.marketplace_manager.lock().unwrap().as_ref() {
@@ -1137,15 +1143,16 @@ impl AgentPool {
 
         // Compute use_tools whitelist — mirrors TS AgentPool.ts:514-523.
         // Task is excluded for normal chat groups (sub-agent spawning is
-        // not the right tool there). For COWORK groups we INVERT this:
-        // the lead MUST delegate via Task, so we force the toolset down
-        // to [Task, TodoWrite] regardless of what the binding said.
+        // not the right tool there). COWORK leads run in DAG mode (set
+        // below): we DON'T impose a whitelist for them — DAG's own tool
+        // filter (`tools_for_main_agent`'s `is_dag` branch) already strips
+        // every mutating tool and surfaces the `Dispatch*` tools. Forcing a
+        // whitelist here would strip those dispatch tools and leave the
+        // lead with nothing to orchestrate with.
         let is_cowork = binding.group_type == "cowork";
         let use_tools: Vec<String> = if is_cowork {
-            // Hard enforcement: lead can only Task-delegate + manage todos.
-            // Any browser/web/code-edit tool is blocked, so the model has
-            // no path forward except calling Task → forces real DAG flow.
-            vec!["Task".into(), "TodoWrite".into()]
+            // No whitelist — DAG mode governs the roster (read-only + dispatch).
+            Vec::new()
         } else {
             const EXCLUDED_TOOLS: &[&str] = &["Task"];
             match &binding.allowed_tools {
@@ -1158,13 +1165,6 @@ impl AgentPool {
             }
         };
         if !use_tools.is_empty() {
-            if is_cowork {
-                tracing::info!(
-                    "[AgentPool] cowork tool-lockdown jid={} use_tools={:?}",
-                    binding.jid,
-                    use_tools
-                );
-            }
             self.core_api.set_use_tools(&binding.jid, use_tools);
         }
 
@@ -1217,19 +1217,28 @@ impl AgentPool {
             .update_thinking(&binding.jid, self.state.lock().unwrap().thinking_enabled);
 
         // Apply pending agent mode (set via UI before engine existed).
+        // COWORK leads always orchestrate via the DAG dispatch flow, so they
+        // default to "Dag" mode unless the UI has explicitly pinned another
+        // mode. Without this the lead runs in Agent mode, where a text-only
+        // turn ends the run — so the lead stalls mid-todo before delegating
+        // every member / synthesizing the final answer. DAG mode's
+        // completion-nudge (see `completion_nudge_for`) keeps it going until
+        // a real dispatch executes and results are reported.
         let pending_mode = self
             .state
             .lock()
             .unwrap()
             .pending_agent_modes
             .get(&binding.jid)
-            .cloned();
+            .cloned()
+            .or_else(|| if is_cowork { Some("Dag".to_string()) } else { None });
         if let Some(mode) = &pending_mode {
             if mode != "Agent" {
                 self.core_api.update_agent_mode(&binding.jid, mode);
                 tracing::info!(
-                    "[AgentPool] Applied pending agent mode for {}: {mode}",
-                    binding.jid
+                    "[AgentPool] Applied agent mode for {}: {mode}{}",
+                    binding.jid,
+                    if is_cowork { " (cowork default)" } else { "" }
                 );
             }
         }

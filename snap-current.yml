@@ -1,0 +1,212 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img "SenClaw" [ref=e8]
+        - generic [ref=e9]: SenClaw
+        - button "bell" [ref=e13] [cursor=pointer]:
+          - img "bell" [ref=e15]:
+            - img [ref=e16]
+      - generic [ref=e18]:
+        - button "message" [ref=e19] [cursor=pointer]:
+          - img "message" [ref=e21]:
+            - img [ref=e22]
+        - button "appstore" [ref=e24] [cursor=pointer]:
+          - img "appstore" [ref=e26]:
+            - img [ref=e27]
+        - button "coffee" [ref=e29] [cursor=pointer]:
+          - img "coffee" [ref=e31]:
+            - img [ref=e32]
+      - generic [ref=e35]:
+        - button "plus New Chat" [ref=e37] [cursor=pointer]:
+          - img "plus" [ref=e39]:
+            - img [ref=e40]
+          - generic [ref=e43]: New Chat
+        - generic [ref=e44]:
+          - generic [ref=e45]: Projects
+          - button "shrink" [ref=e46] [cursor=pointer]:
+            - img "shrink" [ref=e48]:
+              - img [ref=e49]
+          - button "more" [ref=e51] [cursor=pointer]:
+            - img "more" [ref=e53]:
+              - img [ref=e54]
+        - generic [ref=e156]:
+          - button "down folder main 1" [ref=e157] [cursor=pointer]:
+            - img "down" [ref=e158]:
+              - img [ref=e159]
+            - img "folder" [ref=e161]:
+              - img [ref=e162]
+            - generic "main" [ref=e164]
+            - generic [ref=e165]: "1"
+          - generic [ref=e166] [cursor=pointer]:
+            - generic [ref=e168]: "- tìm kiếm giá vàng hôm nay - phân tích …"
+            - button "more" [ref=e169]:
+              - img "more" [ref=e171]:
+                - img [ref=e172]
+        - generic [ref=e174]:
+          - button "down folder research-assistant 1" [ref=e175] [cursor=pointer]:
+            - img "down" [ref=e176]:
+              - img [ref=e177]
+            - img "folder" [ref=e179]:
+              - img [ref=e180]
+            - generic "research-assistant" [ref=e182]
+            - generic [ref=e183]: "1"
+          - generic [ref=e184] [cursor=pointer]:
+            - generic [ref=e186]: Research squad
+            - button "more" [ref=e187]:
+              - img "more" [ref=e189]:
+                - img [ref=e190]
+        - generic [ref=e192]:
+          - button "down folder research-lead 1" [ref=e193] [cursor=pointer]:
+            - img "down" [ref=e194]:
+              - img [ref=e195]
+            - img "folder" [ref=e197]:
+              - img [ref=e198]
+            - generic "research-lead" [ref=e200]
+            - generic [ref=e201]: "1"
+          - generic [ref=e202] [cursor=pointer]:
+            - generic [ref=e204]: Research Bureau
+            - button "more" [ref=e205]:
+              - img "more" [ref=e207]:
+                - img [ref=e208]
+        - generic [ref=e210]:
+          - button "down folder schedule_21843f68-1449-4a4d-b273-b3dcfa37277e 1" [ref=e211] [cursor=pointer]:
+            - img "down" [ref=e212]:
+              - img [ref=e213]
+            - img "folder" [ref=e215]:
+              - img [ref=e216]
+            - generic "schedule_21843f68-1449-4a4d-b273-b3dcfa37277e" [ref=e218]
+            - generic [ref=e219]: "1"
+          - generic [ref=e220] [cursor=pointer]:
+            - generic [ref=e222]: report ssh pi-4
+            - button "more" [ref=e223]:
+              - img "more" [ref=e225]:
+                - img [ref=e226]
+        - generic [ref=e228]:
+          - button "down folder schedule_24763f5d-5985-4584-a9b9-2c9c55b74fce 1" [ref=e229] [cursor=pointer]:
+            - img "down" [ref=e230]:
+              - img [ref=e231]
+            - img "folder" [ref=e233]:
+              - img [ref=e234]
+            - generic "schedule_24763f5d-5985-4584-a9b9-2c9c55b74fce" [ref=e236]
+            - generic [ref=e237]: "1"
+          - generic [ref=e238] [cursor=pointer]:
+            - generic [ref=e240]: report server
+            - button "more" [ref=e241]:
+              - img "more" [ref=e243]:
+                - img [ref=e244]
+        - generic [ref=e246]:
+          - button "down folder schedule_779903fe-ac86-4ac0-bbb1-82726b3dd08b 1" [ref=e247] [cursor=pointer]:
+            - img "down" [ref=e248]:
+              - img [ref=e249]
+            - img "folder" [ref=e251]:
+              - img [ref=e252]
+            - generic "schedule_779903fe-ac86-4ac0-bbb1-82726b3dd08b" [ref=e254]
+            - generic [ref=e255]: "1"
+          - generic [ref=e256] [cursor=pointer]:
+            - generic [ref=e258]: Giá vàng mỗi sáng 9h15
+            - button "more" [ref=e259]:
+              - img "more" [ref=e261]:
+                - img [ref=e262]
+        - generic [ref=e264]:
+          - button "down folder schedule_842c253b-9f43-4e0d-be40-30535e5cffa6 1" [ref=e265] [cursor=pointer]:
+            - img "down" [ref=e266]:
+              - img [ref=e267]
+            - img "folder" [ref=e269]:
+              - img [ref=e270]
+            - generic "schedule_842c253b-9f43-4e0d-be40-30535e5cffa6" [ref=e272]
+            - generic [ref=e273]: "1"
+          - generic [ref=e274] [cursor=pointer]:
+            - generic [ref=e276]: Giá BITCOINT mỗi ngày
+            - button "more" [ref=e277]:
+              - img "more" [ref=e279]:
+                - img [ref=e280]
+        - generic [ref=e282]:
+          - button "down folder schedule_92b10a85-4de5-4ba7-934a-27f54ee111f6 1" [ref=e283] [cursor=pointer]:
+            - img "down" [ref=e284]:
+              - img [ref=e285]
+            - img "folder" [ref=e287]:
+              - img [ref=e288]
+            - generic "schedule_92b10a85-4de5-4ba7-934a-27f54ee111f6" [ref=e290]
+            - generic [ref=e291]: "1"
+          - generic [ref=e292] [cursor=pointer]:
+            - generic [ref=e294]: report server local
+            - button "more" [ref=e295]:
+              - img "more" [ref=e297]:
+                - img [ref=e298]
+      - generic [ref=e58]:
+        - button "book" [ref=e59] [cursor=pointer]:
+          - img "book" [ref=e61]:
+            - img [ref=e62]
+        - button "api" [ref=e64] [cursor=pointer]:
+          - img "api" [ref=e66]:
+            - img [ref=e67]
+        - button "deployment-unit" [ref=e69] [cursor=pointer]:
+          - img "deployment-unit" [ref=e71]:
+            - img [ref=e72]
+        - button "setting" [ref=e74] [cursor=pointer]:
+          - img "setting" [ref=e76]:
+            - img [ref=e77]
+        - button "bulb" [ref=e79] [cursor=pointer]:
+          - img "bulb" [ref=e81]:
+            - img [ref=e82]
+  - main [ref=e86]:
+    - main [ref=e87]:
+      - generic [ref=e2783]:
+        - radiogroup "segmented control" [ref=e2785]:
+          - generic [ref=e2786]:
+            - generic [ref=e2787] [cursor=pointer]:
+              - radio "💬 Chat" [checked]
+              - generic [ref=e2788]: 💬 Chat
+            - generic [ref=e2789] [cursor=pointer]:
+              - radio "⌨️ Code"
+              - generic [ref=e2790]: ⌨️ Code
+        - generic [ref=e2791]:
+          - heading "How can I help today?" [level=1] [ref=e2794]
+          - paragraph [ref=e2795]: No workspace needed — just a conversation.
+        - generic [ref=e2796]:
+          - textbox "Ask anything, or describe a task…" [active] [ref=e2797]
+          - generic [ref=e2798]:
+            - generic [ref=e2799] [cursor=pointer]:
+              - generic "No profile" [ref=e2800]:
+                - text: No profile
+                - combobox [ref=e2801]
+              - img "user" [ref=e2803]:
+                - img [ref=e2804]
+            - generic [ref=e2806] [cursor=pointer]:
+              - generic "Default · Local Gemma 4 E2B-it 4-bit — text-only (vision/audio towers skipped) (MLX)" [ref=e2807]:
+                - generic "Default · Local Gemma 4 E2B-it 4-bit — text-only (vision/audio towers skipped) (MLX)" [ref=e2808]: Default · Gemma 4 E2B
+                - combobox [ref=e2809]
+              - img "down" [ref=e2811]:
+                - img [ref=e2812]
+            - radiogroup "segmented control" [ref=e2814]:
+              - generic [ref=e2815]:
+                - generic [ref=e2816] [cursor=pointer]:
+                  - radio "thunderbolt" [checked]
+                  - generic "Agent — full tool access" [ref=e2817]:
+                    - img "thunderbolt" [ref=e2819]:
+                      - img [ref=e2820]
+                - generic [ref=e2822] [cursor=pointer]:
+                  - radio "bulb"
+                  - generic "Plan — research then propose plan" [ref=e2823]:
+                    - img "bulb" [ref=e2825]:
+                      - img [ref=e2826]
+                - generic [ref=e2828] [cursor=pointer]:
+                  - radio "apartment"
+                  - generic "DAG — multi-agent dispatch" [ref=e2829]:
+                    - img "apartment" [ref=e2831]:
+                      - img [ref=e2832]
+            - button "Start chat" [disabled] [ref=e2834]:
+              - img [ref=e2835]
+        - generic [ref=e2837]:
+          - button "Brainstorm ideas with me" [ref=e2838] [cursor=pointer]
+          - button "Explain a concept simply" [ref=e2839] [cursor=pointer]
+          - button "Help me draft a message" [ref=e2840] [cursor=pointer]
+          - button "Plan my day" [ref=e2841] [cursor=pointer]
+          - button "Summarize this article (paste it)" [ref=e2842] [cursor=pointer]
+          - button "Write a short story" [ref=e2843] [cursor=pointer]
+  - generic [ref=e150]:
+    - button "⚙" [ref=e151] [cursor=pointer]:
+      - generic [ref=e152]: ⚙
+    - button "Workbench" [ref=e153] [cursor=pointer]:
+      - img [ref=e154]

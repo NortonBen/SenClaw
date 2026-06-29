@@ -46,6 +46,14 @@ const BUILTIN_PERSONAS: &[BuiltinPersona] = &[
         filename: "ocr-worker",
         content: include_str!("../../assets/builtin-personas/ocr-worker.md"),
     },
+    BuiltinPersona {
+        filename: "js-sandbox",
+        content: include_str!("../../assets/builtin-personas/js-sandbox.md"),
+    },
+    BuiltinPersona {
+        filename: "bash-sandbox",
+        content: include_str!("../../assets/builtin-personas/bash-sandbox.md"),
+    },
 ];
 
 /// Install builtin personas to `virtual_agents_dir`.

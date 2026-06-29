@@ -1,0 +1,217 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img "SenClaw" [ref=e8]
+        - generic [ref=e9]: SenClaw
+        - button "bell" [ref=e13] [cursor=pointer]:
+          - img "bell" [ref=e15]:
+            - img [ref=e16]
+      - generic [ref=e18]:
+        - button "message" [ref=e19] [cursor=pointer]:
+          - img "message" [ref=e21]:
+            - img [ref=e22]
+        - button "appstore" [ref=e24] [cursor=pointer]:
+          - img "appstore" [ref=e26]:
+            - img [ref=e27]
+        - button "coffee" [ref=e29] [cursor=pointer]:
+          - img "coffee" [ref=e31]:
+            - img [ref=e32]
+      - generic [ref=e35]:
+        - button "plus New Chat" [ref=e37] [cursor=pointer]:
+          - img "plus" [ref=e39]:
+            - img [ref=e40]
+          - generic [ref=e43]: New Chat
+        - generic [ref=e44]:
+          - generic [ref=e45]: Projects
+          - button "shrink" [ref=e46] [cursor=pointer]:
+            - img "shrink" [ref=e48]:
+              - img [ref=e49]
+          - button "more" [ref=e51] [cursor=pointer]:
+            - img "more" [ref=e53]:
+              - img [ref=e54]
+        - generic [ref=e156]:
+          - button "down folder main 2" [ref=e157] [cursor=pointer]:
+            - img "down" [ref=e158]:
+              - img [ref=e159]
+            - img "folder" [ref=e161]:
+              - img [ref=e162]
+            - generic "main" [ref=e164]
+            - generic [ref=e165]: "2"
+          - generic [ref=e166] [cursor=pointer]:
+            - generic [ref=e168]: Plan implementing a hello world rust bin…
+            - button "more" [ref=e169]:
+              - img "more" [ref=e171]:
+                - img [ref=e172]
+          - generic [ref=e174] [cursor=pointer]:
+            - generic [ref=e176]: "- tìm kiếm giá vàng hôm nay - phân tích …"
+            - button "more" [ref=e177]:
+              - img "more" [ref=e179]:
+                - img [ref=e180]
+        - generic [ref=e182]:
+          - button "down folder research-assistant 1" [ref=e183] [cursor=pointer]:
+            - img "down" [ref=e184]:
+              - img [ref=e185]
+            - img "folder" [ref=e187]:
+              - img [ref=e188]
+            - generic "research-assistant" [ref=e190]
+            - generic [ref=e191]: "1"
+          - generic [ref=e192] [cursor=pointer]:
+            - generic [ref=e194]: Research squad
+            - button "more" [ref=e195]:
+              - img "more" [ref=e197]:
+                - img [ref=e198]
+        - generic [ref=e200]:
+          - button "down folder research-lead 1" [ref=e201] [cursor=pointer]:
+            - img "down" [ref=e202]:
+              - img [ref=e203]
+            - img "folder" [ref=e205]:
+              - img [ref=e206]
+            - generic "research-lead" [ref=e208]
+            - generic [ref=e209]: "1"
+          - generic [ref=e210] [cursor=pointer]:
+            - generic [ref=e212]: Research Bureau
+            - button "more" [ref=e213]:
+              - img "more" [ref=e215]:
+                - img [ref=e216]
+        - generic [ref=e218]:
+          - button "down folder schedule_21843f68-1449-4a4d-b273-b3dcfa37277e 1" [ref=e219] [cursor=pointer]:
+            - img "down" [ref=e220]:
+              - img [ref=e221]
+            - img "folder" [ref=e223]:
+              - img [ref=e224]
+            - generic "schedule_21843f68-1449-4a4d-b273-b3dcfa37277e" [ref=e226]
+            - generic [ref=e227]: "1"
+          - generic [ref=e228] [cursor=pointer]:
+            - generic [ref=e230]: report ssh pi-4
+            - button "more" [ref=e231]:
+              - img "more" [ref=e233]:
+                - img [ref=e234]
+        - generic [ref=e236]:
+          - button "down folder schedule_24763f5d-5985-4584-a9b9-2c9c55b74fce 1" [ref=e237] [cursor=pointer]:
+            - img "down" [ref=e238]:
+              - img [ref=e239]
+            - img "folder" [ref=e241]:
+              - img [ref=e242]
+            - generic "schedule_24763f5d-5985-4584-a9b9-2c9c55b74fce" [ref=e244]
+            - generic [ref=e245]: "1"
+          - generic [ref=e246] [cursor=pointer]:
+            - generic [ref=e248]: report server
+            - button "more" [ref=e249]:
+              - img "more" [ref=e251]:
+                - img [ref=e252]
+        - generic [ref=e254]:
+          - button "down folder schedule_779903fe-ac86-4ac0-bbb1-82726b3dd08b 1" [ref=e255] [cursor=pointer]:
+            - img "down" [ref=e256]:
+              - img [ref=e257]
+            - img "folder" [ref=e259]:
+              - img [ref=e260]
+            - generic "schedule_779903fe-ac86-4ac0-bbb1-82726b3dd08b" [ref=e262]
+            - generic [ref=e263]: "1"
+          - generic [ref=e264] [cursor=pointer]:
+            - generic [ref=e266]: Giá vàng mỗi sáng 9h15
+            - button "more" [ref=e267]:
+              - img "more" [ref=e269]:
+                - img [ref=e270]
+        - generic [ref=e272]:
+          - button "down folder schedule_842c253b-9f43-4e0d-be40-30535e5cffa6 1" [ref=e273] [cursor=pointer]:
+            - img "down" [ref=e274]:
+              - img [ref=e275]
+            - img "folder" [ref=e277]:
+              - img [ref=e278]
+            - generic "schedule_842c253b-9f43-4e0d-be40-30535e5cffa6" [ref=e280]
+            - generic [ref=e281]: "1"
+          - generic [ref=e282] [cursor=pointer]:
+            - generic [ref=e284]: Giá BITCOINT mỗi ngày
+            - button "more" [ref=e285]:
+              - img "more" [ref=e287]:
+                - img [ref=e288]
+        - generic [ref=e290]:
+          - button "down folder schedule_92b10a85-4de5-4ba7-934a-27f54ee111f6 1" [ref=e291] [cursor=pointer]:
+            - img "down" [ref=e292]:
+              - img [ref=e293]
+            - img "folder" [ref=e295]:
+              - img [ref=e296]
+            - generic "schedule_92b10a85-4de5-4ba7-934a-27f54ee111f6" [ref=e298]
+            - generic [ref=e299]: "1"
+          - generic [ref=e300] [cursor=pointer]:
+            - generic [ref=e302]: report server local
+            - button "more" [ref=e303]:
+              - img "more" [ref=e305]:
+                - img [ref=e306]
+      - generic [ref=e58]:
+        - button "book" [ref=e59] [cursor=pointer]:
+          - img "book" [ref=e61]:
+            - img [ref=e62]
+        - button "api" [ref=e64] [cursor=pointer]:
+          - img "api" [ref=e66]:
+            - img [ref=e67]
+        - button "deployment-unit" [ref=e69] [cursor=pointer]:
+          - img "deployment-unit" [ref=e71]:
+            - img [ref=e72]
+        - button "setting" [ref=e74] [cursor=pointer]:
+          - img "setting" [ref=e76]:
+            - img [ref=e77]
+        - button "bulb" [ref=e79] [cursor=pointer]:
+          - img "bulb" [ref=e81]:
+            - img [ref=e82]
+  - main [ref=e86]:
+    - main [ref=e87]:
+      - generic [ref=e309]:
+        - radiogroup "segmented control" [ref=e311]:
+          - generic [ref=e312]:
+            - generic [ref=e313] [cursor=pointer]:
+              - radio "💬 Chat" [checked]
+              - generic [ref=e314]: 💬 Chat
+            - generic [ref=e315] [cursor=pointer]:
+              - radio "⌨️ Code"
+              - generic [ref=e316]: ⌨️ Code
+        - generic [ref=e317]:
+          - heading "How can I help today?" [level=1] [ref=e320]
+          - paragraph [ref=e321]: No workspace needed — just a conversation.
+        - generic [ref=e322]:
+          - textbox "Ask anything, or describe a task…" [ref=e323]: "Goal: write a Rust function add(a:i32,b:i32)->i32 with a #[test] case. File at /tmp/dag-test-add.rs. Plan: 1) researcher scans current repo style, 2) creator writes the file, 3) architect reviews and reports."
+          - generic [ref=e324]:
+            - generic [ref=e325] [cursor=pointer]:
+              - generic "No profile" [ref=e326]:
+                - text: No profile
+                - combobox [ref=e327]
+              - img "user" [ref=e329]:
+                - img [ref=e330]
+            - generic [ref=e332] [cursor=pointer]:
+              - generic "Default · Local Gemma 4 E2B-it 4-bit — text-only (vision/audio towers skipped) (MLX)" [ref=e333]:
+                - generic "Default · Local Gemma 4 E2B-it 4-bit — text-only (vision/audio towers skipped) (MLX)" [ref=e334]: Default · Gemma 4 E2B
+                - combobox [ref=e335]
+              - img "down" [ref=e337]:
+                - img [ref=e338]
+            - radiogroup "segmented control" [ref=e340]:
+              - generic [ref=e341]:
+                - generic [ref=e342] [cursor=pointer]:
+                  - radio "thunderbolt"
+                  - generic "Agent — full tool access" [ref=e343]:
+                    - img "thunderbolt" [ref=e345]:
+                      - img [ref=e346]
+                - generic [ref=e348] [cursor=pointer]:
+                  - radio "bulb"
+                  - generic "Plan — research then propose plan" [ref=e349]:
+                    - img "bulb" [ref=e351]:
+                      - img [ref=e352]
+                - generic [ref=e354] [cursor=pointer]:
+                  - radio "apartment" [checked] [active]
+                  - generic "DAG — multi-agent dispatch" [ref=e355]:
+                    - img "apartment" [ref=e357]:
+                      - img [ref=e358]
+            - button "Start chat" [ref=e360] [cursor=pointer]:
+              - img [ref=e361]
+        - generic [ref=e363]:
+          - button "Brainstorm ideas with me" [ref=e364] [cursor=pointer]
+          - button "Explain a concept simply" [ref=e365] [cursor=pointer]
+          - button "Help me draft a message" [ref=e366] [cursor=pointer]
+          - button "Plan my day" [ref=e367] [cursor=pointer]
+          - button "Summarize this article (paste it)" [ref=e368] [cursor=pointer]
+          - button "Write a short story" [ref=e369] [cursor=pointer]
+  - generic [ref=e150]:
+    - button "⚙" [ref=e372] [cursor=pointer]:
+      - generic [ref=e152]: ⚙
+    - button "Workbench" [ref=e153] [cursor=pointer]:
+      - img [ref=e154]

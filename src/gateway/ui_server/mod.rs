@@ -8,7 +8,10 @@
 //! `sema-code-core` model manager which hasn't been ported yet.
 
 mod agent_behavior_config;
+pub mod bash_sandbox;
 mod chat;
+mod code;
+mod code_artifacts;
 mod cognitive;
 mod cognitive_config;
 mod config_handler;

@@ -218,6 +218,19 @@ pub fn ocr_mcp_config(ui_port: u16) -> McpServerConfig {
     cfg
 }
 
+// ===== JS executor =====
+
+/// Sandboxed JavaScript executor (QuickJS). No state is shared with the daemon;
+/// the subprocess just needs its default timeout / memory limits.
+pub fn js_mcp_config(default_timeout_ms: u64, default_memory_mb: u64) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-js", "js-server");
+    cfg.env
+        .insert("SENCLAW_JS_TIMEOUT_MS".into(), default_timeout_ms.to_string());
+    cfg.env
+        .insert("SENCLAW_JS_MEMORY_MB".into(), default_memory_mb.to_string());
+    cfg
+}
+
 // ===== Browser =====
 
 pub fn browser_mcp_config(ws_port: u16) -> McpServerConfig {

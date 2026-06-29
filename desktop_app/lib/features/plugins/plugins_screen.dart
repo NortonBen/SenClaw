@@ -176,6 +176,33 @@ final hooksProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   return h is Map ? h.cast<String, dynamic>() : {};
 });
 
+// ── Code artifacts (published snippets) ──────────────────────────────────────
+class CodeArtifact {
+  final String id;
+  final String name;
+  final String language;
+  final String code;
+  final String description;
+  const CodeArtifact(
+      this.id, this.name, this.language, this.code, this.description);
+  factory CodeArtifact.fromJson(Map<String, dynamic> j) => CodeArtifact(
+        '${j['id'] ?? ''}',
+        '${j['name'] ?? ''}',
+        '${j['language'] ?? ''}',
+        '${j['code'] ?? ''}',
+        '${j['description'] ?? ''}',
+      );
+}
+
+final codeArtifactsProvider = FutureProvider<List<CodeArtifact>>((ref) async =>
+    _list(await ref.read(apiClientProvider).get('/api/code/artifacts'),
+            'artifacts')
+        .map(CodeArtifact.fromJson)
+        .toList());
+
+/// A pending "load this artifact into the editor" request, consumed by the REPL.
+final codeLoadRequestProvider = StateProvider<CodeArtifact?>((ref) => null);
+
 /// Hook events with their accent color + description (mirrors the web
 /// HooksPanel `ALL_EVENTS`).
 const _allHookEvents = <(String, Color, String)>[
@@ -284,48 +311,112 @@ class PluginsScreen extends ConsumerWidget {
   }
 }
 
-/// Code-executor capabilities panel (web CodePanel) — informational: the
-/// supported languages + the sandbox feature set.
+/// Code-executor capabilities panel (web CodePanel) — reflects the live
+/// `senclaw-js` sandbox: JavaScript runs today (QuickJS, isolated, with
+/// timeout + memory limits); the rest of the languages are on the roadmap.
 class _CodeTab extends StatelessWidget {
   const _CodeTab();
 
+  static const _live = Color(0xFF10B981); // green — sandboxed & live
+  static const _host = Color(0xFFF59E0B); // amber — live but runs on host
+
+  // (name, dot color, status) — status ∈ 'sandbox' | 'host' | 'planned'
   static const _languages = [
-    ('Python', Color(0xFF3776AB)),
-    ('JavaScript', Color(0xFFF7DF1E)),
-    ('TypeScript', Color(0xFF3178C6)),
-    ('Go', Color(0xFF00ADD8)),
-    ('Rust', Color(0xFFDEA584)),
-    ('Bash', Color(0xFF4EAA25)),
+    ('JavaScript', Color(0xFFF7DF1E), 'sandbox'),
+    ('TypeScript', Color(0xFF3178C6), 'sandbox'),
+    ('Bash', Color(0xFF4EAA25), 'sandbox'),
+    ('Python', Color(0xFF3776AB), 'planned'),
+    ('Go', Color(0xFF00ADD8), 'planned'),
+    ('Rust', Color(0xFFDEA584), 'planned'),
   ];
 
+  // The three tools exposed by the senclaw-js MCP server.
+  static const _tools = [
+    ('js_eval',
+        'Run a JavaScript snippet; returns the value, console output, and any error'),
+    ('js_eval_ts',
+        'Run TypeScript — transpiled to JS (types stripped), then run in the sandbox'),
+    ('js_eval_file',
+        'Read a .js / .mjs file from disk and run it in the same sandbox'),
+  ];
+
+  // (icon, title, desc, status) — status ∈ 'live' | 'host' | 'planned'
   static const _features = [
     (
-      Icons.terminal,
-      'Interactive REPL',
-      'Run code snippets in a sandboxed environment with real-time output streaming. Supports stdin/stdout and environment variables.'
+      Icons.code,
+      'JavaScript Sandbox (QuickJS)',
+      'Agents run JavaScript via the senclaw-js MCP server — standard ECMAScript intrinsics plus a captured console, with no filesystem, network, or process access.',
+      'live',
     ),
     (
       Icons.shield_outlined,
-      'Sandboxed Execution',
-      'Each run is isolated with configurable resource limits (CPU, memory, timeout). Zero risk to the host system.'
+      'Sandboxed Execution (JS / TS)',
+      'JS/TS runs are bounded by a wall-clock timeout (default 5s, max 60s) and a memory cap (default 128 MiB, max 1 GiB). Infinite loops and over-allocation are killed — zero risk to the host.',
+      'live',
+    ),
+    (
+      Icons.code,
+      'TypeScript support',
+      'TypeScript snippets are transpiled to JS (types stripped, no type-checking) and run in the same sandbox — interfaces, generics, enums, and casts all work.',
+      'live',
+    ),
+    (
+      Icons.terminal,
+      'Bash (brush sandbox)',
+      'Bash runs in brush — a pure-Rust shell — with no env, empty PATH (external programs blocked), a temp working dir, and a kill-enforced timeout (killable child process). In-process isolation, not an OS jail.',
+      'live',
+    ),
+    (
+      Icons.bolt_outlined,
+      'More language runtimes',
+      'Python, Go, and Rust are on the roadmap, reusing the same isolation + resource-limit model.',
+      'planned',
     ),
     (
       Icons.bug_report_outlined,
       'Integrated Debugging',
-      'Set breakpoints, inspect variables, and step through execution. Supports stack-trace visualization and memory profiling.'
+      'Set breakpoints, inspect variables, and step through execution. Supports stack-trace visualization and memory profiling.',
+      'planned',
     ),
     (
       Icons.inventory_2_outlined,
       'Artifact Publishing',
-      'Package and publish code outputs as reusable artifacts — share scripts, notebooks, and utilities across your agent network.'
+      'Package and publish code outputs as reusable artifacts — share scripts, notebooks, and utilities across your agent network.',
+      'planned',
     ),
   ];
+
+  /// (accent color or null when planned, short label) for a status string.
+  static (Color?, String) _statusStyle(String status) {
+    switch (status) {
+      case 'sandbox':
+      case 'live':
+        return (_live, 'LIVE');
+      case 'host':
+        return (_host, 'HOST');
+      default:
+        return (null, 'PLANNED');
+    }
+  }
+
+  Widget _statusPill(String label, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(AppTokens.rSm),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                color: color, fontSize: 10, fontWeight: FontWeight.w700)),
+      );
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     return ListView(
-      padding: const EdgeInsets.all(AppTokens.s24),
+      padding: const EdgeInsets.fromLTRB(
+          AppTokens.s24, AppTokens.s8, AppTokens.s24, AppTokens.s24),
       children: [
         Row(children: [
           Icon(Icons.code, color: c.accent, size: 22),
@@ -335,9 +426,11 @@ class _CodeTab extends StatelessWidget {
                   color: c.textPrimary,
                   fontSize: 18,
                   fontWeight: FontWeight.w700)),
+          const SizedBox(width: AppTokens.s8),
+          _statusPill('JS · TS · BASH', _live),
         ]),
         const SizedBox(height: AppTokens.s4),
-        Text('Sandboxed code execution environment',
+        Text('Sandboxed JS/TS via senclaw-js, plus host-shell Bash',
             style: TextStyle(color: c.textMuted, fontSize: 13)),
         const SizedBox(height: AppTokens.s20),
         Text('LANGUAGES',
@@ -348,60 +441,619 @@ class _CodeTab extends StatelessWidget {
                 letterSpacing: 0.5)),
         const SizedBox(height: AppTokens.s8),
         Wrap(spacing: AppTokens.s8, runSpacing: AppTokens.s8, children: [
-          for (final (name, color) in _languages)
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: AppTokens.s12, vertical: AppTokens.s6),
-              decoration: BoxDecoration(
-                color: c.surfaceAlt,
-                borderRadius: BorderRadius.circular(AppTokens.rFull),
-                border: Border.all(color: c.border),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Container(
-                    width: 8,
-                    height: 8,
-                    decoration:
-                        BoxDecoration(color: color, shape: BoxShape.circle)),
-                const SizedBox(width: AppTokens.s8),
-                Text(name,
-                    style: TextStyle(color: c.textPrimary, fontSize: 12)),
-              ]),
-            ),
+          for (final (name, color, status) in _languages)
+            Builder(builder: (_) {
+              final (accent, label) = _statusStyle(status);
+              final on = accent != null;
+              return Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppTokens.s12, vertical: AppTokens.s6),
+                decoration: BoxDecoration(
+                  color: on ? accent.withValues(alpha: 0.12) : c.surfaceAlt,
+                  borderRadius: BorderRadius.circular(AppTokens.rFull),
+                  border: Border.all(
+                      color: on ? accent.withValues(alpha: 0.45) : c.border),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                      width: 8,
+                      height: 8,
+                      decoration:
+                          BoxDecoration(color: color, shape: BoxShape.circle)),
+                  const SizedBox(width: AppTokens.s8),
+                  Text(name,
+                      style: TextStyle(
+                          color: on ? c.textPrimary : c.textMuted,
+                          fontSize: 12)),
+                  if (on) ...[
+                    const SizedBox(width: AppTokens.s6),
+                    Text(label,
+                        style: TextStyle(
+                            color: accent,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5)),
+                  ],
+                ]),
+              );
+            }),
         ]),
+        const SizedBox(height: AppTokens.s4),
+        Text('JS & TS run sandboxed; Bash runs on the host (not isolated); the rest are planned.',
+            style: TextStyle(color: c.textMuted, fontSize: 11)),
+        const SizedBox(height: AppTokens.s20),
+        // MCP tools exposed by senclaw-js.
+        Row(children: [
+          Icon(Icons.dns_outlined, size: 14, color: c.accent),
+          const SizedBox(width: AppTokens.s6),
+          Text('MCP TOOLS · senclaw-js',
+              style: TextStyle(
+                  color: c.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5)),
+        ]),
+        const SizedBox(height: AppTokens.s8),
+        Container(
+          padding: const EdgeInsets.all(AppTokens.s16),
+          decoration: BoxDecoration(
+            color: c.surface,
+            borderRadius: BorderRadius.circular(AppTokens.rMd),
+            border: Border.all(color: c.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final (name, desc) in _tools)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.bolt, size: 12, color: c.textMuted),
+                        const SizedBox(width: AppTokens.s6),
+                        Expanded(
+                          child: RichText(
+                            text: TextSpan(children: [
+                              TextSpan(
+                                  text: name,
+                                  style: TextStyle(
+                                      color: c.accent,
+                                      fontSize: 12,
+                                      fontFamily: AppTokens.fontMono)),
+                              TextSpan(
+                                  text: ' — $desc',
+                                  style: TextStyle(
+                                      color: c.textMuted, fontSize: 12)),
+                            ]),
+                          ),
+                        ),
+                      ]),
+                ),
+            ],
+          ),
+        ),
         const SizedBox(height: AppTokens.s24),
-        for (final (icon, title, desc) in _features)
+        Text('TRY IT',
+            style: TextStyle(
+                color: c.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5)),
+        const SizedBox(height: AppTokens.s8),
+        const _JsRepl(),
+        const SizedBox(height: AppTokens.s20),
+        Row(children: [
+          Text('ARTIFACTS',
+              style: TextStyle(
+                  color: c.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5)),
+          const Spacer(),
+          Consumer(builder: (context, ref, _) {
+            return IconButton(
+              tooltip: 'Reload',
+              icon: const Icon(Icons.refresh, size: 16),
+              onPressed: () => ref.invalidate(codeArtifactsProvider),
+            );
+          }),
+        ]),
+        const SizedBox(height: AppTokens.s8),
+        const _ArtifactsSection(),
+        const SizedBox(height: AppTokens.s24),
+        for (final (icon, title, desc, status) in _features)
+          Builder(builder: (_) {
+            final (accent, label) = _statusStyle(status);
+            final pillColor = accent ?? const Color(0xFF8A8A99);
+            return Container(
+              margin: const EdgeInsets.only(bottom: AppTokens.s12),
+              padding: const EdgeInsets.all(AppTokens.s16),
+              decoration: BoxDecoration(
+                color: c.surface,
+                borderRadius: BorderRadius.circular(AppTokens.rMd),
+                border: Border.all(
+                    color: accent != null
+                        ? accent.withValues(alpha: 0.4)
+                        : c.border),
+              ),
+              child:
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(icon, size: 18, color: accent ?? c.accent),
+                const SizedBox(width: AppTokens.s12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Expanded(
+                          child: Text(title,
+                              style: TextStyle(
+                                  color: c.textPrimary,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                        _statusPill(label, pillColor),
+                      ]),
+                      const SizedBox(height: AppTokens.s4),
+                      Text(desc,
+                          style: TextStyle(
+                              color: c.textMuted, fontSize: 12, height: 1.4)),
+                    ],
+                  ),
+                ),
+              ]),
+            );
+          }),
+      ],
+    );
+  }
+}
+
+/// Live JavaScript REPL — posts to /api/code/run (sandboxed senclaw-js engine)
+/// and renders the result / console output / error.
+class _JsRepl extends ConsumerStatefulWidget {
+  const _JsRepl();
+  @override
+  ConsumerState<_JsRepl> createState() => _JsReplState();
+}
+
+class _JsReplState extends ConsumerState<_JsRepl> {
+  static const _jsSample =
+      '// Sandboxed JavaScript — no fs, network, or process access.\n'
+      'const xs = [1, 2, 3, 4];\n'
+      "console.log('sum', xs.reduce((a, b) => a + b, 0));\n"
+      'xs.map(x => x * x)';
+  static const _tsSample =
+      '// Sandboxed TypeScript — transpiled to JS, then run in the sandbox.\n'
+      'interface Point { x: number; y: number }\n'
+      'const pts: Point[] = [{ x: 1, y: 2 }, { x: 3, y: 4 }];\n'
+      'const dist = (p: Point): number => Math.hypot(p.x, p.y);\n'
+      "console.log('distances', pts.map(dist));\n"
+      'pts.length';
+  static const _bashSample =
+      '# Bash in the brush sandbox (pure-Rust): no env, empty PATH\n'
+      '# (external programs like ls/curl are blocked), temp dir.\n'
+      'name="brush"\n'
+      'for i in 1 2 3; do echo "hello \$name #\$i"; done\n'
+      'echo "sum = \$((2 + 3 * 4))"';
+
+  static const _samples = {
+    'javascript': _jsSample,
+    'typescript': _tsSample,
+    'bash': _bashSample,
+  };
+
+  final _controller = TextEditingController(text: _jsSample);
+  String _lang = 'javascript';
+  bool _running = false;
+  bool _saving = false;
+  Map<String, dynamic>? _out;
+  String? _err;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _switchLang(String next) {
+    // Swap the sample when the editor still holds an untouched sample, so
+    // toggling shows a relevant example without clobbering real edits.
+    if (_samples.containsValue(_controller.text)) {
+      _controller.text = _samples[next] ?? _jsSample;
+    }
+    setState(() => _lang = next);
+  }
+
+  Future<void> _run() async {
+    setState(() {
+      _running = true;
+      _err = null;
+    });
+    try {
+      final r = await ref.read(apiClientProvider).post('/api/code/run',
+          body: {'code': _controller.text, 'language': _lang});
+      setState(() => _out = (r is Map)
+          ? r.cast<String, dynamic>()
+          : {'ok': false, 'error': '$r'});
+    } catch (e) {
+      setState(() {
+        _err = '$e';
+        _out = null;
+      });
+    } finally {
+      if (mounted) setState(() => _running = false);
+    }
+  }
+
+  Future<void> _save() async {
+    final name = await _promptName(context);
+    if (name == null || name.trim().isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(apiClientProvider).post('/api/code/artifacts', body: {
+        'name': name.trim(),
+        'language': _lang,
+        'code': _controller.text,
+      });
+      ref.invalidate(codeArtifactsProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Saved "${name.trim()}"')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<String?> _promptName(BuildContext context) {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save as artifact'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final out = _out;
+    // Consume a pending "load artifact into editor" request.
+    ref.listen<CodeArtifact?>(codeLoadRequestProvider, (_, next) {
+      if (next == null) return;
+      _controller.text = next.code;
+      setState(() => _lang = next.language);
+      ref.read(codeLoadRequestProvider.notifier).state = null;
+    });
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s16),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+        border: Border.all(color: _CodeTab._live.withValues(alpha: 0.4)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.play_circle_outline, size: 16, color: _CodeTab._live),
+          const SizedBox(width: AppTokens.s6),
+          Text('Interactive REPL',
+              style: TextStyle(
+                  color: c.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600)),
+          const Spacer(),
+          SegmentedButton<String>(
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            segments: const [
+              ButtonSegment(value: 'javascript', label: Text('JS')),
+              ButtonSegment(value: 'typescript', label: Text('TS')),
+              ButtonSegment(value: 'bash', label: Text('Bash')),
+            ],
+            selected: {_lang},
+            showSelectedIcon: false,
+            onSelectionChanged: (s) => _switchLang(s.first),
+          ),
+        ]),
+        if (_lang == 'bash') ...[
+          const SizedBox(height: AppTokens.s8),
           Container(
-            margin: const EdgeInsets.only(bottom: AppTokens.s12),
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppTokens.s12, vertical: AppTokens.s8),
+            decoration: BoxDecoration(
+              color: _CodeTab._host.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppTokens.rSm),
+              border: Border.all(color: _CodeTab._host.withValues(alpha: 0.4)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.warning_amber_rounded,
+                  size: 14, color: _CodeTab._host),
+              const SizedBox(width: AppTokens.s6),
+              Expanded(
+                child: Text(
+                    'Bash runs in the brush sandbox (pure-Rust): no env, empty PATH '
+                    '(external programs blocked), temp dir, kill-enforced timeout. '
+                    'In-process isolation, not an OS jail.',
+                    style: TextStyle(color: c.textSecondary, fontSize: 11)),
+              ),
+            ]),
+          ),
+        ],
+        const SizedBox(height: AppTokens.s12),
+        TextField(
+          controller: _controller,
+          minLines: 5,
+          maxLines: 16,
+          style: const TextStyle(fontFamily: AppTokens.fontMono, fontSize: 12),
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            filled: true,
+            fillColor: c.surfaceAlt,
+            isDense: true,
+          ),
+        ),
+        const SizedBox(height: AppTokens.s8),
+        Row(children: [
+          Expanded(
+            child: Text(
+                'Runs in the senclaw-js sandbox · 5s / 128 MiB limits',
+                style: TextStyle(color: c.textMuted, fontSize: 11)),
+          ),
+          OutlinedButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.bookmark_add_outlined, size: 16),
+            label: const Text('Save'),
+          ),
+          const SizedBox(width: AppTokens.s8),
+          FilledButton.icon(
+            onPressed: _running ? null : _run,
+            icon: _running
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.play_arrow, size: 16),
+            label: const Text('Run'),
+          ),
+        ]),
+        if (_err != null) ...[
+          const SizedBox(height: AppTokens.s8),
+          Text(_err!,
+              style: const TextStyle(color: AppTokens.danger, fontSize: 12)),
+        ],
+        if (out != null) ...[
+          const SizedBox(height: AppTokens.s12),
+          _ReplOutput(out: out),
+        ],
+      ]),
+    );
+  }
+}
+
+class _ReplOutput extends StatelessWidget {
+  const _ReplOutput({required this.out});
+  final Map<String, dynamic> out;
+
+  Widget _label(String t, AppColors c) => Text(t,
+      style: TextStyle(
+          color: c.textMuted,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.5));
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final ok = out['ok'] == true;
+    final logs =
+        ((out['logs'] as List?) ?? const []).map((e) => '$e').toList();
+    final timedOut = out['timed_out'] == true;
+    const mono = TextStyle(fontFamily: AppTokens.fontMono, fontSize: 12);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: c.surfaceAlt,
+        borderRadius: BorderRadius.circular(AppTokens.rSm),
+        border: Border.all(color: c.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (logs.isNotEmpty) ...[
+          _label('CONSOLE', c),
+          for (final l in logs)
+            SelectableText(l, style: mono.copyWith(color: c.textSecondary)),
+          const SizedBox(height: AppTokens.s8),
+        ],
+        if (ok) ...[
+          Row(children: [
+            _label('RESULT', c),
+            if (out['result_type'] != null) ...[
+              const SizedBox(width: AppTokens.s6),
+              Text('${out['result_type']}',
+                  style: TextStyle(color: c.textMuted, fontSize: 10)),
+            ],
+          ]),
+          SelectableText('${out['result'] ?? 'undefined'}',
+              style: mono.copyWith(color: const Color(0xFF10B981))),
+        ] else ...[
+          _label(timedOut ? 'TIMED OUT' : 'ERROR', c),
+          SelectableText('${out['error'] ?? 'unknown error'}',
+              style: mono.copyWith(color: AppTokens.danger)),
+        ],
+        if (out['duration_ms'] != null) ...[
+          const SizedBox(height: AppTokens.s6),
+          Text('${out['duration_ms']} ms',
+              style: TextStyle(color: c.textMuted, fontSize: 10)),
+        ],
+      ]),
+    );
+  }
+}
+
+/// List of published code artifacts — load into editor / run / delete.
+class _ArtifactsSection extends ConsumerStatefulWidget {
+  const _ArtifactsSection();
+  @override
+  ConsumerState<_ArtifactsSection> createState() => _ArtifactsSectionState();
+}
+
+class _ArtifactsSectionState extends ConsumerState<_ArtifactsSection> {
+  final Map<String, Map<String, dynamic>> _runOut = {};
+  String? _busy;
+
+  Future<void> _run(CodeArtifact a) async {
+    setState(() => _busy = a.id);
+    try {
+      final r = await ref
+          .read(apiClientProvider)
+          .post('/api/code/artifacts/${a.id}/run');
+      setState(() => _runOut[a.id] =
+          (r is Map) ? r.cast<String, dynamic>() : {'ok': false, 'error': '$r'});
+    } catch (e) {
+      setState(() => _runOut[a.id] = {'ok': false, 'error': '$e'});
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  Future<void> _delete(CodeArtifact a) async {
+    try {
+      await ref.read(apiClientProvider).delete('/api/code/artifacts/${a.id}');
+      ref.invalidate(codeArtifactsProvider);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final artifacts = ref.watch(codeArtifactsProvider);
+    return artifacts.when(
+      loading: () => const Padding(
+          padding: EdgeInsets.all(AppTokens.s16),
+          child: Center(child: CircularProgressIndicator())),
+      error: (e, _) => Text('$e', style: TextStyle(color: c.textMuted)),
+      data: (list) {
+        if (list.isEmpty) {
+          return Container(
             padding: const EdgeInsets.all(AppTokens.s16),
             decoration: BoxDecoration(
               color: c.surface,
               borderRadius: BorderRadius.circular(AppTokens.rMd),
               border: Border.all(color: c.border),
             ),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Icon(icon, size: 18, color: c.accent),
-              const SizedBox(width: AppTokens.s12),
-              Expanded(
+            child: Text(
+                'No artifacts yet — write code above and tap “Save”.',
+                style: TextStyle(color: c.textMuted, fontSize: 12)),
+          );
+        }
+        return Column(
+          children: [
+            for (final a in list)
+              Container(
+                margin: const EdgeInsets.only(bottom: AppTokens.s8),
+                padding: const EdgeInsets.all(AppTokens.s12),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                  border: Border.all(color: c.border),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        style: TextStyle(
-                            color: c.textPrimary,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600)),
-                    const SizedBox(height: AppTokens.s4),
-                    Text(desc,
-                        style: TextStyle(
-                            color: c.textMuted, fontSize: 12, height: 1.4)),
+                    Row(children: [
+                      _MiniTag(_langLabel(a.language), AppTokens.brandAlt),
+                      const SizedBox(width: AppTokens.s8),
+                      Expanded(
+                        child: Text(a.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: c.textPrimary,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      IconButton(
+                        tooltip: 'Load into editor',
+                        icon: const Icon(Icons.input, size: 16),
+                        onPressed: () => ref
+                            .read(codeLoadRequestProvider.notifier)
+                            .state = a,
+                      ),
+                      IconButton(
+                        tooltip: 'Run',
+                        icon: _busy == a.id
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.play_arrow, size: 16),
+                        onPressed: _busy == null ? () => _run(a) : null,
+                      ),
+                      IconButton(
+                        tooltip: 'Delete',
+                        icon: const Icon(Icons.delete_outline,
+                            size: 16, color: AppTokens.danger),
+                        onPressed: () => _delete(a),
+                      ),
+                    ]),
+                    if (a.description.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(a.description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                TextStyle(color: c.textMuted, fontSize: 12)),
+                      ),
+                    if (_runOut[a.id] != null) ...[
+                      const SizedBox(height: AppTokens.s8),
+                      _ReplOutput(out: _runOut[a.id]!),
+                    ],
                   ],
                 ),
               ),
-            ]),
-          ),
-      ],
+          ],
+        );
+      },
     );
+  }
+
+  String _langLabel(String l) {
+    switch (l) {
+      case 'javascript':
+        return 'JS';
+      case 'typescript':
+        return 'TS';
+      case 'bash':
+        return 'Bash';
+      default:
+        return l;
+    }
   }
 }
 

@@ -49,12 +49,6 @@ const CODE_SUGGESTIONS = [
 
 interface LlmConfig { id: string; label: string; provider: string; modelName: string; }
 
-declare global {
-  interface Window {
-    showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle & { name: string }>;
-  }
-}
-
 const RECENT_PATHS_KEY = 'senclaw:recent-workdirs';
 const MAX_RECENT = 8;
 
@@ -68,6 +62,48 @@ function pushRecentPath(p: string) {
     cur.unshift(p);
     localStorage.setItem(RECENT_PATHS_KEY, JSON.stringify(cur.slice(0, MAX_RECENT)));
   } catch {}
+}
+
+// --- Native folder picker (Tauri desktop shell only) ----------------------
+// The packaged macOS app exposes the dialog plugin via `withGlobalTauri`, so a
+// real OS folder dialog is available at `window.__TAURI__.dialog.open`. In a
+// plain browser `window.__TAURI__` is undefined and we fall back to the
+// typed-path modal. We never use the browser File System Access API (it pops a
+// permission prompt and isn't available in WKWebView).
+
+interface TauriGlobal {
+  dialog?: { open?: (opts: unknown) => Promise<string | string[] | null> };
+  core?: { invoke?: (cmd: string, args?: unknown) => Promise<unknown> };
+}
+function tauriGlobal(): TauriGlobal | undefined {
+  return (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
+}
+
+/** True when running inside the Tauri desktop shell (native dialog available). */
+function hasNativeDialog(): boolean {
+  return !!tauriGlobal();
+}
+
+/** Open the native OS folder dialog. Returns the chosen absolute path, or
+ *  null if the user cancelled or the dialog isn't reachable. */
+async function pickFolderNative(): Promise<string | null> {
+  const t = tauriGlobal();
+  if (!t) return null;
+  const opts = { directory: true, multiple: false, title: 'Choose a workspace folder' };
+  try {
+    if (t.dialog?.open) {
+      const res = await t.dialog.open(opts);
+      return typeof res === 'string' ? res : null;
+    }
+    // Fallback to the raw plugin command if the high-level global is absent.
+    if (t.core?.invoke) {
+      const res = await t.core.invoke('plugin:dialog|open', { options: opts });
+      return typeof res === 'string' ? res : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 export function NewChatScreen({ onStart, projectName, profiles }: Props) {
@@ -97,23 +133,17 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
       .catch(() => {});
   }, []);
 
-  // Note: live file-preview fetch on `workDir` was removed when the inline
-  // panel was replaced by the Codex-style dropdown. The "Use an existing
-  // folder" modal still validates the path via `/api/workspace/files` at
-  // submit time (see `submitPathModal`), so an invalid path can't sneak in.
+  // Note: the New Chat picker never reads the filesystem from the browser.
+  // Selecting a folder only captures its *path string* (see `submitPathModal`);
+  // resolving and validating that path — tilde expansion, existence, access —
+  // is the backend's job when the chat opens the workspace.
 
-  /** Try the OS file picker. Best-effort — Chrome's `showDirectoryPicker`
-   *  only returns the folder *name*, not its absolute path, so it's not
-   *  enough on its own. Use it to seed the modal's path input when present,
-   *  then let the user confirm/edit the full path before submitting. */
-  const seedPathFromNativePicker = async (): Promise<string | null> => {
-    if (!window.showDirectoryPicker) return null;
-    try {
-      const handle = await window.showDirectoryPicker();
-      return handle.name;
-    } catch {
-      return null;
-    }
+  /** Commit a chosen workspace path: set it active, remember it, notify. */
+  const commitWorkDir = (path: string) => {
+    setWorkDir(path);
+    pushRecentPath(path);
+    setRecentPaths(loadRecentPaths());
+    message.success(`Workspace set to ${path}`, 2);
   };
 
   /** Submit the modal — either `mkdir` (create) or just `setWorkDir` (open).
@@ -150,24 +180,17 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
         setCreatingFolder(false);
       }
     } else if (pathModalMode === 'open') {
-      // Verify the folder exists by hitting the list endpoint before committing.
-      try {
-        const res = await fetch(`/api/workspace/files?path=${encodeURIComponent(path)}&depth=1`);
-        if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          throw new Error(txt || `HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        const canonical = data.root ?? path;
-        setWorkDir(canonical);
-        pushRecentPath(canonical);
-        setRecentPaths(loadRecentPaths());
-        message.success(`Workspace set to ${canonical}`, 2);
-        setPathModalMode(null);
-        setNewFolderPath('');
-      } catch (e: unknown) {
-        message.error(`Open failed: ${String((e as Error)?.message ?? e)}`, 3);
+      // Just capture the path the user pointed at — the UI no longer touches
+      // the filesystem here. Validation/resolution (incl. `~` expansion and
+      // existence) is the backend's job when the chat actually opens the
+      // workspace, so we only do a cheap client-side format check.
+      if (!path.startsWith('/') && !path.startsWith('~')) {
+        message.warning('Path must be absolute (start with / or ~).', 2);
+        return;
       }
+      commitWorkDir(path);
+      setPathModalMode(null);
+      setNewFolderPath('');
     }
   };
 
@@ -254,8 +277,16 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
           icon: <FolderOutlined />,
           label: 'Use an existing folder',
           onClick: async () => {
-            const seed = await seedPathFromNativePicker();
-            setNewFolderPath(seed ? `~/${seed}` : (workDir || ''));
+            // In the desktop app, open the native OS folder dialog (real path,
+            // no permission prompt). In a plain browser there's no native
+            // dialog, so fall back to the typed-path modal — the backend
+            // resolves/validates whatever path we hand it when the chat opens.
+            if (hasNativeDialog()) {
+              const picked = await pickFolderNative();
+              if (picked) commitWorkDir(picked);
+              return; // cancelled → leave things as-is, no modal.
+            }
+            setNewFolderPath(workDir || '');
             setPathModalMode('open');
           },
         },

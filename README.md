@@ -195,21 +195,21 @@ make build-extension
 
 ## Desktop App / Ứng dụng desktop
 
-SenClaw includes a Tauri desktop shell in `src-tauri/`.
+SenClaw ships a native **Flutter** desktop app in `desktop_app/` (macOS / Windows / Linux / web). It replaces the former Tauri shell: instead of embedding a WebView, it talks to the daemon directly over HTTP/WebSocket and **supervises the `senclaw` daemon as a child process** (spawns the bundled binary, streams its logs, restarts it on demand). See `docs/flutter-desktop-migration.md`.
 
-SenClaw có desktop shell Tauri trong `src-tauri/`.
+SenClaw có app desktop **Flutter** native trong `desktop_app/` (macOS / Windows / Linux / web). Nó thay thế Tauri shell cũ: kết nối trực tiếp tới daemon qua HTTP/WebSocket và **giám sát daemon `senclaw` như tiến trình con** (spawn binary đi kèm, stream log, restart khi cần).
 
 ```bash
-# Development
+# Development (runs the Flutter app; it adopts a running daemon or spawns one)
 make app-dev
 
-# Production bundle
-make app-build
+# Production bundle (builds the daemon binary + Flutter .app, bundles the
+# binary into Contents/Resources so the supervisor can launch it)
+make app-build          # macOS
+make app-build-windows  # Windows
+make app-build-linux    # Linux
+make app-build-web      # web
 ```
-
-`make app-build` builds the Web UI, builds the `senclaw` sidecar binary, places it under `src-tauri/binaries/`, and runs `cargo tauri build`.
-
-`make app-build` sẽ build Web UI, build binary sidecar `senclaw`, đặt nó vào `src-tauri/binaries/`, rồi chạy `cargo tauri build`.
 
 ---
 
@@ -257,8 +257,8 @@ SenClaw/
 │   ├── code_engine/        # Code-oriented agent runtime
 │   ├── plugins/            # Plugin support
 │   └── wiki/               # Git-backed knowledge base
-├── web/                    # React + Vite Web UI
-├── src-tauri/              # Tauri desktop app
+├── web/                    # React + Vite Web UI (legacy; served by the daemon)
+├── desktop_app/            # Flutter desktop app (macOS/Windows/Linux/web)
 ├── apps/                   # Space Apps
 ├── app-space-sdk/          # SDK for building Space Apps
 ├── examples/               # Example apps and SDK usage

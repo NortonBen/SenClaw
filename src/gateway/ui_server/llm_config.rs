@@ -215,6 +215,92 @@ pub(crate) async fn llm_config_fetch_models(
     }
 }
 
+/// Run a one-shot chat completion against the active LLM config. Used by the
+/// Space-App bridge (`llm.request`) so apps can reuse SenClaw's configured LLM.
+/// Returns `(answer_text, model_name)`.
+pub(crate) async fn chat_completion(
+    config_path: &std::path::Path,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
+    let stored = load_llm_configs(config_path);
+    let cfg = stored
+        .active_id
+        .as_ref()
+        .and_then(|id| stored.configs.iter().find(|c| &c.id == id))
+        .or_else(|| stored.configs.first())
+        .ok_or_else(|| "No LLM configured in SenClaw (Settings → Models)".to_string())?;
+
+    let client = reqwest::Client::new();
+    let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
+    let cap = if max_tokens == 0 { cfg.max_tokens.max(256) } else { max_tokens };
+
+    let (url, body, req) = if is_anthropic {
+        let base = cfg.base_url.trim_end_matches('/').trim_end_matches("/v1");
+        let url = format!("{base}/v1/messages");
+        let body = serde_json::json!({
+            "model": cfg.model_name,
+            "max_tokens": cap,
+            "system": system,
+            "messages": [{ "role": "user", "content": user }],
+        });
+        let req = client
+            .post(&url)
+            .header("x-api-key", &cfg.api_key)
+            .header("anthropic-version", "2023-06-01");
+        (url, body, req)
+    } else {
+        let base = cfg
+            .base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions");
+        let url = format!("{base}/chat/completions");
+        let body = serde_json::json!({
+            "model": cfg.model_name,
+            "max_tokens": cap,
+            "temperature": 0.2,
+            "stream": false,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
+            ],
+        });
+        let req = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", cfg.api_key));
+        (url, body, req)
+    };
+
+    let resp = req
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("LLM request to {url} failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("Read error: {e}"))?;
+    if !status.is_success() {
+        let preview: String = text.chars().take(300).collect();
+        return Err(format!("LLM HTTP {status}: {preview}"));
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+    let answer = if is_anthropic {
+        json["content"][0]["text"].as_str().unwrap_or("").to_string()
+    } else {
+        json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    if answer.trim().is_empty() {
+        return Err("LLM returned an empty response".into());
+    }
+    Ok((answer, cfg.model_name.clone()))
+}
+
 /// Fetch model list from a provider's /models endpoint.
 async fn fetch_models(base_url: &str, api_key: &str, adapt: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();

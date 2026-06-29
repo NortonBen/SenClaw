@@ -81,6 +81,10 @@ use super::ocr::{
     ocr_cancel, ocr_custom_download, ocr_delete, ocr_download, ocr_models_list, ocr_recognize,
     ocr_settings_get, ocr_settings_put, ocr_status,
 };
+use super::code::code_run;
+use super::code_artifacts::{
+    create_artifact, delete_artifact, get_artifact, list_artifacts, run_artifact, update_artifact,
+};
 use super::wiki::{
     wiki_dir_delete, wiki_file_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
     wiki_tree, wiki_upload, wiki_write,
@@ -398,6 +402,18 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/ocr/models/:id/cancel", post(ocr_cancel))
         .route("/api/ocr/models/:id", delete(ocr_delete))
         .route("/api/ocr/recognize", post(ocr_recognize))
+        // Code executor REPL — sandboxed JS via senclaw-js engine.
+        .route("/api/code/run", post(code_run))
+        // Code artifacts — publish/browse/run reusable snippets.
+        .route(
+            "/api/code/artifacts",
+            get(list_artifacts).post(create_artifact),
+        )
+        .route(
+            "/api/code/artifacts/:id",
+            get(get_artifact).put(update_artifact).delete(delete_artifact),
+        )
+        .route("/api/code/artifacts/:id/run", post(run_artifact))
         // Embedding provider config
         .route(
             "/api/embedding-config",

@@ -35,6 +35,7 @@ mod agents;
 mod bindings;
 mod channels;
 mod chat_events;
+pub mod code_artifacts;
 pub mod cowork_tasks;
 pub mod cowork_teams;
 pub mod cowork_templates;

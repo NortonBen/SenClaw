@@ -29,6 +29,8 @@ export interface SearchResult {
   title: string;
   tags: string[];
   updated: string;
+  /** Body excerpt around the match (present only for text queries). */
+  snippet?: string;
 }
 
 export interface WikiStats {
@@ -157,6 +159,16 @@ export function useWiki() {
     await apiFetch(`/api/wiki/dir?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
   }, []);
 
+  const uploadDocs = useCallback(async (
+    folder: string,
+    files: FileList | File[],
+  ): Promise<{ created: string[]; skipped: { file: string; reason: string }[] }> => {
+    const form = new FormData();
+    form.append('folder', folder);
+    for (const f of Array.from(files)) form.append('file', f, f.name);
+    return apiFetch('/api/wiki/upload', { method: 'POST', body: form });
+  }, []);
+
   return {
     tree, treeLoading,
     doc, docLoading,
@@ -172,6 +184,7 @@ export function useWiki() {
     fetchTags,
     mkdir,
     deleteDir,
+    uploadDocs,
     clearDoc: useCallback(() => setDoc(null), []),
     clearSearch: useCallback(() => setSearchResults([]), []),
     clearError: useCallback(() => setError(null), []),

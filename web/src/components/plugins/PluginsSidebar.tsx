@@ -305,24 +305,6 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
     ? subagents.filter(a => a.name.toLowerCase().includes(q))
     : subagents;
 
-  const devBadge = (
-    <span
-      style={{
-        fontSize: '9px',
-        fontWeight: 600,
-        color: token.colorWarning,
-        backgroundColor: token.colorWarningBg,
-        border: `1px solid ${token.colorWarningBorder}`,
-        padding: '0 5px',
-        borderRadius: '4px',
-        lineHeight: '16px',
-        letterSpacing: '0.5px',
-      }}
-    >
-      DEV
-    </span>
-  );
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'transparent' }}>
       {/* Header */}
@@ -421,13 +403,12 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               onClick={() => onSelect('cowork')}
             />
 
-            {/* ─── Code Executor (under development) ─── */}
+            {/* ─── Code Executor (JavaScript sandbox is live; more languages WIP) ─── */}
             <StaticNavItem
               icon={<ExperimentOutlined />}
               label="Code Executor"
               isSelected={activeNav === 'code'}
               onClick={() => onSelect('code')}
-              badge={devBadge}
             />
 
             {/* ─── Marketplace ─── */}

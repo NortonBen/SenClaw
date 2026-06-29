@@ -553,6 +553,35 @@ impl McpManager {
                     ),
                 ],
             },
+            BuiltInServerInfo {
+                name: "senclaw-js".into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "Sandboxed JavaScript executor (QuickJS) — no filesystem, network, or process access; bounded by timeout + memory limits.".into(),
+                ),
+                tools: vec![
+                    t(
+                        "js_eval",
+                        "Run a JavaScript snippet in the sandbox; returns value, console output, and errors",
+                    ),
+                    t(
+                        "js_eval_ts",
+                        "Run a TypeScript snippet — transpiled to JS (types stripped), then executed in the sandbox",
+                    ),
+                    t(
+                        "bash_run",
+                        "Run a Bash script in the brush sandbox (pure-Rust shell; empty PATH blocks external programs; kill-enforced timeout)",
+                    ),
+                    t(
+                        "js_eval_file",
+                        "Read a .js/.mjs file from disk and run it in the sandbox",
+                    ),
+                    t(
+                        "js_capabilities",
+                        "Describe the sandbox policy: limits and available vs blocked globals",
+                    ),
+                ],
+            },
         ]
     }
 

@@ -5,7 +5,7 @@ use futures::{SinkExt, StreamExt};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio::time::{self, Duration, MissedTickBehavior};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::info;
@@ -60,6 +60,18 @@ pub struct RelayClient {
     channel_id: String,
     sender_id: String,
     outbound_tx: mpsc::Sender<RelayFrame>,
+    /// Fired once when either the inbound or outbound socket task exits (i.e. the
+    /// underlying WebSocket dropped). Lets a supervisor reconnect — the socket has
+    /// no self-healing of its own.
+    closed: Arc<Notify>,
+}
+
+impl RelayClient {
+    /// Resolves when the underlying WebSocket has dropped. A fresh `connect()` is
+    /// required afterwards; this client instance is dead once it fires.
+    pub async fn closed(&self) {
+        self.closed.notified().await;
+    }
 }
 
 impl RelayClient {
@@ -81,6 +93,9 @@ impl RelayClient {
         let crypto = Arc::new(Crypto::new(encryption_key));
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<RelayFrame>(100);
         let (mut ws_write, mut ws_read) = ws_stream.split();
+        let closed = Arc::new(Notify::new());
+        let closed_inbound = Arc::clone(&closed);
+        let closed_outbound = Arc::clone(&closed);
 
         info!(
             "Establishing WebSocket stream for channel_id: {}",
@@ -189,6 +204,7 @@ impl RelayClient {
                 }
             }
             tracing::warn!("Inbound relay stream closed for channel: {}", cid_clone);
+            closed_inbound.notify_one();
         });
 
         let cid_outbound = channel_id.clone();
@@ -227,6 +243,7 @@ impl RelayClient {
                     }
                 }
             }
+            closed_outbound.notify_one();
         });
 
         Ok(Self {
@@ -234,6 +251,7 @@ impl RelayClient {
             channel_id,
             sender_id,
             outbound_tx,
+            closed,
         })
     }
 

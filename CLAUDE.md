@@ -119,6 +119,7 @@ mcp__senclaw-<domain>__<tool-prefix>_<verb>[_<modifier>]
 | space | `senclaw-space` | `space_` | `mcp__senclaw-space__space_schedule_activity` |
 | ocr | `senclaw-ocr` | `ocr_` | `mcp__senclaw-ocr__ocr_*` |
 | litho | `senclaw-litho` | `litho_` | `mcp__senclaw-litho__litho_generate` |
+| js | `senclaw-js` | `js_` | `mcp__senclaw-js__js_eval` |
 | **cognitive** | `senclaw-cognitive` | **`cog_`** (not `cognitive_`) | `mcp__senclaw-cognitive__cog_search` |
 | admin | `senclaw-admin` | (varies) | — |
 

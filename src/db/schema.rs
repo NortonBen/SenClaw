@@ -301,6 +301,21 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           updated_at      TEXT NOT NULL
         );
 
+        -- Code executor "artifacts": saved, reusable code snippets (JS/TS/Bash)
+        -- published from the Code REPL.
+        CREATE TABLE IF NOT EXISTS code_artifacts (
+          id           TEXT PRIMARY KEY,
+          name         TEXT NOT NULL,
+          language     TEXT NOT NULL,
+          code         TEXT NOT NULL,
+          description  TEXT NOT NULL DEFAULT '',
+          tags_json    TEXT NOT NULL DEFAULT '[]',
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_code_artifacts_created
+          ON code_artifacts(created_at DESC);
+
         "#,
     )?;
 

@@ -24,26 +24,44 @@ use super::core::{AppError, UiState};
 
 // ===== /api/skills =====
 
-pub(crate) async fn skills_list(State(s): State<Arc<UiState>>) -> Json<serde_json::Value> {
-    let skills = load_all_local_skills(&s.config);
-    let disabled = read_disabled_skills();
-    let result: Vec<serde_json::Value> = skills
-        .iter()
-        .map(|sk| {
-            serde_json::json!({
-                "name": sk.name,
-                "description": sk.description,
-                "version": sk.version,
-                "source": sk.source,
-                "dir": sk.dir,
-                "disabled": disabled.contains(&sk.name),
-                "triggers": sk.metadata.triggers,
-                "allowedTools": sk.metadata.allowed_tools,
-                "eligible": sk.eligible,
+pub(crate) async fn skills_list(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // The skill scan is blocking filesystem I/O (walks every source dir and
+    // parses SKILL.md frontmatter). Running it directly on the async executor
+    // can starve other tasks and, if a single skill file panics during parse,
+    // drop the HTTP connection before headers are sent ("Connection closed
+    // before full header was received"). Offload to a blocking thread and turn
+    // any panic into a proper 500 response instead.
+    let config = Arc::clone(&s.config);
+    let result = tokio::task::spawn_blocking(move || {
+        let skills = load_all_local_skills(&config);
+        let disabled = read_disabled_skills();
+        skills
+            .iter()
+            .map(|sk| {
+                serde_json::json!({
+                    "name": sk.name,
+                    "description": sk.description,
+                    "version": sk.version,
+                    "source": sk.source,
+                    "dir": sk.dir,
+                    "disabled": disabled.contains(&sk.name),
+                    "triggers": sk.metadata.triggers,
+                    "allowedTools": sk.metadata.allowed_tools,
+                    "eligible": sk.eligible,
+                })
             })
-        })
-        .collect();
-    Json(serde_json::json!({ "skills": result }))
+            .collect::<Vec<serde_json::Value>>()
+    })
+    .await
+    .map_err(|e| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("skill scan failed: {e}"),
+        )
+    })?;
+    Ok(Json(serde_json::json!({ "skills": result })))
 }
 
 // ===== /api/skills/remote-search =====
@@ -264,6 +282,65 @@ pub(crate) async fn skills_uninstall(
     Ok(Json(
         serde_json::json!({ "ok": true, "name": name, "slug": slug }),
     ))
+}
+
+// ===== POST /api/skills/create =====
+
+#[derive(Deserialize)]
+pub(crate) struct SkillCreateBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    content: String,
+}
+
+/// Create a new local skill: scaffolds `<managed_skills_dir>/<slug>/SKILL.md`
+/// with YAML frontmatter (`name`, `description`) plus the supplied body.
+pub(crate) async fn skills_create(
+    State(s): State<Arc<UiState>>,
+    Json(body): Json<SkillCreateBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let slug = body.name.trim().to_string();
+    if slug.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "name required".into()));
+    }
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "name must be slug-like (letters, digits, - and _)".into(),
+        ));
+    }
+    let managed_dir = &s.config.paths.managed_skills_dir;
+    let target = managed_dir.join(&slug);
+    if target.exists() {
+        return Err(AppError(
+            StatusCode::CONFLICT,
+            "a skill with that name already exists".into(),
+        ));
+    }
+    fs::create_dir_all(&target)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let desc = body.description.trim().replace(['\n', '\r'], " ");
+    let body_md = if body.content.trim().is_empty() {
+        format!("# {slug}\n\nDescribe what this skill does and when to use it.\n")
+    } else {
+        format!("{}\n", body.content.trim())
+    };
+    let md = format!("---\nname: {slug}\ndescription: {desc}\n---\n\n{body_md}");
+    fs::write(target.join("SKILL.md"), md)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(ref api) = s.agent_api {
+        api.reload_all_skills();
+    }
+    let _ = emit_skills_refresh(&s.config);
+
+    Ok(Json(serde_json::json!({ "ok": true, "name": slug })))
 }
 
 // ===== /api/skills/{name}/readme =====

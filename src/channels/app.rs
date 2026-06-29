@@ -207,8 +207,11 @@ impl AppChannel {
         Ok(())
     }
 
-    /// Connect to the hub relay without blocking daemon startup: first attempt runs in a
-    /// background task (with exponential backoff) so local relay/port-down does not stall boot.
+    /// Connect to the hub relay without blocking daemon startup, then **supervise** the
+    /// connection forever: the underlying WebSocket has no self-healing, so when it drops
+    /// (Cloudflare idle cutoff, hub redeploy, network blip) this loop reconnects with
+    /// exponential backoff. Without this the daemon silently falls off the channel after the
+    /// first drop while the app keeps reconnecting alone — i.e. "daemon stops responding".
     pub fn connect_nonblocking(this: Arc<AppChannel>) {
         info!(
             "[AppChannel] Scheduling relay connection for channel {} at {}",
@@ -224,12 +227,31 @@ impl AppChannel {
                             "[AppChannel] Connected to relay for channel {}",
                             this.channel_id
                         );
-                        break;
+                        backoff_secs = 2;
+                        logged_first_failure = false;
+
+                        // Block until the socket drops, then fall through to reconnect.
+                        // Grab the close future, releasing the client lock before awaiting.
+                        let closed = {
+                            let lock = this.client.lock().await;
+                            lock.as_ref().map(Arc::clone)
+                        };
+                        if let Some(client) = closed {
+                            client.closed().await;
+                        }
+                        warn!(
+                            "[AppChannel] Relay connection dropped for channel {}; reconnecting",
+                            this.channel_id
+                        );
+                        // Reset live state so establish_relay re-runs the handshake.
+                        this.connected.store(false, Ordering::SeqCst);
+                        *this.client.lock().await = None;
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                     }
                     Err(e) => {
                         if !logged_first_failure {
                             warn!(
-                                "[AppChannel] Relay not reachable at startup ({e}); retrying in background for channel {}",
+                                "[AppChannel] Relay not reachable ({e}); retrying in background for channel {}",
                                 this.channel_id
                             );
                             logged_first_failure = true;

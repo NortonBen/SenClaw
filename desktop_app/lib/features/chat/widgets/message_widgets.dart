@@ -126,6 +126,10 @@ class _TextBubble extends StatelessWidget {
                 return Padding(
                   padding: const EdgeInsets.only(top: AppTokens.s6),
                   child: Row(
+                    // User bubbles hug their content; agent footers span so the
+                    // timestamp sits flush right past the actions/tokens.
+                    mainAxisSize:
+                        isUser ? MainAxisSize.min : MainAxisSize.max,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       if (showTokens)
@@ -143,7 +147,7 @@ class _TextBubble extends StatelessWidget {
                                 .where((p) => !p.isThink)
                                 .map((p) => p.text)
                                 .join('\n\n')),
-                      const Spacer(),
+                      if (!isUser) const Spacer(),
                       if (time.isNotEmpty)
                         Text(time,
                             style:

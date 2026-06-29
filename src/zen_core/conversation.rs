@@ -524,6 +524,18 @@ fn max_completion_nudges() -> u8 {
 /// `task_done` is accepted as a generic completion signal in any mode (handled
 /// by the short-circuit further below), but the mode-specific tool is always
 /// the preferred exit.
+/// The mode that should drive completion logic this turn. A model can switch
+/// into Plan mode mid-turn via `EnterPlanMode`, which flips the live engine
+/// mode but not `config.agent_mode` (captured at turn start) — so once that
+/// tool has run, treat an Agent-mode turn as Plan for nudging / `task_done`.
+fn effective_agent_mode(base: AgentMode, entered_plan_mode: bool) -> AgentMode {
+    if entered_plan_mode && matches!(base, AgentMode::Agent) {
+        AgentMode::Plan
+    } else {
+        base
+    }
+}
+
 fn completion_nudge_for(
     mode: AgentMode,
     exit_plan_mode_called: bool,
@@ -574,6 +586,11 @@ fn completion_nudge_for(
 /// completion. Used to track per-session whether the model has reached the
 /// mode's "checkpoint" yet — see `completion_nudge_for`.
 const EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
+/// The tool a model calls to switch INTO Plan mode mid-turn. When this fires,
+/// the live engine mode becomes Plan but `config.agent_mode` (captured at turn
+/// start) stays Agent — so we track it here to upgrade the *effective* mode and
+/// keep the plan-mode completion nudge active for the rest of the session.
+const ENTER_PLAN_MODE_TOOL: &str = "EnterPlanMode";
 /// Dispatch tools whose execution counts as "DAG orchestration started". Tools
 /// like `DispatchListAgents` and bare `DispatchCreateParent` (without Run) are
 /// informational and do not actually delegate work, so they are excluded.
@@ -650,6 +667,10 @@ pub async fn query(
     let mut completion_nudges: u8 = 0;
     let mut exit_plan_mode_called: bool = false;
     let mut dispatch_executed: bool = false;
+    // Set once the model calls `EnterPlanMode` mid-turn. Upgrades the effective
+    // mode Agent→Plan so a later text-only reply is nudged toward `ExitPlanMode`
+    // (which raises the approval dialog) instead of silently ending the turn.
+    let mut entered_plan_mode: bool = false;
 
     loop {
         // Check cancellation before each LLM call
@@ -1068,9 +1089,12 @@ pub async fn query(
         //    - Dag: text is done iff a real dispatch tool already ran, otherwise
         //      nudge toward it (text without delegating any work isn't progress).
         //    Capped at `max_completion_nudges_cap` to avoid text↔nudge loops.
+        // Effective mode upgrades Agent→Plan once `EnterPlanMode` ran this turn,
+        // so a mid-turn switch into Plan mode still triggers the plan nudge.
+        let effective_mode = effective_agent_mode(config.agent_mode, entered_plan_mode);
         if tool_uses.is_empty() {
             if let Some(nudge) = completion_nudge_for(
-                config.agent_mode,
+                effective_mode,
                 exit_plan_mode_called,
                 dispatch_executed,
                 completion_nudges + 1,
@@ -1082,7 +1106,7 @@ pub async fn query(
                         "[{}] text-only response in {} mode without natural completion signal — \
                          nudging ({}/{})",
                         config.agent_id,
-                        config.agent_mode.as_str(),
+                        effective_mode.as_str(),
                         completion_nudges,
                         max_completion_nudges_cap
                     );
@@ -1107,6 +1131,8 @@ pub async fn query(
             if let ContentBlock::ToolUse { name, .. } = tu {
                 if name == EXIT_PLAN_MODE_TOOL {
                     exit_plan_mode_called = true;
+                } else if name == ENTER_PLAN_MODE_TOOL {
+                    entered_plan_mode = true;
                 } else if EXECUTING_DISPATCH_TOOLS.contains(&name.as_str()) {
                     dispatch_executed = true;
                 }
@@ -1271,7 +1297,10 @@ pub async fn query(
             _ => None,
         });
         if let Some(td_id) = task_done_call_id {
-            let accepted = match config.agent_mode {
+            // Honour a mid-turn switch into Plan mode here too (entered_plan_mode
+            // is already set above if EnterPlanMode ran this turn).
+            let td_mode = effective_agent_mode(config.agent_mode, entered_plan_mode);
+            let accepted = match td_mode {
                 AgentMode::Agent => true,
                 AgentMode::Plan => exit_plan_mode_called,
                 AgentMode::Dag => dispatch_executed,
@@ -1289,7 +1318,7 @@ pub async fn query(
             }
             // Rejected: rewrite the task_done result so the model sees an
             // error and is forced to take the mode's canonical exit path.
-            let reject_msg = match config.agent_mode {
+            let reject_msg = match td_mode {
                 AgentMode::Plan => "task_done was NOT accepted: in Plan mode the only valid exit \
                     is to write your plan file to the plans_dir and then call \
                     `ExitPlanMode(plan=\"...\")`. Do that now — task_done is reserved for \
@@ -1312,7 +1341,7 @@ pub async fn query(
                 "[{}] task_done rejected in {} mode (canonical signal not yet fired) — rewrote \
                  tool result, conversation continues",
                 config.agent_id,
-                config.agent_mode.as_str()
+                td_mode.as_str()
             );
         }
 
@@ -1592,6 +1621,21 @@ mod tests {
         // wrap-up — no further nudge needed.
         let post = completion_nudge_for(AgentMode::Plan, true, false, 1, 2);
         assert!(post.is_none(), "Plan mode should NOT nudge after ExitPlanMode");
+    }
+
+    #[test]
+    fn mid_turn_enter_plan_mode_upgrades_effective_mode() {
+        // A turn that STARTS in Agent mode but calls EnterPlanMode must behave as
+        // Plan mode afterwards — otherwise a text-only reply silently ends the
+        // turn and the approval dialog never appears.
+        assert!(matches!(effective_agent_mode(AgentMode::Agent, false), AgentMode::Agent));
+        assert!(matches!(effective_agent_mode(AgentMode::Agent, true), AgentMode::Plan));
+        // Explicit Plan / Dag turns are unaffected by the flag.
+        assert!(matches!(effective_agent_mode(AgentMode::Plan, false), AgentMode::Plan));
+        assert!(matches!(effective_agent_mode(AgentMode::Dag, true), AgentMode::Dag));
+        // End-to-end: Agent base + entered_plan_mode → the Plan nudge fires.
+        let nudge = completion_nudge_for(effective_agent_mode(AgentMode::Agent, true), false, false, 1, 2);
+        assert!(nudge.unwrap().contains("ExitPlanMode"));
     }
 
     #[test]

@@ -68,13 +68,25 @@ app-install:
 	open "/Applications/SenClaw Desktop.app"
 
 # Windows / Linux desktop builds (run on the matching host).
+# Both bundle the release `senclaw` binary ALONGSIDE the app executable, which is
+# the first path the supervisor's _resolveBinary() checks (exeDir/senclaw[.exe]),
+# so the packaged app self-hosts the daemon with no SENCLAW_BIN needed.
+# NOTE: the MLX/Metal features are Apple-only, so these omit DAEMON_FEATURES.
 app-build-windows:
 	cargo build --release --bin senclaw
 	cd $(DESKTOP_DIR) && flutter build windows --release
+	@dir=$$(ls -d $(DESKTOP_DIR)/build/windows/*/runner/Release 2>/dev/null | head -1); \
+	    test -n "$$dir" || (echo "no flutter windows Release dir" && exit 1); \
+	    cp target/release/senclaw.exe "$$dir/senclaw.exe"; \
+	    echo "[app-build-windows] bundled daemon into $$dir/senclaw.exe"
 
 app-build-linux:
 	cargo build --release --bin senclaw
 	cd $(DESKTOP_DIR) && flutter build linux --release
+	@dir=$$(ls -d $(DESKTOP_DIR)/build/linux/*/release/bundle 2>/dev/null | head -1); \
+	    test -n "$$dir" || (echo "no flutter linux bundle dir" && exit 1); \
+	    cp target/release/senclaw "$$dir/senclaw"; \
+	    echo "[app-build-linux] bundled daemon into $$dir/senclaw"
 
 # Web build (served by the daemon's static dir, or any static host).
 app-build-web:

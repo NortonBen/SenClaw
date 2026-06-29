@@ -113,6 +113,7 @@ export default function WikiView({
             onMkdir={wiki.mkdir}
             onDeleteDir={wiki.deleteDir}
             onSelectDoc={handleSelectDoc}
+            onUpload={wiki.uploadDocs}
           />
         )}
       </div>

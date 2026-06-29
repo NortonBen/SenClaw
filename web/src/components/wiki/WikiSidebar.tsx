@@ -212,6 +212,9 @@ export function WikiSidebar({
                 }}
               >
                 <Text strong style={{ display: 'block', fontSize: '13px', color: r.path === selectedPath ? token.colorPrimary : token.colorText }}>{r.title}</Text>
+                {r.snippet && (
+                  <Text type="secondary" style={{ fontSize: '11px', display: 'block', marginTop: 2, lineHeight: 1.4 }} ellipsis={{ tooltip: r.snippet }}>{r.snippet}</Text>
+                )}
                 <Text type="secondary" style={{ fontSize: '11px', display: 'block', opacity: 0.6 }} ellipsis>{r.path}</Text>
               </div>
             ))}

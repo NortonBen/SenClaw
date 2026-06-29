@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar';
 import { AgentConsole } from './AgentConsole';
 import { Workbench } from './Workbench';
 import { DockBadges } from './DockBadges';
+import { ResizeGrips } from './ResizeGrips';
 import { useAppContext } from '../contexts/AppContext';
 import type { WsStatus } from '../types';
 
@@ -77,6 +78,7 @@ export function AppLayout({ sidebar, children, status }: Props) {
     return (
       <Layout className="h-screen overflow-hidden" style={{ background: token.colorBgBase }}>
         <Layout className="bg-transparent relative">{children}</Layout>
+        <ResizeGrips />
       </Layout>
     );
   }
