@@ -19,7 +19,8 @@
 use std::sync::{Arc, OnceLock};
 
 use axum::body::{to_bytes, Body};
-use axum::http::Request;
+use axum::http::{header::CONTENT_TYPE, Request};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use tower::ServiceExt;
 
@@ -52,8 +53,33 @@ pub struct ApiResponse {
     #[serde(rename = "requestId")]
     pub request_id: String,
     pub status: u16,
-    /// Response body as a string (usually JSON).
+    /// Response body. UTF-8 text verbatim, or base64 of the raw bytes when
+    /// `body_base64` is set (binary assets — images/fonts/wasm — would be
+    /// corrupted by a lossy UTF-8 conversion, so they ride as base64).
     pub body: String,
+    /// The response's `Content-Type`, so a webview can serve assets correctly.
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    /// True when `body` is base64-encoded binary rather than UTF-8 text.
+    #[serde(rename = "bodyBase64", default, skip_serializing_if = "is_false")]
+    pub body_base64: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl ApiResponse {
+    /// Build an error response with a JSON text body.
+    fn error(request_id: String, status: u16, body: String) -> Self {
+        ApiResponse {
+            request_id,
+            status,
+            body,
+            content_type: Some("application/json".to_string()),
+            body_base64: false,
+        }
+    }
 }
 
 /// Lazily-populated handle to the UI server state.
@@ -91,11 +117,11 @@ pub async fn dispatch(bridge: &ApiBridgeState, req: ApiRequest) -> ApiResponse {
     let request_id = req.request_id.clone();
 
     let Some(state) = bridge.get() else {
-        return ApiResponse {
+        return ApiResponse::error(
             request_id,
-            status: 503,
-            body: r#"{"error":"daemon not ready"}"#.to_string(),
-        };
+            503,
+            r#"{"error":"daemon not ready"}"#.to_string(),
+        );
     };
 
     let router = build_router(state);
@@ -108,31 +134,48 @@ pub async fn dispatch(bridge: &ApiBridgeState, req: ApiRequest) -> ApiResponse {
     {
         Ok(r) => r,
         Err(e) => {
-            return ApiResponse {
+            return ApiResponse::error(
                 request_id,
-                status: 400,
-                body: format!(r#"{{"error":"bad request: {e}"}}"#),
-            };
+                400,
+                format!(r#"{{"error":"bad request: {e}"}}"#),
+            );
         }
     };
 
     match router.oneshot(http_req).await {
         Ok(resp) => {
             let status = resp.status().as_u16();
+            let content_type = resp
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             let bytes = to_bytes(resp.into_body(), MAX_BODY_BYTES)
                 .await
                 .unwrap_or_default();
-            let body = String::from_utf8_lossy(&bytes).into_owned();
-            ApiResponse {
-                request_id,
-                status,
-                body,
+            // Text rides verbatim (JSON, HTML, JS, CSS); binary (images, fonts,
+            // wasm) would be mangled by a lossy UTF-8 cast, so base64 it.
+            match String::from_utf8(bytes.to_vec()) {
+                Ok(text) => ApiResponse {
+                    request_id,
+                    status,
+                    body: text,
+                    content_type,
+                    body_base64: false,
+                },
+                Err(_) => ApiResponse {
+                    request_id,
+                    status,
+                    body: STANDARD.encode(&bytes),
+                    content_type,
+                    body_base64: true,
+                },
             }
         }
-        Err(_) => ApiResponse {
+        Err(_) => ApiResponse::error(
             request_id,
-            status: 500,
-            body: r#"{"error":"router dispatch failed"}"#.to_string(),
-        },
+            500,
+            r#"{"error":"router dispatch failed"}"#.to_string(),
+        ),
     }
 }

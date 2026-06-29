@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../theme/app_colors.dart';
+import '../theme/tokens.dart';
 import 'markdown_text.dart';
 
 /// Inline card for a pending tool-permission request (parity with the web
@@ -21,6 +21,7 @@ class PermissionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     final toolName = (data['toolName'] ?? 'tool').toString();
     final title = (data['title'] ?? '').toString();
     final content = (data['content'] ?? '').toString();
@@ -31,9 +32,9 @@ class PermissionCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFB74D).withOpacity(0.06),
+        color: AppTokens.warning.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFB74D).withOpacity(0.3)),
+        border: Border.all(color: AppTokens.warning.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -41,13 +42,13 @@ class PermissionCard extends StatelessWidget {
           Row(
             children: [
               const Icon(Icons.shield_outlined,
-                  color: Color(0xFFFFB74D), size: 16),
+                  color: AppTokens.warning, size: 16),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   title.isNotEmpty ? title : 'Yêu cầu quyền: $toolName',
-                  style: const TextStyle(
-                      color: Colors.white,
+                  style: TextStyle(
+                      color: c.textPrimary,
                       fontSize: 13,
                       fontWeight: FontWeight.w600),
                 ),
@@ -59,24 +60,14 @@ class PermissionCard extends StatelessWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 180),
               child: SingleChildScrollView(
-                child: MarkdownText(content, color: Colors.white70, fontSize: 12),
+                child: MarkdownText(content,
+                    color: c.textSecondary, fontSize: 12),
               ),
             ),
           ],
           const SizedBox(height: 10),
           if (resolved)
-            Row(
-              children: [
-                const Icon(Icons.check_circle,
-                    color: Color(0xFF66BB6A), size: 15),
-                const SizedBox(width: 6),
-                Text(
-                  'Đã chọn: ${resolvedText ?? ''}',
-                  style: const TextStyle(
-                      color: Color(0xFF66BB6A), fontSize: 12),
-                ),
-              ],
-            )
+            _ResolvedRow(label: 'Đã chọn: ${resolvedText ?? ''}')
           else
             Wrap(
               spacing: 8,
@@ -84,6 +75,7 @@ class PermissionCard extends StatelessWidget {
               children: [
                 for (final o in options)
                   _optionButton(
+                    context,
                     (o as Map)['label']?.toString() ?? '',
                     () => onRespond(
                       o['key']?.toString() ?? '',
@@ -97,14 +89,15 @@ class PermissionCard extends StatelessWidget {
     );
   }
 
-  Widget _optionButton(String label, VoidCallback onTap) {
+  Widget _optionButton(BuildContext context, String label, VoidCallback onTap) {
     final isDeny = label.toLowerCase().contains('deny') ||
         label.toLowerCase().contains('từ chối') ||
         label.toLowerCase().contains('no');
-    final color = isDeny ? Colors.redAccent : AppColors.accent;
+    final color = isDeny ? AppTokens.danger : context.colors.accent;
     return OutlinedButton(
       onPressed: onTap,
       style: OutlinedButton.styleFrom(
+        foregroundColor: color,
         side: BorderSide(color: color),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         minimumSize: Size.zero,
@@ -133,6 +126,7 @@ class PlanCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     final planContent = (data['planContent'] ?? '').toString();
     final options = (data['options'] as Map?)?.cast<String, dynamic>() ?? const {};
     final startLabel =
@@ -144,20 +138,20 @@ class PlanCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.accent.withOpacity(0.06),
+        color: c.accent.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.accent.withOpacity(0.3)),
+        border: Border.all(color: c.accent.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(Icons.checklist_rtl, color: AppColors.accent, size: 16),
-              SizedBox(width: 6),
+            children: [
+              Icon(Icons.checklist_rtl, color: c.accent, size: 16),
+              const SizedBox(width: 6),
               Text('Kế hoạch chờ duyệt',
                   style: TextStyle(
-                      color: Colors.white,
+                      color: c.textPrimary,
                       fontSize: 13,
                       fontWeight: FontWeight.w600)),
             ],
@@ -168,32 +162,21 @@ class PlanCard extends StatelessWidget {
               constraints: const BoxConstraints(maxHeight: 280),
               child: SingleChildScrollView(
                 child: MarkdownText(planContent,
-                    color: Colors.white70, fontSize: 12),
+                    color: c.textSecondary, fontSize: 12),
               ),
             ),
           ],
           const SizedBox(height: 12),
           if (resolved)
-            Row(
-              children: [
-                const Icon(Icons.check_circle,
-                    color: Color(0xFF66BB6A), size: 15),
-                const SizedBox(width: 6),
-                Text('Đã chọn: ${resolvedText ?? ''}',
-                    style: const TextStyle(
-                        color: Color(0xFF66BB6A), fontSize: 12)),
-              ],
-            )
+            _ResolvedRow(label: 'Đã chọn: ${resolvedText ?? ''}')
           else
             Column(
               children: [
                 SizedBox(
                   width: double.infinity,
-                  child: ElevatedButton(
+                  child: FilledButton(
                     onPressed: () => onRespond('startEditing'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      foregroundColor: Colors.black,
+                    style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                     child: Text(startLabel),
@@ -205,18 +188,18 @@ class PlanCard extends StatelessWidget {
                   child: OutlinedButton(
                     onPressed: () => onRespond('clearContextAndStart'),
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: AppColors.accent),
+                      foregroundColor: c.accent,
+                      side: BorderSide(color: c.accent),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
-                    child: Text(clearLabel,
-                        style: const TextStyle(color: AppColors.accent)),
+                    child: Text(clearLabel),
                   ),
                 ),
                 const SizedBox(height: 4),
                 TextButton(
                   onPressed: () => onRespond('cancelled'),
-                  child: const Text('Huỷ',
-                      style: TextStyle(color: Colors.white38)),
+                  child: Text('Huỷ',
+                      style: TextStyle(color: c.textMuted)),
                 ),
               ],
             ),
@@ -285,24 +268,25 @@ class _QuestionCardState extends State<QuestionCard> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.cyan.withOpacity(0.06),
+        color: AppTokens.cyan.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.cyan.withOpacity(0.3)),
+        border: Border.all(color: AppTokens.cyan.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(Icons.help_outline, color: AppColors.cyan, size: 16),
-              SizedBox(width: 6),
+            children: [
+              const Icon(Icons.help_outline, color: AppTokens.cyan, size: 16),
+              const SizedBox(width: 6),
               Text('Agent đang hỏi',
                   style: TextStyle(
-                      color: Colors.white,
+                      color: c.textPrimary,
                       fontSize: 13,
                       fontWeight: FontWeight.w600)),
             ],
@@ -312,22 +296,14 @@ class _QuestionCardState extends State<QuestionCard> {
             _buildQuestion(qi, _questions[qi] as Map),
           const SizedBox(height: 6),
           if (widget.resolved)
-            const Row(
-              children: [
-                Icon(Icons.check_circle, color: Color(0xFF66BB6A), size: 15),
-                SizedBox(width: 6),
-                Text('Đã trả lời',
-                    style: TextStyle(color: Color(0xFF66BB6A), fontSize: 12)),
-              ],
-            )
+            _ResolvedRow(label: 'Đã trả lời')
           else
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton(
+              child: FilledButton(
                 onPressed: _complete ? _submit : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.cyan,
-                  foregroundColor: Colors.black,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTokens.cyan,
                   padding: const EdgeInsets.symmetric(vertical: 10),
                 ),
                 child: const Text('Gửi trả lời'),
@@ -339,6 +315,7 @@ class _QuestionCardState extends State<QuestionCard> {
   }
 
   Widget _buildQuestion(int qi, Map q) {
+    final c = context.colors;
     final header = (q['header'] ?? '').toString();
     final question = (q['question'] ?? '').toString();
     final multi = q['multiSelect'] == true;
@@ -350,8 +327,8 @@ class _QuestionCardState extends State<QuestionCard> {
         children: [
           if (header.isNotEmpty)
             Text(header.toUpperCase(),
-                style: const TextStyle(
-                    color: Colors.white38,
+                style: TextStyle(
+                    color: c.textMuted,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.8)),
@@ -359,7 +336,7 @@ class _QuestionCardState extends State<QuestionCard> {
             Padding(
               padding: const EdgeInsets.only(top: 2, bottom: 6),
               child: Text(question,
-                  style: const TextStyle(color: Colors.white, fontSize: 13)),
+                  style: TextStyle(color: c.textPrimary, fontSize: 13)),
             ),
           Wrap(
             spacing: 8,
@@ -379,6 +356,7 @@ class _QuestionCardState extends State<QuestionCard> {
   }
 
   Widget _optionChip(String label, bool selected, VoidCallback? onTap) {
+    final c = context.colors;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -386,11 +364,11 @@ class _QuestionCardState extends State<QuestionCard> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.cyan.withOpacity(0.2)
-              : Colors.white.withOpacity(0.05),
+              ? AppTokens.cyan.withValues(alpha: 0.18)
+              : c.surfaceAlt,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: selected ? AppColors.cyan : AppColors.cardBorder,
+            color: selected ? AppTokens.cyan : c.border,
           ),
         ),
         child: Row(
@@ -399,15 +377,35 @@ class _QuestionCardState extends State<QuestionCard> {
             if (selected)
               const Padding(
                 padding: EdgeInsets.only(right: 4),
-                child: Icon(Icons.check, color: AppColors.cyan, size: 14),
+                child: Icon(Icons.check, color: AppTokens.cyan, size: 14),
               ),
             Text(label,
                 style: TextStyle(
-                    color: selected ? AppColors.cyan : Colors.white70,
+                    color: selected ? AppTokens.cyan : c.textSecondary,
                     fontSize: 12)),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Shared "resolved" confirmation row.
+class _ResolvedRow extends StatelessWidget {
+  const _ResolvedRow({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(Icons.check_circle, color: AppTokens.success, size: 15),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(label,
+              style: const TextStyle(color: AppTokens.success, fontSize: 12)),
+        ),
+      ],
     );
   }
 }

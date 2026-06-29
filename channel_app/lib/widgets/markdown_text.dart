@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../theme/app_colors.dart';
+import '../theme/tokens.dart';
 
 /// Lightweight, dependency-free Markdown renderer for agent replies.
 ///
@@ -10,28 +10,32 @@ import '../theme/app_colors.dart';
 /// arbitrary plain text is always safe.
 class MarkdownText extends StatelessWidget {
   final String text;
-  final Color color;
+
+  /// Body text color. When null, resolves to the theme's primary text color so
+  /// the renderer adapts to light/dark automatically.
+  final Color? color;
   final double fontSize;
 
   const MarkdownText(
     this.text, {
     super.key,
-    this.color = Colors.white,
+    this.color,
     this.fontSize = 14,
   });
 
   @override
   Widget build(BuildContext context) {
+    final color = this.color ?? context.colors.textPrimary;
     final blocks = _parseBlocks(text);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final b in blocks) _buildBlock(context, b),
+        for (final b in blocks) _buildBlock(context, color, b),
       ],
     );
   }
 
-  Widget _buildBlock(BuildContext context, _Block b) {
+  Widget _buildBlock(BuildContext context, Color color, _Block b) {
     switch (b.kind) {
       case _BlockKind.code:
         return _CodeBlock(code: b.text, fontSize: fontSize);
@@ -154,8 +158,8 @@ class MarkdownText extends StatelessWidget {
           text: tok.substring(1, tok.length - 1),
           style: base.copyWith(
             fontFamily: 'monospace',
-            backgroundColor: Colors.white.withValues(alpha: 0.08),
-            color: AppColors.cyan,
+            backgroundColor: AppTokens.cyan.withValues(alpha: 0.12),
+            color: AppTokens.cyan,
           ),
         ));
       } else if (tok.startsWith('**')) {
@@ -194,14 +198,15 @@ class _CodeBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 6),
       padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.35),
+        color: c.surfaceAlt,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.cardBorder),
+        border: Border.all(color: c.border),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -212,7 +217,7 @@ class _CodeBlock extends StatelessWidget {
               child: SelectableText(
                 code,
                 style: TextStyle(
-                  color: Colors.white70,
+                  color: c.textSecondary,
                   fontFamily: 'monospace',
                   fontSize: fontSize - 1,
                   height: 1.4,
@@ -222,9 +227,9 @@ class _CodeBlock extends StatelessWidget {
           ),
           InkWell(
             onTap: () => Clipboard.setData(ClipboardData(text: code)),
-            child: const Padding(
-              padding: EdgeInsets.only(left: 4, top: 2),
-              child: Icon(Icons.copy, size: 14, color: Colors.white38),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 4, top: 2),
+              child: Icon(Icons.copy, size: 14, color: c.textMuted),
             ),
           ),
         ],

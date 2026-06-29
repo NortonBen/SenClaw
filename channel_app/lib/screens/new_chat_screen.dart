@@ -1,0 +1,805 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/prefs.dart';
+import '../models/agent_model.dart';
+import '../models/cowork_models.dart';
+import '../services/code_api.dart';
+import '../services/cowork_api.dart';
+import '../services/llm_api.dart';
+import '../theme/tokens.dart';
+import 'code/code_session_screen.dart';
+import 'code/folder_picker.dart';
+import 'cowork/cowork_workspace_screen.dart';
+
+/// Result of the New chat screen for the *chat* kind: which profile to talk to
+/// and the first message. Code/Cowork kinds navigate to their own detail screen
+/// and return null.
+class NewChatResult {
+  final String agentFolder;
+  final String message;
+
+  /// Agent mode for the conversation: 'Agent' | 'Plan' | 'Dag'.
+  final String mode;
+  const NewChatResult(this.agentFolder, this.message, this.mode);
+}
+
+/// Full-page New chat composer (desktop_app NewChatScreen layout adapted for the
+/// mobile remote): a Chat / Code / Cowork kind selector, a centered greeting, a
+/// unified input card with a profile / project / template selector + round send,
+/// and quick-suggestion chips.
+///
+/// "Limited project" = the picker only offers folders saved in the app (prefs
+/// `senclaw:projects`); browsing the filesystem is reachable only via "Add
+/// project", which pins the chosen folder.
+class NewChatScreen extends ConsumerStatefulWidget {
+  const NewChatScreen({super.key, required this.agents});
+  final List<AgentInfo> agents;
+
+  @override
+  ConsumerState<NewChatScreen> createState() => _NewChatScreenState();
+}
+
+class _NewChatScreenState extends ConsumerState<NewChatScreen> {
+  static const _kProjects = 'senclaw:projects';
+  static const _suggestions = [
+    'Tóm tắt tin nhắn chưa đọc',
+    'Lập kế hoạch cho một dự án',
+    'Nghiên cứu một chủ đề và trích nguồn',
+    'Giúp tôi debug một lỗi',
+  ];
+
+  final _msg = TextEditingController();
+  final _llmApi = LlmApi();
+  String _kind = 'chat'; // chat | code | cowork
+  String _chatType = 'Agent'; // Agent | Plan | Dag
+  String? _agentFolder;
+  String? _modelId; // null = keep the active default model
+  String? _activeModelId;
+  String? _workDir;
+  String? _templateId;
+  bool _creating = false;
+  List<CoworkTemplate> _templates = [];
+  List<LlmOption> _models = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _agentFolder =
+        widget.agents.isNotEmpty ? widget.agents.first.folder : null;
+    _loadTemplates();
+    _loadModels();
+  }
+
+  Future<void> _loadTemplates() async {
+    try {
+      final t = await CoworkApi().listTemplates();
+      if (mounted) setState(() => _templates = t);
+    } catch (_) {/* templates are optional */}
+  }
+
+  Future<void> _loadModels() async {
+    try {
+      final l = await _llmApi.list();
+      if (mounted) {
+        setState(() {
+          _models = l.configs;
+          _activeModelId = l.activeId;
+        });
+      }
+    } catch (_) {/* model list optional */}
+  }
+
+  /// Apply the picked model. The relay has no per-chat model, so this sets the
+  /// daemon's GLOBAL active model (no-op when the default is kept).
+  Future<void> _applyModel() async {
+    final id = _modelId;
+    if (id == null || id == _activeModelId) return;
+    try {
+      await _llmApi.setActive(id);
+    } catch (_) {/* keep going even if it fails */}
+  }
+
+  @override
+  void dispose() {
+    _msg.dispose();
+    super.dispose();
+  }
+
+  String? get _effectiveTemplate =>
+      _templateId ?? (_templates.isNotEmpty ? _templates.first.id : null);
+
+  bool get _canSubmit {
+    switch (_kind) {
+      case 'code':
+        return _workDir != null && !_creating;
+      case 'cowork':
+        return _effectiveTemplate != null && !_creating;
+      default:
+        return _msg.text.trim().isNotEmpty &&
+            widget.agents.isNotEmpty &&
+            !_creating;
+    }
+  }
+
+  // ── Restricted project picker ──────────────────────────────────────────────
+
+  Future<void> _addProject(String path) async {
+    final prefs = ref.read(prefsHelperProvider);
+    final list = prefs.stringList(_kProjects);
+    if (!list.contains(path)) {
+      list.insert(0, path);
+      await prefs.setStringList(_kProjects, list);
+    }
+  }
+
+  Future<void> _pickProject() async {
+    final c = context.colors;
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: c.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(AppTokens.rXl)),
+      ),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheet) {
+          final prefs = ref.read(prefsHelperProvider);
+          final projects = prefs.stringList(_kProjects);
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: c.borderStrong,
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Row(children: [
+                    Icon(Icons.folder_special_outlined,
+                        color: c.accent, size: 18),
+                    const SizedBox(width: 8),
+                    Text('Project cho phép',
+                        style: TextStyle(
+                            color: c.textPrimary, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+                if (projects.isEmpty)
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                    child: Text(
+                        'Chưa có project nào — thêm một thư mục để bắt đầu.',
+                        style: TextStyle(color: c.textMuted, fontSize: 13)),
+                  )
+                else
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final p in projects)
+                          ListTile(
+                            leading: Icon(Icons.folder_outlined,
+                                color: AppTokens.warning),
+                            title: Text(
+                                p.split('/').where((s) => s.isNotEmpty).last,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: c.textPrimary)),
+                            subtitle: Text(p,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style:
+                                    TextStyle(color: c.textMuted, fontSize: 11)),
+                            trailing: IconButton(
+                              tooltip: 'Bỏ ghim',
+                              icon: Icon(Icons.close,
+                                  size: 16, color: c.textMuted),
+                              onPressed: () async {
+                                final list = prefs.stringList(_kProjects)
+                                  ..remove(p);
+                                await prefs.setStringList(_kProjects, list);
+                                setSheet(() {});
+                              },
+                            ),
+                            onTap: () => Navigator.of(sheetCtx).pop(p),
+                          ),
+                      ],
+                    ),
+                  ),
+                Divider(height: 1, color: c.border),
+                ListTile(
+                  leading: Icon(Icons.add, color: c.accent),
+                  title: Text('Thêm project…',
+                      style: TextStyle(color: c.textPrimary)),
+                  subtitle: Text('Duyệt thư mục một lần rồi ghim vào danh sách',
+                      style: TextStyle(color: c.textMuted, fontSize: 11)),
+                  onTap: () async {
+                    final path = await FolderPicker.show(sheetCtx);
+                    if (path != null && path.isNotEmpty) {
+                      await _addProject(path);
+                      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop(path);
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    if (picked != null && picked.isNotEmpty) {
+      setState(() => _workDir = picked);
+    } else {
+      setState(() {}); // a pin may have been removed
+    }
+  }
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+
+  Future<void> _submit() async {
+    if (_kind == 'chat') {
+      final folder = _agentFolder ??
+          (widget.agents.isNotEmpty ? widget.agents.first.folder : null);
+      if (folder == null) return;
+      setState(() => _creating = true);
+      await _applyModel();
+      if (!mounted) return;
+      Navigator.of(context).pop(NewChatResult(folder, _msg.text.trim(), _chatType));
+      return;
+    }
+
+    if (_kind == 'code') {
+      final ws = _workDir;
+      if (ws == null) return;
+      setState(() => _creating = true);
+      try {
+        await _applyModel();
+        final name = _msg.text.trim().isNotEmpty
+            ? _msg.text.trim()
+            : ws.split('/').where((s) => s.isNotEmpty).last;
+        final session = await CodeApi().createSession(
+            name: name, workspace: ws, language: '', initGit: false);
+        if (!mounted) return;
+        final nav = Navigator.of(context);
+        nav.pop();
+        nav.push(MaterialPageRoute(
+            builder: (_) => CodeSessionScreen(session: session)));
+      } catch (e) {
+        if (mounted) {
+          setState(() => _creating = false);
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Lỗi tạo session: $e')));
+        }
+      }
+      return;
+    }
+
+    // cowork
+    final tmpl = _effectiveTemplate;
+    if (tmpl == null) return;
+    setState(() => _creating = true);
+    try {
+      final name = _msg.text.trim().isNotEmpty ? _msg.text.trim() : null;
+      final team = await CoworkApi()
+          .createFromTemplate(tmpl, name: name, workspaceDir: _workDir);
+      if (!mounted) return;
+      final nav = Navigator.of(context);
+      nav.pop();
+      nav.push(MaterialPageRoute(builder: (_) => CoworkTeamScreen(team: team)));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _creating = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi tạo team: $e')));
+      }
+    }
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final g = _greeting();
+    return Scaffold(
+      backgroundColor: c.bg,
+      appBar: AppBar(
+        backgroundColor: c.surface,
+        elevation: 0,
+        title: Text('Tạo mới', style: TextStyle(color: c.textPrimary)),
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: _KindSegmented(
+                    kind: _kind,
+                    onChanged: (k) => setState(() {
+                      _kind = k;
+                      if (k == 'chat') _workDir = null;
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                // Centered greeting.
+                Column(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: c.accent.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.auto_awesome, color: c.accent, size: 26),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(g.heading,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: c.textPrimary,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700)),
+                    if (g.sub.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(g.sub,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: c.textMuted, fontSize: 13)),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 20),
+                // Unified input card.
+                Container(
+                  decoration: BoxDecoration(
+                    color: c.surface,
+                    borderRadius: BorderRadius.circular(AppTokens.rXl),
+                    border: Border.all(color: c.border),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 24,
+                          offset: const Offset(0, 8)),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: TextField(
+                          controller: _msg,
+                          autofocus: _kind == 'chat',
+                          minLines: 3,
+                          maxLines: 8,
+                          onChanged: (_) => setState(() {}),
+                          style: TextStyle(color: c.textPrimary),
+                          decoration: InputDecoration(
+                            hintText: _hint,
+                            hintStyle: TextStyle(color: c.textMuted),
+                            border: InputBorder.none,
+                            isCollapsed: true,
+                          ),
+                        ),
+                      ),
+                      Divider(height: 16, color: c.border),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                        child: _toolbar(c),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final s in _suggestions)
+                      _SuggestionChip(
+                          text: s,
+                          onTap: () => setState(() => _msg.text = s)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  ({String heading, String sub}) _greeting() {
+    if (_kind == 'code') {
+      String? base;
+      if (_workDir != null) {
+        final parts = _workDir!.split('/').where((s) => s.isNotEmpty).toList();
+        base = parts.isEmpty ? null : parts.last;
+      }
+      return base != null
+          ? (heading: 'Xây gì trong $base?', sub: '')
+          : (
+              heading: 'Chọn project để bắt đầu',
+              sub: 'Chọn thư mục dự án bên dưới.'
+            );
+    }
+    if (_kind == 'cowork') {
+      return (
+        heading: 'Tạo nhóm Cowork',
+        sub: 'Chọn mẫu, rồi mô tả mục tiêu.'
+      );
+    }
+    final name = _agentFolder == null
+        ? null
+        : widget.agents
+            .where((a) => a.folder == _agentFolder)
+            .map((a) => a.name)
+            .firstOrNull;
+    return name != null
+        ? (heading: 'Chat với $name', sub: 'Không cần workspace — chỉ trò chuyện.')
+        : (heading: 'Mình giúp gì hôm nay?', sub: '');
+  }
+
+  String get _hint => switch (_kind) {
+        'code' => 'Tên session (tuỳ chọn)…',
+        'cowork' => 'Mục tiêu nhóm (tuỳ chọn)…',
+        _ => 'Hỏi bất cứ điều gì, hoặc mô tả một tác vụ…',
+      };
+
+  Widget _toolbar(AppColors c) {
+    final send =
+        _SendButton(enabled: _canSubmit, creating: _creating, onTap: _submit);
+    switch (_kind) {
+      case 'cowork':
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _templateDropdown(c),
+            const SizedBox(height: 8),
+            Row(children: [
+              _ProjectPill(workDir: _workDir, onTap: _pickProject),
+              const Spacer(),
+              send,
+            ]),
+          ],
+        );
+      case 'code':
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              _ProjectPill(workDir: _workDir, onTap: _pickProject),
+              const Spacer(),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: _modelDropdown(c)),
+              const SizedBox(width: 8),
+              send,
+            ]),
+          ],
+        );
+      default: // chat — profile + model (like desktop)
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              Expanded(child: _agentDropdown(c)),
+              const SizedBox(width: 8),
+              Expanded(child: _modelDropdown(c)),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              _ModeIcons(
+                  value: _chatType,
+                  onChanged: (m) => setState(() => _chatType = m)),
+              const Spacer(),
+              send,
+            ]),
+          ],
+        );
+    }
+  }
+
+  Widget _modelDropdown(AppColors c) {
+    final activeLabel = _models
+        .where((m) => m.id == _activeModelId)
+        .map((m) => m.label)
+        .firstOrNull;
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String?>(
+        value: _modelId,
+        isExpanded: true,
+        isDense: true,
+        icon: Icon(Icons.expand_more, color: c.textMuted, size: 18),
+        style: TextStyle(color: c.textPrimary, fontSize: 14),
+        items: [
+          DropdownMenuItem<String?>(
+            value: null,
+            child: Row(children: [
+              Icon(Icons.memory, size: 15, color: c.accent),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                    activeLabel != null
+                        ? 'Mặc định · $activeLabel'
+                        : 'Model mặc định',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textSecondary)),
+              ),
+            ]),
+          ),
+          for (final m in _models)
+            DropdownMenuItem<String?>(
+              value: m.id,
+              child: Row(children: [
+                Icon(Icons.memory, size: 15, color: c.accent),
+                const SizedBox(width: 8),
+                Flexible(
+                    child: Text(m.label, overflow: TextOverflow.ellipsis)),
+              ]),
+            ),
+        ],
+        onChanged: (v) => setState(() => _modelId = v),
+      ),
+    );
+  }
+
+  Widget _agentDropdown(AppColors c) {
+    if (widget.agents.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Text('Chưa có profile nào trên kênh này',
+            style: TextStyle(color: c.textMuted, fontSize: 13)),
+      );
+    }
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: _agentFolder,
+        isExpanded: true,
+        isDense: true,
+        icon: Icon(Icons.expand_more, color: c.textMuted, size: 18),
+        style: TextStyle(color: c.textPrimary, fontSize: 14),
+        items: [
+          for (final a in widget.agents)
+            DropdownMenuItem(
+                value: a.folder,
+                child: Row(children: [
+                  Icon(Icons.person_outline, size: 15, color: c.accent),
+                  const SizedBox(width: 8),
+                  Flexible(
+                      child: Text(a.name, overflow: TextOverflow.ellipsis)),
+                ])),
+        ],
+        onChanged: (v) => setState(() => _agentFolder = v),
+      ),
+    );
+  }
+
+  Widget _templateDropdown(AppColors c) {
+    if (_templates.isEmpty) {
+      return Text('Đang tải mẫu…',
+          style: TextStyle(color: c.textMuted, fontSize: 13));
+    }
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: _effectiveTemplate,
+        isExpanded: true,
+        isDense: true,
+        icon: Icon(Icons.expand_more, color: c.textMuted, size: 18),
+        style: TextStyle(color: c.textPrimary, fontSize: 14),
+        items: [
+          for (final t in _templates)
+            DropdownMenuItem(
+                value: t.id,
+                child: Text('${t.icon} ${t.name}',
+                    overflow: TextOverflow.ellipsis)),
+        ],
+        onChanged: (v) => setState(() => _templateId = v),
+      ),
+    );
+  }
+}
+
+/// 💬 Chat / ⌨️ Code / 👥 Cowork kind selector.
+class _KindSegmented extends StatelessWidget {
+  const _KindSegmented({required this.kind, required this.onChanged});
+  final String kind;
+  final void Function(String) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    Widget seg(String label, String value) => GestureDetector(
+          onTap: () => onChanged(value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+            decoration: BoxDecoration(
+              color: kind == value ? c.accent : Colors.transparent,
+              borderRadius: BorderRadius.circular(AppTokens.rXl),
+            ),
+            child: Text(label,
+                style: TextStyle(
+                    color: kind == value ? Colors.white : c.textSecondary,
+                    fontSize: 13,
+                    fontWeight:
+                        kind == value ? FontWeight.w600 : FontWeight.w400)),
+          ),
+        );
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: c.surfaceAlt,
+        borderRadius: BorderRadius.circular(AppTokens.rXl),
+        border: Border.all(color: c.border),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        seg('💬 Chat', 'chat'),
+        seg('⌨️ Code', 'code'),
+        seg('👥 Cowork', 'cowork'),
+      ]),
+    );
+  }
+}
+
+/// Agent / Plan / DAG mode selector (desktop ⚡/💡/🔀 icons).
+class _ModeIcons extends StatelessWidget {
+  const _ModeIcons({required this.value, required this.onChanged});
+  final String value;
+  final void Function(String) onChanged;
+
+  static const _opts = [
+    ('Agent', Icons.bolt, 'Agent — toàn quyền dùng công cụ'),
+    ('Plan', Icons.lightbulb_outline, 'Plan — nghiên cứu rồi đề xuất'),
+    ('Dag', Icons.account_tree_outlined, 'DAG — điều phối đa agent'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: c.surfaceAlt,
+        borderRadius: BorderRadius.circular(AppTokens.rLg),
+        border: Border.all(color: c.border),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        for (final (val, icon, tip) in _opts)
+          Tooltip(
+            message: tip,
+            child: GestureDetector(
+              onTap: () => onChanged(val),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: value == val ? c.accent : Colors.transparent,
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                ),
+                child: Icon(icon,
+                    size: 16,
+                    color: value == val ? Colors.white : c.textSecondary),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// Round send button (desktop Start arrow).
+class _SendButton extends StatelessWidget {
+  const _SendButton(
+      {required this.enabled, required this.creating, required this.onTap});
+  final bool enabled;
+  final bool creating;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: enabled ? c.accent : c.surfaceAlt,
+          shape: BoxShape.circle,
+        ),
+        child: creating
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white))
+            : Icon(Icons.arrow_upward,
+                size: 18, color: enabled ? Colors.white : c.textMuted),
+      ),
+    );
+  }
+}
+
+/// Pill that shows the chosen project folder (or prompts to pick one).
+class _ProjectPill extends StatelessWidget {
+  const _ProjectPill({required this.workDir, required this.onTap});
+  final String? workDir;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final has = workDir != null;
+    final name = has
+        ? (workDir!.split('/').where((s) => s.isNotEmpty).isEmpty
+            ? 'Project'
+            : workDir!.split('/').where((s) => s.isNotEmpty).last)
+        : 'Chọn project';
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: has ? c.accentSoft : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppTokens.rMd),
+          border: Border.all(color: has ? c.accent : c.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.folder_open_outlined,
+              size: 15, color: has ? c.accent : c.textMuted),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 140),
+            child: Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: has ? c.accent : c.textSecondary, fontSize: 13)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// A suggestion chip that fills the input when tapped.
+class _SuggestionChip extends StatelessWidget {
+  const _SuggestionChip({required this.text, required this.onTap});
+  final String text;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppTokens.rXl),
+          border: Border.all(color: c.border),
+        ),
+        child: Text(text,
+            style: TextStyle(color: c.textSecondary, fontSize: 12)),
+      ),
+    );
+  }
+}

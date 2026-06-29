@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
 
 /// Server-side directory browser backed by `/api/fs/ls`. Returns the chosen
@@ -13,7 +13,7 @@ class FolderPicker extends StatefulWidget {
     return showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppColors.surface,
+      backgroundColor: context.colors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -61,8 +61,56 @@ class _FolderPickerState extends State<FolderPicker> {
     }
   }
 
+  /// Codex-style "start from scratch" — create a new folder under the current
+  /// directory and step into it.
+  Future<void> _createFolder() async {
+    final current = _listing?.current;
+    if (current == null) return;
+    final c = context.colors;
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.surface,
+        title: Text('Thư mục dự án mới',
+            style: TextStyle(color: c.textPrimary)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: TextStyle(color: c.textPrimary),
+          decoration: InputDecoration(
+            labelText: 'Tên thư mục',
+            labelStyle: TextStyle(color: c.textSecondary),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Huỷ')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child:
+                  Text('Tạo', style: TextStyle(color: c.accent))),
+        ],
+      ),
+    );
+    if (ok != true || ctrl.text.trim().isEmpty) return;
+    final sep = current.endsWith('/') ? '' : '/';
+    final target = '$current$sep${ctrl.text.trim()}';
+    try {
+      final created = await _api.workspaceMkdir(target);
+      await _load(created);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi tạo thư mục: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     final listing = _listing;
     return Column(
       children: [
@@ -71,7 +119,7 @@ class _FolderPickerState extends State<FolderPicker> {
           width: 40,
           height: 4,
           decoration: BoxDecoration(
-            color: Colors.white24,
+            color: c.borderStrong,
             borderRadius: BorderRadius.circular(2),
           ),
         ),
@@ -79,19 +127,26 @@ class _FolderPickerState extends State<FolderPicker> {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
           child: Row(
             children: [
-              const Icon(Icons.folder_open, color: AppColors.accent, size: 20),
+              Icon(Icons.folder_open, color: c.accent, size: 20),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   listing?.current ?? 'Chọn thư mục',
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  style: TextStyle(color: c.textPrimary, fontSize: 13),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+              if (listing != null)
+                IconButton(
+                  tooltip: 'Tạo thư mục mới',
+                  icon: Icon(Icons.create_new_folder_outlined,
+                      color: c.accent, size: 20),
+                  onPressed: _createFolder,
+                ),
             ],
           ),
         ),
-        const Divider(color: AppColors.cardBorder, height: 1),
+        Divider(color: c.border, height: 1),
         Expanded(
           child: _loading
               ? const LoadingState()
@@ -101,19 +156,19 @@ class _FolderPickerState extends State<FolderPicker> {
                       children: [
                         if (listing?.parent != null)
                           ListTile(
-                            leading: const Icon(Icons.arrow_upward,
-                                color: Colors.white54),
-                            title: const Text('..',
-                                style: TextStyle(color: Colors.white70)),
+                            leading: Icon(Icons.arrow_upward,
+                                color: c.textSecondary),
+                            title: Text('..',
+                                style: TextStyle(color: c.textSecondary)),
                             onTap: () => _load(listing!.parent),
                           ),
                         ...?listing?.dirs.map(
                           (d) => ListTile(
-                            leading: const Icon(Icons.folder,
-                                color: Color(0xFFFFB74D)),
+                            leading: Icon(Icons.folder,
+                                color: AppTokens.warning),
                             title: Text(d.name,
                                 style:
-                                    const TextStyle(color: Colors.white70)),
+                                    TextStyle(color: c.textSecondary)),
                             onTap: () => _load(d.path),
                           ),
                         ),
@@ -133,8 +188,8 @@ class _FolderPickerState extends State<FolderPicker> {
                 icon: const Icon(Icons.check),
                 label: const Text('Chọn thư mục này'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.black,
+                  backgroundColor: c.accent,
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),

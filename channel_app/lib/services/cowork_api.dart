@@ -1,135 +1,144 @@
 import '../models/cowork_models.dart';
 import 'api_client.dart';
 
-/// Typed wrapper over `/api/cowork/*`, tunnelled through the relay.
-/// Mirrors the cowork slice of the web UI.
+/// Typed wrapper over the rebuilt Cowork (DAG teams) API at `/api/cowork/*`,
+/// tunnelled through the relay. Replaces the old workspace-based endpoints,
+/// which the daemon no longer serves.
 class CoworkApi {
   final _api = ApiClient();
 
-  Future<List<CoworkWorkspace>> listWorkspaces() async {
-    final obj = await _api.getObject('/api/cowork/workspaces');
-    return ((obj['workspaces'] as List?) ?? const [])
-        .map((e) => CoworkWorkspace.fromJson(e as Map<String, dynamic>))
+  // ── Teams ──────────────────────────────────────────────────────────────
+  Future<List<CoworkTeam>> listTeams() async {
+    final r = await _api.get('/api/cowork/teams');
+    final list = r is List ? r : const [];
+    return list
+        .map((e) => CoworkTeam.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 
-  Future<CoworkWorkspace> createWorkspace({
+  Future<CoworkTeam> createTeam({
     required String name,
-    String? description,
-    String? workingDir,
+    required String managerFolder,
+    List<String> members = const [],
+    String? workspaceDir,
   }) async {
-    final r = await _api.post('/api/cowork/workspaces', body: {
+    final r = await _api.post('/api/cowork/teams', body: {
       'name': name,
-      if (description != null && description.isNotEmpty)
-        'description': description,
-      if (workingDir != null && workingDir.isNotEmpty) 'workingDir': workingDir,
+      'manager_folder': managerFolder,
+      'members': members,
+      'workspace_dir': ?workspaceDir,
     });
-    return CoworkWorkspace.fromJson((r as Map).cast<String, dynamic>());
+    return CoworkTeam.fromJson((r as Map).cast<String, dynamic>());
   }
 
-  Future<void> deleteWorkspace(String id) =>
-      _api.delete('/api/cowork/workspaces/$id');
+  Future<CoworkTeam> updateTeam(
+    String id, {
+    String? name,
+    String? managerFolder,
+    String? workspaceDir,
+    CoworkTeamSettings? settings,
+  }) async {
+    final r = await _api.patch('/api/cowork/teams/$id', body: {
+      'name': ?name,
+      'manager_folder': ?managerFolder,
+      'workspace_dir': ?workspaceDir,
+      'settings': ?settings?.toJson(),
+    });
+    return CoworkTeam.fromJson((r as Map).cast<String, dynamic>());
+  }
 
-  Future<List<CoworkTask>> listTasks(String wsId, {String? status}) async {
-    final obj = await _api.getObject(
-      ApiClient.withQuery('/api/cowork/workspaces/$wsId/tasks', {
-        'status': status,
-      }),
-    );
-    return ((obj['tasks'] as List?) ?? const [])
-        .map((e) => CoworkTask.fromJson(e as Map<String, dynamic>))
+  Future<void> deleteTeam(String id) => _api.delete('/api/cowork/teams/$id');
+
+  Future<void> saveAsTemplate(String id,
+          {String? name, String? description, String? icon}) =>
+      _api.post('/api/cowork/teams/$id/save-as-template', body: {
+        'name': ?name,
+        'description': ?description,
+        'icon': ?icon,
+      });
+
+  // ── Members ────────────────────────────────────────────────────────────
+  Future<CoworkTeam> upsertMember(String id, TeamMember member) async {
+    final r = await _api.put('/api/cowork/teams/$id/members', body: member.toJson());
+    return CoworkTeam.fromJson((r as Map).cast<String, dynamic>());
+  }
+
+  Future<CoworkTeam> removeMember(String id, String folder) async {
+    final r = await _api.delete('/api/cowork/teams/$id/members/$folder');
+    return CoworkTeam.fromJson((r as Map).cast<String, dynamic>());
+  }
+
+  // ── Templates ──────────────────────────────────────────────────────────
+  Future<List<CoworkTemplate>> listTemplates() async {
+    final r = await _api.get('/api/cowork/templates');
+    final list = r is List ? r : const [];
+    return list
+        .map((e) => CoworkTemplate.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<CoworkTeam> createFromTemplate(String templateId,
+      {String? name, String? workspaceDir}) async {
+    final r = await _api.post('/api/cowork/teams/from-template', body: {
+      'template_id': templateId,
+      'name': ?name,
+      'workspace_dir': ?workspaceDir,
+    });
+    return CoworkTeam.fromJson((r as Map).cast<String, dynamic>());
+  }
+
+  Future<void> deleteTemplate(String id) =>
+      _api.delete('/api/cowork/templates/$id');
+
+  // ── Personas (member picker) ───────────────────────────────────────────
+  Future<List<CoworkPersona>> listPersonas() async {
+    final r = await _api.get('/api/cowork/personas');
+    final list = r is List ? r : const [];
+    return list
+        .map((e) => CoworkPersona.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  // ── Kanban tasks ───────────────────────────────────────────────────────
+  Future<List<CoworkTeamTask>> listTasks(String teamId) async {
+    final r = await _api.get('/api/cowork/teams/$teamId/tasks');
+    final list = r is List ? r : const [];
+    return list
+        .map((e) => CoworkTeamTask.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 
   Future<void> createTask(
-    String wsId, {
+    String teamId, {
     required String title,
     String? description,
     String? assignee,
     String? priority,
+    String? status,
   }) =>
-      _api.post('/api/cowork/workspaces/$wsId/tasks', body: {
+      _api.post('/api/cowork/teams/$teamId/tasks', body: {
         'title': title,
-        if (description != null && description.isNotEmpty)
-          'description': description,
-        if (assignee != null && assignee.isNotEmpty) 'assignee': assignee,
-        if (priority != null && priority.isNotEmpty) 'priority': priority,
-        'createdBy': 'mobile',
+        'description': ?description,
+        'assignee': ?assignee,
+        'priority': ?priority,
+        'status': ?status,
       });
 
-  Future<void> updateTaskStatus(String wsId, String taskId, String status) =>
-      _api.patch('/api/cowork/workspaces/$wsId/tasks/$taskId',
-          body: {'status': status});
-
-  Future<void> deleteTask(String wsId, String taskId) =>
-      _api.delete('/api/cowork/workspaces/$wsId/tasks/$taskId');
-
-  Future<List<CoworkMessage>> listMessages(String wsId, {int limit = 100}) async {
-    final obj = await _api.getObject(
-      ApiClient.withQuery('/api/cowork/workspaces/$wsId/messages', {
-        'limit': limit,
-      }),
-    );
-    return ((obj['messages'] as List?) ?? const [])
-        .map((e) => CoworkMessage.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  /// Note: the send-message body uses snake_case keys (from_member,
-  /// message_type) — these fields are NOT renamed on the Rust side.
-  Future<void> sendMessage(
-    String wsId, {
-    required String content,
-    String fromMember = 'mobile',
-    String messageType = 'status',
-  }) =>
-      _api.post('/api/cowork/workspaces/$wsId/messages', body: {
-        'from_member': fromMember,
-        'content': content,
-        'message_type': messageType,
-      });
-
-  Future<List<CoworkMember>> listMembers(String wsId) async {
-    final obj = await _api.getObject('/api/cowork/workspaces/$wsId/members');
-    return ((obj['members'] as List?) ?? const [])
-        .map((e) => CoworkMember.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<List<CoworkFile>> listFiles(String wsId) async {
-    final obj = await _api.getObject('/api/cowork/workspaces/$wsId/files');
-    return ((obj['files'] as List?) ?? const [])
-        .map((e) => CoworkFile.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  /// Returns (content, isBinary) for a single file.
-  Future<(String, bool)> fileContent(String wsId, String path) async {
-    final obj = await _api.getObject(
-      ApiClient.withQuery('/api/cowork/workspaces/$wsId/files', {'path': path}),
-    );
-    return (
-      (obj['content'] ?? '').toString(),
-      obj['isBinary'] as bool? ?? false,
-    );
-  }
-
-  Future<List<CoworkBoardEntry>> getBoard(String wsId) async {
-    final obj = await _api.getObject('/api/cowork/workspaces/$wsId/board');
-    return ((obj['entries'] as List?) ?? const [])
-        .map((e) => CoworkBoardEntry.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> updateBoardSection(
-    String wsId,
-    String section, {
-    required String content,
+  Future<void> updateTask(
+    String teamId,
+    String taskId, {
+    String? status,
+    String? assignee,
+    String? priority,
     String? title,
   }) =>
-      _api.patch('/api/cowork/workspaces/$wsId/board/$section', body: {
-        'content': content,
-        if (title != null) 'title': title,
-        'author': 'mobile',
+      _api.patch('/api/cowork/teams/$teamId/tasks/$taskId', body: {
+        'status': ?status,
+        'assignee': ?assignee,
+        'priority': ?priority,
+        'title': ?title,
       });
+
+  Future<void> deleteTask(String teamId, String taskId) =>
+      _api.delete('/api/cowork/teams/$teamId/tasks/$taskId');
 }

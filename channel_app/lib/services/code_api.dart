@@ -115,4 +115,13 @@ class CodeApi {
     );
     return FsListing.fromJson(obj);
   }
+
+  /// Create a workspace folder (parents auto-created). Returns the canonical
+  /// expanded path. Backing endpoint: POST /api/workspace/mkdir.
+  Future<String> workspaceMkdir(String path) async {
+    final r = await _api.post('/api/workspace/mkdir',
+        body: {'path': path, 'recursive': true});
+    if (r is Map && r['path'] != null) return r['path'].toString();
+    return path;
+  }
 }

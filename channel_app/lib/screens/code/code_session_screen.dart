@@ -5,7 +5,7 @@ import '../../models/api_models.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
 import '../../services/relay_manager.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/tokens.dart';
 import '../../widgets/markdown_text.dart';
 import '../../widgets/states.dart';
 
@@ -31,29 +31,31 @@ class _CodeSessionScreenState extends State<CodeSessionScreen>
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: c.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: c.surface,
         elevation: 0,
+        iconTheme: IconThemeData(color: c.textPrimary),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(widget.session.name,
-                style: const TextStyle(color: Colors.white, fontSize: 15)),
+                style: TextStyle(color: c.textPrimary, fontSize: 15)),
             Text(
               widget.session.workspace,
-              style: const TextStyle(color: Colors.white38, fontSize: 10),
+              style: TextStyle(color: c.textMuted, fontSize: 10),
               overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
         bottom: TabBar(
           controller: _tabs,
-          indicatorColor: AppColors.accent,
-          labelColor: AppColors.accent,
-          unselectedLabelColor: Colors.white54,
+          indicatorColor: c.accent,
+          labelColor: c.accent,
+          unselectedLabelColor: c.textSecondary,
           tabs: const [
             Tab(icon: Icon(Icons.chat_outlined), text: 'Chat'),
             Tab(icon: Icon(Icons.account_tree_outlined), text: 'Files'),
@@ -62,7 +64,7 @@ class _CodeSessionScreenState extends State<CodeSessionScreen>
         ),
       ),
       body: Container(
-        decoration: AppColors.pageDecoration,
+        decoration: BoxDecoration(color: c.bg),
         child: TabBarView(
           controller: _tabs,
           children: [
@@ -221,6 +223,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final c = context.colors;
     final processing = _messages.any((m) => m.isPending);
     return Column(
       children: [
@@ -237,8 +240,8 @@ class _CodeChatTabState extends State<_CodeChatTab>
                         )
                       : RefreshIndicator(
                           onRefresh: _refreshMessages,
-                          color: AppColors.accent,
-                          backgroundColor: AppColors.surface,
+                          color: c.accent,
+                          backgroundColor: c.surface,
                           child: ListView.builder(
                             controller: _scroll,
                             padding: const EdgeInsets.all(12),
@@ -250,28 +253,28 @@ class _CodeChatTabState extends State<_CodeChatTab>
         if (processing)
           Container(
             width: double.infinity,
-            color: AppColors.accent.withValues(alpha: 0.08),
+            color: c.accent.withValues(alpha: 0.08),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Row(
               children: [
-                const SizedBox(
+                SizedBox(
                   width: 12,
                   height: 12,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
                     valueColor:
-                        AlwaysStoppedAnimation<Color>(AppColors.accent),
+                        AlwaysStoppedAnimation<Color>(c.accent),
                   ),
                 ),
                 const SizedBox(width: 10),
-                const Expanded(
+                Expanded(
                   child: Text('Agent đang xử lý…',
-                      style: TextStyle(color: Colors.white54, fontSize: 12)),
+                      style: TextStyle(color: c.textSecondary, fontSize: 12)),
                 ),
                 TextButton(
                   onPressed: _stop,
-                  child: const Text('Dừng',
-                      style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                  child: Text('Dừng',
+                      style: TextStyle(color: AppTokens.danger, fontSize: 12)),
                 ),
               ],
             ),
@@ -282,6 +285,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
   }
 
   Widget _bubble(CodeChatMessage m) {
+    final c = context.colors;
     final isUser = m.isUser;
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -292,14 +296,12 @@ class _CodeChatTabState extends State<_CodeChatTab>
         ),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: isUser
-              ? AppColors.accent.withValues(alpha: 0.16)
-              : Colors.white.withValues(alpha: 0.06),
+          color: isUser ? c.bubbleUser : c.bubbleAgent,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: isUser
-                ? AppColors.accent.withValues(alpha: 0.3)
-                : AppColors.cardBorder,
+                ? c.accent.withValues(alpha: 0.3)
+                : c.border,
           ),
         ),
         child: Column(
@@ -310,8 +312,8 @@ class _CodeChatTabState extends State<_CodeChatTab>
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
                   m.role,
-                  style: const TextStyle(
-                    color: AppColors.cyan,
+                  style: TextStyle(
+                    color: AppTokens.cyan,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
@@ -321,7 +323,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
               SelectableText(
                 m.content.isEmpty && m.isPending ? '…' : m.content,
                 style: TextStyle(
-                  color: m.isPending ? Colors.white54 : Colors.white,
+                  color: m.isPending ? c.textSecondary : c.textPrimary,
                   fontSize: 13,
                   height: 1.35,
                 ),
@@ -329,7 +331,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
             else
               MarkdownText(
                 m.content,
-                color: m.isPending ? Colors.white54 : Colors.white,
+                color: m.isPending ? c.textSecondary : c.textPrimary,
                 fontSize: 13,
               ),
             if (m.isPending) ...[
@@ -338,7 +340,7 @@ class _CodeChatTabState extends State<_CodeChatTab>
                 m.status == 'queued'
                     ? 'Đang chờ${m.queuePosition != null ? ' (#${m.queuePosition})' : ''}…'
                     : 'Đang xử lý…',
-                style: const TextStyle(color: Colors.white38, fontSize: 10),
+                style: TextStyle(color: c.textMuted, fontSize: 10),
               ),
             ],
           ],
@@ -348,13 +350,14 @@ class _CodeChatTabState extends State<_CodeChatTab>
   }
 
   Widget _inputArea() {
+    final c = context.colors;
     final enabled = _group != null;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 12),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
+        color: c.surface,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          top: BorderSide(color: c.border),
         ),
       ),
       child: SafeArea(
@@ -367,24 +370,24 @@ class _CodeChatTabState extends State<_CodeChatTab>
                 enabled: enabled && !_sending,
                 minLines: 1,
                 maxLines: 5,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: const InputDecoration(
+                style: TextStyle(color: c.textPrimary, fontSize: 14),
+                decoration: InputDecoration(
                   hintText: 'Nhắn cho code agent…',
-                  hintStyle: TextStyle(color: Colors.white38),
+                  hintStyle: TextStyle(color: c.textMuted),
                   border: InputBorder.none,
                 ),
               ),
             ),
             IconButton(
               icon: _sending
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppColors.accent),
+                          strokeWidth: 2, color: c.accent),
                     )
                   : Icon(Icons.send,
-                      color: enabled ? AppColors.accent : Colors.white24),
+                      color: enabled ? c.accent : c.textMuted),
               onPressed: enabled && !_sending ? _send : null,
             ),
           ],
@@ -445,7 +448,7 @@ class _FilesTabState extends State<_FilesTab>
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppColors.surface,
+      backgroundColor: context.colors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -456,6 +459,7 @@ class _FilesTabState extends State<_FilesTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final c = context.colors;
     if (_loading) return const LoadingState(text: 'Đang tải cây thư mục…');
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_tree.isEmpty) {
@@ -464,18 +468,18 @@ class _FilesTabState extends State<_FilesTab>
         message: 'Thư mục trống',
         action: OutlinedButton.icon(
           onPressed: _load,
-          icon: const Icon(Icons.refresh, color: AppColors.accent, size: 18),
-          label: const Text('Tải lại', style: TextStyle(color: AppColors.accent)),
+          icon: Icon(Icons.refresh, color: c.accent, size: 18),
+          label: Text('Tải lại', style: TextStyle(color: c.accent)),
           style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: AppColors.accent),
+            side: BorderSide(color: c.accent),
           ),
         ),
       );
     }
     return RefreshIndicator(
       onRefresh: _load,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
+      color: c.accent,
+      backgroundColor: c.surface,
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: _tree.map((n) => _node(n, 0)).toList(),
@@ -484,16 +488,17 @@ class _FilesTabState extends State<_FilesTab>
   }
 
   Widget _node(FileNode n, int depth) {
+    final c = context.colors;
     if (n.isDir) {
       return Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           tilePadding: EdgeInsets.only(left: 16.0 + depth * 14, right: 16),
-          leading: const Icon(Icons.folder, color: Color(0xFFFFB74D), size: 20),
+          leading: Icon(Icons.folder, color: AppTokens.warning, size: 20),
           title: Text(n.name,
-              style: const TextStyle(color: Colors.white, fontSize: 13)),
-          iconColor: Colors.white54,
-          collapsedIconColor: Colors.white54,
+              style: TextStyle(color: c.textPrimary, fontSize: 13)),
+          iconColor: c.textSecondary,
+          collapsedIconColor: c.textSecondary,
           childrenPadding: EdgeInsets.zero,
           children: n.children.map((c) => _node(c, depth + 1)).toList(),
         ),
@@ -502,9 +507,9 @@ class _FilesTabState extends State<_FilesTab>
     return ListTile(
       contentPadding: EdgeInsets.only(left: 28.0 + depth * 14, right: 16),
       dense: true,
-      leading: Icon(_fileIcon(n.name), color: Colors.white38, size: 18),
+      leading: Icon(_fileIcon(n.name), color: c.textMuted, size: 18),
       title: Text(n.name,
-          style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          style: TextStyle(color: c.textSecondary, fontSize: 13)),
       onTap: () => _openFile(n),
     );
   }
@@ -563,6 +568,7 @@ class _FileViewerState extends State<_FileViewer> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return FractionallySizedBox(
       heightFactor: 0.9,
       child: Column(
@@ -572,7 +578,7 @@ class _FileViewerState extends State<_FileViewer> {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white24,
+              color: c.borderStrong,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -580,19 +586,19 @@ class _FileViewerState extends State<_FileViewer> {
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
             child: Row(
               children: [
-                const Icon(Icons.description_outlined,
-                    color: AppColors.cyan, size: 18),
+                Icon(Icons.description_outlined,
+                    color: AppTokens.cyan, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     widget.file.path,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    style: TextStyle(color: c.textPrimary, fontSize: 13),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 if (_content != null)
                   IconButton(
-                    icon: const Icon(Icons.copy, color: Colors.white54, size: 18),
+                    icon: Icon(Icons.copy, color: c.textSecondary, size: 18),
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: _content!));
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -603,7 +609,7 @@ class _FileViewerState extends State<_FileViewer> {
               ],
             ),
           ),
-          const Divider(color: AppColors.cardBorder, height: 1),
+          Divider(color: c.border, height: 1),
           Expanded(
             child: _loading
                 ? const LoadingState()
@@ -615,8 +621,8 @@ class _FileViewerState extends State<_FileViewer> {
                           width: double.infinity,
                           child: SelectableText(
                             _content!.isEmpty ? '(tệp trống)' : _content!,
-                            style: const TextStyle(
-                              color: Colors.white70,
+                            style: TextStyle(
+                              color: c.textSecondary,
                               fontFamily: 'monospace',
                               fontSize: 12,
                               height: 1.4,
@@ -678,20 +684,21 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _rollback() async {
+    final c = context.colors;
     final ctrl = TextEditingController(text: '1');
     final steps = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Rollback commits',
-            style: TextStyle(color: Colors.white)),
+        backgroundColor: c.surface,
+        title: Text('Rollback commits',
+            style: TextStyle(color: c.textPrimary)),
         content: TextField(
           controller: ctrl,
           keyboardType: TextInputType.number,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
+          style: TextStyle(color: c.textPrimary),
+          decoration: InputDecoration(
             labelText: 'Số commit lùi lại',
-            labelStyle: TextStyle(color: Colors.white54),
+            labelStyle: TextStyle(color: c.textSecondary),
           ),
         ),
         actions: [
@@ -702,8 +709,8 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
           TextButton(
             onPressed: () =>
                 Navigator.pop(ctx, int.tryParse(ctrl.text.trim()) ?? 0),
-            child: const Text('Rollback',
-                style: TextStyle(color: Colors.redAccent)),
+            child: Text('Rollback',
+                style: TextStyle(color: AppTokens.danger)),
           ),
         ],
       ),
@@ -728,6 +735,7 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final c = context.colors;
     if (_loading) return const LoadingState(text: 'Đang tải git log…');
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (!widget.session.gitEnabled) {
@@ -742,11 +750,11 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
         message: 'Chưa có commit',
         action: OutlinedButton.icon(
           onPressed: _load,
-          icon: const Icon(Icons.refresh, color: AppColors.accent, size: 18),
+          icon: Icon(Icons.refresh, color: c.accent, size: 18),
           label:
-              const Text('Tải lại', style: TextStyle(color: AppColors.accent)),
+              Text('Tải lại', style: TextStyle(color: c.accent)),
           style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: AppColors.accent),
+            side: BorderSide(color: c.accent),
           ),
         ),
       );
@@ -756,8 +764,8 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
         Expanded(
           child: RefreshIndicator(
             onRefresh: _load,
-            color: AppColors.accent,
-            backgroundColor: AppColors.surface,
+            color: c.accent,
+            backgroundColor: c.surface,
             child: ListView.builder(
               padding: const EdgeInsets.all(12),
               itemCount: _log.length,
@@ -773,11 +781,11 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _rollback,
-                icon: const Icon(Icons.undo, color: Colors.redAccent),
-                label: const Text('Rollback…',
-                    style: TextStyle(color: Colors.redAccent)),
+                icon: Icon(Icons.undo, color: AppTokens.danger),
+                label: Text('Rollback…',
+                    style: TextStyle(color: AppTokens.danger)),
                 style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.redAccent),
+                  side: BorderSide(color: AppTokens.danger),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
               ),
@@ -788,14 +796,15 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
     );
   }
 
-  Widget _commitTile(GitCommit c, bool isHead) {
+  Widget _commitTile(GitCommit commit, bool isHead) {
+    final c = context.colors;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
+        color: c.surfaceAlt,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.cardBorder),
+        border: Border.all(color: c.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -805,13 +814,13 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: AppColors.cyan.withValues(alpha: 0.12),
+                  color: AppTokens.cyan.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  c.shortHash,
-                  style: const TextStyle(
-                    color: AppColors.cyan,
+                  commit.shortHash,
+                  style: TextStyle(
+                    color: AppTokens.cyan,
                     fontFamily: 'monospace',
                     fontSize: 11,
                   ),
@@ -823,23 +832,23 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF66BB6A).withValues(alpha: 0.15),
+                    color: AppTokens.success.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text('HEAD',
-                      style: TextStyle(color: Color(0xFF66BB6A), fontSize: 10)),
+                  child: Text('HEAD',
+                      style: TextStyle(color: AppTokens.success, fontSize: 10)),
                 ),
               ],
               const Spacer(),
               Text(
-                c.date.split(' ').first,
-                style: const TextStyle(color: Colors.white38, fontSize: 10),
+                commit.date.split(' ').first,
+                style: TextStyle(color: c.textMuted, fontSize: 10),
               ),
             ],
           ),
           const SizedBox(height: 6),
-          Text(c.message,
-              style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          Text(commit.message,
+              style: TextStyle(color: c.textSecondary, fontSize: 13)),
         ],
       ),
     );

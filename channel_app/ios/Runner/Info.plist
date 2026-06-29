@@ -70,6 +70,17 @@
 	<string>This app needs camera access to scan QR codes for pairing with SemaClaw agents.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs access to the local network to communicate with SemaClaw agents via gRPC.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app uses the microphone to dictate chat messages by voice.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>This app transcribes your speech to text for chat messages.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs photo access to attach images to chat messages.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>io.flutter.embedded_views_preview</key>
 	<true/>
 </dict>

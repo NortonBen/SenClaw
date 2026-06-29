@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import '../theme/tokens.dart';
 
 class ConnectionQRScreen extends StatelessWidget {
   const ConnectionQRScreen({super.key});
@@ -21,7 +22,7 @@ class ConnectionQRScreen extends StatelessWidget {
         'hub': hub,
         'cid': cid,
         'key': key,
-        if (token != null) 'token': token,
+        'token': ?token,
       },
     );
     return uri.toString();
@@ -29,28 +30,29 @@ class ConnectionQRScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D1F),
+      backgroundColor: c.bg,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: Icon(Icons.arrow_back, color: c.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Connection QR', 
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: Text('Connection QR',
+          style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.bold)),
       ),
       body: FutureBuilder<String?>(
         future: _getQRData(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.cyanAccent));
+            return Center(child: CircularProgressIndicator(color: c.accent));
           }
           if (snapshot.hasError || snapshot.data == null) {
-            return const Center(
-              child: Text('Failed to load connection data', 
-                style: TextStyle(color: Colors.white)),
+            return Center(
+              child: Text('Failed to load connection data',
+                style: TextStyle(color: c.textPrimary)),
             );
           }
 
@@ -60,12 +62,14 @@ class ConnectionQRScreen extends StatelessWidget {
               children: [
                 Container(
                   padding: const EdgeInsets.all(16),
+                  // A QR must stay dark-on-light to scan, so this container is
+                  // intentionally white in both themes.
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.cyanAccent.withOpacity(0.2),
+                        color: AppTokens.cyan.withValues(alpha: 0.2),
                         blurRadius: 20,
                         spreadRadius: 5,
                       ),
@@ -80,10 +84,10 @@ class ConnectionQRScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 32),
-                const Text(
+                Text(
                   'Scan this QR code with another device\nto sync the channel connection.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white70, fontSize: 16),
+                  style: TextStyle(color: c.textSecondary, fontSize: 16),
                 ),
                 const SizedBox(height: 16),
                 Padding(
@@ -91,7 +95,7 @@ class ConnectionQRScreen extends StatelessWidget {
                   child: Text(
                     snapshot.data!,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.3),
+                      color: c.textMuted,
                       fontSize: 10,
                       fontFamily: 'monospace',
                     ),

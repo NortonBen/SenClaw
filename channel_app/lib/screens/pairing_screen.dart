@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'chat_screen.dart';
 import '../services/language_service.dart';
 import '../services/config_service.dart';
+import '../theme/tokens.dart';
 
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key});
@@ -38,6 +39,7 @@ class _PairingScreenState extends State<PairingScreen>
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     double scanWindowSize = 250;
 
     return Scaffold(
@@ -76,7 +78,8 @@ class _PairingScreenState extends State<PairingScreen>
               return CustomPaint(
                 painter: ScannerOverlayPainter(
                   scanWindowSize: scanWindowSize,
-                  overlayColor: Colors.black.withOpacity(0.7),
+                  overlayColor: Colors.black.withValues(alpha: 0.7),
+                  frameColor: c.accent,
                   scanLinePosition: _animationController.value,
                 ),
                 child: Container(),
@@ -101,12 +104,12 @@ class _PairingScreenState extends State<PairingScreen>
                         icon: Container(
                           padding: const EdgeInsets.all(5),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: c.accentSoft,
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.close,
-                            color: Colors.white,
+                            color: c.accent,
                             size: 20,
                           ),
                         ),
@@ -118,13 +121,24 @@ class _PairingScreenState extends State<PairingScreen>
                 ),
 
                 const SizedBox(height: 40),
-                Text(
-                  t('scan_hint'),
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(AppTokens.rFull),
+                  ),
+                  child: Text(
+                    t('scan_hint'),
+                    style: const TextStyle(
+                      // Sits over the live camera feed — kept light for contrast.
+                      color: Color(0xFFF5F7FA),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ),
 
@@ -166,8 +180,8 @@ class _PairingScreenState extends State<PairingScreen>
           if (_isProcessing)
             Container(
               color: Colors.black54,
-              child: const Center(
-                child: CircularProgressIndicator(color: Colors.white),
+              child: Center(
+                child: CircularProgressIndicator(color: c.accent),
               ),
             ),
         ],
@@ -176,14 +190,16 @@ class _PairingScreenState extends State<PairingScreen>
   }
 
   Widget _buildInstructionItem(IconData icon, String text) {
+    final c = context.colors;
     return Row(
       children: [
-        Icon(icon, color: Colors.purpleAccent.withOpacity(0.8), size: 22),
+        Icon(icon, color: c.accent.withValues(alpha: 0.9), size: 22),
         const SizedBox(width: 15),
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(color: Colors.white70, fontSize: 14),
+            // Sits over the live camera feed — kept light for contrast.
+            style: const TextStyle(color: Color(0xFFD9DEE5), fontSize: 14),
           ),
         ),
       ],
@@ -281,11 +297,13 @@ class _PairingScreenState extends State<PairingScreen>
 class ScannerOverlayPainter extends CustomPainter {
   final double scanWindowSize;
   final Color overlayColor;
+  final Color frameColor;
   final double scanLinePosition;
 
   ScannerOverlayPainter({
     required this.scanWindowSize,
     required this.overlayColor,
+    required this.frameColor,
     required this.scanLinePosition,
   });
 
@@ -319,7 +337,7 @@ class ScannerOverlayPainter extends CustomPainter {
 
     // 2. Draw Corners
     final borderPaint = Paint()
-      ..color = Colors.cyanAccent
+      ..color = frameColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 5
       ..strokeCap = StrokeCap.round;
@@ -423,9 +441,9 @@ class ScannerOverlayPainter extends CustomPainter {
       ..shader =
           LinearGradient(
             colors: [
-              Colors.blueAccent.withOpacity(0),
-              Colors.blueAccent.withOpacity(0.5),
-              Colors.blueAccent.withOpacity(0),
+              AppTokens.cyan.withValues(alpha: 0),
+              AppTokens.cyan.withValues(alpha: 0.5),
+              AppTokens.cyan.withValues(alpha: 0),
             ],
           ).createShader(
             Rect.fromLTWH(
@@ -444,7 +462,7 @@ class ScannerOverlayPainter extends CustomPainter {
         scanWindowSize - 10,
         2,
       ),
-      Paint()..color = Colors.cyanAccent.withOpacity(0.8),
+      Paint()..color = AppTokens.cyan.withValues(alpha: 0.8),
     );
 
     canvas.drawRect(
@@ -462,6 +480,7 @@ class ScannerOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant ScannerOverlayPainter oldDelegate) {
     return oldDelegate.scanWindowSize != scanWindowSize ||
         oldDelegate.overlayColor != overlayColor ||
+        oldDelegate.frameColor != frameColor ||
         oldDelegate.scanLinePosition != scanLinePosition;
   }
 }

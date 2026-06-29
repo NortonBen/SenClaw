@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
 import '../../services/relay_manager.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
 import 'code_session_screen.dart';
 import 'folder_picker.dart';
@@ -57,7 +57,7 @@ class _CodeScreenState extends State<CodeScreen> {
     final created = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppColors.surface,
+      backgroundColor: context.colors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -68,14 +68,15 @@ class _CodeScreenState extends State<CodeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: c.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: c.surface,
         elevation: 0,
         title: Row(
           children: [
-            const Text('Code', style: TextStyle(color: Colors.white)),
+            Text('Code', style: TextStyle(color: c.textPrimary)),
             const SizedBox(width: 8),
             AnimatedBuilder(
               animation: RelayManager(),
@@ -86,20 +87,20 @@ class _CodeScreenState extends State<CodeScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white54),
+            icon: Icon(Icons.refresh, color: c.textSecondary),
             onPressed: _loading ? null : _load,
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openCreateDialog,
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.black,
+        backgroundColor: c.accent,
+        foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('Session'),
       ),
       body: Container(
-        decoration: AppColors.pageDecoration,
+        decoration: BoxDecoration(color: c.bg),
         child: _buildBody(),
       ),
     );
@@ -119,10 +120,11 @@ class _CodeScreenState extends State<CodeScreen> {
         hint: 'Nhấn + để tạo session từ một thư mục dự án',
       );
     }
+    final c = context.colors;
     return RefreshIndicator(
       onRefresh: _load,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
+      color: c.accent,
+      backgroundColor: c.surface,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
         itemCount: _sessions.length,
@@ -132,23 +134,24 @@ class _CodeScreenState extends State<CodeScreen> {
   }
 
   Widget _sessionCard(CodeSession s) {
+    final c = context.colors;
     return Card(
-      color: Colors.white.withValues(alpha: 0.04),
+      color: c.surfaceAlt,
       margin: const EdgeInsets.only(bottom: 10),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: AppColors.cardBorder),
+        side: BorderSide(color: c.border),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         leading: CircleAvatar(
-          backgroundColor: AppColors.accent.withValues(alpha: 0.15),
-          child: const Icon(Icons.folder_special, color: AppColors.accent),
+          backgroundColor: c.accent.withValues(alpha: 0.15),
+          child: Icon(Icons.folder_special, color: c.accent),
         ),
         title: Text(
           s.name,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: c.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -158,7 +161,7 @@ class _CodeScreenState extends State<CodeScreen> {
             const SizedBox(height: 4),
             Text(
               s.workspace,
-              style: const TextStyle(color: Colors.white38, fontSize: 11),
+              style: TextStyle(color: c.textMuted, fontSize: 11),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -166,14 +169,14 @@ class _CodeScreenState extends State<CodeScreen> {
             Row(
               children: [
                 if (s.language != null && s.language!.isNotEmpty)
-                  _chip(s.language!, AppColors.cyan),
-                if (s.gitEnabled) _chip('git', const Color(0xFF66BB6A)),
-                _chip(s.status, Colors.white38),
+                  _chip(s.language!, AppTokens.cyan),
+                if (s.gitEnabled) _chip('git', AppTokens.success),
+                _chip(s.status, c.textMuted),
               ],
             ),
           ],
         ),
-        trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+        trailing: Icon(Icons.chevron_right, color: c.textMuted),
         onTap: () {
           Navigator.push(
             context,
@@ -268,6 +271,7 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Padding(
       padding: EdgeInsets.fromLTRB(
         20,
@@ -279,10 +283,10 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'Tạo Code Session',
             style: TextStyle(
-              color: Colors.white,
+              color: c.textPrimary,
               fontSize: 18,
               fontWeight: FontWeight.bold,
             ),
@@ -296,22 +300,22 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
+                color: c.surfaceAlt,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.cardBorder),
+                border: Border.all(color: c.border),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.folder_open,
-                      color: Color(0xFFFFB74D), size: 20),
+                  Icon(Icons.folder_open,
+                      color: AppTokens.warning, size: 20),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       _workspace ?? 'Chọn thư mục dự án…',
                       style: TextStyle(
                         color: _workspace == null
-                            ? Colors.white38
-                            : Colors.white,
+                            ? c.textMuted
+                            : c.textPrimary,
                         fontSize: 13,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -328,16 +332,16 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
             contentPadding: EdgeInsets.zero,
             value: _initGit,
             onChanged: (v) => setState(() => _initGit = v),
-            activeColor: AppColors.accent,
-            title: const Text('Khởi tạo git',
-                style: TextStyle(color: Colors.white70, fontSize: 14)),
-            subtitle: const Text('Cho phép checkpoint & rollback',
-                style: TextStyle(color: Colors.white38, fontSize: 12)),
+            activeThumbColor: c.accent,
+            title: Text('Khởi tạo git',
+                style: TextStyle(color: c.textSecondary, fontSize: 14)),
+            subtitle: Text('Cho phép checkpoint & rollback',
+                style: TextStyle(color: c.textMuted, fontSize: 12)),
           ),
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(_error!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                style: TextStyle(color: AppTokens.danger, fontSize: 12)),
           ],
           const SizedBox(height: 16),
           SizedBox(
@@ -345,8 +349,8 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
             child: ElevatedButton(
               onPressed: _saving ? null : _create,
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent,
-                foregroundColor: Colors.black,
+                backgroundColor: c.accent,
+                foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
               child: _saving
@@ -354,7 +358,7 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.black),
+                          strokeWidth: 2, color: Colors.white),
                     )
                   : const Text('Tạo session'),
             ),
@@ -364,23 +368,24 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
     );
   }
 
-  Widget _field(TextEditingController c, String hint, IconData icon) {
+  Widget _field(TextEditingController ctrl, String hint, IconData icon) {
+    final c = context.colors;
     return TextField(
-      controller: c,
-      style: const TextStyle(color: Colors.white),
+      controller: ctrl,
+      style: TextStyle(color: c.textPrimary),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Colors.white38),
-        prefixIcon: Icon(icon, color: Colors.white38, size: 20),
+        hintStyle: TextStyle(color: c.textMuted),
+        prefixIcon: Icon(icon, color: c.textMuted, size: 20),
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.05),
+        fillColor: c.surfaceAlt,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.cardBorder),
+          borderSide: BorderSide(color: c.border),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.cardBorder),
+          borderSide: BorderSide(color: c.border),
         ),
       ),
     );

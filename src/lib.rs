@@ -632,6 +632,7 @@ fn wire_app_channel_controls(
     cfg: Arc<config::Config>,
     db_channel_id: i64,
     api_bridge: Arc<gateway::ui_server::ApiBridgeState>,
+    agent_pool_cell: Arc<std::sync::OnceLock<Arc<agent::agent_pool::AgentPool>>>,
 ) {
     use channels::app::{
         CTRL_AGENT_LIST_REQ, CTRL_AGENT_LIST_RESP, CTRL_AGENT_SELECT, CTRL_API_REQ, CTRL_API_RESP,
@@ -696,6 +697,7 @@ fn wire_app_channel_controls(
 
             // ── Agent select — validate against channel<->agent bindings ────
             t if t == CTRL_AGENT_SELECT => {
+                let agent_pool_cell = Arc::clone(&agent_pool_cell);
                 tokio::spawn(async move {
                     let val: serde_json::Value =
                         serde_json::from_str(&metadata).unwrap_or_default();
@@ -734,6 +736,17 @@ fn wire_app_channel_controls(
                         tracing::warn!(
                             "[AppChannel] AGENT_SELECT: no group binding for {}", chat_jid
                         );
+                    }
+
+                    // Optional agent mode (Agent | Plan | Dag) carried by the app.
+                    let mode = val["mode"].as_str().unwrap_or("");
+                    if !mode.is_empty() {
+                        if let Some(pool) = agent_pool_cell.get() {
+                            pool.set_agent_mode(&chat_jid, mode);
+                            tracing::info!(
+                                "[AppChannel] AGENT_SELECT: mode={} for {}", mode, chat_jid
+                            );
+                        }
                     }
                 });
             }
@@ -977,6 +990,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // App channels collected for the WS-gateway → relay event forwarder (step 8).
     let mut app_channels: Vec<Arc<channels::app::AppChannel>> = Vec::new();
 
+    // Lazy handle to the AgentPool (built later in step 4) so the relay
+    // AGENT_SELECT handler can pin a group's agent mode (Agent/Plan/Dag).
+    let app_agent_pool_cell =
+        Arc::new(std::sync::OnceLock::<Arc<agent::agent_pool::AgentPool>>::new());
+
     // 3a. Telegram
     let tg = channels::telegram::TelegramChannel::new(cfg.telegram.bot_token.clone());
     match tg.connect().await {
@@ -1167,6 +1185,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                                     Arc::new(cfg.clone()),
                                     ch_record.id,
                                     Arc::clone(&api_bridge),
+                                    Arc::clone(&app_agent_pool_cell),
                                 );
                                 channels::app::AppChannel::connect_nonblocking(Arc::clone(
                                     &app_arc,
@@ -1262,6 +1281,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let agent_pool = agent::agent_pool::AgentPool::new(zen_core_api.clone());
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
+    // Publish the pool so the relay AGENT_SELECT handler can set agent modes.
+    let _ = app_agent_pool_cell.set(agent_pool.clone());
 
     // Initialize marketplace manager for loading MCP servers from plugins
     let marketplace_manager = Arc::new(

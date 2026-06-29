@@ -173,3 +173,26 @@ class SpaceSchedule {
     lastRun: j['last_run'] as String?,
   );
 }
+
+/// A Space App (`/api/space/apps`). `manifest` is freeform JSON; the useful
+/// display fields (name/description/icon) live inside it.
+class SpaceApp {
+  final String id;
+  final bool enabled;
+  final Map<String, dynamic> manifest;
+
+  const SpaceApp({required this.id, this.enabled = true, this.manifest = const {}});
+
+  String get name =>
+      (manifest['name'] ?? manifest['title'] ?? id).toString();
+  String get description => (manifest['description'] ?? '').toString();
+  String get icon => (manifest['icon'] ?? '🧩').toString();
+
+  factory SpaceApp.fromJson(Map<String, dynamic> j) => SpaceApp(
+        id: (j['id'] ?? '').toString(),
+        enabled: j['enabled'] as bool? ?? true,
+        manifest: j['manifest'] is Map
+            ? (j['manifest'] as Map).cast<String, dynamic>()
+            : const {},
+      );
+}

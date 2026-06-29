@@ -19,7 +19,7 @@ class ChatApi {
       _api.post('/api/chat/question/respond', body: {
         'requestId': requestId,
         'answers': answers,
-        if (otherTexts != null) 'otherTexts': otherTexts,
+        'otherTexts': ?otherTexts,
       });
 
   /// [selected] = 'startEditing' | 'clearContextAndStart' | 'cancelled'.

@@ -40,9 +40,9 @@ class SpaceApi {
     List<String>? tags,
   }) =>
       _api.put('/api/space/notes/$id', body: {
-        if (title != null) 'title': title,
-        if (body != null) 'body': body,
-        if (tags != null) 'tags': tags,
+        'title': ?title,
+        'body': ?body,
+        'tags': ?tags,
       });
 
   Future<void> deleteNote(String id) => _api.delete('/api/space/notes/$id');
@@ -80,7 +80,7 @@ class SpaceApi {
         if (description != null && description.isNotEmpty)
           'description': description,
         if (location != null && location.isNotEmpty) 'location': location,
-        if (reminderMin != null) 'reminder_min': reminderMin,
+        'reminder_min': ?reminderMin,
       });
 
   Future<void> deleteEvent(String id) =>
@@ -154,4 +154,26 @@ class SpaceApi {
         'body': body,
         if (accountId != null && accountId.isNotEmpty) 'account_id': accountId,
       });
+
+  // ── Apps ─────────────────────────────────────────────────────────────────
+  Future<List<SpaceApp>> listApps() async {
+    final r = await _api.get('/api/space/apps');
+    final list = r is List ? r : const [];
+    return list
+        .map((e) => SpaceApp.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> registerApp(String manifestUrl) =>
+      _api.post('/api/space/apps/register', body: {'manifest_url': manifestUrl});
+
+  Future<void> deleteApp(String id) => _api.delete('/api/space/apps/$id');
+
+  Future<void> restartApp(String id) =>
+      _api.post('/api/space/apps/$id/restart');
+
+  Future<String> appLogs(String id) async {
+    final obj = await _api.getObject('/api/space/apps/$id/logs');
+    return (obj['content'] ?? '').toString();
+  }
 }

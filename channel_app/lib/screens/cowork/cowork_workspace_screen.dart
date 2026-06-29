@@ -1,24 +1,25 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../../models/cowork_models.dart';
 import '../../services/cowork_api.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
 
-const _taskStatuses = ['todo', 'in_progress', 'review', 'done', 'blocked'];
-
-/// Workspace detail: Tasks (kanban-by-status) and team Chat.
-class CoworkWorkspaceScreen extends StatefulWidget {
-  final CoworkWorkspace workspace;
-  const CoworkWorkspaceScreen({super.key, required this.workspace});
+/// Detail view for one Cowork team: kanban Tasks, Members, and Settings
+/// (manager preamble / tools / auto-create-tasks). Backed by
+/// `/api/cowork/teams/:id/*`.
+class CoworkTeamScreen extends StatefulWidget {
+  final CoworkTeam team;
+  const CoworkTeamScreen({super.key, required this.team});
 
   @override
-  State<CoworkWorkspaceScreen> createState() => _CoworkWorkspaceScreenState();
+  State<CoworkTeamScreen> createState() => _CoworkTeamScreenState();
 }
 
-class _CoworkWorkspaceScreenState extends State<CoworkWorkspaceScreen>
+class _CoworkTeamScreenState extends State<CoworkTeamScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 5, vsync: this);
+  final _api = CoworkApi();
+  late final TabController _tabs = TabController(length: 3, vsync: this);
+  late CoworkTeam _team = widget.team;
 
   @override
   void dispose() {
@@ -26,41 +27,111 @@ class _CoworkWorkspaceScreenState extends State<CoworkWorkspaceScreen>
     super.dispose();
   }
 
+  Future<void> _saveTemplate() async {
+    try {
+      await _api.saveAsTemplate(_team.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Đã lưu thành mẫu')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    }
+  }
+
+  Future<void> _deleteTeam() async {
+    final c = context.colors;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.surface,
+        title: Text('Xoá đội?', style: TextStyle(color: c.textPrimary)),
+        content: Text(_team.name,
+            style: TextStyle(color: c.textSecondary)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Huỷ')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Xoá',
+                  style: TextStyle(color: AppTokens.danger))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _api.deleteTeam(_team.id);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: c.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
+        backgroundColor: c.surface,
         elevation: 0,
-        title: Text(widget.workspace.name,
-            style: const TextStyle(color: Colors.white, fontSize: 16)),
+        title: Text(_team.name,
+            style: TextStyle(color: c.textPrimary, fontSize: 16)),
+        actions: [
+          PopupMenuButton<String>(
+            color: c.surface,
+            icon: Icon(Icons.more_vert, color: c.textSecondary),
+            onSelected: (v) {
+              if (v == 'template') _saveTemplate();
+              if (v == 'delete') _deleteTeam();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                  value: 'template',
+                  child: Text('Lưu thành mẫu',
+                      style: TextStyle(color: c.textPrimary))),
+              const PopupMenuItem(
+                  value: 'delete',
+                  child: Text('Xoá đội',
+                      style: TextStyle(color: AppTokens.danger))),
+            ],
+          ),
+        ],
         bottom: TabBar(
           controller: _tabs,
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
-          indicatorColor: AppColors.accent,
-          labelColor: AppColors.accent,
-          unselectedLabelColor: Colors.white54,
+          indicatorColor: c.accent,
+          labelColor: c.accent,
+          unselectedLabelColor: c.textMuted,
           tabs: const [
-            Tab(icon: Icon(Icons.checklist), text: 'Tasks'),
-            Tab(icon: Icon(Icons.dashboard_outlined), text: 'Board'),
-            Tab(icon: Icon(Icons.forum_outlined), text: 'Chat'),
-            Tab(icon: Icon(Icons.people_outline), text: 'Team'),
-            Tab(icon: Icon(Icons.folder_outlined), text: 'Files'),
+            Tab(text: 'Công việc'),
+            Tab(text: 'Thành viên'),
+            Tab(text: 'Cài đặt'),
           ],
         ),
       ),
       body: Container(
-        decoration: AppColors.pageDecoration,
+        decoration: BoxDecoration(color: c.bg),
         child: TabBarView(
           controller: _tabs,
           children: [
-            _TasksTab(wsId: widget.workspace.id),
-            _BoardTab(wsId: widget.workspace.id),
-            _MessagesTab(wsId: widget.workspace.id),
-            _TeamTab(wsId: widget.workspace.id),
-            _FilesTab(wsId: widget.workspace.id),
+            _TasksTab(api: _api, teamId: _team.id),
+            _MembersTab(
+              api: _api,
+              team: _team,
+              onChanged: (t) => setState(() => _team = t),
+            ),
+            _SettingsTab(
+              api: _api,
+              team: _team,
+              onChanged: (t) => setState(() => _team = t),
+            ),
           ],
         ),
       ),
@@ -68,11 +139,37 @@ class _CoworkWorkspaceScreenState extends State<CoworkWorkspaceScreen>
   }
 }
 
-// ─── Tasks ─────────────────────────────────────────────────────────────────
+// ─── Tasks (kanban list grouped by status) ────────────────────────────────────
+
+const _statuses = ['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked'];
+const _statusLabel = {
+  'backlog': 'Tồn đọng',
+  'todo': 'Cần làm',
+  'in_progress': 'Đang làm',
+  'review': 'Rà soát',
+  'done': 'Hoàn thành',
+  'blocked': 'Bị chặn',
+};
+
+Color _statusColor(String s, AppColors c) {
+  switch (s) {
+    case 'in_progress':
+      return AppTokens.cyan;
+    case 'review':
+      return AppTokens.warning;
+    case 'done':
+      return AppTokens.success;
+    case 'blocked':
+      return AppTokens.danger;
+    default:
+      return c.textMuted;
+  }
+}
 
 class _TasksTab extends StatefulWidget {
-  final String wsId;
-  const _TasksTab({required this.wsId});
+  final CoworkApi api;
+  final String teamId;
+  const _TasksTab({required this.api, required this.teamId});
 
   @override
   State<_TasksTab> createState() => _TasksTabState();
@@ -80,8 +177,7 @@ class _TasksTab extends StatefulWidget {
 
 class _TasksTabState extends State<_TasksTab>
     with AutomaticKeepAliveClientMixin {
-  final _api = CoworkApi();
-  List<CoworkTask> _tasks = [];
+  List<CoworkTeamTask> _tasks = [];
   bool _loading = true;
   String? _error;
 
@@ -100,10 +196,10 @@ class _TasksTabState extends State<_TasksTab>
       _error = null;
     });
     try {
-      final tasks = await _api.listTasks(widget.wsId);
+      final t = await widget.api.listTasks(widget.teamId);
       if (!mounted) return;
       setState(() {
-        _tasks = tasks;
+        _tasks = t;
         _loading = false;
       });
     } catch (e) {
@@ -116,19 +212,21 @@ class _TasksTabState extends State<_TasksTab>
   }
 
   Future<void> _create() async {
-    final titleCtrl = TextEditingController();
+    final ctrl = TextEditingController();
+    final c = context.colors;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Task mới', style: TextStyle(color: Colors.white)),
+        backgroundColor: c.surface,
+        title: Text('Công việc mới',
+            style: TextStyle(color: c.textPrimary)),
         content: TextField(
-          controller: titleCtrl,
+          controller: ctrl,
           autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
+          style: TextStyle(color: c.textPrimary),
+          decoration: InputDecoration(
             labelText: 'Tiêu đề',
-            labelStyle: TextStyle(color: Colors.white54),
+            labelStyle: TextStyle(color: c.textMuted),
           ),
         ),
         actions: [
@@ -137,63 +235,43 @@ class _TasksTabState extends State<_TasksTab>
               child: const Text('Huỷ')),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Tạo',
-                  style: TextStyle(color: AppColors.accent))),
+              child: Text('Tạo',
+                  style: TextStyle(color: c.accent))),
         ],
       ),
     );
-    if (ok != true || titleCtrl.text.trim().isEmpty) return;
+    if (ok != true || ctrl.text.trim().isEmpty) return;
     try {
-      await _api.createTask(widget.wsId, title: titleCtrl.text.trim());
+      await widget.api.createTask(widget.teamId, title: ctrl.text.trim());
       _load();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi tạo: $e')));
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
       }
     }
   }
 
-  Future<void> _changeStatus(CoworkTask t) async {
-    final newStatus = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Text(t.title,
-                  style: const TextStyle(color: Colors.white, fontSize: 15)),
-            ),
-            const Divider(color: AppColors.cardBorder, height: 1),
-            for (final s in _taskStatuses)
-              ListTile(
-                leading: Icon(_statusIcon(s), color: _statusColor(s)),
-                title: Text(_statusLabel(s),
-                    style: const TextStyle(color: Colors.white)),
-                trailing: t.status == s
-                    ? const Icon(Icons.check, color: AppColors.accent)
-                    : null,
-                onTap: () => Navigator.pop(context, s),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (newStatus == null || newStatus == t.status) return;
+  Future<void> _move(CoworkTeamTask t, String status) async {
     try {
-      await _api.updateTaskStatus(widget.wsId, t.id, newStatus);
+      await widget.api.updateTask(widget.teamId, t.id, status: status);
       _load();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi cập nhật: $e')));
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    }
+  }
+
+  Future<void> _delete(CoworkTeamTask t) async {
+    try {
+      await widget.api.deleteTask(widget.teamId, t.id);
+      _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
       }
     }
   }
@@ -201,12 +279,13 @@ class _TasksTabState extends State<_TasksTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final c = context.colors;
     return Scaffold(
       backgroundColor: Colors.transparent,
       floatingActionButton: FloatingActionButton(
         onPressed: _create,
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.black,
+        backgroundColor: c.accent,
+        foregroundColor: Colors.white,
         child: const Icon(Icons.add),
       ),
       body: _buildBody(),
@@ -214,43 +293,52 @@ class _TasksTabState extends State<_TasksTab>
   }
 
   Widget _buildBody() {
-    if (_loading) return const LoadingState(text: 'Đang tải tasks…');
+    final c = context.colors;
+    if (_loading) return const LoadingState();
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_tasks.isEmpty) {
       return const EmptyState(
-        icon: Icons.checklist_rtl,
-        message: 'Chưa có task',
-        hint: 'Nhấn + để tạo task cho nhóm agent',
+        icon: Icons.task_alt_outlined,
+        message: 'Chưa có công việc',
+        hint: 'Nhấn + để thêm; agent quản lý cũng tự tạo khi xử lý',
       );
     }
-    // Group by status, ordered by the canonical pipeline.
-    final byStatus = <String, List<CoworkTask>>{};
+    final byStatus = <String, List<CoworkTeamTask>>{};
     for (final t in _tasks) {
       byStatus.putIfAbsent(t.status, () => []).add(t);
     }
-    final ordered = [
-      ..._taskStatuses.where(byStatus.containsKey),
-      ...byStatus.keys.where((k) => !_taskStatuses.contains(k)),
+    final order = [
+      ..._statuses.where(byStatus.containsKey),
+      ...byStatus.keys.where((k) => !_statuses.contains(k)),
     ];
     return RefreshIndicator(
       onRefresh: _load,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
+      color: c.accent,
+      backgroundColor: c.surface,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
         children: [
-          for (final st in ordered) ...[
+          for (final st in order) ...[
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Row(
                 children: [
-                  Icon(_statusIcon(st), color: _statusColor(st), size: 16),
-                  const SizedBox(width: 6),
-                  Text('${_statusLabel(st)}  ·  ${byStatus[st]!.length}',
-                      style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600)),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _statusColor(st, c),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_statusLabel[st] ?? st} · ${byStatus[st]!.length}',
+                    style: TextStyle(
+                        color: c.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600),
+                  ),
                 ],
               ),
             ),
@@ -261,864 +349,344 @@ class _TasksTabState extends State<_TasksTab>
     );
   }
 
-  Widget _taskCard(CoworkTask t) {
+  Widget _taskCard(CoworkTeamTask t) {
+    final c = context.colors;
     return Card(
-      color: Colors.white.withValues(alpha: 0.04),
+      color: c.surfaceAlt,
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: AppColors.cardBorder),
+        side: BorderSide(color: c.border),
       ),
       child: ListTile(
         title: Text(t.title,
-            style: const TextStyle(color: Colors.white, fontSize: 14)),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (t.description != null && t.description!.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(t.description!,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
-            ],
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                if (t.assignee != null && t.assignee!.isNotEmpty)
-                  _miniChip(Icons.person_outline, t.assignee!),
-                _miniChip(Icons.flag_outlined, t.priority),
-              ],
-            ),
+            style: TextStyle(color: c.textPrimary, fontSize: 14)),
+        subtitle: (t.assignee != null && t.assignee!.isNotEmpty)
+            ? Text('→ ${t.assignee}',
+                style: TextStyle(color: c.textMuted, fontSize: 11))
+            : null,
+        trailing: PopupMenuButton<String>(
+          color: c.surface,
+          icon: Icon(Icons.more_vert, color: c.textMuted, size: 20),
+          onSelected: (v) {
+            if (v == 'delete') {
+              _delete(t);
+            } else {
+              _move(t, v);
+            }
+          },
+          itemBuilder: (_) => [
+            for (final st in _statuses)
+              if (st != t.status)
+                PopupMenuItem(
+                  value: st,
+                  child: Text('→ ${_statusLabel[st] ?? st}',
+                      style: TextStyle(color: c.textPrimary)),
+                ),
+            const PopupMenuItem(
+                value: 'delete',
+                child:
+                    Text('Xoá', style: TextStyle(color: AppTokens.danger))),
           ],
         ),
-        trailing: TextButton(
-          onPressed: () => _changeStatus(t),
-          child: const Text('Status',
-              style: TextStyle(color: AppColors.accent, fontSize: 12)),
-        ),
-        onTap: () => _changeStatus(t),
       ),
     );
   }
+}
 
-  Widget _miniChip(IconData icon, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 10),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+// ─── Members ─────────────────────────────────────────────────────────────────
+
+class _MembersTab extends StatefulWidget {
+  final CoworkApi api;
+  final CoworkTeam team;
+  final ValueChanged<CoworkTeam> onChanged;
+  const _MembersTab(
+      {required this.api, required this.team, required this.onChanged});
+
+  @override
+  State<_MembersTab> createState() => _MembersTabState();
+}
+
+class _MembersTabState extends State<_MembersTab> {
+  late CoworkTeam _team = widget.team;
+
+  Future<void> _addMember() async {
+    final folderCtrl = TextEditingController();
+    final roleCtrl = TextEditingController();
+    final respCtrl = TextEditingController();
+    final c = context.colors;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.surface,
+        title: Text('Thêm thành viên',
+            style: TextStyle(color: c.textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dlgField(folderCtrl, 'Folder/persona'),
+            const SizedBox(height: 8),
+            _dlgField(roleCtrl, 'Vai trò (tuỳ chọn)'),
+            const SizedBox(height: 8),
+            _dlgField(respCtrl, 'Trách nhiệm (tuỳ chọn)'),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Huỷ')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Thêm',
+                  style: TextStyle(color: c.accent))),
+        ],
+      ),
+    );
+    if (ok != true || folderCtrl.text.trim().isEmpty) return;
+    try {
+      final updated = await widget.api.upsertMember(
+        _team.id,
+        TeamMember(
+          folder: folderCtrl.text.trim(),
+          role: roleCtrl.text.trim().isEmpty ? null : roleCtrl.text.trim(),
+          responsibilities:
+              respCtrl.text.trim().isEmpty ? null : respCtrl.text.trim(),
+        ),
+      );
+      setState(() => _team = updated);
+      widget.onChanged(updated);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    }
+  }
+
+  Future<void> _remove(TeamMember m) async {
+    try {
+      final updated = await widget.api.removeMember(_team.id, m.folder);
+      setState(() => _team = updated);
+      widget.onChanged(updated);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addMember,
+        backgroundColor: c.accent,
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.person_add_alt),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
         children: [
-          Icon(icon, color: Colors.white38, size: 13),
-          const SizedBox(width: 3),
-          Text(label,
-              style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          Card(
+            color: c.surfaceAlt,
+            margin: const EdgeInsets.only(bottom: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: c.accent.withValues(alpha: 0.4)),
+            ),
+            child: ListTile(
+              leading: Icon(Icons.star, color: c.accent),
+              title: Text(_team.managerFolder,
+                  style: TextStyle(
+                      color: c.textPrimary, fontWeight: FontWeight.w600)),
+              subtitle: Text('Quản lý',
+                  style: TextStyle(color: c.textMuted, fontSize: 12)),
+            ),
+          ),
+          if (_team.members.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text('Chưa có thành viên',
+                    style: TextStyle(color: c.textMuted)),
+              ),
+            )
+          else
+            ..._team.members.map((m) => Card(
+                  color: c.surfaceAlt,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: c.border),
+                  ),
+                  child: ListTile(
+                    leading: const Icon(Icons.person_outline,
+                        color: AppTokens.cyan),
+                    title: Text(m.folder,
+                        style: TextStyle(color: c.textPrimary)),
+                    subtitle: (m.role != null || m.responsibilities != null)
+                        ? Text(
+                            [m.role, m.responsibilities]
+                                .where((e) => e != null && e.isNotEmpty)
+                                .join(' · '),
+                            style: TextStyle(
+                                color: c.textMuted, fontSize: 12))
+                        : null,
+                    trailing: IconButton(
+                      icon: Icon(Icons.delete_outline,
+                          color: c.textMuted, size: 20),
+                      onPressed: () => _remove(m),
+                    ),
+                  ),
+                )),
         ],
       ),
     );
   }
 
-  String _statusLabel(String s) => switch (s) {
-        'todo' => 'Cần làm',
-        'in_progress' => 'Đang làm',
-        'review' => 'Đang review',
-        'done' => 'Hoàn thành',
-        'blocked' => 'Bị chặn',
-        _ => s,
-      };
-
-  IconData _statusIcon(String s) => switch (s) {
-        'todo' => Icons.radio_button_unchecked,
-        'in_progress' => Icons.timelapse,
-        'review' => Icons.rate_review_outlined,
-        'done' => Icons.check_circle_outline,
-        'blocked' => Icons.block,
-        _ => Icons.label_outline,
-      };
-
-  Color _statusColor(String s) => switch (s) {
-        'todo' => Colors.white54,
-        'in_progress' => AppColors.cyan,
-        'review' => const Color(0xFFFFB74D),
-        'done' => const Color(0xFF66BB6A),
-        'blocked' => Colors.redAccent,
-        _ => Colors.white38,
-      };
-}
-
-// ─── Messages ────────────────────────────────────────────────────────────────
-
-class _MessagesTab extends StatefulWidget {
-  final String wsId;
-  const _MessagesTab({required this.wsId});
-
-  @override
-  State<_MessagesTab> createState() => _MessagesTabState();
-}
-
-class _MessagesTabState extends State<_MessagesTab>
-    with AutomaticKeepAliveClientMixin {
-  final _api = CoworkApi();
-  final _inputCtrl = TextEditingController();
-  final _scroll = ScrollController();
-  List<CoworkMessage> _messages = [];
-  bool _loading = true;
-  bool _sending = false;
-  String? _error;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
+  Widget _dlgField(TextEditingController c, String hint) {
+    final col = context.colors;
+    return TextField(
+      controller: c,
+      style: TextStyle(color: col.textPrimary),
+      decoration: InputDecoration(
+        labelText: hint,
+        labelStyle: TextStyle(color: col.textMuted),
+      ),
+    );
   }
+}
+
+// ─── Settings (manager preamble / tools / auto-create-tasks) ──────────────────
+
+class _SettingsTab extends StatefulWidget {
+  final CoworkApi api;
+  final CoworkTeam team;
+  final ValueChanged<CoworkTeam> onChanged;
+  const _SettingsTab(
+      {required this.api, required this.team, required this.onChanged});
+
+  @override
+  State<_SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<_SettingsTab> {
+  late final _preamble =
+      TextEditingController(text: widget.team.settings.managerPreamble ?? '');
+  late final _tools = TextEditingController(
+      text: (widget.team.settings.managerTools ?? const []).join(', '));
+  late bool _autoCreate = widget.team.settings.autoCreateTasks ?? true;
+  bool _saving = false;
 
   @override
   void dispose() {
-    _inputCtrl.dispose();
-    _scroll.dispose();
+    _preamble.dispose();
+    _tools.dispose();
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _save() async {
+    setState(() => _saving = true);
     try {
-      final msgs = await _api.listMessages(widget.wsId);
-      if (!mounted) return;
-      setState(() {
-        _messages = msgs;
-        _loading = false;
-      });
-      _scrollToBottom();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
-    }
-  }
-
-  Future<void> _send() async {
-    final text = _inputCtrl.text.trim();
-    if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
-    try {
-      await _api.sendMessage(widget.wsId, content: text);
-      _inputCtrl.clear();
-      await _load();
+      final tools = _tools.text
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      final updated = await widget.api.updateTeam(
+        widget.team.id,
+        settings: CoworkTeamSettings(
+          managerPreamble:
+              _preamble.text.trim().isEmpty ? null : _preamble.text.trim(),
+          managerTools: tools.isEmpty ? null : tools,
+          autoCreateTasks: _autoCreate,
+        ),
+      );
+      widget.onChanged(updated);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Đã lưu cài đặt đội')));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi gửi: $e')));
+            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) setState(() => _saving = false);
     }
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      }
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
-    return Column(
+    final c = context.colors;
+    return ListView(
+      padding: const EdgeInsets.all(16),
       children: [
-        Expanded(
-          child: _loading
-              ? const LoadingState(text: 'Đang tải tin nhắn…')
-              : _error != null
-                  ? ErrorState(message: _error!, onRetry: _load)
-                  : _messages.isEmpty
-                      ? const EmptyState(
-                          icon: Icons.forum_outlined,
-                          message: 'Chưa có tin nhắn nhóm',
-                        )
-                      : RefreshIndicator(
-                          onRefresh: _load,
-                          color: AppColors.accent,
-                          backgroundColor: AppColors.surface,
-                          child: ListView.builder(
-                            controller: _scroll,
-                            padding: const EdgeInsets.all(12),
-                            itemCount: _messages.length,
-                            itemBuilder: (ctx, i) => _bubble(_messages[i]),
-                          ),
-                        ),
+        Text('Preamble cho quản lý',
+            style: TextStyle(color: c.textSecondary, fontSize: 13)),
+        const SizedBox(height: 6),
+        _field(_preamble, 'Để trống = mặc định PLAN→DELEGATE→SYNTHESIZE',
+            maxLines: 5),
+        const SizedBox(height: 16),
+        Text('Công cụ cho quản lý',
+            style: TextStyle(color: c.textSecondary, fontSize: 13)),
+        const SizedBox(height: 6),
+        _field(_tools, 'Phân tách bằng dấu phẩy (trống = Task + TodoWrite)'),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _autoCreate,
+          onChanged: (v) => setState(() => _autoCreate = v),
+          activeThumbColor: c.accent,
+          title: Text('Tự tạo công việc khi có tin nhắn',
+              style: TextStyle(color: c.textPrimary, fontSize: 14)),
         ),
-        _inputArea(),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _saving ? null : _save,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: c.accent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            child: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Text('Lưu'),
+          ),
+        ),
       ],
     );
   }
 
-  Widget _bubble(CoworkMessage m) {
-    final isMine = m.fromMember == 'mobile';
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.82,
+  Widget _field(TextEditingController c, String hint, {int maxLines = 1}) {
+    final col = context.colors;
+    return TextField(
+      controller: c,
+      maxLines: maxLines,
+      style: TextStyle(color: col.textPrimary),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: col.textMuted),
+        filled: true,
+        fillColor: col.surfaceAlt,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: col.border),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: isMine
-              ? AppColors.accent.withValues(alpha: 0.16)
-              : Colors.white.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isMine
-                ? AppColors.accent.withValues(alpha: 0.3)
-                : AppColors.cardBorder,
-          ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: col.border),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  m.fromMember,
-                  style: const TextStyle(
-                    color: AppColors.cyan,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(m.messageType,
-                      style:
-                          const TextStyle(color: Colors.white38, fontSize: 9)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(m.content,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13, height: 1.35)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _inputArea() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 8, 12),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
-        border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _inputCtrl,
-                minLines: 1,
-                maxLines: 4,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: const InputDecoration(
-                  hintText: 'Nhắn cho nhóm…',
-                  hintStyle: TextStyle(color: Colors.white38),
-                  border: InputBorder.none,
-                ),
-              ),
-            ),
-            IconButton(
-              icon: _sending
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppColors.accent),
-                    )
-                  : const Icon(Icons.send, color: AppColors.accent),
-              onPressed: _sending ? null : _send,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Board ───────────────────────────────────────────────────────────────────
-
-class _BoardTab extends StatefulWidget {
-  final String wsId;
-  const _BoardTab({required this.wsId});
-
-  @override
-  State<_BoardTab> createState() => _BoardTabState();
-}
-
-class _BoardTabState extends State<_BoardTab>
-    with AutomaticKeepAliveClientMixin {
-  final _api = CoworkApi();
-  List<CoworkBoardEntry> _entries = [];
-  bool _loading = true;
-  String? _error;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final entries = await _api.getBoard(widget.wsId);
-      if (!mounted) return;
-      setState(() {
-        _entries = entries;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
-    }
-  }
-
-  Future<void> _edit(CoworkBoardEntry e) async {
-    final ctrl = TextEditingController(text: e.content);
-    final ok = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (_) => Padding(
-        padding: EdgeInsets.fromLTRB(
-            20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_sectionLabel(e.section),
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold)),
-            const SizedBox(height: 14),
-            TextField(
-              controller: ctrl,
-              maxLines: 10,
-              minLines: 4,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'Nội dung…',
-                hintStyle: const TextStyle(color: Colors.white38),
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.05),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppColors.cardBorder),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppColors.cardBorder),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                child: const Text('Lưu'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    try {
-      await _api.updateBoardSection(widget.wsId, e.section,
-          content: ctrl.text, title: e.title);
-      _load();
-    } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi lưu: $err')));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    if (_loading) return const LoadingState(text: 'Đang tải bảng…');
-    if (_error != null) return ErrorState(message: _error!, onRetry: _load);
-    if (_entries.isEmpty) {
-      return const EmptyState(
-        icon: Icons.dashboard_customize_outlined,
-        message: 'Bảng trống',
-        hint: 'Các mục brief / guidelines / progress sẽ hiện ở đây',
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _entries.length,
-        itemBuilder: (ctx, i) => _card(_entries[i]),
-      ),
-    );
-  }
-
-  Widget _card(CoworkBoardEntry e) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.04),
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: AppColors.cardBorder),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(_sectionIcon(e.section),
-                    color: AppColors.cyan, size: 16),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    e.title?.isNotEmpty == true
-                        ? e.title!
-                        : _sectionLabel(e.section),
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined,
-                      color: Colors.white38, size: 18),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () => _edit(e),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              e.content.isEmpty ? '(trống)' : e.content,
-              style: const TextStyle(
-                  color: Colors.white70, fontSize: 13, height: 1.4),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _sectionLabel(String s) => switch (s) {
-        'brief' => 'Tóm tắt',
-        'guidelines' => 'Hướng dẫn',
-        'progress' => 'Tiến độ',
-        'reference' => 'Tham chiếu',
-        'decisions' => 'Quyết định',
-        _ => s,
-      };
-
-  IconData _sectionIcon(String s) => switch (s) {
-        'brief' => Icons.summarize_outlined,
-        'guidelines' => Icons.rule,
-        'progress' => Icons.trending_up,
-        'reference' => Icons.link,
-        'decisions' => Icons.gavel,
-        _ => Icons.notes,
-      };
-}
-
-// ─── Team ────────────────────────────────────────────────────────────────────
-
-class _TeamTab extends StatefulWidget {
-  final String wsId;
-  const _TeamTab({required this.wsId});
-
-  @override
-  State<_TeamTab> createState() => _TeamTabState();
-}
-
-class _TeamTabState extends State<_TeamTab>
-    with AutomaticKeepAliveClientMixin {
-  final _api = CoworkApi();
-  List<CoworkMember> _members = [];
-  bool _loading = true;
-  String? _error;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final members = await _api.listMembers(widget.wsId);
-      if (!mounted) return;
-      setState(() {
-        _members = members;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    if (_loading) return const LoadingState(text: 'Đang tải thành viên…');
-    if (_error != null) return ErrorState(message: _error!, onRetry: _load);
-    if (_members.isEmpty) {
-      return const EmptyState(
-        icon: Icons.person_off_outlined,
-        message: 'Chưa có thành viên',
-        hint: 'Thêm agent vào workspace từ Web UI',
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _members.length,
-        itemBuilder: (ctx, i) => _memberCard(_members[i]),
-      ),
-    );
-  }
-
-  Widget _memberCard(CoworkMember m) {
-    return Card(
-      color: Colors.white.withValues(alpha: 0.04),
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: AppColors.cardBorder),
-      ),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: _roleColor(m.role).withValues(alpha: 0.18),
-          child: Icon(Icons.smart_toy_outlined,
-              color: _roleColor(m.role), size: 20),
-        ),
-        title: Text(m.memberId,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w600)),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 2),
-            Text(
-              m.persona?.isNotEmpty == true ? m.persona! : m.role,
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-            if (m.responsibilities != null &&
-                m.responsibilities!.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(m.responsibilities!,
-                  style: const TextStyle(color: Colors.white38, fontSize: 11),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
-            ],
-          ],
-        ),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: _roleColor(m.role).withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(m.role,
-              style: TextStyle(color: _roleColor(m.role), fontSize: 10)),
-        ),
-      ),
-    );
-  }
-
-  Color _roleColor(String role) => switch (role) {
-        'lead' => AppColors.accent,
-        'reviewer' => const Color(0xFFFFB74D),
-        'worker' => AppColors.cyan,
-        _ => Colors.white54,
-      };
-}
-
-// ─── Files ───────────────────────────────────────────────────────────────────
-
-class _FilesTab extends StatefulWidget {
-  final String wsId;
-  const _FilesTab({required this.wsId});
-
-  @override
-  State<_FilesTab> createState() => _FilesTabState();
-}
-
-class _FilesTabState extends State<_FilesTab>
-    with AutomaticKeepAliveClientMixin {
-  final _api = CoworkApi();
-  List<CoworkFile> _files = [];
-  bool _loading = true;
-  String? _error;
-
-  @override
-  bool get wantKeepAlive => true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final files = await _api.listFiles(widget.wsId);
-      // Directories first, then by path.
-      files.sort((a, b) {
-        if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-        return a.path.compareTo(b.path);
-      });
-      if (!mounted) return;
-      setState(() {
-        _files = files;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
-    }
-  }
-
-  Future<void> _open(CoworkFile f) async {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (_) => _CoworkFileViewer(wsId: widget.wsId, file: f),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    if (_loading) return const LoadingState(text: 'Đang tải tệp…');
-    if (_error != null) return ErrorState(message: _error!, onRetry: _load);
-    if (_files.isEmpty) {
-      return const EmptyState(
-        icon: Icons.folder_off_outlined,
-        message: 'Không có tệp trong workspace',
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      color: AppColors.accent,
-      backgroundColor: AppColors.surface,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _files.length,
-        itemBuilder: (ctx, i) => _row(_files[i]),
-      ),
-    );
-  }
-
-  Widget _row(CoworkFile f) {
-    return ListTile(
-      dense: true,
-      contentPadding:
-          EdgeInsets.only(left: 16.0 + f.depth * 14, right: 16),
-      leading: Icon(
-        f.isDir ? Icons.folder : Icons.insert_drive_file_outlined,
-        color: f.isDir ? const Color(0xFFFFB74D) : Colors.white38,
-        size: 18,
-      ),
-      title: Text(f.name,
-          style: TextStyle(
-              color: f.isDir ? Colors.white : Colors.white70, fontSize: 13)),
-      subtitle: f.isDir
-          ? null
-          : Text(_fmtSize(f.size),
-              style: const TextStyle(color: Colors.white24, fontSize: 11)),
-      onTap: f.isDir ? null : () => _open(f),
-    );
-  }
-
-  String _fmtSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-}
-
-class _CoworkFileViewer extends StatefulWidget {
-  final String wsId;
-  final CoworkFile file;
-  const _CoworkFileViewer({required this.wsId, required this.file});
-
-  @override
-  State<_CoworkFileViewer> createState() => _CoworkFileViewerState();
-}
-
-class _CoworkFileViewerState extends State<_CoworkFileViewer> {
-  final _api = CoworkApi();
-  String? _content;
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final (content, _) = await _api.fileContent(widget.wsId, widget.file.path);
-      if (!mounted) return;
-      setState(() {
-        _content = content;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = '$e';
-        _loading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FractionallySizedBox(
-      heightFactor: 0.9,
-      child: Column(
-        children: [
-          const SizedBox(height: 10),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.description_outlined,
-                    color: AppColors.cyan, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(widget.file.path,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                      overflow: TextOverflow.ellipsis),
-                ),
-                if (_content != null)
-                  IconButton(
-                    icon:
-                        const Icon(Icons.copy, color: Colors.white54, size: 18),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: _content!));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Đã sao chép')));
-                    },
-                  ),
-              ],
-            ),
-          ),
-          const Divider(color: AppColors.cardBorder, height: 1),
-          Expanded(
-            child: _loading
-                ? const LoadingState()
-                : _error != null
-                    ? ErrorState(message: _error!, onRetry: _load)
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.all(14),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: SelectableText(
-                            _content!.isEmpty ? '(tệp trống)' : _content!,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ),
-          ),
-        ],
       ),
     );
   }

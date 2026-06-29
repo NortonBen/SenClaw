@@ -287,6 +287,38 @@ class RelayService {
     );
   }
 
+  /// Like [apiRequest] but sends [rawBody] verbatim (no extra JSON encoding) —
+  /// used by the Space-app webview proxy, which forwards the browser's exact
+  /// request body. Returns the response (which may be base64 binary).
+  Future<ApiResponse> apiRequestRaw(
+    String method,
+    String path, {
+    String? rawBody,
+  }) async {
+    if (_isDisposed) {
+      throw const ApiException(0, 'relay disposed');
+    }
+    final requestId = '${DateTime.now().millisecondsSinceEpoch}-${_apiSeq++}';
+    final completer = Completer<ApiResponse>();
+    _pendingApi[requestId] = completer;
+
+    final meta = jsonEncode({
+      'requestId': requestId,
+      'method': method.toUpperCase(),
+      'path': path,
+      if (rawBody != null && rawBody.isNotEmpty) 'body': rawBody,
+    });
+    _outboundController.add(_makeControl(RelayControlType.apiReq, meta));
+
+    return completer.future.timeout(
+      _apiTimeout,
+      onTimeout: () {
+        _pendingApi.remove(requestId);
+        throw ApiException(0, 'request timed out: $method $path');
+      },
+    );
+  }
+
   void _failPendingApi(Object error) {
     if (_pendingApi.isEmpty) return;
     final pending = List.of(_pendingApi.values);

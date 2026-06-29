@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/agent_model.dart';
+import '../theme/tokens.dart';
 
 class AgentSelectScreen extends StatelessWidget {
   final List<AgentInfo> agents;
@@ -26,10 +27,11 @@ class AgentSelectScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF16162E),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -40,7 +42,7 @@ class AgentSelectScreen extends StatelessWidget {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white24,
+              color: c.borderStrong,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -49,12 +51,12 @@ class AgentSelectScreen extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
               children: [
-                const Icon(Icons.smart_toy_outlined, color: Colors.cyanAccent, size: 20),
+                const Icon(Icons.person_outline, color: AppTokens.cyan, size: 20),
                 const SizedBox(width: 10),
-                const Text(
-                  'Chọn agent',
+                Text(
+                  'Chọn profile',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: c.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -63,7 +65,7 @@ class AgentSelectScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          const Divider(color: Colors.white12, height: 1),
+          Divider(color: c.border, height: 1),
           ConstrainedBox(
             constraints: BoxConstraints(
               maxHeight: MediaQuery.of(context).size.height * 0.5,
@@ -78,11 +80,11 @@ class AgentSelectScreen extends StatelessWidget {
                   onTap: () => Navigator.pop(context, agent),
                   leading: CircleAvatar(
                     backgroundColor:
-                        isSelected ? Colors.purpleAccent.withOpacity(0.3) : Colors.white10,
+                        isSelected ? c.accentSoft : c.surfaceAlt,
                     child: Text(
                       agent.name.isNotEmpty ? agent.name[0].toUpperCase() : 'A',
                       style: TextStyle(
-                        color: isSelected ? Colors.purpleAccent : Colors.white70,
+                        color: isSelected ? c.accent : c.textSecondary,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -90,17 +92,17 @@ class AgentSelectScreen extends StatelessWidget {
                   title: Text(
                     agent.name,
                     style: TextStyle(
-                      color: isSelected ? Colors.purpleAccent : Colors.white,
+                      color: isSelected ? c.accent : c.textPrimary,
                       fontWeight:
                           isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                   subtitle: Text(
                     agent.folder,
-                    style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
                   ),
                   trailing: isSelected
-                      ? const Icon(Icons.check_circle, color: Colors.purpleAccent, size: 20)
+                      ? Icon(Icons.check_circle, color: c.accent, size: 20)
                       : null,
                 );
               },

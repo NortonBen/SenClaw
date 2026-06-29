@@ -85,6 +85,12 @@ const URL_IMAGE_REGEX: &str = r"(https?://\S+?\.(?:png|jpe?g|gif|webp))(?:\?\S*)
 /// Matches @/abs/path/to/img.{png,jpg,...}
 const AT_PATH_IMAGE_REGEX: &str = r"(?:^|\s)@(/[^\s'<>]+\.(?:png|jpe?g|gif|webp))";
 
+/// Regex for detecting inline base64 `data:` image URLs embedded in text.
+/// Lets channels that can only carry text (e.g. the mobile app relay) attach
+/// images by appending a data URL to the message body.
+const DATA_IMAGE_REGEX: &str =
+    r"(data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)";
+
 /// Load image as base64 data URI for Anthropic API.
 ///
 /// Supports:
@@ -225,11 +231,27 @@ pub fn build_agent_input(prompt: &str, attachments: Option<&[ImageAttachment]>) 
     let mut image_blocks: Vec<ContentBlock> = vec![];
 
     for src in &all_srcs {
+        // Inline data: URLs carry their own mime + base64 — parse directly so
+        // jpeg/png is preserved (load_image_as_base64 drops the mime for these).
+        if let Some((mime_type, base64_data)) = parse_data_uri(src) {
+            image_blocks.push(ContentBlock {
+                block_type: "image".to_string(),
+                text: None,
+                source: Some(ImageSource {
+                    source_type: "base64".to_string(),
+                    media_type: mime_type,
+                    data: base64_data,
+                }),
+            });
+            continue;
+        }
         match load_image_as_base64(src) {
             Ok(data_uri) => {
-                // Parse MIME type from data URI
+                // Parse MIME type from data URI (strip any leading `data:`).
                 let mime_type = if let Some(mime_start) = data_uri.find(';') {
-                    data_uri[..mime_start].to_string()
+                    data_uri[..mime_start]
+                        .trim_start_matches("data:")
+                        .to_string()
                 } else {
                     "image/png".to_string()
                 };
@@ -257,8 +279,9 @@ pub fn build_agent_input(prompt: &str, attachments: Option<&[ImageAttachment]>) 
         }
     }
 
-    // Replace @/path references with [image:basename] placeholders
-    let cleaned_text = strip_at_path_refs(prompt);
+    // Replace @/path references with [image:basename] placeholders and collapse
+    // inline base64 data: URLs to a short [image] marker (no base64 in the text).
+    let cleaned_text = strip_data_urls(&strip_at_path_refs(prompt));
 
     let mut blocks: Vec<ContentBlock> = vec![];
 
@@ -340,7 +363,39 @@ fn detect_images_in_text(text: &str) -> Vec<String> {
         }
     }
 
+    // Detect inline base64 data: image URLs (text-only channels).
+    if let Ok(re) = Regex::new(DATA_IMAGE_REGEX) {
+        for cap in re.captures_iter(text) {
+            if let Some(url) = cap.get(1) {
+                found.push(url.as_str().to_string());
+            }
+        }
+    }
+
     found
+}
+
+/// Parse a `data:<mime>;base64,<data>` URL into `(mime, base64)`. Returns None
+/// if the string isn't a base64 data URL.
+fn parse_data_uri(src: &str) -> Option<(String, String)> {
+    let rest = src.strip_prefix("data:")?;
+    let semi = rest.find(";base64,")?;
+    let mime = rest[..semi].to_string();
+    let data = rest[semi + ";base64,".len()..].to_string();
+    if mime.is_empty() || data.is_empty() {
+        return None;
+    }
+    Some((mime, data))
+}
+
+/// Replace inline base64 `data:` image URLs with a short `[image]` placeholder
+/// so the (huge) base64 blob never reaches the model's text block.
+fn strip_data_urls(text: &str) -> String {
+    if let Ok(re) = Regex::new(DATA_IMAGE_REGEX) {
+        re.replace_all(text, " [image]").to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 /// Replace `@/path/to/img.png` with [image:img.png] placeholder.
@@ -393,6 +448,40 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert!(found.contains(&"/path/to/image.png".to_string()));
         assert!(found.contains(&"/another/photo.webp".to_string()));
+    }
+
+    #[test]
+    fn test_detect_and_build_data_url_image() {
+        // A 1x1 transparent PNG data URL appended to the message body, as the
+        // mobile app sends image attachments over the text-only relay channel.
+        const PNG: &str =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+        let prompt = format!("Mô tả ảnh này {PNG}");
+        let found = detect_images_in_text(&prompt);
+        assert_eq!(found.len(), 1, "data: URL should be detected");
+        assert!(found[0].starts_with("data:image/png;base64,"));
+
+        let result = build_agent_input(&prompt, None);
+        match result.input {
+            Input::Blocks(blocks) => {
+                let img = blocks
+                    .iter()
+                    .find(|b| b.block_type == "image")
+                    .expect("expected an image block");
+                let src = img.source.as_ref().unwrap();
+                assert_eq!(src.media_type, "image/png");
+                assert_eq!(src.source_type, "base64");
+                assert!(!src.data.contains("data:"), "base64 only, no prefix");
+                // The text block must NOT carry the raw base64 blob.
+                let text_block = blocks.iter().find(|b| b.block_type == "text");
+                if let Some(tb) = text_block {
+                    let t = tb.text.clone().unwrap_or_default();
+                    assert!(!t.contains("base64,"));
+                    assert!(t.contains("[image]"));
+                }
+            }
+            Input::Text(_) => panic!("expected Blocks with an image"),
+        }
     }
 
     #[test]

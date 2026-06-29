@@ -2,22 +2,18 @@ import 'package:flutter/material.dart';
 import 'pairing_screen.dart';
 import '../services/language_service.dart';
 import '../services/config_service.dart';
+import '../theme/tokens.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Scaffold(
       body: Container(
         width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF0D0D1F), Color(0xFF16162E), Color(0xFF0D0D1F)],
-          ),
-        ),
+        decoration: BoxDecoration(color: c.bg),
         child: ListenableBuilder(
           listenable: LanguageService(),
           builder: (context, _) {
@@ -31,9 +27,9 @@ class WelcomeScreen extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         IconButton(
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.settings,
-                            color: Colors.white70,
+                            color: c.textSecondary,
                           ),
                           onPressed: () => _showSettingsDialog(context),
                         ),
@@ -55,7 +51,7 @@ class WelcomeScreen extends StatelessWidget {
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF5BBFE8).withOpacity(0.2),
+                          color: c.accent.withValues(alpha: 0.2),
                           blurRadius: 60,
                           spreadRadius: 5,
                         ),
@@ -74,10 +70,10 @@ class WelcomeScreen extends StatelessWidget {
                   const SizedBox(height: 30),
                   Text(
                     t('welcome_title'),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      color: c.textPrimary,
                       letterSpacing: 1.2,
                     ),
                   ),
@@ -86,7 +82,7 @@ class WelcomeScreen extends StatelessWidget {
                     t('welcome_subtitle'),
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.white.withOpacity(0.7),
+                      color: c.textSecondary,
                     ),
                   ),
                   const Spacer(),
@@ -97,12 +93,10 @@ class WelcomeScreen extends StatelessWidget {
                       height: 56,
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(20),
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF5BBFE8), Color(0xFF3AAAD4)],
-                        ),
+                        color: c.accent,
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(0xFF5BBFE8).withOpacity(0.3),
+                            color: c.accent.withValues(alpha: 0.3),
                             blurRadius: 25,
                             offset: const Offset(0, 8),
                           ),
@@ -127,7 +121,7 @@ class WelcomeScreen extends StatelessWidget {
                         child: Text(
                           t('start_now'),
                           style: const TextStyle(
-                            color: Colors.white,
+                            color: Color(0xFF0A1A22),
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
@@ -145,15 +139,15 @@ class WelcomeScreen extends StatelessWidget {
                           : hub;
                       return TextButton.icon(
                         onPressed: () => _showSettingsDialog(context),
-                        icon: const Icon(
+                        icon: Icon(
                           Icons.link,
-                          color: Colors.white70,
+                          color: c.textSecondary,
                           size: 18,
                         ),
                         label: Text(
                           'Hub URL: $displayHub',
                           style: TextStyle(
-                            color: Colors.white.withOpacity(0.75),
+                            color: c.textSecondary,
                             fontSize: 12,
                           ),
                           overflow: TextOverflow.ellipsis,
@@ -172,6 +166,7 @@ class WelcomeScreen extends StatelessWidget {
   }
 
   Widget _buildLanguageButton(BuildContext context, String code, String label) {
+    final c = context.colors;
     final isSelected = LanguageService().currentLocale.languageCode == code;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -180,21 +175,17 @@ class WelcomeScreen extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF5BBFE8).withOpacity(0.15)
-              : Colors.transparent,
+          color: isSelected ? c.accentSoft : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isSelected
-                ? const Color(0xFF5BBFE8)
-                : Colors.white.withOpacity(0.15),
+            color: isSelected ? c.accent : c.border,
             width: 1,
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : Colors.white.withOpacity(0.5),
+            color: isSelected ? c.accent : c.textMuted,
             fontSize: 12,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
           ),
@@ -215,23 +206,24 @@ class WelcomeScreen extends StatelessWidget {
     showDialog(
       context: context,
       builder: (context) {
+        final c = context.colors;
         return AlertDialog(
-          backgroundColor: const Color(0xFF16162E),
+          backgroundColor: c.surface,
           title: Text(
             t('settings_hub_title'),
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: c.textPrimary),
           ),
           content: TextField(
             controller: controller,
-            style: const TextStyle(color: Colors.white),
+            style: TextStyle(color: c.textPrimary),
             decoration: InputDecoration(
               labelText: 'Hub URL',
-              labelStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
-              enabledBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24),
+              labelStyle: TextStyle(color: c.textMuted),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: c.border),
               ),
-              focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0xFF5BBFE8)),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: c.accent),
               ),
             ),
           ),
@@ -240,7 +232,7 @@ class WelcomeScreen extends StatelessWidget {
               onPressed: () => Navigator.pop(context),
               child: Text(
                 t('cancel'),
-                style: const TextStyle(color: Colors.white54),
+                style: TextStyle(color: c.textMuted),
               ),
             ),
             TextButton(
@@ -253,7 +245,7 @@ class WelcomeScreen extends StatelessWidget {
               },
               child: Text(
                 t('save'),
-                style: const TextStyle(color: Color(0xFF5BBFE8)),
+                style: TextStyle(color: c.accent),
               ),
             ),
           ],

@@ -1,197 +1,215 @@
-// Models mirroring `/api/cowork/*` JSON shapes. The Rust structs serialise
-// with `#[serde(rename_all = "camelCase")]` (src/types.rs) and timestamps are
-// ISO-8601 *strings* (unlike the int epochs used by code/space).
+/// Models mirroring the rebuilt Cowork (DAG teams) API at `/api/cowork/*`.
+/// NOTE: these structs serialise with snake_case keys (manager_folder,
+/// workspace_dir, created_at, handoff_rules, team_id, …) — unlike most other
+/// app models. Timestamps are ISO-8601 strings.
+library;
 
-class CoworkWorkspace {
-  final String id;
-  final String name;
-  final String? description;
-  final String status;
-  final String rootDir;
-  final String? workingDir;
-  final String createdAt;
-  final String updatedAt;
+class TeamMember {
+  final String folder;
+  final String? role;
+  final String? responsibilities;
+  final String? triggers;
+  final String? handoffRules;
+  final String? acceptanceCriteria;
+  final String? outputFormat;
+  final String? sla;
+  final String? limits;
 
-  const CoworkWorkspace({
-    required this.id,
-    required this.name,
-    this.description,
-    required this.status,
-    this.rootDir = '',
-    this.workingDir,
-    this.createdAt = '',
-    this.updatedAt = '',
+  const TeamMember({
+    required this.folder,
+    this.role,
+    this.responsibilities,
+    this.triggers,
+    this.handoffRules,
+    this.acceptanceCriteria,
+    this.outputFormat,
+    this.sla,
+    this.limits,
   });
 
-  factory CoworkWorkspace.fromJson(Map<String, dynamic> j) => CoworkWorkspace(
-    id: (j['id'] ?? '').toString(),
-    name: (j['name'] ?? '').toString(),
-    description: j['description'] as String?,
-    status: (j['status'] ?? '').toString(),
-    rootDir: (j['rootDir'] ?? '').toString(),
-    workingDir: j['workingDir'] as String?,
-    createdAt: (j['createdAt'] ?? '').toString(),
-    updatedAt: (j['updatedAt'] ?? '').toString(),
-  );
+  factory TeamMember.fromJson(Map<String, dynamic> j) => TeamMember(
+        folder: (j['folder'] ?? '').toString(),
+        role: j['role'] as String?,
+        responsibilities: j['responsibilities'] as String?,
+        triggers: j['triggers'] as String?,
+        handoffRules: j['handoff_rules'] as String?,
+        acceptanceCriteria: j['acceptance_criteria'] as String?,
+        outputFormat: j['output_format'] as String?,
+        sla: j['sla'] as String?,
+        limits: j['limits'] as String?,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'folder': folder,
+        'role': ?role,
+        'responsibilities': ?responsibilities,
+        'triggers': ?triggers,
+        'handoff_rules': ?handoffRules,
+        'acceptance_criteria': ?acceptanceCriteria,
+        'output_format': ?outputFormat,
+        'sla': ?sla,
+        'limits': ?limits,
+      };
 }
 
-class CoworkTask {
+class CoworkTeamSettings {
+  final String? managerPreamble;
+  final List<String>? managerTools;
+  final bool? autoCreateTasks;
+
+  const CoworkTeamSettings({
+    this.managerPreamble,
+    this.managerTools,
+    this.autoCreateTasks,
+  });
+
+  factory CoworkTeamSettings.fromJson(Map<String, dynamic> j) =>
+      CoworkTeamSettings(
+        managerPreamble: j['manager_preamble'] as String?,
+        managerTools:
+            (j['manager_tools'] as List?)?.map((e) => e.toString()).toList(),
+        autoCreateTasks: j['auto_create_tasks'] as bool?,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'manager_preamble': ?managerPreamble,
+        'manager_tools': ?managerTools,
+        'auto_create_tasks': ?autoCreateTasks,
+      };
+}
+
+class CoworkTeam {
   final String id;
-  final String workspaceId;
+  final String name;
+  final String managerFolder;
+  final List<TeamMember> members;
+  final String? workspaceDir;
+  final String createdAt;
+  final String jid;
+  final CoworkTeamSettings settings;
+
+  const CoworkTeam({
+    required this.id,
+    required this.name,
+    required this.managerFolder,
+    this.members = const [],
+    this.workspaceDir,
+    this.createdAt = '',
+    this.jid = '',
+    this.settings = const CoworkTeamSettings(),
+  });
+
+  factory CoworkTeam.fromJson(Map<String, dynamic> j) => CoworkTeam(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        managerFolder: (j['manager_folder'] ?? '').toString(),
+        members: ((j['members'] as List?) ?? const [])
+            .map((e) => TeamMember.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        workspaceDir: j['workspace_dir'] as String?,
+        createdAt: (j['created_at'] ?? '').toString(),
+        jid: (j['jid'] ?? '').toString(),
+        settings: j['settings'] is Map
+            ? CoworkTeamSettings.fromJson(
+                (j['settings'] as Map).cast<String, dynamic>())
+            : const CoworkTeamSettings(),
+      );
+}
+
+class CoworkTemplate {
+  final String id;
+  final String name;
+  final String description;
+  final String icon;
+  final String manager;
+  final String managerRole;
+  final List<TeamMember> members;
+  final CoworkTeamSettings settings;
+  final bool builtin;
+
+  const CoworkTemplate({
+    required this.id,
+    required this.name,
+    this.description = '',
+    this.icon = '🧩',
+    this.manager = '',
+    this.managerRole = 'lead',
+    this.members = const [],
+    this.settings = const CoworkTeamSettings(),
+    this.builtin = false,
+  });
+
+  factory CoworkTemplate.fromJson(Map<String, dynamic> j) => CoworkTemplate(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        description: (j['description'] ?? '').toString(),
+        icon: (j['icon'] ?? '🧩').toString(),
+        manager: (j['manager'] ?? '').toString(),
+        managerRole: (j['manager_role'] ?? 'lead').toString(),
+        members: ((j['members'] as List?) ?? const [])
+            .map((e) => TeamMember.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        settings: j['settings'] is Map
+            ? CoworkTeamSettings.fromJson(
+                (j['settings'] as Map).cast<String, dynamic>())
+            : const CoworkTeamSettings(),
+        builtin: j['builtin'] as bool? ?? false,
+      );
+}
+
+class CoworkPersona {
+  final String name;
+  final String description;
+  const CoworkPersona({required this.name, this.description = ''});
+  factory CoworkPersona.fromJson(Map<String, dynamic> j) => CoworkPersona(
+        name: (j['name'] ?? '').toString(),
+        description: (j['description'] ?? '').toString(),
+      );
+}
+
+class CoworkTeamTask {
+  final String id;
+  final String teamId;
   final String title;
   final String? description;
-  final String status;
+  final String status; // backlog|todo|in_progress|review|done|blocked
   final String? assignee;
   final String? reviewer;
-  final String priority;
-  final String createdBy;
-  final String createdAt;
+  final String priority; // low|medium|high|critical
+  final List<String> dependsOn;
   final String? resultOutput;
-
-  const CoworkTask({
-    required this.id,
-    required this.workspaceId,
-    required this.title,
-    this.description,
-    required this.status,
-    this.assignee,
-    this.reviewer,
-    this.priority = 'normal',
-    this.createdBy = '',
-    this.createdAt = '',
-    this.resultOutput,
-  });
-
-  factory CoworkTask.fromJson(Map<String, dynamic> j) => CoworkTask(
-    id: (j['id'] ?? '').toString(),
-    workspaceId: (j['workspaceId'] ?? '').toString(),
-    title: (j['title'] ?? '').toString(),
-    description: j['description'] as String?,
-    status: (j['status'] ?? 'todo').toString(),
-    assignee: j['assignee'] as String?,
-    reviewer: j['reviewer'] as String?,
-    priority: (j['priority'] ?? 'normal').toString(),
-    createdBy: (j['createdBy'] ?? '').toString(),
-    createdAt: (j['createdAt'] ?? '').toString(),
-    resultOutput: j['resultOutput'] as String?,
-  );
-}
-
-class CoworkMessage {
-  final String id;
-  final String workspaceId;
-  final String fromMember;
-  final String? toMember;
-  final String messageType;
-  final String content;
-  final String? taskId;
-  final bool isRead;
-  final String createdAt;
-
-  const CoworkMessage({
-    required this.id,
-    required this.workspaceId,
-    required this.fromMember,
-    this.toMember,
-    this.messageType = 'status',
-    required this.content,
-    this.taskId,
-    this.isRead = false,
-    this.createdAt = '',
-  });
-
-  factory CoworkMessage.fromJson(Map<String, dynamic> j) => CoworkMessage(
-    id: (j['id'] ?? '').toString(),
-    workspaceId: (j['workspaceId'] ?? '').toString(),
-    fromMember: (j['fromMember'] ?? '').toString(),
-    toMember: j['toMember'] as String?,
-    messageType: (j['messageType'] ?? 'status').toString(),
-    content: (j['content'] ?? '').toString(),
-    taskId: j['taskId'] as String?,
-    isRead: j['isRead'] as bool? ?? false,
-    createdAt: (j['createdAt'] ?? '').toString(),
-  );
-}
-
-class CoworkFile {
-  final String name;
-  final String path; // relative to workspace root
-  final bool isDir;
-  final int size;
-
-  const CoworkFile({
-    required this.name,
-    required this.path,
-    required this.isDir,
-    this.size = 0,
-  });
-
-  factory CoworkFile.fromJson(Map<String, dynamic> j) => CoworkFile(
-    name: (j['name'] ?? '').toString(),
-    path: (j['path'] ?? '').toString(),
-    isDir: j['isDir'] as bool? ?? false,
-    size: (j['size'] as num?)?.toInt() ?? 0,
-  );
-
-  int get depth => path.split('/').where((s) => s.isNotEmpty).length - 1;
-}
-
-class CoworkMember {
-  final String workspaceId;
-  final String memberId;
-  final String role;
-  final String? persona;
-  final String? responsibilities;
-
-  const CoworkMember({
-    required this.workspaceId,
-    required this.memberId,
-    required this.role,
-    this.persona,
-    this.responsibilities,
-  });
-
-  factory CoworkMember.fromJson(Map<String, dynamic> j) => CoworkMember(
-    workspaceId: (j['workspaceId'] ?? '').toString(),
-    memberId: (j['memberId'] ?? '').toString(),
-    role: (j['role'] ?? '').toString(),
-    persona: j['persona'] as String?,
-    responsibilities: j['responsibilities'] as String?,
-  );
-}
-
-class CoworkBoardEntry {
-  final String id;
-  final String workspaceId;
-  final String section;
-  final String? title;
-  final String content;
-  final String author;
-  final bool pinned;
   final String createdAt;
   final String updatedAt;
 
-  const CoworkBoardEntry({
+  const CoworkTeamTask({
     required this.id,
-    required this.workspaceId,
-    required this.section,
-    this.title,
-    required this.content,
-    this.author = '',
-    this.pinned = false,
+    required this.teamId,
+    required this.title,
+    this.description,
+    this.status = 'todo',
+    this.assignee,
+    this.reviewer,
+    this.priority = 'medium',
+    this.dependsOn = const [],
+    this.resultOutput,
     this.createdAt = '',
     this.updatedAt = '',
   });
 
-  factory CoworkBoardEntry.fromJson(Map<String, dynamic> j) => CoworkBoardEntry(
-    id: (j['id'] ?? '').toString(),
-    workspaceId: (j['workspaceId'] ?? '').toString(),
-    section: (j['section'] ?? '').toString(),
-    title: j['title'] as String?,
-    content: (j['content'] ?? '').toString(),
-    author: (j['author'] ?? '').toString(),
-    pinned: j['pinned'] as bool? ?? false,
-    createdAt: (j['createdAt'] ?? '').toString(),
-    updatedAt: (j['updatedAt'] ?? '').toString(),
-  );
+  factory CoworkTeamTask.fromJson(Map<String, dynamic> j) => CoworkTeamTask(
+        id: (j['id'] ?? '').toString(),
+        teamId: (j['team_id'] ?? '').toString(),
+        title: (j['title'] ?? '').toString(),
+        description: j['description'] as String?,
+        status: (j['status'] ?? 'todo').toString(),
+        assignee: j['assignee'] as String?,
+        reviewer: j['reviewer'] as String?,
+        priority: (j['priority'] ?? 'medium').toString(),
+        dependsOn: ((j['depends_on'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        resultOutput: j['result_output'] as String?,
+        createdAt: (j['created_at'] ?? '').toString(),
+        updatedAt: (j['updated_at'] ?? '').toString(),
+      );
 }
