@@ -854,26 +854,40 @@ impl Gemma4TextModel {
         // multi-token prefill — single-token decode (`seq == 1`) attends the
         // whole cache, which is correct for full attention, so `None`.
         //
-        // Sliding-window layers need a windowed mask at EVERY step, including
-        // single-token decode: `create_causal_mask(1, offset, window)` yields a
-        // `[1, offset+1]` row that restricts the query to the last
-        // `sliding_window` keys. Omitting it on decode (as the gemma3 path does)
-        // lets sliding layers attend the full cache — out-of-distribution for
-        // layers trained with a 512 window, which degrades long generations.
-        // The KV buffer is still never shrunk (memory grows with the sequence,
-        // same trade-off as the rest of this crate); only attention is windowed.
+        // Sliding-window layers need an explicit windowed causal mask during
+        // multi-token prefill: `create_causal_mask(seq, offset, window)`
+        // restricts each query to the last `sliding_window` keys.
+        //
+        // On single-token decode (`seq == 1`) sliding layers also use `None`:
+        // their KV cache is itself bounded to `sliding_window` (see
+        // `make_caches` → `with_decode_window`), so after the per-step eviction
+        // the buffer holds *exactly* the in-window keys and the query attends
+        // all of them — same as full-attention decode. This is equivalent to
+        // the old `create_causal_mask(1, offset, window)` (which masked the
+        // out-of-window keys to zero) but avoids both storing those keys and
+        // rebuilding an O(context) mask on every decode step.
+        //
+        // (This is sound only because the sliding cache is windowed. If a
+        // sliding layer ran on an unbounded cache, `None` here would let it
+        // attend the full history — the latent gemma3 decode bug. `make_caches`
+        // guarantees the windowing whenever `window < cap`, and when
+        // `window >= cap` the buffer never exceeds the window anyway.)
         let seq = scaled_emb.dim(1);
         let full_mask = if seq <= 1 {
             None
         } else {
             Some(create_causal_mask(seq, Some(rope_off), None, None)?)
         };
-        let sliding_mask = Some(create_causal_mask(
-            seq,
-            Some(rope_off),
-            Some(self.args.sliding_window),
-            None,
-        )?);
+        let sliding_mask = if seq <= 1 {
+            None
+        } else {
+            Some(create_causal_mask(
+                seq,
+                Some(rope_off),
+                Some(self.args.sliding_window),
+                None,
+            )?)
+        };
 
         let mut h = scaled_emb;
         // Captured (keys, values) per layer for KV reuse.
@@ -986,15 +1000,33 @@ impl Model {
 
     /// FP16 KV cache for non-shared layers only; KV-shared layers hold `None`
     /// and reuse intermediates. Length == `num_hidden_layers`.
+    ///
+    /// Sliding-window layers get a **decode-time windowed** cache capped at
+    /// `sliding_window`: prefill stays unbounded (every query keeps its full
+    /// window; the prefix-cache snapshot is exact), but once decode starts the
+    /// KV is evicted to the last `sliding_window` keys. Since those layers only
+    /// ever attend the last `sliding_window` positions, this changes nothing
+    /// about the output (the dropped keys were already masked to zero) while
+    /// bounding decode-phase KV memory and per-step attention cost to the window
+    /// instead of the full sequence length. Full-attention layers keep the
+    /// global `max_kv_tokens` cap.
     pub fn make_caches(&self, max_kv_tokens: i32) -> Vec<Option<KvCache>> {
         let cap = max_kv_tokens.max(1);
+        let window = self.args.sliding_window.max(1);
         let first_shared = self.args.first_kv_shared();
         (0..self.args.num_hidden_layers)
             .map(|i| {
-                if first_shared <= 0 || i < first_shared {
-                    Some(KvCache::fp16_with_max(cap))
+                let owns_kv = first_shared <= 0 || i < first_shared;
+                if !owns_kv {
+                    return None;
+                }
+                let is_sliding = self.model.layer_types[i as usize] != "full_attention";
+                if is_sliding && window < cap {
+                    Some(KvCache::fp16_decode_windowed(cap, window))
                 } else {
-                    None
+                    // Full-attention layer, or window ≥ cap (the global cap is
+                    // already ≤ window, so decode never exceeds the window).
+                    Some(KvCache::fp16_with_max(cap))
                 }
             })
             .collect()

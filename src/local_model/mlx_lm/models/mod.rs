@@ -1,4 +1,6 @@
 pub mod bonsai_q1;
+/// DeepSeek-V2 (MLA + DeepSeekMoE) — `mlx-community/DeepSeek-Coder-V2-Lite-*`.
+pub mod deepseek_v2;
 pub mod falcon_mamba;
 pub mod gated_delta;
 pub mod gemma2;

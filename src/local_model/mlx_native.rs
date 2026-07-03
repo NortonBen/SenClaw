@@ -34,6 +34,7 @@ enum ModelKind {
     Gemma2(super::mlx_lm::models::gemma2::Gemma2CausalLM),
     Gemma3(super::mlx_lm::models::gemma3::Model),
     Gemma4(super::mlx_lm::models::gemma4::Model),
+    DeepSeekV2(super::mlx_lm::models::deepseek_v2::Model),
     Mamba2(super::mlx_lm::models::mamba2::Model),
     FalconMamba(super::mlx_lm::models::falcon_mamba::Model),
     BonsaiQ1(super::mlx_lm::models::bonsai_q1::LoadedBonsaiQ1),
@@ -49,6 +50,7 @@ impl ModelKind {
             Self::Gemma2(_) => "gemma2",
             Self::Gemma3(_) => "gemma3",
             Self::Gemma4(_) => "gemma4",
+            Self::DeepSeekV2(_) => "deepseek_v2",
             Self::Mamba2(_) => "mamba2",
             Self::FalconMamba(_) => "falcon_mamba",
             Self::BonsaiQ1(_) => "bonsai_q1",
@@ -72,6 +74,7 @@ impl ModelKind {
             Self::Gemma2(m) => m.resolve_special_tokens(template, tokenizer),
             Self::Gemma3(m) => m.resolve_special_tokens(template, tokenizer),
             Self::Gemma4(m) => m.resolve_special_tokens(template, tokenizer),
+            Self::DeepSeekV2(m) => m.resolve_special_tokens(template, tokenizer),
             Self::Mamba2(m) => m.resolve_special_tokens(template, tokenizer),
             Self::FalconMamba(m) => m.resolve_special_tokens(template, tokenizer),
             Self::BonsaiQ1(b) => b.resolve_special_tokens(template, tokenizer),
@@ -93,6 +96,7 @@ impl ModelKind {
             Self::Gemma2(m) => m.markers(),
             Self::Gemma3(m) => m.markers(),
             Self::Gemma4(m) => m.markers(),
+            Self::DeepSeekV2(m) => m.markers(),
             Self::Mamba2(m) => m.markers(),
             Self::FalconMamba(m) => m.markers(),
             Self::BonsaiQ1(b) => b.markers(),
@@ -112,6 +116,7 @@ impl ModelKind {
             Self::Gemma2(m) => m.stop_token_ids(tokenizer),
             Self::Gemma3(m) => m.stop_token_ids(tokenizer),
             Self::Gemma4(m) => m.stop_token_ids(tokenizer),
+            Self::DeepSeekV2(m) => m.stop_token_ids(tokenizer),
             Self::Mamba2(m) => m.stop_token_ids(tokenizer),
             Self::FalconMamba(m) => m.stop_token_ids(tokenizer),
             Self::BonsaiQ1(b) => b.stop_token_ids(tokenizer),
@@ -601,6 +606,16 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
             let kvh = m.args.num_key_value_heads;
             (ModelKind::Gemma4(m), n, hd, kvh)
         }
+        Arch::DeepSeekV2 => {
+            let m = load_deepseek_v2_any(model_dir)
+                .map_err(|e| anyhow::anyhow!("load_deepseek_v2 failed: {e:?}"))?;
+            let n = m.args.num_hidden_layers as usize;
+            // Nominal head_dim/kv_heads — only used to size TurboQuant, which
+            // MLA does not use (it caches expanded K/V via fp16_with_max).
+            let hd = m.args.q_head_dim();
+            let kvh = m.args.num_key_value_heads;
+            (ModelKind::DeepSeekV2(m), n, hd, kvh)
+        }
         Arch::Mamba2 => {
             let m = load_mamba2_any(model_dir)
                 .map_err(|e| anyhow::anyhow!("load_mamba2 failed: {e:?}"))?;
@@ -1087,24 +1102,39 @@ fn generate_with_cache(
     // over all 192 slots). An EXPLICIT `max_kv_tokens` is honoured verbatim — the
     // user has opted into the RAM cost for more context.
     let kv_mult = state.model.kv_recurrence_multiplier();
-    let max_kv_tokens = if kv_mult > 1 && gen_opt.max_kv_tokens.is_none() {
-        // ~4 GB live-KV target: bounds RAM hard (was ~20–30 GB) while leaving
-        // enough window (~2.4 K tokens for Ouro) for an agentic system prompt +
-        // tool schemas. Explicit `max_kv_tokens` bypasses this entirely.
-        const LOOPED_KV_BUDGET_BYTES: i64 = 4 * 1024 * 1024 * 1024;
-        // per token, summed over all KV slots: n_layers × n_kv_heads × head_dim
-        // × 2 (K+V) × 2 B (fp16). `n_layers` here is already total_ut_steps×48.
+    let max_kv_tokens = if gen_opt.max_kv_tokens.is_none() {
+        // Bound live-KV RAM to a fixed byte budget when the window isn't set
+        // explicitly. This is a **no-op for low-per-token dense models** (the
+        // budget window exceeds `DEFAULT_KV_WINDOW_TOKENS`, so the `.clamp` keeps
+        // the default), but it caps the archs whose KV would otherwise balloon on
+        // the 20 480-token default:
+        //   - **Looped LMs (Ouro)** — `kv_mult`× slots (`n_layers` already
+        //     ×total_ut_steps); the default reached ~20–30 GB.
+        //   - **MLA (DeepSeek)** — caches the *expanded* K-192 + V-128 per head
+        //     × 16 heads × 27 layers ≈ 264 KB/token, so 20 480 tokens is ~5.4 GB
+        //     KV → >15 GB total with the 8.3 GB of 4-bit weights.
+        // An EXPLICIT `max_kv_tokens` bypasses this — the user opted into the RAM
+        // cost for a larger context window.
+        const KV_BUDGET_BYTES: i64 = 4 * 1024 * 1024 * 1024;
+        // Per token over all KV slots: n_layers × n_kv_heads × head_dim × 2 (K+V)
+        // × 2 B (fp16). Uses `head_dim` for both K and V (slightly conservative
+        // for MLA, whose V dim is smaller than K).
         let per_token = (n_layers as i64)
             * (state.head_dim.max(1) as i64)
             * (state.n_kv_heads.max(1) as i64)
             * 4;
         let budget_window =
-            (LOOPED_KV_BUDGET_BYTES / per_token.max(1)).clamp(1024, max_kv_tokens as i64) as i32;
+            (KV_BUDGET_BYTES / per_token.max(1)).clamp(1024, max_kv_tokens as i64) as i32;
         if budget_window < max_kv_tokens {
-            let budget_gib = LOOPED_KV_BUDGET_BYTES / (1024 * 1024 * 1024);
+            let budget_gib = KV_BUDGET_BYTES / (1024 * 1024 * 1024);
+            let why = if kv_mult > 1 {
+                "recurrent slots"
+            } else {
+                "high per-token MLA KV"
+            };
             tracing::info!(
-                "[local-mlx-native] looped-LM KV window {max_kv_tokens}→{budget_window} tokens \
-                 (≈{budget_gib} GB KV budget over {n_layers} recurrent slots); set max_kv_tokens explicitly for more context"
+                "[local-mlx-native] KV window {max_kv_tokens}→{budget_window} tokens \
+                 (≈{budget_gib} GB KV budget, {why}); set max_kv_tokens explicitly for more context"
             );
         }
         budget_window
@@ -1467,6 +1497,15 @@ fn generate_with_cache(
             }
             m.make_caches(max_kv_tokens)
         }
+        ModelKind::DeepSeekV2(m) => {
+            if tq_bits.is_some() {
+                tracing::warn!(
+                    "[local-mlx-native] kv_cache_bits ignored for DeepSeek-V2 (MLA caches \
+                     expanded K/V via FP16; TurboQuant not wired)"
+                );
+            }
+            m.make_caches(max_kv_tokens)
+        }
         ModelKind::Mamba2(m) => {
             if tq_bits.is_some() {
                 tracing::warn!(
@@ -1659,6 +1698,9 @@ fn generate_with_cache(
                     0.7_f32
                 }
             }
+            // DeepSeek recommends ~0.6; greedy (0.0) invites loops on the 4-bit
+            // MoE since we leave it off the prefix cache for v1.
+            ModelKind::DeepSeekV2(_) => 0.6_f32,
             _ => 0.0_f32,
         });
     // Pure greedy (temp=0) plus rep_penalty=1.0 is a recipe for loops once
@@ -1736,7 +1778,10 @@ fn generate_with_cache(
     // their convolution windows. Skip for Mamba / Falcon-Mamba.
     let chunked_supported = !matches!(
         &state.model,
-        ModelKind::Mamba2(_) | ModelKind::FalconMamba(_)
+        // DeepSeek-V2 v1 has no forward_hidden/forward_last_token yet → run
+        // single-shot prefill only (excluded here so it never reaches the
+        // chunked path's unreachable!() catch-all).
+        ModelKind::Mamba2(_) | ModelKind::FalconMamba(_) | ModelKind::DeepSeekV2(_)
     );
 
     // Recurrent arches (Qwen3.5): the SSM/conv state can't be trimmed, so the
@@ -1819,6 +1864,9 @@ fn generate_with_cache(
                     .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?
             }
             ModelKind::Gemma4(m) => m
+                .forward(&prompt_tokens, &mut cache, rope_offset)
+                .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
+            ModelKind::DeepSeekV2(m) => m
                 .forward(&prompt_tokens, &mut cache, rope_offset)
                 .map_err(|e| anyhow::anyhow!("prefill forward failed: {e:?}"))?,
             ModelKind::Mamba2(m) => m
@@ -2142,6 +2190,9 @@ fn generate_with_cache(
                 ModelKind::Gemma4(m) => m
                     .forward($inputs, &mut cache, rope_offset)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::DeepSeekV2(m) => m
+                    .forward($inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Mamba2(m) => m
                     .forward($inputs, &mut cache, &scan)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
@@ -2388,6 +2439,9 @@ fn generate_with_cache(
                 ModelKind::Gemma4(m) => m
                     .forward(&inputs, &mut cache, rope_offset)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
+                ModelKind::DeepSeekV2(m) => m
+                    .forward(&inputs, &mut cache, rope_offset)
+                    .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
                 ModelKind::Mamba2(m) => m
                     .forward(&inputs, &mut cache, &scan)
                     .map_err(|e| anyhow::anyhow!("decode forward failed: {e:?}"))?,
@@ -2564,6 +2618,7 @@ enum Arch {
     Gemma2,
     Gemma3,
     Gemma4,
+    DeepSeekV2,
     Mamba2,
     FalconMamba,
     BonsaiQ1,
@@ -3097,6 +3152,179 @@ fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
     }
     if total_loaded == 0 {
         anyhow::bail!("no safetensor keys matched the Gemma-4 parameter tree");
+    }
+
+    model
+        .eval()
+        .map_err(|e| anyhow::anyhow!("eval after load failed: {e:?}"))?;
+    Ok(model)
+}
+
+/// Load a DeepSeek-V2 [`Model`] (MLA + DeepSeekMoE). Uniform 4-bit
+/// quantization via `nn::quantize` — the router `gate` (plain `nn::Linear`) and
+/// the stacked `switch_mlp.*` experts (raw, already-quantized arrays loaded
+/// verbatim) are skipped by construction. HF names the MoE block `mlp`; our
+/// struct splits dense (`mlp`) vs MoE (`moe`), so MoE-layer keys are remapped
+/// `mlp.* → moe.*` during load.
+fn load_deepseek_v2_any(
+    model_dir: &Path,
+) -> anyhow::Result<super::mlx_lm::models::deepseek_v2::Model> {
+    use super::mlx_lm::models::deepseek_v2::{get_deepseek_v2_model_args, Model, WeightMap};
+    use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
+    use std::collections::HashSet;
+
+    let args = get_deepseek_v2_model_args(model_dir)
+        .map_err(|e| anyhow::anyhow!("read deepseek_v2 args failed: {e:?}"))?;
+    let first_dense = args.first_k_dense_replace;
+
+    let cfg_path = model_dir.join("config.json");
+    let raw = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
+    let cfg: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("parse config.json failed: {e}"))?;
+    let (group_size, bits) = cfg
+        .get("quantization")
+        .map(|q| {
+            (
+                q.get("group_size").and_then(|v| v.as_i64()).unwrap_or(64) as i32,
+                q.get("bits").and_then(|v| v.as_i64()).unwrap_or(4) as i32,
+            )
+        })
+        .unwrap_or((64, 4));
+
+    let mut model =
+        Model::new(args, group_size, bits).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
+
+    // Uniform quantize: flips every #[quantizable] MaybeQuantized slot
+    // (embeddings, attention, dense MLP, shared experts, lm_head) to N-bit. The
+    // plain router `gate` and the raw stacked experts are left untouched.
+    model = mlx_rs::nn::quantize(model, Some(group_size), Some(bits))
+        .map_err(|e| anyhow::anyhow!("nn::quantize failed: {e:?}"))?;
+    model
+        .eval()
+        .map_err(|e| anyhow::anyhow!("post-quantize eval failed: {e:?}"))?;
+
+    let weights_index = model_dir.join("model.safetensors.index.json");
+    let mut shard_files: Vec<std::path::PathBuf> = Vec::new();
+    if weights_index.exists() {
+        let json = std::fs::read_to_string(&weights_index)
+            .map_err(|e| anyhow::anyhow!("read index failed: {e}"))?;
+        let map: WeightMap =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("parse index failed: {e}"))?;
+        let files: HashSet<&String> = map.weight_map.values().collect();
+        for f in files {
+            shard_files.push(model_dir.join(f));
+        }
+    } else {
+        let single = model_dir.join("model.safetensors");
+        if !single.exists() {
+            anyhow::bail!("no safetensors in {}", model_dir.display());
+        }
+        shard_files.push(single);
+    }
+
+    let remap_moe = |key: &str| -> String {
+        if let Some(rest) = key.strip_prefix("model.layers.") {
+            if let Some((idx_str, tail)) = rest.split_once('.') {
+                if let Ok(idx) = idx_str.parse::<i32>() {
+                    if idx >= first_dense {
+                        if let Some(after) = tail.strip_prefix("mlp.") {
+                            return format!("model.layers.{idx}.moe.{after}");
+                        }
+                    }
+                }
+            }
+        }
+        key.to_string()
+    };
+
+    let mut embed_weight: Option<mlx_rs::Array> = None;
+    let mut embed_scales: Option<mlx_rs::Array> = None;
+    let mut embed_biases: Option<mlx_rs::Array> = None;
+
+    let mut unfilled: HashSet<String> = {
+        let snap = model.parameters_mut().flatten();
+        snap.keys().map(|k| k.to_string()).collect()
+    };
+    let mut total_loaded = 0usize;
+    let mut total_missed = 0usize;
+    let mut unmatched_samples: Vec<String> = Vec::new();
+
+    for shard in &shard_files {
+        let loaded = mlx_rs::Array::load_safetensors(shard)
+            .map_err(|e| anyhow::anyhow!("read shard {}: {e:?}", shard.display()))?;
+        let mut params = model.parameters_mut().flatten();
+        for (raw_key, value) in loaded {
+            let key = remap_moe(raw_key.as_str());
+            match key.as_str() {
+                "model.embed_tokens.weight" => {
+                    embed_weight = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens.scales" => {
+                    embed_scales = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                "model.embed_tokens.biases" => {
+                    embed_biases = Some(value);
+                    total_loaded += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(slot) = params.get_mut(key.as_str()) {
+                **slot = value;
+                total_loaded += 1;
+                unfilled.remove(&key);
+                continue;
+            }
+            // Quantized Linear stores the packed weight under `.inner.weight`.
+            if let Some(stripped) = key.strip_suffix(".weight") {
+                let remapped = format!("{stripped}.inner.weight");
+                if let Some(slot) = params.get_mut(remapped.as_str()) {
+                    **slot = value;
+                    total_loaded += 1;
+                    unfilled.remove(&remapped);
+                    continue;
+                }
+            }
+            total_missed += 1;
+            if unmatched_samples.len() < 8 {
+                unmatched_samples.push(key);
+            }
+        }
+    }
+
+    apply_quantized_embedding(
+        &mut model.model.embed_tokens,
+        embed_weight,
+        embed_scales,
+        embed_biases,
+    );
+
+    tracing::info!(
+        "[local-mlx-native] deepseek_v2 safetensor load: {total_loaded} matched, {total_missed} unmatched"
+    );
+    if !unmatched_samples.is_empty() {
+        tracing::warn!(
+            "[local-mlx-native] deepseek_v2 unmatched key samples: {}",
+            unmatched_samples.join(", ")
+        );
+    }
+    if !unfilled.is_empty() {
+        let mut samples: Vec<&String> = unfilled.iter().collect();
+        samples.sort();
+        let preview: Vec<&str> = samples.iter().take(8).map(|s| s.as_str()).collect();
+        tracing::warn!(
+            "[local-mlx-native] deepseek_v2 {} parameter slot(s) NOT populated — first few: {}",
+            unfilled.len(),
+            preview.join(", ")
+        );
+    }
+    if total_loaded == 0 {
+        anyhow::bail!("no safetensor keys matched the DeepSeek-V2 parameter tree");
     }
 
     model
@@ -3810,6 +4038,11 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
                 if mt == "gemma4" || mt.starts_with("gemma4") {
                     return Ok(Arch::Gemma4);
                 }
+                // DeepSeek-V2 (MLA + DeepSeekMoE). Covers `deepseek_v2` and the
+                // Coder-V2 variants which share the same `model_type`.
+                if mt == "deepseek_v2" || mt.starts_with("deepseek_v2") {
+                    return Ok(Arch::DeepSeekV2);
+                }
                 // Llama covers `llama`, `llama-3`, `llama3`, Nesso, etc.
                 if mt == "llama" || mt.starts_with("llama") {
                     return Ok(Arch::Llama);
@@ -3857,6 +4090,9 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
     if lower.contains("gemma-3") || lower.contains("gemma3") {
         return Ok(Arch::Gemma3);
     }
+    if lower.contains("deepseek-coder-v2") || lower.contains("deepseek-v2") {
+        return Ok(Arch::DeepSeekV2);
+    }
     if lower.contains("llama") || lower.contains("nesso") {
         return Ok(Arch::Llama);
     }
@@ -3864,7 +4100,7 @@ fn detect_architecture(model_id: &str, model_dir: &Path) -> anyhow::Result<Arch>
         return Ok(Arch::BonsaiQ1);
     }
     anyhow::bail!(
-        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, gemma4, mamba2, mamba, falcon_mamba, ouro, bonsai / bonsai_q1.",
+        "no native loader for `{}` — supported model_type values: qwen3, qwen3_5, llama, gemma2, gemma3, gemma4, deepseek_v2, mamba2, mamba, falcon_mamba, ouro, bonsai / bonsai_q1.",
         model_id
     )
 }

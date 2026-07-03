@@ -13,6 +13,7 @@ use mlx_rs::{
 use super::cache::KeyValueCache;
 pub use super::cache::{QuantizedKeys, QuantizedValues};
 
+pub mod moe;
 pub mod rope;
 pub mod tokenizer;
 pub mod turboquant_attn;

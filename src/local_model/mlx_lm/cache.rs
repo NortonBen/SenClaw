@@ -109,6 +109,16 @@ impl KvCache {
         Self::Fp16(SteppingKeyValueCache::with_max(max_seq_len))
     }
 
+    /// FP16 KV with a decode-time sliding window (see
+    /// [`SteppingKeyValueCache::with_decode_window`]). Prefill grows to
+    /// `max_seq_len`; decode is bounded to the last `decode_window` keys.
+    pub fn fp16_decode_windowed(max_seq_len: i32, decode_window: i32) -> Self {
+        Self::Fp16(SteppingKeyValueCache::with_decode_window(
+            max_seq_len,
+            decode_window,
+        ))
+    }
+
     pub fn turboquant_with_max(
         bits: u8,
         head_dim: i32,
@@ -439,6 +449,20 @@ pub struct SteppingKeyValueCache {
     values: Option<Array>,
     stored_len: i32,
     max_seq_len: Option<i32>,
+    /// Sliding-window cap that applies **only to single-token (decode) writes**.
+    ///
+    /// During multi-token prefill the buffer grows to `max_seq_len` so every
+    /// query keeps its full attention window (a single forward pass over an
+    /// `L`-token chunk needs all `L` keys — a query at position `p` attends
+    /// `(p-window, p]`, and collectively those windows span the whole chunk, so
+    /// the buffer cannot be bounded below the chunk length without dropping keys
+    /// that later queries in the same pass still need).
+    ///
+    /// Once decode starts (1 token / step) eviction is exact: keep the last
+    /// `decode_window` keys, which is precisely the sliding window for the new
+    /// query. `None` = no sliding behavior (full-attention layers / other
+    /// models) — identical to the previous behavior.
+    decode_window: Option<i32>,
     step: i32,
 }
 
@@ -457,6 +481,7 @@ impl SteppingKeyValueCache {
             values: None,
             stored_len: 0,
             max_seq_len: None,
+            decode_window: None,
             step: KV_CACHE_STEP,
         }
     }
@@ -480,6 +505,25 @@ impl SteppingKeyValueCache {
             values: None,
             stored_len: 0,
             max_seq_len: Some(max_seq_len.max(1)),
+            decode_window: None,
+            step: KV_CACHE_STEP,
+        }
+    }
+
+    /// Pre-sized KV cache with a **decode-time sliding window**. Identical to
+    /// [`with_max`](Self::with_max) for multi-token prefill writes (the buffer
+    /// grows up to `max_seq_len`), but single-token decode writes evict to keep
+    /// only the last `decode_window` keys. Used by sliding-window attention
+    /// layers (e.g. Gemma-4) so the decode KV — and the per-step SDPA work — is
+    /// bounded by the window instead of the full sequence length. See
+    /// [`decode_window`](Self::decode_window).
+    pub fn with_decode_window(max_seq_len: i32, decode_window: i32) -> Self {
+        Self {
+            keys: None,
+            values: None,
+            stored_len: 0,
+            max_seq_len: Some(max_seq_len.max(1)),
+            decode_window: Some(decode_window.max(1)),
             step: KV_CACHE_STEP,
         }
     }
@@ -602,7 +646,14 @@ impl SteppingKeyValueCache {
         let v_shape = values.shape();
         let new_tokens = Self::dim(k_shape, 2, "keys T")?;
 
-        let max_cap = self.max_seq_len;
+        // Decode-time sliding window: a single-token (decode) write evicts down
+        // to `decode_window`; multi-token prefill writes use the normal
+        // `max_seq_len` cap so every query keeps its full window. See the field
+        // doc on `decode_window`.
+        let max_cap = match self.decode_window {
+            Some(w) if new_tokens == 1 => Some(w),
+            _ => self.max_seq_len,
+        };
         let target_stored = match max_cap {
             Some(m) => (self.stored_len + new_tokens).min(m),
             None => self.stored_len + new_tokens,
@@ -1355,6 +1406,45 @@ mod tests {
         let keys = cache.keys.as_ref().unwrap();
         assert_eq!(keys.index((.., .., 0, ..)).item::<f32>(), 2.0);
         assert_eq!(keys.index((.., .., 1, ..)).item::<f32>(), 3.0);
+    }
+
+    /// Decode-windowed cache (sliding-window attention layers): a **multi-token
+    /// prefill** write is retained in full — every prefill query keeps its
+    /// window — while **single-token decode** writes evict down to the window.
+    /// This is the invariant that lets Gemma-4 bound decode-phase sliding KV to
+    /// `sliding_window` without changing the (already windowed) attention math.
+    #[test]
+    fn decode_window_evicts_only_on_single_token_writes() {
+        let window = 4;
+        let mut cache = SteppingKeyValueCache::with_decode_window(64_000, window);
+
+        // Prefill: one 10-token write, values 0..10 along the time axis. A
+        // multi-token write ignores the decode window, so all 10 are kept.
+        let prefill: Vec<f32> = (0..10).map(|i| i as f32).collect();
+        let pk = Array::from_slice(&prefill, &[1, 1, 10, 1]);
+        let _ = cache.update_and_fetch(pk.clone(), pk).unwrap();
+        assert_eq!(
+            cache.stored_len(),
+            10,
+            "multi-token prefill write must not be windowed"
+        );
+
+        // Decode: single-token writes 10, 11, 12 — each evicts to the window.
+        for v in 10..13 {
+            let (k, vv) = make_kv(1, v as f32);
+            let _ = cache.update_and_fetch(k, vv).unwrap();
+        }
+        assert_eq!(
+            cache.stored_len(),
+            window,
+            "single-token decode writes cap at the window"
+        );
+        // Retained = most recent `window` keys: 9 (last prefill token), 10, 11, 12.
+        let keys = cache.keys.as_ref().unwrap();
+        assert_eq!(keys.index((.., .., 0, ..)).item::<f32>(), 9.0);
+        assert_eq!(keys.index((.., .., 1, ..)).item::<f32>(), 10.0);
+        assert_eq!(keys.index((.., .., 2, ..)).item::<f32>(), 11.0);
+        assert_eq!(keys.index((.., .., 3, ..)).item::<f32>(), 12.0);
     }
 
     /// Buffer capacity should double per grow event, capped at `max_cap`.
