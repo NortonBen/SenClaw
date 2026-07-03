@@ -34,6 +34,30 @@ enum Command {
     },
     /// Run a one-shot disposable agent task (for hook scripts: reflection / summarization / analysis).
     AgentTask(senclaw::cli::commands::agent_task::AgentTaskCmd),
+    /// List / inspect / run saved workflows (DAGs of agent + script steps)
+    Workflow {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::workflow::WorkflowCmd,
+    },
+    /// Download and install optional SenClaw components (e.g. the desktop app)
+    Install {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::distrib::InstallCmd,
+    },
+    /// Remove components installed by `senclaw install`
+    Uninstall {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::distrib::UninstallCmd,
+    },
+    /// Download the Web UI bundle (first run only) and start the daemon serving it
+    Web {
+        /// Re-download the Web UI bundle even if it is already present
+        #[arg(long)]
+        force: bool,
+        /// Release tag to download the bundle from (e.g. v0.3.0). Default: latest.
+        #[arg(long)]
+        version: Option<String>,
+    },
 
     // ===== MCP servers (spawned as subprocesses by sema-core) =====
     /// Start the schedule MCP server (stdio JSON-RPC)
@@ -148,6 +172,12 @@ async fn main() -> Result<()> {
         Command::Wiki { cmd } => senclaw::cli::commands::wiki::run(cmd).await,
         Command::Channel { cmd } => senclaw::cli::commands::channel::run(cmd).await,
         Command::AgentTask(cmd) => senclaw::cli::commands::agent_task::run(cmd).await,
+        Command::Workflow { cmd } => senclaw::cli::commands::workflow::run(cmd).await,
+        Command::Install { cmd } => senclaw::cli::commands::distrib::run_install(cmd).await,
+        Command::Uninstall { cmd } => senclaw::cli::commands::distrib::run_uninstall(cmd).await,
+        Command::Web { force, version } => {
+            senclaw::cli::commands::distrib::run_web(force, version).await
+        }
 
         // MCP servers
         Command::ScheduleServer => senclaw::mcp::schedule_server::run_stdio_server().await,

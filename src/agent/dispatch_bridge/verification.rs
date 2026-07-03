@@ -260,6 +260,8 @@ mod tests {
             is_virtual: false,
             persona_name: None,
             checklist: Vec::new(),
+            checklist_auto: false,
+            retry_count: 0,
             file_changes: Vec::new(),
             verification_result: None,
         };

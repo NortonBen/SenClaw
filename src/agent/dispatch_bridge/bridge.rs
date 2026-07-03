@@ -517,23 +517,29 @@ impl DispatchBridge {
                     task_admin = Some(parent.admin_folder.clone());
                     task_label = task.label.clone();
                     parent_goal = parent.goal.clone();
-                    
-                    // Run per-task verification BEFORE marking as done
+
+                    // Assign the result BEFORE verification so the checklist
+                    // matcher sees the text the worker actually produced.
+                    task.result = Some(text.to_string());
+                    task.completed_at = Some(now.clone());
                     let verification = verify_task_checklist(task);
-                    
-                    // Only mark as done if verification passes, otherwise mark as error
-                    if verification.verified {
+
+                    // Auto-generated checklists are advisory: the worker never
+                    // sees them, so an unticked item is not evidence of failure.
+                    // Only an explicit orchestrator-supplied checklist may fail
+                    // the task.
+                    if verification.verified || task.checklist_auto {
                         task.status = DispatchTaskStatus::Done;
-                        task.completed_at = Some(now.clone());
-                        task.result = Some(text.to_string());
-                        tracing::info!(
-                            "[DispatchBridge] Task {} verification passed, marking as done",
-                            task_id
-                        );
+                        if !verification.verified {
+                            tracing::info!(
+                                "[DispatchBridge] Task {} advisory checklist unverified ({} missing, {} failed) — keeping done",
+                                task_id,
+                                verification.missing_items.len(),
+                                verification.failed_items.len()
+                            );
+                        }
                     } else {
                         task.status = DispatchTaskStatus::Error;
-                        task.completed_at = Some(now.clone());
-                        // Add verification note to result
                         let verification_note = verification.note.as_deref().unwrap_or("Verification failed");
                         let enhanced_result = format!(
                             "{}\n\n❌ VERIFICATION FAILED:\n{}\n\nMissing items: {}\nFailed items: {}",
@@ -544,16 +550,16 @@ impl DispatchBridge {
                         );
                         task.result = Some(enhanced_result);
                         tracing::warn!(
-                            "[DispatchBridge] Task {} verification failed, marking as error: {}",
+                            "[DispatchBridge] Task {} explicit checklist verification failed, marking as error: {}",
                             task_id,
                             verification_note
                         );
                     }
-                    
+
                     task.verification_result = Some(verification);
                     
                     task_clone = Some(task.clone());
-                    
+
                     if parent.tasks.iter().all(|t| t.status.is_terminal()) {
                         parent.status = "done".into();
                         parent.completed_at = Some(now.clone());
@@ -573,15 +579,26 @@ impl DispatchBridge {
                 }
             }
         });
+        // The verification step above may have downgraded the task to Error —
+        // report the status that was actually persisted.
+        let final_status = task_clone
+            .as_ref()
+            .map(|t| t.status)
+            .unwrap_or(DispatchTaskStatus::Done);
+        let final_result = task_clone
+            .as_ref()
+            .and_then(|t| t.result.clone())
+            .unwrap_or_else(|| text.to_string());
         self.fire_task_lifecycle(
             task_id,
-            "done",
+            final_status.label(),
             &task_label,
             &parent_goal,
-            Some(text.to_string()),
+            Some(final_result),
         );
         tracing::info!(
-            "[DispatchBridge] Task {task_id} done{}",
+            "[DispatchBridge] Task {task_id} {}{}",
+            final_status.label(),
             if let Some(j) = &jid {
                 format!(" for {j}")
             } else {
@@ -602,8 +619,27 @@ impl DispatchBridge {
         }
     }
 
+    /// Max scheduler-level retries for a task that failed on an *infra* error
+    /// (timeout, agent loop limit, engine crash). Model/content failures are
+    /// never retried — retrying those just burns tokens deterministically.
+    const MAX_INFRA_RETRIES: u32 = 1;
+
+    /// True when `error_message` looks like a transient infrastructure failure
+    /// worth one automatic retry, as opposed to a deterministic model/content
+    /// failure. Patterns match the messages produced by VirtualWorkerPool and
+    /// the zen_core agent loop.
+    fn is_retryable_infra_error(error_message: &str) -> bool {
+        let m = error_message.to_ascii_lowercase();
+        m.contains("timed out")
+            || m.contains("tool-calling turns")
+            || m.contains("event bus closed")
+            || m.contains("virtual agent failed")
+    }
+
     /// Mark `task_id` as `error` with `error_message`. Same caveats as
-    /// `mark_task_done`.
+    /// `mark_task_done`. Infra errors (timeout / loop limit / engine crash)
+    /// get one automatic in-place retry: the task is reset to `registered`
+    /// so the scheduler relaunches it — no new parent, no manager involvement.
     pub(super) fn mark_task_error(&self, task_id: &str, error_message: &str) {
         let jid = self.remove_active_task(task_id);
         let now = chrono::Utc::now().to_rfc3339();
@@ -611,6 +647,7 @@ impl DispatchBridge {
         let mut completed_admin: Option<String> = None;
         let mut task_label = String::new();
         let mut parent_goal = String::new();
+        let mut retried = false;
         let _ = self.modify_state(|state| {
             for parent in &mut state.parents {
                 if let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) {
@@ -620,6 +657,20 @@ impl DispatchBridge {
                     task_admin = Some(parent.admin_folder.clone());
                     task_label = task.label.clone();
                     parent_goal = parent.goal.clone();
+
+                    if parent.status == "active"
+                        && task.retry_count < Self::MAX_INFRA_RETRIES
+                        && Self::is_retryable_infra_error(error_message)
+                    {
+                        task.retry_count += 1;
+                        task.status = DispatchTaskStatus::Registered;
+                        task.started_at = None;
+                        task.timeout_at = None;
+                        task.result = None;
+                        retried = true;
+                        return;
+                    }
+
                     task.status = DispatchTaskStatus::Error;
                     task.result = Some(error_message.to_string());
                     task.completed_at = Some(now.clone());
@@ -632,6 +683,17 @@ impl DispatchBridge {
                 }
             }
         });
+        if retried {
+            tracing::warn!(
+                "[DispatchBridge] Task {task_id} infra error, retrying in place: {error_message}"
+            );
+            self.fire_task_lifecycle(task_id, "registered", &task_label, &parent_goal, None);
+            if let Some(folder) = task_admin {
+                self.fire_admin_activity(&folder);
+            }
+            // The 300ms poll tick will relaunch it once a concurrency slot frees.
+            return;
+        }
         self.fire_task_lifecycle(task_id, "error", &task_label, &parent_goal, None);
         tracing::warn!(
             "[DispatchBridge] Task {task_id} error{}: {error_message}",

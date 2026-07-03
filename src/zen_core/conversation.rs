@@ -448,6 +448,8 @@ pub struct QueryConfig {
     pub session_id: String,
     /// Enable prompt caching (Anthropic only — cache_control on system + last tool).
     pub enable_cache: bool,
+    /// Per-engine turn-budget override (see [`max_agent_turns`]). `None` = default.
+    pub max_turns_override: Option<usize>,
     /// Current agent mode (Agent / Plan / Dag). Drives `task_done` enforcement:
     /// Plan and Dag modes nudge the model toward `task_done` when it stops with
     /// text only. Agent mode keeps legacy "text = done" behavior so ordinary
@@ -456,13 +458,15 @@ pub struct QueryConfig {
 }
 
 /// Absolute cap on LLM turns per user input — a backstop against runaway
-/// agentic loops (small models can call tools forever). Override with
-/// `SENCLAW_MAX_AGENT_TURNS`.
-fn max_agent_turns() -> usize {
+/// agentic loops (small models can call tools forever). Resolution order:
+/// `SENCLAW_MAX_AGENT_TURNS` env (explicit user intent) → per-engine override
+/// (e.g. virtual workers doing browser research get a higher budget) → 30.
+fn max_agent_turns(override_turns: Option<usize>) -> usize {
     std::env::var("SENCLAW_MAX_AGENT_TURNS")
         .ok()
         .and_then(|v| v.trim().parse().ok())
         .filter(|n| *n > 0)
+        .or(override_turns)
         .unwrap_or(30)
 }
 
@@ -481,6 +485,15 @@ fn stall_tool_turns() -> usize {
 const STALL_NUDGE: &str = "You have called the same tool several times in a row \
 without producing an answer. You already have enough information. Stop calling tools now \
 and write your final answer to the user, in the user's language, based on what you have gathered.";
+
+/// Instruction injected when the turn budget (or stall hard-stop) is reached.
+/// The next LLM call runs with tools disabled, so this is the model's one
+/// chance to salvage the work it has done so far into a real answer.
+const FINAL_ANSWER_NUDGE: &str = "Your tool budget for this task is exhausted and tool access \
+is now disabled. Based on everything you have gathered above, write your complete final answer \
+to the user now, in the user's language. Include the concrete findings, data, and sources you \
+collected. Do not mention the tool budget, do not apologize, and do not describe what you would \
+have done — just deliver the best answer possible from the information above.";
 
 /// Max retries for silent empty completions (LLM returned 200 OK with 0 blocks
 /// and 0 tool calls — observed with MLX 4-bit / qwen3.5-4b-optiq under heavy
@@ -633,6 +646,18 @@ arguments earlier in this conversation and received a result above. Re-running i
 new. Use the information you already have to write your final answer to the user now. If you truly \
 need different information, change the arguments — do not repeat the identical call.";
 
+/// Tools whose re-invocation with identical args is legitimate — blocking
+/// waits / status polls whose result changes as daemon-side state advances
+/// (e.g. re-waiting on a dispatch parent after it left the queue). Exempt
+/// from the duplicate-call interception.
+const DUPLICATE_EXEMPT_TOOLS: &[&str] =
+    &["DispatchAllTasks", "DispatchTask", "DispatchListAgents"];
+
+fn is_duplicate_exempt(block: &ContentBlock) -> bool {
+    matches!(block, ContentBlock::ToolUse { name, .. }
+        if DUPLICATE_EXEMPT_TOOLS.contains(&name.as_str()))
+}
+
 /// Run the conversation query loop. Returns the final message history.
 ///
 /// This is an async generator conceptually — each "turn" is a call to the LLM
@@ -648,12 +673,17 @@ pub async fn query(
     let mut proactively_compacted = false;
 
     // Loop-guard state (see `max_agent_turns` / `stall_tool_turns`).
-    let max_turns = max_agent_turns();
+    let max_turns = max_agent_turns(config.max_turns_override);
     let stall_limit = stall_tool_turns();
     let mut turn: usize = 0;
     let mut last_sig: Option<String> = None;
     let mut stall_streak: usize = 0;
     let mut nudged = false;
+    // Set when the turn budget (or stall hard-stop) is exhausted: the next LLM
+    // call runs with tools disabled and its text reply is accepted as the final
+    // answer — salvaging the gathered context instead of erroring out with
+    // nothing.
+    let mut forcing_final = false;
     // Exact (name+args) tool-call signatures already executed this user input,
     // so identical re-issues can be short-circuited instead of re-run.
     let mut seen_tool_sigs: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -681,11 +711,23 @@ pub async fn query(
 
         // Backstop: hard cap on turns per user input so a model that ignores
         // every nudge still terminates instead of looping until the user pauses.
+        // Reaching the cap does NOT throw the gathered context away: one final
+        // LLM call runs with tools disabled to turn it into a real answer.
         turn += 1;
-        if turn > max_turns {
+        if turn > max_turns && !forcing_final {
             warn!(
-                "[{}] agent loop limit reached ({} turns) — stopping",
+                "[{}] agent loop limit reached ({} turns) — forcing a final answer (tools disabled)",
                 config.agent_id, max_turns
+            );
+            forcing_final = true;
+            messages.push(create_user_message(vec![ContentBlock::Text {
+                text: FINAL_ANSWER_NUDGE.to_string(),
+            }]));
+        } else if turn > max_turns + 1 {
+            // The forced-final turn also failed to produce a clean answer.
+            warn!(
+                "[{}] agent loop limit reached and forced-final turn failed — stopping",
+                config.agent_id
             );
             config
                 .event_bus
@@ -747,8 +789,13 @@ pub async fn query(
 
         // 1. Call the LLM. Resolve tools fresh each turn so any tool the
         //    model discovered via `ToolSearch` earlier in this conversation
-        //    is included starting from the very next turn.
-        let turn_tools: Vec<Arc<dyn Tool>> = (config.tools)();
+        //    is included starting from the very next turn. The forced-final
+        //    turn runs without tools so the model can only answer.
+        let turn_tools: Vec<Arc<dyn Tool>> = if forcing_final {
+            Vec::new()
+        } else {
+            (config.tools)()
+        };
         info!(
             "[{}] LLM turn start: messages={} tools={} stream={}",
             config.agent_id,
@@ -1093,13 +1140,21 @@ pub async fn query(
         // so a mid-turn switch into Plan mode still triggers the plan nudge.
         let effective_mode = effective_agent_mode(config.agent_mode, entered_plan_mode);
         if tool_uses.is_empty() {
-            if let Some(nudge) = completion_nudge_for(
-                effective_mode,
-                exit_plan_mode_called,
-                dispatch_executed,
-                completion_nudges + 1,
-                max_completion_nudges_cap,
-            ) {
+            // Forced-final turn: accept the text as-is — mode-completion
+            // nudging would just push the model back into a loop it can no
+            // longer act on (tools are disabled).
+            if let Some(nudge) = (!forcing_final)
+                .then(|| {
+                    completion_nudge_for(
+                        effective_mode,
+                        exit_plan_mode_called,
+                        dispatch_executed,
+                        completion_nudges + 1,
+                        max_completion_nudges_cap,
+                    )
+                })
+                .flatten()
+            {
                 if completion_nudges < max_completion_nudges_cap {
                     completion_nudges += 1;
                     info!(
@@ -1121,6 +1176,32 @@ pub async fn query(
                 config.agent_id,
                 messages.len()
             );
+            return Ok(messages);
+        }
+
+        // Forced-final turn but the model still emitted tool calls (possible
+        // with local models that hallucinate tools) — give up cleanly rather
+        // than looping; the transcript keeps whatever text it produced.
+        if forcing_final {
+            warn!(
+                "[{}] forced-final turn still attempted {} tool call(s) — stopping",
+                config.agent_id,
+                tool_uses.len()
+            );
+            messages.push(assistant_msg);
+            config
+                .event_bus
+                .emit(EngineEvent::SessionError(SessionErrorData {
+                    error_type: "agent_loop_limit".to_string(),
+                    error: SessionErrorDetail {
+                        code: "AGENT_LOOP_LIMIT".to_string(),
+                        message: format!(
+                            "Stopped after {max_turns} tool-calling turns without a final answer \
+                             (likely a loop). Increase SENCLAW_MAX_AGENT_TURNS to allow more."
+                        ),
+                        details: None,
+                    },
+                }));
             return Ok(messages);
         }
 
@@ -1167,6 +1248,12 @@ pub async fn query(
                 ContentBlock::ToolUse { id, .. } => id.clone(),
                 _ => continue,
             };
+            if is_duplicate_exempt(tu) {
+                // Blocking waits / status polls: identical args legitimately
+                // return new data as daemon-side state advances.
+                fresh.push(tu.clone());
+                continue;
+            }
             match tool_call_sig(tu) {
                 Some(sig) if seen_tool_sigs.contains(&sig) => dup_ids.push(id),
                 Some(sig) => {
@@ -1379,11 +1466,24 @@ pub async fn query(
         let hard_stop = stall_streak >= stall_limit * 2;
         let should_nudge = !nudged && stall_streak >= stall_limit;
 
-        // 7. Recurse: append the assistant turn and the tool results.
+        // 7. Recurse: append the assistant turn and the tool results. A stall
+        //    hard-stop doesn't abort the session — it disables tools and forces
+        //    one final answer turn so the gathered context isn't thrown away.
         messages.push(assistant_msg);
+        if hard_stop {
+            warn!(
+                "[{}] tool-call stall not resolved after nudge ({} consecutive turns) — forcing a final answer (tools disabled)",
+                config.agent_id, stall_streak
+            );
+            forcing_final = true;
+        }
         if !tool_results.is_empty() {
             let mut blocks = tool_results;
-            if should_nudge {
+            if hard_stop {
+                blocks.push(ContentBlock::Text {
+                    text: FINAL_ANSWER_NUDGE.to_string(),
+                });
+            } else if should_nudge {
                 nudged = true;
                 info!(
                     "[{}] tool-call stall detected ({} consecutive turns on '{}') — nudging to finalize",
@@ -1396,27 +1496,10 @@ pub async fn query(
                 });
             }
             messages.push(create_user_message(blocks));
-        }
-
-        if hard_stop {
-            warn!(
-                "[{}] tool-call stall not resolved after nudge ({} consecutive turns) — stopping",
-                config.agent_id, stall_streak
-            );
-            config
-                .event_bus
-                .emit(EngineEvent::SessionError(SessionErrorData {
-                    error_type: "agent_loop_limit".to_string(),
-                    error: SessionErrorDetail {
-                        code: "AGENT_TOOL_STALL".to_string(),
-                        message: format!(
-                            "Stopped: the agent called the same tool {stall_streak} times in a row \
-                             without producing an answer."
-                        ),
-                        details: None,
-                    },
-                }));
-            return Ok(messages);
+        } else if hard_stop {
+            messages.push(create_user_message(vec![ContentBlock::Text {
+                text: FINAL_ANSWER_NUDGE.to_string(),
+            }]));
         }
 
         debug!(
@@ -1593,7 +1676,8 @@ mod tests {
         std::env::remove_var("SENCLAW_STALL_TOOL_TURNS");
         std::env::remove_var("SENCLAW_EMPTY_RETRIES");
         std::env::remove_var("SENCLAW_COMPLETION_NUDGES");
-        assert_eq!(max_agent_turns(), 30);
+        assert_eq!(max_agent_turns(None), 30);
+        assert_eq!(max_agent_turns(Some(60)), 60);
         assert_eq!(stall_tool_turns(), 4);
         assert_eq!(max_empty_retries(), 2);
         assert_eq!(max_completion_nudges(), 2);

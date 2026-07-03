@@ -714,6 +714,10 @@ pub struct ZenCoreOptions {
     /// `None` = resolve the globally active model (`activeLlmConfigId`).
     /// Set per-engine from the group binding's `llm_config_id`.
     pub model_config_id: Option<String>,
+    /// Per-engine agent-loop turn budget. `None` = built-in default (30).
+    /// `SENCLAW_MAX_AGENT_TURNS` env still overrides everything. Virtual
+    /// workers doing browser research set this higher (see VirtualWorkerPool).
+    pub max_agent_turns: Option<usize>,
 }
 
 impl Default for ZenCoreOptions {
@@ -740,6 +744,7 @@ impl Default for ZenCoreOptions {
             pre_trigger_skill: false,
             after_process: false,
             model_config_id: None,
+            max_agent_turns: None,
         }
     }
 }

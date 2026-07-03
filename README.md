@@ -60,7 +60,36 @@ What that adds up to:
 
 ---
 
-## Quick Start
+## Install
+
+### One-line install (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NortonBen/SenClaw/main/scripts/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/NortonBen/SenClaw/main/scripts/install.ps1 | iex"
+```
+
+Both installers download the latest release binary into `~/.senclaw/bin` (`%USERPROFILE%\.senclaw\bin` on Windows) and add it to your PATH. To pin a release, set `SENCLAW_VERSION=v0.3.0` before running the installer.
+
+The `senclaw` binary ships **without** the Web UI or the desktop app — they are downloaded on demand:
+
+```bash
+senclaw web               # download the Web UI bundle (first run only), then start the daemon serving it
+senclaw install desktop   # download & install the native desktop app for this platform
+senclaw uninstall desktop # remove the desktop app again
+```
+
+- `senclaw web` stores the UI bundle in `~/.senclaw/web/dist` and serves it at `http://127.0.0.1:18788`. Use `--force` to re-download, `--version v0.3.0` to pin a release.
+- `senclaw install desktop` installs into `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` (Windows), or `~/.senclaw/desktop` plus a launcher entry (Linux). It supports macOS (Apple Silicon + Intel), Windows x64, and Linux x64.
+
+---
+
+## Quick Start (from source)
 
 ### 1. Clone
 

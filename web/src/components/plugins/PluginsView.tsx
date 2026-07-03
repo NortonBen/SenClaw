@@ -10,6 +10,7 @@ import CoworkPanel from './CoworkPanel';
 import CodePanel from './CodePanel';
 import MarketplacePanel from './MarketplacePanel';
 import { SpaceAppsSettings } from '../settings/SpaceAppsSettings';
+import WorkflowsPanel from './WorkflowsPanel';
 
 const { Text } = Typography;
 
@@ -26,6 +27,7 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   code: 'Code Executor',
   marketplace: 'Marketplace',
   'space-apps': 'Space Apps',
+  workflows: 'Workflow',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -44,6 +46,7 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'code' && <CodePanel />}
         {activeNav === 'marketplace' && <MarketplacePanel />}
         {activeNav === 'space-apps' && <SpaceAppsSettings />}
+        {activeNav === 'workflows' && <WorkflowsPanel />}
       </Content>
     </Layout>
   );

@@ -17,6 +17,23 @@ impl WebSocketGateway {
             "isFromMe": msg.is_from_me,
         });
         self.broadcast(&msg.chat_jid, &payload).await;
+
+        let ts_ms = chrono::DateTime::parse_from_rfc3339(&msg.timestamp)
+            .map(|d| d.timestamp_millis())
+            .unwrap_or_else(|_| chrono::Utc::now().timestamp_millis());
+        self.notify_group_activity(&msg.chat_jid, ts_ms).await;
+    }
+
+    /// Sidebar "recent activity" tick. Goes to ALL clients (not just the
+    /// chat's subscribers) so the session list can reorder live on any new
+    /// message or agent response.
+    pub async fn notify_group_activity(&self, chat_jid: &str, ts_ms: i64) {
+        self.broadcast_to_all(&serde_json::json!({
+            "type": "group:activity",
+            "jid": chat_jid,
+            "ts": ts_ms,
+        }))
+        .await;
     }
 
     /// Emit an incremental agent reply delta. The frontend accumulates these
@@ -56,6 +73,8 @@ impl WebSocketGateway {
             "ts": chrono::Utc::now().to_rfc3339(),
         });
         self.broadcast(chat_jid, &payload).await;
+        self.notify_group_activity(chat_jid, chrono::Utc::now().timestamp_millis())
+            .await;
     }
 
     pub async fn notify_agent_state(&self, chat_jid: &str, state: &str) {
@@ -265,6 +284,15 @@ impl WebSocketGateway {
         tracing::info!(
             "[WsGateway] emit dispatch:update parents={parent_count} tasks={task_count}"
         );
+        self.broadcast_to_admins(&msg).await;
+    }
+
+    /// Push one workflow run state change to admin clients (Workflow dock).
+    pub async fn notify_workflow_update(&self, run: &serde_json::Value) {
+        let msg = serde_json::json!({
+            "type": "workflow:update",
+            "run": run,
+        });
         self.broadcast_to_admins(&msg).await;
     }
 

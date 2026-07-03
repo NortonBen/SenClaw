@@ -14,14 +14,15 @@ import {
   FolderOutlined,
   ExperimentOutlined,
   CloudServerOutlined,
-  AppstoreOutlined
+  AppstoreOutlined,
+  ApartmentOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code' | 'marketplace' | 'space-apps';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows';
 
 interface SkillSummary {
   name: string;
@@ -401,6 +402,14 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               label="Cowork"
               isSelected={activeNav === 'cowork'}
               onClick={() => onSelect('cowork')}
+            />
+
+            {/* ─── Workflows (saved DAGs of agent + script steps) ─── */}
+            <StaticNavItem
+              icon={<ApartmentOutlined />}
+              label="Workflow"
+              isSelected={activeNav === 'workflows'}
+              onClick={() => onSelect('workflows')}
             />
 
             {/* ─── Code Executor (JavaScript sandbox is live; more languages WIP) ─── */}

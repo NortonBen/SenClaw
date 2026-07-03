@@ -128,6 +128,18 @@ pub trait VirtualCoreApi: Send + Sync {
 
 const DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1000; // 10 minutes
 
+/// Default agent-loop turn budget for virtual workers. Browser-driven research
+/// burns ~2 turns per page (navigate + extract), so the global default of 30
+/// kills legitimate multi-source scouting runs. Override with
+/// `SENCLAW_VIRTUAL_MAX_TURNS`.
+fn virtual_max_turns() -> usize {
+    std::env::var("SENCLAW_VIRTUAL_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(60)
+}
+
 /// Tools excluded for virtual agents (Task, AskUserQuestion require main-agent context).
 const VIRTUAL_EXCLUDED_TOOLS: &[&str] = &["Task", "AskUserQuestion"];
 
@@ -571,6 +583,39 @@ impl CleanupGuard<'_> {
 
 // ===== Helpers =====
 
+/// Final messages shorter than this are suspected to be nudge echoes
+/// ("No more tool calls...") rather than the actual deliverable.
+const SHORT_FINAL_CHARS: usize = 200;
+
+/// Pick the text returned as the virtual run's result. A stall-nudged model
+/// often ends the session with a short junk echo of the nudge, while the real
+/// deliverable was produced a few turns earlier — when the final message is
+/// suspiciously short and a much longer message exists, return the longer one.
+fn pick_result_text(
+    final_text: String,
+    longest_message: Option<String>,
+    instance_id: &str,
+) -> String {
+    let final_len = final_text.trim().chars().count();
+    if final_len >= SHORT_FINAL_CHARS {
+        return final_text;
+    }
+    match longest_message {
+        Some(longest)
+            if longest.trim().chars().count() >= SHORT_FINAL_CHARS * 2
+                && longest.trim().chars().count() > final_len * 3 =>
+        {
+            tracing::warn!(
+                "[VirtualAgent:{instance_id}] final message is a short tail ({final_len} chars) — \
+                 returning the longest message ({} chars) as the result instead",
+                longest.trim().chars().count()
+            );
+            longest
+        }
+        _ => final_text,
+    }
+}
+
 fn generate_instance_id(persona_name: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -641,6 +686,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                 .to_string(),
             custom_memory_dir: custom_memory_dir.map(|s| s.to_string()),
             memory_folder_override: memory_folder_override.map(|s| s.to_string()),
+            max_agent_turns: Some(virtual_max_turns()),
             ..Default::default()
         };
 
@@ -667,6 +713,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         engine.process_user_input(prompt, None)?;
 
         let mut last_message: Option<String> = None;
+        let mut longest_message: Option<String> = None;
         let deadline = std::time::Instant::now() + timeout;
 
         loop {
@@ -713,6 +760,18 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                                 }
                             }
                             if !data.content.trim().is_empty() {
+                                // Track the longest message separately: a model
+                                // that gets stall-nudged often ends on a short
+                                // junk echo ("No more tool calls...") after
+                                // having already produced the real deliverable.
+                                if data.content.trim().chars().count()
+                                    > longest_message
+                                        .as_deref()
+                                        .map(|m: &str| m.trim().chars().count())
+                                        .unwrap_or(0)
+                                {
+                                    longest_message = Some(data.content.clone());
+                                }
                                 last_message = Some(data.content.clone());
                                 if let Some(ref notify) = activity_notify {
                                     notify(
@@ -735,10 +794,12 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                     EngineEvent::StateUpdate(data) => {
                         if data.state == SessionState::Idle {
                             let from_history = engine.last_main_assistant_visible_text();
-                            if !from_history.trim().is_empty() {
-                                return Ok(from_history);
-                            }
-                            return Ok(last_message.unwrap_or_default());
+                            let final_text = if !from_history.trim().is_empty() {
+                                from_history
+                            } else {
+                                last_message.unwrap_or_default()
+                            };
+                            return Ok(pick_result_text(final_text, longest_message, instance_id));
                         }
                     }
                     EngineEvent::SessionError(data) => {

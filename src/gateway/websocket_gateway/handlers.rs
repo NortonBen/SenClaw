@@ -562,8 +562,16 @@ pub(crate) async fn handle_list_groups(
                 llm_config_id: None,
                 agent_id: Some(br.agent.id),
                 channel_id: Some(br.channel.id),
+                last_activity: None,
             });
         }
+    }
+
+    // Stamp each group with its last message/response time so the sidebar
+    // "recent activity" sort reflects real chat activity.
+    let activity = state.db.last_activity_per_group().unwrap_or_default();
+    for g in &mut groups {
+        g.last_activity = activity.get(&g.jid).copied();
     }
 
     send_json(
@@ -1094,6 +1102,18 @@ pub(crate) async fn handle_message_send(
     if let Err(e) = state.db.insert_group_message(&stored, limit) {
         tracing::warn!("[WebSocketGateway] Failed to persist web message for {group_jid}: {e}");
     }
+
+    // Sidebar "recent activity" tick — user messages sent from the UI don't
+    // pass through notify_incoming, so emit the activity event here.
+    broadcast_to_all_inner(
+        clients,
+        &serde_json::json!({
+            "type": "group:activity",
+            "jid": group_jid,
+            "ts": chrono::Utc::now().timestamp_millis(),
+        }),
+    )
+    .await;
 
     // Convert attachments to the format expected by the agent system
     let agent_attachments: Vec<crate::agent::input_builder::ImageAttachment> = attachments

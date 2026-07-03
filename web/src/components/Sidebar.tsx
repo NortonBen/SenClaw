@@ -27,9 +27,12 @@ import {
   ShrinkOutlined,
   MenuOutlined,
   ReloadOutlined,
+  ControlOutlined,
+  SortAscendingOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { WsStatus, EventNotification, GroupInfo } from '../types';
+import { WorkflowSidebarSection } from './workflows/WorkflowSidebarSection';
 
 const { Sider } = Layout;
 
@@ -180,43 +183,36 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
 
 const ACTIVE_STATES = new Set(['thinking', 'executing', 'processing', 'waiting_permission', 'waiting_question']);
 
-/** Sidebar grouping — modelled on Codex's "Organize sidebar" menu. */
-export type OrganizeMode = 'project' | 'project-recent' | 'chronological' | 'flat';
-export type SortMode = 'created' | 'updated';
+/** Sidebar "Group by" axis: bucket by project folder, by date, or not at all. */
+export type GroupMode = 'project' | 'date' | 'none';
+/** Sidebar "Sort by" axis: last activity, creation time, or name A–Z. */
+export type SortMode = 'created' | 'updated' | 'name';
 
 const ORGANIZE_KEY = 'senclaw:sessionlist-organize';
 const SORT_KEY = 'senclaw:sessionlist-sort';
-const LAST_SEEN_KEY = 'senclaw:chat-last-seen';
 
-function loadOrganize(): OrganizeMode {
+function loadGroupMode(): GroupMode {
   try {
     const v = localStorage.getItem(ORGANIZE_KEY);
-    if (v === 'project' || v === 'project-recent' || v === 'chronological' || v === 'flat') return v;
-    // Back-compat with the previous 4-button toggle.
-    const legacy = localStorage.getItem('senclaw:sessionlist-groupby');
-    if (legacy === 'workspace') return 'project';
-    if (legacy === 'day' || legacy === 'week') return 'chronological';
-    if (legacy === 'none') return 'flat';
+    if (v === 'project' || v === 'date' || v === 'none') return v;
+    // Legacy 4-way organize values ('project-recent' collapses into 'project'
+    // — bucket order now follows the sort mode).
+    if (v === 'project-recent') return 'project';
+    if (v === 'chronological') return 'date';
+    if (v === 'flat') return 'none';
   } catch {}
   return 'project';
 }
-function saveOrganize(m: OrganizeMode) { try { localStorage.setItem(ORGANIZE_KEY, m); } catch {} }
+function saveGroupMode(m: GroupMode) { try { localStorage.setItem(ORGANIZE_KEY, m); } catch {} }
 
 function loadSort(): SortMode {
   try {
     const v = localStorage.getItem(SORT_KEY);
-    if (v === 'created' || v === 'updated') return v;
+    if (v === 'created' || v === 'updated' || v === 'name') return v;
   } catch {}
   return 'updated';
 }
 function saveSort(m: SortMode) { try { localStorage.setItem(SORT_KEY, m); } catch {} }
-
-function loadLastSeen(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(LAST_SEEN_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
-}
-function saveLastSeen(m: Record<string, number>) {
-  try { localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(m)); } catch {}
-}
 
 /** Best-effort creation timestamp parsed from the JID's trailing base36 suffix. */
 function jidCreatedAt(jid: string): number {
@@ -226,9 +222,12 @@ function jidCreatedAt(jid: string): number {
   return Number.isFinite(ms) && ms > 0 ? ms : 0;
 }
 
-function itemTimestamp(g: GroupInfo, sort: SortMode, lastSeen: Record<string, number>): number {
-  if (sort === 'updated') return lastSeen[g.jid] ?? jidCreatedAt(g.jid);
-  return jidCreatedAt(g.jid);
+// "Recent activity" = the chat's last message/agent response time from the
+// server (NOT when the user last opened it — opening must not reorder).
+// Sort:name still needs a timestamp for date buckets — use activity time.
+function itemTimestamp(g: GroupInfo, sort: SortMode): number {
+  if (sort === 'created') return jidCreatedAt(g.jid);
+  return g.lastActivity ?? jidCreatedAt(g.jid);
 }
 
 export interface SessionListProps {
@@ -249,9 +248,8 @@ export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSe
   const { token } = theme.useToken();
   const [renamingJid, setRenamingJid] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [organize, setOrganize] = useState<OrganizeMode>(loadOrganize);
+  const [groupMode, setGroupModeState] = useState<GroupMode>(loadGroupMode);
   const [sort, setSort] = useState<SortMode>(loadSort);
-  const [lastSeen, setLastSeen] = useState<Record<string, number>>(loadLastSeen);
   // collapseSignal/expandSignal are bumped from the menu to broadcast
   // "collapse all" / "expand all" intents to <SessionGroups/>.
   const [collapseSignal, setCollapseSignal] = useState(0);
@@ -272,22 +270,11 @@ export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSe
     if (renamingJid && renameInputRef.current) renameInputRef.current.focus();
   }, [renamingJid]);
 
-  // Mark a chat as "just opened" whenever it becomes the selected one — drives
-  // the Updated sort order without needing backend lastActivity data.
-  useEffect(() => {
-    if (!selectedJid) return;
-    setLastSeen(prev => {
-      const next = { ...prev, [selectedJid]: Date.now() };
-      saveLastSeen(next);
-      return next;
-    });
-  }, [selectedJid]);
-
   const pinned   = groups.filter(g => pinnedJids.has(g.jid));
   const unpinned = groups.filter(g => !pinnedJids.has(g.jid));
 
-  const setOrganizeMode = (m: OrganizeMode) => { setOrganize(m); saveOrganize(m); };
-  const setSortMode     = (m: SortMode) => { setSort(m); saveSort(m); };
+  const setGroupMode = (m: GroupMode) => { setGroupModeState(m); saveGroupMode(m); };
+  const setSortMode  = (m: SortMode) => { setSort(m); saveSort(m); };
 
   const renderItem = (g: GroupInfo, isPinned = false) => {
     const isSelected = g.jid === selectedJid;
@@ -381,7 +368,7 @@ export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSe
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 flex items-center gap-1.5">
         <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={onNewChat} style={{ borderRadius: 8, fontSize: 12 }} className="flex-1">
-          New Chat
+          New Session
         </Button>
         {onReload && (
           <Tooltip title="Tải lại danh sách chat">
@@ -397,15 +384,19 @@ export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSe
 
       {pinned.length > 0 && <>{sectionLabel('Pinned')}{pinned.map(g => renderItem(g, true))}</>}
 
-      {/* Header row: section title + collapse-all + organize/sort menu (Codex style). */}
+      {/* Workflow runs surface as sessions too — selecting one shows the
+          flow-activity pane in place of the chat conversation. */}
+      <WorkflowSidebarSection selectedJid={selectedJid} onSelect={onSelect} />
+
+      {/* Header row: section title + collapse-all + group/sort menu. */}
       <div className="px-4 pt-3 pb-1 flex items-center gap-1">
         <span
           className="text-[10px] font-semibold tracking-widest uppercase flex-1"
           style={{ color: token.colorTextTertiary }}
         >
-          {organize === 'flat' ? 'Sessions' : organize === 'chronological' ? 'Chats' : 'Projects'}
+          {groupMode === 'none' ? 'Sessions' : groupMode === 'date' ? 'Chats' : 'Projects'}
         </span>
-        <Tooltip title="Collapse all">
+        <Tooltip title="Thu gọn tất cả">
           <Button
             type="text" size="small"
             icon={<ShrinkOutlined style={{ fontSize: 11 }} />}
@@ -413,49 +404,52 @@ export function SessionList({ groups, selectedJid, agentStates, pinnedJids, onSe
             style={{ width: 22, height: 22, padding: 0, color: token.colorTextTertiary }}
           />
         </Tooltip>
+        {/* Flat two-section menu (Group by / Sort by) — no nested submenus. */}
         <Dropdown
           trigger={['click']}
           placement="bottomRight"
           menu={{
             items: [
               {
-                key: 'organize',
-                icon: <FolderOutlined />,
-                label: 'Organize sidebar',
+                key: 'group-by',
+                type: 'group' as const,
+                label: 'Nhóm theo',
                 children: [
-                  { key: 'project',         label: 'By project',         icon: <FolderOutlined />,      onClick: () => setOrganizeMode('project'),         extra: organize === 'project'         ? <CheckOutlined /> : undefined },
-                  { key: 'project-recent',  label: 'Recent projects',    icon: <FolderOutlined />,      onClick: () => setOrganizeMode('project-recent'),  extra: organize === 'project-recent'  ? <CheckOutlined /> : undefined },
-                  { key: 'chronological',   label: 'Chronological list', icon: <ClockCircleOutlined />, onClick: () => setOrganizeMode('chronological'),   extra: organize === 'chronological'   ? <CheckOutlined /> : undefined },
-                  { key: 'flat',            label: 'Flat list',          icon: <MenuOutlined />,        onClick: () => setOrganizeMode('flat'),            extra: organize === 'flat'            ? <CheckOutlined /> : undefined },
-                ],
-              },
-              {
-                key: 'sort',
-                icon: <ClockCircleOutlined />,
-                label: 'Sort by',
-                children: [
-                  { key: 'updated', label: 'Updated', icon: <ClockCircleOutlined />, onClick: () => setSortMode('updated'), extra: sort === 'updated' ? <CheckOutlined /> : undefined },
-                  { key: 'created', label: 'Created', icon: <PlusOutlined />,        onClick: () => setSortMode('created'), extra: sort === 'created' ? <CheckOutlined /> : undefined },
+                  { key: 'g-project', label: 'Dự án',      icon: <FolderOutlined />,      onClick: () => setGroupMode('project'), extra: groupMode === 'project' ? <CheckOutlined /> : undefined },
+                  { key: 'g-date',    label: 'Ngày',       icon: <ClockCircleOutlined />, onClick: () => setGroupMode('date'),    extra: groupMode === 'date'    ? <CheckOutlined /> : undefined },
+                  { key: 'g-none',    label: 'Không nhóm', icon: <MenuOutlined />,        onClick: () => setGroupMode('none'),    extra: groupMode === 'none'    ? <CheckOutlined /> : undefined },
                 ],
               },
               { type: 'divider' as const },
-              { key: 'expand-all',   icon: <DownOutlined />,   label: 'Expand all',   onClick: () => setExpandSignal(n => n + 1) },
-              { key: 'collapse-all', icon: <ShrinkOutlined />, label: 'Collapse all', onClick: () => setCollapseSignal(n => n + 1) },
+              {
+                key: 'sort-by',
+                type: 'group' as const,
+                label: 'Sắp xếp',
+                children: [
+                  { key: 's-updated', label: 'Hoạt động gần đây', icon: <ClockCircleOutlined />,  onClick: () => setSortMode('updated'), extra: sort === 'updated' ? <CheckOutlined /> : undefined },
+                  { key: 's-created', label: 'Ngày tạo',          icon: <PlusOutlined />,         onClick: () => setSortMode('created'), extra: sort === 'created' ? <CheckOutlined /> : undefined },
+                  { key: 's-name',    label: 'Tên A–Z',           icon: <SortAscendingOutlined />, onClick: () => setSortMode('name'),   extra: sort === 'name'    ? <CheckOutlined /> : undefined },
+                ],
+              },
+              { type: 'divider' as const },
+              { key: 'expand-all',   icon: <DownOutlined />,   label: 'Mở rộng tất cả', onClick: () => setExpandSignal(n => n + 1) },
+              { key: 'collapse-all', icon: <ShrinkOutlined />, label: 'Thu gọn tất cả', onClick: () => setCollapseSignal(n => n + 1) },
             ],
           }}
         >
-          <Button
-            type="text" size="small" icon={<MoreOutlined />}
-            style={{ width: 22, height: 22, padding: 0, color: token.colorTextTertiary }}
-          />
+          <Tooltip title="Nhóm & sắp xếp">
+            <Button
+              type="text" size="small" icon={<ControlOutlined />}
+              style={{ width: 22, height: 22, padding: 0, color: token.colorTextTertiary }}
+            />
+          </Tooltip>
         </Dropdown>
       </div>
 
       <SessionGroups
         groups={unpinned}
-        organize={organize}
+        groupMode={groupMode}
         sort={sort}
-        lastSeen={lastSeen}
         collapseSignal={collapseSignal}
         expandSignal={expandSignal}
         renderItem={renderItem}
@@ -476,15 +470,15 @@ function saveCollapsed(s: Set<string>) {
   try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s])); } catch {}
 }
 
-/** Bucket key + display label for a session under each organize mode. */
-function bucketKey(g: GroupInfo, mode: OrganizeMode, ts: number): { key: string; label: string } {
-  if (mode === 'project' || mode === 'project-recent') {
+/** Bucket key + display label for a session under each group mode. */
+function bucketKey(g: GroupInfo, mode: GroupMode, ts: number): { key: string; label: string } {
+  if (mode === 'project') {
     const f = g.folder || '(unknown)';
     return { key: f, label: f };
   }
-  if (mode === 'flat') return { key: 'all', label: 'Sessions' };
+  if (mode === 'none') return { key: 'all', label: 'Sessions' };
 
-  // Chronological — bucket by recency relative to today.
+  // Date — bucket by recency relative to today.
   if (!ts) return { key: 'older', label: 'Older' };
   const d = new Date(ts);
   const now = new Date();
@@ -505,12 +499,11 @@ const CHRONO_ORDER: Record<string, number> = {
 };
 
 function SessionGroups({
-  groups, organize, sort, lastSeen, collapseSignal, expandSignal, renderItem, token,
+  groups, groupMode, sort, collapseSignal, expandSignal, renderItem, token,
 }: {
   groups: GroupInfo[];
-  organize: OrganizeMode;
+  groupMode: GroupMode;
   sort: SortMode;
-  lastSeen: Record<string, number>;
   collapseSignal: number;
   expandSignal: number;
   renderItem: (g: GroupInfo) => React.ReactNode;
@@ -523,38 +516,41 @@ function SessionGroups({
   type Bucket = { key: string; label: string; items: GroupInfo[]; maxTs: number };
   const buckets = new Map<string, Bucket>();
   for (const g of groups) {
-    const ts = itemTimestamp(g, sort, lastSeen);
-    const { key, label } = bucketKey(g, organize, ts);
+    const ts = itemTimestamp(g, sort);
+    const { key, label } = bucketKey(g, groupMode, ts);
     let b = buckets.get(key);
     if (!b) { b = { key, label, items: [], maxTs: 0 }; buckets.set(key, b); }
     b.items.push(g);
     if (ts > b.maxTs) b.maxTs = ts;
   }
 
-  // Items inside each bucket sort newest-first by the active sort field.
+  // Items inside each bucket follow the active sort: name A–Z, else newest-first.
   for (const b of buckets.values()) {
-    b.items.sort((a, x) => itemTimestamp(x, sort, lastSeen) - itemTimestamp(a, sort, lastSeen));
+    if (sort === 'name') {
+      b.items.sort((a, x) => (a.name || a.jid).localeCompare(x.name || x.jid));
+    } else {
+      b.items.sort((a, x) => itemTimestamp(x, sort) - itemTimestamp(a, sort));
+    }
   }
 
-  // Bucket order depends on organize mode:
-  //   project          → alphabetical
-  //   project-recent   → freshest bucket first
-  //   chronological    → canonical today / yesterday / past7 / past30 / older
-  //   flat             → single bucket, no sort needed
+  // Bucket order depends on group mode:
+  //   date    → canonical today / yesterday / past7 / past30 / older
+  //   none    → single bucket, no sort needed
+  //   project → follows the sort mode: A–Z for name, else freshest bucket first
   const sorted = [...buckets.values()].sort((a, b) => {
-    switch (organize) {
-      case 'project-recent': return b.maxTs - a.maxTs;
-      case 'chronological':  return (CHRONO_ORDER[a.key] ?? 99) - (CHRONO_ORDER[b.key] ?? 99);
-      case 'flat':           return 0;
+    switch (groupMode) {
+      case 'date': return (CHRONO_ORDER[a.key] ?? 99) - (CHRONO_ORDER[b.key] ?? 99);
+      case 'none': return 0;
       case 'project':
-      default:               return a.label.localeCompare(b.label);
+      default:
+        return sort === 'name' ? a.label.localeCompare(b.label) : b.maxTs - a.maxTs;
     }
   });
 
   // Collapse-all / Expand-all broadcasts from the parent menu.
   useEffect(() => {
     if (collapseSignal === 0) return;
-    const all = new Set<string>(sorted.map(b => `${organize}:${b.key}`));
+    const all = new Set<string>(sorted.map(b => `${groupMode}:${b.key}`));
     setCollapsed(prev => {
       const merged = new Set(prev);
       for (const k of all) merged.add(k);
@@ -568,9 +564,9 @@ function SessionGroups({
     if (expandSignal === 0) return;
     setCollapsed(prev => {
       if (prev.size === 0) return prev;
-      // Drop any key that belongs to the current organize mode.
+      // Drop any key that belongs to the current group mode.
       const next = new Set<string>();
-      for (const k of prev) if (!k.startsWith(`${organize}:`)) next.add(k);
+      for (const k of prev) if (!k.startsWith(`${groupMode}:`)) next.add(k);
       saveCollapsed(next);
       return next;
     });
@@ -588,7 +584,7 @@ function SessionGroups({
   const toggle = (key: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
-      const k = `${organize}:${key}`;
+      const k = `${groupMode}:${key}`;
       if (next.has(k)) next.delete(k); else next.add(k);
       saveCollapsed(next);
       return next;
@@ -598,9 +594,9 @@ function SessionGroups({
   return (
     <>
       {sorted.map(b => {
-        const collapsedKey = `${organize}:${b.key}`;
+        const collapsedKey = `${groupMode}:${b.key}`;
         const isCollapsed = collapsed.has(collapsedKey);
-        const isProjectMode = organize === 'project' || organize === 'project-recent';
+        const isProjectMode = groupMode === 'project';
         return (
           <div key={collapsedKey} className="mt-1">
             <button

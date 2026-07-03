@@ -109,6 +109,14 @@ pub struct DispatchTask {
     /// Checklist items for task verification.
     #[serde(default)]
     pub checklist: Vec<ChecklistItem>,
+    /// True when `checklist` was auto-generated from the prompt rather than
+    /// supplied explicitly by the orchestrator. Auto checklists are advisory:
+    /// a failed verification downgrades to warnings instead of `Error`.
+    #[serde(default)]
+    pub checklist_auto: bool,
+    /// Number of scheduler-level retries already consumed (infra errors only).
+    #[serde(default)]
+    pub retry_count: u32,
     /// File changes tracked during task execution.
     #[serde(default)]
     pub file_changes: Vec<FileChange>,

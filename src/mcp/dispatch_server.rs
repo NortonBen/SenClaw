@@ -513,8 +513,12 @@ impl DispatchServer {
                 tasks: resolved
                     .iter()
                     .map(|(agent, label, prompt, deps, checklist_inputs)| {
-                        // Convert checklist inputs to ChecklistItem, or auto-generate from prompt
-                        let checklist: Vec<ChecklistItem> = if checklist_inputs.is_empty() {
+                        // Convert checklist inputs to ChecklistItem, or auto-generate from prompt.
+                        // Auto-generated checklists are advisory only (see
+                        // `DispatchTask::checklist_auto`) — workers never see them,
+                        // so they must not fail the task.
+                        let checklist_auto = checklist_inputs.is_empty();
+                        let checklist: Vec<ChecklistItem> = if checklist_auto {
                             generate_checklist_from_prompt(prompt)
                         } else {
                             checklist_inputs
@@ -546,6 +550,8 @@ impl DispatchServer {
                             is_virtual: agent.is_virtual,
                             persona_name: agent.persona_name.clone(),
                             checklist,
+                            checklist_auto,
+                            retry_count: 0,
                             file_changes: Vec::new(),
                             verification_result: None,
                         }
@@ -759,14 +765,29 @@ impl DispatchServer {
                     return ToolResult::ok(current.result.unwrap_or_default());
                 }
                 DispatchTaskStatus::Error => {
+                    // Return the partial output alongside the failure — the
+                    // orchestrator can often synthesize from it instead of
+                    // re-dispatching the whole DAG from scratch.
+                    let partial = current
+                        .result
+                        .as_deref()
+                        .filter(|r| !r.trim().is_empty())
+                        .map(|r| format!("\n\nPartial output before failure (use it if salvageable — do NOT re-dispatch the whole DAG just to regenerate this):\n{r}"))
+                        .unwrap_or_default();
                     return ToolResult::err(format!(
-                        "Task \"{task_label}\" failed (agent: {})",
+                        "Task \"{task_label}\" failed (agent: {}){partial}",
                         current.agent_id
                     ));
                 }
                 DispatchTaskStatus::Timeout => {
+                    let partial = current
+                        .result
+                        .as_deref()
+                        .filter(|r| !r.trim().is_empty())
+                        .map(|r| format!("\n\nPartial output before timeout:\n{r}"))
+                        .unwrap_or_default();
                     return ToolResult::err(format!(
-                        "Task \"{task_label}\" timed out (agent: {})",
+                        "Task \"{task_label}\" timed out (agent: {}){partial}",
                         current.agent_id
                     ));
                 }
@@ -778,7 +799,11 @@ impl DispatchServer {
     }
 
     /// Wait for every task under `parent_id` in dependency order (same wait semantics as
-    /// [`dispatch_task`] per label). Returns one combined report or stops at the first failure.
+    /// [`dispatch_task`] per label). Waits for ALL tasks to reach a terminal state —
+    /// the DAG scheduler has continue-on-error semantics (an errored dependency still
+    /// unblocks dependants), so stopping at the first failure would abandon results
+    /// that are still being produced in the daemon. Returns one combined report with
+    /// per-task status; the call is an error only if EVERY task failed.
     pub async fn dispatch_all_tasks(
         &self,
         parent_id: &str,
@@ -809,20 +834,35 @@ impl DispatchServer {
             order.len(),
             order.join(", ")
         )];
+        let mut failed_labels: Vec<String> = Vec::new();
 
         for label in &order {
             let r = self.dispatch_task(parent_id, label, timeout_seconds).await;
             if r.is_error {
-                let trail = sections.join("\n\n");
-                return ToolResult::err(format!(
-                    "{trail}\n\n---\nStopped on task `{label}`:\n{}",
-                    r.content
-                ));
+                failed_labels.push(label.clone());
+                sections.push(format!("### `{label}` — FAILED\n{}", r.content));
+            } else {
+                sections.push(format!("### `{label}` — done\n{}", r.content));
             }
-            sections.push(format!("### `{label}`\n{}", r.content));
         }
 
-        sections.push("**All dispatch tasks completed.**".into());
+        if failed_labels.len() == order.len() {
+            sections.push("**Every dispatch task failed.**".into());
+            return ToolResult::err(sections.join("\n\n"));
+        }
+        if failed_labels.is_empty() {
+            sections.push("**All dispatch tasks completed.**".into());
+        } else {
+            sections.push(format!(
+                "**Completed with failures** — {}/{} task(s) failed: [{}]. \
+                 Use the successful results (and any partial output above) to answer the user. \
+                 Do NOT re-dispatch the whole DAG; if one task's output is truly required and \
+                 missing, re-dispatch only that task.",
+                failed_labels.len(),
+                order.len(),
+                failed_labels.join(", ")
+            ));
+        }
         ToolResult::ok(sections.join("\n\n"))
     }
 
@@ -1335,6 +1375,8 @@ mod tests {
             is_virtual: false,
             persona_name: None,
             checklist: vec![],
+            checklist_auto: false,
+            retry_count: 0,
             file_changes: vec![],
             verification_result: None,
         }

@@ -105,6 +105,15 @@ impl ZenEngine {
             event_bus.clone(),
             response_registry.clone(),
         ));
+        // Wire the option skip flags in — without this, unattended sessions
+        // (isolated runner / workflow agent steps) emit permission requests
+        // that nobody can answer and hang until their timeout.
+        permission_manager.update_skip_flags(
+            options.skip_file_edit_permission,
+            options.skip_bash_exec_permission,
+            options.skip_skill_permission,
+            options.skip_mcp_tool_permission,
+        );
 
         let http_client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(30))
@@ -427,12 +436,33 @@ impl ZenEngine {
         let is_dag = opts.agent_mode == AgentMode::Dag;
         let tools = self.builtin_tools.read().unwrap();
 
+        // Resolve the whitelist like `tools_for_main_agent` does — a naive
+        // exact match on `use_tools` silently drops every MCP tool listed by
+        // short name (persona says `browser_navigate`, the tool registers as
+        // `mcp__senclaw-browser__browser_navigate`), which makes those tools
+        // invisible even to ToolSearch.
+        let keep: Option<std::collections::HashSet<String>> = if use_tools.is_empty() {
+            None
+        } else {
+            let mut k = std::collections::HashSet::new();
+            for entry in use_tools.iter() {
+                if let Some(t) =
+                    crate::tools::tool_search::resolve_tool_by_name(entry, tools.as_slice())
+                {
+                    k.insert(t.name().to_string());
+                }
+            }
+            Some(k)
+        };
+
         let mut deferred: Vec<Arc<dyn Tool>> = tools
             .iter()
             .filter(|t| {
                 let name = t.name();
-                if !use_tools.is_empty() && !use_tools.contains(&name.to_string()) {
-                    return false;
+                if let Some(keep) = &keep {
+                    if !keep.contains(name) {
+                        return false;
+                    }
                 }
                 if is_plan && name == "TodoWrite" {
                     return false;
@@ -1146,6 +1176,7 @@ impl ZenCore for ZenEngine {
                 // Pass through the current agent_mode so the conversation loop
                 // knows whether to enforce task_done (Plan/Dag only).
                 agent_mode: opts.agent_mode,
+                max_turns_override: opts.max_agent_turns,
             };
 
             let result = conversation::query(messages, &config, &cancel).await;
@@ -1283,11 +1314,17 @@ impl ZenCore for ZenEngine {
     }
 
     fn update_skip_permissions(&self, skip: bool) {
-        let mut opts = self.options.write().unwrap();
-        opts.skip_file_edit_permission = skip;
-        opts.skip_bash_exec_permission = skip;
-        opts.skip_skill_permission = skip;
-        opts.skip_mcp_tool_permission = skip;
+        {
+            let mut opts = self.options.write().unwrap();
+            opts.skip_file_edit_permission = skip;
+            opts.skip_bash_exec_permission = skip;
+            opts.skip_skill_permission = skip;
+            opts.skip_mcp_tool_permission = skip;
+        }
+        // Propagate to the live checker — PermissionManager reads its own
+        // flags, not the options copy.
+        self.permission_manager
+            .update_skip_flags(skip, skip, skip, skip);
     }
 
     fn update_thinking(&self, enabled: bool) {

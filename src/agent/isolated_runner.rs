@@ -33,6 +33,18 @@ pub struct McpInject {
     pub scope: String,
 }
 
+/// Live-activity callback: `(kind, text)` where kind ∈
+/// think | text | tool | tool_error | message. Lets callers (workflow steps)
+/// surface what the isolated agent is doing in real time.
+#[derive(Clone)]
+pub struct OnActivity(pub Arc<dyn Fn(&str, &str) + Send + Sync>);
+
+impl std::fmt::Debug for OnActivity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnActivity(..)")
+    }
+}
+
 /// Permission skip flags. All default to `true` for unattended one-shot runs.
 #[derive(Debug, Clone)]
 pub struct SkipPermissions {
@@ -80,6 +92,14 @@ pub struct OneShotOptions {
     pub timeout: Option<Duration>,
     /// Permission skip flags (all default true).
     pub skip_permissions: SkipPermissions,
+    /// Cooperative cancellation: when cancelled, the engine is aborted and
+    /// the result returns with `aborted: true` (used by workflow cancel).
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
+    /// Agent-loop turn budget override. `None` = engine default (30). Raise
+    /// for browser-driven research sessions (~2 turns per page).
+    pub max_agent_turns: Option<usize>,
+    /// Live-activity stream (thinking deltas, tool calls, messages).
+    pub on_activity: Option<OnActivity>,
 }
 
 impl Default for OneShotOptions {
@@ -97,6 +117,9 @@ impl Default for OneShotOptions {
             mcp_configs: Vec::new(),
             timeout: None,
             skip_permissions: SkipPermissions::default(),
+            cancel: None,
+            max_agent_turns: None,
+            on_activity: None,
         }
     }
 }
@@ -114,6 +137,15 @@ pub struct OneShotResult {
     pub turn_count: u32,
     /// `true` if execution ended via timeout (engine forcibly aborted).
     pub timed_out: bool,
+    /// `true` if execution ended via the `cancel` token (engine aborted).
+    pub aborted: bool,
+    /// `true` if the session surfaced a terminal error (api/model/context…).
+    /// Mirrors the TS runner's fast-fail on `session:error` — without it a
+    /// mid-step LLM failure ends the loop via Idle and the caller sees a
+    /// "successful" run with an empty `text`.
+    pub errored: bool,
+    /// Description of the session error when `errored` (`<code>: <message>`).
+    pub error_message: Option<String>,
 }
 
 /// Build a unique instance id like `oneshot-{millis}-{rand}` if caller didn't supply one.
@@ -150,30 +182,77 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
         system_prompt: opts.system_prompt.clone().unwrap_or_default(),
         custom_rules: opts.custom_rules.clone().unwrap_or_default(),
         agent_mode: opts.agent_mode,
+        max_agent_turns: opts.max_agent_turns,
         ..Default::default()
     };
 
     let engine = ZenEngine::new(zen_opts, None);
 
-    for inject in &opts.mcp_configs {
-        if let Err(e) = engine.add_or_update_mcp_server(&inject.config, &inject.scope) {
-            tracing::warn!(
-                "[IsolatedRunner:{instance_id}] add_or_update_mcp_server '{}' failed: {e}",
-                inject.config.name
+    let mut rx = engine.event_bus.subscribe();
+    engine.create_session(Some(&format!("session-{instance_id}")))?;
+
+    // Inject MCP servers AFTER create_session (session setup rebuilds tool
+    // registries), then give the async connect tasks a beat to register their
+    // tools before the prompt queries the tool list — mirrors
+    // VirtualWorkerPool's ordering.
+    if !opts.mcp_configs.is_empty() {
+        for inject in &opts.mcp_configs {
+            if let Err(e) = engine.add_or_update_mcp_server(&inject.config, &inject.scope) {
+                tracing::warn!(
+                    "[IsolatedRunner:{instance_id}] add_or_update_mcp_server '{}' failed: {e}",
+                    inject.config.name
+                );
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Pre-discover whitelisted deferred tools: a persona that names MCP tools
+    // (e.g. browser_navigate) expects them in the roster immediately. Without
+    // this the defer filter hides them behind ToolSearch and small models
+    // stall searching instead of working. Mirrors DAG-mode pre-discovery.
+    if !opts.use_tools.is_empty() {
+        let deferred = engine.deferred_tools();
+        let mut pre_discovered = 0usize;
+        let mut discovered = engine.discovered_tools.lock().unwrap();
+        for entry in &opts.use_tools {
+            if let Some(t) =
+                crate::tools::tool_search::resolve_tool_by_name(entry, deferred.as_slice())
+            {
+                discovered.insert(t.name().to_string());
+                pre_discovered += 1;
+            }
+        }
+        if pre_discovered > 0 {
+            tracing::info!(
+                "[IsolatedRunner:{instance_id}] pre-discovered {pre_discovered} whitelisted deferred tool(s)"
             );
         }
     }
 
-    let mut rx = engine.event_bus.subscribe();
-    engine.create_session(Some(&format!("session-{instance_id}")))?;
     engine.process_user_input(&opts.prompt, None)?;
 
     let mut all_texts: Vec<String> = Vec::new();
     let mut turn_count: u32 = 0;
     let mut timed_out = false;
+    let mut aborted = false;
+    let mut errored = false;
+    let mut error_message: Option<String> = None;
+    // Only accept Idle AFTER the session has been observed doing work.
+    // create_session / plugin init can leave an early Idle StateUpdate in the
+    // event channel; breaking on it would dispose the engine before the LLM
+    // request is even sent ("Request cancelled before send") and return an
+    // empty text. Mirrors the TS runner's `sawProcessing` guard.
+    let mut saw_processing = false;
     let deadline = Instant::now() + timeout;
+    let cancel = opts.cancel.clone().unwrap_or_default();
 
-    loop {
+    if cancel.is_cancelled() {
+        aborted = true;
+        engine.abort_current();
+    }
+
+    while !aborted {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             timed_out = true;
@@ -181,7 +260,17 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
             break;
         }
 
-        match tokio_timeout(remaining, rx.recv()).await {
+        let next = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                aborted = true;
+                engine.abort_current();
+                break;
+            }
+            next = tokio_timeout(remaining, rx.recv()) => next,
+        };
+
+        match next {
             // Timed out waiting for next event
             Err(_) => {
                 timed_out = true;
@@ -196,13 +285,49 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
                 }) if agent_id == MAIN_AGENT_ID => {
                     turn_count += 1;
                     if !content.trim().is_empty() {
+                        if let Some(cb) = &opts.on_activity {
+                            (cb.0)("message", &content);
+                        }
                         all_texts.push(content);
                     }
                 }
-                EngineEvent::StateUpdate(StateUpdateData { state })
-                    if state == SessionState::Idle =>
-                {
-                    break;
+                EngineEvent::ThinkingChunk(d) => {
+                    if let Some(cb) = &opts.on_activity {
+                        if !d.delta.is_empty() {
+                            (cb.0)("think", &d.delta);
+                        }
+                    }
+                }
+                EngineEvent::TextChunk(d) => {
+                    if let Some(cb) = &opts.on_activity {
+                        if !d.delta.is_empty() {
+                            (cb.0)("text", &d.delta);
+                        }
+                    }
+                }
+                EngineEvent::ToolExecutionComplete(d) => {
+                    if let Some(cb) = &opts.on_activity {
+                        let summary = if d.summary.trim().is_empty() {
+                            d.title.clone()
+                        } else {
+                            d.summary.clone()
+                        };
+                        (cb.0)("tool", &format!("{} — {}", d.tool_name, summary));
+                    }
+                }
+                EngineEvent::ToolExecutionError(d) => {
+                    if let Some(cb) = &opts.on_activity {
+                        (cb.0)("tool_error", &format!("{}: {}", d.tool_name, d.content));
+                    }
+                }
+                EngineEvent::StateUpdate(StateUpdateData { state }) => {
+                    if state == SessionState::Idle {
+                        if saw_processing {
+                            break;
+                        }
+                    } else {
+                        saw_processing = true;
+                    }
                 }
                 EngineEvent::SessionError(err) => {
                     tracing::warn!(
@@ -210,7 +335,15 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
                         err.error.message,
                         err.error.code
                     );
-                    // Don't break — wait for Idle to flush remaining state.
+                    // Fast-fail (TS parity): session errors are terminal
+                    // (api/model/context) — waiting for Idle just converts
+                    // them into a silent empty result.
+                    errored = true;
+                    error_message = Some(format!(
+                        "{}: {}",
+                        err.error.code, err.error.message
+                    ));
+                    break;
                 }
                 _ => {}
             },
@@ -233,6 +366,9 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
         duration: started_at.elapsed(),
         turn_count,
         timed_out,
+        aborted,
+        errored,
+        error_message,
     })
 }
 

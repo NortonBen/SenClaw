@@ -33,6 +33,7 @@ pub mod tts;
 pub mod types;
 pub mod util;
 pub mod wiki;
+pub mod workflow;
 pub mod zen_core;
 
 use channels::Channel;
@@ -2090,6 +2091,37 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         tracing::info!("[SenClaw] EventNotifier started (60s poll, local TZ: {tz_name})");
     }
 
+    // 6b. WorkflowService — saved DAGs of agent + script steps. Fully
+    //     decoupled from AgentPool/DispatchBridge (isolated sessions only);
+    //     state changes push to admin clients as `workflow:update`.
+    let workflow_service = {
+        let gw = Arc::clone(&ws_gateway);
+        let on_update: workflow::executor::OnUpdate = Arc::new(move |run| {
+            let gw = Arc::clone(&gw);
+            let run_json = serde_json::to_value(run).unwrap_or_default();
+            tokio::spawn(async move {
+                gw.notify_workflow_update(&run_json).await;
+            });
+        });
+        let svc = Arc::new(workflow::WorkflowService::new(workflow::WorkflowServiceOpts {
+            workflows_dir: cfg.paths.workflows_dir.clone(),
+            workflow_state_path: cfg.paths.workflow_state_path.clone(),
+            workflow_data_dir: cfg.paths.workflow_data_dir.clone(),
+            persona_registry: Arc::clone(&persona_registry),
+            concurrency: None,
+            skills_extra_dirs: cli::commands::workflow::default_skills_dirs(&cfg),
+            extra_mcp_servers: cli::commands::workflow::default_extra_mcp_servers(&cfg),
+            shell_override: cfg.workflow_shell.clone(),
+            on_update: Some(on_update),
+        }));
+        tracing::info!(
+            "[SenClaw] WorkflowService ready: {} definition(s) in {}",
+            svc.list_defs().len(),
+            cfg.paths.workflows_dir.display()
+        );
+        svc
+    };
+
     // 7b. WikiManager
     let wiki_mgr = Arc::new(wiki::manager::WikiManager::new(cfg.paths.wiki_dir.clone()));
     if let Err(e) = wiki_mgr.ensure_init().await {
@@ -2188,6 +2220,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             ))),
             workbench_bridge: Some(Arc::clone(&workbench_bridge)),
             space_mcp_launcher: Some(Arc::clone(&space_mcp_launcher)),
+            workflow_service: Some(Arc::clone(&workflow_service)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });
@@ -2228,6 +2261,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             }
         }
     }
+
+    // Flush in-flight workflow run state (running orphans reconcile on next boot)
+    workflow_service.flush();
 
     // Stop any MCP server processes launched for Space Apps
     space_mcp_launcher.shutdown().await;

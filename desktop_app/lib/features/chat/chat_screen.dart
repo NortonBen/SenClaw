@@ -4,6 +4,7 @@ import '../../core/prefs.dart';
 import '../../theme/tokens.dart';
 import '../../models/group.dart';
 import '../dock/right_dock.dart';
+import '../workflow/workflow_session_pane.dart';
 import 'agents_provider.dart';
 import 'conversation_pane.dart';
 import 'groups_provider.dart';
@@ -78,25 +79,32 @@ class ChatScreen extends ConsumerWidget {
         Expanded(
           child: (showNewChat || selected == null)
               ? const NewChatScreen()
-              : Row(
-                  children: [
-                    Expanded(
-                      child: ConversationPane(
-                        key: ValueKey(selected),
-                        jid: selected,
-                        title: groups
-                            .firstWhere(
-                              (g) => g.jid == selected,
-                              orElse: () =>
-                                  GroupInfo(jid: selected, name: selected),
-                            )
-                            .name,
-                      ),
+              // Workflow "sessions" are not chats: show the read-only flow
+              // activity view instead of a conversation (no composer/dock).
+              : selected.startsWith(wfRunJidPrefix)
+                  ? WorkflowSessionPane(
+                      key: ValueKey(selected),
+                      runId: selected.substring(wfRunJidPrefix.length),
+                    )
+                  : Row(
+                      children: [
+                        Expanded(
+                          child: ConversationPane(
+                            key: ValueKey(selected),
+                            jid: selected,
+                            title: groups
+                                .firstWhere(
+                                  (g) => g.jid == selected,
+                                  orElse: () =>
+                                      GroupInfo(jid: selected, name: selected),
+                                )
+                                .name,
+                          ),
+                        ),
+                        if (ref.watch(dockVisibleProvider))
+                          RightDock(jid: selected),
+                      ],
                     ),
-                    if (ref.watch(dockVisibleProvider))
-                      RightDock(jid: selected),
-                  ],
-                ),
         ),
       ],
     );

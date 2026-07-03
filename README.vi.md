@@ -60,7 +60,36 @@ Cụ thể gồm:
 
 ---
 
-## Chạy nhanh
+## Cài đặt
+
+### Cài bằng 1 lệnh (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NortonBen/SenClaw/main/scripts/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/NortonBen/SenClaw/main/scripts/install.ps1 | iex"
+```
+
+Cả hai script tải binary release mới nhất về `~/.senclaw/bin` (`%USERPROFILE%\.senclaw\bin` trên Windows) và tự thêm vào PATH. Muốn cài một phiên bản cụ thể, đặt `SENCLAW_VERSION=v0.3.0` trước khi chạy.
+
+Binary `senclaw` mặc định **không** kèm Web UI hay app desktop — chúng được tải về khi cần:
+
+```bash
+senclaw web               # tải bundle Web UI (lần đầu), rồi khởi động daemon phục vụ UI
+senclaw install desktop   # tải & cài app desktop native cho nền tảng hiện tại
+senclaw uninstall desktop # gỡ app desktop
+```
+
+- `senclaw web` lưu bundle UI tại `~/.senclaw/web/dist` và phục vụ tại `http://127.0.0.1:18788`. Dùng `--force` để tải lại, `--version v0.3.0` để chọn phiên bản.
+- `senclaw install desktop` cài vào `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` (Windows), hoặc `~/.senclaw/desktop` kèm shortcut launcher (Linux). Hỗ trợ macOS (Apple Silicon + Intel), Windows x64 và Linux x64.
+
+---
+
+## Chạy nhanh (từ mã nguồn)
 
 ### 1. Tải mã nguồn
 

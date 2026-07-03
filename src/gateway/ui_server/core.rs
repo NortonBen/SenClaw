@@ -143,6 +143,7 @@ pub struct UiState {
     pub marketplace_manager: Option<Arc<Mutex<crate::marketplace::manager::MarketplaceManager>>>,
     pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
     pub space_mcp_launcher: Option<Arc<super::space_mcp::SpaceMcpLauncher>>,
+    pub workflow_service: Option<Arc<crate::workflow::WorkflowService>>,
     pub ws_port: u16,
     pub ws_token: String,
 }
@@ -273,6 +274,50 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/agents/:folder/files",
             get(super::profile_files::get_files).put(super::profile_files::put_files),
+        )
+        // Workflows (saved DAGs of agent + script steps)
+        .route(
+            "/api/workflows",
+            get(super::workflow::workflows_list).post(super::workflow::workflows_def_create),
+        )
+        .route(
+            "/api/workflows/draft",
+            post(super::workflow::workflows_draft),
+        )
+        .route(
+            "/api/workflows/settings",
+            get(super::workflow::workflows_settings_get)
+                .put(super::workflow::workflows_settings_put),
+        )
+        .route("/api/workflows/runs", get(super::workflow::workflows_runs))
+        .route(
+            "/api/workflows/runs/:id",
+            get(super::workflow::workflows_run_get)
+                .patch(super::workflow::workflows_run_rename)
+                .delete(super::workflow::workflows_run_delete),
+        )
+        .route(
+            "/api/workflows/runs/:id/cancel",
+            post(super::workflow::workflows_run_cancel),
+        )
+        .route(
+            "/api/workflows/runs/:id/activity",
+            get(super::workflow::workflows_run_activity),
+        )
+        .route(
+            "/api/workflows/:name/run",
+            post(super::workflow::workflows_run_start),
+        )
+        .route(
+            "/api/workflows/:name/definition",
+            get(super::workflow::workflows_def_get)
+                .put(super::workflow::workflows_def_update)
+                .patch(super::workflow::workflows_def_patch)
+                .delete(super::workflow::workflows_def_delete),
+        )
+        .route(
+            "/api/workflows/:name",
+            delete(super::workflow::workflows_def_delete),
         )
         // Cowork teams (multi-agent dispatch)
         .route(

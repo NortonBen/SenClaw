@@ -52,13 +52,26 @@ class GroupsNotifier extends StateNotifier<List<GroupInfo>> {
           state = [
             for (final x in state)
               if (x.jid == info.jid)
-                // Selecting/reading a chat re-emits group:updated with a bumped
-                // lastActivity but the SAME lastMessage. Don't let that reorder
-                // the Sort:Updated list — only a genuinely new message (changed
-                // lastMessage) should move the chat's sort position.
-                (info.lastMessage == x.lastMessage
+                // group:updated carries settings changes, not activity — keep
+                // the lastActivity we already know unless the server sent one.
+                (info.lastActivity == null
                     ? info.copyWith(lastActivity: x.lastActivity)
                     : info)
+              else
+                x,
+          ];
+        }
+      case 'group:activity':
+        // Lightweight tick broadcast on every new message/agent response:
+        // bump that chat's lastActivity so the "recent activity" sort
+        // reorders live.
+        final jid = '${e['jid']}';
+        final ts = (e['ts'] as num?)?.toInt();
+        if (ts != null) {
+          state = [
+            for (final x in state)
+              if (x.jid == jid && ts > (x.lastActivity ?? 0))
+                x.copyWith(lastActivity: ts)
               else
                 x,
           ];
@@ -149,48 +162,47 @@ final pinnedProvider =
       (ref) => PinnedNotifier(ref),
     );
 
-// ── Organize / sort modes (persisted) ────────────────────────────────────
-enum OrganizeMode { project, projectRecent, chronological, flat }
-enum SortMode { updated, created }
+// ── Group / sort modes (persisted) ───────────────────────────────────────
+/// "Group by" axis: bucket sessions by project folder, by date, or not at all.
+enum GroupMode { project, date, none }
 
-class OrganizeNotifier extends StateNotifier<OrganizeMode> {
-  OrganizeNotifier(this._ref)
+/// "Sort by" axis: order sessions (and project buckets) by last activity,
+/// creation time, or name A–Z.
+enum SortMode { updated, created, name }
+
+class GroupModeNotifier extends StateNotifier<GroupMode> {
+  GroupModeNotifier(this._ref)
     : super(_parse(_ref.read(prefsHelperProvider).string(kOrganizeKey, 'project')));
   final Ref _ref;
-  static OrganizeMode _parse(String s) => switch (s) {
-    'project-recent' => OrganizeMode.projectRecent,
-    'chronological' => OrganizeMode.chronological,
-    'flat' => OrganizeMode.flat,
-    _ => OrganizeMode.project,
+  // Legacy 4-way organize values map onto the 3-way split: 'project-recent'
+  // collapses into 'project' (bucket order now follows the sort mode).
+  static GroupMode _parse(String s) => switch (s) {
+    'chronological' || 'date' => GroupMode.date,
+    'flat' || 'none' => GroupMode.none,
+    _ => GroupMode.project,
   };
-  static String _str(OrganizeMode m) => switch (m) {
-    OrganizeMode.projectRecent => 'project-recent',
-    OrganizeMode.chronological => 'chronological',
-    OrganizeMode.flat => 'flat',
-    OrganizeMode.project => 'project',
-  };
-  void set(OrganizeMode m) {
+  void set(GroupMode m) {
     state = m;
-    _ref.read(prefsHelperProvider).setString(kOrganizeKey, _str(m));
+    _ref.read(prefsHelperProvider).setString(kOrganizeKey, m.name);
   }
 }
 
-final organizeProvider =
-    StateNotifierProvider<OrganizeNotifier, OrganizeMode>(
-      (ref) => OrganizeNotifier(ref),
+final groupModeProvider =
+    StateNotifierProvider<GroupModeNotifier, GroupMode>(
+      (ref) => GroupModeNotifier(ref),
     );
 
 class SortNotifier extends StateNotifier<SortMode> {
   SortNotifier(this._ref)
-    : super(_ref.read(prefsHelperProvider).string(kSortKey, 'updated') == 'created'
-          ? SortMode.created
-          : SortMode.updated);
+    : super(switch (_ref.read(prefsHelperProvider).string(kSortKey, 'updated')) {
+        'created' => SortMode.created,
+        'name' => SortMode.name,
+        _ => SortMode.updated,
+      });
   final Ref _ref;
   void set(SortMode m) {
     state = m;
-    _ref
-        .read(prefsHelperProvider)
-        .setString(kSortKey, m == SortMode.created ? 'created' : 'updated');
+    _ref.read(prefsHelperProvider).setString(kSortKey, m.name);
   }
 }
 

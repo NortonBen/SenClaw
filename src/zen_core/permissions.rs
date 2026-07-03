@@ -63,11 +63,15 @@ const MCP_TOOL_PREFIX: &str = "mcp__";
 // ============================================================================
 
 pub struct PermissionManager {
-    /// Skip flags from engine options.
-    skip_file_edit: bool,
-    skip_bash: bool,
-    skip_skill: bool,
-    skip_mcp: bool,
+    /// Skip flags from engine options. Atomic so both the engine constructor
+    /// and the runtime settings toggle can update them through the shared
+    /// `Arc<PermissionManager>`. (They were plain bools that were NEVER wired
+    /// from `ZenCoreOptions` — unattended one-shot sessions then hung on
+    /// permission prompts nobody answers until the step timeout.)
+    skip_file_edit: std::sync::atomic::AtomicBool,
+    skip_bash: std::sync::atomic::AtomicBool,
+    skip_skill: std::sync::atomic::AtomicBool,
+    skip_mcp: std::sync::atomic::AtomicBool,
     /// Per-project allowed tools list (tool_name or "Bash(cmd)" keys).
     allowed_tools: Mutex<HashSet<String>>,
     /// Whether global edit permission has been granted this session.
@@ -84,10 +88,10 @@ pub struct PermissionManager {
 impl PermissionManager {
     pub(crate) fn new(event_bus: EventBus, response_registry: Arc<ResponseRegistry>) -> Self {
         Self {
-            skip_file_edit: false,
-            skip_bash: false,
-            skip_skill: false,
-            skip_mcp: false,
+            skip_file_edit: std::sync::atomic::AtomicBool::new(false),
+            skip_bash: std::sync::atomic::AtomicBool::new(false),
+            skip_skill: std::sync::atomic::AtomicBool::new(false),
+            skip_mcp: std::sync::atomic::AtomicBool::new(false),
             allowed_tools: Mutex::new(HashSet::new()),
             global_edit_granted: Mutex::new(false),
             is_in_working_dir: Box::new(|_| true),
@@ -96,11 +100,12 @@ impl PermissionManager {
         }
     }
 
-    pub fn update_skip_flags(&mut self, file_edit: bool, bash: bool, skill: bool, mcp: bool) {
-        self.skip_file_edit = file_edit;
-        self.skip_bash = bash;
-        self.skip_skill = skill;
-        self.skip_mcp = mcp;
+    pub fn update_skip_flags(&self, file_edit: bool, bash: bool, skill: bool, mcp: bool) {
+        use std::sync::atomic::Ordering;
+        self.skip_file_edit.store(file_edit, Ordering::Relaxed);
+        self.skip_bash.store(bash, Ordering::Relaxed);
+        self.skip_skill.store(skill, Ordering::Relaxed);
+        self.skip_mcp.store(mcp, Ordering::Relaxed);
     }
 
     pub fn grant_global_edit(&self) {
@@ -363,11 +368,12 @@ impl PermissionChecker for PermissionManager {
         cancel: &CancellationToken,
         agent_id: &str,
     ) -> Result<bool> {
+        use std::sync::atomic::Ordering;
         let name = tool.name();
 
         // 1. File edit tools
         if Self::is_file_edit_tool(name) {
-            if self.skip_file_edit {
+            if self.skip_file_edit.load(Ordering::Relaxed) {
                 debug!("[{name}] skip file edit permission");
                 return Ok(true);
             }
@@ -382,7 +388,7 @@ impl PermissionChecker for PermissionManager {
 
         // 2. Bash tool
         if name == "Bash" {
-            if self.skip_bash {
+            if self.skip_bash.load(Ordering::Relaxed) {
                 return Ok(true);
             }
             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
@@ -397,7 +403,7 @@ impl PermissionChecker for PermissionManager {
 
         // 3. Skill tool
         if Self::is_skill_tool(name) {
-            if self.skip_skill {
+            if self.skip_skill.load(Ordering::Relaxed) {
                 return Ok(true);
             }
             let key = Self::get_permission_key(tool, input, None);
@@ -411,7 +417,7 @@ impl PermissionChecker for PermissionManager {
 
         // 4. MCP tools
         if Self::is_mcp_tool(name) {
-            if self.skip_mcp {
+            if self.skip_mcp.load(Ordering::Relaxed) {
                 return Ok(true);
             }
             if self.is_allowed(name) {

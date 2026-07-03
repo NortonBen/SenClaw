@@ -36,12 +36,31 @@ pub(crate) fn build_augmented_prompt(parent: &DispatchParent, task: &DispatchTas
                 dep.status.label()
             ));
             ctx.push_str(&format!("\n    <prompt>{}</prompt>", dep.prompt));
-            if dep.status == DispatchTaskStatus::Done {
-                let result = match &dep.result {
-                    Some(r) if !r.is_empty() => format!("\n    <result>{r}</result>"),
-                    _ => "\n    <result>(task completed but produced no text output — the agent may have only used tools; check workspace for artifacts)</result>".into(),
-                };
-                ctx.push_str(&result);
+            match dep.status {
+                DispatchTaskStatus::Done => {
+                    let result = match &dep.result {
+                        Some(r) if !r.is_empty() => format!("\n    <result>{r}</result>"),
+                        _ => "\n    <result>(task completed but produced no text output — the agent may have only used tools; check workspace for artifacts)</result>".into(),
+                    };
+                    ctx.push_str(&result);
+                }
+                // Continue-on-error: an errored/timed-out dependency still
+                // unblocks this task. Inject whatever partial output it left
+                // behind so the dependant can salvage it instead of silently
+                // redoing the work from scratch.
+                DispatchTaskStatus::Error | DispatchTaskStatus::Timeout => {
+                    match &dep.result {
+                        Some(r) if !r.is_empty() => ctx.push_str(&format!(
+                            "\n    <result status=\"{}\">This prerequisite did NOT complete successfully — treat its output below as unverified/partial and assess it critically before relying on it:\n{r}</result>",
+                            dep.status.label()
+                        )),
+                        _ => ctx.push_str(&format!(
+                            "\n    <result status=\"{}\">(prerequisite failed and produced no output — proceed with your task using your own tools and note the gap in your answer)</result>",
+                            dep.status.label()
+                        )),
+                    }
+                }
+                _ => {}
             }
             ctx.push_str("\n  </task>");
         }

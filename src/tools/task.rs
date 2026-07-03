@@ -302,6 +302,7 @@ impl Tool for TaskTool {
             // they're best-effort one-shot helpers, not Plan/Dag-style
             // workflows that need task_done enforcement.
             agent_mode: crate::zen_core::AgentMode::Agent,
+            max_turns_override: None,
         };
 
         let result = conversation::query(messages, &query_config, &abort).await;

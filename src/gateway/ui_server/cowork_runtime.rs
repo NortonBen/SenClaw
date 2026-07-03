@@ -223,6 +223,15 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
             final answer for the user, attributing which member contributed what. \
             Do NOT stop after dispatching — the final synthesized answer is required.\n\
          \n\
+         ERROR HANDLING — if some tasks report status error/failed:\n\
+         • Use the successful results and any partial output included in the report.\n\
+         • Do NOT re-dispatch the whole DAG — that duplicates work already running \
+           in the daemon. If one specific output is truly missing, re-dispatch only \
+           that single task.\n\
+         • Do NOT do the members' work yourself (you don't have their tools), and \
+           NEVER attribute content to a member whose output you did not receive — \
+           if you had to answer from partial data, say so honestly.\n\
+         \n\
          If the request is purely conversational (greeting, small talk), say so \
          explicitly: \"No specialist needed — answering directly.\" and answer. \
          Otherwise delegation is REQUIRED.\n",

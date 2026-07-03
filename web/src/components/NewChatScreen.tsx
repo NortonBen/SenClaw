@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { theme, Input, message, Select, Segmented, Dropdown, Modal } from 'antd';
+import { WorkflowQuickStart } from './WorkflowQuickStart';
 import type { MenuProps } from 'antd';
 import {
   FolderOpenOutlined,
@@ -27,6 +28,9 @@ interface Props {
   /** Display name shown in the welcome heading when no folder is picked. */
   projectName?: string;
   profiles: AgentInfo[];
+  /** Select a workflow "session" (wfrun:<id>) in the chat surface after a
+   *  run started from the quick-start — keeps the user in Chat. */
+  onWorkflowRunSelected?: (jid: string) => void;
 }
 
 const CHAT_SUGGESTIONS = [
@@ -106,7 +110,7 @@ async function pickFolderNative(): Promise<string | null> {
   return null;
 }
 
-export function NewChatScreen({ onStart, projectName, profiles }: Props) {
+export function NewChatScreen({ onStart, projectName, profiles, onWorkflowRunSelected }: Props) {
   const { token } = theme.useToken();
   const [input, setInput] = useState('');
   const [workDir, setWorkDir] = useState('');
@@ -116,7 +120,9 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
   const [models, setModels] = useState<LlmConfig[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [recentPaths, setRecentPaths] = useState<string[]>(loadRecentPaths);
-  const [kind, setKind] = useState<ChatKind>('chat');
+  // 'workflow' is not a chat kind — it swaps the composer for the workflow
+  // quick-start (pick & run, or create with the agent).
+  const [kind, setKind] = useState<ChatKind | 'workflow'>('chat');
   // Project-picker dropdown + path modal (Codex-style flow).
   //   - `pickerSearch` filters the recent-projects list.
   //   - `pathModalMode` opens a small modal for either creating a new folder
@@ -306,7 +312,7 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
 
   const handleSubmit = () => {
     const text = input.trim();
-    if (!text) return;
+    if (!text || kind === 'workflow') return;
     if (workDir) {
       pushRecentPath(workDir);
       setRecentPaths(loadRecentPaths());
@@ -370,11 +376,15 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
   const workDirBasename = workDir ? (workDir.split('/').filter(Boolean).pop() || workDir) : '';
   const selectedProfile = profileId ? profiles.find(p => p.id === profileId) : undefined;
   const heading =
-    kind === 'code'
+    kind === 'workflow'
+      ? 'Chạy một workflow'
+      : kind === 'code'
       ? (workDirBasename ? `What should we build in ${workDirBasename}?` : 'Pick a workspace folder to start')
       : (selectedProfile ? `Chat with ${selectedProfile.name}` : 'How can I help today?');
   const subheading =
-    kind === 'code'
+    kind === 'workflow'
+      ? 'Chọn quy trình có sẵn, hoặc mô tả để AI agent tạo mới rồi chạy ngay.'
+      : kind === 'code'
       ? (workDirBasename ? '' : 'Click "Folder" below to choose your project root.')
       : 'No workspace needed — just a conversation.';
   // `projectName` prop kept for backward compat but no longer drives the heading.
@@ -387,18 +397,19 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
       <div className="w-full max-w-2xl">
         {/* Kind selector — Chat vs Code */}
         <div className="flex justify-center mb-5">
-          <Segmented<ChatKind>
+          <Segmented<ChatKind | 'workflow'>
             size="middle"
             value={kind}
             onChange={(v) => {
               setKind(v);
-              // Reset workspace state when switching to plain Chat so it's
-              // not silently carried over to the next code session.
+              // Reset workspace state when leaving Code so it's not silently
+              // carried over to the next code session.
               if (v === 'chat') { setWorkDir(''); }
             }}
             options={[
               { value: 'chat', label: <span style={{ padding: '0 8px' }}>💬 Chat</span> },
               { value: 'code', label: <span style={{ padding: '0 8px' }}>⌨️ Code</span> },
+              { value: 'workflow', label: <span style={{ padding: '0 8px' }}>🔁 Workflow</span> },
             ]}
           />
         </div>
@@ -418,6 +429,10 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
           )}
         </div>
 
+        {kind === 'workflow' ? (
+          <WorkflowQuickStart onRunSelected={onWorkflowRunSelected} />
+        ) : (
+        <>
         {/* Unified input card — textarea + toolbar all in one rounded surface */}
         <div
           className="rounded-2xl overflow-hidden transition-shadow"
@@ -569,6 +584,8 @@ export function NewChatScreen({ onStart, projectName, profiles }: Props) {
             </button>
           ))}
         </div>
+        </>
+        )}
       </div>
 
       {/* Path modal — opened from the project dropdown's "Add new project"

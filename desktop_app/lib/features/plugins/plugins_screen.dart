@@ -7,6 +7,7 @@ import '../settings/entity_providers.dart' show toolRulesProvider, ToolRule;
 import 'cowork_panel.dart' show CoworkPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
 import '../cognitive/cognitive_screen.dart' show CognitiveScreen;
+import '../workflow/workflow_panel.dart' show WorkflowPanel;
 
 // ── Models ──────────────────────────────────────────────────────────────────
 class SkillInfo {
@@ -247,11 +248,14 @@ const _pluginsSections = [
   ('code', 'Code', Icons.code),
   ('apps', 'Space Apps', Icons.apps_outlined),
   ('cowork', 'Cowork', Icons.groups_outlined),
+  ('workflow', 'Workflow', Icons.account_tree_outlined),
   ('memory', 'Memory', Icons.hub_outlined),
   ('marketplace', 'Marketplace', Icons.store_outlined),
 ];
 
-final _pluginsSectionProvider = StateProvider<String>((ref) => 'skills');
+/// Public so other screens (e.g. the new-session Workflow tab) can deep-link
+/// straight to a Plugins section before navigating here.
+final pluginsSectionProvider = StateProvider<String>((ref) => 'skills');
 
 // ── Screen ──────────────────────────────────────────────────────────────────
 /// Plugins management, laid out like the web app: a left section rail + a
@@ -262,7 +266,7 @@ class PluginsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
-    final section = ref.watch(_pluginsSectionProvider);
+    final section = ref.watch(pluginsSectionProvider);
     return Row(
       children: [
         SizedBox(
@@ -287,7 +291,7 @@ class PluginsScreen extends ConsumerWidget {
                     label: label,
                     active: section == key,
                     onTap: () =>
-                        ref.read(_pluginsSectionProvider.notifier).state = key,
+                        ref.read(pluginsSectionProvider.notifier).state = key,
                   ),
               ],
             ),
@@ -316,6 +320,7 @@ class PluginsScreen extends ConsumerWidget {
                 child: const _CodeTab()),
             'apps' => const SpaceAppsSection(),
             'cowork' => const CoworkPanel(),
+            'workflow' => const WorkflowPanel(),
             'memory' => const CognitiveScreen(),
             'marketplace' => RefreshOnMount(
                 key: const ValueKey('marketplace'),

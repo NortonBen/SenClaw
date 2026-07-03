@@ -230,7 +230,10 @@ class _ConsoleTab extends ConsumerWidget {
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1,
               )),
-        for (final a in d.activity.reversed.take(80))
+        // Chronological feed (oldest → newest), capped to the most recent 80.
+        for (final a in (d.activity.length > 80
+            ? d.activity.sublist(d.activity.length - 80)
+            : d.activity))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: Text('• ${a.text}',

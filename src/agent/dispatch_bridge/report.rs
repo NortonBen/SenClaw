@@ -322,6 +322,8 @@ mod tests {
                 depends_on: Vec::new(),
                 verification_note: None,
             }],
+            checklist_auto: false,
+            retry_count: 0,
             file_changes: Vec::new(),
             verification_result: None,
         };

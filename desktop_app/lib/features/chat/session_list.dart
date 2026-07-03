@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/prefs.dart';
 import '../../models/group.dart';
 import '../../theme/tokens.dart';
+import '../workflow/workflow_session_pane.dart' show WorkflowSessionSection;
 import 'agent_states_provider.dart';
 import 'agents_provider.dart';
 import 'groups_provider.dart';
@@ -57,11 +58,14 @@ class _SessionListState extends ConsumerState<SessionList> {
     return ms > 0 ? ms : 0;
   }
 
-  // Sort:Updated → last message/activity time (NOT when the user last opened
-  // the chat — opening must not reorder the list). Sort:Created → jid time.
-  int _ts(GroupInfo g, SortMode sort) => sort == SortMode.updated
-      ? (g.lastActivity ?? _jidCreatedAt(g.jid))
-      : _jidCreatedAt(g.jid);
+  // Sort:updated → last message/activity time (NOT when the user last opened
+  // the chat — opening must not reorder the list). Sort:created → jid time.
+  // Sort:name still needs a timestamp for date buckets — use activity time.
+  int _ts(GroupInfo g, SortMode sort) => sort == SortMode.created
+      ? _jidCreatedAt(g.jid)
+      : (g.lastActivity ?? _jidCreatedAt(g.jid));
+
+  String _title(GroupInfo g) => g.name.isNotEmpty ? g.name : g.jid;
 
   /// "How long ago" the chat was last active: now / Nm / Nh / Nd / d/m.
   String _relTime(int ms) {
@@ -75,12 +79,12 @@ class _SessionListState extends ConsumerState<SessionList> {
     return '${dt.day}/${dt.month}';
   }
 
-  (String, String) _bucket(GroupInfo g, OrganizeMode mode, int ts) {
-    if (mode == OrganizeMode.project || mode == OrganizeMode.projectRecent) {
+  (String, String) _bucket(GroupInfo g, GroupMode mode, int ts) {
+    if (mode == GroupMode.project) {
       final f = (g.folder == null || g.folder!.isEmpty) ? '(unknown)' : g.folder!;
       return (f, f);
     }
-    if (mode == OrganizeMode.flat) return ('all', 'Sessions');
+    if (mode == GroupMode.none) return ('all', 'Sessions');
     if (ts == 0) return ('older', 'Older');
     final d = DateTime.fromMillisecondsSinceEpoch(ts);
     final now = DateTime.now();
@@ -105,7 +109,7 @@ class _SessionListState extends ConsumerState<SessionList> {
     final c = context.colors;
     final groups = ref.watch(groupsProvider);
     final pinned = ref.watch(pinnedProvider);
-    final organize = ref.watch(organizeProvider);
+    final groupMode = ref.watch(groupModeProvider);
     final sort = ref.watch(sortProvider);
     final selected = ref.watch(selectedJidProvider);
     final states = ref.watch(agentStatesProvider);
@@ -117,7 +121,7 @@ class _SessionListState extends ConsumerState<SessionList> {
     final buckets = <String, ({String label, List<GroupInfo> items, int maxTs})>{};
     for (final g in rest) {
       final ts = _ts(g, sort);
-      final (key, label) = _bucket(g, organize, ts);
+      final (key, label) = _bucket(g, groupMode, ts);
       final b = buckets[key];
       if (b == null) {
         buckets[key] = (label: label, items: [g], maxTs: ts);
@@ -127,19 +131,26 @@ class _SessionListState extends ConsumerState<SessionList> {
       }
     }
     for (final b in buckets.values) {
-      b.items.sort((a, x) => _ts(x, sort).compareTo(_ts(a, sort)));
+      if (sort == SortMode.name) {
+        b.items.sort((a, x) =>
+            _title(a).toLowerCase().compareTo(_title(x).toLowerCase()));
+      } else {
+        b.items.sort((a, x) => _ts(x, sort).compareTo(_ts(a, sort)));
+      }
     }
     final ordered = buckets.entries.toList()
       ..sort((a, b) {
-        switch (organize) {
-          case OrganizeMode.projectRecent:
-            return b.value.maxTs.compareTo(a.value.maxTs);
-          case OrganizeMode.chronological:
+        switch (groupMode) {
+          case GroupMode.date:
             return (_chronoOrder[a.key] ?? 99).compareTo(_chronoOrder[b.key] ?? 99);
-          case OrganizeMode.flat:
+          case GroupMode.none:
             return 0;
-          case OrganizeMode.project:
-            return a.value.label.toLowerCase().compareTo(b.value.label.toLowerCase());
+          case GroupMode.project:
+            // Project buckets follow the sort mode: A–Z for name, else the
+            // bucket with the freshest session first.
+            return sort == SortMode.name
+                ? a.value.label.toLowerCase().compareTo(b.value.label.toLowerCase())
+                : b.value.maxTs.compareTo(a.value.maxTs);
         }
       });
 
@@ -156,7 +167,7 @@ class _SessionListState extends ConsumerState<SessionList> {
                 child: FilledButton.icon(
                   onPressed: widget.onNewChat,
                   icon: const Icon(Icons.add_rounded, size: 18),
-                  label: const Text('New Chat'),
+                  label: const Text('New Session'),
                   style: FilledButton.styleFrom(
                     backgroundColor: c.accent,
                     foregroundColor: Colors.white,
@@ -181,10 +192,18 @@ class _SessionListState extends ConsumerState<SessionList> {
         ),
         Expanded(
           child: groups.isEmpty
-              ? Center(
-                  child: Text('No chats yet.\nClick + New Chat above.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: c.textMuted, fontSize: 12)),
+              ? ListView(
+                  padding: const EdgeInsets.only(bottom: AppTokens.s12),
+                  children: [
+                    const WorkflowSessionSection(),
+                    Padding(
+                      padding: const EdgeInsets.only(top: AppTokens.s24),
+                      child: Text('No chats yet.\nClick + New Session above.',
+                          textAlign: TextAlign.center,
+                          style:
+                              TextStyle(color: c.textMuted, fontSize: 12)),
+                    ),
+                  ],
                 )
               : ListView(
                   padding: const EdgeInsets.only(bottom: AppTokens.s12),
@@ -194,10 +213,13 @@ class _SessionListState extends ConsumerState<SessionList> {
                       for (final g in pinnedGroups)
                         _item(g, selected, states, pinned),
                     ],
-                    _organizeHeader(organize),
+                    // Workflow runs surface as sessions too — selecting one
+                    // shows its flow activity in place of the chat pane.
+                    const WorkflowSessionSection(),
+                    _organizeHeader(groupMode),
                     for (final entry in ordered)
                       _bucketView(entry.key, entry.value.label,
-                          entry.value.items, organize, selected, states, pinned),
+                          entry.value.items, groupMode, selected, states, pinned),
                   ],
                 ),
         ),
@@ -217,13 +239,13 @@ class _SessionListState extends ConsumerState<SessionList> {
             )),
       );
 
-  Widget _organizeHeader(OrganizeMode organize) {
+  Widget _organizeHeader(GroupMode groupMode) {
     final c = context.colors;
-    // Chronological groups by time buckets below, so no redundant wrapper
-    // label here — keep just the organize menu (the top header reads "Sessions").
-    final title = organize == OrganizeMode.flat
+    // Date mode groups by time buckets below, so no redundant wrapper label
+    // here — keep just the group/sort menu.
+    final title = groupMode == GroupMode.none
         ? 'Sessions'
-        : organize == OrganizeMode.chronological
+        : groupMode == GroupMode.date
             ? ''
             : 'Projects';
     return Padding(
@@ -247,13 +269,12 @@ class _SessionListState extends ConsumerState<SessionList> {
   }
 
   Widget _bucketView(String key, String label, List<GroupInfo> items,
-      OrganizeMode organize, String? selected, Map<String, String> states,
+      GroupMode groupMode, String? selected, Map<String, String> states,
       Set<String> pinned) {
     final c = context.colors;
-    final collapsedKey = '${organize.name}:$key';
+    final collapsedKey = '${groupMode.name}:$key';
     final isCollapsed = _collapsed.contains(collapsedKey);
-    final isProject =
-        organize == OrganizeMode.project || organize == OrganizeMode.projectRecent;
+    final isProject = groupMode == GroupMode.project;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -429,17 +450,18 @@ class _SessionListState extends ConsumerState<SessionList> {
   }
 }
 
-/// Organize + sort dropdown (the "•••" menu in the React sidebar).
+/// Group-by + sort-by dropdown: two clearly labeled sections with one
+/// radio-style choice each, instead of the old flat 6-item organize menu.
 class _OrganizeMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final organize = ref.watch(organizeProvider);
+    final groupMode = ref.watch(groupModeProvider);
     final sort = ref.watch(sortProvider);
     final c = context.colors;
     return PopupMenuButton<String>(
-      tooltip: 'Organize',
+      tooltip: 'Group & sort',
       iconSize: 16,
-      icon: Icon(Icons.more_horiz, size: 16, color: c.textMuted),
+      icon: Icon(Icons.tune_rounded, size: 15, color: c.textMuted),
       color: c.surface,
       elevation: 12,
       shape: RoundedRectangleBorder(
@@ -448,43 +470,70 @@ class _OrganizeMenu extends ConsumerWidget {
       ),
       onSelected: (k) {
         switch (k) {
-          case 'project':
-            ref.read(organizeProvider.notifier).set(OrganizeMode.project);
-          case 'project-recent':
-            ref.read(organizeProvider.notifier).set(OrganizeMode.projectRecent);
-          case 'chronological':
-            ref.read(organizeProvider.notifier).set(OrganizeMode.chronological);
-          case 'flat':
-            ref.read(organizeProvider.notifier).set(OrganizeMode.flat);
-          case 'updated':
+          case 'g:project':
+            ref.read(groupModeProvider.notifier).set(GroupMode.project);
+          case 'g:date':
+            ref.read(groupModeProvider.notifier).set(GroupMode.date);
+          case 'g:none':
+            ref.read(groupModeProvider.notifier).set(GroupMode.none);
+          case 's:updated':
             ref.read(sortProvider.notifier).set(SortMode.updated);
-          case 'created':
+          case 's:created':
             ref.read(sortProvider.notifier).set(SortMode.created);
+          case 's:name':
+            ref.read(sortProvider.notifier).set(SortMode.name);
         }
       },
-      itemBuilder: (_) => [
-        _check('By project', 'project', organize == OrganizeMode.project),
-        _check('Recent projects', 'project-recent',
-            organize == OrganizeMode.projectRecent),
-        _check('Chronological', 'chronological',
-            organize == OrganizeMode.chronological),
-        _check('Flat list', 'flat', organize == OrganizeMode.flat),
-        const PopupMenuDivider(),
-        _check('Sort: Updated', 'updated', sort == SortMode.updated),
-        _check('Sort: Created', 'created', sort == SortMode.created),
-      ],
+      itemBuilder: (ctx) {
+        final cc = ctx.colors;
+        PopupMenuItem<String> header(String label) => PopupMenuItem(
+              enabled: false,
+              height: 30,
+              child: Text(label.toUpperCase(),
+                  style: TextStyle(
+                    color: cc.textMuted,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.1,
+                  )),
+            );
+        PopupMenuItem<String> option(
+                String value, IconData icon, String label, bool on) =>
+            PopupMenuItem(
+              value: value,
+              height: 38,
+              child: Row(children: [
+                Icon(icon, size: 16, color: on ? cc.accent : cc.textSecondary),
+                const SizedBox(width: AppTokens.s12),
+                Expanded(
+                  child: Text(label,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        color: on ? cc.accent : cc.textPrimary,
+                        fontWeight: on ? FontWeight.w600 : FontWeight.w400,
+                      )),
+                ),
+                if (on) Icon(Icons.check_rounded, size: 16, color: cc.accent),
+              ]),
+            );
+        return [
+          header('Group by'),
+          option('g:project', Icons.folder_outlined, 'Project',
+              groupMode == GroupMode.project),
+          option('g:date', Icons.schedule_outlined, 'Date',
+              groupMode == GroupMode.date),
+          option('g:none', Icons.menu_rounded, 'None',
+              groupMode == GroupMode.none),
+          const PopupMenuDivider(),
+          header('Sort by'),
+          option('s:updated', Icons.history_rounded, 'Recent activity',
+              sort == SortMode.updated),
+          option('s:created', Icons.add_circle_outline, 'Created',
+              sort == SortMode.created),
+          option('s:name', Icons.sort_by_alpha_rounded, 'Name',
+              sort == SortMode.name),
+        ];
+      },
     );
   }
-
-  PopupMenuItem<String> _check(String label, String value, bool on) =>
-      PopupMenuItem(
-        value: value,
-        child: Row(children: [
-          SizedBox(
-            width: 18,
-            child: on ? const Icon(Icons.check, size: 14) : null,
-          ),
-          Text(label),
-        ]),
-      );
 }

@@ -91,6 +91,17 @@ pub struct PathsConfig {
     /// other model trees. Default: `~/.senclaw/ocr-models`. Override with
     /// `SENCLAW_OCR_MODELS_DIR`.
     pub ocr_models_dir: PathBuf,
+    /// Workflow definitions (`<name>.md` with YAML frontmatter).
+    /// Default: `~/senclaw/workflows`. Override with `SENCLAW_WORKFLOWS_DIR`.
+    pub workflows_dir: PathBuf,
+    /// Persistent per-workflow workspaces (default root; each workflow gets
+    /// `<root>/<name>/`). Default: `~/senclaw/workflow-data`. Override with
+    /// `SENCLAW_WORKFLOW_DATA_DIR`.
+    pub workflow_data_dir: PathBuf,
+    /// Workflow run-history state file. Default:
+    /// `~/.senclaw/workflow-runs.json`. Override with
+    /// `SENCLAW_WORKFLOW_STATE_PATH`.
+    pub workflow_state_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +266,9 @@ pub struct Config {
     pub ui_server: UiServerConfig,
     pub mcp: McpConfig,
     pub ws_port: u16,
+    /// POSIX shell override for workflow script steps
+    /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
+    pub workflow_shell: Option<String>,
 }
 
 fn home() -> PathBuf {
@@ -391,6 +405,15 @@ impl Config {
                 ),
                 tts_models_dir: env_path("SENCLAW_TTS_MODELS_DIR", senclaw_home.join("tts-models")),
                 ocr_models_dir: env_path("SENCLAW_OCR_MODELS_DIR", senclaw_home.join("ocr-models")),
+                workflows_dir: env_path("SENCLAW_WORKFLOWS_DIR", senclaw_data.join("workflows")),
+                workflow_data_dir: env_path(
+                    "SENCLAW_WORKFLOW_DATA_DIR",
+                    senclaw_data.join("workflow-data"),
+                ),
+                workflow_state_path: env_path(
+                    "SENCLAW_WORKFLOW_STATE_PATH",
+                    senclaw_home.join("workflow-runs.json"),
+                ),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(
@@ -450,6 +473,9 @@ impl Config {
                 litho_model_efficient: env_or("SENCLAW_LITHO_MODEL_EFFICIENT", ""),
             },
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
+            workflow_shell: env::var("SENCLAW_WORKFLOW_SHELL")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         }
     }
 

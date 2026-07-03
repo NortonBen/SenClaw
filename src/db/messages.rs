@@ -5,6 +5,20 @@ use crate::types::StoredMessage;
 
 use super::rows::row_to_message;
 
+/// group_messages timestamps come in two formats: RFC3339 (channel adapters,
+/// UTC) and host-local `YYYY-MM-DD HH:MM:SS` (web-sent messages). Parse both.
+fn parse_message_ts_ms(s: &str) -> Option<i64> {
+    if let Ok(d) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(d.timestamp_millis());
+    }
+    use chrono::TimeZone;
+    let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()?;
+    chrono::Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .map(|d| d.timestamp_millis())
+}
+
 impl super::Db {
     // ============================================================
     // Messages (channel_messages + group_messages)
@@ -192,6 +206,28 @@ impl super::Db {
         })
     }
 
+    /// Last message/response timestamp (ms since epoch) per chat, from
+    /// group_messages. Powers the sidebar "recent activity" sort.
+    pub fn last_activity_per_group(&self) -> Result<std::collections::HashMap<String, i64>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT chat_jid, MAX(timestamp) FROM group_messages GROUP BY chat_jid",
+            )?;
+            let rows: Vec<(String, Option<String>)> = stmt
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut map = std::collections::HashMap::new();
+            for (jid, ts) in rows {
+                if let Some(ms) = ts.as_deref().and_then(parse_message_ts_ms) {
+                    map.insert(jid, ms);
+                }
+            }
+            Ok(map)
+        })
+    }
+
     pub fn get_group_messages(
         &self,
         chat_jid: &str,
@@ -269,5 +305,53 @@ impl super::Db {
                 |r| r.get::<_, usize>(0),
             )?)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::Config;
+    use crate::db::Db;
+    use crate::types::StoredMessage;
+
+    fn msg(id: &str, jid: &str, ts: &str) -> StoredMessage {
+        StoredMessage {
+            message_id: id.into(),
+            chat_jid: jid.into(),
+            sender_jid: String::new(),
+            sender_name: String::new(),
+            content: "hi".into(),
+            timestamp: ts.into(),
+            is_from_me: false,
+            is_bot_reply: false,
+            reply_to_id: None,
+            media_type: None,
+            attachments: None,
+        }
+    }
+
+    #[test]
+    fn last_activity_handles_both_timestamp_formats() {
+        let cfg = Config::from_env();
+        let db = Db::open_in_memory(&cfg).expect("open db");
+
+        // RFC3339 (channel adapters) — newest of the two wins.
+        db.insert_group_message(&msg("m1", "tg:1", "2026-07-01T08:00:00+00:00"), 100)
+            .unwrap();
+        db.insert_group_message(&msg("m2", "tg:1", "2026-07-02T09:30:00+00:00"), 100)
+            .unwrap();
+        // Host-local "YYYY-MM-DD HH:MM:SS" (web-sent messages).
+        db.insert_group_message(&msg("m3", "web:x:abc", "2026-07-02 10:00:00"), 100)
+            .unwrap();
+
+        let map = db.last_activity_per_group().unwrap();
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-07-02T09:30:00+00:00")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(map.get("tg:1"), Some(&expected));
+        // Local-format timestamp parses to a real epoch (exact value depends
+        // on the host timezone — just require presence and sanity).
+        let web_ms = *map.get("web:x:abc").expect("web chat present");
+        assert!(web_ms > 1_700_000_000_000, "epoch ms expected, got {web_ms}");
     }
 }

@@ -137,6 +137,9 @@ pub async fn run(cmd: AgentTaskCmd) -> Result<()> {
         mcp_configs: Vec::new(),
         timeout,
         skip_permissions: SkipPermissions::default(),
+        cancel: None,
+        max_agent_turns: None,
+        on_activity: None,
     };
 
     let result = run_one_shot(opts).await?;
@@ -148,6 +151,13 @@ pub async fn run(cmd: AgentTaskCmd) -> Result<()> {
             result.turn_count
         );
         std::process::exit(124);
+    }
+    if result.errored {
+        eprintln!(
+            "[agent-task] session error: {}",
+            result.error_message.as_deref().unwrap_or("unknown")
+        );
+        std::process::exit(1);
     }
 
     let final_text = result.text;

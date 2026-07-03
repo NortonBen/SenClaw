@@ -42,6 +42,7 @@ mod cowork;
 pub mod cowork_runtime;
 mod profile_files;
 mod workbench;
+mod workflow;
 mod workspace;
 
 // Re-exports for external use

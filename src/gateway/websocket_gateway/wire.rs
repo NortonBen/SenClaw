@@ -32,6 +32,10 @@ pub(crate) struct GroupInfo {
     pub(crate) agent_id: Option<i64>,
     #[serde(rename = "channelId", skip_serializing_if = "Option::is_none")]
     pub(crate) channel_id: Option<i64>,
+    /// Last chat message/agent response time (ms since epoch), from
+    /// group_messages. Powers the sidebar "recent activity" sort.
+    #[serde(rename = "lastActivity", skip_serializing_if = "Option::is_none")]
+    pub(crate) last_activity: Option<i64>,
 }
 
 pub(crate) fn to_group_info(g: &crate::types::GroupBinding) -> GroupInfo {
@@ -49,6 +53,7 @@ pub(crate) fn to_group_info(g: &crate::types::GroupBinding) -> GroupInfo {
         llm_config_id: g.llm_config_id.clone(),
         agent_id: None,
         channel_id: None,
+        last_activity: None,
     }
 }
 

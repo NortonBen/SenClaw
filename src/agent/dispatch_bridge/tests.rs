@@ -59,6 +59,8 @@ fn resume_hint_renders_active_parents_only() {
                 is_virtual: false,
                 persona_name: None,
                 checklist: vec![],
+                checklist_auto: false,
+                retry_count: 0,
                 file_changes: vec![],
                 verification_result: None,
             }],
@@ -121,6 +123,8 @@ fn make_task(id: &str, label: &str, jid: &str) -> DispatchTask {
         is_virtual: false,
         persona_name: None,
         checklist: vec![],
+        checklist_auto: false,
+        retry_count: 0,
         file_changes: vec![],
         verification_result: None,
     }
@@ -180,6 +184,151 @@ fn notify_task_done_marks_terminal_and_completes_parent() {
     assert_eq!(parents[0].tasks[0].result.as_deref(), Some("result-text"));
     assert_eq!(parents[0].status, "done");
     assert!(parents[0].completed_at.is_some());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn auto_checklist_failure_keeps_task_done() {
+    // Auto-generated checklists are advisory: unticked items must NOT flip a
+    // successful task to error (the worker never even sees the checklist).
+    let path = tmp_state_path("auto_checklist");
+    let bridge = DispatchBridge::new(&path);
+    let mut task = make_task("d1", "scout", "jid-a");
+    task.checklist = vec![crate::agent::dispatch_bridge::types::ChecklistItem {
+        id: "item-0".into(),
+        description: "Today is 2026-07-03".into(),
+        status: "pending".into(),
+        depends_on: vec![],
+        verification_note: None,
+    }];
+    task.checklist_auto = true;
+    bridge
+        .modify_state(|s| {
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![task],
+            });
+        })
+        .unwrap();
+
+    bridge.notify_task_done("d1", "full research output");
+
+    let parents = bridge.get_parents();
+    let t = &parents[0].tasks[0];
+    assert_eq!(t.status, DispatchTaskStatus::Done);
+    assert_eq!(t.result.as_deref(), Some("full research output"));
+    // Verification result is still recorded for the UI badge.
+    assert!(t.verification_result.as_ref().is_some_and(|v| !v.verified));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn explicit_checklist_failure_marks_error() {
+    let path = tmp_state_path("explicit_checklist");
+    let bridge = DispatchBridge::new(&path);
+    let mut task = make_task("d1", "scout", "jid-a");
+    task.checklist = vec![crate::agent::dispatch_bridge::types::ChecklistItem {
+        id: "item-0".into(),
+        description: "must produce a table".into(),
+        status: "pending".into(),
+        depends_on: vec![],
+        verification_note: None,
+    }];
+    task.checklist_auto = false; // orchestrator-supplied
+    bridge
+        .modify_state(|s| {
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![task],
+            });
+        })
+        .unwrap();
+
+    bridge.notify_task_done("d1", "no table here");
+
+    let parents = bridge.get_parents();
+    let t = &parents[0].tasks[0];
+    assert_eq!(t.status, DispatchTaskStatus::Error);
+    // The worker's output is preserved inside the enhanced result.
+    assert!(t.result.as_deref().unwrap().contains("no table here"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn infra_error_retries_in_place_once() {
+    let path = tmp_state_path("infra_retry");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![make_task("d1", "scout", "jid-a")],
+            });
+        })
+        .unwrap();
+
+    // First infra failure → reset to registered with retry_count = 1.
+    bridge.mark_task_error("d1", "Virtual agent timed out after 600s");
+    let parents = bridge.get_parents();
+    let t = &parents[0].tasks[0];
+    assert_eq!(t.status, DispatchTaskStatus::Registered);
+    assert_eq!(t.retry_count, 1);
+    assert_eq!(parents[0].status, "active");
+
+    // Simulate the retry starting, then failing again → terminal error.
+    bridge
+        .modify_state(|s| {
+            s.parents[0].tasks[0].status = DispatchTaskStatus::Processing;
+        })
+        .unwrap();
+    bridge.mark_task_error("d1", "Virtual agent timed out after 600s");
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].tasks[0].status, DispatchTaskStatus::Error);
+    assert_eq!(parents[0].status, "done");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn content_error_is_terminal_immediately() {
+    let path = tmp_state_path("content_err");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![make_task("d1", "scout", "jid-a")],
+            });
+        })
+        .unwrap();
+
+    bridge.mark_task_error("d1", "Virtual agent setup error: persona \"x\" not available");
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].tasks[0].status, DispatchTaskStatus::Error);
+    assert_eq!(parents[0].tasks[0].retry_count, 0);
     let _ = std::fs::remove_file(path);
 }
 

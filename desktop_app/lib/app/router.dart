@@ -10,6 +10,7 @@ import '../features/plugins/plugins_screen.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/space/space_screen.dart' show SpaceScreen, SpaceAppsScreen;
 import '../features/wiki/wiki_screen.dart';
+import '../features/workflow/workflow_runs_screen.dart';
 import 'shell.dart';
 
 /// App routing. A single [ShellRoute] keeps the nav rail mounted while the
@@ -61,6 +62,13 @@ final appRouter = GoRouter(
         GoRoute(
           path: '/plugins',
           pageBuilder: (context, state) => _noTransition(const PluginsScreen()),
+        ),
+        // Kept (no nav item) — reached from Plugins → Workflow ("Run
+        // history") and automatically after triggering a run.
+        GoRoute(
+          path: '/workflow-runs',
+          pageBuilder: (context, state) =>
+              _noTransition(const WorkflowRunsScreen()),
         ),
         GoRoute(
           path: '/settings',

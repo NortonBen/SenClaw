@@ -12,6 +12,7 @@ import '../../core/prefs.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../cowork/cowork_providers.dart';
+import '../workflow/workflow_quick_start.dart';
 import 'agents_provider.dart';
 import 'audio_service.dart';
 import 'conversation_provider.dart';
@@ -125,6 +126,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   bool get _isCode => _kind == 'code';
   bool get _isCowork => _kind == 'cowork';
   bool get _isSchedule => _kind == 'schedule';
+  bool get _isWorkflow => _kind == 'workflow';
 
   @override
   void dispose() {
@@ -509,6 +511,12 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   }
 
   ({String heading, String sub}) _greeting(String? agentName) {
+    if (_isWorkflow) {
+      return (
+        heading: 'Run a workflow',
+        sub: 'Pick a saved routine, or describe a new one and let the agent build it.'
+      );
+    }
     if (_isSchedule) {
       return (
         heading: 'Create a schedule',
@@ -782,6 +790,11 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                 ],
               ),
               const SizedBox(height: AppTokens.s20),
+              // Workflow kind swaps the composer for the quick-start panel
+              // (pick & run a saved workflow, or create one with the agent).
+              if (_isWorkflow)
+                const WorkflowQuickStart()
+              else ...[
               // Unified input card: textarea + toolbar in one rounded surface.
               Container(
                 decoration: BoxDecoration(
@@ -1092,6 +1105,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   ],
                 ),
               ],
+              ],
             ],
           ),
         ),
@@ -1138,6 +1152,7 @@ class _KindSegmented extends StatelessWidget {
         seg('⌨️ Code', 'code'),
         seg('👥 Cowork', 'cowork'),
         seg('🕐 Schedule', 'schedule'),
+        seg('🔁 Workflow', 'workflow'),
       ]),
     );
   }

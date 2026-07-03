@@ -7,6 +7,8 @@ import { AppLayout } from '../components/AppLayout';
 import { SessionList } from '../components/Sidebar';
 import { ChatView } from '../components/ChatView';
 import { NewChatScreen, type StartChatOptions } from '../components/NewChatScreen';
+import { WorkflowSessionPane } from '../components/workflows/WorkflowSessionPane';
+import { WFRUN_JID_PREFIX } from '../components/workflows/workflowShared';
 
 const { Content } = Layout;
 
@@ -61,12 +63,17 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws.groups.length, pendingDeepLink]);
 
-  useEffect(() => { ws.setActiveJid(selectedJid); }, [selectedJid, ws.setActiveJid]);
+  // Workflow sessions are not chat groups — never report them as the active
+  // chat jid or subscribe to them over WS.
+  const isWorkflowSession = selectedJid?.startsWith(WFRUN_JID_PREFIX) ?? false;
+  useEffect(() => {
+    ws.setActiveJid(isWorkflowSession ? null : selectedJid);
+  }, [selectedJid, isWorkflowSession, ws.setActiveJid]);
 
   const handleSelect = (jid: string) => {
     setSelectedJid(jid);
     setShowNewChat(false);
-    if (!ws.subscribed.has(jid)) ws.subscribe(jid);
+    if (!jid.startsWith(WFRUN_JID_PREFIX) && !ws.subscribed.has(jid)) ws.subscribe(jid);
   };
 
   const handleNewChat = () => {
@@ -224,6 +231,14 @@ export function ChatPage() {
                 // Pass the first non-schedule profile name as a friendly default.
                 projectName={(ws.agents.find(a => !a.folder.startsWith('schedule_')) ?? ws.agents[0])?.name}
                 profiles={ws.agents.filter(a => !a.folder.startsWith('schedule_'))}
+                onWorkflowRunSelected={handleSelect}
+              />
+            ) : isWorkflowSession ? (
+              // Workflow "session": read-only flow activity, no composer.
+              <WorkflowSessionPane
+                key={selectedJid!}
+                runId={selectedJid!.slice(WFRUN_JID_PREFIX.length)}
+                onSelectSession={handleSelect}
               />
             ) : selectedGroup ? (
               <ChatView
@@ -246,6 +261,7 @@ export function ChatPage() {
               <NewChatScreen
                 onStart={handleStartChat}
                 profiles={ws.agents.filter(a => !a.folder.startsWith('schedule_'))}
+                onWorkflowRunSelected={handleSelect}
               />
             )}
           </main>

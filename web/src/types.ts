@@ -13,6 +13,8 @@ export interface GroupInfo {
   modelId?: string | null;
   agentId?: number;
   channelId?: number;
+  /** Last chat message/agent response time (ms since epoch), from the server. */
+  lastActivity?: number | null;
 }
 
 export interface RegisterGroupPayload {

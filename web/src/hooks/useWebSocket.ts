@@ -902,8 +902,26 @@ export function useWebSocket(): WsHook {
             setGroups(prev => prev.filter(g => g.jid !== (msg.jid as string)));
             break;
           case 'group:updated':
-            setGroups(prev => prev.map(g => g.jid === (msg.group as GroupInfo).jid ? msg.group as GroupInfo : g));
+            // group:updated carries settings changes, not activity — keep the
+            // lastActivity we already know unless the server sent one.
+            setGroups(prev => prev.map(g => {
+              const ng = msg.group as GroupInfo;
+              if (g.jid !== ng.jid) return g;
+              return ng.lastActivity == null ? { ...ng, lastActivity: g.lastActivity } : ng;
+            }));
             break;
+          case 'group:activity': {
+            // Lightweight tick on every new message/agent response: bump that
+            // chat's lastActivity so the "recent activity" sort reorders live.
+            const ajid = msg.jid as string;
+            const ats = msg.ts as number;
+            if (typeof ats === 'number') {
+              setGroups(prev => prev.map(g =>
+                g.jid === ajid && ats > (g.lastActivity ?? 0) ? { ...g, lastActivity: ats } : g
+              ));
+            }
+            break;
+          }
           case 'dispatch:update': {
             const newParents = (msg.parents as DispatchParent[]) ?? [];
             const TERMINAL = ['done', 'error', 'timeout'];
@@ -943,14 +961,19 @@ export function useWebSocket(): WsHook {
             break;
           }
           case 'dispatch:activity:batch': {
-            // Bulk replay of persisted activity on subscribe/reconnect.
+            // Bulk replay of persisted activity on subscribe/reconnect. The
+            // replay is older than anything already received live, so it goes
+            // in FRONT to keep the feed chronological; entries whose timestamp
+            // already exists live are dropped to avoid duplicates.
             const taskId = msg.taskId as string;
             const entries = msg.entries as SubAgentActivityEntry[];
             if (taskId && Array.isArray(entries) && entries.length > 0) {
-              setDispatchActivity(prev => ({
-                ...prev,
-                [taskId]: [...(prev[taskId] ?? []), ...entries].slice(-500),
-              }));
+              setDispatchActivity(prev => {
+                const live = prev[taskId] ?? [];
+                const seen = new Set(live.map(e => `${e.ts}|${e.entryType}|${e.toolName ?? ''}`));
+                const fresh = entries.filter(e => !seen.has(`${e.ts}|${e.entryType}|${e.toolName ?? ''}`));
+                return { ...prev, [taskId]: [...fresh, ...live].slice(-500) };
+              });
             }
             break;
           }
