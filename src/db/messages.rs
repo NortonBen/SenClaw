@@ -288,6 +288,46 @@ impl super::Db {
         })
     }
 
+    /// Messages for a chat strictly newer than `after_ms` (epoch millis),
+    /// oldest → newest, capped to the newest `limit` rows. Each row is paired
+    /// with its parsed epoch-ms timestamp so callers get a stable numeric
+    /// cursor. Timestamps are stored as strings in two formats (RFC3339 and
+    /// host-local `YYYY-MM-DD HH:MM:SS`), so filtering/sorting happens in Rust
+    /// via `parse_message_ts_ms` rather than SQL string comparison — string
+    /// ORDER BY mis-sorts across the two formats. Row counts per chat are
+    /// FIFO-trimmed to `max_messages`, so the full-chat scan stays bounded.
+    pub fn get_group_messages_after_ms(
+        &self,
+        chat_jid: &str,
+        after_ms: i64,
+        limit: u32,
+    ) -> Result<Vec<(StoredMessage, i64)>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT * FROM group_messages WHERE chat_jid = ?1")?;
+            let rows = stmt
+                .query_map(params![chat_jid], |r| Ok(row_to_message(r)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut out = Vec::new();
+            for r in rows {
+                let m = r?;
+                if let Some(ms) = parse_message_ts_ms(&m.timestamp) {
+                    if ms > after_ms {
+                        out.push((m, ms));
+                    }
+                }
+            }
+            out.sort_by(|a, b| {
+                a.1.cmp(&b.1)
+                    .then_with(|| a.0.message_id.cmp(&b.0.message_id))
+            });
+            if out.len() > limit as usize {
+                out.drain(..out.len() - limit as usize);
+            }
+            Ok(out)
+        })
+    }
+
     pub fn delete_group_messages_for_jid(&self, chat_jid: &str) -> Result<usize> {
         self.with_conn(|c| {
             Ok(c.execute(
@@ -353,5 +393,42 @@ mod tests {
         // on the host timezone — just require presence and sanity).
         let web_ms = *map.get("web:x:abc").expect("web chat present");
         assert!(web_ms > 1_700_000_000_000, "epoch ms expected, got {web_ms}");
+    }
+
+    #[test]
+    fn after_ms_filters_sorts_and_caps_mixed_formats() {
+        let cfg = Config::from_env();
+        let db = Db::open_in_memory(&cfg).expect("open db");
+
+        let jid = "app:c1:user:mobile-app";
+        db.insert_group_message(&msg("m1", jid, "2026-07-01T08:00:00+00:00"), 100)
+            .unwrap();
+        db.insert_group_message(&msg("m2", jid, "2026-07-02T09:00:00+00:00"), 100)
+            .unwrap();
+        db.insert_group_message(&msg("m3", jid, "2026-07-02T10:00:00+00:00"), 100)
+            .unwrap();
+
+        // No cursor (−1): everything, oldest → newest, with parsed epoch ms.
+        let all = db.get_group_messages_after_ms(jid, -1, 100).unwrap();
+        assert_eq!(
+            all.iter().map(|(m, _)| m.message_id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2", "m3"]
+        );
+        assert!(all.windows(2).all(|w| w[0].1 <= w[1].1));
+
+        // Strictly-after cursor: only messages newer than m2.
+        let m2_ms = chrono::DateTime::parse_from_rfc3339("2026-07-02T09:00:00+00:00")
+            .unwrap()
+            .timestamp_millis();
+        let delta = db.get_group_messages_after_ms(jid, m2_ms, 100).unwrap();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].0.message_id, "m3");
+
+        // Limit keeps the NEWEST rows.
+        let capped = db.get_group_messages_after_ms(jid, -1, 2).unwrap();
+        assert_eq!(
+            capped.iter().map(|(m, _)| m.message_id.as_str()).collect::<Vec<_>>(),
+            vec!["m2", "m3"]
+        );
     }
 }

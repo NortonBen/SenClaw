@@ -17,7 +17,9 @@ use crate::db::Db;
 use crate::mcp::manager::McpManager;
 use crate::wiki::manager::WikiManager;
 
-use super::chat::{chat_permission_respond, chat_plan_respond, chat_question_respond};
+use super::chat::{
+    chat_history, chat_permission_respond, chat_plan_respond, chat_question_respond, chat_states,
+};
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::embedding_config::{embedding_config_get, embedding_config_save};
 use super::llm_config::{
@@ -144,6 +146,11 @@ pub struct UiState {
     pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
     pub space_mcp_launcher: Option<Arc<super::space_mcp::SpaceMcpLauncher>>,
     pub workflow_service: Option<Arc<crate::workflow::WorkflowService>>,
+    /// Live per-group agent state map (`jid → "processing"/"idle"/…`), shared
+    /// with the WebSocket gateway's `last_known_states`. Backs
+    /// `GET /api/chat/states` so relay clients can reconcile after a drop.
+    pub agent_states:
+        Option<Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>>,
     pub ws_port: u16,
     pub ws_token: String,
 }
@@ -620,6 +627,9 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route("/api/chat/question/respond", post(chat_question_respond))
         .route("/api/chat/plan/respond", post(chat_plan_respond))
+        // ── Chat sync for relay clients (delta history + agent-state snapshot) ──
+        .route("/api/chat/history", get(chat_history))
+        .route("/api/chat/states", get(chat_states))
         // Workbench reverse ops (artifacts published by tools)
         .route(
             "/api/workbench/:jid/:id/mark-viewed",

@@ -2221,6 +2221,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             workbench_bridge: Some(Arc::clone(&workbench_bridge)),
             space_mcp_launcher: Some(Arc::clone(&space_mcp_launcher)),
             workflow_service: Some(Arc::clone(&workflow_service)),
+            // Share the gateway's live state map so GET /api/chat/states serves
+            // the same snapshot the web WS replays on reconnect.
+            agent_states: Some(Arc::clone(&ws_gateway.last_known_states)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });

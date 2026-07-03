@@ -47,7 +47,13 @@ function entryTitle(e: ActivityEntry): string {
 
 /** Live agent activity of a run. Entries render collapsed (one summary line,
  *  like the chat box's tool bubbles) and expand on click. */
-export function WorkflowActivityFeed({ runId, active }: { runId: string; active: boolean }) {
+export function WorkflowActivityFeed({ runId, active, collapsed, onToggle }: {
+  runId: string;
+  active: boolean;
+  /** Collapsed = slim vertical strip showing only the entry count. */
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   const { token } = theme.useToken();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -87,12 +93,39 @@ export function WorkflowActivityFeed({ runId, active }: { runId: string; active:
       : k === 'status' ? token.colorWarning
       : token.colorTextTertiary;
 
+  // Collapsed: slim strip — icon, live spinner, and the action count.
+  if (collapsed) {
+    return (
+      <div
+        onClick={onToggle}
+        title={`Hoạt động (${entries.length}) — bấm để mở`}
+        style={{
+          height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center',
+          gap: 8, paddingTop: 12, cursor: 'pointer', userSelect: 'none',
+        }}
+      >
+        <RightOutlined style={{ fontSize: 10, color: token.colorTextTertiary }} />
+        {active
+          ? <SyncOutlined spin style={{ color: token.colorPrimary, fontSize: 13 }} />
+          : <ToolOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />}
+        <Text strong style={{ fontSize: 11, color: token.colorTextSecondary }}>
+          {entries.length}
+        </Text>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{
-        padding: '8px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}`,
-        display: 'flex', alignItems: 'center', gap: 6,
-      }}>
+      <div
+        onClick={onToggle}
+        style={{
+          padding: '8px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          display: 'flex', alignItems: 'center', gap: 6,
+          cursor: onToggle ? 'pointer' : undefined, userSelect: 'none',
+        }}
+      >
+        {onToggle && <DownOutlined style={{ fontSize: 9, color: token.colorTextTertiary }} />}
         {active && <SyncOutlined spin style={{ color: token.colorPrimary, fontSize: 12 }} />}
         <Text strong style={{ fontSize: 12, letterSpacing: 0.5 }}>HOẠT ĐỘNG</Text>
         <Text type="secondary" style={{ fontSize: 11 }}>({entries.length})</Text>

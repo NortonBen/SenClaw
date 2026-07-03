@@ -6,7 +6,11 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, response::Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::Json,
+};
 use serde::Deserialize;
 
 use super::core::{AppError, UiState};
@@ -78,6 +82,76 @@ pub(crate) struct PlanRespondBody {
 
 fn default_agent_id() -> String {
     "main".to_string()
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ChatHistoryQuery {
+    jid: String,
+    /// Epoch-millis cursor — only messages strictly newer are returned.
+    /// Optional for backward compatibility (absent = full history, capped).
+    #[serde(default)]
+    after_ts: Option<i64>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// GET /api/chat/history?jid=…&after_ts=…&limit=…
+///
+/// Incremental history for relay clients: returns group messages strictly
+/// newer than `after_ts` (epoch ms), oldest → newest, each row carrying a
+/// daemon-parsed numeric `ts` so the client can persist a stable sync cursor
+/// without re-parsing the mixed-format timestamp strings.
+pub(crate) async fn chat_history(
+    State(s): State<Arc<UiState>>,
+    Query(q): Query<ChatHistoryQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if q.jid.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "jid required".into()));
+    }
+    let db = s.db.as_ref().ok_or_else(|| {
+        AppError(StatusCode::SERVICE_UNAVAILABLE, "db unavailable".into())
+    })?;
+    let limit = q.limit.unwrap_or(200).min(1000);
+    let after_ms = q.after_ts.unwrap_or(-1);
+    let messages = db
+        .get_group_messages_after_ms(&q.jid, after_ms, limit)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let rows: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|(m, ms)| {
+            // Keep mobile protocol explicit: only "user" or "agent" (same
+            // mapping as the HISTORY_RESP relay control frames).
+            let role = if m.is_bot_reply { "agent" } else { "user" };
+            serde_json::json!({
+                "id":         m.message_id,
+                "sender":     m.sender_name,
+                "content":    m.content,
+                "timestamp":  m.timestamp,
+                "ts":         ms,
+                "isFromMe":   m.is_from_me,
+                "isBotReply": m.is_bot_reply,
+                "role":       role,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "jid": q.jid, "messages": rows })))
+}
+
+/// GET /api/chat/states
+///
+/// Authoritative per-group agent state snapshot (`jid → "processing" | "idle"
+/// | …`) from the WS gateway's `last_known_states`. Relay clients call this on
+/// (re)connect to reconcile a typing indicator whose `agent:state` events were
+/// lost while the relay socket was down.
+pub(crate) async fn chat_states(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let states = match s.agent_states.as_ref() {
+        Some(m) => m.lock().await.clone(),
+        None => Default::default(),
+    };
+    Ok(Json(serde_json::json!({ "states": states })))
 }
 
 pub(crate) async fn chat_plan_respond(

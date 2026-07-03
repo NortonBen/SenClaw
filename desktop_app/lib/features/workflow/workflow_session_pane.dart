@@ -237,6 +237,9 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
   /// Expanded entry indexes — everything starts collapsed (chat-box style).
   final Set<int> _expandedActivity = {};
 
+  /// Whole activity panel: default collapsed to a slim strip with the count.
+  bool _feedOpen = false;
+
   Future<void> _loadActivity() async {
     try {
       final entries = await fetchRunActivity(ref, widget.runId);
@@ -281,6 +284,39 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  /// Collapsed activity panel: slim vertical strip — chevron, live spinner
+  /// (or tool icon), and the action count. Click anywhere to expand.
+  Widget _collapsedFeedStrip(AppColors c, bool active) {
+    return InkWell(
+      onTap: () => setState(() => _feedOpen = true),
+      child: Tooltip(
+        message: 'Activity (${_activity.length}) — click to expand',
+        child: Column(
+          children: [
+            const SizedBox(height: AppTokens.s12),
+            Icon(Icons.chevron_right_rounded, size: 16, color: c.textMuted),
+            const SizedBox(height: AppTokens.s8),
+            if (active)
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.6, color: AppTokens.brand),
+              )
+            else
+              Icon(Icons.build_outlined, size: 13, color: c.textMuted),
+            const SizedBox(height: AppTokens.s8),
+            Text('${_activity.length}',
+                style: TextStyle(
+                    color: c.textMuted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _activityFeed(AppColors c, bool active) {
     IconData icon(String k) => switch (k) {
           'think' => Icons.psychology_outlined,
@@ -298,28 +334,33 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-              AppTokens.s12, AppTokens.s8, AppTokens.s12, AppTokens.s4),
-          child: Row(children: [
-            if (active)
-              SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                    strokeWidth: 1.6, color: AppTokens.brand),
-              ),
-            if (active) const SizedBox(width: AppTokens.s6),
-            Text('ACTIVITY',
-                style: TextStyle(
-                    color: c.textMuted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.1)),
-            const SizedBox(width: AppTokens.s4),
-            Text('(${_activity.length})',
-                style: TextStyle(color: c.textMuted, fontSize: 10)),
-          ]),
+        InkWell(
+          onTap: () => setState(() => _feedOpen = false),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppTokens.s12, AppTokens.s8, AppTokens.s12, AppTokens.s4),
+            child: Row(children: [
+              Icon(Icons.expand_more_rounded, size: 14, color: c.textMuted),
+              const SizedBox(width: AppTokens.s4),
+              if (active)
+                SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.6, color: AppTokens.brand),
+                ),
+              if (active) const SizedBox(width: AppTokens.s6),
+              Text('ACTIVITY',
+                  style: TextStyle(
+                      color: c.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1)),
+              const SizedBox(width: AppTokens.s4),
+              Text('(${_activity.length})',
+                  style: TextStyle(color: c.textMuted, fontSize: 10)),
+            ]),
+          ),
         ),
         Expanded(
           child: _activity.isEmpty
@@ -512,13 +553,19 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                width: 300,
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: _feedOpen ? 300 : 40,
                 decoration: BoxDecoration(
                   color: c.sidebar,
                   border: Border(right: BorderSide(color: c.border)),
                 ),
-                child: _activityFeed(c, run.isActive),
+                // Clip so mid-animation widths never overflow the row content.
+                child: ClipRect(
+                  child: _feedOpen
+                      ? _activityFeed(c, run.isActive)
+                      : _collapsedFeedStrip(c, run.isActive),
+                ),
               ),
               Expanded(
                 child: WorkflowRunDetail(

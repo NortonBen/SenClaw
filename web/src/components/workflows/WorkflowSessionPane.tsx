@@ -23,6 +23,8 @@ export function WorkflowSessionPane({ runId, onSelectSession }: {
   const [defs, setDefs] = useState<WorkflowDefSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [rerunTarget, setRerunTarget] = useState<WorkflowDefSummary | null>(null);
+  // Activity panel: default collapsed (slim strip with the action count).
+  const [feedOpen, setFeedOpen] = useState(false);
 
   const run = runs.find((r) => r.id === runId) ?? null;
 
@@ -90,10 +92,18 @@ export function WorkflowSessionPane({ runId, onSelectSession }: {
           right: the read-only flow view. */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <div style={{
-          width: 340, minWidth: 260, borderRight: `1px solid ${token.colorBorderSecondary}`,
+          width: feedOpen ? 340 : 40,
+          minWidth: feedOpen ? 260 : 40,
+          borderRight: `1px solid ${token.colorBorderSecondary}`,
           background: token.colorFillQuaternary, minHeight: 0,
+          transition: 'width .15s',
         }}>
-          <WorkflowActivityFeed runId={runId} active={active ?? false} />
+          <WorkflowActivityFeed
+            runId={runId}
+            active={active ?? false}
+            collapsed={!feedOpen}
+            onToggle={() => setFeedOpen((v) => !v)}
+          />
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
           {!loaded ? (
