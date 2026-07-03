@@ -38,6 +38,8 @@ static VISION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         Regex::new(r"(?i)gemini.*flash").unwrap(),
         Regex::new(r"(?i)gemini-1\.5").unwrap(),
         Regex::new(r"(?i)gemini-2").unwrap(),
+        // DeepSeek-VL
+        Regex::new(r"(?i)deepseek-vl").unwrap(),
         // Llama 3.2 vision
         Regex::new(r"(?i)llama-3\.2.*vision").unwrap(),
         // 通用关键字

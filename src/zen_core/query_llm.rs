@@ -462,19 +462,18 @@ pub(crate) fn openai_messages_for_api(
                             "text": text_acc,
                         }));
                     }
-                    if content_parts.len() == 1 {
-                        // Single text part - use simple string format
-                        if let Some(Value::String(text)) = content_parts.first() {
-                            api_msgs.push(serde_json::json!({
-                                "role": "user",
-                                "content": text,
-                            }));
-                        } else {
-                            api_msgs.push(serde_json::json!({
-                                "role": "user",
-                                "content": content_parts,
-                            }));
-                        }
+                    // Single text part → plain-string content (what OpenAI-shape
+                    // providers expect for text-only turns). The parts are
+                    // `{type:"text",text:...}` OBJECTS, so match on the field —
+                    // matching `Value::String` here never fires.
+                    let single_text = content_parts.len() == 1
+                        && content_parts[0].get("type").and_then(|t| t.as_str())
+                            == Some("text");
+                    if single_text {
+                        api_msgs.push(serde_json::json!({
+                            "role": "user",
+                            "content": content_parts[0]["text"],
+                        }));
                     } else {
                         api_msgs.push(serde_json::json!({
                             "role": "user",
@@ -1571,6 +1570,8 @@ mod tests {
     /// produce the same OpenAI-shaped `(visible, reasoning, tool_calls)` tuple.
     /// Detailed dialect coverage lives in `local_model::stream_parser::tests`.
     #[test]
+    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
+    #[cfg(feature = "local-mlx")]
     fn local_mlx_path_yields_canonical_shape_for_gemma4() {
         use crate::local_model::stream_parser::{
             dialect_for_model_id, parse_complete, LocalDialect,
@@ -1686,6 +1687,8 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
+    #[cfg(feature = "local-mlx")]
     fn qwen_tool_call_json_form_yields_openai_shape() {
         let raw = "OK.\n<tool_call>\n{\"name\": \"weather\", \"arguments\": {\"city\": \"HN\"}}\n</tool_call>\n";
         let (_, text, tc) = qwen_pipeline(raw);
@@ -1730,6 +1733,8 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
+    #[cfg(feature = "local-mlx")]
     fn qwen35_think_then_xml_tool_call_pipeline() {
         let raw = "<think>I should look up the weather for the user.</think>\n\n<tool_call>\n<function=get_weather>\n<parameter=city>\nHanoi\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
         let (reasoning, clean, tcs) = qwen_pipeline(raw);
@@ -1746,6 +1751,8 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
+    #[cfg(feature = "local-mlx")]
     fn split_qwen35_xml_tool_call() {
         let raw = "Sure.\n<tool_call>\n<function=weather>\n<parameter=city>\nHN\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
         let (_, text, tc) = qwen_pipeline(raw);

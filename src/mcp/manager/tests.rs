@@ -145,7 +145,15 @@ async fn manager_builtin_servers_listed() {
 
     let mgr = McpManager::new(work, cfg_dir);
     let builtins = mgr.get_builtin_servers();
-    assert_eq!(builtins.len(), 12);
+    // Don't pin the exact count (it grows with every new domain server) —
+    // assert the core set is present and names are unique.
+    assert!(builtins.len() >= 12, "got {} builtins", builtins.len());
+    let names: std::collections::HashSet<_> =
+        builtins.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names.len(), builtins.len(), "duplicate server names");
+    for expected in ["senclaw-memory", "senclaw-space", "senclaw-browser"] {
+        assert!(names.contains(expected), "missing {expected}");
+    }
     // Each has a name starting with senclaw-
     for s in &builtins {
         assert!(

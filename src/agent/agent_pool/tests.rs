@@ -55,6 +55,14 @@ fn permissions_config_round_trips() {
     let cfg = pool.get_permissions_config();
     assert!(cfg.skip_main_agent_permissions);
     assert!(!cfg.skip_all_agents_permissions);
+    // Virtual/persona agents only skip permissions under the ALL-agents flag —
+    // the main-agent flag alone must not leak to them.
+    assert!(!pool.get_skip_perms_for_virtual());
+
+    pool.set_permissions_config(PermissionsConfig {
+        skip_main_agent_permissions: false,
+        skip_all_agents_permissions: true,
+    });
     assert!(pool.get_skip_perms_for_virtual());
 }
 

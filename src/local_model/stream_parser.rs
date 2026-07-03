@@ -958,6 +958,8 @@ mod tests {
     /// + `chat_template.jinja` and verify the parser config matches the named
     /// role-tokens.
     #[test]
+    // Marker discovery for real model dirs exercises the mlx model parsers.
+    #[cfg(feature = "local-mlx")]
     fn parser_config_loads_real_gemma4_model_dir() {
         let dir = std::path::Path::new(env!("HOME"))
             .join(".senclaw/local-models/mlx-community__gemma-4-e2b-it-4bit");
@@ -1006,6 +1008,9 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn gemma4_complete_thought_and_tool_call() {
         let raw = "<|channel>thought\nThe user wants gold price.<channel|>\
                    <|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>";
@@ -1035,6 +1040,9 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn gemma4_arbitrary_chunking_yields_clean_events() {
         let raw = "Some preamble. <|channel>thought\nreasoning here<channel|>\
                    Answer text. <|tool_call>call:f{x:1,y:<|\"|>z<|\"|>}<tool_call|> end.";
@@ -1074,6 +1082,9 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn qwen_think_and_tool_call_compatible() {
         let raw = "<think>Let me consider.</think>\
                    <tool_call>{\"name\":\"search\",\"arguments\":{\"q\":\"hi\"}}</tool_call>\
@@ -1107,6 +1118,9 @@ mod tests {
     }
 
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn multiple_tool_calls_get_distinct_ids() {
         let raw = "<|tool_call>call:f{a:1}<tool_call|><|tool_call>call:g{b:2}<tool_call|>";
         let (_, _, tcs) = parse_complete(raw, LocalDialect::Gemma4);
@@ -1269,6 +1283,9 @@ mod tests {
     /// Without this, the UI shows the literal `call:Skill{…}<tool_call|>` at
     /// the end of the think bubble and never executes the tool.
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn tool_call_inside_unclosed_channel_is_extracted_separately() {
         let raw = "<|channel>thought\nLet me search for gold price.\n\
                    <|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>";
@@ -1300,6 +1317,9 @@ mod tests {
     /// And the well-formed case (channel close BEFORE tool_call open) still
     /// works — the change to `relevant_markers` must not break this path.
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn well_formed_channel_then_tool_call_still_works() {
         let raw = "<|channel>thought\nReason.<channel|>\
                    <|tool_call>call:f{x:1}<tool_call|>";
@@ -1376,6 +1396,9 @@ mod tests {
 
     /// Standalone tool call (no surrounding thought).
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn gemma4_contract_tool_call_only() {
         let (vis, reas, tcs) = parse_complete(
             "<|tool_call>call:search{q:<|\"|>gold price<|\"|>}<tool_call|>",
@@ -1394,6 +1417,9 @@ mod tests {
     /// tool call, no visible answer. Matches `text_len=0 reasoning_len=N
     /// tool_calls=1` log line.
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn gemma4_contract_think_then_tool_call_no_answer() {
         let (vis, reas, tcs) = parse_complete(
             "<|channel>thought\nI should search the web.<channel|>\
@@ -1424,6 +1450,9 @@ mod tests {
     /// Parser must extract it as a distinct ToolCall event (not swallow it
     /// into the reasoning body).
     #[test]
+    // Tool-call body parsing lives in mlx_lm::models (local-mlx only) —
+    // without the feature the parser deliberately emits no tool events.
+    #[cfg(feature = "local-mlx")]
     fn gemma4_contract_malformed_tool_call_inside_unclosed_channel() {
         let (vis, reas, tcs) = parse_complete(
             "<|channel>thought\nI will invoke the skill.\

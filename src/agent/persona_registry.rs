@@ -700,8 +700,17 @@ Body B.
         )
         .unwrap();
 
+        // The registry also seeds built-in agents; count only the personas
+        // loaded from our temp dir (non-builtin).
+        let user_count = |reg: &PersonaRegistry| {
+            reg.list()
+                .iter()
+                .filter(|p| p.location != PersonaLocation::Builtin)
+                .count()
+        };
+
         let reg = PersonaRegistry::new(dir.path().to_path_buf());
-        assert_eq!(reg.list().len(), 2);
+        assert_eq!(user_count(&reg), 2);
         assert!(reg.get("alpha").is_some());
         assert_eq!(reg.get("Beta").unwrap().max_concurrent, 2);
 
@@ -719,10 +728,10 @@ Body C.
         .unwrap();
         // Create a new registry pointing to same dir
         let mut reg2 = PersonaRegistry::new(dir.path().to_path_buf());
-        assert_eq!(reg2.list().len(), 3);
+        assert_eq!(user_count(&reg2), 3);
         // Or use reload
         reg2.reload();
-        assert_eq!(reg2.list().len(), 3);
+        assert_eq!(user_count(&reg2), 3);
     }
 
     #[test]

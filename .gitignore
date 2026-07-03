@@ -76,7 +76,12 @@ target
 out
 .senclaw
 .playwright-mcp
-scripts
+# Local-only helper scripts (benchmarks, fixtures). NOTE: do NOT ignore bare
+# `scripts` — that hides the root installers and every app's pack scripts.
+scripts/dump_llm_prompt.py
+scripts/mlx_bench.sh
+scripts/tts_roundtrip.sh
+scripts/whisper_*
 code-old/cognee
 code-old/sema-code-core
 code-old/SemaClaw
