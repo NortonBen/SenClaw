@@ -242,12 +242,22 @@ impl SpaceMcpLauncher {
             .try_clone()
             .with_context(|| format!("clone stderr log for app '{app_id}'"))?;
 
-        // Spawn the start command in its own process group so we can kill the
-        // whole tree (npm -> next-server) on shutdown.
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(start)
-            .current_dir(app_dir)
+        // Spawn the start command via the platform shell. On unix it gets its
+        // own process group so we can kill the whole tree (npm -> next-server)
+        // on shutdown; on Windows we fall back to killing the direct child.
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(start);
+            c
+        };
+        #[cfg(not(unix))]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(start);
+            c
+        };
+        cmd.current_dir(app_dir)
             .env("PORT", port.to_string())
             .env("SENCLAW_BASE_URL", base_url)
             .env("SENCLAW_SPACE_APP_ID", app_id)
@@ -255,8 +265,9 @@ impl SpaceMcpLauncher {
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
-            .process_group(0)
             .kill_on_drop(true);
+        #[cfg(unix)]
+        cmd.process_group(0);
         let child = cmd
             .spawn()
             .with_context(|| format!("spawn '{start}' for app '{app_id}'"))?;
@@ -293,6 +304,7 @@ impl SpaceMcpLauncher {
     /// Stop one app's server process (on uninstall).
     pub async fn stop_app(&self, app_id: &str) {
         if let Some(proc) = self.children.lock().await.remove(app_id) {
+            #[cfg(unix)]
             if proc.pgid > 0 {
                 unsafe {
                     libc::kill(-proc.pgid, libc::SIGTERM);
@@ -311,6 +323,7 @@ impl SpaceMcpLauncher {
     pub async fn shutdown(&self) {
         let mut children = self.children.lock().await;
         for (app_id, proc) in children.drain() {
+            #[cfg(unix)]
             if proc.pgid > 0 {
                 // Signal the whole process group (npm + next-server children).
                 unsafe {

@@ -79,7 +79,7 @@ pub(crate) fn acquire_lock(lock_path: &Path) -> bool {
     // Stale-lock recovery: if the recorded PID is gone, clear and retry once.
     if let Ok(raw) = std::fs::read_to_string(lock_path) {
         if let Ok(holder) = raw.trim().parse::<i32>() {
-            let alive = unsafe { libc::kill(holder, 0) } == 0;
+            let alive = pid_alive(holder);
             if !alive {
                 let _ = std::fs::remove_file(lock_path);
                 if let Ok(mut f) = OpenOptions::new()
@@ -94,4 +94,22 @@ pub(crate) fn acquire_lock(lock_path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Is a process with this PID alive? Used for stale-lock recovery.
+#[cfg(unix)]
+fn pid_alive(pid: i32) -> bool {
+    // Signal 0 = existence probe, no signal delivered.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Windows: probe via `tasklist` (no extra deps). On any probe failure assume
+/// the holder is alive — stealing a live lock is worse than waiting.
+#[cfg(not(unix))]
+fn pid_alive(pid: i32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .unwrap_or(true)
 }
