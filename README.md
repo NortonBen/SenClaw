@@ -290,7 +290,7 @@ Issues, pull requests, experiments, and design discussions are welcome. Please k
 
 ## License
 
-[MIT](LICENSE) © AIRC Sema Team
+[MIT](LICENSE)
 
 ---
 

@@ -1,0 +1,99 @@
+name: Space Apps build
+
+# Builds every Space App into its installable zip (the artifact you upload in
+# SenClaw → Apps → Install). Zips are published as workflow artifacts on every
+# run and attached to the GitHub Release when a v* tag is pushed.
+#
+# Rust apps (ssh-manager, email, deepwiki) are built on macOS arm64 — the
+# binary inside the zip must match the machine SenClaw runs on. Node apps
+# (test-manager, google-workspace) are platform-independent.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "apps/**"
+      - ".github/workflows/space-apps.yml"
+  workflow_dispatch:
+
+jobs:
+  rust-apps:
+    name: Rust apps (${{ matrix.app.id }}, macOS arm64)
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - { id: ssh-manager, zip: ssh-manager.zip }
+          - { id: email, zip: email-app.zip }
+          - { id: deepwiki, zip: deepwiki-app.zip }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: space-apps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Pack ${{ matrix.app.id }}
+        run: bash apps/${{ matrix.app.id }}/scripts/pack.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app.zip }}
+          path: apps/${{ matrix.app.id }}/${{ matrix.app.zip }}
+          if-no-files-found: error
+
+  node-apps:
+    name: Node apps (${{ matrix.app.dir }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - { dir: test-manager, zip: test-manager.zip }
+          - { dir: google-workspace-space-app, zip: google-workspace-space-app.zip }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Pack ${{ matrix.app.dir }}
+        working-directory: apps/${{ matrix.app.dir }}
+        run: |
+          npm install
+          npm run pack:zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app.zip }}
+          path: apps/${{ matrix.app.dir }}/${{ matrix.app.zip }}
+          if-no-files-found: error
+
+  # Attach every zip to the GitHub Release on tag pushes.
+  release:
+    name: Attach zips to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [rust-apps, node-apps]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

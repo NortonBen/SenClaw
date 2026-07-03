@@ -290,7 +290,7 @@ Bạn có thể đóng góp bằng issue, pull request, thử nghiệm hoặc th
 
 ## Giấy phép
 
-[MIT](LICENSE) © AIRC Sema Team
+[MIT](LICENSE)
 
 ---
 
