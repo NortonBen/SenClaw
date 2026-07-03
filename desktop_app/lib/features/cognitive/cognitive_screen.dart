@@ -82,7 +82,7 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
           ),
           child: Row(
             children: [
-              Text('Memory',
+              Text('Knowledge',
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,

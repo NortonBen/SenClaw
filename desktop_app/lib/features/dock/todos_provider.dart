@@ -41,16 +41,27 @@ class AgentTodosNotifier extends StateNotifier<Map<String, List<AgentTodo>>> {
     state = next;
   }
 
-  /// Dismiss one agent's todo list from the console (local only — the daemon
-  /// will re-push if that agent emits new todos).
+  /// Dismiss one agent's todo list from the console — PERMANENT: the daemon
+  /// clears its snapshot cache + persisted row (`dismiss:todos`), so the list
+  /// won't be replayed on reconnect/reload. Removes locally right away; the
+  /// daemon will still re-push if that agent later emits NEW todos.
   void remove(String jid) {
     if (!state.containsKey(jid)) return;
     final next = {...state}..remove(jid);
     state = next;
+    _ref
+        .read(wsClientProvider)
+        .send({'type': 'dismiss:todos', 'agentJid': jid});
   }
 
-  /// Clear every agent's todo list from the console.
-  void clear() => state = const {};
+  /// Clear every agent's todo list from the console (permanent, see [remove]).
+  void clear() {
+    final ws = _ref.read(wsClientProvider);
+    for (final jid in state.keys) {
+      ws.send({'type': 'dismiss:todos', 'agentJid': jid});
+    }
+    state = const {};
+  }
 
   @override
   void dispose() {

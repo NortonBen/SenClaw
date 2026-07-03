@@ -148,6 +148,15 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
     state = state.copyWith(messages: hydrated);
   }
 
+  /// Wipe the local message list NOW. Used by "Clear all messages" — the
+  /// daemon's `stop_and_clear` pushes an empty `history:load`, but
+  /// [_onHistory] deliberately ignores empty lists to protect optimistic
+  /// bubbles, so the caller clears locally and the (now empty) DB keeps it
+  /// clean across reloads.
+  void clearLocal() {
+    state = state.copyWith(messages: const []);
+  }
+
   void _onDelta(String delta, String? ts) {
     final list = [...state.messages];
     final idx = list.indexWhere((m) => m.id == _streamId);

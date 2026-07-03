@@ -367,8 +367,13 @@ class AcceptAllNotifier extends StateNotifier<bool> {
   AcceptAllNotifier(this._ref)
     : super(_ref.read(prefsHelperProvider).string(_kAcceptAllKey, 'false') ==
           'true') {
-    // Push the persisted choice to the daemon on (re)connect.
+    // Push the persisted choice to the daemon on (re)connect. If the socket
+    // is ALREADY connected when this provider is first read, push right away —
+    // the status stream only emits on transitions.
     final ws = _ref.read(wsClientProvider);
+    if (ws.status == WsStatus.connected && state) {
+      ws.send({'type': 'permission:accept-all', 'enabled': true});
+    }
     _sub = ws.statusStream.listen((s) {
       if (s == WsStatus.connected && state) {
         ws.send({'type': 'permission:accept-all', 'enabled': true});

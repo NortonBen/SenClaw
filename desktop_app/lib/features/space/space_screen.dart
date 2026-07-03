@@ -1789,10 +1789,24 @@ class _RunningAppView extends ConsumerWidget {
 }
 
 // ── Schedules ───────────────────────────────────────────────────────────
-class _SchedulesTab extends ConsumerWidget {
+class _SchedulesTab extends ConsumerStatefulWidget {
   const _SchedulesTab();
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_SchedulesTab> createState() => _SchedulesTabState();
+}
+
+class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
+  @override
+  void initState() {
+    super.initState();
+    // Re-fetch every time the tab is opened so next-run/status are current.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.invalidate(schedulesProvider);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final c = context.colors;
     final schedules = ref.watch(schedulesProvider);
     return Column(
@@ -1878,7 +1892,7 @@ class _SchedulesTab extends ConsumerWidget {
                                       color: c.textPrimary,
                                       fontWeight: FontWeight.w600)),
                               Text(
-                                  'next: ${s.nextRun ?? '—'}  ·  ${s.lastStatus ?? ''}',
+                                  'next: ${_fmtLocalTs(s.nextRun) ?? '—'}  ·  ${s.lastStatus ?? ''}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
@@ -1891,10 +1905,14 @@ class _SchedulesTab extends ConsumerWidget {
                           icon: const Icon(Icons.play_arrow, size: 18),
                           onPressed: () async {
                             await ref.read(spaceApiProvider).runSchedule(s.id);
+                            // The daemon rewinds next_run so its 30s poller
+                            // picks the task up — refresh so the list shows it.
+                            ref.invalidate(schedulesProvider);
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                    content: Text('Running schedule…')),
+                                    content: Text(
+                                        'Queued — runs within ~30s (scheduler poll)')),
                               );
                             }
                           },
@@ -2197,4 +2215,14 @@ class _AppFullscreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// ISO timestamp (UTC from the daemon, e.g. `2026-07-03T02:10:00+00:00`) →
+/// the user's LOCAL time as `yyyy-MM-dd HH:mm`. Falls back to the raw string
+/// when unparsable; null stays null so callers can show a placeholder.
+String? _fmtLocalTs(String? iso) {
+  if (iso == null || iso.isEmpty) return null;
+  final dt = DateTime.tryParse(iso);
+  if (dt == null) return iso;
+  return DateFormat('yyyy-MM-dd HH:mm').format(dt.toLocal());
 }

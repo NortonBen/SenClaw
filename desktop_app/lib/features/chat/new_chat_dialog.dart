@@ -1,11 +1,19 @@
+import 'dart:convert';
+import 'dart:io' show File, Platform;
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 import '../../core/prefs.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../cowork/cowork_providers.dart';
 import 'agents_provider.dart';
+import 'audio_service.dart';
 import 'conversation_provider.dart';
 import 'groups_provider.dart';
 import 'mini_chat_screen.dart' show subWindowIdProvider;
@@ -22,6 +30,10 @@ class LlmConfig {
   final String adapt;
   final int maxTokens;
   final int contextLength;
+
+  /// Explicit vision-support override; null = daemon auto-infers from the
+  /// model name (mirrors the web LLMSettings tri-state).
+  final bool? vision;
   const LlmConfig(
     this.id,
     this.label, {
@@ -32,6 +44,7 @@ class LlmConfig {
     this.adapt = '',
     this.maxTokens = 0,
     this.contextLength = 0,
+    this.vision,
   });
 }
 
@@ -66,6 +79,7 @@ final llmConfigsProvider = FutureProvider<LlmConfigData>((ref) async {
             adapt: '${m['adapt'] ?? ''}',
             maxTokens: (m['maxTokens'] as num?)?.toInt() ?? 0,
             contextLength: (m['contextLength'] as num?)?.toInt() ?? 0,
+            vision: m['vision'] is bool ? m['vision'] as bool : null,
           ))
       .toList();
   return LlmConfigData(
@@ -101,6 +115,13 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   final _cron = TextEditingController(text: '0 9 * * *');
   bool _creating = false;
 
+  // First-message attachments + mic dictation (parity with the main chat
+  // composer in conversation_pane).
+  final List<Map<String, String>> _attachments = [];
+  final _recorder = AudioRecorder();
+  bool _recording = false;
+  bool _transcribing = false;
+
   bool get _isCode => _kind == 'code';
   bool get _isCowork => _kind == 'cowork';
   bool get _isSchedule => _kind == 'schedule';
@@ -110,8 +131,107 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     _msg.dispose();
     _schedTime.dispose();
     _cron.dispose();
+    _recorder.dispose();
     super.dispose();
   }
+
+  Future<void> _attach() async {
+    final res = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      withData: true,
+    );
+    if (res == null) return;
+    for (final f in res.files) {
+      final bytes = f.bytes;
+      if (bytes == null) continue;
+      final ext = (f.extension ?? 'png').toLowerCase();
+      final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg' : 'image/$ext';
+      setState(() => _attachments.add({
+            'mimeType': mime,
+            'dataUrl': 'data:$mime;base64,${base64Encode(bytes)}',
+          }));
+    }
+  }
+
+  /// Toggle mic recording. On stop, send the audio to Whisper and append the
+  /// recognized text to the composer.
+  Future<void> _toggleMic() async {
+    if (_recording) {
+      setState(() {
+        _recording = false;
+        _transcribing = true;
+      });
+      try {
+        final out = await _recorder.stop();
+        if (out == null) return;
+        Uint8List bytes;
+        String filename;
+        if (kIsWeb) {
+          bytes = (await http.get(Uri.parse(out))).bodyBytes;
+          filename = 'recording.webm';
+        } else {
+          bytes = await File(out).readAsBytes();
+          filename = out.split(Platform.pathSeparator).last;
+        }
+        final text =
+            await ref.read(audioServiceProvider).transcribe(bytes, filename);
+        if (text.isNotEmpty) {
+          final prefix = _msg.text.trimRight();
+          setState(
+              () => _msg.text = prefix.isEmpty ? text : '$prefix $text');
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Transcription failed: $e')),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _transcribing = false);
+      }
+      return;
+    }
+    if (!await _recorder.hasPermission()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Microphone permission denied')),
+        );
+      }
+      return;
+    }
+    String path = '';
+    if (!kIsWeb) {
+      final dir = await getTemporaryDirectory();
+      path =
+          '${dir.path}${Platform.pathSeparator}senclaw_rec_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    }
+    await _recorder.start(const RecordConfig(), path: path);
+    if (mounted) setState(() => _recording = true);
+  }
+
+  /// Attach + mic buttons shared by the full and mini composer toolbars.
+  List<Widget> _micAttachButtons(AppColors c) => [
+        IconButton(
+          tooltip: 'Attach images',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.attach_file, size: 18, color: c.textSecondary),
+          onPressed: _attach,
+        ),
+        IconButton(
+          tooltip: _recording ? 'Stop recording' : 'Dictate (Whisper)',
+          visualDensity: VisualDensity.compact,
+          icon: _transcribing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(_recording ? Icons.stop_circle : Icons.mic_none,
+                  size: 18,
+                  color: _recording ? AppTokens.danger : c.textSecondary),
+          onPressed: _transcribing ? null : _toggleMic,
+        ),
+      ];
 
   static const _kRecentDirs = 'senclaw:recent-workdirs';
 
@@ -313,7 +433,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       ref.read(selectedJidProvider.notifier).state = jid;
       final convo = ref.read(conversationProvider(jid).notifier);
       convo.setAgentMode('Dag');
-      convo.sendText(text);
+      convo.sendText(text, attachments: List.of(_attachments));
       ref.read(showNewChatProvider.notifier).state = false;
       return;
     }
@@ -339,7 +459,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     // first message right after the register:group frame on the same socket.
     final convo = ref.read(conversationProvider(jid).notifier);
     convo.setAgentMode(_chatType); // Agent / Plan / Dag
-    convo.sendText(text);
+    convo.sendText(text, attachments: List.of(_attachments));
     ref.read(showNewChatProvider.notifier).state = false;
   }
 
@@ -511,6 +631,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
             onChanged: (t) => setState(() => _chatType = t),
           ),
           const Spacer(),
+          ..._micAttachButtons(c),
           _SendButton(enabled: canStart && !_creating, onTap: _start),
         ]),
       ],
@@ -692,6 +813,26 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                           isCollapsed: true,
                         ),
                       ),
+                    ),
+                    if (_attachments.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                            AppTokens.s16, AppTokens.s8, AppTokens.s16, 0),
+                        child: Wrap(
+                          spacing: AppTokens.s8,
+                          runSpacing: AppTokens.s8,
+                          children: [
+                            for (var i = 0; i < _attachments.length; i++)
+                              Chip(
+                                label: Text('image ${i + 1}',
+                                    style: const TextStyle(fontSize: 12)),
+                                avatar:
+                                    const Icon(Icons.image_outlined, size: 14),
+                                onDeleted: () => setState(
+                                    () => _attachments.removeAt(i)),
+                              ),
+                          ],
+                        ),
                     ),
                     Divider(height: AppTokens.s16, color: c.border),
                     // Toolbar row.
@@ -924,6 +1065,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                             value: _chatType,
                             onChanged: (t) => setState(() => _chatType = t),
                           ),
+                          ..._micAttachButtons(c),
                           ],
                           const SizedBox(width: AppTokens.s8),
                           _SendButton(

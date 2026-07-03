@@ -475,6 +475,15 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                       items.add(InlineDispatchCard(parent: e.p));
                     }
                   }
+                  // Typing indicator while the agent works (channel_app
+                  // parity): shown between send and the first streamed delta,
+                  // and while tools run — hidden once a live streaming bubble
+                  // is already animating.
+                  final streamingNow =
+                      msgs.isNotEmpty && msgs.last.streaming;
+                  if (convo.busy && !streamingNow) {
+                    items.add(const _TypingIndicatorRow());
+                  }
                   return SelectionArea(
                     child: ListView.builder(
                       controller: _scroll,
@@ -1555,6 +1564,32 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                         ),
                       ),
                     ),
+                  const SizedBox(height: AppTokens.s20),
+                  // Danger zone — wipe this session's entire chat history.
+                  Text('DANGER ZONE',
+                      style: TextStyle(
+                          color: c.textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5)),
+                  const SizedBox(height: AppTokens.s8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTokens.danger,
+                        side: const BorderSide(color: AppTokens.danger),
+                      ),
+                      onPressed: _clearAllMessages,
+                      icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                      label: const Text('Clear all messages'),
+                    ),
+                  ),
+                  const SizedBox(height: AppTokens.s4),
+                  Text(
+                      'Stops the agent and permanently deletes every message, '
+                      'tool log, and chat event of this session.',
+                      style: TextStyle(color: c.textMuted, fontSize: 11)),
                 ],
               ),
             ),
@@ -1562,6 +1597,46 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
         ),
       ),
     );
+  }
+
+  /// Confirm, then ask the daemon to stop the agent and permanently delete
+  /// this session's persisted history (`agent:control stop_and_clear` wipes
+  /// group_messages + tool_executions + chat_events). Local list is cleared
+  /// directly because the provider ignores empty history:load pushes.
+  Future<void> _clearAllMessages() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear all messages?'),
+        content: const Text(
+            'This stops the agent and permanently deletes the entire chat '
+            'history of this session. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    ref.read(wsClientProvider).send({
+      'type': 'agent:control',
+      'groupJid': widget.jid,
+      'action': 'stop_and_clear',
+    });
+    ref.read(conversationProvider(widget.jid).notifier).clearLocal();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chat history deleted')),
+      );
+      Navigator.of(context).pop();
+    }
   }
 }
 
@@ -1653,6 +1728,18 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
   }
 
   String _s(String k) => '${_data?[k] ?? ''}';
+
+  /// ISO timestamp (UTC from the daemon) → local `yyyy-MM-dd HH:mm` for
+  /// display; falls back to the raw string when unparsable.
+  static String _fmtTs(String raw) {
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw;
+    final l = dt.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
+  }
+
+  String _localTs(String k) => _fmtTs(_s(k));
 
   Future<void> _edit() async {
     final c = context.colors;
@@ -2014,9 +2101,9 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                             ]),
                             const SizedBox(height: AppTokens.s8),
                             if (_s('next_run').isNotEmpty)
-                              _kv(c, 'Next run', _s('next_run')),
+                              _kv(c, 'Next run', _localTs('next_run')),
                             if (_s('last_run').isNotEmpty)
-                              _kv(c, 'Last run', _s('last_run')),
+                              _kv(c, 'Last run', _localTs('last_run')),
                             const SizedBox(height: AppTokens.s16),
                             Text('HISTORY',
                                 style: TextStyle(
@@ -2050,7 +2137,7 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                                     const SizedBox(width: AppTokens.s8),
                                     Expanded(
                                       child: Text(
-                                          '${r['ranAt'] ?? r['ran_at'] ?? r['created_at'] ?? ''} · ${r['status'] ?? ''}',
+                                          '${_fmtTs('${r['ranAt'] ?? r['ran_at'] ?? r['created_at'] ?? ''}')} · ${r['status'] ?? ''}',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
@@ -2105,6 +2192,92 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
             style: TextStyle(
                 color: color, fontSize: 12, fontWeight: FontWeight.w600)),
       ]),
+    );
+  }
+}
+
+/// "Agent is typing" row appended under the last message while the agent is
+/// busy (channel_app parity): a small agent-side bubble with three bouncing
+/// dots. Hidden as soon as a streaming reply bubble takes over.
+class _TypingIndicatorRow extends StatelessWidget {
+  const _TypingIndicatorRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppTokens.s16, AppTokens.s8, AppTokens.s16, AppTokens.s8),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppTokens.s12, vertical: AppTokens.s12),
+          decoration: BoxDecoration(
+            color: c.bubbleAgent,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(4),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(16),
+              bottomRight: Radius.circular(16),
+            ),
+            border: Border.all(color: c.border),
+          ),
+          child: const _TypingDots(),
+        ),
+      ),
+    );
+  }
+}
+
+/// Three dots pulsing in a staggered wave (ported from channel_app).
+class _TypingDots extends StatefulWidget {
+  const _TypingDots();
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1000))
+    ..repeat();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (i) {
+            final t = (_ctrl.value - i * 0.15) % 1.0;
+            final scale = t < 0.5 ? 0.6 + t * 0.8 : 1.0 - (t - 0.5) * 0.8;
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Transform.scale(
+                scale: scale.clamp(0.6, 1.0),
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: c.accent.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+            );
+          }),
+        );
+      },
     );
   }
 }

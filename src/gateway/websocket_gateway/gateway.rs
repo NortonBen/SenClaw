@@ -71,6 +71,10 @@ pub trait WsGatewayApi: Send + Sync {
     fn get_agent_todos(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
+    /// Dismiss one agent's todo list from the console: drop the in-memory
+    /// cache entry so subscribe snapshots stop replaying it. The DB row is
+    /// deleted separately by the WS handler. Default no-op.
+    fn dismiss_agent_todos(&self, _agent_jid: &str) {}
     /// Get current per-agent tool rosters (for admin clients on subscribe).
     /// Returned shape: `{ "<agentJid>": { "agentName": ..., "tools": [...] } }`.
     fn get_agent_tools(&self) -> serde_json::Value {

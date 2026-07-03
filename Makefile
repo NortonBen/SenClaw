@@ -43,7 +43,8 @@ build-extension:
 # its logs, and restarts it on demand). Multi-platform: macOS / Windows / Linux
 # / web. Requires the Flutter SDK on PATH.
 DESKTOP_DIR := desktop_app
-DAEMON_FEATURES := local-mlx,local-embed-metal,local-embed,local-mlx-whisper
+# Full Apple-Silicon feature set — keep in sync with `run-release`.
+DAEMON_FEATURES := local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal
 
 app-dev:
 	cd $(DESKTOP_DIR) && flutter run -d macos

@@ -146,23 +146,55 @@ class _SectionItem extends StatelessWidget {
 }
 
 /// Common scrollable section body with a title.
-class _Body extends StatelessWidget {
-  const _Body({required this.title, required this.children});
+class _Body extends StatefulWidget {
+  const _Body({required this.title, required this.children, this.onRefresh});
   final String title;
   final List<Widget> children;
+
+  /// Re-fetches this section's API data. Called automatically every time the
+  /// user navigates to the section, and exposed as a reload button beside the
+  /// title.
+  final VoidCallback? onRefresh;
+
+  @override
+  State<_Body> createState() => _BodyState();
+}
+
+class _BodyState extends State<_Body> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.onRefresh != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onRefresh!();
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     return ListView(
       padding: const EdgeInsets.all(AppTokens.s24),
       children: [
-        Text(title,
-            style: TextStyle(
-                color: c.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.w700)),
+        Row(
+          children: [
+            Text(widget.title,
+                style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700)),
+            const Spacer(),
+            if (widget.onRefresh != null)
+              IconButton(
+                tooltip: 'Reload',
+                icon: Icon(Icons.refresh, size: 18, color: c.textSecondary),
+                onPressed: widget.onRefresh,
+              ),
+          ],
+        ),
         const SizedBox(height: AppTokens.s16),
-        ...children,
+        ...widget.children,
       ],
     );
   }
@@ -366,6 +398,14 @@ class _GeneralSection extends ConsumerWidget {
                   {...b, 'preCognitive': v}, agentBehaviorProvider),
             ),
             _ToggleRow(
+              label: 'Memory recall',
+              desc: 'Consolidate dropped history into memory files and '
+                  'inject relevant saved memories into each request.',
+              value: b['memoryRecall'] == true,
+              onChanged: (v) => api.post('/api/agent-behavior',
+                  {...b, 'memoryRecall': v}, agentBehaviorProvider),
+            ),
+            _ToggleRow(
               label: 'Pre-trigger skill',
               desc: 'Evaluate trigger skills before the main turn.',
               value: b['preTriggerSkill'] == true,
@@ -388,6 +428,10 @@ class _ChannelsSection extends ConsumerWidget {
     final channels = ref.watch(channelsProvider);
     return _Body(
       title: 'Channels',
+      onRefresh: () {
+        ref.read(channelsProvider.notifier).refresh();
+        ref.read(bindingsProvider.notifier).refresh();
+      },
       children: [
         Align(
           alignment: Alignment.centerRight,
@@ -1058,6 +1102,10 @@ class _AgentsSection extends ConsumerWidget {
     final bindings = ref.watch(bindingsProvider);
     return _Body(
       title: 'Profiles',
+      onRefresh: () {
+        ref.read(agentsProvider.notifier).refresh();
+        ref.read(bindingsProvider.notifier).refresh();
+      },
       children: [
         Align(
           alignment: Alignment.centerRight,
@@ -1811,15 +1859,49 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
 
 // ── LLM models ────────────────────────────────────────────────────────────
 /// Provider presets (baseURL + adapter), ported from the web LLMSettings.
-const _llmPresets = <String, (String url, String adapt)>{
-  'anthropic': ('https://api.anthropic.com', 'anthropic'),
-  'openai': ('https://api.openai.com/v1', 'openai'),
-  'kimi': ('https://api.moonshot.cn/v1', 'openai'),
-  'minimax': ('https://api.minimaxi.com/anthropic', 'anthropic'),
-  'deepseek': ('https://api.deepseek.com/anthropic', 'anthropic'),
-  'glm': ('https://open.bigmodel.cn/api/paas/v4', 'openai'),
-  'openrouter': ('https://openrouter.ai/api', 'openai'),
-  'qwen': ('https://dashscope.aliyuncs.com/compatible-mode/v1', 'openai'),
+/// Per-provider preset, mirrors web `LLMSettings.tsx` `PROVIDERS`.
+/// `modelsUrl` is the OpenAI-style listing endpoint used by Fetch/Test when
+/// the chat `baseUrl` speaks a different protocol (e.g. DeepSeek's
+/// `/anthropic` chat base can't list models).
+class _LlmProviderDef {
+  final String name;
+  final String baseUrl;
+  final String adapt; // 'openai' | 'anthropic' compatible protocol
+  final String? modelsUrl;
+  final String? keyHint;
+  final String? urlHint;
+  const _LlmProviderDef(this.name, this.baseUrl, this.adapt,
+      {this.modelsUrl, this.keyHint, this.urlHint});
+}
+
+const _llmProviders = <String, _LlmProviderDef>{
+  'anthropic': _LlmProviderDef('Anthropic', 'https://api.anthropic.com',
+      'anthropic',
+      keyHint: 'Your Anthropic API key'),
+  'openai': _LlmProviderDef('OpenAI', 'https://api.openai.com/v1', 'openai',
+      keyHint: 'Your OpenAI API key'),
+  'kimi': _LlmProviderDef('Kimi (Moonshot)', 'https://api.moonshot.cn/v1',
+      'openai',
+      keyHint: 'Your Moonshot API key'),
+  'minimax': _LlmProviderDef(
+      'MiniMax', 'https://api.minimaxi.com/anthropic', 'anthropic',
+      keyHint: 'Your MiniMax API key'),
+  'deepseek': _LlmProviderDef(
+      'DeepSeek', 'https://api.deepseek.com/anthropic', 'anthropic',
+      modelsUrl: 'https://api.deepseek.com/v1',
+      keyHint: 'Your DeepSeek API key'),
+  'glm': _LlmProviderDef(
+      'GLM (Zhipu)', 'https://open.bigmodel.cn/api/paas/v4', 'openai',
+      keyHint: 'Your Zhipu API key'),
+  'openrouter': _LlmProviderDef(
+      'OpenRouter', 'https://openrouter.ai/api', 'openai',
+      modelsUrl: 'https://openrouter.ai/api/v1',
+      keyHint: 'Your OpenRouter API key'),
+  'qwen': _LlmProviderDef('Qwen (Alibaba)',
+      'https://dashscope.aliyuncs.com/compatible-mode/v1', 'openai',
+      keyHint: 'Your Alibaba Cloud API key'),
+  'custom': _LlmProviderDef('Custom LLM endpoint', '', 'openai',
+      urlHint: 'https://your-api.com/v1', keyHint: 'Your API key'),
 };
 
 /// Whether extended thinking is enabled (from /api/llm-config.thinkingEnabled).
@@ -1837,6 +1919,7 @@ class _LlmSection extends ConsumerWidget {
     final thinking = ref.watch(thinkingEnabledProvider).valueOrNull ?? true;
     return _Body(
       title: 'LLM Models',
+      onRefresh: () => ref.invalidate(llmConfigsProvider),
       children: [
         Container(
           margin: const EdgeInsets.only(bottom: AppTokens.s12),
@@ -1977,6 +2060,29 @@ class _LlmSection extends ConsumerWidget {
                           icon: const Icon(Icons.delete_outline,
                               size: 16, color: AppTokens.danger),
                           onPressed: () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (dctx) => AlertDialog(
+                                title: const Text('Delete endpoint?'),
+                                content: Text(
+                                    '"${m.label}" will be removed. Chats '
+                                    'using it fall back to the active '
+                                    'default model.'),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(dctx).pop(false),
+                                      child: const Text('Cancel')),
+                                  FilledButton(
+                                      style: FilledButton.styleFrom(
+                                          backgroundColor: AppTokens.danger),
+                                      onPressed: () =>
+                                          Navigator.of(dctx).pop(true),
+                                      child: const Text('Delete')),
+                                ],
+                              ),
+                            );
+                            if (ok != true) return;
                             await ref
                                 .read(apiClientProvider)
                                 .delete('/api/llm-config/${m.id}');
@@ -2050,18 +2156,26 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
       : 'openai';
   late String _adapt = (widget.existing?.adapt.isNotEmpty ?? false)
       ? widget.existing!.adapt
-      : (_llmPresets[_provider]?.$2 ?? 'openai');
+      : (_llmProviders[_provider]?.adapt ?? 'openai');
   late final _baseUrl = TextEditingController(
       text: (widget.existing?.baseUrl.isNotEmpty ?? false)
           ? widget.existing!.baseUrl
-          : (_llmPresets[_provider]?.$1 ?? ''));
+          : (_llmProviders[_provider]?.baseUrl ?? ''));
   late final _apiKey =
       TextEditingController(text: widget.existing?.apiKey ?? '');
   late final _model =
       TextEditingController(text: widget.existing?.modelName ?? '');
+
+  /// Vision override: null = auto-infer from model name (daemon side).
+  late bool? _vision = widget.existing?.vision;
   String? _testResult;
   bool _busy = false;
   List<String> _availableModels = const [];
+
+  /// Fetch/Test target: some providers list models on a different base than
+  /// the chat endpoint (web parity: `PROVIDERS[p].modelsUrl ?? baseURL`).
+  String get _probeBaseUrl =>
+      _llmProviders[_provider]?.modelsUrl ?? _baseUrl.text.trim();
 
   bool get _isEdit => widget.existing != null;
 
@@ -2085,7 +2199,7 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
     try {
       final r = await ref.read(apiClientProvider).post('/api/llm-config/models',
           body: {
-            'baseURL': _baseUrl.text.trim(),
+            'baseURL': _probeBaseUrl,
             'apiKey': _apiKey.text.trim(),
             'adapt': _adapt,
           });
@@ -2129,7 +2243,10 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
       'adapt': _adapt,
       'maxTokens': maxTokens,
       'contextLength': ctx,
-      'label': '$model ($_provider)',
+      'label':
+          '$model (${_llmProviders[_provider]?.name ?? _provider})',
+      // Only send an explicit override; omitting lets the daemon auto-infer.
+      if (_vision != null) 'vision': _vision,
     };
   }
 
@@ -2140,7 +2257,7 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
     });
     try {
       await ref.read(apiClientProvider).post('/api/llm-config/test', body: {
-        'baseURL': _baseUrl.text.trim(),
+        'baseURL': _probeBaseUrl,
         'apiKey': _apiKey.text.trim(),
         'adapt': _adapt,
       });
@@ -2195,13 +2312,15 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final providerKeys = _llmPresets.keys.toList();
+    final providerKeys = _llmProviders.keys.toList();
+    final def = _llmProviders[_provider];
     return AlertDialog(
       backgroundColor: c.surface,
       title: Text(_isEdit ? 'Edit LLM endpoint' : 'Add LLM endpoint'),
       content: SizedBox(
         width: 460,
-        child: Column(
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -2212,16 +2331,17 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
                 if (!providerKeys.contains(_provider))
                   DropdownMenuItem(value: _provider, child: Text(_provider)),
                 for (final k in providerKeys)
-                  DropdownMenuItem(value: k, child: Text(k)),
+                  DropdownMenuItem(
+                      value: k, child: Text(_llmProviders[k]!.name)),
               ],
               onChanged: (v) {
                 if (v == null) return;
                 setState(() {
                   _provider = v;
-                  final preset = _llmPresets[v];
+                  final preset = _llmProviders[v];
                   if (preset != null) {
-                    _baseUrl.text = preset.$1;
-                    _adapt = preset.$2;
+                    _baseUrl.text = preset.baseUrl;
+                    _adapt = preset.adapt;
                   }
                 });
               },
@@ -2229,15 +2349,33 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
             const SizedBox(height: AppTokens.s8),
             TextField(
                 controller: _baseUrl,
-                decoration: const InputDecoration(labelText: 'Base URL')),
+                decoration: InputDecoration(
+                    labelText: 'Base URL',
+                    hintText: def?.urlHint)),
             const SizedBox(height: AppTokens.s8),
             TextField(
                 controller: _apiKey,
                 obscureText: true,
                 decoration: InputDecoration(
                     labelText: 'API key',
-                    hintText:
-                        _isEdit ? 'Stored key — edit to replace' : null)),
+                    hintText: _isEdit
+                        ? 'Stored key — edit to replace'
+                        : def?.keyHint)),
+            const SizedBox(height: AppTokens.s8),
+            // Protocol the endpoint speaks — pre-set by the provider preset,
+            // editable for custom/self-hosted gateways.
+            DropdownButtonFormField<String>(
+              initialValue: _adapt == 'anthropic' ? 'anthropic' : 'openai',
+              decoration: const InputDecoration(
+                  labelText: 'API type (compatibility)'),
+              items: const [
+                DropdownMenuItem(
+                    value: 'openai', child: Text('OpenAI-compatible')),
+                DropdownMenuItem(
+                    value: 'anthropic', child: Text('Anthropic-compatible')),
+              ],
+              onChanged: (v) => setState(() => _adapt = v ?? 'openai'),
+            ),
             const SizedBox(height: AppTokens.s8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -2283,7 +2421,24 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
                           : AppTokens.danger,
                       fontSize: 12)),
             ],
+            const SizedBox(height: AppTokens.s8),
+            // Vision tri-state: Auto follows the daemon's model-name
+            // inference; the explicit options override it (web parity).
+            DropdownButtonFormField<String>(
+              initialValue: _vision == null ? 'auto' : (_vision! ? 'on' : 'off'),
+              decoration:
+                  const InputDecoration(labelText: 'Vision (image input)'),
+              items: const [
+                DropdownMenuItem(
+                    value: 'auto', child: Text('Auto (infer from model name)')),
+                DropdownMenuItem(value: 'on', child: Text('Supported')),
+                DropdownMenuItem(value: 'off', child: Text('Not supported')),
+              ],
+              onChanged: (v) => setState(
+                  () => _vision = v == 'auto' ? null : v == 'on'),
+            ),
           ],
+          ),
         ),
       ),
       actions: [
@@ -3332,6 +3487,7 @@ class SpaceAppsSection extends ConsumerWidget {
     final apps = ref.watch(spaceAppsProvider);
     return _Body(
       title: 'Space Apps',
+      onRefresh: () => ref.invalidate(spaceAppsProvider),
       children: [
         Text('Install, register, and remove embedded Space Apps.',
             style: TextStyle(color: c.textMuted, fontSize: 12)),

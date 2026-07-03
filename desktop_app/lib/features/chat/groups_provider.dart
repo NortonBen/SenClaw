@@ -11,6 +11,10 @@ import '../../models/group.dart';
 class GroupsNotifier extends StateNotifier<List<GroupInfo>> {
   GroupsNotifier(this._ref) : super(const []) {
     final ws = _ref.read(wsClientProvider);
+    // The status stream only emits on transitions; if the socket is ALREADY
+    // connected when this provider is first read (lazy), fetch right now —
+    // otherwise the list would stay empty until the next reconnect.
+    if (ws.status == WsStatus.connected) ws.send({'type': 'list:groups'});
     _statusSub = ws.statusStream.listen((s) {
       if (s == WsStatus.connected) ws.send({'type': 'list:groups'});
     });

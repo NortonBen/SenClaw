@@ -206,7 +206,12 @@ class DaemonSupervisor extends ChangeNotifier {
   }
 
   // ── Logging (coalesced to avoid rebuild storms) ────────────────────────
-  void _log(String line) {
+  static final _ansi = RegExp(r'\x1B\[[0-9;?]*[a-zA-Z]');
+
+  void _log(String rawLine) {
+    // The daemon logs with ANSI colors; strip them so the Diagnostics screen
+    // and startup splash show clean text instead of `[2m...[0m` garbage.
+    final line = rawLine.replaceAll(_ansi, '');
     if (line.isEmpty) return;
     _logs.add(line);
     while (_logs.length > _logCap) {

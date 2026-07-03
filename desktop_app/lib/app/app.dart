@@ -10,6 +10,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import '../core/daemon/daemon_provider.dart';
 import '../core/daemon/port_tools.dart';
+import '../core/daemon/startup_gate.dart';
 import '../core/notifications/system_notifier.dart';
 import '../core/transport/connection.dart';
 import '../features/chat/mini_chat_screen.dart' show miniExpandRequestProvider;
@@ -222,12 +223,16 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
       darkTheme: AppTheme.dark(),
       themeMode: ref.watch(themeModeProvider),
       routerConfig: appRouter,
-      // Global plan-approval modal, stacked above all routes.
-      builder: (context, child) => Stack(
-        children: [
-          child ?? const SizedBox.shrink(),
-          const PlanExitOverlay(),
-        ],
+      // StartupGate holds a splash until the daemon answers HTTP, so no route
+      // (and none of its data providers) runs against a dead daemon. The
+      // plan-approval modal stacks above all routes once the shell is live.
+      builder: (context, child) => StartupGate(
+        child: Stack(
+          children: [
+            child ?? const SizedBox.shrink(),
+            const PlanExitOverlay(),
+          ],
+        ),
       ),
     );
   }

@@ -245,6 +245,10 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         .unwrap_or(serde_json::Value::Null)
     }
 
+    fn dismiss_agent_todos(&self, agent_jid: &str) {
+        self.agent_pool.dismiss_cached_todos(agent_jid);
+    }
+
     /// Snapshot of cached agent todos — sent to admin clients on subscribe.
     fn get_agent_todos(&self) -> serde_json::Value {
         let cached = self.agent_pool.get_all_cached_todos();

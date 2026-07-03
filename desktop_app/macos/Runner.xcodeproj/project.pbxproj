@@ -240,6 +240,7 @@
 				33CC10EB2044A3C60003C045 /* Resources */,
 				33CC110E2044A8840003C045 /* Bundle Framework */,
 				3399D490228B24CF009A79C7 /* ShellScript */,
+				5EC1A100DAEB017E00000001 /* Embed senclaw daemon */,
 				A7449FF98BA9D772126D23C8 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
@@ -340,6 +341,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "echo \"$PRODUCT_NAME.app\" > \"$PROJECT_DIR\"/Flutter/ephemeral/.app_filename && \"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh embed\n";
+		};
+		5EC1A100DAEB017E00000001 /* Embed senclaw daemon */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed senclaw daemon";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Bundle the Rust daemon so DaemonSupervisor can spawn it from Contents/Resources.\nSRC=\"$PROJECT_DIR/../../target/release/senclaw\"\nDST=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/senclaw\"\nif [ -f \"$SRC\" ]; then\n  cp -f \"$SRC\" \"$DST\"\n  chmod +x \"$DST\"\n  codesign --force --sign - \"$DST\" 2>/dev/null || true\n  echo \"note: embedded senclaw daemon from $SRC\"\nelse\n  echo \"warning: senclaw daemon not found at $SRC (run cargo build --release) — bundle keeps any previous copy\"\nfi\n";
 		};
 		33CC111E2044C6BF0003C045 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;

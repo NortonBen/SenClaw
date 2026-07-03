@@ -1,8 +1,42 @@
 import { useEffect, useState } from 'react';
-import { Modal, Form, Select, Tabs, message, Spin, Typography, Radio } from 'antd';
+import { Button, Modal, Form, Select, Space, Tabs, message, Spin, Typography, Radio } from 'antd';
 import { useAppTheme } from '../theme';
 
 const { Text } = Typography;
+
+/// Commands the bundled SSH skills actually run — keep in sync with
+/// apps/ssh-manager/skills/*/SKILL.md (ssh-reporting's system report:
+/// disk/mem/cpu/network) plus the identity probes agents habitually issue.
+const SKILL_COMMANDS = [
+  'df', 'free', 'uptime', 'top', 'ip', 'ping',
+  'uname', 'ps', 'ss', 'whoami', 'hostname',
+];
+
+/// Safe read-only diagnostics for one-click allowing. First-token matching
+/// means anything that can mutate state (rm, dd, systemctl, docker, ...) is
+/// deliberately NOT in this list — add those explicitly if you accept the risk.
+const BASIC_COMMANDS = [
+  'ls', 'pwd', 'cat', 'head', 'tail', 'grep', 'find', 'which',
+  'echo', 'date', 'id', 'env', 'du', 'stat', 'wc', 'w', 'who',
+  'last', 'lsblk', 'lscpu', 'journalctl', 'netstat',
+  ...SKILL_COMMANDS,
+];
+
+const dedup = (xs: string[]) => Array.from(new Set(xs));
+
+/// Grouped dropdown suggestions for the allowlist picker.
+const ALLOW_OPTIONS = [
+  {
+    label: 'From SSH skills',
+    options: SKILL_COMMANDS.map((c) => ({ value: c, label: c })),
+  },
+  {
+    label: 'Basic (read-only)',
+    options: BASIC_COMMANDS.filter((c) => !SKILL_COMMANDS.includes(c))
+      .sort()
+      .map((c) => ({ value: c, label: c })),
+  },
+];
 
 interface Settings {
   theme: string;
@@ -124,16 +158,57 @@ export const SettingsModal: React.FC<Props> = ({ open, onClose }) => {
                 {settings.ssh_command_policy === 'allowlist' && (
                   <Form.Item
                     label="Allowed commands"
-                    extra="Only these commands can run. Press Enter to add."
+                    extra="Only these commands can run. Pick from the suggestions or type any other command and press Enter to add it."
                   >
                     <Select
                       mode="tags"
                       value={settings.ssh_allowed_commands}
-                      onChange={(v) => persist({ ...settings, ssh_allowed_commands: v })}
+                      onChange={(v) => persist({ ...settings, ssh_allowed_commands: dedup(v) })}
                       tokenSeparators={[',', ' ']}
+                      options={ALLOW_OPTIONS}
                       placeholder="ls, pwd, df, free, uname, whoami, ..."
                       style={{ width: '100%' }}
                     />
+                    <Space style={{ marginTop: 8 }} wrap>
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          persist({
+                            ...settings,
+                            ssh_allowed_commands: dedup([
+                              ...settings.ssh_allowed_commands,
+                              ...SKILL_COMMANDS,
+                            ]),
+                          })
+                        }
+                      >
+                        + SSH-skill commands
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          persist({
+                            ...settings,
+                            ssh_allowed_commands: dedup([
+                              ...settings.ssh_allowed_commands,
+                              ...BASIC_COMMANDS,
+                            ]),
+                          })
+                        }
+                      >
+                        + All basic commands
+                      </Button>
+                      <Button
+                        size="small"
+                        danger
+                        disabled={settings.ssh_allowed_commands.length === 0}
+                        onClick={() =>
+                          persist({ ...settings, ssh_allowed_commands: [] })
+                        }
+                      >
+                        Clear
+                      </Button>
+                    </Space>
                   </Form.Item>
                 )}
 

@@ -27,9 +27,14 @@ final wsClientProvider = Provider<WsClient>((ref) {
 });
 
 /// Live connection status for the WS gateway.
-final wsStatusProvider = StreamProvider<WsStatus>((ref) {
+final wsStatusProvider = StreamProvider<WsStatus>((ref) async* {
   final ws = ref.watch(wsClientProvider);
-  return ws.statusStream;
+  // The status stream is a broadcast controller that only emits transitions —
+  // it does NOT replay. Seed subscribers with the CURRENT status, otherwise a
+  // late watcher (e.g. the nav-rail connection dot) shows "Offline" even
+  // though the socket connected long before it was built.
+  yield ws.status;
+  yield* ws.statusStream;
 });
 
 /// Broadcast of every decoded server event. Feature providers do

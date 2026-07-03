@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/refresh_on_mount.dart';
 import '../settings/entity_providers.dart' show toolRulesProvider, ToolRule;
 import 'cowork_panel.dart' show CoworkPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
@@ -294,16 +295,36 @@ class PluginsScreen extends ConsumerWidget {
         ),
         Container(width: 1, color: c.border),
         Expanded(
+          // Each API-backed tab re-fetches when opened (distinct keys keep
+          // RefreshOnMount remounting across tab switches).
           child: switch (section) {
-            'subagents' => const _SubagentsTab(),
-            'mcp' => const _McpTab(),
-            'hooks' => const _HooksTab(),
-            'code' => const _CodeTab(),
+            'subagents' => RefreshOnMount(
+                key: const ValueKey('subagents'),
+                providers: [subagentsProvider],
+                child: const _SubagentsTab()),
+            'mcp' => RefreshOnMount(
+                key: const ValueKey('mcp'),
+                providers: [mcpServersProvider],
+                child: const _McpTab()),
+            'hooks' => RefreshOnMount(
+                key: const ValueKey('hooks'),
+                providers: [hooksProvider],
+                child: const _HooksTab()),
+            'code' => RefreshOnMount(
+                key: const ValueKey('code'),
+                providers: [codeArtifactsProvider],
+                child: const _CodeTab()),
             'apps' => const SpaceAppsSection(),
             'cowork' => const CoworkPanel(),
             'memory' => const CognitiveScreen(),
-            'marketplace' => const _MarketplaceTab(),
-            _ => const _SkillsTab(),
+            'marketplace' => RefreshOnMount(
+                key: const ValueKey('marketplace'),
+                providers: [marketplaceSourcesProvider],
+                child: const _MarketplaceTab()),
+            _ => RefreshOnMount(
+                key: const ValueKey('skills'),
+                providers: [skillsProvider],
+                child: const _SkillsTab()),
           },
         ),
       ],

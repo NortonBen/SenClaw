@@ -220,6 +220,9 @@ async fn handle_message(
         "list:dispatch" => {
             super::handlers::handle_list_dispatch(clients, client_idx, &sender, state).await
         }
+        "dismiss:todos" => {
+            super::handlers::handle_todos_dismiss(clients, client_idx, &sender, state, msg).await
+        }
         "agent:control" => {
             super::handlers::handle_agent_control(clients, client_idx, &sender, state, msg).await
         }

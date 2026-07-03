@@ -1403,6 +1403,48 @@ pub(crate) async fn handle_tool_rule_remove(
     }
 }
 
+/// `dismiss:todos {agentJid}` — permanently dismiss an agent's todo list from
+/// the Console. Clears the in-memory snapshot cache AND deletes the persisted
+/// `agent_todos` row (both are replayed to clients on subscribe, which is why
+/// a client-side-only removal reappears after reload), then broadcasts an
+/// empty list so every connected client drops the group immediately.
+pub(crate) async fn handle_todos_dismiss(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let Some(jid) = msg["agentJid"].as_str().filter(|s| !s.is_empty()) else {
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "agentJid required"}),
+        );
+        return;
+    };
+    state.api.dismiss_agent_todos(jid);
+    if let Err(e) = state.db.delete_agent_todos(jid) {
+        tracing::warn!(
+            error = %e, agent_jid = %jid,
+            "[WsGateway] dismiss:todos: failed to delete persisted todos"
+        );
+    }
+    tracing::info!("[WsGateway] dismiss:todos agent_jid={jid}");
+    broadcast_to_all_inner(
+        clients,
+        &serde_json::json!({
+            "type": "agent:todos",
+            "agentJid": jid,
+            "agentName": jid,
+            "todos": [],
+        }),
+    )
+    .await;
+}
+
 pub(crate) async fn handle_tool_rule_update(
     clients: &Arc<Mutex<Vec<WsClient>>>,
     client_idx: usize,
