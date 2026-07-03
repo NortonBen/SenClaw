@@ -2634,7 +2634,9 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
             .read(apiClientProvider)
             .post('/api/local-models/${Uri.encodeComponent(m.id)}/$action');
       } catch (e) {
-        if (context.mounted) {
+        // State context — guard with the State's own `mounted` (the analyzer
+        // flags `context.mounted` here as an unrelated check).
+        if (mounted) {
           ScaffoldMessenger.of(context)
               .showSnackBar(SnackBar(content: Text('$e')));
         }
