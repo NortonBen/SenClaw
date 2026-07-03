@@ -60,6 +60,27 @@ What that adds up to:
 
 ---
 
+## Supported Local LLMs
+
+SenClaw ships its own **native MLX runtime** (Rust `mlx-rs`, Apple Silicon — no Python, no llama.cpp) plus a cross-platform **Candle** fallback. Any HuggingFace checkpoint whose `model_type` matches a supported architecture can be downloaded and run from *Settings → Local Models*:
+
+| Architecture (`model_type`) | Family | Notes |
+|---|---|---|
+| `qwen3`, `qwen2` | Qwen 2.5 / Qwen 3 | Full tool-calling + thinking markers; recommended default for agents. |
+| `qwen3_5` | Qwen 3.5 hybrid | GatedDeltaNet linear-attention + attention hybrid (OptiQ quant); recurrent prefix cache skips ~90% of prefill on multi-turn agent loops. |
+| `gemma2`, `gemma3`, `gemma4` | Google Gemma | Gemma 4 runs the text backbone (Per-Layer Embeddings, cross-layer KV sharing); vision tower in progress. |
+| `llama` | Llama 3.x | Standard transformer path. |
+| `deepseek_v2` | DeepSeek-Coder-V2-Lite | Multi-head Latent Attention + Mixture-of-Experts. |
+| `ouro` | Ouro LoopLM | Looped-depth universal transformer with a `recurrence_steps` depth knob. |
+| `mamba2`, `falcon_mamba` | State-space models | Attention-free SSM decoding. |
+| `bonsai_q1` | Bonsai Q1 | Compact experimental architecture. |
+
+Curated one-click downloads (verified end-to-end): **Qwen3 4B Instruct 4-bit** (tools/agents), **Qwen2.5 0.5B** (fast chat), **Qwen3.5 0.8B OptiQ** (chat + agentic), **Gemma 4 E2B-it 4-bit / OptiQ** (long-form text). Custom repos can be added by HF id.
+
+Runtime extras: **TurboQuant KV-cache quantization** (TQ3/TQ4 — long contexts in a fraction of the RAM), prefix caching, and streaming tool-call/thinking parsers per model dialect. Beyond LLMs, the same local stack covers **Whisper** speech-to-text (incl. Vietnamese), **TTS** (macOS native voice; ZipVoice in progress), **PaddleOCR** (Metal/CoreML), and **local embeddings**. Build with `make run-release` / `make app-build` to get the full feature set.
+
+---
+
 ## Install
 
 ### One-line install (macOS / Linux)
@@ -223,22 +244,34 @@ make app-install
 
 ## Runtime Layout
 
-By default, SenClaw stores runtime data under the user's home directory:
+By default, SenClaw stores runtime data under the user's home directory, split into a hidden config/state root and a user-visible workspace:
 
 ```text
-~/.senclaw/
-├── senclaw.db
-├── config.json
-├── dispatch-state.json
-└── workspace-state-{folder}.json
+~/.senclaw/                         # config, databases, model caches
+├── config.json                     # global config (LLM profiles, toggles)
+├── senclaw.db                      # main SQLite DB (groups, messages, tasks, events)
+├── senclaw_cognitive.db            # cognitive memory graph
+├── dispatch-state.json             # DAG team state
+├── hooks.json                      # user hooks
+├── llm_logs/                       # per-request LLM logs
+├── models/  local-models/          # downloaded local LLMs (MLX/Candle)
+├── whisper-models/  tts-models/  ocr-models/
+├── managed/skills/                 # skills installed by Space Apps
+├── space-apps-data/{app-id}/       # per-app data (settings, databases)
+├── plans/                          # saved Plan-mode plans
+└── workspace-state-{folder}.json   # per-agent workspace state
 
-~/senclaw/
-├── agents/{folder}/
-│   ├── SOUL.md
-│   ├── memory/
-│   └── .sema/sessions/
-├── workspace/{folder}/
-└── wiki/
+~/senclaw/                          # user-visible workspace
+├── agents/{folder}/                # one folder per agent profile
+│   ├── SOUL.md                     # persona
+│   ├── memory/                     # curated memory (*.md + MEMORY.md index)
+│   └── .sema/sessions/             # conversation sessions
+├── workspace/{folder}/             # working directories for chats
+├── workspace/space-apps/{app-id}/  # installed Space Apps (binary + web_dist)
+├── wiki/                           # Git-backed knowledge base
+├── quicknotes/                     # Space notes
+├── workflows/  workflow-data/      # saved workflows and their runs
+└── virtual-agents/                 # DAG virtual worker folders
 ```
 
 Most paths can be overridden through `.env` or `~/.senclaw/config.json`.
@@ -250,25 +283,34 @@ Most paths can be overridden through `.env` or `~/.senclaw/config.json`.
 ```text
 SenClaw/
 ├── src/                    # Rust daemon and core runtime
-│   ├── agent/              # Agent lifecycle, permissions, personas, dispatch
-│   ├── channels/           # Telegram, Feishu/Lark, QQ, WeChat adapters
-│   ├── gateway/            # HTTP, WebSocket, routing, UI server
-│   ├── mcp/                # MCP servers exposed to agents
-│   ├── memory/             # FTS/vector memory, curated memory, daily logs
-│   ├── scheduler/          # Cron, interval, and one-shot tasks
-│   ├── local_model/        # MLX/Candle local model support
-│   ├── code_graph/         # Tree-sitter code indexing
-│   ├── code_engine/        # Code-oriented agent runtime
-│   ├── plugins/            # Plugin support
+│   ├── agent/              # Agent pool, permissions, personas, DAG dispatch
+│   ├── zen_core/           # Agent engine (sessions, tools, LLM querying)
+│   ├── channels/           # Telegram, Feishu/Lark, QQ, WeChat, app-relay adapters
+│   ├── gateway/            # HTTP + WebSocket gateway, routing, UI server
+│   ├── mcp/                # MCP servers exposed to agents (space, memory, browser, …)
+│   ├── memory/             # FTS/vector memory, curated auto-memory, daily logs
+│   ├── scheduler/          # Cron/interval/once tasks + event reminders
+│   ├── local_model/        # Native MLX/Candle local inference (LLM/ASR/TTS)
+│   ├── browser/            # Browser-automation backend for senclaw-browser
+│   ├── clawhub/            # ClawHub skill marketplace + relay client
+│   ├── marketplace/        # Plugin marketplace manager
+│   ├── skills/  subagents/ # Bundled skills and subagent definitions
+│   ├── workflow/           # Deterministic multi-agent workflow runner
+│   ├── cli/                # senclaw CLI subcommands
+│   ├── db/                 # rusqlite storage layer
 │   └── wiki/               # Git-backed knowledge base
-├── web/                    # React + Vite Web UI (legacy; served by the daemon)
 ├── desktop_app/            # Flutter desktop app (macOS/Windows/Linux/web)
-├── apps/                   # Space Apps
+├── channel_app/            # Flutter mobile app (connects over the relay)
+├── web/                    # React + Vite Web UI (legacy; served by the daemon)
+├── apps/                   # Space Apps (ssh-manager, deepwiki, email, …)
 ├── app-space-sdk/          # SDK for building Space Apps
+├── hub-backend/            # Relay hub backend (mobile app channel)
+├── senclaw-extension-chrome/ # Chrome extension (browser remote control)
+├── skills/                 # Bundled skill definitions
+├── scripts/                # install.sh / install.ps1 one-line installers
 ├── examples/               # Example apps and SDK usage
-├── skills/                 # Bundled skills
 ├── docs/                   # Architecture and feature docs
-└── senclaw-extension-chrome/ # Chrome extension
+└── tests/                  # Integration tests
 ```
 
 ---
@@ -280,9 +322,16 @@ SenClaw/
 | [Quick Start](docs/QUICK_START.md) | Setup, runtime layout, and usage notes. |
 | [Architecture](docs/ARCHITECTURE.md) | System layers, startup flow, and data flow. |
 | [Memory](docs/memory.md) | Memory design and retrieval flow. |
+| [Curated Memory](docs/curated-memory-design.md) | Claude-Code-style auto-memory: consolidation on compaction + recall. |
 | [DAG Team](docs/DAG_Team.md) | Multi-agent task decomposition and execution. |
+| [Cowork](docs/COWORK_DESIGN.md) | Persistent agent teams built on DAG dispatch. |
+| [Workflows](docs/workflow.md) | Saved, parameterized DAGs of agent + script steps. |
 | [Space Apps](docs/workspace-feature-design.md) | How Space Apps are designed and registered. |
-| [Code Knowledge Graph](docs/code-knowledge-graph.md) | Tree-sitter based code indexing. |
+| [Flutter Desktop](docs/flutter-desktop-migration.md) | Desktop app architecture (supervisor, startup gate). |
+| [Mobile Channel App](docs/CHANNEL_APP_DESIGN.md) | Flutter mobile app over the relay. |
+| [Local MLX Runtime](docs/mlx-rs-turboquant-native-runtime.md) | Native MLX inference + TurboQuant KV cache. |
+| [Chrome Extension](docs/senclaw-extension-design.md) | Browser remote-control extension design. |
+| [ClawHub Plugins & Skills](docs/clawhub-plugins-skills.md) | Skill marketplace and plugin system. |
 | [Prompt Injection Security](docs/prompt-injection-security.md) | Security notes for tool and prompt boundaries. |
 
 ---

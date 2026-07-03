@@ -60,6 +60,27 @@ Cụ thể gồm:
 
 ---
 
+## Các LLM local được hỗ trợ
+
+SenClaw có **runtime MLX native riêng** (Rust `mlx-rs`, Apple Silicon — không Python, không llama.cpp) cùng backend **Candle** đa nền tảng. Bất kỳ checkpoint HuggingFace nào có `model_type` khớp kiến trúc hỗ trợ đều tải và chạy được từ *Settings → Local Models*:
+
+| Kiến trúc (`model_type`) | Họ model | Ghi chú |
+|---|---|---|
+| `qwen3`, `qwen2` | Qwen 2.5 / Qwen 3 | Đủ tool-calling + thinking markers; mặc định khuyên dùng cho agent. |
+| `qwen3_5` | Qwen 3.5 hybrid | Hybrid GatedDeltaNet linear-attention + attention (quant OptiQ); prefix cache hồi quy bỏ qua ~90% prefill trong vòng lặp agent nhiều lượt. |
+| `gemma2`, `gemma3`, `gemma4` | Google Gemma | Gemma 4 chạy backbone text (Per-Layer Embeddings, chia sẻ KV liên tầng); tower vision đang phát triển. |
+| `llama` | Llama 3.x | Transformer chuẩn. |
+| `deepseek_v2` | DeepSeek-Coder-V2-Lite | Multi-head Latent Attention + Mixture-of-Experts. |
+| `ouro` | Ouro LoopLM | Universal transformer lặp theo chiều sâu, có knob `recurrence_steps`. |
+| `mamba2`, `falcon_mamba` | State-space models | Decode SSM không attention. |
+| `bonsai_q1` | Bonsai Q1 | Kiến trúc thử nghiệm gọn nhẹ. |
+
+Bộ tải một-click đã kiểm chứng end-to-end: **Qwen3 4B Instruct 4-bit** (tools/agent), **Qwen2.5 0.5B** (chat nhanh), **Qwen3.5 0.8B OptiQ** (chat + agentic), **Gemma 4 E2B-it 4-bit / OptiQ** (văn bản dài). Có thể thêm repo tùy ý theo HF id.
+
+Tiện ích runtime: **TurboQuant KV-cache quantization** (TQ3/TQ4 — ngữ cảnh dài với một phần nhỏ RAM), prefix caching, và parser streaming tool-call/thinking theo dialect từng model. Ngoài LLM, stack local còn gồm **Whisper** speech-to-text (có tiếng Việt), **TTS** (giọng native macOS; ZipVoice đang phát triển), **PaddleOCR** (Metal/CoreML) và **embeddings cục bộ**. Build `make run-release` / `make app-build` để có đủ bộ feature.
+
+---
+
 ## Cài đặt
 
 ### Cài bằng 1 lệnh (macOS / Linux)
@@ -223,22 +244,34 @@ make app-install
 
 ## Cấu trúc dữ liệu runtime
 
-Mặc định SenClaw lưu dữ liệu runtime trong home directory:
+Mặc định SenClaw lưu dữ liệu runtime trong home directory, tách thành phần config/state ẩn và workspace hiển thị với người dùng:
 
 ```text
-~/.senclaw/
-├── senclaw.db
-├── config.json
-├── dispatch-state.json
-└── workspace-state-{folder}.json
+~/.senclaw/                         # config, database, cache model
+├── config.json                     # config toàn cục (LLM profiles, toggles)
+├── senclaw.db                      # SQLite chính (groups, messages, tasks, events)
+├── senclaw_cognitive.db            # graph bộ nhớ nhận thức
+├── dispatch-state.json             # trạng thái DAG team
+├── hooks.json                      # hooks người dùng
+├── llm_logs/                       # log LLM theo từng request
+├── models/  local-models/          # local LLM đã tải (MLX/Candle)
+├── whisper-models/  tts-models/  ocr-models/
+├── managed/skills/                 # skills do Space Apps cài
+├── space-apps-data/{app-id}/       # dữ liệu riêng từng app
+├── plans/                          # plan đã lưu (Plan mode)
+└── workspace-state-{folder}.json   # trạng thái workspace từng agent
 
-~/senclaw/
-├── agents/{folder}/
-│   ├── SOUL.md
-│   ├── memory/
-│   └── .sema/sessions/
-├── workspace/{folder}/
-└── wiki/
+~/senclaw/                          # workspace hiển thị với người dùng
+├── agents/{folder}/                # mỗi profile agent một thư mục
+│   ├── SOUL.md                     # persona
+│   ├── memory/                     # curated memory (*.md + index MEMORY.md)
+│   └── .sema/sessions/             # các phiên hội thoại
+├── workspace/{folder}/             # thư mục làm việc của các chat
+├── workspace/space-apps/{app-id}/  # Space Apps đã cài (binary + web_dist)
+├── wiki/                           # knowledge base quản lý bằng Git
+├── quicknotes/                     # ghi chú Space
+├── workflows/  workflow-data/      # workflow đã lưu và dữ liệu chạy
+└── virtual-agents/                 # thư mục virtual worker của DAG
 ```
 
 Hầu hết đường dẫn có thể ghi đè qua `.env` hoặc `~/.senclaw/config.json`.
@@ -250,25 +283,34 @@ Hầu hết đường dẫn có thể ghi đè qua `.env` hoặc `~/.senclaw/con
 ```text
 SenClaw/
 ├── src/                    # Daemon Rust và core runtime
-│   ├── agent/              # Vòng đời agent, phân quyền, personas, dispatch
-│   ├── channels/           # Adapter Telegram, Feishu/Lark, QQ, WeChat
-│   ├── gateway/            # HTTP, WebSocket, routing, UI server
-│   ├── mcp/                # Các MCP server cung cấp cho agent
-│   ├── memory/             # Bộ nhớ FTS/vector, curated memory, nhật ký
-│   ├── scheduler/          # Task cron, interval và một lần
-│   ├── local_model/        # Local model qua MLX/Candle
-│   ├── code_graph/         # Lập chỉ mục code bằng Tree-sitter
-│   ├── code_engine/        # Runtime agent chuyên code
-│   ├── plugins/            # Hỗ trợ plugin
+│   ├── agent/              # Agent pool, phân quyền, personas, DAG dispatch
+│   ├── zen_core/           # Engine agent (sessions, tools, gọi LLM)
+│   ├── channels/           # Adapter Telegram, Feishu/Lark, QQ, WeChat, app-relay
+│   ├── gateway/            # Gateway HTTP + WebSocket, routing, UI server
+│   ├── mcp/                # Các MCP server cung cấp cho agent (space, memory, browser, …)
+│   ├── memory/             # Bộ nhớ FTS/vector, curated auto-memory, nhật ký
+│   ├── scheduler/          # Task cron/interval/một-lần + nhắc hẹn sự kiện
+│   ├── local_model/        # Inference cục bộ MLX/Candle (LLM/ASR/TTS)
+│   ├── browser/            # Backend tự động hoá trình duyệt cho senclaw-browser
+│   ├── clawhub/            # Marketplace skill ClawHub + relay client
+│   ├── marketplace/        # Quản lý marketplace plugin
+│   ├── skills/  subagents/ # Skills đi kèm và định nghĩa subagent
+│   ├── workflow/           # Trình chạy workflow nhiều agent
+│   ├── cli/                # Các lệnh CLI senclaw
+│   ├── db/                 # Tầng lưu trữ rusqlite
 │   └── wiki/               # Knowledge base quản lý bằng Git
-├── web/                    # Web UI React + Vite (legacy; daemon phục vụ)
 ├── desktop_app/            # App desktop Flutter (macOS/Windows/Linux/web)
-├── apps/                   # Space Apps
+├── channel_app/            # App di động Flutter (kết nối qua relay)
+├── web/                    # Web UI React + Vite (legacy; daemon phục vụ)
+├── apps/                   # Space Apps (ssh-manager, deepwiki, email, …)
 ├── app-space-sdk/          # SDK xây dựng Space Apps
+├── hub-backend/            # Backend relay hub (kênh app di động)
+├── senclaw-extension-chrome/ # Extension Chrome (điều khiển trình duyệt)
+├── skills/                 # Định nghĩa skills đi kèm
+├── scripts/                # Script cài đặt install.sh / install.ps1
 ├── examples/               # Ví dụ app và cách dùng SDK
-├── skills/                 # Skills đi kèm
 ├── docs/                   # Tài liệu kiến trúc và tính năng
-└── senclaw-extension-chrome/ # Extension Chrome
+└── tests/                  # Test tích hợp
 ```
 
 ---
@@ -280,9 +322,16 @@ SenClaw/
 | [Quick Start](docs/QUICK_START.md) | Cài đặt, cấu trúc runtime và ghi chú sử dụng. |
 | [Architecture](docs/ARCHITECTURE.md) | Các lớp hệ thống, luồng khởi động và luồng dữ liệu. |
 | [Memory](docs/memory.md) | Thiết kế bộ nhớ và luồng truy xuất. |
+| [Curated Memory](docs/curated-memory-design.md) | Auto-memory kiểu Claude Code: chắt lọc khi nén ngữ cảnh + recall. |
 | [DAG Team](docs/DAG_Team.md) | Phân rã và thực thi tác vụ nhiều agent. |
+| [Cowork](docs/COWORK_DESIGN.md) | Team agent bền vững xây trên DAG dispatch. |
+| [Workflows](docs/workflow.md) | Pipeline DAG lưu sẵn, tham số hoá, gồm bước agent + script. |
 | [Space Apps](docs/workspace-feature-design.md) | Cách thiết kế và đăng ký Space Apps. |
-| [Code Knowledge Graph](docs/code-knowledge-graph.md) | Lập chỉ mục code bằng Tree-sitter. |
+| [Flutter Desktop](docs/flutter-desktop-migration.md) | Kiến trúc app desktop (supervisor, startup gate). |
+| [Mobile Channel App](docs/CHANNEL_APP_DESIGN.md) | App di động Flutter qua relay. |
+| [Local MLX Runtime](docs/mlx-rs-turboquant-native-runtime.md) | Inference MLX native + TurboQuant KV cache. |
+| [Chrome Extension](docs/senclaw-extension-design.md) | Thiết kế extension điều khiển trình duyệt. |
+| [ClawHub Plugins & Skills](docs/clawhub-plugins-skills.md) | Marketplace skill và hệ thống plugin. |
 | [Prompt Injection Security](docs/prompt-injection-security.md) | Ghi chú bảo mật cho ranh giới tool và prompt. |
 
 ---
