@@ -19,6 +19,9 @@ on:
     tags: ["v*"]
     paths:
       - "apps/**"
+      # `@senclaw/space-sdk` is a file: dependency of several apps and its
+      # dist/ is built in CI — SDK changes must rebuild the dependents.
+      - "examples/senclaw-space-sdk/**"
       - ".github/workflows/space-apps.yml"
   workflow_dispatch:
 
@@ -46,14 +49,14 @@ jobs:
             base="${{ github.event.before }}"
           fi
 
-          # No usable base (first tag / force push / manual dispatch) or the
-          # workflow file itself changed → build everything.
+          # No usable base (first tag / force push / manual dispatch), or the
+          # workflow file / shared space-sdk changed → build everything.
           if [[ -z "$base" ]] \
              || ! git rev-parse -q --verify "$base^{commit}" >/dev/null \
-             || ! git diff --quiet "$base" "$GITHUB_SHA" -- .github/workflows/space-apps.yml; then
+             || ! git diff --quiet "$base" "$GITHUB_SHA" -- .github/workflows/space-apps.yml examples/senclaw-space-sdk/; then
             echo "rust_matrix=$RUST_APPS" >> "$GITHUB_OUTPUT"
             echo "node_matrix=$NODE_APPS" >> "$GITHUB_OUTPUT"
-            echo "Building ALL apps (no diff base or workflow changed)."
+            echo "Building ALL apps (no diff base, or workflow/space-sdk changed)."
             exit 0
           fi
 
@@ -96,6 +99,14 @@ jobs:
         with:
           node-version: 20
 
+      # `@senclaw/space-sdk` is a file: dependency (ssh-manager's web UI);
+      # its dist/ is gitignored, so build it before the app installs it.
+      - name: Build @senclaw/space-sdk
+        working-directory: examples/senclaw-space-sdk
+        run: |
+          npm install
+          npm run build
+
       - name: Pack ${{ matrix.app.id }}
         run: bash apps/${{ matrix.app.id }}/scripts/pack.sh
 
@@ -120,6 +131,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # `@senclaw/space-sdk` is a file: dependency with a gitignored dist/ —
+      # build it first or `next build` fails with "Can't resolve
+      # '@senclaw/space-sdk'".
+      - name: Build @senclaw/space-sdk
+        working-directory: examples/senclaw-space-sdk
+        run: |
+          npm install
+          npm run build
 
       - name: Pack ${{ matrix.app.dir }}
         working-directory: apps/${{ matrix.app.dir }}
