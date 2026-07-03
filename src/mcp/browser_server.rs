@@ -263,10 +263,21 @@ struct ExtractTableParams {
     selector: Option<String>,
 }
 
+/// Schema for `serde_json::Value` fields. schemars emits the boolean schema
+/// `true` for `Value`, which Gemini-backed providers reject (their Schema
+/// proto only accepts objects) — declare a plain object schema instead.
+fn json_object_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "description": "Arbitrary JSON object"
+    })
+}
+
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ExtractStructuredParams {
     #[serde(default, deserialize_with = "de_opt_string_or_number")]
     tab_id: Option<String>,
+    #[schemars(schema_with = "json_object_schema")]
     schema: serde_json::Value,
     #[serde(default)]
     selector: Option<String>,
@@ -315,6 +326,7 @@ struct CrawlParams {
     #[serde(default = "default_extract_type")]
     extract_type: String,
     #[serde(default)]
+    #[schemars(schema_with = "json_object_schema")]
     structured_schema: Option<serde_json::Value>,
     #[serde(default = "default_per_page_timeout")]
     per_page_timeout_ms: u32,
@@ -1456,6 +1468,28 @@ mod tests {
     // as strings, e.g. "1526693519") as a JSON *number*. The lenient
     // deserializers must accept that without the old hard failure:
     // "invalid type: integer `1526693519`, expected a string".
+
+    // `serde_json::Value` fields default to the boolean schema `true`, which
+    // Gemini-backed providers reject with 400 INVALID_ARGUMENT ("Invalid value
+    // at ...parameters.properties[N].value ... Schema, true"). The
+    // `schema_with` override must keep every property an object schema.
+    #[test]
+    fn value_typed_params_generate_object_schemas() {
+        for schema in [
+            serde_json::to_value(schemars::schema_for!(ExtractStructuredParams)).unwrap(),
+            serde_json::to_value(schemars::schema_for!(CrawlParams)).unwrap(),
+        ] {
+            let props = schema["properties"].as_object().unwrap();
+            for (name, prop) in props {
+                assert!(
+                    prop.is_object(),
+                    "property `{name}` must be an object schema, got: {prop}"
+                );
+            }
+        }
+        let extract = serde_json::to_value(schemars::schema_for!(ExtractStructuredParams)).unwrap();
+        assert_eq!(extract["properties"]["schema"]["type"], "object");
+    }
 
     #[test]
     fn extract_structured_accepts_numeric_tab_id() {

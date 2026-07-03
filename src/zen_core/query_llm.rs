@@ -294,7 +294,8 @@ pub(crate) fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
     tools
         .iter()
         .map(|t| {
-            let schema = t.input_schema();
+            let mut schema = t.input_schema();
+            sanitize_schema_node(&mut schema);
             serde_json::json!({
                 "type": "function",
                 "function": {
@@ -305,6 +306,49 @@ pub(crate) fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// Replace boolean JSON Schemas (`true`/`false`) with `{"type": "object"}` in
+/// every subschema position. schemars emits the boolean form for
+/// `serde_json::Value` fields ("any value allowed"), which is valid JSON
+/// Schema but rejected by Gemini behind OpenAI-compatible proxies: its proto
+/// `Schema` type only accepts objects, so a single `"properties": {"x": true}`
+/// 400s the whole request. `additionalProperties` is left untouched — a
+/// boolean is the conventional form there and Gemini drops the field.
+pub(crate) fn sanitize_schema_node(node: &mut Value) {
+    if node.is_boolean() {
+        *node = serde_json::json!({"type": "object"});
+        return;
+    }
+    let Some(obj) = node.as_object_mut() else {
+        return;
+    };
+    for key in ["properties", "patternProperties", "$defs", "definitions"] {
+        if let Some(map) = obj.get_mut(key).and_then(Value::as_object_mut) {
+            for v in map.values_mut() {
+                sanitize_schema_node(v);
+            }
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        if let Some(list) = obj.get_mut(key).and_then(Value::as_array_mut) {
+            for v in list.iter_mut() {
+                sanitize_schema_node(v);
+            }
+        }
+    }
+    for key in ["items", "not", "contains", "propertyNames", "if", "then", "else"] {
+        if let Some(v) = obj.get_mut(key) {
+            // Old-draft tuple form: "items": [schema, schema, ...]
+            if let Some(list) = v.as_array_mut() {
+                for item in list.iter_mut() {
+                    sanitize_schema_node(item);
+                }
+            } else {
+                sanitize_schema_node(v);
+            }
+        }
+    }
 }
 
 /// Build HF-style tools (direct function objects, no OpenAI wrapper)
@@ -1439,6 +1483,88 @@ pub fn create_llm_client() -> Result<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Boolean subschemas (schemars output for `serde_json::Value`) must be
+    /// rewritten to object schemas — Gemini-backed OpenAI proxies 400 on them.
+    #[test]
+    fn sanitize_schema_replaces_boolean_subschemas() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "schema": true,
+                "name": {"type": "string"},
+                "nested": {
+                    "type": "object",
+                    "properties": {"inner": true}
+                },
+                "list": {"type": "array", "items": true},
+                "choice": {"anyOf": [true, {"type": "string"}]}
+            },
+            "required": ["schema"]
+        });
+        sanitize_schema_node(&mut schema);
+        let props = &schema["properties"];
+        assert_eq!(props["schema"], serde_json::json!({"type": "object"}));
+        assert_eq!(props["name"], serde_json::json!({"type": "string"}));
+        assert_eq!(
+            props["nested"]["properties"]["inner"],
+            serde_json::json!({"type": "object"})
+        );
+        assert_eq!(props["list"]["items"], serde_json::json!({"type": "object"}));
+        assert_eq!(
+            props["choice"]["anyOf"],
+            serde_json::json!([{"type": "object"}, {"type": "string"}])
+        );
+        // Non-schema fields untouched.
+        assert_eq!(schema["required"], serde_json::json!(["schema"]));
+    }
+
+    /// `build_openai_tools` must never emit a boolean in a `properties` map.
+    #[test]
+    fn build_openai_tools_sanitizes_value_typed_params() {
+        struct AnyTool;
+        #[async_trait::async_trait]
+        impl Tool for AnyTool {
+            fn name(&self) -> &str {
+                "any_tool"
+            }
+            fn description(&self) -> &str {
+                "test"
+            }
+            fn input_schema(&self) -> Value {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {"payload": true}
+                })
+            }
+            fn is_read_only(&self) -> bool {
+                true
+            }
+            async fn call(
+                &self,
+                _input: Value,
+                _ctx: &ToolContext<'_>,
+            ) -> anyhow::Result<Vec<ToolOutput>> {
+                unreachable!()
+            }
+            fn gen_tool_result_message(
+                &self,
+                _data: &Value,
+                _input: &Value,
+            ) -> crate::zen_core::ToolResultMessage {
+                unreachable!()
+            }
+            fn get_display_title(&self, _input: &Value) -> String {
+                "any_tool".into()
+            }
+        }
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(AnyTool)];
+        let built = build_openai_tools(&tools);
+        assert_eq!(
+            built[0]["function"]["parameters"]["properties"]["payload"],
+            serde_json::json!({"type": "object"})
+        );
+    }
 
     /// Integration check that `query_local_mlx` / `query_local_candle_native`
     /// both route the model's raw output through the unified stream parser and
