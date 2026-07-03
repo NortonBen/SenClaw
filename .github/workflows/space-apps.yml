@@ -6,7 +6,8 @@ name: Space Apps build
 #
 # Rust apps (ssh-manager, email, deepwiki) are built on macOS arm64 — the
 # binary inside the zip must match the machine SenClaw runs on. Node apps
-# (test-manager, google-workspace) are platform-independent.
+# (test-manager) are platform-independent. google-workspace-space-app is
+# intentionally NOT built here.
 #
 # Only apps whose directory actually changed are built: `paths:` gates branch
 # pushes for the workflow as a whole (and never applies to tag pushes), so the
@@ -41,7 +42,7 @@ jobs:
         run: |
           set -e
           RUST_APPS='[{"id":"ssh-manager","zip":"ssh-manager.zip"},{"id":"email","zip":"email-app.zip"},{"id":"deepwiki","zip":"deepwiki-app.zip"}]'
-          NODE_APPS='[{"dir":"test-manager","zip":"test-manager.zip"},{"dir":"google-workspace-space-app","zip":"google-workspace-space-app.zip"}]'
+          NODE_APPS='[{"dir":"test-manager","zip":"test-manager.zip"}]'
 
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             base=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
