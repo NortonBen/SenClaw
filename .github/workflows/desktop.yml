@@ -116,7 +116,8 @@ jobs:
             libayatana-appindicator3-dev \
             libssl-dev \
             libunwind-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libnotify-dev
         # NOTE: libunwind-dev is named explicitly — the GitHub runner image
         # ships libunwind-14-dev, which apt refuses to auto-swap when it is
         # only a transitive dependency of libgstreamer1.0-dev.
