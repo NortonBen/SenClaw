@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/semaclaw-logo.png" alt="SenClaw logo" width="200" />
+  <img src="docs/images/senclaw-logo.png" alt="SenClaw logo" width="200" />
 </p>
 
 <h1 align="center">SenClaw</h1>
@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/midea-ai/SenClaw/releases/latest"><img src="https://img.shields.io/github/v/release/midea-ai/SenClaw?label=release" alt="Latest release" /></a>
-  <a href="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml"><img src="https://github.com/midea-ai/SenClaw/actions/workflows/desktop.yml/badge.svg" alt="Build status" /></a>
+  <a href="https://github.com/NortonBen/SenClaw/releases/latest"><img src="https://img.shields.io/github/v/release/NortonBen/SenClaw?label=release" alt="Latest release" /></a>
+  <a href="https://github.com/NortonBen/SenClaw/actions/workflows/desktop.yml"><img src="https://github.com/NortonBen/SenClaw/actions/workflows/desktop.yml/badge.svg" alt="Build status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
 </p>
 
@@ -51,7 +51,7 @@ SenClaw cung cấp lớp hạ tầng chạy quanh mô hình ngôn ngữ lớn: p
 ### 1. Clone / Tải mã nguồn
 
 ```bash
-git clone https://github.com/midea-ai/SenClaw.git
+git clone https://github.com/NortonBen/SenClaw.git
 cd SenClaw
 ```
 
@@ -199,16 +199,22 @@ SenClaw ships a native **Flutter** desktop app in `desktop_app/` (macOS / Window
 
 SenClaw có app desktop **Flutter** native trong `desktop_app/` (macOS / Windows / Linux / web). Nó thay thế Tauri shell cũ: kết nối trực tiếp tới daemon qua HTTP/WebSocket và **giám sát daemon `senclaw` như tiến trình con** (spawn binary đi kèm, stream log, restart khi cần).
 
+On launch the app shows a **startup gate**: if a daemon is already running it opens straight into the UI; otherwise it spawns the bundled daemon, waits until the HTTP API answers, then switches to the main screen (with a retryable error screen if the daemon can't start).
+
 ```bash
 # Development (runs the Flutter app; it adopts a running daemon or spawns one)
 make app-dev
 
-# Production bundle (builds the daemon binary + Flutter .app, bundles the
-# binary into Contents/Resources so the supervisor can launch it)
+# Production bundle (builds the daemon with the full Apple-Silicon feature set
+# — MLX LLM, Whisper ASR, TTS, OCR Metal, embeddings — and bundles the binary
+# into Contents/Resources so the supervisor can launch it)
 make app-build          # macOS
 make app-build-windows  # Windows
 make app-build-linux    # Linux
 make app-build-web      # web
+
+# Install the freshly-built .app into /Applications and launch it (macOS)
+make app-install
 ```
 
 ---
