@@ -18,6 +18,28 @@ use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
 use crate::types::{AgentMode, ContextMode, ScheduleType, ScheduledTask, TaskStatus};
 
+/// Parse a wall-clock datetime string in the HOST-LOCAL timezone into Unix
+/// milliseconds. Accepts `YYYY-MM-DD HH:MM[:SS]` (a `T` separator is fine)
+/// and bare `YYYY-MM-DD` (midnight). Returns None if unparsable.
+pub(crate) fn parse_local_datetime_ms(s: &str) -> Option<i64> {
+    use chrono::{Local, NaiveDate, NaiveDateTime};
+    let s = s.trim().replace('T', " ");
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&s, fmt) {
+            if let Some(local) = chrono::TimeZone::from_local_datetime(&Local, &dt).earliest() {
+                return Some(local.timestamp_millis());
+            }
+        }
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+        let dt = d.and_hms_opt(0, 0, 0)?;
+        if let Some(local) = chrono::TimeZone::from_local_datetime(&Local, &dt).earliest() {
+            return Some(local.timestamp_millis());
+        }
+    }
+    None
+}
+
 // ─── Params ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -64,10 +86,21 @@ struct NoteIdParams {
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct EventCreateParams {
     title: String,
-    /// Unix milliseconds
-    start_at: i64,
-    /// Unix milliseconds
-    end_at: i64,
+    /// PREFERRED: start time in the SYSTEM LOCAL timezone,
+    /// `YYYY-MM-DD HH:MM` (e.g. "2026-07-03 22:00"). Overrides `start_at`.
+    #[serde(default)]
+    start_local: Option<String>,
+    /// PREFERRED: end time in the SYSTEM LOCAL timezone, `YYYY-MM-DD HH:MM`.
+    /// Optional — defaults to 1 hour after the start. Overrides `end_at`.
+    #[serde(default)]
+    end_local: Option<String>,
+    /// Unix milliseconds (UTC epoch). Use `start_local` instead when the time
+    /// came from natural language — it avoids timezone math mistakes.
+    #[serde(default)]
+    start_at: Option<i64>,
+    /// Unix milliseconds. Optional — defaults to start + 1 hour.
+    #[serde(default)]
+    end_at: Option<i64>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -100,6 +133,14 @@ struct EventUpdateParams {
     title: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    /// PREFERRED: new start in the SYSTEM LOCAL timezone, `YYYY-MM-DD HH:MM`.
+    /// Overrides `start_at`.
+    #[serde(default)]
+    start_local: Option<String>,
+    /// PREFERRED: new end in the SYSTEM LOCAL timezone, `YYYY-MM-DD HH:MM`.
+    /// Overrides `end_at`.
+    #[serde(default)]
+    end_local: Option<String>,
     /// Unix milliseconds
     #[serde(default)]
     start_at: Option<i64>,
@@ -306,7 +347,9 @@ impl McpSpaceServer {
     // ── Calendar ───────────────────────────────────────────────────────────
 
     #[rmcp::tool(
-        description = "Tạo sự kiện lịch mới. Create a calendar event with optional reminder."
+        description = "Tạo sự kiện lịch mới. Create a calendar event with optional reminder. \
+                       Prefer start_local/end_local ('YYYY-MM-DD HH:MM', interpreted in the \
+                       system's LOCAL timezone). end time defaults to start + 1 hour."
     )]
     fn space_event_create(
         &self,
@@ -314,11 +357,37 @@ impl McpSpaceServer {
             EventCreateParams,
         >,
     ) -> String {
+        // Local-time strings take priority — the model passes wall-clock times
+        // straight through and the daemon does the (host-local) epoch math.
+        let start = match (&p.start_local, p.start_at) {
+            (Some(s), _) => match parse_local_datetime_ms(s) {
+                Some(ms) => ms,
+                None => {
+                    return format!(
+                        "Error: cannot parse start_local '{s}' — expected 'YYYY-MM-DD HH:MM'"
+                    )
+                }
+            },
+            (None, Some(ms)) => ms,
+            (None, None) => return "Error: provide start_local or start_at".to_string(),
+        };
+        let end = match (&p.end_local, p.end_at) {
+            (Some(s), _) => match parse_local_datetime_ms(s) {
+                Some(ms) => ms,
+                None => {
+                    return format!(
+                        "Error: cannot parse end_local '{s}' — expected 'YYYY-MM-DD HH:MM'"
+                    )
+                }
+            },
+            // No end time given → default to a 1-hour event.
+            (None, other) => other.unwrap_or(start + 60 * 60 * 1000),
+        };
         self.inner()
             .event_create(
                 p.title,
-                p.start_at,
-                p.end_at,
+                start,
+                end,
                 p.description,
                 p.location,
                 p.all_day.unwrap_or(false),
@@ -346,7 +415,8 @@ impl McpSpaceServer {
     #[rmcp::tool(
         description = "Cập nhật sự kiện lịch. Update any field of an existing calendar event by id. \
                        Only provided fields are changed — omit fields you don't want to modify. \
-                       start_at and end_at are Unix milliseconds."
+                       Prefer start_local/end_local ('YYYY-MM-DD HH:MM', system LOCAL timezone); \
+                       start_at/end_at are Unix milliseconds."
     )]
     fn space_event_update(
         &self,
@@ -354,13 +424,23 @@ impl McpSpaceServer {
             EventUpdateParams,
         >,
     ) -> String {
+        let start_at = p
+            .start_local
+            .as_deref()
+            .and_then(parse_local_datetime_ms)
+            .or(p.start_at);
+        let end_at = p
+            .end_local
+            .as_deref()
+            .and_then(parse_local_datetime_ms)
+            .or(p.end_at);
         self.inner()
             .event_update(
                 p.event_id,
                 p.title,
                 p.description,
-                p.start_at,
-                p.end_at,
+                start_at,
+                end_at,
                 p.location,
                 p.all_day,
                 p.color,
@@ -1800,4 +1880,38 @@ pub async fn run_stdio_server() -> Result<()> {
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod local_time_tests {
+    use super::parse_local_datetime_ms;
+    use chrono::{Local, TimeZone};
+
+    #[test]
+    fn parses_local_wall_clock() {
+        let ms = parse_local_datetime_ms("2026-07-03 22:00").expect("parse");
+        let expected = Local
+            .with_ymd_and_hms(2026, 7, 3, 22, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(ms, expected);
+        // T separator + seconds also accepted.
+        assert_eq!(parse_local_datetime_ms("2026-07-03T22:00:00"), Some(ms));
+    }
+
+    #[test]
+    fn parses_bare_date_as_local_midnight() {
+        let ms = parse_local_datetime_ms("2026-07-04").expect("parse");
+        let expected = Local
+            .with_ymd_and_hms(2026, 7, 4, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(ms, expected);
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert_eq!(parse_local_datetime_ms("tomorrow 10pm"), None);
+        assert_eq!(parse_local_datetime_ms(""), None);
+    }
 }

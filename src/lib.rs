@@ -1267,13 +1267,25 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // Auto-launch + auto-register MCP servers declared by installed Space Apps
     // (manifest `mcp.autoRegister`). Lifecycle is tied to the daemon.
+    //
+    // Runs in the BACKGROUND: apps are launched sequentially and each can wait
+    // up to ~30s for its health endpoint, so a slow or broken app must not
+    // stall daemon boot (the desktop startup gate waits on the UI port, which
+    // is only opened after this section used to complete). Agents that start
+    // before an app finishes registering simply see its MCP tools appear late.
     let space_mcp_launcher = Arc::new(gateway::ui_server::space_mcp::SpaceMcpLauncher::new());
     {
         let apps_dir = cfg.paths.workspace_dir.join("space-apps");
         let base_url = format!("http://127.0.0.1:{}", cfg.ui_server.port);
-        space_mcp_launcher
-            .autoregister_installed(&db, &mcp_manager, &apps_dir, &base_url)
-            .await;
+        let launcher = Arc::clone(&space_mcp_launcher);
+        let db_bg = Arc::clone(&db);
+        let mgr_bg = Arc::clone(&mcp_manager);
+        tokio::spawn(async move {
+            launcher
+                .autoregister_installed(&db_bg, &mgr_bg, &apps_dir, &base_url)
+                .await;
+            tracing::info!("[space-mcp] background auto-register pass complete");
+        });
     }
 
     // ===== 4. GroupQueue + AgentPool =====

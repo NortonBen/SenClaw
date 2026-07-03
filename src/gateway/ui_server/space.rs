@@ -427,7 +427,8 @@ pub(crate) async fn space_events_list(
 pub(crate) struct EventCreateBody {
     title: String,
     start_at: i64,
-    end_at: i64,
+    /// Optional — defaults to start_at + 1 hour.
+    end_at: Option<i64>,
     description: Option<String>,
     location: Option<String>,
     #[serde(default)]
@@ -452,7 +453,8 @@ pub(crate) async fn space_events_create(
     let result = space_srv.event_create(
         b.title,
         b.start_at,
-        b.end_at,
+        // No end time given → default to a 1-hour event.
+        b.end_at.unwrap_or(b.start_at + 60 * 60 * 1000),
         b.description,
         b.location,
         b.all_day,
