@@ -258,6 +258,16 @@ pub(super) struct GlobalConfig {
         rename = "afterProcess"
     )]
     pub(super) after_process: Option<bool>,
+    /// Curated-memory stage: when enabled, (a) history dropped by compaction is
+    /// consolidated into curated `memory/*.md` files, and (b) each request runs
+    /// a hybrid FTS5/vector search over the curated memories and injects the
+    /// relevant ones into the prompt (Claude-Code-style auto-memory).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "memoryRecall"
+    )]
+    pub(super) memory_recall: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

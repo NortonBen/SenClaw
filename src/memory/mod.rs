@@ -2,6 +2,8 @@
 
 pub mod chunker;
 pub mod cognitive;
+pub mod consolidate;
+pub mod curated;
 pub mod daily_logger;
 pub mod embedding;
 pub mod embedding_providers;

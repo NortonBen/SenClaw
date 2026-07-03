@@ -89,6 +89,25 @@ pub fn save_after_process_enabled(config_path: &Path, enabled: bool) -> Result<(
     save_global_config(config_path, &cfg)
 }
 
+// ===== Curated-memory stage toggle (global, user-set) =====
+
+/// Curated-memory stage. Default OFF — opt-in.
+///
+/// When enabled: (a) history dropped by compaction is consolidated into
+/// curated `memory/*.md` files, and (b) each request injects relevant curated
+/// memories found via hybrid FTS5/vector search (Claude-Code-style auto-memory).
+pub fn get_memory_recall_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path)
+        .memory_recall
+        .unwrap_or(false)
+}
+
+pub fn save_memory_recall_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.memory_recall = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== LLM config =====
 
 pub fn load_llm_configs(config_path: &Path) -> LlmConfigResult {

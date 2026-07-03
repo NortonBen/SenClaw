@@ -102,8 +102,13 @@ pub struct TodosUpdateItem {
 pub struct CompactStartData;
 
 /// `compact:exec` event payload.
-#[derive(Debug, Clone)]
-pub struct CompactExecData;
+#[derive(Debug, Clone, Default)]
+pub struct CompactExecData {
+    /// The LLM compaction summary that replaced the dropped history, when the
+    /// compaction produced one (None on keep-recent truncation fallback).
+    /// Consumed by the curated-memory consolidation hook in `pool.rs`.
+    pub summary: Option<String>,
+}
 
 /// `session:error` event payload.
 #[derive(Debug, Clone)]

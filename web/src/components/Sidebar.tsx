@@ -163,7 +163,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
             <Tooltip title="Plugins">
               <Button type={isPlugins ? 'primary' : 'text'} size="small" icon={<ApiOutlined />} onClick={() => navigate('/plugins')} />
             </Tooltip>
-            <Tooltip title="Memory">
+            <Tooltip title="Knowledge">
               <Button type={isCognitive ? 'primary' : 'text'} size="small" icon={<DeploymentUnitOutlined />} onClick={() => navigate('/cognitive')} />
             </Tooltip>
             <Tooltip title="Settings">

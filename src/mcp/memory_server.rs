@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
 
+use crate::memory::curated;
 use crate::memory::embedding::{create_embedding_provider, EmbeddingProvider};
 use crate::memory::fts_search::{self, SearchOptions};
 use rmcp::ServiceExt;
@@ -40,6 +41,39 @@ struct MemoryGetParams {
     end_line: Option<u32>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct MemorySaveParams {
+    /// Kebab-case slug; becomes the filename. Free text is normalized automatically.
+    name: String,
+    /// Short recall hook (≤120 chars) — this is what recall matches on.
+    description: String,
+    /// Markdown body. For type=project|feedback use **Why:** / **How to apply:** sections.
+    body: String,
+    /// project | reference | feedback | user. Defaults to "project".
+    #[serde(default)]
+    #[serde(rename = "type")]
+    mem_type: Option<String>,
+    /// Optional human-readable title for the index (defaults to the de-slugified name).
+    #[serde(default)]
+    title: Option<String>,
+    /// Overwrite an existing same-name memory (update-not-duplicate). Defaults to false.
+    #[serde(default)]
+    supersede: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct MemoryRecallParams {
+    query: String,
+    #[serde(default)]
+    #[serde(rename = "maxResults")]
+    max_results: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct MemoryDeleteParams {
+    name: String,
+}
+
 #[derive(Clone)]
 struct McpMemoryServer {
     db_path: String,
@@ -49,6 +83,15 @@ struct McpMemoryServer {
 }
 
 impl McpMemoryServer {
+    /// The per-folder base dir (mirrors `MemoryManager::get_memory_dir_for_folder`):
+    /// custom cowork dir, else `agents_dir/{folder}`. `MEMORY.md` lives here; curated
+    /// files live under `<base>/memory/`.
+    fn base_dir(&self) -> PathBuf {
+        self.custom_memory_dir
+            .clone()
+            .unwrap_or_else(|| self.agents_dir.join(&self.folder))
+    }
+
     fn open_db_and_provider(&self) -> Result<(Db, Option<Box<dyn EmbeddingProvider>>)> {
         let cfg = crate::config::Config::from_env();
         let mut db_cfg = cfg.clone();
@@ -111,6 +154,79 @@ impl McpMemoryServer {
         );
         srv.memory_get(&p.rel_path, p.start_line, p.end_line)
             .content
+    }
+
+    #[rmcp::tool(
+        description = "Save a curated, human-readable memory (frontmatter + body) and update the MEMORY.md index. Use for durable notes: decisions, gotchas, research findings, user requests. Do NOT save facts derivable from code/git/CLAUDE.md. Pass supersede=true to update an existing memory instead of duplicating it."
+    )]
+    fn memory_save(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemorySaveParams,
+        >,
+    ) -> String {
+        let base = self.base_dir();
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mem_type = p.mem_type.as_deref().unwrap_or("project");
+        match curated::save(
+            &base,
+            &p.name,
+            &p.description,
+            &p.body,
+            mem_type,
+            p.title.as_deref(),
+            &self.folder,
+            &date,
+            p.supersede.unwrap_or(false),
+        ) {
+            Ok(s) => format!(
+                "{} memory '{}' ({}).",
+                if s.updated { "Updated" } else { "Saved" },
+                s.name,
+                s.path.display()
+            ),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    #[rmcp::tool(
+        description = "Recall curated memories relevant to a query (hybrid FTS5 + vector search over saved memories, excluding daily logs). Returns each memory's name, type, hook, and matched snippet."
+    )]
+    async fn memory_recall(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemoryRecallParams,
+        >,
+    ) -> String {
+        let (db, provider) = match self.open_db_and_provider() {
+            Ok(v) => v,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let srv = MemoryServer::new(
+            db,
+            &self.folder,
+            &self.agents_dir,
+            provider,
+            self.custom_memory_dir.clone(),
+        );
+        srv.memory_recall(&p.query, p.max_results).await
+    }
+
+    #[rmcp::tool(
+        description = "Delete a curated memory by name and remove its MEMORY.md index entry. Use to prune memories that turned out to be wrong."
+    )]
+    fn memory_delete(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemoryDeleteParams,
+        >,
+    ) -> String {
+        let base = self.base_dir();
+        match curated::delete(&base, &p.name) {
+            Ok(true) => format!("Deleted memory '{}'.", curated::slugify(&p.name)),
+            Ok(false) => format!("No memory named '{}' found.", curated::slugify(&p.name)),
+            Err(e) => format!("Error: {e}"),
+        }
     }
 }
 
@@ -246,6 +362,60 @@ impl MemoryServer {
         ToolResult::ok(out.trim().to_string())
     }
 
+    // ===== memory_recall =====
+
+    /// Curated recall: hybrid search scoped to saved memories, deduped per file, each
+    /// presented as `name (type) — hook` + the matched snippet.
+    pub async fn memory_recall(&self, query: &str, max_results: Option<usize>) -> String {
+        let limit = max_results.unwrap_or(5);
+        let opts = SearchOptions {
+            max_results: limit + 5,
+            min_score: 0.25,
+            source: Some("memory".to_owned()),
+        };
+        let provider_ref: Option<&dyn EmbeddingProvider> = self.embedding_provider.as_deref();
+
+        let raw = match fts_search::hybrid_search(&self.db, &self.folder, query, provider_ref, opts)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return format!("Recall error: {e}"),
+        };
+
+        let today_file = format!("{}.md", chrono::Utc::now().format("%Y-%m-%d"));
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut out = String::new();
+        let mut n = 0usize;
+        for r in raw {
+            // Skip daily logs and the index itself; curated memories only.
+            if r.path.ends_with(&today_file) || r.path.ends_with("MEMORY.md") {
+                continue;
+            }
+            if !seen.insert(r.path.clone()) {
+                continue;
+            }
+            n += 1;
+            match curated::read_meta(Path::new(&r.path)) {
+                Some(m) => out.push_str(&format!(
+                    "[{n}] {} ({}) — {}\n",
+                    m.name,
+                    if m.mem_type.is_empty() { "memory" } else { &m.mem_type },
+                    m.description
+                )),
+                None => out.push_str(&format!("[{n}] {}\n", r.path)),
+            }
+            out.push_str(&format!("{}\n\n", truncate_chars(&r.text, 300)));
+            if n >= limit {
+                break;
+            }
+        }
+
+        if n == 0 {
+            return "No matching memories found.".to_string();
+        }
+        format!("Recalled {n} memories:\n\n{}", out.trim())
+    }
+
     // ===== memory_get =====
 
     pub fn memory_get(
@@ -289,6 +459,17 @@ impl MemoryServer {
         );
 
         ToolResult::ok(format!("{header}{}", slice.join("\n")))
+    }
+}
+
+/// Truncate to at most `max` chars (not bytes), appending `...` when clipped. Safe for
+/// UTF-8 memory bodies (Vietnamese/CJK) unlike a raw byte slice.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let t: String = s.chars().take(max).collect();
+        format!("{t}...")
     }
 }
 

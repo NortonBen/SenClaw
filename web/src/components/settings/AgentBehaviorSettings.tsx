@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Typography, Switch, Card, Space, Spin, message, Divider } from 'antd';
-import { ThunderboltOutlined, BulbOutlined, SyncOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined, BulbOutlined, SyncOutlined, DatabaseOutlined } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
 
 interface AgentBehavior {
   preTriggerSkill: boolean;
   preCognitive: boolean;
+  memoryRecall: boolean;
   afterProcess: boolean;
 }
 
@@ -27,6 +28,7 @@ export const AgentBehaviorSettings: React.FC = () => {
   const [state, setState] = useState<AgentBehavior>({
     preTriggerSkill: false,
     preCognitive: false,
+    memoryRecall: false,
     afterProcess: false,
   });
   const [loading, setLoading] = useState(true);
@@ -128,6 +130,12 @@ export const AgentBehaviorSettings: React.FC = () => {
           'Pre-cognitive',
           'Retrieve relevant entries from the cognitive-graph memory for the message and inject them into the prompt as context before the main turn.',
           'preCognitive'
+        )}
+        {row(
+          <DatabaseOutlined />,
+          'Memory recall',
+          'Consolidate dropped history into memory files and inject relevant saved memories into each request.',
+          'memoryRecall'
         )}
       </Space>
 

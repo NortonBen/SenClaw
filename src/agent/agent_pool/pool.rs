@@ -671,6 +671,13 @@ impl AgentPool {
         self.state.lock().unwrap().cached_todos.clone()
     }
 
+    /// Remove one agent's cached todo list (Console dismiss) so subscribe
+    /// snapshots stop replaying it. The persisted `agent_todos` DB row is
+    /// deleted by the gateway handler that calls this.
+    pub fn dismiss_cached_todos(&self, jid: &str) {
+        self.state.lock().unwrap().cached_todos.remove(jid);
+    }
+
     /// Snapshot of all cached agent tool rosters — used for initial push on
     /// WS subscribe so the Agent Console can render the tools each running
     /// agent can use.
@@ -1344,9 +1351,11 @@ impl AgentPool {
             .set_model_override(jid, group.llm_config_id.clone());
 
         // ---- Pre-process stage 2: pre-retrieval injection ----
-        // Two independent, user-toggleable backends:
+        // Three independent, user-toggleable backends:
         //   • MEMORY.md    → env-level `memory.pre_retrieval` (whole-file load)
         //   • Cognitive    → global `preCognitive` toggle (pre-cognitive stage)
+        //   • Curated      → global `memoryRecall` toggle (hybrid FTS5/vector
+        //                    search over curated memory/*.md, per-memory hits)
         // The memory backend now loads `~/.senclaw/agents/<folder>/MEMORY.md`
         // verbatim instead of FTS-searching chunks + daily history.
         let full_prompt = {
@@ -1361,6 +1370,10 @@ impl AgentPool {
             let do_cognitive = global_config_path
                 .as_deref()
                 .map(crate::gateway::group_manager::get_pre_cognitive_enabled)
+                .unwrap_or(false);
+            let do_recall = global_config_path
+                .as_deref()
+                .map(crate::gateway::group_manager::get_memory_recall_enabled)
                 .unwrap_or(false);
 
             // MEMORY.md backend — read the file verbatim from the agent's dir.
@@ -1399,15 +1412,27 @@ impl AgentPool {
                 String::new()
             };
 
-            match (mem_context.is_empty(), cog_context.is_empty()) {
-                (true, true) => prompt.to_string(),
-                (false, true) => format!("<memory>\n{mem_context}\n</memory>\n\n{prompt}"),
-                (true, false) => {
-                    format!("<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}")
-                }
-                (false, false) => format!(
-                    "<memory>\n{mem_context}\n</memory>\n<cognitive_memory>\n{cog_context}</cognitive_memory>\n\n{prompt}"
-                ),
+            // Curated-memory backend (`memoryRecall` toggle).
+            let recall_context = if do_recall {
+                curated_pre_retrieval(prompt, &group.folder, max_results).await
+            } else {
+                String::new()
+            };
+
+            let mut blocks = String::new();
+            if !mem_context.is_empty() {
+                blocks.push_str(&format!("<memory>\n{mem_context}\n</memory>\n"));
+            }
+            if !cog_context.is_empty() {
+                blocks.push_str(&format!("<cognitive_memory>\n{cog_context}</cognitive_memory>\n"));
+            }
+            if !recall_context.is_empty() {
+                blocks.push_str(&format!("<memory_recall>\n{recall_context}\n</memory_recall>\n"));
+            }
+            if blocks.is_empty() {
+                prompt.to_string()
+            } else {
+                format!("{blocks}\n{prompt}")
             }
         };
 
@@ -2512,10 +2537,54 @@ impl AgentPool {
             let jid_arg = jid.clone();
             self.core_api.on_compact_exec(
                 &jid_arg,
-                Box::new(move |_data: CompactExecData| {
+                Box::new(move |data: CompactExecData| {
                     if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
                         sink.notify_agent_compacting(&jid, false);
                     }
+
+                    // ---- curated-memory consolidation (`memoryRecall`) ----
+                    // The history that compaction just replaced lives on only
+                    // in `data.summary`. When the toggle is on, distill it
+                    // into curated memory files (LLM if configured, verbatim
+                    // fallback) so it stays recallable. Fire-and-forget:
+                    // failures log and never affect the turn.
+                    if let Some(summary) = data.summary.clone() {
+                        let cfg = pool.config.lock().unwrap().as_ref().cloned();
+                        if let Some(cfg) = cfg {
+                            let enabled = crate::gateway::group_manager::get_memory_recall_enabled(
+                                &cfg.paths.global_config_path,
+                            );
+                            if enabled {
+                                let folder = folder.clone();
+                                let base = cfg.paths.agents_dir.join(&folder);
+                                tokio::spawn(async move {
+                                    let llm =
+                                        crate::memory::cognitive::llm_openai::create_cognitive_llm(
+                                            &cfg,
+                                        );
+                                    let date =
+                                        chrono::Utc::now().format("%Y-%m-%d").to_string();
+                                    match crate::memory::consolidate::consolidate_summary(
+                                        &base, &folder, &summary, llm, &date,
+                                    )
+                                    .await
+                                    {
+                                        Ok(n) if n > 0 => {
+                                            // New files → let the watcher pick
+                                            // them up on the next search.
+                                            crate::memory::manager::get_instance()
+                                                .mark_dirty(&folder, None);
+                                        }
+                                        Ok(_) => {}
+                                        Err(e) => tracing::warn!(
+                                            "[AgentPool] history consolidation failed: {e}"
+                                        ),
+                                    }
+                                });
+                            }
+                        }
+                    }
+
                     let today: String = chrono::Utc::now().format("%Y-%m-%d").to_string();
                     let changed_file = dirs::home_dir()
                         .map(|h| {
@@ -2896,6 +2965,87 @@ async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: 
             String::new()
         }
     }
+}
+
+/// Curated-memory pre-retrieval (the `memoryRecall` toggle). Hybrid FTS5 +
+/// vector search over the group's curated `memory/*.md` files via the
+/// MemoryManager singleton, deduped per file and presented per-memory
+/// (`name (type) — hook` + matched snippet), ending with a hint that the
+/// agent can call the memory tools for deeper retrieval.
+///
+/// Mirrors `cognitive_pre_retrieval`'s failure contract: any error logs and
+/// returns an empty string — pre-retrieval never fails the agent turn.
+async fn curated_pre_retrieval(query: &str, group_folder: &str, max_results: usize) -> String {
+    let mgr = crate::memory::manager::get_instance();
+    let opts = crate::memory::fts_search::SearchOptions {
+        max_results: max_results + 5,
+        min_score: 0.25,
+        source: Some("memory".to_owned()),
+    };
+    let results = match mgr.search(group_folder, query, Some(opts)).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("[AgentPool] Curated pre-retrieval failed: {e}");
+            return String::new();
+        }
+    };
+
+    // Curated files only: skip daily logs (YYYY-MM-DD.md) and the index.
+    let today_file = format!("{}.md", chrono::Utc::now().format("%Y-%m-%d"));
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = String::new();
+    let mut n = 0usize;
+    for r in results {
+        let file_name = std::path::Path::new(&r.path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if file_name == today_file
+            || file_name == "MEMORY.md"
+            || is_daily_log_name(&file_name)
+            || !seen.insert(r.path.clone())
+        {
+            continue;
+        }
+        n += 1;
+        match crate::memory::curated::read_meta(std::path::Path::new(&r.path)) {
+            Some(m) => out.push_str(&format!(
+                "[{n}] {} ({}) — {}\n",
+                m.name,
+                if m.mem_type.is_empty() { "memory" } else { &m.mem_type },
+                m.description
+            )),
+            None => out.push_str(&format!("[{n}] {file_name}\n")),
+        }
+        let snippet: String = r.text.chars().take(300).collect();
+        out.push_str(&format!("{snippet}\n\n"));
+        if n >= max_results {
+            break;
+        }
+    }
+
+    if n == 0 {
+        return String::new();
+    }
+    format!(
+        "Saved memories relevant to this request (point-in-time notes — verify before asserting):\n\n{}\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).",
+        out.trim()
+    )
+}
+
+/// `YYYY-MM-DD.md` daily-log filename check (any date, not just today).
+fn is_daily_log_name(file_name: &str) -> bool {
+    let Some(stem) = file_name.strip_suffix(".md") else {
+        return false;
+    };
+    let b = stem.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && stem
+            .chars()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 4 | 7) || c.is_ascii_digit())
 }
 
 /// Filter for the auto-reflection path (P14).

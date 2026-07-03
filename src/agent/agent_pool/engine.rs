@@ -232,9 +232,11 @@ impl ZenCoreApi {
                                     cb(CompactStartData);
                                 }
                             }
-                            EngineEvent::CompactExec(_) => {
+                            EngineEvent::CompactExec(d) => {
                                 if let Some(ref cb) = h.compact_exec {
-                                    cb(CompactExecData);
+                                    cb(CompactExecData {
+                                        summary: d.summary.clone(),
+                                    });
                                 }
                             }
                             EngineEvent::SessionError(data) => {
