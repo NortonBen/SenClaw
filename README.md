@@ -25,6 +25,33 @@ SenClaw cung cấp lớp hạ tầng chạy quanh mô hình ngôn ngữ lớn: p
 
 ---
 
+## About / Về dự án
+
+SenClaw is a **local-first personal AI workstation**: a single Rust daemon that hosts your agents, and a native Flutter desktop app that supervises it. Your data — chats, notes, calendar, memories, wiki — lives in SQLite under `~/.senclaw/` on your machine; the model can be a cloud provider **or run fully offline** on Apple Silicon via MLX.
+
+SenClaw là một **trạm làm việc AI cá nhân, local-first**: một daemon Rust duy nhất chạy toàn bộ agent, và app desktop Flutter native giám sát nó. Dữ liệu của bạn — hội thoại, ghi chú, lịch, bộ nhớ, wiki — nằm trong SQLite tại `~/.senclaw/` trên máy của bạn; model có thể là cloud provider **hoặc chạy hoàn toàn offline** trên Apple Silicon qua MLX.
+
+What that adds up to / Cụ thể gồm:
+
+- **One assistant, everywhere** — talk to the same agents from the desktop app, Telegram / Feishu / QQ, the mobile app (relay), or the browser extension.
+- **Agents that do real work** — tool permissions with human-in-the-loop approval, Plan mode, and DAG multi-agent teams (Cowork) for larger tasks.
+- **Memory that compounds** — a cognitive knowledge graph plus curated `memory/*.md` files that are consolidated automatically when context is compacted, and recalled into future turns.
+- **A personal Space** — notes, calendar with reminders that fire as native notifications, and recurring schedules that run agents on cron.
+- **Space Apps** — installable full-stack mini-apps (SSH Manager, DeepWiki, Email, …) that ship their own UI, MCP tools, and skills.
+- **Local models** — native MLX inference for LLMs (Gemma, Qwen, DeepSeek, …), Whisper speech-to-text, TTS, OCR, and embeddings — no GPU cloud required.
+
+### Screenshots / Ảnh màn hình
+
+| Dashboard | Chat |
+| --- | --- |
+| ![Dashboard](docs/images/screenshots/senclaw-dashboard.png) | ![Chat](docs/images/screenshots/senclaw-chat.png) |
+
+| Plugins (Skills / MCP / Subagents) | Space (Notes · Calendar · Schedules) |
+| --- | --- |
+| ![Plugins](docs/images/screenshots/senclaw-plugins.png) | ![Space](docs/images/screenshots/senclaw-space.png) |
+
+---
+
 ## Highlights / Điểm nổi bật
 
 - **Personal agent runtime**: agent lifecycle, tool permissions, clarification flow, workspace state, and per-agent personas.
