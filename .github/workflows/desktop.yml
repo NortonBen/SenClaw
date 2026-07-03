@@ -4,8 +4,31 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Branch pushes only rebuild when code that feeds this workflow changed
+    # (docs-only commits skip). NOTE: tag pushes ignore `paths` — a release
+    # tag always builds the full desktop bundle, which is intended.
+    paths:
+      - "src/**"
+      - "desktop_app/**"
+      - "apps/**"
+      - "app-space-sdk/**"
+      - "web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/desktop.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "src/**"
+      - "desktop_app/**"
+      - "apps/**"
+      - "app-space-sdk/**"
+      - "web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/desktop.yml"
   workflow_dispatch:
 
 env:
