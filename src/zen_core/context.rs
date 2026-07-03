@@ -61,7 +61,10 @@ tokio::task_local! {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// (`ignore` — illustrative pseudo-code; `no_run` would still compile it and
+/// the `{ ... }` initializer is intentionally elided.)
+///
+/// ```rust,ignore
 /// let store = EngineStore { ... };
 /// run_with_engine(store, || async {
 ///     let current = get_engine_store().unwrap();
