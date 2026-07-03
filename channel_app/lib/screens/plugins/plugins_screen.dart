@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/plugin_models.dart';
 import '../../services/plugins_api.dart';
@@ -110,11 +111,25 @@ class _SkillsTabState extends State<_SkillsTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _skills.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_skills.isEmpty) {
+      unawaited(widget.api.listSkillsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _skills.isNotEmpty) return;
+        setState(() {
+          _skills = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final s = await widget.api.listSkills();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _skills = s;
@@ -123,7 +138,8 @@ class _SkillsTabState extends State<_SkillsTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _skills.isEmpty ? '$e' : null;
         _loading = false;
       });
     }
@@ -420,11 +436,25 @@ class _SubagentsTabState extends State<_SubagentsTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _subs.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_subs.isEmpty) {
+      unawaited(widget.api.listSubagentsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _subs.isNotEmpty) return;
+        setState(() {
+          _subs = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final s = await widget.api.listSubagents();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _subs = s;
@@ -433,7 +463,8 @@ class _SubagentsTabState extends State<_SubagentsTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _subs.isEmpty ? '$e' : null;
         _loading = false;
       });
     }
@@ -674,11 +705,26 @@ class _PluginsTabState extends State<_PluginsTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _plugins.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_plugins.isEmpty) {
+      unawaited(widget.api.listPluginsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted) return;
+        if (_plugins.isNotEmpty) return;
+        setState(() {
+          _plugins = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final p = await widget.api.listPlugins();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _plugins = p;
@@ -687,7 +733,8 @@ class _PluginsTabState extends State<_PluginsTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _plugins.isEmpty ? '$e' : null;
         _loading = false;
       });
     }
@@ -1026,11 +1073,25 @@ class _McpTabState extends State<_McpTab> with AutomaticKeepAliveClientMixin {
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _servers.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_servers.isEmpty) {
+      unawaited(widget.api.listMcpCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _servers.isNotEmpty) return;
+        setState(() {
+          _servers = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final s = await widget.api.listMcp();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _servers = s;
@@ -1039,7 +1100,8 @@ class _McpTabState extends State<_McpTab> with AutomaticKeepAliveClientMixin {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _servers.isEmpty ? '$e' : null;
         _loading = false;
       });
     }

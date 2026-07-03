@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../../models/space_models.dart';
@@ -102,15 +103,29 @@ class _CalendarGridState extends State<_CalendarGrid>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _events.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_events.isEmpty) {
+      unawaited(_api.listEventsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _events.isNotEmpty) return;
+        setState(() {
+          _events = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       // Wide window so markers show across months.
       final now = DateTime.now();
       final from = DateTime(now.year - 1, now.month).millisecondsSinceEpoch;
       final to = DateTime(now.year + 1, now.month).millisecondsSinceEpoch;
-      final events = await _api.listEvents(from: from, to: to);
+      final events = await _api.listEvents(from: from, to: to, cache: true);
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _events = events;
@@ -119,7 +134,8 @@ class _CalendarGridState extends State<_CalendarGrid>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _events.isEmpty ? '$e' : null;
         _loading = false;
       });
     }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
@@ -35,8 +36,24 @@ class _CodeScreenState extends State<CodeScreen> {
       _loading = true;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_sessions.isEmpty && !_loadedOnce) {
+      unawaited(_api.listSessionsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted) return;
+        if (_sessions.isNotEmpty) return;
+        setState(() {
+          _sessions = cached;
+          _loading = false;
+          _loadedOnce = true;
+          _error = null;
+        });
+      }));
+    }
     try {
       final sessions = await _api.listSessions();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _sessions = sessions;
@@ -46,7 +63,8 @@ class _CodeScreenState extends State<CodeScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _sessions.isEmpty ? '$e' : null;
         _loading = false;
         _loadedOnce = true;
       });

@@ -14,13 +14,15 @@ class ApiClient {
 
   final _manager = RelayManager();
 
-  Future<dynamic> _send(String method, String path, {Object? body}) async {
+  Future<dynamic> _send(String method, String path,
+      {Object? body, Duration? timeout}) async {
     await _manager.ensureStarted();
     final relay = _manager.relay;
     if (relay == null) {
       throw const ApiException(0, 'no relay connection');
     }
-    final resp = await relay.apiRequest(method, path, body: body);
+    final resp =
+        await relay.apiRequest(method, path, body: body, timeout: timeout);
     if (!resp.isOk) {
       throw ApiException(resp.status, _extractError(resp.body));
     }
@@ -43,8 +45,8 @@ class ApiClient {
   }
 
   Future<dynamic> get(String path) => _send('GET', path);
-  Future<dynamic> post(String path, {Object? body}) =>
-      _send('POST', path, body: body);
+  Future<dynamic> post(String path, {Object? body, Duration? timeout}) =>
+      _send('POST', path, body: body, timeout: timeout);
   Future<dynamic> put(String path, {Object? body}) =>
       _send('PUT', path, body: body);
   Future<dynamic> patch(String path, {Object? body}) =>

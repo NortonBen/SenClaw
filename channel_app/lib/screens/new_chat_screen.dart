@@ -1,15 +1,19 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/prefs.dart';
 import '../models/agent_model.dart';
 import '../models/cowork_models.dart';
+import '../models/workflow_models.dart';
 import '../services/code_api.dart';
 import '../services/cowork_api.dart';
 import '../services/llm_api.dart';
+import '../services/workflow_api.dart';
 import '../theme/tokens.dart';
 import 'code/code_session_screen.dart';
 import 'code/folder_picker.dart';
 import 'cowork/cowork_workspace_screen.dart';
+import 'workflow/workflow_screen.dart';
 
 /// Result of the New chat screen for the *chat* kind: which profile to talk to
 /// and the first message. Code/Cowork kinds navigate to their own detail screen
@@ -50,7 +54,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
 
   final _msg = TextEditingController();
   final _llmApi = LlmApi();
-  String _kind = 'chat'; // chat | code | cowork
+  String _kind = 'chat'; // chat | code | cowork | workflow
   String _chatType = 'Agent'; // Agent | Plan | Dag
   String? _agentFolder;
   String? _modelId; // null = keep the active default model
@@ -60,6 +64,16 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   bool _creating = false;
   List<CoworkTemplate> _templates = [];
   List<LlmOption> _models = [];
+
+  // ── Workflow quick-start state ──
+  final _wfApi = WorkflowApi();
+  final _wfDesc = TextEditingController();
+  List<WorkflowDefSummary> _wfDefs = [];
+  bool _wfLoaded = false;
+  String? _wfSelected;
+  final Map<String, TextEditingController> _wfInputCtrls = {};
+  bool _wfStarting = false;
+  bool _wfDrafting = false;
 
   @override
   void initState() {
@@ -71,15 +85,33 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   }
 
   Future<void> _loadTemplates() async {
+    var fresh = false;
+    // Local-DB paint races the relay fetch — the relay result wins.
+    unawaited(CoworkApi().listTemplatesCached().then((cached) {
+      if (fresh || cached.isEmpty || !mounted || _templates.isNotEmpty) return;
+      setState(() => _templates = cached);
+    }));
     try {
       final t = await CoworkApi().listTemplates();
+      fresh = true;
       if (mounted) setState(() => _templates = t);
     } catch (_) {/* templates are optional */}
   }
 
   Future<void> _loadModels() async {
+    var fresh = false;
+    // Local-DB paint races the relay fetch — the relay result wins.
+    unawaited(_llmApi.listCached().then((cached) {
+      if (fresh || cached.configs.isEmpty || !mounted) return;
+      if (_models.isNotEmpty) return;
+      setState(() {
+        _models = cached.configs;
+        _activeModelId = cached.activeId;
+      });
+    }));
     try {
       final l = await _llmApi.list();
+      fresh = true;
       if (mounted) {
         setState(() {
           _models = l.configs;
@@ -102,7 +134,35 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   @override
   void dispose() {
     _msg.dispose();
+    _wfDesc.dispose();
+    for (final c in _wfInputCtrls.values) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  Future<void> _loadWorkflows() async {
+    var fresh = false;
+    // Local-DB paint races the relay fetch — the relay result wins.
+    unawaited(_wfApi.listDefsCached().then((cached) {
+      if (fresh || cached.isEmpty || !mounted || _wfDefs.isNotEmpty) return;
+      setState(() {
+        _wfDefs = cached;
+        _wfLoaded = true;
+      });
+    }));
+    try {
+      final defs = await _wfApi.listDefs();
+      fresh = true;
+      if (mounted) {
+        setState(() {
+          _wfDefs = defs;
+          _wfLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _wfLoaded = true);
+    }
   }
 
   String? get _effectiveTemplate =>
@@ -119,6 +179,193 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
             widget.agents.isNotEmpty &&
             !_creating;
     }
+  }
+
+  // ── Workflow quick-start (pick & run, or create with AI) ──────────────────
+
+  void _wfPick(String name) {
+    WorkflowDefSummary? d;
+    for (final x in _wfDefs) {
+      if (x.name == name) {
+        d = x;
+        break;
+      }
+    }
+    setState(() {
+      _wfSelected = name;
+      for (final c in _wfInputCtrls.values) {
+        c.dispose();
+      }
+      _wfInputCtrls.clear();
+      for (final i in d?.inputs ?? const <WorkflowInputDef>[]) {
+        _wfInputCtrls[i.name] =
+            TextEditingController(text: i.defaultValue ?? '');
+      }
+    });
+  }
+
+  Future<void> _wfRun(WorkflowDefSummary def) async {
+    final missing = def.inputs
+        .where((i) =>
+            i.required && (_wfInputCtrls[i.name]?.text.trim() ?? '').isEmpty)
+        .map((i) => i.name)
+        .toList();
+    if (missing.isNotEmpty) {
+      _wfSnack('Thiếu input bắt buộc: ${missing.join(', ')}');
+      return;
+    }
+    setState(() => _wfStarting = true);
+    try {
+      final inputs = <String, String>{
+        for (final e in _wfInputCtrls.entries)
+          if (e.value.text.trim().isNotEmpty) e.key: e.value.text,
+      };
+      final runId = await _wfApi.startRun(def.name, inputs);
+      if (!mounted) return;
+      // Leave New Session and land on the live run detail.
+      final nav = Navigator.of(context);
+      nav.pop();
+      nav.push(MaterialPageRoute(
+          builder: (_) => WorkflowRunDetailScreen(runId: runId)));
+    } catch (e) {
+      _wfSnack('Chạy thất bại: $e');
+      if (mounted) setState(() => _wfStarting = false);
+    }
+  }
+
+  Future<void> _wfCreateWithAi() async {
+    if (_wfDesc.text.trim().isEmpty) {
+      _wfSnack('Hãy mô tả quy trình trước');
+      return;
+    }
+    setState(() => _wfDrafting = true);
+    String content;
+    try {
+      // Agent authors a validated draft — nothing saved yet.
+      content = await _wfApi.draft(_wfDesc.text);
+    } catch (e) {
+      _wfSnack('Soạn thảo thất bại: $e');
+      if (mounted) setState(() => _wfDrafting = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _wfDrafting = false);
+    await _wfReviewAndSave(content);
+  }
+
+  /// Review dialog: user edits the agent's draft, Save persists it (validated
+  /// server-side, with an overwrite confirm on name clash), Cancel discards.
+  /// Validation errors keep the editor open so the fix isn't lost.
+  Future<void> _wfReviewAndSave(String content) async {
+    final ctrl = TextEditingController(text: content);
+    var busy = false;
+    final c = context.colors;
+
+    Future<void> save(BuildContext ctx, StateSetter setDlg,
+        {bool overwrite = false}) async {
+      setDlg(() => busy = true);
+      try {
+        final created = await _wfApi.create(ctrl.text, overwrite: overwrite);
+        await _loadWorkflows();
+        _wfPick(created);
+        _wfDesc.clear();
+        _wfSnack('Đã lưu "$created" — điền input rồi bấm Chạy');
+        if (ctx.mounted) Navigator.pop(ctx);
+      } catch (e) {
+        setDlg(() => busy = false);
+        final msg = '$e';
+        if (!overwrite && msg.contains('already exists') && ctx.mounted) {
+          final ok = await showDialog<bool>(
+            context: ctx,
+            builder: (ctx2) => AlertDialog(
+              title: const Text('Workflow đã tồn tại'),
+              content: const Text('Ghi đè định nghĩa hiện có?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx2, false),
+                    child: const Text('Huỷ')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx2, true),
+                    child: const Text('Ghi đè')),
+              ],
+            ),
+          );
+          if (ok == true && ctx.mounted) {
+            await save(ctx, setDlg, overwrite: true);
+            return;
+          }
+        } else {
+          // Validation error — keep the editor open.
+          _wfSnack('Lưu thất bại: $msg');
+        }
+      }
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => Dialog(
+          insetPadding: const EdgeInsets.all(12),
+          backgroundColor: c.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Xem lại bản nháp',
+                    style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text(
+                    'Sửa nếu cần rồi Lưu (được kiểm tra DAG/persona khi lưu). Huỷ sẽ bỏ bản nháp.',
+                    style: TextStyle(color: c.textMuted, fontSize: 12)),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: MediaQuery.of(ctx).size.height * 0.55,
+                  child: TextField(
+                    controller: ctrl,
+                    maxLines: null,
+                    expands: true,
+                    enabled: !busy,
+                    textAlignVertical: TextAlignVertical.top,
+                    style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: c.textPrimary),
+                    decoration:
+                        const InputDecoration(border: OutlineInputBorder()),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: busy ? null : () => Navigator.pop(ctx),
+                      child: const Text('Huỷ'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: busy ? null : () => save(ctx, setDlg),
+                      child: Text(busy ? 'Đang lưu…' : 'Lưu workflow'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _wfSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // ── Restricted project picker ──────────────────────────────────────────────
@@ -329,6 +576,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     onChanged: (k) => setState(() {
                       _kind = k;
                       if (k == 'chat') _workDir = null;
+                      if (k == 'workflow' && !_wfLoaded) _loadWorkflows();
                     }),
                   ),
                 ),
@@ -361,6 +609,10 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   ],
                 ),
                 const SizedBox(height: 20),
+                // Workflow kind swaps the composer for the quick-start panel.
+                if (_kind == 'workflow') ...[
+                  _workflowQuickStart(c),
+                ] else ...[
                 // Unified input card.
                 Container(
                   decoration: BoxDecoration(
@@ -413,11 +665,184 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                           onTap: () => setState(() => _msg.text = s)),
                   ],
                 ),
+                ],
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// Workflow quick-start panel (replaces the composer for the workflow kind):
+  /// run a saved workflow, or describe one and let the AI agent author it.
+  Widget _workflowQuickStart(AppColors c) {
+    WorkflowDefSummary? selected;
+    for (final d in _wfDefs) {
+      if (d.name == _wfSelected) {
+        selected = d;
+        break;
+      }
+    }
+
+    BoxDecoration card() => BoxDecoration(
+          color: c.surface,
+          borderRadius: BorderRadius.circular(AppTokens.rXl),
+          border: Border.all(color: c.border),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Pick & run an existing workflow ──
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: card(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.account_tree_outlined, size: 16, color: c.accent),
+                const SizedBox(width: 6),
+                Text('Chạy workflow có sẵn',
+                    style: TextStyle(
+                        color: c.textPrimary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14)),
+              ]),
+              const SizedBox(height: 8),
+              if (!_wfLoaded)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text('Đang tải danh sách…',
+                      style: TextStyle(color: c.textMuted, fontSize: 13)),
+                )
+              else
+                DropdownButtonHideUnderline(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: c.surfaceAlt,
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      border: Border.all(color: c.border),
+                    ),
+                    child: DropdownButton<String>(
+                      value: _wfDefs.any((d) => d.name == _wfSelected)
+                          ? _wfSelected
+                          : null,
+                      isExpanded: true,
+                      hint: Text(
+                          _wfDefs.isEmpty
+                              ? 'Chưa có workflow — tạo mới bên dưới'
+                              : 'Chọn workflow…',
+                          style: TextStyle(color: c.textMuted, fontSize: 13)),
+                      items: [
+                        for (final d in _wfDefs)
+                          DropdownMenuItem(
+                            value: d.name,
+                            child: Text(
+                              '${d.name} · ${d.stepCount} bước${(d.description ?? '').isEmpty ? '' : ' — ${d.description}'}',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  color: c.textPrimary, fontSize: 13),
+                            ),
+                          ),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) _wfPick(v);
+                      },
+                    ),
+                  ),
+                ),
+              if (selected != null) ...[
+                const SizedBox(height: 12),
+                for (final i in selected.inputs)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: TextField(
+                      controller: _wfInputCtrls[i.name],
+                      style: TextStyle(color: c.textPrimary, fontSize: 14),
+                      decoration: InputDecoration(
+                        labelText: i.required ? '${i.name} *' : i.name,
+                        helperText: i.description,
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                FilledButton.icon(
+                  onPressed: _wfStarting ? null : () => _wfRun(selected!),
+                  icon: _wfStarting
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.play_arrow_rounded, size: 18),
+                  label: Text(_wfStarting ? 'Đang khởi chạy…' : 'Chạy workflow'),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Center(
+            child:
+                Text('hoặc', style: TextStyle(color: c.textMuted, fontSize: 12))),
+        const SizedBox(height: 8),
+        // ── Create a new one with the AI agent ──
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: card(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                Icon(Icons.auto_awesome, size: 16, color: c.accent),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text('Tạo workflow mới bằng AI agent',
+                      style: TextStyle(
+                          color: c.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14)),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _wfDesc,
+                maxLines: 4,
+                enabled: !_wfDrafting,
+                style: TextStyle(color: c.textPrimary, fontSize: 14),
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  hintText:
+                      'Mô tả quy trình… vd: Hàng tuần nghiên cứu một chủ đề từ 3 góc nhìn song song, rồi tổng hợp thành một báo cáo.',
+                  hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _wfDrafting ? null : _wfCreateWithAi,
+                icon: _wfDrafting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.auto_awesome, size: 16),
+                label: Text(_wfDrafting
+                    ? 'Agent đang soạn (30–120s)…'
+                    : 'Tạo workflow'),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Bản nháp sẽ mở trong trình soạn để xem lại — Lưu để giữ, Huỷ để bỏ.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: c.textMuted, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -439,6 +864,12 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       return (
         heading: 'Tạo nhóm Cowork',
         sub: 'Chọn mẫu, rồi mô tả mục tiêu.'
+      );
+    }
+    if (_kind == 'workflow') {
+      return (
+        heading: 'Chạy một workflow',
+        sub: 'Chọn workflow có sẵn, hoặc để AI agent soạn quy trình mới.'
       );
     }
     final name = _agentFolder == null
@@ -642,18 +1073,24 @@ class _KindSegmented extends StatelessWidget {
                         kind == value ? FontWeight.w600 : FontWeight.w400)),
           ),
         );
-    return Container(
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: c.surfaceAlt,
-        borderRadius: BorderRadius.circular(AppTokens.rXl),
-        border: Border.all(color: c.border),
+    // FittedBox: four segments can exceed narrow phone widths — scale down
+    // instead of overflowing.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: c.surfaceAlt,
+          borderRadius: BorderRadius.circular(AppTokens.rXl),
+          border: Border.all(color: c.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          seg('💬 Chat', 'chat'),
+          seg('⌨️ Code', 'code'),
+          seg('👥 Cowork', 'cowork'),
+          seg('🔁 Flow', 'workflow'),
+        ]),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        seg('💬 Chat', 'chat'),
-        seg('⌨️ Code', 'code'),
-        seg('👥 Cowork', 'cowork'),
-      ]),
     );
   }
 }

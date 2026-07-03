@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/space_models.dart';
 import '../../services/space_api.dart';
@@ -41,14 +42,29 @@ class _NotesTabState extends State<_NotesTab>
   }
 
   Future<void> _load() async {
+    final searching = _query.trim().isNotEmpty;
     setState(() {
-      _loading = true;
+      _loading = searching || _notes.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel (unfiltered list
+    // only) — the relay result always wins once it arrives.
+    if (!searching && _notes.isEmpty) {
+      unawaited(_api.listNotesCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _notes.isNotEmpty) return;
+        setState(() {
+          _notes = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
-      final notes = _query.trim().isEmpty
-          ? await _api.listNotes()
-          : await _api.searchNotes(_query.trim());
+      final notes = searching
+          ? await _api.searchNotes(_query.trim())
+          : await _api.listNotes();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _notes = notes;
@@ -57,7 +73,8 @@ class _NotesTabState extends State<_NotesTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = !searching && _notes.isNotEmpty ? null : '$e';
         _loading = false;
       });
     }

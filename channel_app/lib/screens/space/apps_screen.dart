@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/space_models.dart';
 import '../../services/space_api.dart';
@@ -40,11 +41,25 @@ class _AppsTabState extends State<_AppsTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _apps.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — whichever lands
+    // first shows, and the relay result always wins once it arrives.
+    if (_apps.isEmpty) {
+      unawaited(_api.listAppsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _apps.isNotEmpty) return;
+        setState(() {
+          _apps = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final a = await _api.listApps();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _apps = a;
@@ -53,7 +68,8 @@ class _AppsTabState extends State<_AppsTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _apps.isEmpty ? '$e' : null;
         _loading = false;
       });
     }
@@ -102,7 +118,8 @@ class _AppsTabState extends State<_AppsTab>
 
   void _openApp(SpaceApp a) {
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => AppWebViewScreen(appId: a.id, title: a.name),
+      builder: (_) => AppWebViewScreen(
+          appId: a.id, title: a.name, version: a.installedAt),
     ));
   }
 

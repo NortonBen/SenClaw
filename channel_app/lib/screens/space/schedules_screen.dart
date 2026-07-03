@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/space_models.dart';
 import '../../services/config_service.dart';
@@ -50,7 +51,7 @@ class _SchedulesTabState extends State<_SchedulesTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _schedules.isEmpty;
       _error = null;
     });
     try {
@@ -61,7 +62,22 @@ class _SchedulesTabState extends State<_SchedulesTab>
         setState(() => _loading = false);
         return;
       }
+      var fresh = false;
+      // Local-DB paint races the relay fetch in parallel — the relay
+      // result always wins once it arrives.
+      if (_schedules.isEmpty) {
+        unawaited(_api.listSchedulesCached(folder).then((cached) {
+          if (fresh || cached.isEmpty || !mounted) return;
+          if (_schedules.isNotEmpty) return;
+          setState(() {
+            _schedules = cached;
+            _loading = false;
+            _error = null;
+          });
+        }));
+      }
       final schedules = await _api.listSchedules(folder);
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _schedules = schedules;
@@ -70,7 +86,8 @@ class _SchedulesTabState extends State<_SchedulesTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _schedules.isEmpty ? '$e' : null;
         _loading = false;
       });
     }

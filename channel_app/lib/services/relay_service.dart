@@ -261,6 +261,7 @@ class RelayService {
     String method,
     String path, {
     Object? body,
+    Duration? timeout,
   }) async {
     if (_isDisposed) {
       throw const ApiException(0, 'relay disposed');
@@ -279,7 +280,7 @@ class RelayService {
     _outboundController.add(_makeControl(RelayControlType.apiReq, meta));
 
     return completer.future.timeout(
-      _apiTimeout,
+      timeout ?? _apiTimeout,
       onTimeout: () {
         _pendingApi.remove(requestId);
         throw ApiException(0, 'request timed out: $method $path');

@@ -1,5 +1,6 @@
 import '../models/wiki_models.dart';
 import 'api_client.dart';
+import 'local_cache.dart';
 
 /// Typed wrapper over `/api/wiki/*`, tunnelled through the relay.
 /// Mirrors web/src/hooks/useWiki.ts. File upload (multipart) is intentionally
@@ -9,11 +10,15 @@ class WikiApi {
 
   Future<List<WikiDirNode>> tree() async {
     final obj = await _api.getObject('/api/wiki/tree');
-    final list = (obj['tree'] as List?) ?? const [];
-    return list
-        .map((e) => WikiDirNode.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(obj['tree']);
+    LocalCache().putDomainList('wiki_tree', maps);
+    return maps.map(WikiDirNode.fromJson).toList();
   }
+
+  Future<List<WikiDirNode>> treeCached() async =>
+      (await LocalCache().getDomainList('wiki_tree'))
+          .map(WikiDirNode.fromJson)
+          .toList();
 
   Future<WikiDoc> file(String path) async {
     final obj = await _api

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/cowork_models.dart';
 import '../../services/cowork_api.dart';
@@ -94,11 +95,25 @@ class _TeamsTabState extends State<_TeamsTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _teams.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_teams.isEmpty) {
+      unawaited(_api.listTeamsCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _teams.isNotEmpty) return;
+        setState(() {
+          _teams = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final t = await _api.listTeams();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _teams = t;
@@ -107,7 +122,8 @@ class _TeamsTabState extends State<_TeamsTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _teams.isEmpty ? '$e' : null;
         _loading = false;
       });
     }
@@ -390,11 +406,26 @@ class _TemplatesTabState extends State<_TemplatesTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _templates.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_templates.isEmpty) {
+      unawaited(_api.listTemplatesCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted) return;
+        if (_templates.isNotEmpty) return;
+        setState(() {
+          _templates = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final t = await _api.listTemplates();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _templates = t;
@@ -403,7 +434,8 @@ class _TemplatesTabState extends State<_TemplatesTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _templates.isEmpty ? '$e' : null;
         _loading = false;
       });
     }

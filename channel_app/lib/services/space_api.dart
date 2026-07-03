@@ -1,8 +1,10 @@
 import '../models/space_models.dart';
 import 'api_client.dart';
+import 'local_cache.dart';
 
 /// Typed wrapper over `/api/space/*` (Notes + Calendar), tunnelled through the
-/// relay. Mirrors web/src/hooks/useSpace.ts.
+/// relay. Mirrors web/src/hooks/useSpace.ts. List fetches feed the
+/// [LocalCache] domain tables for instant cache-first rendering.
 class SpaceApi {
   final _api = ApiClient();
 
@@ -11,10 +13,18 @@ class SpaceApi {
     final list = await _api.getList(
       ApiClient.withQuery('/api/space/notes', {'tag': tag}),
     );
-    return list
-        .map((e) => SpaceNote.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(list);
+    // Only the unfiltered list is cached — tag views are cheap derivatives.
+    if (tag == null || tag.isEmpty) {
+      LocalCache().putDomainList('notes', maps);
+    }
+    return maps.map(SpaceNote.fromJson).toList();
   }
+
+  Future<List<SpaceNote>> listNotesCached() async =>
+      (await LocalCache().getDomainList('notes'))
+          .map(SpaceNote.fromJson)
+          .toList();
 
   Future<List<SpaceNote>> searchNotes(String q) async {
     final list = await _api.getList(
@@ -48,9 +58,12 @@ class SpaceApi {
   Future<void> deleteNote(String id) => _api.delete('/api/space/notes/$id');
 
   // ── Calendar ───────────────────────────────────────────────────────────
+  /// [cache] should be set ONLY by the wide-window (±1y) fetch — the cache is
+  /// full-replace, so a narrow-window fetch would clobber it with a subset.
   Future<List<SpaceEvent>> listEvents({
     required int from,
     required int to,
+    bool cache = false,
   }) async {
     final list = await _api.getList(
       ApiClient.withQuery('/api/space/calendar/events', {
@@ -58,10 +71,17 @@ class SpaceApi {
         'to': to,
       }),
     );
-    return list
-        .map((e) => SpaceEvent.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(list);
+    if (cache) {
+      LocalCache().putDomainList('calendar_events', maps);
+    }
+    return maps.map(SpaceEvent.fromJson).toList();
   }
+
+  Future<List<SpaceEvent>> listEventsCached() async =>
+      (await LocalCache().getDomainList('calendar_events'))
+          .map(SpaceEvent.fromJson)
+          .toList();
 
   Future<void> createEvent({
     required String title,
@@ -91,10 +111,15 @@ class SpaceApi {
     final list = await _api.getList(
       ApiClient.withQuery('/api/space/schedules', {'group': groupFolder}),
     );
-    return list
-        .map((e) => SpaceSchedule.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(list);
+    LocalCache().putDomainList('schedules', maps, scope: groupFolder);
+    return maps.map(SpaceSchedule.fromJson).toList();
   }
+
+  Future<List<SpaceSchedule>> listSchedulesCached(String groupFolder) async =>
+      (await LocalCache().getDomainList('schedules', scope: groupFolder))
+          .map(SpaceSchedule.fromJson)
+          .toList();
 
   Future<void> createSchedule({
     required String prompt,
@@ -157,12 +182,15 @@ class SpaceApi {
 
   // ── Apps ─────────────────────────────────────────────────────────────────
   Future<List<SpaceApp>> listApps() async {
-    final r = await _api.get('/api/space/apps');
-    final list = r is List ? r : const [];
-    return list
-        .map((e) => SpaceApp.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(await _api.get('/api/space/apps'));
+    LocalCache().putDomainList('space_apps', maps);
+    return maps.map(SpaceApp.fromJson).toList();
   }
+
+  Future<List<SpaceApp>> listAppsCached() async =>
+      (await LocalCache().getDomainList('space_apps'))
+          .map(SpaceApp.fromJson)
+          .toList();
 
   Future<void> registerApp(String manifestUrl) =>
       _api.post('/api/space/apps/register', body: {'manifest_url': manifestUrl});

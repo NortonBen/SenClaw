@@ -1,4 +1,5 @@
 import 'api_client.dart';
+import 'local_cache.dart';
 
 class LlmOption {
   final String id;
@@ -17,13 +18,25 @@ class LlmConfigList {
 class LlmApi {
   final _api = ApiClient();
 
-  Future<LlmConfigList> list() async {
-    final r = await _api.getObject('/api/llm-config');
+  static LlmConfigList _parse(Map<String, dynamic> r) {
     final configs = ((r['configs'] as List?) ?? const [])
         .whereType<Map>()
         .map((m) => LlmOption('${m['id']}', '${m['label'] ?? m['id']}'))
         .toList();
     return LlmConfigList(configs, r['activeId'] as String?);
+  }
+
+  Future<LlmConfigList> list() async {
+    final r = await _api.getObject('/api/llm-config');
+    // Single-row domain: the whole response object is the cached item.
+    LocalCache().putDomainList('llm_config', [r]);
+    return _parse(r);
+  }
+
+  Future<LlmConfigList> listCached() async {
+    final rows = await LocalCache().getDomainList('llm_config');
+    if (rows.isEmpty) return const LlmConfigList([], null);
+    return _parse(rows.first);
   }
 
   /// Set the global active (main) model. `type` defaults to "main" server-side.

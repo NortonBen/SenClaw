@@ -181,7 +181,15 @@ class SpaceApp {
   final bool enabled;
   final Map<String, dynamic> manifest;
 
-  const SpaceApp({required this.id, this.enabled = true, this.manifest = const {}});
+  /// Registration timestamp (ms) — bumped on every (re)deploy, so it doubles
+  /// as the version key for the local asset cache.
+  final int installedAt;
+
+  const SpaceApp(
+      {required this.id,
+      this.enabled = true,
+      this.manifest = const {},
+      this.installedAt = 0});
 
   String get name =>
       (manifest['name'] ?? manifest['title'] ?? id).toString();
@@ -194,5 +202,6 @@ class SpaceApp {
         manifest: j['manifest'] is Map
             ? (j['manifest'] as Map).cast<String, dynamic>()
             : const {},
+        installedAt: (j['installed_at'] as num?)?.toInt() ?? 0,
       );
 }

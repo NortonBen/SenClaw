@@ -10,6 +10,7 @@ import '../services/relay_service.dart';
 import '../services/relay_manager.dart';
 import '../services/config_service.dart';
 import '../services/chat_api.dart';
+import '../services/local_cache.dart';
 import '../services/llm_api.dart';
 import '../services/logger_service.dart';
 import '../theme/tokens.dart';
@@ -65,8 +66,14 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   static const _agentListTimeout = Duration(seconds: 40);
 
+  /// Max time the busy/typing indicator may stay on without any fresh
+  /// state/reply event before we re-check the daemon (see [_onBusyTimeout]).
+  static const _busyTimeout = Duration(seconds: 90);
+
   final _config = ConfigService();
   final _relayManager = RelayManager();
+  final _chatApi = ChatApi();
+  final _cache = LocalCache();
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
   final List<StreamSubscription> _subs = [];
@@ -74,6 +81,18 @@ class _ChatScreenState extends State<ChatScreen> {
   RelayService? _relay;
   Timer? _loadTimeout;
   Timer? _agentListPoll;
+  Timer? _busyWatchdog;
+  Timer? _deltaSyncDebounce;
+
+  /// This device's chat JID on the daemon (`app:<channelId>:user:mobile-app`).
+  /// Keys the local message cache, sync cursor and agent-state lookups.
+  String? _chatJid;
+
+  /// Server message ids already rendered — dedups overlap between the local
+  /// cache, HISTORY_RESP pages and REST delta fetches.
+  final Set<String> _seenMessageIds = {};
+  bool _deltaSyncInFlight = false;
+  bool _pendingDeltaSync = false;
 
   // Composer: image attachments (base64 data URLs), model picker, voice input.
   final _picker = ImagePicker();
@@ -126,6 +145,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _relay = relay;
     Log.i('[Chat] Dùng relay chung từ RelayManager');
 
+    // JID the daemon files this device's conversation under — keys the local
+    // cache and the /api/chat/states lookup.
+    final cid = await _config.channelId;
+    _chatJid = cid == null ? null : 'app:$cid:user:${RelayManager.senderId}';
+
     _subs.add(relay.incomingMessages.listen((text) {
       if (!mounted) return;
       Log.d(
@@ -149,12 +173,24 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       );
+      // A reply is activity: keep the busy watchdog fresh, and pull the
+      // server-authoritative row into the local cache shortly after.
+      _restartBusyWatchdog();
+      _scheduleDeltaSync();
       _scrollToBottom();
     }));
 
     _subs.add(relay.typingUpdates.listen((typing) {
       if (!mounted) return;
       setState(() => _isTyping = typing);
+      _restartBusyWatchdog();
+    }));
+
+    // Events emitted while the relay socket was down (~50s reconnect cycle)
+    // are lost — on every (re)connect reconcile agent state + message delta.
+    _subs.add(relay.connectionUpdates.listen((connected) {
+      if (!mounted || !connected) return;
+      unawaited(_onRelayConnected());
     }));
 
     _subs.add(relay.agentListUpdates.listen(_onAgentList));
@@ -172,10 +208,12 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     // The shared relay may have already received the agent list before this
-    // screen mounted — replay the cache; otherwise (re)request it.
-    if (_relayManager.agents.isNotEmpty) {
+    // screen mounted — replay it; otherwise render the local-cache snapshot
+    // for an instant UI and (re)request the live list.
+    if (_relayManager.agents.isNotEmpty && _relayManager.agentsFresh) {
       _onAgentList(_relayManager.agents);
     } else {
+      unawaited(_applyCachedAgents());
       _relayManager.requestAgentList();
     }
 
@@ -275,13 +313,45 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Render the cached agent list (and the saved agent's cached history)
+  /// immediately while the live AGENT_LIST_RESP is still in flight over the
+  /// relay. Deliberately does NOT set [_agentLoaded]: the connecting banner
+  /// stays up and the agent-list poll keeps running until real data arrives.
+  Future<void> _applyCachedAgents() async {
+    final cached = _relayManager.agents.isNotEmpty
+        ? _relayManager.agents
+        : await _cache.getAgents();
+    if (!mounted || _agentLoaded || cached.isEmpty) return;
+    Log.i('[Chat] Hiển thị ${cached.length} agent từ bộ nhớ đệm');
+    setState(() => _agents = cached);
+
+    final savedFolder = await _config.selectedAgentFolder;
+    AgentInfo? pick = savedFolder == null
+        ? null
+        : cached.where((a) => a.folder == savedFolder).firstOrNull;
+    pick ??= cached.length == 1 ? cached.first : null;
+    if (!mounted || _agentLoaded || _selectedAgent != null || pick == null) {
+      return;
+    }
+    _selectAgent(pick, sendSelect: false);
+  }
+
   void _onHistory(List<HistoryMessage> history) {
     if (!mounted) return;
     Log.i(
       '[Chat] Nhận lịch sử: ${history.length} tin cho agent "${_selectedAgent?.name}"',
     );
 
-    final histMsgs = history.map((m) {
+    // Overlap with the local cache / delta fetches is deduped by message id
+    // (the page-offset math is approximate once the cache pre-filled the UI).
+    final fresh = history
+        .where((m) => m.id.isEmpty || !_seenMessageIds.contains(m.id))
+        .toList();
+    for (final m in fresh) {
+      if (m.id.isNotEmpty) _seenMessageIds.add(m.id);
+    }
+
+    final histMsgs = fresh.map((m) {
       final ts = DateTime.tryParse(m.timestamp)?.toLocal();
       return ChatMessage(
         m.content,
@@ -332,9 +402,11 @@ class _ChatScreenState extends State<ChatScreen> {
           toolOk: m['ok'] as bool? ?? true,
         ));
       });
+      _restartBusyWatchdog(); // tool activity — the agent is alive
       _scrollToBottom();
     } else if (event.topic == 'agent:state' && data is Map) {
       setState(() => _agentState = (data['state'] ?? '').toString());
+      _restartBusyWatchdog();
     } else if (event.topic == 'permission:request' && data is Map) {
       final m = data.cast<String, dynamic>();
       _addInteraction('permission', (m['requestId'] ?? '').toString(), m);
@@ -446,6 +518,201 @@ class _ChatScreenState extends State<ChatScreen> {
         s == 'busy';
   }
 
+  // ── Typing/busy reconciliation ─────────────────────────────────────────────
+  //
+  // The busy indicator is fed by TYPING_START/STOP control frames and
+  // `agent:state` API_EVENTs. The relay socket drops roughly every 50s, and
+  // events emitted during the gap are lost — when that gap swallows the
+  // TYPING_STOP / idle transition, the indicator sticks forever. Two guards:
+  //  1. on every relay (re)connect, fetch GET /api/chat/states and reconcile;
+  //  2. a watchdog clears/re-checks any busy state older than [_busyTimeout].
+
+  void _restartBusyWatchdog() {
+    _busyWatchdog?.cancel();
+    _busyWatchdog = null;
+    if (!(_isTyping || _agentBusy)) return;
+    _busyWatchdog = Timer(_busyTimeout, () => unawaited(_onBusyTimeout()));
+  }
+
+  /// Busy for > [_busyTimeout] without any fresh event — ask the daemon for
+  /// the authoritative state; clear to idle when it (or an unreachable
+  /// daemon) says nothing is running.
+  Future<void> _onBusyTimeout() async {
+    if (!mounted || !(_isTyping || _agentBusy)) return;
+    var state = 'idle';
+    try {
+      state = _stateForThisChat(await _chatApi.fetchAgentStates());
+    } catch (_) {/* daemon unreachable — clear rather than spin forever */}
+    if (!mounted) return;
+    Log.i('[Chat] Busy watchdog: đối chiếu trạng thái → "$state"');
+    setState(() {
+      _agentState = state;
+      if (!_agentBusy) _isTyping = false;
+    });
+    _restartBusyWatchdog(); // still busy per the daemon → keep watching
+  }
+
+  String _stateForThisChat(Map<String, String> states) {
+    final jid = _chatJid;
+    if (jid == null) return 'idle';
+    return states[jid] ?? 'idle';
+  }
+
+  /// On relay (re)connect: events sent during the outage are gone. Fetch the
+  /// authoritative agent state (fixes a stuck typing indicator) and pull the
+  /// message delta the gap may have swallowed.
+  Future<void> _onRelayConnected() async {
+    _scheduleDeltaSync();
+    try {
+      final states = await _chatApi.fetchAgentStates();
+      if (!mounted) return;
+      setState(() {
+        _agentState = _stateForThisChat(states);
+        if (!_agentBusy) _isTyping = false;
+      });
+      _restartBusyWatchdog();
+    } catch (e) {
+      Log.w('[Chat] Không đối chiếu được agent state: $e');
+    }
+  }
+
+  // ── Local cache + incremental sync ─────────────────────────────────────────
+
+  /// Debounced [_deltaSync] — batches the burst of reply/tool events around a
+  /// turn into one REST round-trip over the relay.
+  void _scheduleDeltaSync() {
+    _deltaSyncDebounce?.cancel();
+    _deltaSyncDebounce = Timer(const Duration(milliseconds: 800), () {
+      if (mounted) unawaited(_deltaSync());
+    });
+  }
+
+  /// Fetch messages newer than the per-jid sync cursor, persist them to the
+  /// local cache, advance the cursor, and append anything not yet rendered.
+  Future<void> _deltaSync() async {
+    final jid = _chatJid;
+    if (jid == null) return;
+    if (_deltaSyncInFlight) {
+      _pendingDeltaSync = true;
+      return;
+    }
+    _deltaSyncInFlight = true;
+    try {
+      final cursor = await _cache.getSyncCursor(jid);
+      // `cursor − 1` re-fetches the boundary millisecond so same-ms messages
+      // can't be skipped; the overlap is deduped by id.
+      final rows = await _chatApi.fetchHistoryAfter(
+        jid,
+        cursor > 0 ? cursor - 1 : 0,
+      );
+      if (rows.isEmpty) return;
+
+      await _cache.upsertMessages(jid, [
+        for (final r in rows)
+          CachedMessage(
+            id: r.id,
+            ts: r.ts,
+            role: r.role,
+            content: r.content,
+            sender: r.sender,
+            isFromMe: r.isFromMe,
+            isBotReply: r.isBotReply,
+          ),
+      ]);
+      var maxTs = cursor;
+      for (final r in rows) {
+        if (r.ts > maxTs) maxTs = r.ts;
+      }
+      await _cache.setSyncCursor(jid, maxTs);
+      if (!mounted) return;
+
+      final added = <ChatMessage>[];
+      for (final r in rows) {
+        if (r.id.isEmpty || !_seenMessageIds.add(r.id)) continue;
+        if (_matchesRecentLiveBubble(r)) continue;
+        added.add(ChatMessage(
+          r.content,
+          r.role == 'user',
+          timestamp: DateTime.fromMillisecondsSinceEpoch(r.ts),
+          role: r.role,
+        ));
+      }
+      Log.i(
+        '[Chat] Delta sync: ${rows.length} tin từ server, ${added.length} tin mới hiển thị',
+      );
+      if (added.isEmpty) return;
+      final epoch0 = DateTime.fromMillisecondsSinceEpoch(0);
+      setState(() {
+        _messages.addAll(added);
+        _messages.sort((a, b) =>
+            (a.timestamp ?? epoch0).compareTo(b.timestamp ?? epoch0));
+      });
+      _scrollToBottom();
+    } catch (e) {
+      Log.w('[Chat] Delta sync lỗi: $e');
+    } finally {
+      _deltaSyncInFlight = false;
+      if (_pendingDeltaSync) {
+        _pendingDeltaSync = false;
+        unawaited(_deltaSync());
+      }
+    }
+  }
+
+  /// True when a server row duplicates a live bubble already rendered this
+  /// session — the message reached us over the encrypted chat path before its
+  /// server row was synced. Matched by role + exact text among recent
+  /// non-history rows (live bubbles carry no server id to compare).
+  bool _matchesRecentLiveBubble(ChatHistoryEntry r) {
+    final text = r.content.trim();
+    if (text.isEmpty) return false;
+    final start = _messages.length > 40 ? _messages.length - 40 : 0;
+    for (var i = _messages.length - 1; i >= start; i--) {
+      final m = _messages[i];
+      if (m.isHistory || m.requestId != null || m.role == 'tool') continue;
+      if (m.role == r.role && m.text.trim() == text) return true;
+    }
+    return false;
+  }
+
+  /// Cache-first history load for the selected agent: render cached rows
+  /// instantly, then fetch only the delta. Falls back to the legacy full
+  /// page-1 HISTORY_REQ control frame when the cache is empty (first run,
+  /// or web where sqflite is unavailable).
+  Future<void> _loadHistoryForSelected() async {
+    final jid = _chatJid;
+    final cached =
+        jid == null ? const <CachedMessage>[] : await _cache.getMessages(jid);
+    if (!mounted) return;
+
+    if (cached.isEmpty) {
+      _relay?.sendControl(
+        RelayControlType.historyReq,
+        jsonEncode({'page': 1, 'pageSize': 20}),
+      );
+    } else {
+      Log.i('[Chat] Hiển thị ${cached.length} tin từ bộ nhớ đệm');
+      setState(() {
+        for (final m in cached) {
+          if (m.id.isNotEmpty) _seenMessageIds.add(m.id);
+          _messages.add(ChatMessage(
+            m.content,
+            m.role == 'user',
+            isHistory: true,
+            timestamp: DateTime.fromMillisecondsSinceEpoch(m.ts),
+            role: m.role,
+          ));
+        }
+        // Approximate the server page the cache already covers so "load
+        // more" continues with older pages (overlap dedups by id).
+        _currentPage = (cached.length / 20).ceil().clamp(1, 1 << 20);
+        _statusText = 'Đã tải ${cached.length} tin từ bộ nhớ đệm';
+      });
+      _scrollToBottom(animate: false);
+    }
+    unawaited(_deltaSync());
+  }
+
   void _loadMoreHistory() {
     if (_selectedAgent == null || !_hasMoreHistory || _isLoadingMore) return;
     Log.i('[Chat] Tải thêm trang lịch sử: ${_currentPage + 1}');
@@ -467,6 +734,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentPage = 1;
       _hasMoreHistory = true;
       _messages.clear();
+      _seenMessageIds.clear();
       _statusText = 'Đang tải lịch sử cho "${agent.name}"…';
     });
 
@@ -482,10 +750,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }),
       );
     }
-    _relay?.sendControl(
-      RelayControlType.historyReq,
-      jsonEncode({'page': 1, 'pageSize': 20}),
-    );
+    unawaited(_loadHistoryForSelected());
   }
 
   void _reloadAgentList() {
@@ -506,11 +771,21 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentPage = 1;
       _hasMoreHistory = true;
       _messages.clear();
+      _seenMessageIds.clear();
     });
-    _relay?.sendControl(
-      RelayControlType.historyReq,
-      jsonEncode({'page': 1, 'pageSize': 20}),
-    );
+    // Forced reload = drop the cache + cursor and re-fetch from the daemon;
+    // the delta sync repopulates the cache from the authoritative rows.
+    final jid = _chatJid;
+    Future<void> reload() async {
+      if (jid != null) await _cache.clearMessages(jid);
+      _relay?.sendControl(
+        RelayControlType.historyReq,
+        jsonEncode({'page': 1, 'pageSize': 20}),
+      );
+      unawaited(_deltaSync());
+    }
+
+    unawaited(reload());
   }
 
   void _retryLoad() {
@@ -610,6 +885,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _messageController.clear();
         _attachments.clear();
       });
+      // Pull the server-authoritative row into the cache once it's stored.
+      _scheduleDeltaSync();
       _scrollToBottom();
     } catch (e) {
       if (mounted) {
@@ -1591,6 +1868,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _loadTimeout?.cancel();
     _agentListPoll?.cancel();
+    _busyWatchdog?.cancel();
+    _deltaSyncDebounce?.cancel();
     _speech.cancel();
     for (final s in _subs) {
       s.cancel();

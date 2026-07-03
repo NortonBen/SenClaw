@@ -1,20 +1,25 @@
 import '../models/cowork_models.dart';
 import 'api_client.dart';
+import 'local_cache.dart';
 
 /// Typed wrapper over the rebuilt Cowork (DAG teams) API at `/api/cowork/*`,
 /// tunnelled through the relay. Replaces the old workspace-based endpoints,
-/// which the daemon no longer serves.
+/// which the daemon no longer serves. List fetches feed the [LocalCache]
+/// domain tables for instant cache-first rendering.
 class CoworkApi {
   final _api = ApiClient();
 
   // ── Teams ──────────────────────────────────────────────────────────────
   Future<List<CoworkTeam>> listTeams() async {
-    final r = await _api.get('/api/cowork/teams');
-    final list = r is List ? r : const [];
-    return list
-        .map((e) => CoworkTeam.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(await _api.get('/api/cowork/teams'));
+    LocalCache().putDomainList('cowork_teams', maps);
+    return maps.map(CoworkTeam.fromJson).toList();
   }
+
+  Future<List<CoworkTeam>> listTeamsCached() async =>
+      (await LocalCache().getDomainList('cowork_teams'))
+          .map(CoworkTeam.fromJson)
+          .toList();
 
   Future<CoworkTeam> createTeam({
     required String name,
@@ -70,12 +75,15 @@ class CoworkApi {
 
   // ── Templates ──────────────────────────────────────────────────────────
   Future<List<CoworkTemplate>> listTemplates() async {
-    final r = await _api.get('/api/cowork/templates');
-    final list = r is List ? r : const [];
-    return list
-        .map((e) => CoworkTemplate.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(await _api.get('/api/cowork/templates'));
+    LocalCache().putDomainList('cowork_templates', maps);
+    return maps.map(CoworkTemplate.fromJson).toList();
   }
+
+  Future<List<CoworkTemplate>> listTemplatesCached() async =>
+      (await LocalCache().getDomainList('cowork_templates'))
+          .map(CoworkTemplate.fromJson)
+          .toList();
 
   Future<CoworkTeam> createFromTemplate(String templateId,
       {String? name, String? workspaceDir}) async {
@@ -92,12 +100,15 @@ class CoworkApi {
 
   // ── Personas (member picker) ───────────────────────────────────────────
   Future<List<CoworkPersona>> listPersonas() async {
-    final r = await _api.get('/api/cowork/personas');
-    final list = r is List ? r : const [];
-    return list
-        .map((e) => CoworkPersona.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(await _api.get('/api/cowork/personas'));
+    LocalCache().putDomainList('cowork_personas', maps);
+    return maps.map(CoworkPersona.fromJson).toList();
   }
+
+  Future<List<CoworkPersona>> listPersonasCached() async =>
+      (await LocalCache().getDomainList('cowork_personas'))
+          .map(CoworkPersona.fromJson)
+          .toList();
 
   // ── Kanban tasks ───────────────────────────────────────────────────────
   Future<List<CoworkTeamTask>> listTasks(String teamId) async {

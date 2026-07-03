@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/wiki_models.dart';
 import '../../services/relay_manager.dart';
@@ -315,11 +316,25 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _tree.isEmpty;
       _error = null;
     });
+    var fresh = false;
+    // Local-DB paint races the relay fetch in parallel — the relay result
+    // always wins once it arrives.
+    if (_tree.isEmpty) {
+      unawaited(widget.api.treeCached().then((cached) {
+        if (fresh || cached.isEmpty || !mounted || _tree.isNotEmpty) return;
+        setState(() {
+          _tree = cached;
+          _loading = false;
+          _error = null;
+        });
+      }));
+    }
     try {
       final t = await widget.api.tree();
+      fresh = true;
       if (!mounted) return;
       setState(() {
         _tree = t;
@@ -328,7 +343,8 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        // Keep the cached view usable when the refresh fails.
+        _error = _tree.isEmpty ? '$e' : null;
         _loading = false;
       });
     }

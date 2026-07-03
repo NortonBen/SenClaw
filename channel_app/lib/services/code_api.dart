@@ -1,5 +1,6 @@
 import '../models/code_models.dart';
 import 'api_client.dart';
+import 'local_cache.dart';
 
 /// Typed wrapper over the `/api/code/*` and `/api/fs/*` endpoints, tunnelled
 /// through the relay. Mirrors web/src/hooks/useCode.ts.
@@ -10,10 +11,16 @@ class CodeApi {
     final obj = await _api.getObject(
       ApiClient.withQuery('/api/code/sessions', {'status': status}),
     );
-    return ((obj['sessions'] as List?) ?? const [])
-        .map((e) => CodeSession.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(obj['sessions']);
+    LocalCache().putDomainList('code_sessions', maps, scope: status);
+    return maps.map(CodeSession.fromJson).toList();
   }
+
+  Future<List<CodeSession>> listSessionsCached(
+          {String status = 'active'}) async =>
+      (await LocalCache().getDomainList('code_sessions', scope: status))
+          .map(CodeSession.fromJson)
+          .toList();
 
   Future<CodeSession> createSession({
     required String name,

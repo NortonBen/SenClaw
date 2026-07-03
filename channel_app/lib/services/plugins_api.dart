@@ -1,19 +1,26 @@
 import 'dart:convert';
 import '../models/plugin_models.dart';
 import 'api_client.dart';
+import 'local_cache.dart';
 
 /// Typed wrapper over the plugin-management endpoints (Skills / Subagents /
-/// MCP / Marketplace / Hooks), tunnelled through the relay.
+/// MCP / Marketplace / Hooks), tunnelled through the relay. List fetches
+/// feed the [LocalCache] domain tables for instant cache-first rendering.
 class PluginsApi {
   final _api = ApiClient();
 
   // ── Skills ─────────────────────────────────────────────────────────────
   Future<List<LocalSkill>> listSkills() async {
     final obj = await _api.getObject('/api/skills');
-    return ((obj['skills'] as List?) ?? const [])
-        .map((e) => LocalSkill.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(obj['skills']);
+    LocalCache().putDomainList('skills', maps);
+    return maps.map(LocalSkill.fromJson).toList();
   }
+
+  Future<List<LocalSkill>> listSkillsCached() async =>
+      (await LocalCache().getDomainList('skills'))
+          .map(LocalSkill.fromJson)
+          .toList();
 
   Future<List<RemoteSkill>> searchSkills(String q) async {
     final obj = await _api
@@ -34,10 +41,15 @@ class PluginsApi {
   // ── Subagents ──────────────────────────────────────────────────────────
   Future<List<Subagent>> listSubagents() async {
     final obj = await _api.getObject('/api/subagents');
-    return ((obj['subagents'] as List?) ?? const [])
-        .map((e) => Subagent.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(obj['subagents']);
+    LocalCache().putDomainList('subagents', maps);
+    return maps.map(Subagent.fromJson).toList();
   }
+
+  Future<List<Subagent>> listSubagentsCached() async =>
+      (await LocalCache().getDomainList('subagents'))
+          .map(Subagent.fromJson)
+          .toList();
 
   Future<void> createSubagent(String name, String content) =>
       _api.post('/api/subagents/create', body: {'name': name, 'content': content});
@@ -48,10 +60,15 @@ class PluginsApi {
   // ── Plugins (packages) ─────────────────────────────────────────────────
   Future<List<Plugin>> listPlugins() async {
     final obj = await _api.getObject('/api/plugins');
-    return ((obj['plugins'] as List?) ?? const [])
-        .map((e) => Plugin.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(obj['plugins']);
+    LocalCache().putDomainList('plugins', maps);
+    return maps.map(Plugin.fromJson).toList();
   }
+
+  Future<List<Plugin>> listPluginsCached() async =>
+      (await LocalCache().getDomainList('plugins'))
+          .map(Plugin.fromJson)
+          .toList();
 
   Future<List<RemoteSkill>> searchPlugins(String q) async {
     final obj = await _api
@@ -72,10 +89,15 @@ class PluginsApi {
   // ── MCP ────────────────────────────────────────────────────────────────
   Future<List<McpServer>> listMcp() async {
     final obj = await _api.getObject('/api/mcp-servers');
-    return ((obj['servers'] as List?) ?? const [])
-        .map((e) => McpServer.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final maps = jsonMaps(obj['servers']);
+    LocalCache().putDomainList('mcp_servers', maps);
+    return maps.map(McpServer.fromJson).toList();
   }
+
+  Future<List<McpServer>> listMcpCached() async =>
+      (await LocalCache().getDomainList('mcp_servers'))
+          .map(McpServer.fromJson)
+          .toList();
 
   Future<void> addMcp(Map<String, dynamic> body) =>
       _api.post('/api/mcp-servers', body: body);

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_model.dart';
 import 'config_service.dart';
 import 'crypto_service.dart';
+import 'local_cache.dart';
 import 'relay_service.dart';
 import 'logger_service.dart';
 
@@ -20,7 +21,12 @@ class RelayManager extends ChangeNotifier {
   factory RelayManager() => _instance;
   RelayManager._internal();
 
+  /// Sender id this app registers on the relay with. Also the last JID
+  /// segment the daemon uses for this device's chat: `app:<cid>:user:<this>`.
+  static const String senderId = 'mobile-app';
+
   final _config = ConfigService();
+  final _cache = LocalCache();
 
   RelayService? _relay;
   RelayService? get relay => _relay;
@@ -30,6 +36,11 @@ class RelayManager extends ChangeNotifier {
 
   List<AgentInfo> _agents = [];
   List<AgentInfo> get agents => List.unmodifiable(_agents);
+
+  /// False while [agents] only holds the local-cache snapshot; true once a
+  /// real AGENT_LIST_RESP arrived from the daemon this session.
+  bool _agentsFresh = false;
+  bool get agentsFresh => _agentsFresh;
 
   StreamSubscription? _connSub;
   StreamSubscription? _agentSub;
@@ -72,7 +83,7 @@ class RelayManager extends ChangeNotifier {
       final relay = RelayService(
         hubUrl: url,
         channelId: cid,
-        senderId: 'mobile-app',
+        senderId: senderId,
         accessToken: token,
         encryptionKey: encKey,
       );
@@ -83,11 +94,17 @@ class RelayManager extends ChangeNotifier {
       });
       _agentSub = relay.agentListUpdates.listen((list) {
         _agents = list;
+        _agentsFresh = true;
+        // Persist so the next launch renders the list instantly.
+        unawaited(_cache.upsertAgents(list));
         notifyListeners();
       });
 
       _relay = relay;
       relay.start();
+      // Instant render: surface the cached agent list while the live
+      // AGENT_LIST_RESP is still in flight over the relay.
+      unawaited(_loadCachedAgents());
       notifyListeners();
       completer.complete(true);
       return true;
@@ -106,6 +123,16 @@ class RelayManager extends ChangeNotifier {
     _relay?.sendControl(RelayControlType.agentListReq, '{}');
   }
 
+  Future<void> _loadCachedAgents() async {
+    if (_agentsFresh || _agents.isNotEmpty) return;
+    final cached = await _cache.getAgents();
+    // A live list may have raced us — never clobber fresh data with cache.
+    if (_agentsFresh || _agents.isNotEmpty || cached.isEmpty) return;
+    Log.i('[RelayManager] Serving ${cached.length} agent(s) from local cache');
+    _agents = cached;
+    notifyListeners();
+  }
+
   /// Tear down and recreate the relay (used by retry / re-pair flows).
   Future<void> reset() async {
     await _disposeRelay();
@@ -116,6 +143,7 @@ class RelayManager extends ChangeNotifier {
   Future<void> shutdown() async {
     await _disposeRelay();
     _agents = [];
+    _agentsFresh = false;
     _connected = false;
     notifyListeners();
   }

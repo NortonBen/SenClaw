@@ -6,6 +6,7 @@ import '../theme/tokens.dart';
 import '../screens/code/code_screen.dart';
 import '../screens/cognitive/cognitive_screen.dart';
 import '../screens/cowork/cowork_screen.dart';
+import '../screens/workflow/workflow_screen.dart';
 import '../screens/more/more_screen.dart';
 import '../screens/plugins/plugins_screen.dart';
 import '../screens/space/space_screen.dart';
@@ -117,6 +118,8 @@ class AppDrawer extends ConsumerWidget {
                       onTap: () => open(const CodeScreen())),
                   _navTile(c, Icons.groups_outlined, 'Cowork',
                       onTap: () => open(const CoworkScreen())),
+                  _navTile(c, Icons.account_tree_outlined, 'Workflow',
+                      onTap: () => open(const WorkflowScreen())),
                   _navTile(c, Icons.menu_book_outlined, 'Wiki',
                       onTap: () => open(const WikiScreen())),
                   _navTile(c, Icons.hub_outlined, 'Tri thức',

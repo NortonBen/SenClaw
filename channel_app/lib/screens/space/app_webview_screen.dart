@@ -8,9 +8,14 @@ import '../../theme/tokens.dart';
 /// every asset/API request through the relay tunnel, and this webview points at
 /// it. Mobile only — web shows an unsupported notice.
 class AppWebViewScreen extends StatefulWidget {
-  const AppWebViewScreen({super.key, required this.appId, required this.title});
+  const AppWebViewScreen(
+      {super.key, required this.appId, required this.title, this.version = 0});
   final String appId;
   final String title;
+
+  /// App registration version (`installed_at`) — keys the local asset cache;
+  /// 0 disables caching.
+  final int version;
 
   @override
   State<AppWebViewScreen> createState() => _AppWebViewScreenState();
@@ -30,7 +35,7 @@ class _AppWebViewScreenState extends State<AppWebViewScreen> {
 
   Future<void> _boot() async {
     try {
-      final proxy = AppProxyServer(widget.appId);
+      final proxy = AppProxyServer(widget.appId, version: widget.version);
       final url = await proxy.start();
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -75,12 +80,21 @@ class _AppWebViewScreenState extends State<AppWebViewScreen> {
         elevation: 0,
         title: Text(widget.title, style: TextStyle(color: c.textPrimary)),
         actions: [
-          if (_controller != null)
+          if (_controller != null) ...[
             IconButton(
               tooltip: 'Tải lại',
               icon: Icon(Icons.refresh, color: c.textSecondary),
               onPressed: () => _controller!.reload(),
             ),
+            IconButton(
+              tooltip: 'Tải mới hoàn toàn (xoá cache)',
+              icon: Icon(Icons.cloud_sync_outlined, color: c.textSecondary),
+              onPressed: () async {
+                await AppProxyServer.clearAppCache(widget.appId);
+                _controller!.reload();
+              },
+            ),
+          ],
         ],
       ),
       body: kIsWeb
