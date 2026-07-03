@@ -35,18 +35,21 @@ jobs:
       - id: check
         run: |
           set -e
+          # Diff base: previous tag for tag pushes, the pushed-range start for
+          # branch pushes. Only the extension dir itself counts — a
+          # workflow-file edit alone must not rebuild the extension.
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-            if [[ -z "$prev" ]]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if git diff --quiet "$prev" "$GITHUB_SHA" -- senclaw-extension-chrome/ .github/workflows/extension.yml; then
-              echo "No extension changes since $prev — skipping build."
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            fi
+            base=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [[ -z "$base" ]] || ! git rev-parse -q --verify "$base^{commit}" >/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet "$base" "$GITHUB_SHA" -- senclaw-extension-chrome/; then
+            echo "No extension changes since $base — skipping build."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
