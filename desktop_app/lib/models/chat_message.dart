@@ -2,7 +2,7 @@ import 'dart:convert';
 
 /// Discriminated chat message. Mirrors the React union of text / tool /
 /// permission / question bubbles; the renderer branches on [kind].
-enum MessageKind { user, other, agent, tool, permission, question, system }
+enum MessageKind { user, other, agent, tool, permission, question, form, system }
 
 class ChatMessage {
   final String id;
@@ -98,6 +98,8 @@ class ChatMessage {
         return MessageKind.permission;
       case 'question':
         return MessageKind.question;
+      case 'form':
+        return MessageKind.form;
       case 'system':
         return MessageKind.system;
       default:
