@@ -57,6 +57,8 @@ What that adds up to:
 - **Space Apps**: isolated micro-apps such as SSH Manager, DeepWiki, Email, Google Workspace, and Test Manager that expose tools through MCP.
 - **Local AI options**: MLX/Candle local inference, local embeddings, OCR, Whisper speech-to-text, and local TTS.
 - **Desktop app**: native Flutter app (macOS/Windows/Linux/web) that supervises the daemon as a child process.
+- **Mobile app**: Flutter app over the relay — chat, sessions, workflows, Space Apps, push notifications, and background sync.
+- **Deterministic safety guards**: fail-closed SSRF blocking for URL-fetch tools (loopback / link-local / cloud-metadata / private ranges) and read-only shell-command classification, applied before the model ever sees a risky call — on top of the prompt/tool trust boundaries.
 
 ---
 

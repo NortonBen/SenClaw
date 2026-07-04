@@ -57,6 +57,8 @@ Cụ thể gồm:
 - **Space Apps**: các micro-app tách biệt như SSH Manager, DeepWiki, Email, Google Workspace và Test Manager, cung cấp tool qua MCP.
 - **Tùy chọn AI cục bộ**: inference bằng MLX/Candle, embedding cục bộ, OCR, Whisper speech-to-text và TTS local.
 - **Ứng dụng desktop**: app Flutter native (macOS/Windows/Linux/web), giám sát daemon như tiến trình con.
+- **App di động**: app Flutter qua relay — chat, sessions, workflows, Space Apps, thông báo đẩy và đồng bộ nền.
+- **Bộ chặn an toàn tất định**: chặn SSRF fail-closed cho các tool fetch URL (loopback / link-local / cloud-metadata / dải private) và phân loại lệnh shell chỉ-đọc, áp dụng trước khi model thấy lời gọi rủi ro — bên cạnh ranh giới tin cậy prompt/tool.
 
 ---
 
