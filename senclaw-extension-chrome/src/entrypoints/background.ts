@@ -62,6 +62,14 @@ async function setupBackground() {
 
   groupController.setupListeners();
 
+  // Each heartbeat carries the live agent→tab map so the daemon's registry
+  // stays correct across daemon restarts and missed tab events.
+  ws.setAgentTabsProvider(() =>
+    Object.fromEntries(
+      groupController.getAgentTabMappings().map((m) => [m.agentId, m.tabId]),
+    ),
+  );
+
   // Reflect WS state into logs for visibility.
   ws.onStatusChange((state, detail) => {
     connectionState = state;
@@ -295,6 +303,45 @@ function logIncoming(msg: DaemonMessage): void {
 // Default agent ID when agent_id is not provided (backward compatibility)
 const DEFAULT_AGENT_ID: AgentId = 'default-agent';
 
+// Cap on concurrent ephemeral search tabs — beyond this, searches queue.
+// Each search loads a full SERP; too many parallel loads slow all of them
+// down and trip the daemon's 30s per-request timeout.
+const MAX_CONCURRENT_SEARCHES = 6;
+let activeSearchSlots = 0;
+const searchSlotWaiters: Array<() => void> = [];
+
+async function acquireSearchSlot(): Promise<void> {
+  if (activeSearchSlots < MAX_CONCURRENT_SEARCHES) {
+    activeSearchSlots++;
+    return;
+  }
+  await new Promise<void>((resolve) => searchSlotWaiters.push(resolve));
+  activeSearchSlots++;
+}
+
+function releaseSearchSlot(): void {
+  activeSearchSlots--;
+  searchSlotWaiters.shift()?.();
+}
+
+// Serialize operations that touch a tab's DOM/SelectorMap. Two concurrent
+// commands on the SAME tab can interleave (e.g. a snapshot rebuilding the
+// SelectorMap between another command's snapshot and click), so each tab
+// gets a promise chain; different tabs still run fully in parallel.
+const tabOpQueues = new Map<string, Promise<unknown>>();
+
+function withTabLock<T>(tabId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = tabOpQueues.get(tabId) ?? Promise.resolve();
+  const next = prev.catch(() => { /* prior op failed — still run ours */ }).then(fn);
+  tabOpQueues.set(tabId, next);
+  next
+    .catch(() => { /* handled by caller */ })
+    .finally(() => {
+      if (tabOpQueues.get(tabId) === next) tabOpQueues.delete(tabId);
+    });
+  return next;
+}
+
 async function handleDaemonMessage(
   msg: DaemonMessage,
   tabs: TabsController,
@@ -324,7 +371,7 @@ async function handleDaemonMessage(
 
     case 'NewTab': {
       const activeNewTab = msg.active === true;
-      const tab = await tabs.getOrCreateForAgent(agentId, msg.url, undefined, activeNewTab);
+      const tab = await tabs.getOrCreateForAgent(agentId, msg.url, activeNewTab);
       ws.send({
         type: 'Response',
         request_id: msg.request_id,
@@ -423,7 +470,7 @@ async function handleDaemonMessage(
         ws.send({ type: 'Response', request_id: msg.request_id, status: 'error', message: 'No tab available' });
         return;
       }
-      const result = await MessageBridge.sendToTab(targetTabId, msg);
+      const result = await withTabLock(targetTabId, () => MessageBridge.sendToTab(targetTabId, msg));
       if (result.status === 'error') {
         log.error(`${msg.type} failed: ${shortDetail((result as any).message, 120)}`);
       }
@@ -439,10 +486,7 @@ async function handleDaemonMessage(
         ws.send({ type: 'Response', request_id: msg.request_id, status: 'error', message: 'No tab available' });
         return;
       }
-      const result = await MessageBridge.sendToTab(targetTabId, {
-        type: 'ExecuteJs',
-        script: msg.script,
-      });
+      const result = await withTabLock(targetTabId, () => MessageBridge.sendToTab(targetTabId, msg));
       if (result.status === 'error') {
         log.error(`ExecuteJs failed: ${shortDetail((result as any).message, 120)}`);
       }
@@ -499,7 +543,7 @@ async function handleDaemonMessage(
         return;
       }
 
-      const result = await MessageBridge.sendToTab(targetTabId, payload as any);
+      const result = await withTabLock(targetTabId, () => MessageBridge.sendToTab(targetTabId, payload as any));
       if (result.status === 'error') {
         log.error(`${msg.type} failed: ${shortDetail((result as any).message, 120)}`);
       }
@@ -510,19 +554,54 @@ async function handleDaemonMessage(
     // ===== Search (creates/uses agent's tab) =====
     case 'Search': {
       const activeSearch = msg.active === true;
-      const tab = await tabs.getOrCreateForAgent(agentId, undefined, activeSearch);
-      await new Promise(r => setTimeout(r, 500));
+      // Ephemeral (default): run in a throwaway tab and close it afterwards.
+      // Fully parallel — concurrent searches (even from the same agent) never
+      // fight over the agent's persistent tab. `ephemeral: false` restores the
+      // old behavior (search in the agent's own tab and leave the SERP open).
+      const ephemeral = msg.ephemeral !== false;
 
       try {
-        const results = await searcher.search(tab.id, msg.query, msg.engine, msg.num_results, msg.language);
-        log.event(`Search complete: ${results.results.length} result(s) for "${shortDetail(msg.query, 50)}"`);
-        ws.send({
-          type: 'Response',
-          request_id: msg.request_id,
-          agent_id: agentId,
-          status: 'ok',
-          data: { ...results, agent_id: agentId, tab_id: tab.id, active: activeSearch },
-        });
+        if (ephemeral) {
+          await acquireSearchSlot();
+          let ephemeralTabId: number | null = null;
+          try {
+            // Jitter when other searches are in flight — a burst of
+            // identically-timed requests trips engine rate-limiting faster.
+            if (activeSearchSlots > 1) {
+              await new Promise(r => setTimeout(r, 200 + Math.random() * 700));
+            }
+            const tab = await tabs.groupController.createEphemeralTab();
+            ephemeralTabId = tab.id!;
+            const results = await searcher.search(
+              String(ephemeralTabId), msg.query, msg.engine, msg.num_results, msg.language,
+            );
+            log.event(`Search complete: ${results.results.length} result(s) for "${shortDetail(msg.query, 50)}"`);
+            ws.send({
+              type: 'Response',
+              request_id: msg.request_id,
+              agent_id: agentId,
+              status: 'ok',
+              data: { ...results, agent_id: agentId, ephemeral: true },
+            });
+          } finally {
+            releaseSearchSlot();
+            if (ephemeralTabId !== null) {
+              try { await chrome.tabs.remove(ephemeralTabId); } catch { /* already gone */ }
+            }
+          }
+        } else {
+          const tab = await tabs.getOrCreateForAgent(agentId, undefined, activeSearch);
+          await new Promise(r => setTimeout(r, 500));
+          const results = await searcher.search(tab.id, msg.query, msg.engine, msg.num_results, msg.language);
+          log.event(`Search complete: ${results.results.length} result(s) for "${shortDetail(msg.query, 50)}"`);
+          ws.send({
+            type: 'Response',
+            request_id: msg.request_id,
+            agent_id: agentId,
+            status: 'ok',
+            data: { ...results, agent_id: agentId, tab_id: tab.id, active: activeSearch },
+          });
+        }
       } catch (e: unknown) {
         const errMsg = e instanceof Error ? e.message : String(e);
         log.error(`Search failed: ${shortDetail(errMsg, 120)}`);

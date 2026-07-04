@@ -153,7 +153,7 @@ export type DaemonMessage =
   | { type: 'ExtractText'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
   | { type: 'ExtractLinks'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
   | { type: 'ExtractTable'; request_id: RequestId; agent_id: AgentId; tab_id?: TabId; selector?: string }
-  | { type: 'Search'; request_id: RequestId; agent_id: AgentId; query: string; engine: string; num_results: number; language?: string }
+  | { type: 'Search'; request_id: RequestId; agent_id: AgentId; query: string; engine: string; num_results: number; language?: string; ephemeral?: boolean; active?: boolean }
   | { type: 'CrawlStart'; job_id: JobId; agent_id: AgentId; start_url: string; depth: number; max_pages: number; link_patterns: string[]; exclude_patterns: string[]; same_domain: boolean; active?: boolean }
   | { type: 'CrawlPause'; job_id: JobId; agent_id: AgentId }
   | { type: 'CrawlResume'; job_id: JobId; agent_id: AgentId }
@@ -173,4 +173,4 @@ export type ExtensionMessage =
   | { type: 'CrawlResult'; job_id: JobId; agent_id: AgentId; page_result: CrawlPageResult }
   | { type: 'CrawlComplete'; job_id: JobId; agent_id: AgentId; total_pages: number; duration_ms: number }
   | { type: 'ScreenshotFrame'; tab_id: TabId; agent_id?: AgentId; data: string; format: string }
-  | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId };
+  | { type: 'Heartbeat'; tab_count: number; active_tab_id?: TabId; agent_tabs?: Record<AgentId, TabId> };

@@ -24,6 +24,7 @@ export class WSClient {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private activeTabId: string | null = null;
+  private agentTabsProvider: (() => Record<string, string>) | null = null;
   private state: ConnectionState = 'idle';
   private disposed = false;
 
@@ -59,6 +60,11 @@ export class WSClient {
 
   setActiveTabId(tabId: string | null): void {
     this.activeTabId = tabId;
+  }
+
+  /** Provider for the agent→tab map included in each heartbeat. */
+  setAgentTabsProvider(provider: () => Record<string, string>): void {
+    this.agentTabsProvider = provider;
   }
 
   /** Update endpoint and force a fresh connection. */
@@ -163,6 +169,7 @@ export class WSClient {
           type: 'Heartbeat',
           tab_count: allTabs.length,
           active_tab_id: this.activeTabId ?? undefined,
+          agent_tabs: this.agentTabsProvider?.() ?? undefined,
         });
       });
     }, HEARTBEAT_INTERVAL);

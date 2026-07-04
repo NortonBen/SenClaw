@@ -21,6 +21,20 @@ export class SearchEngine {
     // Extra wait for dynamic content
     await this.sleep(1500);
 
+    // Rate-limit / CAPTCHA check — a clear error lets the agent back off or
+    // fall back to another engine instead of getting silent empty results.
+    const loaded = await chrome.tabs.get(parseInt(tabId));
+    const loadedUrl = loaded.url ?? '';
+    const loadedTitle = loaded.title ?? '';
+    if (
+      loadedUrl.includes('google.com/sorry/') ||
+      /unusual traffic|verify you are a human|not a robot/i.test(loadedTitle)
+    ) {
+      throw new Error(
+        `Search engine rate-limited (CAPTCHA page) on ${engine}. Retry later or use a different engine.`,
+      );
+    }
+
     // Extract results via content script
     const response = await chrome.tabs.sendMessage(parseInt(tabId), {
       type: 'ExtractSearchResults',

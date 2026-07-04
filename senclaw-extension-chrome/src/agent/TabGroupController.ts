@@ -3,19 +3,28 @@
 import type { TabId, AgentId } from '../types/protocol';
 
 const GROUP_TITLE = 'SenClaw';
-const GROUP_COLOR: chrome.tabGroups.Color = 'blue';
+const GROUP_COLOR: chrome.tabGroups.ColorEnum = 'blue';
+
+// GC thresholds — agent tabs idle past the TTL are closed (recreated on demand);
+// ephemeral search tabs that outlive their expected lifetime were leaked by a
+// service-worker restart mid-search and get reaped.
+const IDLE_AGENT_TAB_TTL_MS = 30 * 60_000;
+const LEAKED_EPHEMERAL_TTL_MS = 3 * 60_000;
+const MAX_AGENT_TABS = 12;
 
 interface AgentTabInfo {
   tabId: number;
   agentId: AgentId;
   url: string;
   createdAt: number;
+  lastUsedAt: number;
 }
 
 export class TabGroupController {
   private groupId: number | null = null;
   private agentTabs: Map<AgentId, AgentTabInfo> = new Map(); // agent_id -> tab info
   private tabToAgent: Map<number, AgentId> = new Map(); // tab_id -> agent_id
+  private ephemeralTabs: Map<number, number> = new Map(); // tab_id -> createdAt
 
   /**
    * Get tab ID for an agent (if exists)
@@ -85,6 +94,7 @@ export class TabGroupController {
         }
         // Update URL in tracking
         existing.url = url ?? tab.url ?? '';
+        existing.lastUsedAt = Date.now();
         console.log(`[SenClaw] Reused tab ${existing.tabId} for agent ${agentId} (active: ${active})`);
         return tab;
       } catch {
@@ -113,34 +123,7 @@ export class TabGroupController {
       throw new Error('Failed to create tab - no tab ID');
     }
 
-    // Ensure group exists or create new one
-    let targetGroupId = this.groupId ?? -1;
-
-    if (targetGroupId === -1) {
-      // Try to find existing SenClaw group
-      const groups = await chrome.tabGroups.query({ title: GROUP_TITLE });
-      if (groups.length > 0) {
-        targetGroupId = groups[0].id;
-      }
-    }
-
-    // Add tab to group (creates new group if targetGroupId is -1)
-    // NOTE: chrome.tabs.group() can steal focus; restore below if needed
-    const groupId = await chrome.tabs.group({
-      tabIds: [tab.id],
-      groupId: targetGroupId === -1 ? undefined : targetGroupId,
-    });
-
-    this.groupId = groupId;
-
-    // Configure group appearance (only when creating new)
-    if (targetGroupId === -1) {
-      await chrome.tabGroups.update(groupId, {
-        title: GROUP_TITLE,
-        color: GROUP_COLOR,
-        collapsed: false,
-      });
-    }
+    await this.addTabToGroup(tab.id);
 
     // Restore focus to original tab if we were asked to open in background
     if (!active && previousActiveTabId !== null) {
@@ -157,9 +140,82 @@ export class TabGroupController {
       agentId,
       url: url ?? tab.url ?? '',
       createdAt: Date.now(),
+      lastUsedAt: Date.now(),
     };
     this.agentTabs.set(agentId, tabInfo);
     this.tabToAgent.set(tab.id, agentId);
+
+    // Cap the group: evict the least-recently-used agent tab beyond the limit.
+    if (this.agentTabs.size > MAX_AGENT_TABS) {
+      const lru = [...this.agentTabs.values()].sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+      if (lru && lru.agentId !== agentId) {
+        console.log(`[SenClaw] Tab cap ${MAX_AGENT_TABS} reached — closing LRU tab of agent ${lru.agentId}`);
+        this.closeAgentTab(lru.agentId).catch(() => { /* already gone */ });
+      }
+    }
+
+    return tab;
+  }
+
+  /**
+   * Attach a tab to the SenClaw group, creating the group if needed.
+   * NOTE: chrome.tabs.group() can steal focus; callers restore it if needed.
+   */
+  private async addTabToGroup(tabId: number): Promise<void> {
+    let targetGroupId = this.groupId ?? -1;
+
+    if (targetGroupId === -1) {
+      // Try to find existing SenClaw group
+      const groups = await chrome.tabGroups.query({ title: GROUP_TITLE });
+      if (groups.length > 0) {
+        targetGroupId = groups[0].id;
+      }
+    }
+
+    // Add tab to group (creates new group if targetGroupId is -1)
+    const groupId = await chrome.tabs.group({
+      tabIds: [tabId],
+      groupId: targetGroupId === -1 ? undefined : targetGroupId,
+    });
+
+    this.groupId = groupId;
+
+    // Configure group appearance (only when creating new)
+    if (targetGroupId === -1) {
+      await chrome.tabGroups.update(groupId, {
+        title: GROUP_TITLE,
+        color: GROUP_COLOR,
+        collapsed: false,
+      });
+    }
+  }
+
+  /**
+   * Create a throwaway background tab in the SenClaw group that is NOT
+   * registered as any agent's primary tab. Used for one-shot operations
+   * (search) so concurrent requests never fight over an agent's tab.
+   * The caller is responsible for closing it.
+   */
+  async createEphemeralTab(url?: string): Promise<chrome.tabs.Tab> {
+    const [cur] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const previousActiveTabId = cur?.id ?? null;
+
+    const tab = await chrome.tabs.create({ url, active: false });
+    if (!tab.id) {
+      throw new Error('Failed to create tab - no tab ID');
+    }
+
+    this.ephemeralTabs.set(tab.id, Date.now());
+    await this.addTabToGroup(tab.id);
+
+    // chrome.tabs.group() may steal focus — give it back
+    if (previousActiveTabId !== null) {
+      try {
+        await chrome.tabs.update(previousActiveTabId, { active: true });
+      } catch {
+        // Previous tab may have been closed — ignore
+      }
+    }
 
     return tab;
   }
@@ -242,6 +298,7 @@ export class TabGroupController {
       const info = this.agentTabs.get(agentId);
       if (info) {
         info.url = url;
+        info.lastUsedAt = Date.now();
       }
     }
   }
@@ -253,12 +310,32 @@ export class TabGroupController {
   async syncTrackedTabs(): Promise<void> {
     const allTabs = await chrome.tabs.query({});
     const existingTabIds = new Set(allTabs.map(t => t.id).filter(Boolean) as number[]);
+    const now = Date.now();
 
     // Remove tracking for closed tabs
     for (const [agentId, info] of this.agentTabs) {
       if (!existingTabIds.has(info.tabId)) {
         this.tabToAgent.delete(info.tabId);
         this.agentTabs.delete(agentId);
+      }
+    }
+
+    // GC: close agent tabs idle past the TTL (recreated on demand)
+    for (const info of [...this.agentTabs.values()]) {
+      if (now - info.lastUsedAt > IDLE_AGENT_TAB_TTL_MS) {
+        console.log(`[SenClaw] Closing idle tab of agent ${info.agentId} (idle ${(now - info.lastUsedAt) / 1000}s)`);
+        await this.closeAgentTab(info.agentId).catch(() => { /* already gone */ });
+      }
+    }
+
+    // GC: reap ephemeral tabs leaked by a service-worker restart mid-search
+    for (const [tabId, createdAt] of this.ephemeralTabs) {
+      if (!existingTabIds.has(tabId)) {
+        this.ephemeralTabs.delete(tabId);
+      } else if (now - createdAt > LEAKED_EPHEMERAL_TTL_MS) {
+        console.log(`[SenClaw] Reaping leaked ephemeral tab ${tabId}`);
+        this.ephemeralTabs.delete(tabId);
+        try { await chrome.tabs.remove(tabId); } catch { /* already gone */ }
       }
     }
 
@@ -283,6 +360,7 @@ export class TabGroupController {
         this.agentTabs.delete(agentId);
         this.tabToAgent.delete(tabId);
       }
+      this.ephemeralTabs.delete(tabId);
     });
 
     // Listen for tab updates (navigation)
