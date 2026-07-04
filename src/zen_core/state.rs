@@ -12,6 +12,60 @@ use tracing::info;
 
 use super::*;
 
+/// Kind of a queued user input (mirrors TS `PendingUserInput['type']`).
+///
+/// `Command` (`/`-prefixed) inputs run solo as their own turn; `Inject`
+/// inputs may be appended to an in-flight turn's tool results or batched
+/// together into the next turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingInputKind {
+    Command,
+    Inject,
+}
+
+/// A user input that arrived while the main agent was processing.
+#[derive(Debug, Clone)]
+pub struct PendingUserInput {
+    pub input: String,
+    pub original_input: Option<String>,
+    pub kind: PendingInputKind,
+    /// Silent inputs (background/system-originated) skip user-facing events.
+    pub silent: bool,
+}
+
+impl PendingUserInput {
+    pub fn classify(input: &str, original_input: Option<&str>, silent: bool) -> Self {
+        let kind = if input.trim_start().starts_with('/') {
+            PendingInputKind::Command
+        } else {
+            PendingInputKind::Inject
+        };
+        Self {
+            input: input.to_owned(),
+            original_input: original_input.map(str::to_owned),
+            kind,
+            silent,
+        }
+    }
+}
+
+/// Take the next batch from a pending queue (mirrors TS `takeNextBatch`):
+/// a leading command is taken alone; otherwise all inputs up to (excluding)
+/// the next command are taken together.
+pub fn take_next_batch(pending: &mut Vec<PendingUserInput>) -> Vec<PendingUserInput> {
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    if pending[0].kind == PendingInputKind::Command {
+        return pending.drain(..1).collect();
+    }
+    let next_command = pending
+        .iter()
+        .position(|p| p.kind == PendingInputKind::Command)
+        .unwrap_or(pending.len());
+    pending.drain(..next_command).collect()
+}
+
 /// Internal per-agent state record.
 #[derive(Debug, Clone)]
 struct AgentState {
@@ -40,6 +94,8 @@ pub struct StateManager {
     global_edit_permission_granted: bool,
     plan_mode_info_sent: bool,
     pub(crate) current_abort: Option<tokio_util::sync::CancellationToken>,
+    /// Inputs that arrived while the main agent was processing (FIFO).
+    pending_inputs: Vec<PendingUserInput>,
 }
 
 impl Default for StateManager {
@@ -59,7 +115,37 @@ impl StateManager {
             global_edit_permission_granted: false,
             plan_mode_info_sent: false,
             current_abort: None,
+            pending_inputs: Vec::new(),
         }
+    }
+
+    // ============================================================
+    // Pending input queue (main agent)
+    // ============================================================
+
+    pub fn add_pending_input(&mut self, item: PendingUserInput) {
+        self.pending_inputs.push(item);
+    }
+
+    pub fn pending_inputs_len(&self) -> usize {
+        self.pending_inputs.len()
+    }
+
+    /// Take the next batch of queued inputs (see [`take_next_batch`]).
+    pub fn take_next_input_batch(&mut self) -> Vec<PendingUserInput> {
+        take_next_batch(&mut self.pending_inputs)
+    }
+
+    /// Drain leading `Inject` items, stopping at the first `Command`
+    /// (mirrors TS `consumeInjectInputsBeforeNextCommand`). Used mid-turn to
+    /// append fresh user messages to the current tool results.
+    pub fn consume_inject_inputs_before_next_command(&mut self) -> Vec<PendingUserInput> {
+        let cut = self
+            .pending_inputs
+            .iter()
+            .position(|p| p.kind == PendingInputKind::Command)
+            .unwrap_or(self.pending_inputs.len());
+        self.pending_inputs.drain(..cut).collect()
     }
 
     // ============================================================
@@ -244,6 +330,7 @@ impl StateManager {
         self.current_abort = None;
         self.global_edit_permission_granted = false;
         self.plan_mode_info_sent = false;
+        self.pending_inputs.clear();
         info!("All state cleared");
     }
 
@@ -342,6 +429,77 @@ mod tests {
 
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0].content, "c");
+    }
+
+    fn pi(input: &str) -> PendingUserInput {
+        PendingUserInput::classify(input, None, false)
+    }
+
+    #[test]
+    fn classify_commands_and_injects() {
+        assert_eq!(pi("/compact").kind, PendingInputKind::Command);
+        assert_eq!(pi("  /clear").kind, PendingInputKind::Command);
+        assert_eq!(pi("hello").kind, PendingInputKind::Inject);
+        assert_eq!(pi("what about a/b?").kind, PendingInputKind::Inject);
+    }
+
+    #[test]
+    fn take_next_batch_command_runs_solo() {
+        let mut q = vec![pi("/compact"), pi("hi"), pi("there")];
+        let batch = take_next_batch(&mut q);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].input, "/compact");
+        assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn take_next_batch_groups_until_command() {
+        let mut q = vec![pi("a"), pi("b"), pi("/cmd"), pi("c")];
+        let batch = take_next_batch(&mut q);
+        assert_eq!(
+            batch.iter().map(|i| i.input.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(q[0].input, "/cmd");
+        // Next batch is the command alone.
+        let batch = take_next_batch(&mut q);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].input, "/cmd");
+        // Then the trailing normal input.
+        let batch = take_next_batch(&mut q);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].input, "c");
+        assert!(take_next_batch(&mut q).is_empty());
+    }
+
+    #[test]
+    fn consume_inject_stops_at_command() {
+        let mut sm = StateManager::new();
+        sm.add_pending_input(pi("first"));
+        sm.add_pending_input(pi("second"));
+        sm.add_pending_input(pi("/cmd"));
+        sm.add_pending_input(pi("third"));
+
+        let injected = sm.consume_inject_inputs_before_next_command();
+        assert_eq!(
+            injected
+                .iter()
+                .map(|i| i.input.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        // Command and everything after it stay queued.
+        assert_eq!(sm.pending_inputs_len(), 2);
+        let batch = sm.take_next_input_batch();
+        assert_eq!(batch[0].input, "/cmd");
+    }
+
+    #[test]
+    fn clear_all_drops_pending_inputs() {
+        let mut sm = StateManager::new();
+        sm.add_pending_input(pi("queued"));
+        sm.clear_all();
+        assert_eq!(sm.pending_inputs_len(), 0);
     }
 
     #[test]

@@ -45,6 +45,18 @@ pub const CTRL_API_REQ: i32 = 11;
 pub const CTRL_API_RESP: i32 = 12;
 /// server → app: pushed event (no request). metadata = `{topic, data}`
 pub const CTRL_API_EVENT: i32 = 13;
+/// app → server: request the sender's session list. metadata = `{}`
+pub const CTRL_SESSION_LIST_REQ: i32 = 14;
+/// server → app: JSON array `[{jid,name,folder,groupType,lastActivity,active}]`
+pub const CTRL_SESSION_LIST_RESP: i32 = 15;
+/// app → server: create a new session group. metadata = `{name, folder, mode?}`
+pub const CTRL_SESSION_CREATE: i32 = 16;
+/// app → server: rename/rebind a session. metadata = `{jid, name?, folder?}`
+pub const CTRL_SESSION_UPDATE: i32 = 17;
+/// app → server: delete a session. metadata = `{jid}`
+pub const CTRL_SESSION_DELETE: i32 = 18;
+/// app → server: set the active session (routes new messages). metadata = `{jid, folder?, mode?}`
+pub const CTRL_SESSION_SELECT: i32 = 19;
 
 /// Called when the app sends a control frame that requires server handling.
 /// Arguments: (sender_id, control_type, metadata_json)
@@ -60,6 +72,10 @@ pub struct AppChannel {
     control_handler: Arc<RwLock<Option<ControlCallback>>>,
     client: Mutex<Option<Arc<RelayClient>>>,
     connected: AtomicBool,
+    /// Per-sender active session jid (`sender_id → group jid`). New messages
+    /// from a sender are filed under their active session's group; absence =
+    /// the default single-session jid `app:<cid>:user:<sender>`.
+    active_sessions: Arc<RwLock<std::collections::HashMap<String, String>>>,
 }
 
 impl AppChannel {
@@ -79,7 +95,36 @@ impl AppChannel {
             control_handler: Arc::new(RwLock::new(None)),
             client: Mutex::new(None),
             connected: AtomicBool::new(false),
+            active_sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// The relay channel id string used to build `app:<cid>:user:<sender>` jids.
+    pub fn channel_id(&self) -> &str {
+        &self.channel_id
+    }
+
+    /// The default (single-session) jid for a sender.
+    pub fn default_session_jid(&self, sender_id: &str) -> String {
+        format!("app:{}:user:{}", self.channel_id, sender_id)
+    }
+
+    /// The sender's currently active session jid, or their default jid.
+    pub fn active_session_for(&self, sender_id: &str) -> String {
+        self.active_sessions
+            .read()
+            .unwrap()
+            .get(sender_id)
+            .cloned()
+            .unwrap_or_else(|| self.default_session_jid(sender_id))
+    }
+
+    /// Route this sender's subsequent messages to session [jid].
+    pub fn set_active_session(&self, sender_id: &str, jid: &str) {
+        self.active_sessions
+            .write()
+            .unwrap()
+            .insert(sender_id.to_string(), jid.to_string());
     }
 
     pub fn parse_jid(jid: &str) -> Option<(String, String)> {
@@ -119,6 +164,7 @@ impl AppChannel {
 
         let handlers = Arc::clone(&this.handlers);
         let control_handler = Arc::clone(&this.control_handler);
+        let active_sessions = Arc::clone(&this.active_sessions);
         let cid = channel_id.clone();
 
         let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel(100);
@@ -159,9 +205,19 @@ impl AppChannel {
                         ) {
                             Ok(text) => {
                                 info!("[AppChannel] Decrypted from {}: {}", msg.sender_id, text);
+                                // File under the sender's active session (multi-session);
+                                // falls back to the default single-session jid.
+                                let chat_jid = active_sessions
+                                    .read()
+                                    .unwrap()
+                                    .get(&msg.sender_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| {
+                                        format!("app:{}:user:{}", cid, msg.sender_id)
+                                    });
                                 let incoming = IncomingMessage {
                                     id: msg.message_id,
-                                    chat_jid: format!("app:{}:user:{}", cid, msg.sender_id),
+                                    chat_jid: chat_jid.clone(),
                                     sender_name: msg.sender_id.clone(),
                                     sender_jid: format!("app:{}:user:{}", cid, msg.sender_id),
                                     content: text,

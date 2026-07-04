@@ -25,6 +25,7 @@ pub enum EngineEvent {
     SessionError(SessionErrorData),
     SessionCleared { session_id: Option<String> },
     StateUpdate(StateUpdateData),
+    InputReceived(InputReceivedData),
     MessageComplete(MessageCompleteData),
     ConversationUsage(ConversationUsageData),
     ThinkingChunk(ThinkingChunkData),

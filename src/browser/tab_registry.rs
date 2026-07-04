@@ -11,6 +11,8 @@ use super::types::*;
 pub struct TabRegistry {
     tabs: Arc<RwLock<HashMap<TabId, TabState>>>,
     active_tab: Arc<RwLock<Option<TabId>>>,
+    /// Each agent's dedicated tab (mirrors the extension's TabGroupController).
+    agent_tabs: Arc<RwLock<HashMap<String, TabId>>>,
     last_heartbeat: Arc<RwLock<Option<std::time::Instant>>>,
 }
 
@@ -19,12 +21,19 @@ impl TabRegistry {
         Self {
             tabs: Arc::new(RwLock::new(HashMap::new())),
             active_tab: Arc::new(RwLock::new(None)),
+            agent_tabs: Arc::new(RwLock::new(HashMap::new())),
             last_heartbeat: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Register a new tab.
-    pub async fn register(&self, tab_id: TabId, url: String) {
+    /// Register a new tab, optionally owned by an agent.
+    pub async fn register(&self, tab_id: TabId, url: String, agent_id: Option<String>) {
+        if let Some(aid) = &agent_id {
+            self.agent_tabs
+                .write()
+                .await
+                .insert(aid.clone(), tab_id.clone());
+        }
         let mut tabs = self.tabs.write().await;
         tabs.insert(
             tab_id.clone(),
@@ -33,6 +42,7 @@ impl TabRegistry {
                 url,
                 title: String::new(),
                 status: TabStatus::Loading,
+                agent_id,
                 created_at: std::time::Instant::now(),
             },
         );
@@ -56,6 +66,8 @@ impl TabRegistry {
     pub async fn remove(&self, tab_id: &str) {
         let mut tabs = self.tabs.write().await;
         tabs.remove(tab_id);
+        // Drop any agent ownership of the removed tab
+        self.agent_tabs.write().await.retain(|_, tid| tid != tab_id);
         // Clear active if it was the removed tab
         let mut active = self.active_tab.write().await;
         if active.as_deref() == Some(tab_id) {
@@ -71,6 +83,22 @@ impl TabRegistry {
     /// Get the active tab ID.
     pub async fn get_active(&self) -> Option<TabId> {
         self.active_tab.read().await.clone()
+    }
+
+    /// Get the tab owned by an agent, if any.
+    pub async fn get_agent_tab(&self, agent_id: &str) -> Option<TabId> {
+        self.agent_tabs.read().await.get(agent_id).cloned()
+    }
+
+    /// Snapshot of the agent → tab mapping (for status reporting).
+    pub async fn agent_tab_map(&self) -> HashMap<String, TabId> {
+        self.agent_tabs.read().await.clone()
+    }
+
+    /// Replace the agent → tab map with the extension's authoritative snapshot
+    /// (sent in each heartbeat). Recovers state after a daemon restart.
+    pub async fn sync_agent_tabs(&self, map: HashMap<String, TabId>) {
+        *self.agent_tabs.write().await = map;
     }
 
     /// Get a specific tab's state.

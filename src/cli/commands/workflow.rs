@@ -21,9 +21,7 @@ use clap::Subcommand;
 use crate::agent::persona_registry::PersonaRegistry;
 use crate::config::Config;
 use crate::workflow::types::{RunStatus, StepStatus, WorkflowRun};
-use crate::workflow::{
-    WorkflowExecutor, WorkflowExecutorOpts, WorkflowRegistry, WorkflowRunStore,
-};
+use crate::workflow::{WorkflowExecutor, WorkflowExecutorOpts, WorkflowRegistry, WorkflowRunStore};
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum WorkflowCmd {
@@ -75,7 +73,10 @@ pub async fn run(cmd: WorkflowCmd) -> Result<()> {
         WorkflowCmd::Show { name } => {
             let registry = WorkflowRegistry::new(cfg.paths.workflows_dir.clone());
             let Some(d) = registry.get(&name) else {
-                bail!("workflow \"{name}\" not found in {}", cfg.paths.workflows_dir.display());
+                bail!(
+                    "workflow \"{name}\" not found in {}",
+                    cfg.paths.workflows_dir.display()
+                );
             };
             println!("name:        {}", d.name);
             if let Some(desc) = &d.description {
@@ -113,7 +114,10 @@ pub async fn run(cmd: WorkflowCmd) -> Result<()> {
             let inputs = parse_inputs(&inputs)?;
             let registry = WorkflowRegistry::new(cfg.paths.workflows_dir.clone());
             let Some(def) = registry.get(&name).cloned() else {
-                bail!("workflow \"{name}\" not found in {}", cfg.paths.workflows_dir.display());
+                bail!(
+                    "workflow \"{name}\" not found in {}",
+                    cfg.paths.workflows_dir.display()
+                );
             };
 
             let persona_registry = Arc::new(Mutex::new(PersonaRegistry::new(
@@ -209,7 +213,11 @@ fn print_run(run: &WorkflowRun, detail: bool) {
             line.push_str(&format!("  error: {err}"));
         } else if !s.result.is_empty() {
             let preview: String = s.result.chars().take(80).collect();
-            let ellipsis = if s.result.chars().count() > 80 { "…" } else { "" };
+            let ellipsis = if s.result.chars().count() > 80 {
+                "…"
+            } else {
+                ""
+            };
             line.push_str(&format!("  {preview}{ellipsis}"));
         }
         println!("{line}");
@@ -233,7 +241,7 @@ fn print_run(run: &WorkflowRun, detail: bool) {
 /// have their tools. The subprocess talks to the daemon's WS port; without a
 /// running daemon the tools degrade gracefully.
 pub fn default_extra_mcp_servers(cfg: &Config) -> Vec<crate::zen_core::McpServerConfig> {
-    let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port);
+    let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port, "workflow");
     vec![crate::zen_core::McpServerConfig {
         name: helper_cfg.name,
         command: helper_cfg.command,

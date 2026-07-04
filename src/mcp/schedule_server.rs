@@ -110,6 +110,38 @@ impl McpScheduleServer {
         let result = srv.cancel_task(&self.db, &p.task_id, &p.group_folder);
         result.content
     }
+
+    #[rmcp::tool(
+        description = "Resume a paused scheduled task. The next run time is recomputed from \
+                       the task's schedule (a one-off whose time already passed fires on the \
+                       next scheduler tick)."
+    )]
+    fn resume_task(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TaskActionParams,
+        >,
+    ) -> String {
+        let srv = ScheduleServer::new();
+        let result = srv.resume_task(&self.db, &p.task_id, &p.group_folder);
+        result.content
+    }
+
+    #[rmcp::tool(
+        description = "Permanently delete a scheduled task and stop it from ever running again. \
+                       Unlike cancel_task (which keeps the row with status=completed), this \
+                       removes the task entirely."
+    )]
+    fn delete_task(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TaskActionParams,
+        >,
+    ) -> String {
+        let srv = ScheduleServer::new();
+        let result = srv.delete_task(&self.db, &p.task_id, &p.group_folder);
+        result.content
+    }
 }
 
 /// Start the schedule MCP server over stdio. Reads config from environment
@@ -299,6 +331,76 @@ impl ScheduleServer {
             Err(e) => ToolResult::err(format!("Error: {e}")),
         }
     }
+
+    // ===== resume_task =====
+
+    /// Reactivate a paused task. Recomputes `next_run` from the schedule so a
+    /// long pause doesn't leave a stale fire time; a `once` task whose time
+    /// already passed fires on the next scheduler tick.
+    pub fn resume_task(&self, db: &Db, task_id: &str, group_folder: &str) -> ToolResult {
+        let task = match db.get_tasks_by_group(group_folder) {
+            Ok(tasks) => match tasks.into_iter().find(|t| t.id == task_id) {
+                Some(t) => t,
+                None => {
+                    return ToolResult::err(format!(
+                        "Task not found or not in this group: {task_id}"
+                    ))
+                }
+            },
+            Err(e) => return ToolResult::err(format!("Error: {e}")),
+        };
+        if task.status != TaskStatus::Paused {
+            return ToolResult::err(format!(
+                "Only paused tasks can be resumed (task {task_id} is {})",
+                task.status.as_str()
+            ));
+        }
+        match compute_next_run(&task.schedule_type, &task.schedule_value) {
+            Ok(next_run) => {
+                if let Err(e) =
+                    db.advance_task_next_run(task_id, Some(&next_run), TaskStatus::Active)
+                {
+                    return ToolResult::err(format!("Error: {e}"));
+                }
+                let json = serde_json::json!({
+                    "success": true,
+                    "taskId": task_id,
+                    "status": "active",
+                    "nextRun": next_run,
+                });
+                ToolResult::ok(json.to_string())
+            }
+            Err(e) => ToolResult::err(format!("Error: {e}")),
+        }
+    }
+
+    // ===== delete_task =====
+
+    /// Hard-delete a task (row removed; run logs are kept for audit).
+    pub fn delete_task(&self, db: &Db, task_id: &str, group_folder: &str) -> ToolResult {
+        match db.get_tasks_by_group(group_folder) {
+            Ok(tasks) => {
+                if !tasks.iter().any(|t| t.id == task_id) {
+                    return ToolResult::err(format!(
+                        "Task not found or not in this group: {task_id}"
+                    ));
+                }
+            }
+            Err(e) => return ToolResult::err(format!("Error: {e}")),
+        }
+        match db.delete_task(task_id) {
+            Ok(true) => {
+                let json = serde_json::json!({
+                    "success": true,
+                    "taskId": task_id,
+                    "deleted": true,
+                });
+                ToolResult::ok(json.to_string())
+            }
+            Ok(false) => ToolResult::err(format!("Task not found: {task_id}")),
+            Err(e) => ToolResult::err(format!("Error: {e}")),
+        }
+    }
 }
 
 impl Default for ScheduleServer {
@@ -407,5 +509,53 @@ mod tests {
 
         let cancel = srv.cancel_task(&db, &task_id, "team-a");
         assert!(!cancel.is_error);
+    }
+
+    #[test]
+    fn resume_and_delete_task_flow() {
+        let cfg = test_config();
+        let db = Db::open_in_memory(&cfg).unwrap();
+        let srv = ScheduleServer::new();
+
+        let create = tokio_test::block_on(srv.schedule_task(
+            &db,
+            "team-b",
+            "tg:group:2",
+            "daily report",
+            "cron",
+            "0 9 * * *",
+            Some("isolated"),
+            None,
+        ));
+        assert!(!create.is_error);
+        let task_id: String = serde_json::from_str::<serde_json::Value>(&create.content).unwrap()
+            ["taskId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // Resume only works on paused tasks.
+        let premature = srv.resume_task(&db, &task_id, "team-b");
+        assert!(premature.is_error, "resuming an active task must fail");
+
+        srv.pause_task(&db, &task_id, "team-b");
+        let resume = srv.resume_task(&db, &task_id, "team-b");
+        assert!(!resume.is_error, "{}", resume.content);
+        let v: serde_json::Value = serde_json::from_str(&resume.content).unwrap();
+        assert_eq!(v["status"], "active");
+        assert!(v["nextRun"].as_str().unwrap().len() > 10);
+
+        // Ownership enforced for both new tools.
+        assert!(srv.resume_task(&db, &task_id, "other-team").is_error);
+        assert!(srv.delete_task(&db, &task_id, "other-team").is_error);
+
+        // Hard delete removes the row entirely.
+        let del = srv.delete_task(&db, &task_id, "team-b");
+        assert!(!del.is_error, "{}", del.content);
+        let tasks = db.get_tasks_by_group("team-b").unwrap();
+        assert!(tasks.is_empty(), "task row must be gone after delete_task");
+
+        // Deleting again reports not-found.
+        assert!(srv.delete_task(&db, &task_id, "team-b").is_error);
     }
 }

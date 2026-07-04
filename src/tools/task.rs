@@ -303,6 +303,8 @@ impl Tool for TaskTool {
             // workflows that need task_done enforcement.
             agent_mode: crate::zen_core::AgentMode::Agent,
             max_turns_override: None,
+            // Subagents never receive mid-turn user injections.
+            pending_inject: None,
         };
 
         let result = conversation::query(messages, &query_config, &abort).await;

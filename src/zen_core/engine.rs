@@ -416,8 +416,9 @@ impl ZenEngine {
         //     so subsequent turns can actually invoke it. Mirrors claude-code's
         //     "lazy load" UX without breaking the dispatch lookup.
         let discovered = self.discovered_tools.lock().unwrap().clone();
-        filtered
-            .retain(|t| t.always_load() || !t.should_defer() || discovered_has(&discovered, t.name()));
+        filtered.retain(|t| {
+            t.always_load() || !t.should_defer() || discovered_has(&discovered, t.name())
+        });
 
         // Layer 6 — stable sort for prompt-cache stability.
         filtered.sort_by(|a, b| a.name().cmp(b.name()));
@@ -619,6 +620,7 @@ impl ZenEngine {
             // (FormRequest is consumed by the AgentPool event loop via bus
             // subscription, like the workbench events.)
             EngineEvent::SessionCleared { .. }
+            | EngineEvent::InputReceived(_)
             | EngineEvent::ToolPermissionResponse(_)
             | EngineEvent::AskQuestionResponse(_)
             | EngineEvent::FormRequest(_)
@@ -909,348 +911,35 @@ impl ZenCore for ZenEngine {
         Ok(())
     }
 
-    fn process_user_input(&self, prompt: &str, _original_input: Option<&str>) -> Result<()> {
+    fn process_user_input(&self, prompt: &str, original_input: Option<&str>) -> Result<()> {
         info!("[{}] process_user_input: {}", self.instance_id, prompt);
 
+        // Queue when a turn is already in flight (mirrors TS SemaEngine
+        // pending-input queue): `/commands` run solo in a later turn; injects
+        // may be appended to the running turn's tool results mid-flight or
+        // batched into the next turn. Check-and-transition happens under one
+        // lock so two concurrent inputs can't both start loops.
         {
             let mut state = self.state.lock().unwrap();
+            if state.current_state(MAIN_AGENT_ID) == SessionState::Processing {
+                let queued = Self::push_pending(&mut state, prompt, original_input);
+                drop(state);
+                self.report_queued(prompt, queued);
+                return Ok(());
+            }
             state.update_state(MAIN_AGENT_ID, SessionState::Processing);
         }
         self.fire(EngineEvent::StateUpdate(StateUpdateData {
             state: SessionState::Processing,
         }));
+        self.fire(EngineEvent::InputReceived(InputReceivedData {
+            input: prompt.to_string(),
+            queued: false,
+            inject: false,
+            queue_length: 0,
+        }));
 
-        // Create abort token for this request
-        let cancel = CancellationToken::new();
-        {
-            let mut state = self.state.lock().unwrap();
-            state.current_abort = Some(cancel.clone());
-        }
-
-        // Clone shared resources for the spawned task
-        let instance_id = self.instance_id.clone();
-        let event_bus = self.event_bus.clone();
-        let opts = self.options.read().unwrap().clone();
-        let tools_initial = self.get_tools();
-        // Resolver re-evaluates the live tool set each turn so ToolSearch
-        // discoveries flow into subsequent turns within this same user input.
-        let engine_for_tools = self.self_weak.lock().unwrap().clone();
-        let tools_resolver: crate::zen_core::conversation::ToolsResolver = Arc::new(move || {
-            engine_for_tools
-                .upgrade()
-                .map(|e| e.tools_for_main_agent())
-                .unwrap_or_default()
-        });
-        // Keep `tools` binding for the existing log lines below.
-        let _tools = tools_initial;
-        // Debug: log all tools being sent to LLM so we can verify browser tools appear
-        // {
-        //     let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        //     let mcp_tools: Vec<&str> = tool_names
-        //         .iter()
-        //         .filter(|n| n.starts_with("mcp__"))
-        //         .copied()
-        //         .collect();
-        //     info!(
-        //         "[{}] get_tools: {} total ({} mcp__*): {:?}",
-        //         self.instance_id,
-        //         tool_names.len(),
-        //         mcp_tools.len(),
-        //         mcp_tools
-        //     );
-        // }
-        let messages = {
-            let state = self.state.lock().unwrap();
-            state.message_history(MAIN_AGENT_ID)
-        };
-        let http_client = self.http_client.clone();
-        let permission_manager = self.permission_manager.clone();
-        let response_registry = self.response_registry.clone();
-        let state_for_spawn = self.state.clone();
-
-        // Build system prompt (stable base + dynamic system context appended).
-        // When the Skill tool is registered we append a skills reminder so the
-        // LLM can auto-trigger skills by metadata (`name` + `description` +
-        // `when-to-use`) — mirrors sema-core `generateSkillsReminder`.
-        let has_skill_tool = self
-            .builtin_tools
-            .read()
-            .unwrap()
-            .iter()
-            .any(|t| t.name() == "Skill");
-        let skills_reminder = if has_skill_tool {
-            self.build_skills_reminder()
-        } else {
-            None
-        };
-        // Always-on skills (`use: always`) are injected in full every turn,
-        // independent of whether the Skill tool is registered.
-        let always_skills_block = self.build_always_skills_block();
-        // Build deferred-tools reminder so the LLM knows ToolSearch can load
-        // specialized tools on demand.
-        let deferred_reminder = self.build_deferred_tools_reminder();
-
-        let plan_mode_reminder = match opts.agent_mode {
-            AgentMode::Plan => {
-                let plans_dir = std::path::Path::new(&opts.agent_data_dir)
-                    .join(".sema")
-                    .join("plans")
-                    .join("") // ensure trailing slash
-                    .to_string_lossy()
-                    .to_string();
-                tracing::info!(
-                    "[{}] Plan mode active — injecting plan reminder (plans_dir={})",
-                    self.instance_id,
-                    plans_dir
-                );
-                Some(crate::zen_core::prompt::plan_mode_reminder(&plans_dir))
-            }
-            AgentMode::Dag => {
-                tracing::info!(
-                    "[{}] DAG mode active — injecting DAG orchestration reminder",
-                    self.instance_id
-                );
-                Some(crate::zen_core::prompt::dag_mode_reminder())
-            }
-            AgentMode::Agent => None,
-        };
-
-        let system_prompt = Self::assemble_system_prompt(
-            &opts.system_prompt,
-            &opts.working_dir,
-            skills_reminder.as_deref(),
-            deferred_reminder.as_deref(),
-            plan_mode_reminder.as_deref(),
-            always_skills_block.as_deref(),
-        );
-
-        // Resolve profile: per-group override → active UI config → env fallback.
-        let profile = self.resolve_model_profile();
-
-        // UserPromptSubmit hook — may update the prompt before it reaches the LLM.
-        // Runs synchronously before the spawn so `updatedInput` can modify the prompt.
-        let prompt = prompt.to_owned();
-        let prompt = if self
-            .hook_manager
-            .has_hooks_for_event(&HookEvent::UserPromptSubmit)
-        {
-            let hm = self.hook_manager.clone();
-            let (client, hook_profile) = self.hook_opts();
-            let base = self.hook_base(HookEvent::UserPromptSubmit);
-            let p = prompt.clone();
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    zen_hooks::execute_hooks(
-                        &hm,
-                        &HookEvent::UserPromptSubmit,
-                        &HookInput::UserPromptSubmit(UserPromptSubmitInput { base, prompt: p }),
-                        &ExecuteHooksOptions {
-                            client: Some(&client),
-                            profile: Some(&hook_profile),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                })
-            });
-            if let Some(updated) = result.updated_input {
-                updated["prompt"].as_str().unwrap_or(&prompt).to_owned()
-            } else {
-                prompt
-            }
-        } else {
-            prompt
-        };
-
-        // Persist prompt to project history (raw, including any `#skill` prefix).
-        let working_dir_for_hist = self.options.read().unwrap().working_dir.clone();
-        config_manager::with_conf_manager(|mgr| {
-            mgr.save_user_input_to_history(&working_dir_for_hist, &prompt);
-        });
-
-        // Explicit skill directive: a prompt that starts with `#skill-name` or
-        // `/skill-name` is a hard, deterministic request to run that skill —
-        // it must not depend on the model noticing the convention (weak models
-        // ignore it). Strip the directive, force-inject the skill instructions,
-        // and pre-discover the deferred MCP tools the skill references so they
-        // are immediately callable.
-        let (prompt, forced_skill_reminder) = match self.detect_explicit_skill(&prompt) {
-            Some((skill_name, rest)) => {
-                let reminder = self.force_skill_reminder(&skill_name);
-                let body = if rest.trim().is_empty() {
-                    prompt.clone()
-                } else {
-                    rest
-                };
-                (body, reminder)
-            }
-            None => (prompt, None),
-        };
-
-        // Build the user message (after hooks may have modified prompt).
-        // On the very first turn inject volatile context (SENCLAW.md, date) as a
-        // hidden <system-reminder> block so it doesn't destabilise the system prompt
-        // for prompt caching.
-        //
-        // SENCLAW.md is only relevant for sessions that operate on a real
-        // workspace (code editing, cowork). For regular chat JIDs (`web:*`,
-        // `app:*`, `virtual:*`, etc.) the project doc is noise — wastes ~2k
-        // tokens per turn and dilutes the model's attention from the actual
-        // user query. Date-only context is still injected for everyone.
-        let user_msg = {
-            let mut blocks = Vec::<ContentBlock>::new();
-            if messages.is_empty() {
-                let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
-                if let Some(ctx) =
-                    Self::collect_first_turn_context(&opts.working_dir, include_project_doc)
-                {
-                    blocks.push(ContentBlock::Text { text: ctx });
-                }
-            }
-            // Skill pre-match: scan the prompt against loaded skill triggers
-            // and surface a hard recommendation if any match. Mirrors the
-            // claude-code pattern of a "preferred skill" hint, but driven by
-            // keyword overlap (no LLM call). The reminder is part of the user
-            // message so it gets the model's full attention on the very first
-            // pass — vs the skill list at the end of the system prompt which
-            // the model often skims.
-            // Priority: explicit `#skill` directive > pre-trigger-skill
-            // force-load (when enabled and a match is found) > soft keyword hint.
-            if let Some(reminder) = forced_skill_reminder.clone() {
-                blocks.push(ContentBlock::Text { text: reminder });
-            } else if let Some(reminder) = opts
-                .pre_trigger_skill
-                .then(|| self.match_skill_name(&prompt))
-                .flatten()
-                .and_then(|name| self.force_skill_reminder(&name))
-            {
-                // Pre-trigger-skill stage: deterministically load the matched
-                // skill's full instructions (+ pre-discover its tools) so a weak
-                // model never has to decide to call the Skill tool itself.
-                blocks.push(ContentBlock::Text { text: reminder });
-            } else if let Some(hint) = self.build_skill_match_reminder(&prompt) {
-                blocks.push(ContentBlock::Text { text: hint });
-            }
-            // Per-turn language lock. Small models can default to English or
-            // Chinese even when the user writes another language. Keep this
-            // reminder close to the prompt, but avoid mentioning "thinking
-            // blocks" because some models copy that phrase into the visible
-            // answer.
-            if let Some(lang) = detect_user_language(&prompt) {
-                blocks.push(ContentBlock::Text {
-                    text: format!(
-                        "<system-reminder>\nReply in {lang}. Do not include hidden reasoning, chain-of-thought, or thinking blocks in the final answer.\n</system-reminder>"
-                    ),
-                });
-            }
-            blocks.push(ContentBlock::Text {
-                text: prompt.clone(),
-            });
-            create_user_message(blocks)
-        };
-        let mut messages = messages;
-        messages.push(user_msg);
-
-        // Spawn the conversation loop — runs in background, emits events
-        let event_bus_spawn = event_bus.clone();
-        let hook_manager_spawn = self.hook_manager.clone();
-        let session_id_spawn = self.session_id.read().unwrap().clone().unwrap_or_default();
-        let cwd_spawn = opts.working_dir.clone();
-        tokio::spawn(async move {
-            let eb = event_bus_spawn.clone();
-            let config = conversation::QueryConfig {
-                agent_id: MAIN_AGENT_ID.to_string(),
-                working_dir: opts.working_dir.clone(),
-                agent_data_dir: opts.agent_data_dir.clone(),
-                system_prompt: system_prompt.clone(),
-                tools: tools_resolver.clone(),
-                http_client: http_client.clone(),
-                event_bus: event_bus_spawn,
-                response_registry: Some(response_registry.clone()),
-                permission_checker: permission_manager.clone(),
-                profile: profile.clone(),
-                thinking: opts.thinking,
-                stream: opts.stream,
-                is_subagent: false,
-                hook_manager: Some(hook_manager_spawn.clone()),
-                hook_client: Some(http_client.clone()),
-                hook_profile: Some(profile.clone()),
-                session_id: session_id_spawn.clone(),
-                enable_cache: false,
-                // Pass through the current agent_mode so the conversation loop
-                // knows whether to enforce task_done (Plan/Dag only).
-                agent_mode: opts.agent_mode,
-                max_turns_override: opts.max_agent_turns,
-            };
-
-            let result = conversation::query(messages, &config, &cancel).await;
-
-            if let Ok(msgs) = &result {
-                let mut st = state_for_spawn.lock().unwrap();
-                st.set_message_history(MAIN_AGENT_ID, msgs.clone());
-            }
-
-            // After-process stage: proactively summarize/compact the completed
-            // conversation so the stored context stays optimized and coherent
-            // for the next turn (Claude-Code-style). Runs on a clone (lock not
-            // held across the LLM call), then persists the compacted history.
-            // No-op for short conversations or when cancelled.
-            if opts.after_process && !cancel.is_cancelled() {
-                if let Ok(msgs) = &result {
-                    let compacted =
-                        conversation::compact_now(msgs.clone(), &config, &cancel).await;
-                    let mut st = state_for_spawn.lock().unwrap();
-                    st.set_message_history(MAIN_AGENT_ID, compacted);
-                }
-            }
-
-            let stop_reason = match &result {
-                Ok(_) => {
-                    info!("[{instance_id}] conversation loop completed");
-                    None
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    warn!("[{instance_id}] conversation loop error: {msg}");
-                    let classified = query_llm::LlmError::classify(e);
-                    if classified.should_emit() {
-                        eb.emit(EngineEvent::SessionError(classified.to_session_error()));
-                    }
-                    Some(msg)
-                }
-            };
-
-            // Fire Stop hook (non-blockable)
-            if hook_manager_spawn.has_hooks_for_event(&HookEvent::Stop) {
-                let base = HookInputBase {
-                    hook_event_name: HookEvent::Stop,
-                    session_id: session_id_spawn.clone(),
-                    agent_id: MAIN_AGENT_ID.to_string(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    cwd: cwd_spawn.clone(),
-                };
-                zen_hooks::execute_hooks(
-                    &hook_manager_spawn,
-                    &HookEvent::Stop,
-                    &HookInput::Stop(StopInput { base, stop_reason }),
-                    &ExecuteHooksOptions {
-                        client: Some(&http_client),
-                        profile: Some(&profile),
-                        ..Default::default()
-                    },
-                )
-                .await;
-            }
-
-            // Signal idle (unless cancelled)
-            if !cancel.is_cancelled() {
-                eb.emit(EngineEvent::StateUpdate(StateUpdateData {
-                    state: SessionState::Idle,
-                }));
-            }
-        });
-
-        Ok(())
+        self.start_query(prompt)
     }
 
     fn pause_session(&self) {
@@ -1564,6 +1253,446 @@ impl ZenCore for ZenEngine {
 // ============================================================================
 
 impl ZenEngine {
+    /// Push one input onto the pending queue. Returns `(inject, queue_length)`.
+    fn push_pending(
+        state: &mut StateManager,
+        prompt: &str,
+        original_input: Option<&str>,
+    ) -> (bool, usize) {
+        let item = PendingUserInput::classify(prompt, original_input, false);
+        let inject = item.kind == PendingInputKind::Inject;
+        state.add_pending_input(item);
+        (inject, state.pending_inputs_len())
+    }
+
+    /// Log + emit `InputReceived(queued: true)` for a just-queued input.
+    fn report_queued(&self, prompt: &str, (inject, queue_length): (bool, usize)) {
+        info!(
+            "[{}] input queued ({}), queue length: {queue_length}",
+            self.instance_id,
+            if inject { "inject" } else { "command" }
+        );
+        self.fire(EngineEvent::InputReceived(InputReceivedData {
+            input: prompt.to_string(),
+            queued: true,
+            inject,
+            queue_length,
+        }));
+    }
+
+    /// Queue an input ONLY when a turn is currently in flight. Returns `false`
+    /// (does nothing) when idle — the caller should then dispatch through its
+    /// normal full-turn path (e.g. GroupQueue with memory pre-retrieval).
+    /// Injected inputs ride the in-flight turn's tool results, so skipping the
+    /// per-turn pre-stages is correct for them.
+    pub fn queue_input_if_processing(&self, prompt: &str) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.current_state(MAIN_AGENT_ID) != SessionState::Processing {
+            return false;
+        }
+        let queued = Self::push_pending(&mut state, prompt, None);
+        drop(state);
+        self.report_queued(prompt, queued);
+        true
+    }
+
+    /// Build context and spawn the conversation loop for one input turn.
+    /// Callers must have already set the main agent to `Processing`
+    /// (`process_user_input` does; the queued-batch path arrives here with
+    /// the state still `Processing` from the previous turn).
+    fn start_query(&self, prompt: &str) -> Result<()> {
+        let cancel = CancellationToken::new();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.current_abort = Some(cancel.clone());
+        }
+
+        // Clone shared resources for the spawned task
+        let instance_id = self.instance_id.clone();
+        let engine_weak = self.self_weak.lock().unwrap().clone();
+        let event_bus = self.event_bus.clone();
+        let opts = self.options.read().unwrap().clone();
+        let tools_initial = self.get_tools();
+        // Resolver re-evaluates the live tool set each turn so ToolSearch
+        // discoveries flow into subsequent turns within this same user input.
+        let engine_for_tools = self.self_weak.lock().unwrap().clone();
+        let tools_resolver: crate::zen_core::conversation::ToolsResolver = Arc::new(move || {
+            engine_for_tools
+                .upgrade()
+                .map(|e| e.tools_for_main_agent())
+                .unwrap_or_default()
+        });
+        // Keep `tools` binding for the existing log lines below.
+        let _tools = tools_initial;
+        // Debug: log all tools being sent to LLM so we can verify browser tools appear
+        // {
+        //     let tool_names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        //     let mcp_tools: Vec<&str> = tool_names
+        //         .iter()
+        //         .filter(|n| n.starts_with("mcp__"))
+        //         .copied()
+        //         .collect();
+        //     info!(
+        //         "[{}] get_tools: {} total ({} mcp__*): {:?}",
+        //         self.instance_id,
+        //         tool_names.len(),
+        //         mcp_tools.len(),
+        //         mcp_tools
+        //     );
+        // }
+        let messages = {
+            let state = self.state.lock().unwrap();
+            state.message_history(MAIN_AGENT_ID)
+        };
+        let http_client = self.http_client.clone();
+        let permission_manager = self.permission_manager.clone();
+        let response_registry = self.response_registry.clone();
+        let state_for_spawn = self.state.clone();
+
+        // Build system prompt (stable base + dynamic system context appended).
+        // When the Skill tool is registered we append a skills reminder so the
+        // LLM can auto-trigger skills by metadata (`name` + `description` +
+        // `when-to-use`) — mirrors sema-core `generateSkillsReminder`.
+        let has_skill_tool = self
+            .builtin_tools
+            .read()
+            .unwrap()
+            .iter()
+            .any(|t| t.name() == "Skill");
+        let skills_reminder = if has_skill_tool {
+            self.build_skills_reminder()
+        } else {
+            None
+        };
+        // Always-on skills (`use: always`) are injected in full every turn,
+        // independent of whether the Skill tool is registered.
+        let always_skills_block = self.build_always_skills_block();
+        // Build deferred-tools reminder so the LLM knows ToolSearch can load
+        // specialized tools on demand.
+        let deferred_reminder = self.build_deferred_tools_reminder();
+
+        let plan_mode_reminder = match opts.agent_mode {
+            AgentMode::Plan => {
+                let plans_dir = std::path::Path::new(&opts.agent_data_dir)
+                    .join(".sema")
+                    .join("plans")
+                    .join("") // ensure trailing slash
+                    .to_string_lossy()
+                    .to_string();
+                tracing::info!(
+                    "[{}] Plan mode active — injecting plan reminder (plans_dir={})",
+                    self.instance_id,
+                    plans_dir
+                );
+                Some(crate::zen_core::prompt::plan_mode_reminder(&plans_dir))
+            }
+            AgentMode::Dag => {
+                tracing::info!(
+                    "[{}] DAG mode active — injecting DAG orchestration reminder",
+                    self.instance_id
+                );
+                Some(crate::zen_core::prompt::dag_mode_reminder())
+            }
+            AgentMode::Agent => None,
+        };
+
+        let system_prompt = Self::assemble_system_prompt(
+            &opts.system_prompt,
+            &opts.working_dir,
+            skills_reminder.as_deref(),
+            deferred_reminder.as_deref(),
+            plan_mode_reminder.as_deref(),
+            always_skills_block.as_deref(),
+        );
+
+        // Resolve profile: per-group override → active UI config → env fallback.
+        let profile = self.resolve_model_profile();
+
+        // UserPromptSubmit hook — may update the prompt before it reaches the LLM.
+        // Runs synchronously before the spawn so `updatedInput` can modify the prompt.
+        let prompt = prompt.to_owned();
+        let prompt = if self
+            .hook_manager
+            .has_hooks_for_event(&HookEvent::UserPromptSubmit)
+        {
+            let hm = self.hook_manager.clone();
+            let (client, hook_profile) = self.hook_opts();
+            let base = self.hook_base(HookEvent::UserPromptSubmit);
+            let p = prompt.clone();
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    zen_hooks::execute_hooks(
+                        &hm,
+                        &HookEvent::UserPromptSubmit,
+                        &HookInput::UserPromptSubmit(UserPromptSubmitInput { base, prompt: p }),
+                        &ExecuteHooksOptions {
+                            client: Some(&client),
+                            profile: Some(&hook_profile),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                })
+            });
+            if let Some(updated) = result.updated_input {
+                updated["prompt"].as_str().unwrap_or(&prompt).to_owned()
+            } else {
+                prompt
+            }
+        } else {
+            prompt
+        };
+
+        // Persist prompt to project history (raw, including any `#skill` prefix).
+        let working_dir_for_hist = self.options.read().unwrap().working_dir.clone();
+        config_manager::with_conf_manager(|mgr| {
+            mgr.save_user_input_to_history(&working_dir_for_hist, &prompt);
+        });
+
+        // Explicit skill directive: a prompt that starts with `#skill-name` or
+        // `/skill-name` is a hard, deterministic request to run that skill —
+        // it must not depend on the model noticing the convention (weak models
+        // ignore it). Strip the directive, force-inject the skill instructions,
+        // and pre-discover the deferred MCP tools the skill references so they
+        // are immediately callable.
+        let (prompt, forced_skill_reminder) = match self.detect_explicit_skill(&prompt) {
+            Some((skill_name, rest)) => {
+                let reminder = self.force_skill_reminder(&skill_name);
+                let body = if rest.trim().is_empty() {
+                    prompt.clone()
+                } else {
+                    rest
+                };
+                (body, reminder)
+            }
+            None => (prompt, None),
+        };
+
+        // Build the user message (after hooks may have modified prompt).
+        // On the very first turn inject volatile context (SENCLAW.md, date) as a
+        // hidden <system-reminder> block so it doesn't destabilise the system prompt
+        // for prompt caching.
+        //
+        // SENCLAW.md is only relevant for sessions that operate on a real
+        // workspace (code editing, cowork). For regular chat JIDs (`web:*`,
+        // `app:*`, `virtual:*`, etc.) the project doc is noise — wastes ~2k
+        // tokens per turn and dilutes the model's attention from the actual
+        // user query. Date-only context is still injected for everyone.
+        let user_msg = {
+            let mut blocks = Vec::<ContentBlock>::new();
+            if messages.is_empty() {
+                let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
+                if let Some(ctx) =
+                    Self::collect_first_turn_context(&opts.working_dir, include_project_doc)
+                {
+                    blocks.push(ContentBlock::Text { text: ctx });
+                }
+            }
+            // Skill pre-match: scan the prompt against loaded skill triggers
+            // and surface a hard recommendation if any match. Mirrors the
+            // claude-code pattern of a "preferred skill" hint, but driven by
+            // keyword overlap (no LLM call). The reminder is part of the user
+            // message so it gets the model's full attention on the very first
+            // pass — vs the skill list at the end of the system prompt which
+            // the model often skims.
+            // Priority: explicit `#skill` directive > pre-trigger-skill
+            // force-load (when enabled and a match is found) > soft keyword hint.
+            if let Some(reminder) = forced_skill_reminder.clone() {
+                blocks.push(ContentBlock::Text { text: reminder });
+            } else if let Some(reminder) = opts
+                .pre_trigger_skill
+                .then(|| self.match_skill_name(&prompt))
+                .flatten()
+                .and_then(|name| self.force_skill_reminder(&name))
+            {
+                // Pre-trigger-skill stage: deterministically load the matched
+                // skill's full instructions (+ pre-discover its tools) so a weak
+                // model never has to decide to call the Skill tool itself.
+                blocks.push(ContentBlock::Text { text: reminder });
+            } else if let Some(hint) = self.build_skill_match_reminder(&prompt) {
+                blocks.push(ContentBlock::Text { text: hint });
+            }
+            // Per-turn language lock. Small models can default to English or
+            // Chinese even when the user writes another language. Keep this
+            // reminder close to the prompt, but avoid mentioning "thinking
+            // blocks" because some models copy that phrase into the visible
+            // answer.
+            if let Some(lang) = detect_user_language(&prompt) {
+                blocks.push(ContentBlock::Text {
+                    text: format!(
+                        "<system-reminder>\nReply in {lang}. Do not include hidden reasoning, chain-of-thought, or thinking blocks in the final answer.\n</system-reminder>"
+                    ),
+                });
+            }
+            blocks.push(ContentBlock::Text {
+                text: prompt.clone(),
+            });
+            create_user_message(blocks)
+        };
+        let mut messages = messages;
+        messages.push(user_msg);
+
+        // Spawn the conversation loop — runs in background, emits events
+        let event_bus_spawn = event_bus.clone();
+        let hook_manager_spawn = self.hook_manager.clone();
+        let session_id_spawn = self.session_id.read().unwrap().clone().unwrap_or_default();
+        let cwd_spawn = opts.working_dir.clone();
+        tokio::spawn(async move {
+            let eb = event_bus_spawn.clone();
+            // Mid-turn inject source: drains queued (non-command) inputs so
+            // the conversation loop can append them to tool results.
+            let state_for_inject = state_for_spawn.clone();
+            let pending_inject: crate::zen_core::conversation::PendingInjectSource =
+                Arc::new(move || {
+                    state_for_inject
+                        .lock()
+                        .unwrap()
+                        .consume_inject_inputs_before_next_command()
+                });
+            let config = conversation::QueryConfig {
+                agent_id: MAIN_AGENT_ID.to_string(),
+                working_dir: opts.working_dir.clone(),
+                agent_data_dir: opts.agent_data_dir.clone(),
+                system_prompt: system_prompt.clone(),
+                tools: tools_resolver.clone(),
+                http_client: http_client.clone(),
+                event_bus: event_bus_spawn,
+                response_registry: Some(response_registry.clone()),
+                permission_checker: permission_manager.clone(),
+                profile: profile.clone(),
+                thinking: opts.thinking,
+                stream: opts.stream,
+                is_subagent: false,
+                hook_manager: Some(hook_manager_spawn.clone()),
+                hook_client: Some(http_client.clone()),
+                hook_profile: Some(profile.clone()),
+                session_id: session_id_spawn.clone(),
+                enable_cache: false,
+                // Pass through the current agent_mode so the conversation loop
+                // knows whether to enforce task_done (Plan/Dag only).
+                agent_mode: opts.agent_mode,
+                max_turns_override: opts.max_agent_turns,
+                pending_inject: Some(pending_inject),
+            };
+
+            let result = conversation::query(messages, &config, &cancel).await;
+
+            if let Ok(msgs) = &result {
+                let mut st = state_for_spawn.lock().unwrap();
+                st.set_message_history(MAIN_AGENT_ID, msgs.clone());
+            }
+
+            // After-process stage: proactively summarize/compact the completed
+            // conversation so the stored context stays optimized and coherent
+            // for the next turn (Claude-Code-style). Runs on a clone (lock not
+            // held across the LLM call), then persists the compacted history.
+            // No-op for short conversations or when cancelled.
+            if opts.after_process && !cancel.is_cancelled() {
+                if let Ok(msgs) = &result {
+                    let compacted = conversation::compact_now(msgs.clone(), &config, &cancel).await;
+                    let mut st = state_for_spawn.lock().unwrap();
+                    st.set_message_history(MAIN_AGENT_ID, compacted);
+                }
+            }
+
+            let stop_reason = match &result {
+                Ok(_) => {
+                    info!("[{instance_id}] conversation loop completed");
+                    None
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    warn!("[{instance_id}] conversation loop error: {msg}");
+                    let classified = query_llm::LlmError::classify(e);
+                    if classified.should_emit() {
+                        eb.emit(EngineEvent::SessionError(classified.to_session_error()));
+                    }
+                    Some(msg)
+                }
+            };
+
+            // Fire Stop hook (non-blockable)
+            if hook_manager_spawn.has_hooks_for_event(&HookEvent::Stop) {
+                let base = HookInputBase {
+                    hook_event_name: HookEvent::Stop,
+                    session_id: session_id_spawn.clone(),
+                    agent_id: MAIN_AGENT_ID.to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    cwd: cwd_spawn.clone(),
+                };
+                zen_hooks::execute_hooks(
+                    &hook_manager_spawn,
+                    &HookEvent::Stop,
+                    &HookInput::Stop(StopInput { base, stop_reason }),
+                    &ExecuteHooksOptions {
+                        client: Some(&http_client),
+                        profile: Some(&profile),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            }
+
+            // Consume inputs that queued up mid-turn: a non-empty batch chains
+            // straight into the next query (state stays Processing); otherwise
+            // return the state machine to Idle and signal it. (Also fixes the
+            // pre-existing bug where the StateManager stayed `Processing`
+            // forever — only the event was emitted.)
+            let next_batch = {
+                let mut st = state_for_spawn.lock().unwrap();
+                // Drain even when this turn was interrupted — the TS `finally`
+                // does too, so messages typed during a cancelled turn still run.
+                // (A session clear empties the queue first, so nothing revives.)
+                let batch = st.take_next_input_batch();
+                if batch.is_empty() {
+                    if !cancel.is_cancelled() {
+                        st.update_state(MAIN_AGENT_ID, SessionState::Idle);
+                    }
+                } else {
+                    // The interrupt path may have set Idle/Paused already —
+                    // the chained turn needs Processing so new arrivals queue.
+                    st.update_state(MAIN_AGENT_ID, SessionState::Processing);
+                }
+                batch
+            };
+            if next_batch.is_empty() {
+                // Signal idle (unless cancelled)
+                if !cancel.is_cancelled() {
+                    eb.emit(EngineEvent::StateUpdate(StateUpdateData {
+                        state: SessionState::Idle,
+                    }));
+                }
+            } else {
+                let joined = next_batch
+                    .iter()
+                    .map(|i| i.input.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                info!(
+                    "[{instance_id}] starting next turn with {} queued input(s)",
+                    next_batch.len()
+                );
+                match engine_weak.upgrade() {
+                    Some(engine) => {
+                        if let Err(e) = engine.start_query(&joined) {
+                            warn!("[{instance_id}] queued-input turn failed to start: {e}");
+                            let mut st = state_for_spawn.lock().unwrap();
+                            st.update_state(MAIN_AGENT_ID, SessionState::Idle);
+                            eb.emit(EngineEvent::StateUpdate(StateUpdateData {
+                                state: SessionState::Idle,
+                            }));
+                        }
+                    }
+                    None => {
+                        warn!("[{instance_id}] engine dropped before queued inputs could run");
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     /// Last non-empty main-agent assistant text from persisted transcript (after `query` runs).
     pub fn last_main_assistant_visible_text(&self) -> String {
         let state = self.state.lock().unwrap();
@@ -2319,9 +2448,15 @@ mod tests {
         // ToolSearch / apply_skill_activation insert the FULL name directly.
         let mut set2 = std::collections::HashSet::new();
         set2.insert("mcp__senclaw-space__space_note_create".to_string());
-        assert!(discovered_has(&set2, "mcp__senclaw-space__space_note_create"));
+        assert!(discovered_has(
+            &set2,
+            "mcp__senclaw-space__space_note_create"
+        ));
         // A genuinely-undiscovered tool stays out.
-        assert!(!discovered_has(&set, "mcp__senclaw-space__space_note_create"));
+        assert!(!discovered_has(
+            &set,
+            "mcp__senclaw-space__space_note_create"
+        ));
     }
 
     #[test]
@@ -2795,8 +2930,12 @@ mod tests {
         assert_eq!(name, "ssh-connect");
         assert!(rest.is_empty());
         // Ordinary text that merely starts with `/` or `#` is left alone.
-        assert!(engine.detect_explicit_skill("/Users/benji/file.rs").is_none());
-        assert!(engine.detect_explicit_skill("#hashtag not a skill").is_none());
+        assert!(engine
+            .detect_explicit_skill("/Users/benji/file.rs")
+            .is_none());
+        assert!(engine
+            .detect_explicit_skill("#hashtag not a skill")
+            .is_none());
         assert!(engine.detect_explicit_skill("just connect ssh").is_none());
     }
 
@@ -2858,7 +2997,8 @@ mod tests {
             &[],
         );
         assert_eq!(
-            e.match_skill_name("please search the web browser for prices").as_deref(),
+            e.match_skill_name("please search the web browser for prices")
+                .as_deref(),
             Some("agent-browser")
         );
         // Unrelated prompt does not match.
@@ -2994,6 +3134,49 @@ mod tests {
         engine.process_user_input("hello", None).unwrap();
         let state = engine.state.lock().unwrap();
         assert_eq!(state.current_state(MAIN_AGENT_ID), SessionState::Processing);
+    }
+
+    #[tokio::test]
+    async fn input_queues_while_processing() {
+        let opts = ZenCoreOptions {
+            instance_id: "test-queue".into(),
+            ..Default::default()
+        };
+        let engine = ZenEngine::new(opts, None);
+        engine.create_session(None).unwrap();
+
+        let mut rx = engine.event_bus.subscribe();
+        engine.process_user_input("first", None).unwrap();
+        // Main agent is Processing — these must queue, not start new loops.
+        engine.process_user_input("second", None).unwrap();
+        engine.process_user_input("/compact", None).unwrap();
+        engine.process_user_input("third", None).unwrap();
+
+        {
+            let mut state = engine.state.lock().unwrap();
+            assert_eq!(state.pending_inputs_len(), 3);
+            // Inject items drain up to (not including) the command.
+            let injected = state.consume_inject_inputs_before_next_command();
+            assert_eq!(injected.len(), 1);
+            assert_eq!(injected[0].input, "second");
+            assert_eq!(state.pending_inputs_len(), 2);
+        }
+
+        // InputReceived events: first is not queued, the rest are.
+        let mut received = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let EngineEvent::InputReceived(d) = ev {
+                received.push(d);
+            }
+        }
+        assert_eq!(received.len(), 4);
+        assert!(!received[0].queued);
+        assert!(received[1].queued && received[1].inject);
+        assert!(
+            received[2].queued && !received[2].inject,
+            "/compact is a command"
+        );
+        assert!(received[3].queued && received[3].inject);
     }
 
     fn llm_cfg(id: &str, model: &str) -> crate::gateway::group_manager::LlmConfig {

@@ -160,6 +160,14 @@ pub trait CoreApi: Send + Sync {
         Ok(())
     }
 
+    /// Queue an input into the engine's pending queue ONLY if that agent is
+    /// mid-turn (the input then rides the running turn's tool results or the
+    /// next chained turn). Returns `false` when idle or no engine exists —
+    /// the caller should dispatch through its normal full-turn path.
+    fn queue_input_if_processing(&self, _jid: &str, _prompt: &str) -> bool {
+        false
+    }
+
     /// Whether the session has pending tool-call results. Default false.
     fn has_session_tool_results(&self, _jid: &str) -> bool {
         false

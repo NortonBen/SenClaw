@@ -489,6 +489,15 @@ impl CoreApi for ZenCoreApi {
         Ok(())
     }
 
+    fn queue_input_if_processing(&self, jid: &str, prompt: &str) -> bool {
+        // No ensure_engine: if no engine exists yet, nothing is processing.
+        let engine = self.engines.lock().unwrap().get(jid).cloned();
+        match engine {
+            Some(engine) => engine.queue_input_if_processing(prompt),
+            None => false,
+        }
+    }
+
     fn has_session_tool_results(&self, jid: &str) -> bool {
         self.engines
             .lock()

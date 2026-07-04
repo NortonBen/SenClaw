@@ -48,7 +48,7 @@ pub use context::{
 pub use engine::ZenEngine;
 pub use events::{EngineEvent, EventBus, ResponseRegistry};
 pub use model_manager::{with_model_manager, ModelManager, ModelUpdateData, TaskConfig};
-pub use state::StateManager;
+pub use state::{take_next_batch, PendingInputKind, PendingUserInput, StateManager};
 pub use workbench::{
     ProcessInfo, StopReason, WorkbenchArtifact, WorkbenchFile, WorkbenchMode, WorkbenchNewData,
     WorkbenchService, WorkbenchServiceCrashedData, WorkbenchServiceReadyData,
@@ -284,6 +284,20 @@ pub struct StateUpdateData {
     pub state: SessionState,
 }
 
+/// Event: `input:received` — a user input was accepted, either started
+/// immediately (`queued: false`) or held in the pending queue because the
+/// main agent is mid-turn (`queued: true`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputReceivedData {
+    pub input: String,
+    pub queued: bool,
+    /// True when the queued input is an inject (may be appended to the
+    /// running turn's tool results) rather than a `/command`.
+    pub inject: bool,
+    #[serde(rename = "queueLength")]
+    pub queue_length: usize,
+}
+
 /// Event: `message:thinking:chunk`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingChunkData {
@@ -494,11 +508,7 @@ pub enum FormField {
         help: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         placeholder: Option<String>,
-        #[serde(
-            default,
-            rename = "maxLength",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, rename = "maxLength", skip_serializing_if = "Option::is_none")]
         max_length: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<String>,
@@ -512,11 +522,7 @@ pub enum FormField {
         help: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         placeholder: Option<String>,
-        #[serde(
-            default,
-            rename = "maxLength",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, rename = "maxLength", skip_serializing_if = "Option::is_none")]
         max_length: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rows: Option<u64>,
@@ -695,9 +701,7 @@ impl FormField {
             | FormField::Textarea { default, .. }
             | FormField::Select { default, .. }
             | FormField::Radio { default, .. }
-            | FormField::Date { default, .. } => {
-                default.as_ref().map(|v| serde_json::json!(v))
-            }
+            | FormField::Date { default, .. } => default.as_ref().map(|v| serde_json::json!(v)),
             FormField::Number { default, .. } | FormField::Slider { default, .. } => {
                 default.map(|v| serde_json::json!(v))
             }

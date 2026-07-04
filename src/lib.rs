@@ -128,6 +128,14 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         text: &str,
         attachments: &[crate::agent::input_builder::ImageAttachment],
     ) {
+        // Mid-turn fast path: while this group's agent is processing, text-only
+        // inputs go into the engine's pending queue — they get appended to the
+        // running turn's tool results (or chained as the next turn) instead of
+        // waiting behind the whole turn in the GroupQueue. Image messages keep
+        // the full path (the queue is text-only).
+        if attachments.is_empty() && self.agent_pool.queue_input_if_processing(group_jid, text) {
+            return;
+        }
         let agent_pool = Arc::clone(&self.agent_pool);
         let jid = group_jid.to_string();
         let g = group.clone();
@@ -441,7 +449,10 @@ fn persist_plan(
     } else {
         tracing::info!(
             "[Plans] persisted plan id={} chat={} title=\"{}\" file={}",
-            plan.id, chat_jid, plan.title, file_path.display()
+            plan.id,
+            chat_jid,
+            plan.title,
+            file_path.display()
         );
     }
 }
@@ -686,6 +697,56 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
 
 // ===== App channel control flow wiring =====
 
+/// Build the sender's session list (the default session plus any `:s-*`
+/// sub-sessions) and push it to the app as a `SESSION_LIST_RESP` control frame.
+/// Ensures the default session group exists so the list is never empty.
+async fn send_app_session_list(
+    app: &Arc<channels::app::AppChannel>,
+    db: &Arc<db::Db>,
+    gm: &Arc<gateway::group_manager::GroupManager>,
+    cfg: &Arc<config::Config>,
+    sender_id: &str,
+) {
+    use channels::app::CTRL_SESSION_LIST_RESP;
+
+    let default_jid = app.default_session_jid(sender_id);
+    if gm.get(db, &default_jid).is_none() {
+        gateway::group_manager::ensure_app_group(db, gm, cfg, &default_jid);
+    }
+
+    let sub_prefix = format!("{default_jid}:");
+    let active = app.active_session_for(sender_id);
+    let last_activity = db.last_activity_per_group().unwrap_or_default();
+
+    let mut sessions: Vec<serde_json::Value> = gm
+        .list(db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|g| g.jid == default_jid || g.jid.starts_with(&sub_prefix))
+        .map(|g| {
+            let ts = last_activity.get(&g.jid).copied();
+            serde_json::json!({
+                "jid": g.jid,
+                "name": g.name,
+                "folder": g.folder,
+                "groupType": g.group_type,
+                "lastActivity": ts,
+                "active": g.jid == active,
+            })
+        })
+        .collect();
+
+    // Freshest first; sessions with no activity yet sink to the bottom.
+    sessions.sort_by(|a, b| {
+        let av = a["lastActivity"].as_i64().unwrap_or(0);
+        let bv = b["lastActivity"].as_i64().unwrap_or(0);
+        bv.cmp(&av)
+    });
+
+    let json = serde_json::to_string(&sessions).unwrap_or_default();
+    let _ = app.send_control(CTRL_SESSION_LIST_RESP, json).await;
+}
+
 /// Wire AGENT_LIST_REQ / AGENT_SELECT / HISTORY_REQ handlers onto an AppChannel.
 /// Called before `connect()` so the handler is in place when the first control
 /// frame arrives.
@@ -700,7 +761,8 @@ fn wire_app_channel_controls(
 ) {
     use channels::app::{
         CTRL_AGENT_LIST_REQ, CTRL_AGENT_LIST_RESP, CTRL_AGENT_SELECT, CTRL_API_REQ, CTRL_API_RESP,
-        CTRL_HISTORY_REQ, CTRL_HISTORY_RESP,
+        CTRL_HISTORY_REQ, CTRL_HISTORY_RESP, CTRL_SESSION_CREATE, CTRL_SESSION_DELETE,
+        CTRL_SESSION_LIST_REQ, CTRL_SESSION_SELECT, CTRL_SESSION_UPDATE,
     };
 
     let app_for_cb = Arc::clone(app);
@@ -781,12 +843,12 @@ fn wire_app_channel_controls(
                     let target_folder = bwr.agent.folder.clone();
                     let target_name   = bwr.agent.name.clone();
 
-                    // Find the sender's own app group JID and update its folder binding.
-                    let chat_jid = gm.list(&db).unwrap_or_default()
-                        .into_iter()
-                        .find(|g| g.jid.contains(&format!(":user:{}", sender_id)))
-                        .map(|g| g.jid)
-                        .unwrap_or_else(|| format!("app:unknown:user:{}", sender_id));
+                    // Rebind the sender's ACTIVE session group (multi-session);
+                    // falls back to the default single-session jid.
+                    let chat_jid = app.active_session_for(&sender_id);
+                    if gm.get(&db, &chat_jid).is_none() {
+                        gateway::group_manager::ensure_app_group(&db, &gm, &cfg, &chat_jid);
+                    }
 
                     if let Some(mut binding) = gm.get(&db, &chat_jid) {
                         binding.folder = target_folder.clone();
@@ -826,23 +888,8 @@ fn wire_app_channel_controls(
                     let page_size = val["pageSize"].as_u64().unwrap_or(20) as u32;
                     let offset = (page.saturating_sub(1)) * page_size;
 
-                    // Find the chat_jid for this sender.
-                    let chat_jid = {
-                        let all = gm.list(&db).unwrap_or_default();
-                        all.into_iter()
-                            .find(|g| {
-                                g.channel == "app"
-                                    && g.jid.contains(&format!(":user:{}", sender_id))
-                            })
-                            .map(|g| g.jid)
-                    };
-
-                    let Some(chat_jid) = chat_jid else {
-                        tracing::warn!(
-                            "[AppChannel] HISTORY_REQ: no group for sender {}", sender_id
-                        );
-                        return;
-                    };
+                    // History for the sender's ACTIVE session (multi-session).
+                    let chat_jid = app.active_session_for(&sender_id);
 
                     let messages = db
                         .get_group_messages_paginated(&chat_jid, page_size, offset)
@@ -873,6 +920,175 @@ fn wire_app_channel_controls(
                         sender_id, payload.len(), page, page_size
                     );
                     let _ = app.send_control(CTRL_HISTORY_RESP, json).await;
+                });
+            }
+
+            // ── Session list ────────────────────────────────────────────────
+            t if t == CTRL_SESSION_LIST_REQ => {
+                tokio::spawn(async move {
+                    send_app_session_list(&app, &db, &gm, &cfg, &sender_id).await;
+                });
+            }
+
+            // ── Session create — a new `:s-*` sub-session group ──────────────
+            t if t == CTRL_SESSION_CREATE => {
+                let agent_pool_cell = Arc::clone(&agent_pool_cell);
+                tokio::spawn(async move {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&metadata).unwrap_or_default();
+                    let name = val["name"].as_str().unwrap_or("New session").to_string();
+                    let want_folder = val["folder"].as_str().unwrap_or("").to_string();
+
+                    // Folder must be bound to this channel; else use the first
+                    // bound agent, else a per-device fallback.
+                    let bindings =
+                        db.list_bindings_for_channel(db_channel_id).unwrap_or_default();
+                    let folder = if bindings.iter().any(|b| b.agent.folder == want_folder) {
+                        want_folder
+                    } else {
+                        bindings
+                            .first()
+                            .map(|b| b.agent.folder.clone())
+                            .unwrap_or_else(|| format!("app-{sender_id}"))
+                    };
+
+                    let sid = uuid::Uuid::new_v4().simple().to_string();
+                    let jid = format!("{}:s-{}", app.default_session_jid(&sender_id), &sid[..8]);
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let binding = crate::types::GroupBinding {
+                        jid: jid.clone(),
+                        folder,
+                        name,
+                        channel: "app".to_string(),
+                        group_type: "chat".to_string(),
+                        requires_trigger: false,
+                        allowed_tools: None,
+                        allowed_paths: None,
+                        allowed_work_dirs: None,
+                        bot_token: None,
+                        max_messages: None,
+                        llm_config_id: None,
+                        last_active: Some(now.clone()),
+                        added_at: now,
+                    };
+                    gm.register(&db, &cfg, &binding);
+                    app.set_active_session(&sender_id, &jid);
+
+                    let mode = val["mode"].as_str().unwrap_or("");
+                    if !mode.is_empty() {
+                        if let Some(pool) = agent_pool_cell.get() {
+                            pool.set_agent_mode(&jid, mode);
+                        }
+                    }
+                    tracing::info!(
+                        "[AppChannel] SESSION_CREATE {} for {}", jid, sender_id
+                    );
+                    send_app_session_list(&app, &db, &gm, &cfg, &sender_id).await;
+                });
+            }
+
+            // ── Session update — rename / rebind folder ──────────────────────
+            t if t == CTRL_SESSION_UPDATE => {
+                tokio::spawn(async move {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&metadata).unwrap_or_default();
+                    let jid = val["jid"].as_str().unwrap_or("").to_string();
+                    let default_jid = app.default_session_jid(&sender_id);
+                    let owns = jid == default_jid
+                        || jid.starts_with(&format!("{default_jid}:"));
+                    if jid.is_empty() || !owns {
+                        return;
+                    }
+                    let mut updates =
+                        gateway::group_manager::GroupBindingUpdate::default();
+                    if let Some(n) = val["name"].as_str() {
+                        updates.name = Some(n.to_string());
+                    }
+                    if let Some(f) = val["folder"].as_str() {
+                        if !f.is_empty() {
+                            updates.folder = Some(f.to_string());
+                        }
+                    }
+                    if gm.get(&db, &jid).is_none() {
+                        gateway::group_manager::ensure_app_group(&db, &gm, &cfg, &jid);
+                    }
+                    let _ = gm.update(&db, &cfg, &jid, updates);
+                    send_app_session_list(&app, &db, &gm, &cfg, &sender_id).await;
+                });
+            }
+
+            // ── Session delete — sub-sessions only (default is permanent) ────
+            t if t == CTRL_SESSION_DELETE => {
+                tokio::spawn(async move {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&metadata).unwrap_or_default();
+                    let jid = val["jid"].as_str().unwrap_or("").to_string();
+                    let default_jid = app.default_session_jid(&sender_id);
+                    let owns = jid == default_jid
+                        || jid.starts_with(&format!("{default_jid}:"));
+                    // The default session can't be deleted — it's the fallback.
+                    if jid.is_empty() || !owns || jid == default_jid {
+                        return;
+                    }
+                    gm.unregister(&db, &cfg, &jid);
+                    if app.active_session_for(&sender_id) == jid {
+                        app.set_active_session(&sender_id, &default_jid);
+                    }
+                    tracing::info!(
+                        "[AppChannel] SESSION_DELETE {} for {}", jid, sender_id
+                    );
+                    send_app_session_list(&app, &db, &gm, &cfg, &sender_id).await;
+                });
+            }
+
+            // ── Session select — set active + optional folder/mode ───────────
+            t if t == CTRL_SESSION_SELECT => {
+                let agent_pool_cell = Arc::clone(&agent_pool_cell);
+                tokio::spawn(async move {
+                    let val: serde_json::Value =
+                        serde_json::from_str(&metadata).unwrap_or_default();
+                    let jid = val["jid"].as_str().unwrap_or("").to_string();
+                    let default_jid = app.default_session_jid(&sender_id);
+                    let owns = jid == default_jid
+                        || jid.starts_with(&format!("{default_jid}:"));
+                    if jid.is_empty() || !owns {
+                        return;
+                    }
+                    // The default session may not be registered until the first
+                    // message — materialize it so history/routing line up.
+                    if jid == default_jid && gm.get(&db, &jid).is_none() {
+                        gateway::group_manager::ensure_app_group(&db, &gm, &cfg, &jid);
+                    }
+                    app.set_active_session(&sender_id, &jid);
+
+                    // Optional folder rebind (switch agent for this session);
+                    // never touches the session's own display name.
+                    if let Some(folder) = val["folder"].as_str() {
+                        if !folder.is_empty() {
+                            let bindings = db
+                                .list_bindings_for_channel(db_channel_id)
+                                .unwrap_or_default();
+                            if let Some(b) =
+                                bindings.iter().find(|b| b.agent.folder == folder)
+                            {
+                                let mut updates =
+                                    gateway::group_manager::GroupBindingUpdate::default();
+                                updates.folder = Some(b.agent.folder.clone());
+                                let _ = gm.update(&db, &cfg, &jid, updates);
+                            }
+                        }
+                    }
+
+                    let mode = val["mode"].as_str().unwrap_or("");
+                    if !mode.is_empty() {
+                        if let Some(pool) = agent_pool_cell.get() {
+                            pool.set_agent_mode(&jid, mode);
+                        }
+                    }
+                    tracing::info!(
+                        "[AppChannel] SESSION_SELECT {} for {}", jid, sender_id
+                    );
+                    send_app_session_list(&app, &db, &gm, &cfg, &sender_id).await;
                 });
             }
 
@@ -1357,6 +1573,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let agent_pool = agent::agent_pool::AgentPool::new(zen_core_api.clone());
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
+    // Skills hot-reload: clawhub reload-signal + manual changes to the
+    // managed skills dir (cp/rm of a skill folder writes no signal).
+    agent_pool.watch_skills_reload(cfg.paths.managed_skills_dir.clone());
     // Publish the pool so the relay AGENT_SELECT handler can set agent modes.
     let _ = app_agent_pool_cell.set(agent_pool.clone());
 
@@ -1660,7 +1879,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // Inject browser MCP server so browser-agent virtual instances have browser tools.
     // Use zen_core::McpServerConfig (not mcp::helper) since VirtualWorkerPool uses that type.
     virtual_worker_pool.set_extra_mcp_servers(vec![{
-        let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port);
+        // Coarse identity: all virtual workers share one browser tab for now.
+        // Per-persona tabs need VirtualWorkerPool to build configs per worker.
+        let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port, "virtual-worker");
         crate::zen_core::McpServerConfig {
             name: helper_cfg.name,
             command: helper_cfg.command,
@@ -1741,7 +1962,6 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 "[SenClaw] App-channel event forwarder wired ({} channel(s))",
                 app_channels.len()
             );
-
         }
 
         // Wire MessageRouter → WebSocket gateway for real-time incoming messages.
@@ -2036,7 +2256,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                             .map(|v| serde_json::to_string(v).unwrap_or_default());
                         if let Err(e) = db.insert_dispatch_activity(
                             &task_id,
-                            "",  // parent_id — resolved by frontend from dispatchParents
+                            "", // parent_id — resolved by frontend from dispatchParents
                             &entry_clone.entry_type,
                             entry_clone.tool_name.as_deref(),
                             entry_clone.title.as_deref(),
@@ -2046,9 +2266,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                             entry_clone.text.as_deref(),
                             &entry_clone.ts,
                         ) {
-                            tracing::warn!(
-                                "[DispatchActivity] persist failed task={task_id}: {e}"
-                            );
+                            tracing::warn!("[DispatchActivity] persist failed task={task_id}: {e}");
                         }
                         gw.notify_dispatch_activity(&task_id, &entry).await;
                     });
@@ -2162,17 +2380,19 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 gw.notify_workflow_update(&run_json).await;
             });
         });
-        let svc = Arc::new(workflow::WorkflowService::new(workflow::WorkflowServiceOpts {
-            workflows_dir: cfg.paths.workflows_dir.clone(),
-            workflow_state_path: cfg.paths.workflow_state_path.clone(),
-            workflow_data_dir: cfg.paths.workflow_data_dir.clone(),
-            persona_registry: Arc::clone(&persona_registry),
-            concurrency: None,
-            skills_extra_dirs: cli::commands::workflow::default_skills_dirs(&cfg),
-            extra_mcp_servers: cli::commands::workflow::default_extra_mcp_servers(&cfg),
-            shell_override: cfg.workflow_shell.clone(),
-            on_update: Some(on_update),
-        }));
+        let svc = Arc::new(workflow::WorkflowService::new(
+            workflow::WorkflowServiceOpts {
+                workflows_dir: cfg.paths.workflows_dir.clone(),
+                workflow_state_path: cfg.paths.workflow_state_path.clone(),
+                workflow_data_dir: cfg.paths.workflow_data_dir.clone(),
+                persona_registry: Arc::clone(&persona_registry),
+                concurrency: None,
+                skills_extra_dirs: cli::commands::workflow::default_skills_dirs(&cfg),
+                extra_mcp_servers: cli::commands::workflow::default_extra_mcp_servers(&cfg),
+                shell_override: cfg.workflow_shell.clone(),
+                on_update: Some(on_update),
+            },
+        ));
         tracing::info!(
             "[SenClaw] WorkflowService ready: {} definition(s) in {}",
             svc.list_defs().len(),
@@ -2240,15 +2460,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     self.agent_pool
                         .resolve_ask_question_batch(request_id, answers, other_texts);
             }
-            fn resolve_form(
-                &self,
-                request_id: &str,
-                values: &serde_json::Value,
-                submitted: bool,
-            ) {
-                let _ = self
-                    .agent_pool
-                    .resolve_form(request_id, form_values_map(values), submitted);
+            fn resolve_form(&self, request_id: &str, values: &serde_json::Value, submitted: bool) {
+                let _ =
+                    self.agent_pool
+                        .resolve_form(request_id, form_values_map(values), submitted);
             }
             fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
                 self.agent_pool

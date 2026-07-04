@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures::{SinkExt, StreamExt};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
@@ -44,7 +44,13 @@ pub struct BrowserBridge {
     pub ext_port: u16,
     /// Port the MCP internal WS server listens on.
     pub int_port: u16,
+    /// Backpressure on requests in flight to the extension.
+    inflight: Arc<Semaphore>,
 }
+
+/// Cap on requests concurrently forwarded to the extension (see gateway
+/// BrowserRelay for rationale).
+const MAX_INFLIGHT_TO_EXTENSION: usize = 12;
 
 impl BrowserBridge {
     /// Create a new bridge. Does not start listening yet.
@@ -57,6 +63,7 @@ impl BrowserBridge {
             crawl_engine: Arc::new(CrawlEngine::new()),
             ext_port: port,
             int_port: port + 1,
+            inflight: Arc::new(Semaphore::new(MAX_INFLIGHT_TO_EXTENSION)),
         }
     }
 
@@ -174,6 +181,7 @@ impl BrowserBridge {
             let pending = self.pending.clone();
             let tabs = self.tabs.clone();
             let crawl_engine = self.crawl_engine.clone();
+            let inflight = self.inflight.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -190,72 +198,80 @@ impl BrowserBridge {
 
                             let (mut ws_sink, mut ws_stream) = ws.split();
 
-                            // Read loop: MCP client → DaemonMessage → relay to extension → response back
+                            // Per-connection state; the read loop runs in its
+                            // own task so concurrent MCP clients don't block
+                            // each other at the accept loop.
                             let ext_tx_clone = ext_tx.clone();
                             let pending_clone = pending.clone();
                             let tabs_clone = tabs.clone();
                             let crawl_clone = crawl_engine.clone();
+                            let inflight_clone = inflight.clone();
 
-                            loop {
-                                match ws_stream.next().await {
-                                    Some(Ok(Message::Text(text))) => {
-                                        let text_str = text.to_string();
+                            tokio::spawn(async move {
+                                loop {
+                                    match ws_stream.next().await {
+                                        Some(Ok(Message::Text(text))) => {
+                                            let text_str = text.to_string();
 
-                                        // Try DaemonMessage (MCP client request)
-                                        match serde_json::from_str::<DaemonMessage>(&text_str) {
-                                            Ok(dm) => {
-                                                let response = relay_mcp_request(
-                                                    &ext_tx_clone,
-                                                    &pending_clone,
-                                                    &tabs_clone,
-                                                    &crawl_clone,
-                                                    dm,
-                                                )
-                                                .await;
+                                            // Try DaemonMessage (MCP client request)
+                                            match serde_json::from_str::<DaemonMessage>(&text_str) {
+                                                Ok(dm) => {
+                                                    let response = relay_mcp_request(
+                                                        &ext_tx_clone,
+                                                        &pending_clone,
+                                                        &tabs_clone,
+                                                        &crawl_clone,
+                                                        &inflight_clone,
+                                                        dm,
+                                                    )
+                                                    .await;
 
-                                                let resp_json = serde_json::to_string(&response)
+                                                    let resp_json = serde_json::to_string(&response)
                                                     .unwrap_or_else(|e| {
                                                         format!(
                                                             r#"{{"type":"Response","status":"error","message":"serialize failed: {}"}}"#,
                                                             e
                                                         )
                                                     });
-                                                if ws_sink
-                                                    .send(Message::Text(resp_json.into()))
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
+                                                    if ws_sink
+                                                        .send(Message::Text(resp_json.into()))
+                                                        .await
+                                                        .is_err()
+                                                    {
+                                                        break;
+                                                    }
                                                 }
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(
+                                                Err(e) => {
+                                                    tracing::warn!(
                                                     "[BrowserBridge] Failed to parse MCP message: {e}"
                                                 );
-                                                let err_resp = serde_json::json!({
-                                                    "type": "Response",
-                                                    "status": "error",
-                                                    "message": format!("parse error: {e}"),
-                                                });
-                                                let _ = ws_sink
-                                                    .send(Message::Text(
-                                                        err_resp.to_string().into(),
-                                                    ))
-                                                    .await;
+                                                    let err_resp = serde_json::json!({
+                                                        "type": "Response",
+                                                        "status": "error",
+                                                        "message": format!("parse error: {e}"),
+                                                    });
+                                                    let _ = ws_sink
+                                                        .send(Message::Text(
+                                                            err_resp.to_string().into(),
+                                                        ))
+                                                        .await;
+                                                }
                                             }
                                         }
-                                    }
-                                    Some(Ok(Message::Close(_))) | None => {
-                                        tracing::info!("[BrowserBridge] MCP client disconnected");
-                                        break;
-                                    }
-                                    Some(Ok(_)) => {} // Ignore binary, ping, pong
-                                    Some(Err(e)) => {
-                                        tracing::error!("[BrowserBridge] MCP WS error: {e}");
-                                        break;
+                                        Some(Ok(Message::Close(_))) | None => {
+                                            tracing::info!(
+                                                "[BrowserBridge] MCP client disconnected"
+                                            );
+                                            break;
+                                        }
+                                        Some(Ok(_)) => {} // Ignore binary, ping, pong
+                                        Some(Err(e)) => {
+                                            tracing::error!("[BrowserBridge] MCP WS error: {e}");
+                                            break;
+                                        }
                                     }
                                 }
-                            }
+                            });
                         }
                         Err(e) => {
                             tracing::error!("[BrowserBridge] MCP accept error: {e}");
@@ -334,6 +350,7 @@ async fn relay_mcp_request(
     pending: &Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
     tabs: &Arc<TabRegistry>,
     crawl_engine: &Arc<CrawlEngine>,
+    inflight: &Arc<Semaphore>,
     msg: DaemonMessage,
 ) -> ExtensionMessage {
     let request_id = extract_request_id(&msg);
@@ -362,6 +379,7 @@ async fn relay_mcp_request(
                         "extension_alive": alive,
                         "tab_count": tab_count,
                         "active_tab": active_tab,
+                        "agent_tabs": tabs.agent_tab_map().await,
                         "active_crawl_jobs": crawl_engine.list_jobs().await,
                     }),
                 },
@@ -375,6 +393,7 @@ async fn relay_mcp_request(
             link_patterns,
             exclude_patterns,
             same_domain,
+            ..
         } => {
             let config = CrawlConfig {
                 job_id: job_id.clone(),
@@ -391,6 +410,21 @@ async fn relay_mcp_request(
         }
         _ => {}
     }
+
+    // Backpressure: hold slow bursts here rather than piling them all onto
+    // the browser at once. Permit is held until the response (or timeout).
+    let _permit = match inflight.acquire().await {
+        Ok(p) => p,
+        Err(_) => {
+            return ExtensionMessage::Response {
+                request_id,
+                result: ActionResult::Error {
+                    message: "Bridge shutting down".into(),
+                    code: None,
+                },
+            };
+        }
+    };
 
     // Set up response channel
     let (tx, rx) = oneshot::channel();
@@ -504,8 +538,9 @@ async fn handle_extension_message(
             tab_id,
             url,
             window_id: _,
+            agent_id,
         } => {
-            tabs.register(tab_id.clone(), url.clone()).await;
+            tabs.register(tab_id.clone(), url.clone(), agent_id).await;
             tabs.set_active(&tab_id).await;
             tracing::info!("[BrowserBridge] Tab created: {tab_id} -> {url}");
         }
@@ -514,10 +549,11 @@ async fn handle_extension_message(
             url,
             title,
             status,
+            agent_id: _,
         } => {
             tabs.update(&tab_id, url, title, status).await;
         }
-        ExtensionMessage::TabClosed { tab_id } => {
+        ExtensionMessage::TabClosed { tab_id, .. } => {
             tabs.remove(&tab_id).await;
             tracing::info!("[BrowserBridge] Tab closed: {tab_id}");
         }
@@ -555,8 +591,12 @@ async fn handle_extension_message(
         ExtensionMessage::Heartbeat {
             tab_count,
             active_tab_id: _,
+            agent_tabs,
         } => {
             tabs.heartbeat(tab_count).await;
+            if let Some(map) = agent_tabs {
+                tabs.sync_agent_tabs(map).await;
+            }
         }
     }
 }

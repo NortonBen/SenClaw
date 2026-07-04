@@ -224,8 +224,10 @@ pub fn ocr_mcp_config(ui_port: u16) -> McpServerConfig {
 /// the subprocess just needs its default timeout / memory limits.
 pub fn js_mcp_config(default_timeout_ms: u64, default_memory_mb: u64) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-js", "js-server");
-    cfg.env
-        .insert("SENCLAW_JS_TIMEOUT_MS".into(), default_timeout_ms.to_string());
+    cfg.env.insert(
+        "SENCLAW_JS_TIMEOUT_MS".into(),
+        default_timeout_ms.to_string(),
+    );
     cfg.env
         .insert("SENCLAW_JS_MEMORY_MB".into(), default_memory_mb.to_string());
     cfg
@@ -233,10 +235,16 @@ pub fn js_mcp_config(default_timeout_ms: u64, default_memory_mb: u64) -> McpServ
 
 // ===== Browser =====
 
-pub fn browser_mcp_config(ws_port: u16) -> McpServerConfig {
+/// `agent_id` identifies the agent this server instance serves; the extension
+/// allocates one tab per agent_id so concurrent agents don't share a tab.
+pub fn browser_mcp_config(ws_port: u16, agent_id: &str) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-browser", "browser-server");
     cfg.env
         .insert("SENCLAW_WS_PORT".into(), ws_port.to_string());
+    if !agent_id.is_empty() {
+        cfg.env
+            .insert("SENCLAW_AGENT_ID".into(), agent_id.to_string());
+    }
     cfg
 }
 

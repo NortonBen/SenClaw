@@ -298,6 +298,10 @@ struct SearchParams {
     country: Option<String>,
     #[serde(default = "default_true_val")]
     safe_search: bool,
+    /// Keep the search results page open in the agent's tab instead of
+    /// running in a throwaway tab (default false — throwaway tab).
+    #[serde(default)]
+    keep_open: bool,
 }
 
 fn default_search_engine2() -> String {
@@ -501,6 +505,10 @@ fn format_snapshot_response(
 struct McpBrowserServer {
     /// Gateway's WebSocket port.
     ws_port: u16,
+    /// Identity of the agent this subprocess serves (SENCLAW_AGENT_ID).
+    /// Stamped onto every command so the extension routes it to that
+    /// agent's own tab instead of the shared default-agent tab.
+    agent_id: Option<String>,
 }
 
 impl McpBrowserServer {
@@ -511,6 +519,7 @@ impl McpBrowserServer {
     /// Send a DaemonMessage to the gateway and wait for the response.
     /// Opens a fresh WebSocket connection for each request (stateless).
     async fn do_request(&self, msg: DaemonMessage) -> Result<ActionResult, String> {
+        let msg = msg.with_agent_id(self.agent_id.clone());
         let url = format!("ws://127.0.0.1:{}/browser-mcp", self.ws_port);
 
         let (mut ws, _) = tokio_tungstenite::connect_async(&url)
@@ -598,6 +607,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Navigate {
                 request_id: Self::request_id(),
+                agent_id: None,
                 url: p.url,
                 tab_id: p.tab_id,
             })
@@ -621,6 +631,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::NewTab {
                 request_id: Self::request_id(),
+                agent_id: None,
                 url: p.url,
             })
             .await
@@ -643,6 +654,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::CloseTab {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
             })
             .await
@@ -681,6 +693,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::SwitchTab {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
             })
             .await
@@ -701,6 +714,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::GoBack {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
             })
             .await
@@ -721,6 +735,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::GoForward {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
             })
             .await
@@ -741,6 +756,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Reload {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
             })
             .await
@@ -765,6 +781,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Click {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 index: p.index,
             })
@@ -788,6 +805,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Type {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 index: p.index,
                 text: p.text,
@@ -813,6 +831,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::SelectOption {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 index: p.index,
                 option_text: p.option_text,
@@ -840,6 +859,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Scroll {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 direction: p.direction,
                 amount,
@@ -863,6 +883,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Hover {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 index: p.index,
             })
@@ -887,6 +908,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::PressKey {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 key: p.key,
             })
@@ -910,6 +932,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::UploadFile {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 index: p.index,
                 file_paths: p.file_paths,
@@ -934,6 +957,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::ExecuteJs {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 script: p.script,
             })
@@ -977,6 +1001,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::WaitFor {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 condition,
             })
@@ -1016,6 +1041,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::GetSnapshot {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 depth: p.depth,
                 compress_html: p.compress_html,
@@ -1047,6 +1073,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::GetScreenshot {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 full_page: p.full_page,
                 format: p.format,
@@ -1088,6 +1115,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::ExtractText {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 selector: p.selector,
             })
@@ -1124,6 +1152,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::ExtractLinks {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 selector: p.selector,
             })
@@ -1147,6 +1176,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::ExtractTable {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 selector: p.selector,
             })
@@ -1203,6 +1233,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::ExecuteJs {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 script,
             })
@@ -1219,7 +1250,7 @@ impl McpBrowserServer {
     // ===== Search & Crawl =====
 
     #[rmcp::tool(
-        description = "Search Google or Bing and return structured results. Use for research, fact-checking, or finding documentation."
+        description = "Search Google or Bing and return structured results. Use for research, fact-checking, or finding documentation. Runs in a throwaway tab so parallel searches don't interfere; pass keep_open=true to keep the results page open in your tab instead."
     )]
     async fn browser_search(
         &self,
@@ -1230,10 +1261,12 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Search {
                 request_id: Self::request_id(),
+                agent_id: None,
                 query: p.query,
                 engine: p.engine,
                 num_results: p.num_results,
                 language: p.language,
+                ephemeral: !p.keep_open,
             })
             .await
         {
@@ -1262,6 +1295,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::CrawlStart {
                 job_id: job_id.clone(),
+                agent_id: None,
                 start_url,
                 depth: p.depth,
                 max_pages: p.max_pages,
@@ -1330,6 +1364,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::FillForm {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
                 fields: p.fields,
                 submit: p.submit,
@@ -1352,6 +1387,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Click {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id.clone(),
                 index: p.index,
             })
@@ -1362,6 +1398,7 @@ impl McpBrowserServer {
                 match self
                     .do_request(DaemonMessage::WaitFor {
                         request_id: Self::request_id(),
+                        agent_id: None,
                         tab_id: p.tab_id,
                         condition: WaitCondition::Navigation {
                             timeout_ms: p.timeout_ms,
@@ -1409,6 +1446,7 @@ impl McpBrowserServer {
         match self
             .do_request(DaemonMessage::Reload {
                 request_id: Self::request_id(),
+                agent_id: None,
                 tab_id: p.tab_id,
             })
             .await
@@ -1439,6 +1477,13 @@ pub async fn run_stdio_server() -> Result<()> {
         .parse()
         .context("invalid SENCLAW_WS_PORT")?;
 
+    let agent_id = std::env::var("SENCLAW_AGENT_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    if let Some(aid) = &agent_id {
+        tracing::info!("[BrowserServer] Serving agent: {aid}");
+    }
+
     // Verify the gateway is reachable
     let test_url = format!("ws://127.0.0.1:{ws_port}/browser-mcp");
     match tokio_tungstenite::connect_async(&test_url).await {
@@ -1453,7 +1498,7 @@ pub async fn run_stdio_server() -> Result<()> {
     }
 
     // Start MCP stdio server — each tool call will open a fresh WS connection
-    let server = McpBrowserServer { ws_port };
+    let server = McpBrowserServer { ws_port, agent_id };
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
 

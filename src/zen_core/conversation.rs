@@ -455,6 +455,46 @@ pub struct QueryConfig {
     /// text only. Agent mode keeps legacy "text = done" behavior so ordinary
     /// chat is unaffected.
     pub agent_mode: AgentMode,
+    /// Source of user inputs that queued up while this turn runs (main agent
+    /// only; `None` for subagents). Drained after each tool round and appended
+    /// to the last tool result so the model sees mid-turn user messages
+    /// without restarting the loop (mirrors TS
+    /// `injectPendingInputsIntoToolResult`).
+    pub pending_inject: Option<PendingInjectSource>,
+}
+
+/// Closure draining queued inject-type inputs (stops before the next
+/// `/command`). See [`StateManager::consume_inject_inputs_before_next_command`].
+pub type PendingInjectSource = Arc<dyn Fn() -> Vec<PendingUserInput> + Send + Sync>;
+
+/// Append queued mid-turn user inputs to the current tool-result blocks as
+/// `<system-reminder>` texts. Returns how many were injected.
+fn inject_pending_inputs(blocks: &mut Vec<ContentBlock>, config: &QueryConfig) -> usize {
+    if config.is_subagent {
+        return 0;
+    }
+    let Some(source) = &config.pending_inject else {
+        return 0;
+    };
+    let items = source();
+    for item in &items {
+        blocks.push(ContentBlock::Text {
+            text: format!(
+                "<system-reminder>\nNew user message arrived during your task:\n{}\n\n\
+                 Reminder: Once current task finishes, immediately respond to the user's \
+                 latest message. Do not skip it.\n</system-reminder>",
+                item.input
+            ),
+        });
+    }
+    if !items.is_empty() {
+        info!(
+            "[{}] injected {} queued user input(s) into tool results",
+            config.agent_id,
+            items.len()
+        );
+    }
+    items.len()
 }
 
 /// Absolute cap on LLM turns per user input — a backstop against runaway
@@ -607,8 +647,11 @@ const ENTER_PLAN_MODE_TOOL: &str = "EnterPlanMode";
 /// Dispatch tools whose execution counts as "DAG orchestration started". Tools
 /// like `DispatchListAgents` and bare `DispatchCreateParent` (without Run) are
 /// informational and do not actually delegate work, so they are excluded.
-const EXECUTING_DISPATCH_TOOLS: &[&str] =
-    &["DispatchCreateParentAndRun", "DispatchAllTasks", "DispatchTask"];
+const EXECUTING_DISPATCH_TOOLS: &[&str] = &[
+    "DispatchCreateParentAndRun",
+    "DispatchAllTasks",
+    "DispatchTask",
+];
 
 /// Sorted, deduped set of tool names in a batch — a coarse signature used to
 /// detect the model re-invoking the same tool turn after turn (args may vary
@@ -650,8 +693,7 @@ need different information, change the arguments — do not repeat the identical
 /// waits / status polls whose result changes as daemon-side state advances
 /// (e.g. re-waiting on a dispatch parent after it left the queue). Exempt
 /// from the duplicate-call interception.
-const DUPLICATE_EXEMPT_TOOLS: &[&str] =
-    &["DispatchAllTasks", "DispatchTask", "DispatchListAgents"];
+const DUPLICATE_EXEMPT_TOOLS: &[&str] = &["DispatchAllTasks", "DispatchTask", "DispatchListAgents"];
 
 fn is_duplicate_exempt(block: &ContentBlock) -> bool {
     matches!(block, ContentBlock::ToolUse { name, .. }
@@ -1166,7 +1208,9 @@ pub async fn query(
                         max_completion_nudges_cap
                     );
                     messages.push(assistant_msg);
-                    messages.push(create_user_message(vec![ContentBlock::Text { text: nudge }]));
+                    messages.push(create_user_message(vec![ContentBlock::Text {
+                        text: nudge,
+                    }]));
                     continue;
                 }
             }
@@ -1376,9 +1420,7 @@ pub async fn query(
         //       orchestrator trying to skip delegation can't escape via
         //       task_done. Same rejection pattern as Plan mode.
         let task_done_call_id: Option<String> = tool_uses.iter().find_map(|b| match b {
-            ContentBlock::ToolUse { name, id, .. }
-                if name == crate::tools::TASK_DONE_TOOL_NAME =>
-            {
+            ContentBlock::ToolUse { name, id, .. } if name == crate::tools::TASK_DONE_TOOL_NAME => {
                 Some(id.clone())
             }
             _ => None,
@@ -1406,18 +1448,27 @@ pub async fn query(
             // Rejected: rewrite the task_done result so the model sees an
             // error and is forced to take the mode's canonical exit path.
             let reject_msg = match td_mode {
-                AgentMode::Plan => "task_done was NOT accepted: in Plan mode the only valid exit \
+                AgentMode::Plan => {
+                    "task_done was NOT accepted: in Plan mode the only valid exit \
                     is to write your plan file to the plans_dir and then call \
                     `ExitPlanMode(plan=\"...\")`. Do that now — task_done is reserved for \
-                    abandoning the planning task entirely, not for finishing the plan.",
-                AgentMode::Dag => "task_done was NOT accepted: in this mode you must first \
+                    abandoning the planning task entirely, not for finishing the plan."
+                }
+                AgentMode::Dag => {
+                    "task_done was NOT accepted: in this mode you must first \
                     delegate work via `DispatchCreateParentAndRun(...)` (which blocks until \
                     sub-agents finish), then report results to the user. Calling task_done \
-                    before any dispatch means no work was actually done.",
+                    before any dispatch means no work was actually done."
+                }
                 AgentMode::Agent => unreachable!(),
             };
             for r in tool_results.iter_mut() {
-                if let ContentBlock::ToolResult { tool_use_id, content, is_error } = r {
+                if let ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } = r
+                {
                     if *tool_use_id == td_id {
                         *content = reject_msg.to_string();
                         *is_error = true;
@@ -1479,6 +1530,8 @@ pub async fn query(
         }
         if !tool_results.is_empty() {
             let mut blocks = tool_results;
+            // Mid-turn user messages ride along with this round's tool results.
+            inject_pending_inputs(&mut blocks, config);
             if hard_stop {
                 blocks.push(ContentBlock::Text {
                     text: FINAL_ANSWER_NUDGE.to_string(),
@@ -1704,7 +1757,10 @@ mod tests {
         // After ExitPlanMode runs, a follow-up text-only reply is a legitimate
         // wrap-up — no further nudge needed.
         let post = completion_nudge_for(AgentMode::Plan, true, false, 1, 2);
-        assert!(post.is_none(), "Plan mode should NOT nudge after ExitPlanMode");
+        assert!(
+            post.is_none(),
+            "Plan mode should NOT nudge after ExitPlanMode"
+        );
     }
 
     #[test]
@@ -1712,13 +1768,31 @@ mod tests {
         // A turn that STARTS in Agent mode but calls EnterPlanMode must behave as
         // Plan mode afterwards — otherwise a text-only reply silently ends the
         // turn and the approval dialog never appears.
-        assert!(matches!(effective_agent_mode(AgentMode::Agent, false), AgentMode::Agent));
-        assert!(matches!(effective_agent_mode(AgentMode::Agent, true), AgentMode::Plan));
+        assert!(matches!(
+            effective_agent_mode(AgentMode::Agent, false),
+            AgentMode::Agent
+        ));
+        assert!(matches!(
+            effective_agent_mode(AgentMode::Agent, true),
+            AgentMode::Plan
+        ));
         // Explicit Plan / Dag turns are unaffected by the flag.
-        assert!(matches!(effective_agent_mode(AgentMode::Plan, false), AgentMode::Plan));
-        assert!(matches!(effective_agent_mode(AgentMode::Dag, true), AgentMode::Dag));
+        assert!(matches!(
+            effective_agent_mode(AgentMode::Plan, false),
+            AgentMode::Plan
+        ));
+        assert!(matches!(
+            effective_agent_mode(AgentMode::Dag, true),
+            AgentMode::Dag
+        ));
         // End-to-end: Agent base + entered_plan_mode → the Plan nudge fires.
-        let nudge = completion_nudge_for(effective_agent_mode(AgentMode::Agent, true), false, false, 1, 2);
+        let nudge = completion_nudge_for(
+            effective_agent_mode(AgentMode::Agent, true),
+            false,
+            false,
+            1,
+            2,
+        );
         assert!(nudge.unwrap().contains("ExitPlanMode"));
     }
 
@@ -1735,7 +1809,10 @@ mod tests {
         // After dispatch returns, the orchestrator's job is to report results
         // — text-only is the natural exit. No nudge.
         let post = completion_nudge_for(AgentMode::Dag, false, true, 1, 2);
-        assert!(post.is_none(), "DAG mode should NOT nudge after dispatch executed");
+        assert!(
+            post.is_none(),
+            "DAG mode should NOT nudge after dispatch executed"
+        );
     }
 
     #[test]

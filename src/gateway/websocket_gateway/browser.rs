@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use axum::extract::ws::Message;
 use futures::{SinkExt, StreamExt};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock, Semaphore};
 
 use crate::browser::crawl_engine::CrawlEngine;
 use crate::browser::protocol::{DaemonMessage, ExtensionMessage};
@@ -19,6 +19,11 @@ use crate::browser::types::*;
 
 /// Response channel for a pending request.
 pub(crate) type PendingRequest = oneshot::Sender<ActionResult>;
+
+/// Cap on requests concurrently forwarded to the extension. The extension is
+/// a single browser: unbounded fan-in just makes every page load slower until
+/// everything trips the 30s timeout. Excess requests queue here instead.
+const MAX_INFLIGHT_TO_EXTENSION: usize = 12;
 
 /// Shared browser relay state — lives in WsState.
 pub struct BrowserRelay {
@@ -30,6 +35,8 @@ pub struct BrowserRelay {
     pub pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
     /// Crawl engine.
     pub crawl_engine: Arc<CrawlEngine>,
+    /// Backpressure on requests in flight to the extension.
+    pub inflight: Arc<Semaphore>,
 }
 
 impl BrowserRelay {
@@ -39,6 +46,7 @@ impl BrowserRelay {
             tabs: Arc::new(TabRegistry::new()),
             pending: Arc::new(Mutex::new(HashMap::new())),
             crawl_engine: Arc::new(CrawlEngine::new()),
+            inflight: Arc::new(Semaphore::new(MAX_INFLIGHT_TO_EXTENSION)),
         }
     }
 
@@ -112,6 +120,7 @@ pub(crate) async fn handle_browser_mcp_connection(
     let pending = relay.pending.clone();
     let tabs = relay.tabs.clone();
     let crawl_engine = relay.crawl_engine.clone();
+    let inflight = relay.inflight.clone();
 
     loop {
         match ws_stream.next().await {
@@ -119,9 +128,15 @@ pub(crate) async fn handle_browser_mcp_connection(
                 let text_str = text.to_string();
                 match serde_json::from_str::<DaemonMessage>(&text_str) {
                     Ok(dm) => {
-                        let response =
-                            relay_mcp_request(relay.ext_tx(), &pending, &tabs, &crawl_engine, dm)
-                                .await;
+                        let response = relay_mcp_request(
+                            relay.ext_tx(),
+                            &pending,
+                            &tabs,
+                            &crawl_engine,
+                            &inflight,
+                            dm,
+                        )
+                        .await;
 
                         let resp_json =
                             serde_json::to_string(&response).unwrap_or_else(|e| {
@@ -166,6 +181,7 @@ async fn relay_mcp_request(
     pending: &Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
     tabs: &Arc<TabRegistry>,
     crawl_engine: &Arc<CrawlEngine>,
+    inflight: &Arc<Semaphore>,
     msg: DaemonMessage,
 ) -> ExtensionMessage {
     let request_id = extract_request_id(&msg);
@@ -194,6 +210,7 @@ async fn relay_mcp_request(
                         "extension_alive": alive,
                         "tab_count": tab_count,
                         "active_tab": active_tab,
+                        "agent_tabs": tabs.agent_tab_map().await,
                         "active_crawl_jobs": crawl_engine.list_jobs().await,
                     }),
                 },
@@ -207,6 +224,7 @@ async fn relay_mcp_request(
             link_patterns,
             exclude_patterns,
             same_domain,
+            ..
         } => {
             let config = CrawlConfig {
                 job_id: job_id.clone(),
@@ -223,6 +241,13 @@ async fn relay_mcp_request(
         }
         _ => {}
     }
+
+    // Backpressure: hold slow bursts here rather than piling them all onto
+    // the browser at once. Permit is held until the response (or timeout).
+    let _permit = match inflight.acquire().await {
+        Ok(p) => p,
+        Err(_) => return error_response(request_id, "Relay shutting down"),
+    };
 
     // Forward to extension
     let (tx, rx) = oneshot::channel();
@@ -319,8 +344,9 @@ async fn handle_extension_message(
             tab_id,
             url,
             window_id: _,
+            agent_id,
         } => {
-            tabs.register(tab_id.clone(), url.clone()).await;
+            tabs.register(tab_id.clone(), url.clone(), agent_id).await;
             tabs.set_active(&tab_id).await;
             tracing::info!("[BrowserGateway] Tab created: {tab_id} -> {url}");
         }
@@ -329,10 +355,11 @@ async fn handle_extension_message(
             url,
             title,
             status,
+            agent_id: _,
         } => {
             tabs.update(&tab_id, url, title, status).await;
         }
-        ExtensionMessage::TabClosed { tab_id } => {
+        ExtensionMessage::TabClosed { tab_id, .. } => {
             tabs.remove(&tab_id).await;
             tracing::info!("[BrowserGateway] Tab closed: {tab_id}");
         }
@@ -364,8 +391,12 @@ async fn handle_extension_message(
         ExtensionMessage::Heartbeat {
             tab_count,
             active_tab_id: _,
+            agent_tabs,
         } => {
             tabs.heartbeat(tab_count).await;
+            if let Some(map) = agent_tabs {
+                tabs.sync_agent_tabs(map).await;
+            }
         }
     }
 }

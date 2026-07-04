@@ -26,29 +26,6 @@ use super::*;
 // Constants (mirrors TS)
 // ============================================================================
 
-/// Commands that are always allowed without prompting.
-const SAFE_COMMANDS: &[&str] = &[
-    "git status",
-    "git diff",
-    "git log",
-    "git branch",
-    "pwd",
-    "tree",
-    "date",
-    "which",
-    "ls",
-    "find",
-    "grep",
-    "head",
-    "tail",
-    "cat",
-    "du",
-    "wc",
-    "echo",
-    "env",
-    "printenv",
-];
-
 /// Tool names that are treated as file-editing tools.
 const FILE_EDIT_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
@@ -161,15 +138,48 @@ impl PermissionManager {
         name.to_string()
     }
 
+    /// Provably read-only commands run without a prompt. Delegates to the
+    /// shell-safety classifier: per-pipe-segment readonly whitelist, git
+    /// readonly subcommands, dangerous-flag screens, redirection and
+    /// injection detection (`cat a; rm -rf /` no longer rides on `cat`).
     fn is_safe_command(command: &str) -> bool {
-        let cmd = command.trim();
-        // Exact match
-        if SAFE_COMMANDS.contains(&cmd) {
-            return true;
+        crate::util::shell_safety::is_readonly_safe_command(command)
+    }
+
+    /// Derive a deterministic prefix for the "never ask again" option.
+    /// Multi-word commands get their first word (`git` gets `git <sub>`);
+    /// commands with redirections or dangerous words get no prefix option —
+    /// prefix matching only sees the first word, so `rm:*`/`echo … > f` must
+    /// stay per-command.
+    fn derive_prefix(command: &str) -> Option<String> {
+        if crate::util::shell_safety::is_unsafe_for_prefix_auth(command) {
+            return None;
         }
-        // Prefix match (e.g. "ls -la" matches "ls")
-        let main = cmd.split(' ').next().unwrap_or("");
-        SAFE_COMMANDS.contains(&main)
+        let toks: Vec<&str> = command.split_whitespace().collect();
+        if toks.len() < 2 {
+            return None; // single word — the exact-command key covers it
+        }
+        if toks[0] == "git" {
+            return Some(format!("git {}", toks[1]));
+        }
+        Some(toks[0].to_string())
+    }
+
+    /// Whether a saved `Bash(<prefix>:*)` entry covers this command. Saved
+    /// prefixes never cover commands with redirections or dangerous words
+    /// (defense in depth against over-broad stored grants).
+    fn matches_saved_prefix(&self, command: &str) -> bool {
+        let cmd = command.trim();
+        if cmd.is_empty() || crate::util::shell_safety::is_unsafe_for_prefix_auth(cmd) {
+            return false;
+        }
+        let allowed = self.allowed_tools.lock().unwrap();
+        allowed.iter().any(|key| {
+            key.strip_prefix("Bash(")
+                .and_then(|rest| rest.strip_suffix(":*)"))
+                .map(|p| !p.is_empty() && (cmd == p || cmd.starts_with(&format!("{p} "))))
+                .unwrap_or(false)
+        })
     }
 
     fn build_options(
@@ -393,11 +403,15 @@ impl PermissionChecker for PermissionManager {
             }
             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             let key = Self::get_permission_key(tool, input, None);
-            if Self::is_safe_command(command) || self.is_allowed(&key) {
+            if Self::is_safe_command(command)
+                || self.is_allowed(&key)
+                || self.matches_saved_prefix(command)
+            {
                 return Ok(true);
             }
+            let prefix = Self::derive_prefix(command);
             return self
-                .request_permission(tool, input, None, cancel, agent_id)
+                .request_permission(tool, input, prefix.as_deref(), cancel, agent_id)
                 .await;
         }
 
@@ -525,6 +539,54 @@ mod tests {
         assert!(PermissionManager::is_safe_command("git status"));
         assert!(!PermissionManager::is_safe_command("rm -rf /"));
         assert!(!PermissionManager::is_safe_command("curl evil.com"));
+        // shell-safety hardening: readonly first word no longer wins alone
+        assert!(!PermissionManager::is_safe_command("cat a; rm -rf /"));
+        assert!(!PermissionManager::is_safe_command("echo x > /etc/passwd"));
+        assert!(!PermissionManager::is_safe_command(
+            "find . -exec rm {} \\;"
+        ));
+        assert!(PermissionManager::is_safe_command(
+            "cat a | grep b 2>/dev/null"
+        ));
+    }
+
+    #[test]
+    fn prefix_derivation() {
+        assert_eq!(
+            PermissionManager::derive_prefix("npm test"),
+            Some("npm".into())
+        );
+        assert_eq!(
+            PermissionManager::derive_prefix("git push origin main"),
+            Some("git push".into())
+        );
+        assert_eq!(PermissionManager::derive_prefix("make"), None);
+        assert_eq!(PermissionManager::derive_prefix("rm -rf x"), None);
+        assert_eq!(PermissionManager::derive_prefix("echo x > f"), None);
+    }
+
+    #[tokio::test]
+    async fn saved_prefix_allows_matching_commands() {
+        let bus = EventBus::new();
+        let reg = Arc::new(ResponseRegistry::new());
+        let pm = PermissionManager::new(bus, reg);
+        pm.add_allowed_tool("Bash(npm:*)");
+
+        let tool = TestBashTool;
+        let cancel = CancellationToken::new();
+        assert!(pm
+            .check(
+                &tool,
+                &serde_json::json!({"command": "npm run build"}),
+                &cancel,
+                "main"
+            )
+            .await
+            .unwrap());
+        // Prefix must not cover redirections (defense in depth)
+        assert!(!pm.matches_saved_prefix("npm run build > /etc/passwd"));
+        // Nor unrelated commands
+        assert!(!pm.matches_saved_prefix("npx evil"));
     }
 
     #[test]

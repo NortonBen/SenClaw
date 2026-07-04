@@ -112,6 +112,9 @@ pub struct TabState {
     pub url: String,
     pub title: String,
     pub status: TabStatus,
+    /// Agent that owns this tab (extension allocates one tab per agent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(skip)]
     pub created_at: std::time::Instant,
 }

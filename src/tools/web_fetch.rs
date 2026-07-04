@@ -60,11 +60,15 @@ impl Tool for WebFetchTool {
         match reqwest::Url::parse(url) {
             Ok(u) => {
                 let scheme = u.scheme();
-                if scheme == "http" || scheme == "https" {
-                    Ok(())
-                } else {
-                    Err(format!("Unsupported scheme: {url}"))
+                if scheme != "http" && scheme != "https" {
+                    return Err(format!("Unsupported scheme: {url}"));
                 }
+                if crate::util::fetch_safety::is_blocked_fetch_host(url) {
+                    return Err(format!(
+                        "Blocked URL (SSRF guard): {url} resolves to a local, private, or link-local address"
+                    ));
+                }
+                Ok(())
             }
             Err(_) => Err(format!("Malformed URL: {url}")),
         }
@@ -78,9 +82,21 @@ impl Tool for WebFetchTool {
             .to_string();
 
         let started = std::time::Instant::now();
+        // Re-check every redirect hop against the SSRF guard so a public URL
+        // cannot bounce the request onto localhost or the metadata endpoint.
+        let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() > 5 {
+                return attempt.error("too many redirects");
+            }
+            if crate::util::fetch_safety::is_blocked_fetch_host(attempt.url().as_str()) {
+                return attempt.error("redirect to a blocked (local/private) address");
+            }
+            attempt.follow()
+        });
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .redirect(redirect_policy)
             .build()?;
 
         let resp = match client

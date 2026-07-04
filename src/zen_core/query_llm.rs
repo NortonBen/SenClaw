@@ -176,6 +176,48 @@ fn is_local_mlx_provider(lower: &str) -> bool {
     matches!(lower, "local-mlx" | "local-mlx-native" | "local-mlx-server")
 }
 
+/// Claude Opus/Sonnet ≥4.6 (Anthropic provider) accept the `adaptive`
+/// thinking type with an `output_config.effort` knob; older models need the
+/// legacy `enabled` + `budget_tokens` form. Mirrors sema-core
+/// `usesAdaptiveThinking`.
+fn uses_adaptive_thinking(profile: &ModelProfile) -> bool {
+    if !profile.provider.to_lowercase().contains("anthropic") {
+        return false;
+    }
+    let name = profile.model_name.to_lowercase();
+    let Some(pos) = name.find("claude").map(|p| p + "claude".len()) else {
+        return false;
+    };
+    // Parse "claude[-_ ](opus|sonnet)[-_ ]<major>[-._ ]<minor>"
+    let rest: &str = &name[pos..];
+    let rest = rest.trim_start_matches(['-', '_', ' ']);
+    let rest = if let Some(r) = rest.strip_prefix("opus") {
+        r
+    } else if let Some(r) = rest.strip_prefix("sonnet") {
+        r
+    } else {
+        return false;
+    };
+    let rest = rest.trim_start_matches(['-', '_', ' ']);
+    let mut parts = rest.splitn(3, ['-', '.', '_', ' ']);
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let (Ok(major), Ok(minor)) = (major.parse::<u32>(), minor.parse::<u32>()) else {
+        return false;
+    };
+    major > 4 || (major == 4 && minor >= 6)
+}
+
+/// OpenAI reasoning-model families that take `max_completion_tokens` instead
+/// of `max_tokens`. Mirrors sema-core `useMaxCompletionTokens`.
+fn uses_max_completion_tokens(model_name: &str) -> bool {
+    let lower = model_name.to_lowercase();
+    ["o1", "o3", "o4", "gpt-5"]
+        .iter()
+        .any(|p| lower.starts_with(p))
+}
+
 /// Prefer routing implied by `provider`; otherwise use explicit `adapt`.
 fn effective_adapter(profile: &ModelProfile) -> &str {
     let p = profile.provider.to_lowercase();
@@ -337,7 +379,15 @@ pub(crate) fn sanitize_schema_node(node: &mut Value) {
             }
         }
     }
-    for key in ["items", "not", "contains", "propertyNames", "if", "then", "else"] {
+    for key in [
+        "items",
+        "not",
+        "contains",
+        "propertyNames",
+        "if",
+        "then",
+        "else",
+    ] {
         if let Some(v) = obj.get_mut(key) {
             // Old-draft tuple form: "items": [schema, schema, ...]
             if let Some(list) = v.as_array_mut() {
@@ -467,8 +517,7 @@ pub(crate) fn openai_messages_for_api(
                     // `{type:"text",text:...}` OBJECTS, so match on the field —
                     // matching `Value::String` here never fires.
                     let single_text = content_parts.len() == 1
-                        && content_parts[0].get("type").and_then(|t| t.as_str())
-                            == Some("text");
+                        && content_parts[0].get("type").and_then(|t| t.as_str()) == Some("text");
                     if single_text {
                         api_msgs.push(serde_json::json!({
                             "role": "user",
@@ -691,12 +740,19 @@ async fn query_openai(
         Some(build_openai_tools(tools))
     };
 
+    // OpenAI reasoning models (o1/o3/o4/gpt-5 families) reject `max_tokens`
+    // and require `max_completion_tokens` instead.
+    let max_tokens_key = if uses_max_completion_tokens(&profile.model_name) {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    };
     let mut body = serde_json::json!({
         "model": profile.model_name,
         "messages": api_messages,
-        "max_tokens": profile.max_tokens,
         "stream": stream,
     });
+    body[max_tokens_key] = serde_json::json!(profile.max_tokens);
 
     // Ask the server to emit a final usage chunk so we can capture real token
     // counts from streamed responses (no-op for providers that ignore it).
@@ -970,10 +1026,19 @@ async fn query_anthropic(
         body["tools"] = serde_json::Value::Array(t.clone());
     }
 
-    if thinking {
+    // Thinking parameter by model capability: Claude Opus/Sonnet ≥4.6 take
+    // adaptive thinking with an effort knob; older models take the legacy
+    // enabled/budget form (budget capped below max_tokens).
+    if uses_adaptive_thinking(profile) {
+        if thinking {
+            body["thinking"] = serde_json::json!({ "type": "adaptive" });
+            body["output_config"] = serde_json::json!({ "effort": "medium" });
+        }
+    } else if thinking {
+        let budget = (profile.max_tokens / 2).clamp(1024, 4096);
         body["thinking"] = serde_json::json!({
             "type": "enabled",
-            "budget_tokens": 4096,
+            "budget_tokens": budget,
         });
     }
 
@@ -1483,6 +1548,70 @@ pub fn create_llm_client() -> Result<Client> {
 mod tests {
     use super::*;
 
+    fn profile(provider: &str, model: &str) -> ModelProfile {
+        ModelProfile {
+            name: "test".into(),
+            provider: provider.into(),
+            model_name: model.into(),
+            base_url: "https://api.example.com".into(),
+            api_key: "k".into(),
+            max_tokens: 8192,
+            context_length: 200_000,
+            adapt: None,
+            vision: None,
+        }
+    }
+
+    #[test]
+    fn adaptive_thinking_detection() {
+        assert!(uses_adaptive_thinking(&profile(
+            "anthropic",
+            "claude-opus-4-6"
+        )));
+        assert!(uses_adaptive_thinking(&profile(
+            "anthropic",
+            "claude-sonnet-4-6-20260101"
+        )));
+        assert!(uses_adaptive_thinking(&profile(
+            "anthropic",
+            "claude-opus-4.8"
+        )));
+        assert!(uses_adaptive_thinking(&profile(
+            "Anthropic",
+            "Claude-Sonnet-5-0"
+        )));
+        // Older or non-matching models
+        assert!(!uses_adaptive_thinking(&profile(
+            "anthropic",
+            "claude-sonnet-4-5"
+        )));
+        assert!(!uses_adaptive_thinking(&profile(
+            "anthropic",
+            "claude-3-5-sonnet-20241022"
+        )));
+        assert!(!uses_adaptive_thinking(&profile(
+            "anthropic",
+            "claude-haiku-4-6"
+        )));
+        // Non-anthropic provider never adaptive
+        assert!(!uses_adaptive_thinking(&profile(
+            "openrouter",
+            "claude-opus-4-6"
+        )));
+    }
+
+    #[test]
+    fn max_completion_tokens_models() {
+        assert!(uses_max_completion_tokens("o1-preview"));
+        assert!(uses_max_completion_tokens("o3-mini"));
+        assert!(uses_max_completion_tokens("o4-mini"));
+        assert!(uses_max_completion_tokens("gpt-5"));
+        assert!(uses_max_completion_tokens("GPT-5-turbo"));
+        assert!(!uses_max_completion_tokens("gpt-4o"));
+        assert!(!uses_max_completion_tokens("deepseek-chat"));
+        assert!(!uses_max_completion_tokens("qwen-max"));
+    }
+
     /// Boolean subschemas (schemars output for `serde_json::Value`) must be
     /// rewritten to object schemas — Gemini-backed OpenAI proxies 400 on them.
     #[test]
@@ -1509,7 +1638,10 @@ mod tests {
             props["nested"]["properties"]["inner"],
             serde_json::json!({"type": "object"})
         );
-        assert_eq!(props["list"]["items"], serde_json::json!({"type": "object"}));
+        assert_eq!(
+            props["list"]["items"],
+            serde_json::json!({"type": "object"})
+        );
         assert_eq!(
             props["choice"]["anyOf"],
             serde_json::json!([{"type": "object"}, {"type": "string"}])

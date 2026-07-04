@@ -97,8 +97,7 @@ impl WorkflowService {
         let settings_path = opts
             .workflow_state_path
             .with_file_name("workflow-settings.json");
-        let live_settings =
-            LiveWorkflowSettings::new(&WorkflowSettings::load(&settings_path));
+        let live_settings = LiveWorkflowSettings::new(&WorkflowSettings::load(&settings_path));
         let registry = Mutex::new(WorkflowRegistry::new(opts.workflows_dir));
         let store = Arc::new(WorkflowRunStore::new(opts.workflow_state_path));
         // Startup reconciliation: `running` orphans left by a previous
@@ -166,11 +165,9 @@ impl WorkflowService {
     /// unless `overwrite` is set. Returns the parsed workflow name.
     pub fn create_definition(&self, content: &str, overwrite: bool) -> Result<String, String> {
         // Validate against the target path the file will get.
-        let probe = super::registry::parse_workflow_source(
-            content,
-            &self.workflows_dir.join("new.md"),
-        )
-        .map_err(|e| format!("invalid workflow definition: {e:#}"))?;
+        let probe =
+            super::registry::parse_workflow_source(content, &self.workflows_dir.join("new.md"))
+                .map_err(|e| format!("invalid workflow definition: {e:#}"))?;
 
         let mut reg = self.registry.lock().unwrap();
         reg.reload();
@@ -473,6 +470,10 @@ pub struct DefFieldsPatch {
     /// Workflow-level guidance. `None` = untouched; `Some("")` = remove.
     #[serde(default)]
     pub guidance: Option<String>,
+    /// Workflow-level workspace path. `None` = untouched; `Some("")` = remove
+    /// (falls back to the default per-workflow directory).
+    #[serde(default)]
+    pub workspace: Option<String>,
     #[serde(default)]
     pub steps: Vec<StepFieldsPatch>,
 }
@@ -516,6 +517,7 @@ fn apply_def_fields_patch(raw: &str, patch: &DefFieldsPatch) -> Result<String, S
         .ok_or_else(|| "frontmatter is not a mapping".to_string())?;
 
     set_or_remove_str(map, "guidance", patch.guidance.as_deref());
+    set_or_remove_str(map, "workspace", patch.workspace.as_deref());
 
     if !patch.steps.is_empty() {
         let steps = map
@@ -527,7 +529,8 @@ fn apply_def_fields_patch(raw: &str, patch: &DefFieldsPatch) -> Result<String, S
                 .iter_mut()
                 .filter_map(|v| v.as_mapping_mut())
                 .find(|m| {
-                    m.get(serde_yaml::Value::from("id")).and_then(|v| v.as_str())
+                    m.get(serde_yaml::Value::from("id"))
+                        .and_then(|v| v.as_str())
                         == Some(sp.id.as_str())
                 })
                 .ok_or_else(|| format!("step \"{}\" not found", sp.id))?;
@@ -697,7 +700,9 @@ mod tests {
             "---\nsteps:\n  - { id: a, kind: script, run: echo ok }\n---\n",
         )
         .unwrap();
-        let run_id = svc.start_run("quick", HashMap::new(), Some("test".into())).unwrap();
+        let run_id = svc
+            .start_run("quick", HashMap::new(), Some("test".into()))
+            .unwrap();
         assert_eq!(run_id, "quick-0001");
 
         // Poll until the background task finishes.
@@ -720,7 +725,8 @@ mod tests {
         assert!(err.contains("not found"));
     }
 
-    const DEF: &str = "---\nname: crud-wf\nsteps:\n  - { id: a, kind: script, run: echo 1 }\n---\nbody\n";
+    const DEF: &str =
+        "---\nname: crud-wf\nsteps:\n  - { id: a, kind: script, run: echo 1 }\n---\nbody\n";
 
     #[tokio::test]
     async fn definition_crud_roundtrip() {
@@ -732,7 +738,10 @@ mod tests {
         assert_eq!(name, "crud-wf");
         assert!(dir.path().join("workflows").join("crud-wf.md").exists());
         // duplicate rejected without overwrite
-        assert!(svc.create_definition(DEF, false).unwrap_err().contains("already exists"));
+        assert!(svc
+            .create_definition(DEF, false)
+            .unwrap_err()
+            .contains("already exists"));
         // overwrite allowed
         svc.create_definition(DEF, true).unwrap();
 
@@ -742,7 +751,9 @@ mod tests {
         assert_eq!(content, DEF);
 
         // update (edit) — invalid content rejected, file untouched
-        let err = svc.update_definition("crud-wf", "no frontmatter").unwrap_err();
+        let err = svc
+            .update_definition("crud-wf", "no frontmatter")
+            .unwrap_err();
         assert!(err.contains("invalid workflow definition"), "{err}");
         assert_eq!(svc.get_definition("crud-wf").unwrap().1, DEF);
         // valid update goes through
@@ -783,6 +794,7 @@ Thân bài giữ nguyên từng byte.
             "tune-me",
             &DefFieldsPatch {
                 guidance: Some("luật mới\nnhiều dòng".to_string()),
+                workspace: None,
                 steps: vec![StepFieldsPatch {
                     id: "research".to_string(),
                     guidance: Some("guidance step mới".to_string()),
@@ -809,6 +821,7 @@ Thân bài giữ nguyên từng byte.
             "tune-me",
             &DefFieldsPatch {
                 guidance: Some(String::new()),
+                workspace: None,
                 steps: vec![],
             },
         )
@@ -816,6 +829,40 @@ Thân bài giữ nguyên từng byte.
         let defs = svc.list_defs();
         let d = defs.iter().find(|d| d.name == "tune-me").unwrap();
         assert!(d.guidance.is_none());
+    }
+
+    #[tokio::test]
+    async fn edit_fields_updates_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service(dir.path());
+        svc.create_definition(TUNABLE, false).unwrap();
+
+        svc.edit_definition_fields(
+            "tune-me",
+            &DefFieldsPatch {
+                guidance: None,
+                workspace: Some("/tmp/wf-ws".to_string()),
+                steps: vec![],
+            },
+        )
+        .unwrap();
+        let defs = svc.list_defs();
+        let d = defs.iter().find(|d| d.name == "tune-me").unwrap();
+        assert_eq!(d.workspace.as_deref(), Some("/tmp/wf-ws"));
+
+        // Empty string removes it (falls back to the default directory).
+        svc.edit_definition_fields(
+            "tune-me",
+            &DefFieldsPatch {
+                guidance: None,
+                workspace: Some(String::new()),
+                steps: vec![],
+            },
+        )
+        .unwrap();
+        let defs = svc.list_defs();
+        let d = defs.iter().find(|d| d.name == "tune-me").unwrap();
+        assert!(d.workspace.is_none());
     }
 
     #[tokio::test]
@@ -829,6 +876,7 @@ Thân bài giữ nguyên từng byte.
                 "tune-me",
                 &DefFieldsPatch {
                     guidance: None,
+                    workspace: None,
                     steps: vec![StepFieldsPatch {
                         id: "ghost".to_string(),
                         guidance: Some("x".to_string()),
@@ -844,6 +892,7 @@ Thân bài giữ nguyên từng byte.
                 "tune-me",
                 &DefFieldsPatch {
                     guidance: None,
+                    workspace: None,
                     steps: vec![StepFieldsPatch {
                         id: "fetch".to_string(),
                         guidance: None,

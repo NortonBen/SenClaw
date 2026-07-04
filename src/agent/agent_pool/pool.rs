@@ -354,9 +354,7 @@ impl AgentPool {
             );
             let s6 = Arc::clone(&sink);
             bridge.set_form_resolved_callback(
-                move |chat_jid: &str,
-                      req_id: &str,
-                      values: HashMap<String, serde_json::Value>| {
+                move |chat_jid: &str, req_id: &str, values: HashMap<String, serde_json::Value>| {
                     s6.notify_form_resolved(chat_jid, req_id, values);
                 },
             );
@@ -1107,7 +1105,7 @@ impl AgentPool {
                     Some(cfg.mcp.litho_model_efficient.as_str())
                 },
             ));
-            mcp_servers.push(browser_mcp_config(cfg.ws_port));
+            mcp_servers.push(browser_mcp_config(cfg.ws_port, &binding.jid));
             mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
             // Sandboxed JS executor — no shared state, just default limits.
             mcp_servers.push(js_mcp_config(5_000, 128));
@@ -1285,7 +1283,13 @@ impl AgentPool {
             .pending_agent_modes
             .get(&binding.jid)
             .cloned()
-            .or_else(|| if is_cowork { Some("Dag".to_string()) } else { None });
+            .or_else(|| {
+                if is_cowork {
+                    Some("Dag".to_string())
+                } else {
+                    None
+                }
+            });
         if let Some(mode) = &pending_mode {
             if mode != "Agent" {
                 self.core_api.update_agent_mode(&binding.jid, mode);
@@ -1302,9 +1306,7 @@ impl AgentPool {
             let dispatch_config = std::sync::Arc::new(crate::tools::DispatchToolsConfig {
                 state_path: cfg.paths.dispatch_state_path.clone(),
                 admin_folder: binding.folder.clone(),
-                agents_config_dir: Some(
-                    cfg.paths.virtual_agents_dir.to_string_lossy().to_string(),
-                ),
+                agents_config_dir: Some(cfg.paths.virtual_agents_dir.to_string_lossy().to_string()),
             });
             self.core_api.register_tools(
                 &binding.jid,
@@ -1471,10 +1473,14 @@ impl AgentPool {
                 blocks.push_str(&format!("<memory>\n{mem_context}\n</memory>\n"));
             }
             if !cog_context.is_empty() {
-                blocks.push_str(&format!("<cognitive_memory>\n{cog_context}</cognitive_memory>\n"));
+                blocks.push_str(&format!(
+                    "<cognitive_memory>\n{cog_context}</cognitive_memory>\n"
+                ));
             }
             if !recall_context.is_empty() {
-                blocks.push_str(&format!("<memory_recall>\n{recall_context}\n</memory_recall>\n"));
+                blocks.push_str(&format!(
+                    "<memory_recall>\n{recall_context}\n</memory_recall>\n"
+                ));
             }
             if blocks.is_empty() {
                 prompt.to_string()
@@ -2229,6 +2235,11 @@ impl AgentPool {
         if has_core {
             match self.core_api.create_session(jid) {
                 Ok(()) => {
+                    // create_session rebuilds the skill registry without the
+                    // disabled filter — re-apply it or disabled skills come
+                    // back to life after stop/reset (upstream 8ef3dba).
+                    let disabled = crate::skills::disabled::read_disabled_skills();
+                    self.core_api.reload_skills(&disabled);
                     if let Some(sink) = self.agent_event_sink.lock().unwrap().as_ref() {
                         sink.notify_agent_state(jid, "idle");
                     }
@@ -2609,8 +2620,7 @@ impl AgentPool {
                                         crate::memory::cognitive::llm_openai::create_cognitive_llm(
                                             &cfg,
                                         );
-                                    let date =
-                                        chrono::Utc::now().format("%Y-%m-%d").to_string();
+                                    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
                                     match crate::memory::consolidate::consolidate_summary(
                                         &base, &folder, &summary, llm, &date,
                                     )
@@ -2882,33 +2892,78 @@ impl AgentPool {
         });
     }
 
-    /// Watch the skills reload signal file and reload skills on change.
-    /// Mirrors TS `watchSkillsReloadSignal` (AgentPool.ts:183–188).
-    pub fn watch_skills_reload_signal(self: &Arc<Self>, config_path: &std::path::Path) {
-        let signal_path = config_path
-            .parent()
-            .map(|p| p.join(".skills-reload"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".skills-reload"));
-
+    /// Watch skills for hot-reload. Two sources, one poller (mirrors TS
+    /// `watchSkillsReloadSignal` + `watchManagedSkillsDir`,
+    /// AgentPool.ts:214–260):
+    ///
+    /// 1. The clawhub reload-signal file
+    ///    (`<managed_skills_dir>/.clawhub/reload-signal`) — written by
+    ///    `senclaw clawhub install/uninstall/refresh` and UI enable/disable.
+    ///    (The previous watcher looked for `<config dir>/.skills-reload`,
+    ///    a path nothing writes — and was never spawned.)
+    /// 2. The managed skills directory itself — a user manually `cp`ing or
+    ///    deleting a skill folder writes no signal, so the dir's direct
+    ///    children are fingerprinted; a change that stays stable for two
+    ///    consecutive ticks (debounce for multi-file copies) triggers a
+    ///    reload. `.clawhub` bookkeeping entries are ignored, and a
+    ///    signal-triggered reload re-baselines the fingerprint so a clawhub
+    ///    install doesn't reload twice.
+    pub fn watch_skills_reload(self: &Arc<Self>, managed_skills_dir: std::path::PathBuf) {
+        let signal_path = managed_skills_dir.join(".clawhub").join("reload-signal");
         let pool = Arc::clone(self);
         tokio::spawn(async move {
-            let mut last_mtime: Option<std::time::SystemTime> = None;
+            let mut first = true;
+            let mut last_signal_mtime: Option<std::time::SystemTime> = None;
+            let mut last_fp: u64 = 0;
+            let mut pending_fp: Option<u64> = None;
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+                let mut reloaded = false;
+
+                // 1. Authoritative reload signal.
                 match std::fs::metadata(&signal_path) {
                     Ok(meta) => {
                         let mtime = meta.modified().ok();
-                        if mtime != last_mtime {
-                            last_mtime = mtime;
+                        if !first && mtime != last_signal_mtime {
                             pool.reload_all_skills();
+                            reloaded = true;
                         }
+                        last_signal_mtime = mtime;
                     }
-                    Err(_) => {
-                        last_mtime = None;
-                    }
+                    Err(_) => last_signal_mtime = None,
                 }
+
+                // 2. Manual add/remove of skill folders (no signal written).
+                let fp = fingerprint_skills_dir(&managed_skills_dir);
+                if first || reloaded {
+                    last_fp = fp;
+                    pending_fp = None;
+                } else if fp != last_fp {
+                    if pending_fp == Some(fp) {
+                        last_fp = fp;
+                        pending_fp = None;
+                        tracing::info!(
+                            "[AgentPool] managed skills dir changed on disk; reloading skills"
+                        );
+                        pool.reload_all_skills();
+                    } else {
+                        pending_fp = Some(fp); // debounce until stable
+                    }
+                } else {
+                    pending_fp = None;
+                }
+                first = false;
             }
         });
+    }
+
+    /// Queue a user input into the engine's mid-turn pending queue if the
+    /// group's agent is currently processing. Returns `false` when idle —
+    /// callers then dispatch via the normal GroupQueue full-turn path (which
+    /// runs memory pre-retrieval etc.). Injected inputs ride the in-flight
+    /// turn, so skipping those per-turn pre-stages is correct for them.
+    pub fn queue_input_if_processing(&self, jid: &str, prompt: &str) -> bool {
+        self.core_api.queue_input_if_processing(jid, prompt)
     }
 
     /// Reload skills across all active cores. Mirrors TS `reloadAllSkills`
@@ -3076,7 +3131,11 @@ async fn curated_pre_retrieval(query: &str, group_folder: &str, max_results: usi
             Some(m) => out.push_str(&format!(
                 "[{n}] {} ({}) — {}\n",
                 m.name,
-                if m.mem_type.is_empty() { "memory" } else { &m.mem_type },
+                if m.mem_type.is_empty() {
+                    "memory"
+                } else {
+                    &m.mem_type
+                },
                 m.description
             )),
             None => out.push_str(&format!("[{n}] {file_name}\n")),
@@ -3316,6 +3375,62 @@ mod merge_reasoning_tests {
             after_close.trim().is_empty(),
             "intermediate turn must not have body after </think>, got: {after_close:?}"
         );
+    }
+}
+
+/// Order-independent fingerprint of a skills directory's direct children
+/// (name + mtime), ignoring `.clawhub` bookkeeping. Used by
+/// [`AgentPool::watch_skills_reload`] to detect manual skill add/remove.
+fn fingerprint_skills_dir(dir: &std::path::Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut entries: Vec<(String, Option<std::time::SystemTime>)> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with(".clawhub") {
+                    return None;
+                }
+                let mtime = e.metadata().ok().and_then(|m| m.modified().ok());
+                Some((name, mtime))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    entries.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::fingerprint_skills_dir;
+
+    #[test]
+    fn detects_added_and_removed_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fingerprint_skills_dir(dir.path());
+        std::fs::create_dir(dir.path().join("my-skill")).unwrap();
+        let with_skill = fingerprint_skills_dir(dir.path());
+        assert_ne!(base, with_skill);
+        std::fs::remove_dir(dir.path().join("my-skill")).unwrap();
+        assert_eq!(fingerprint_skills_dir(dir.path()), base);
+    }
+
+    #[test]
+    fn ignores_clawhub_bookkeeping() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fingerprint_skills_dir(dir.path());
+        std::fs::create_dir(dir.path().join(".clawhub")).unwrap();
+        std::fs::write(dir.path().join(".clawhub").join("reload-signal"), "x").unwrap();
+        assert_eq!(fingerprint_skills_dir(dir.path()), base);
+    }
+
+    #[test]
+    fn missing_dir_is_stable() {
+        let ghost = std::path::Path::new("/nonexistent/senclaw-skills-test");
+        assert_eq!(fingerprint_skills_dir(ghost), fingerprint_skills_dir(ghost));
     }
 }
 

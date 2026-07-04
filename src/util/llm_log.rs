@@ -50,6 +50,55 @@ fn time_str() -> String {
     format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
 }
 
+/// Keep at most this many `.log` files (matches TS
+/// `LLM_LOG_FILES_RETAIN_COUNT`); older files are deleted.
+const LOG_FILES_RETAIN_COUNT: usize = 30;
+/// Throttle cleanup scans to once per interval per process.
+const CLEANUP_INTERVAL_SECS: u64 = 3600;
+
+static LAST_CLEANUP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Delete all but the newest [`LOG_FILES_RETAIN_COUNT`] `.log` files (by
+/// mtime). Runs at most once per [`CLEANUP_INTERVAL_SECS`]; without this the
+/// daily log files accumulate forever (the TS side archives after 30 files).
+fn maybe_cleanup(dir: &std::path::Path) {
+    use std::sync::atomic::Ordering;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_CLEANUP.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < CLEANUP_INTERVAL_SECS {
+        return;
+    }
+    if LAST_CLEANUP
+        .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return; // another thread is on it
+    }
+
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.path().extension().map(|x| x == "log").unwrap_or(false))
+        .filter_map(|e| {
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((mtime, e.path()))
+        })
+        .collect();
+    if files.len() <= LOG_FILES_RETAIN_COUNT {
+        return;
+    }
+    // Newest first; delete the tail.
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in files.into_iter().skip(LOG_FILES_RETAIN_COUNT) {
+        let _ = fs::remove_file(path);
+    }
+}
+
 /// Append a `[HH:MM:SS]{json}` line to today's log file. Never panics.
 fn append_line(payload: &Value) {
     if !enabled() {
@@ -67,6 +116,7 @@ fn append_line(payload: &Value) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&file) {
         let _ = f.write_all(line.as_bytes());
     }
+    maybe_cleanup(&dir);
 }
 
 /// Log an outgoing LLM request. `system_prompt` is wrapped as a single text
