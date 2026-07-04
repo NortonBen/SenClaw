@@ -7,6 +7,7 @@ import 'highlight.js/styles/github-dark.css';
 import 'highlight.js/styles/github.css'; 
 import type { ChatMessage, ImageAttachment } from '../types';
 import { PermissionCard, QuestionCard } from './PermissionCard';
+import { FormCard } from './FormCard';
 import { useAppContext } from '../contexts/AppContext';
 import { extractLeadingReasoningBlocks } from '../utils/reasoningBlocks';
 import { ReasoningCollapsible } from './ReasoningCollapsible';
@@ -289,6 +290,7 @@ interface MessageBubbleProps {
   message: ChatMessage;
   onResolvePermission: (requestId: string, optionKey: string) => void;
   onResolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
+  onResolveForm: (requestId: string, values: Record<string, unknown>, submitted: boolean) => void;
 }
 
 function UserBubble({ text, timestamp, attachments }: { text: string; timestamp: string; attachments?: ImageAttachment[] }) {
@@ -388,7 +390,7 @@ function OtherUserBubble({ senderName, text, timestamp, attachments, isDarkMode 
   );
 }
 
-export function MessageBubble({ message, onResolvePermission, onResolveQuestion }: MessageBubbleProps) {
+export function MessageBubble({ message, onResolvePermission, onResolveQuestion, onResolveForm }: MessageBubbleProps) {
   const { token } = theme.useToken();
   const { isDarkMode } = useAppContext();
 
@@ -404,6 +406,16 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion 
     return (
       <div className="flex justify-start">
         <QuestionCard message={message} onResolve={onResolveQuestion} />
+      </div>
+    );
+  }
+
+  if (message.role === 'form') {
+    // surface:'dock' forms render in the Workbench panel, not the chat stream
+    if (message.surface === 'dock') return null;
+    return (
+      <div className="flex justify-start">
+        <FormCard message={message} onResolve={onResolveForm} />
       </div>
     );
   }

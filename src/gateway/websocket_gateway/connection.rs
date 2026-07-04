@@ -190,6 +190,9 @@ async fn handle_message(
             super::handlers::handle_question_response(clients, client_idx, &sender, state, msg)
                 .await
         }
+        "form:response" => {
+            super::handlers::handle_form_response(clients, client_idx, &sender, state, msg).await
+        }
         "list:tasks" => {
             super::handlers::handle_list_tasks(clients, client_idx, &sender, state, msg).await
         }

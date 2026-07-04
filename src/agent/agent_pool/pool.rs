@@ -23,7 +23,9 @@ use crate::agent::dispatch_bridge::{
 };
 use crate::agent::group_queue::GroupQueue;
 use crate::agent::input_builder::ImageAttachment;
-use crate::agent::permission_bridge::{AskQuestionPayload, PermissionBridge, PermissionPayload};
+use crate::agent::permission_bridge::{
+    AskQuestionPayload, FormPayload, PermissionBridge, PermissionPayload,
+};
 use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
@@ -344,6 +346,20 @@ impl AgentPool {
                     s4.notify_ask_question_resolved(chat_jid, req_id, answers);
                 },
             );
+            let s5 = Arc::clone(&sink);
+            bridge.set_form_request_callback(
+                move |chat_jid: &str, req_id: &str, payload: FormPayload| {
+                    s5.notify_form_request(chat_jid, req_id, payload);
+                },
+            );
+            let s6 = Arc::clone(&sink);
+            bridge.set_form_resolved_callback(
+                move |chat_jid: &str,
+                      req_id: &str,
+                      values: HashMap<String, serde_json::Value>| {
+                    s6.notify_form_resolved(chat_jid, req_id, values);
+                },
+            );
         }
         *self.agent_event_sink.lock().unwrap() = Some(sink);
     }
@@ -469,6 +485,20 @@ impl AgentPool {
         }
     }
 
+    /// Web UI / app submits a FormUI form (`submitted = false` = user skipped).
+    /// Defers to PermissionBridge.
+    pub fn resolve_form(
+        &self,
+        request_id: &str,
+        values: HashMap<String, serde_json::Value>,
+        submitted: bool,
+    ) -> bool {
+        match self.permission_bridge.lock().unwrap().as_ref() {
+            Some(b) => b.resolve_form(request_id, values, submitted),
+            None => false,
+        }
+    }
+
     /// Surface a permission request from a virtual agent (no persistent core).
     /// Calls `PermissionBridge::handle_permission_request` with the virtual_jid so the
     /// request shows up in the admin Web UI.
@@ -525,6 +555,23 @@ impl AgentPool {
             tracing::warn!(
                 "[AgentPool] respond_to_ask_question failed for {group_jid}/{agent_id}: {e}"
             );
+        }
+    }
+
+    /// Forward a FormUI response to the underlying core instance.
+    /// Used by [`PermissionBridgeApi`] wiring in daemon startup.
+    pub fn respond_to_form(
+        &self,
+        group_jid: &str,
+        agent_id: &str,
+        values: HashMap<String, serde_json::Value>,
+        submitted: bool,
+    ) {
+        if let Err(e) = self
+            .core_api
+            .respond_to_form(group_jid, agent_id, values, submitted)
+        {
+            tracing::warn!("[AgentPool] respond_to_form failed for {group_jid}/{agent_id}: {e}");
         }
     }
 
@@ -2680,6 +2727,23 @@ impl AgentPool {
                             &chat_jid,
                             bot_token.as_deref(),
                         );
+                    }
+                }),
+            );
+        }
+
+        // ---- form:request ----
+        {
+            let pool = Arc::clone(self);
+            let jid = _jid.clone();
+            let chat_jid = _jid.clone();
+            let bot_token = _bot_token.clone();
+            let jid_arg = jid.clone();
+            self.core_api.on_form_request(
+                &jid_arg,
+                Box::new(move |data: crate::zen_core::FormRequestData| {
+                    if let Some(pb) = pool.permission_bridge.lock().unwrap().as_ref() {
+                        pb.handle_form_request(&data, &jid, &chat_jid, bot_token.as_deref());
                     }
                 }),
             );

@@ -616,9 +616,13 @@ impl ZenEngine {
                 }
             }
             // Internal events — bus only, no handler dispatch
+            // (FormRequest is consumed by the AgentPool event loop via bus
+            // subscription, like the workbench events.)
             EngineEvent::SessionCleared { .. }
             | EngineEvent::ToolPermissionResponse(_)
             | EngineEvent::AskQuestionResponse(_)
+            | EngineEvent::FormRequest(_)
+            | EngineEvent::FormResponse(_)
             | EngineEvent::PlanExitResponse(_)
             | EngineEvent::PlanImplement(_)
             | EngineEvent::FileReference(_)
@@ -1462,6 +1466,10 @@ impl ZenCore for ZenEngine {
 
     fn respond_to_ask_question(&self, response: AskQuestionResponseData) {
         self.response_registry.deliver_ask_question(response);
+    }
+
+    fn respond_to_form(&self, response: FormResponseData) {
+        self.response_registry.deliver_form(response);
     }
 
     fn respond_to_plan_exit(&self, response: PlanExitResponseData) {

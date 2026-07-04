@@ -7,8 +7,9 @@ use crate::types::InlineButton;
 
 use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
 use super::types::{
-    AskQuestionData, AskQuestionPayload, PendingAskQuestion, PendingPermission, PermissionOption,
-    PermissionPayload, RuleAction, RuleMatcherType, ToolAutoAcceptRule, ToolCategory,
+    AskQuestionData, AskQuestionPayload, FormPayload, PendingAskQuestion, PendingForm,
+    PendingPermission, PermissionOption, PermissionPayload, RuleAction, RuleMatcherType,
+    ToolAutoAcceptRule, ToolCategory,
 };
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
@@ -17,6 +18,7 @@ const DEPRECATED_DEFAULT_RULE_IDS: &[&str] = &["tool-category-skill", "tool-cate
 pub struct PermissionBridge {
     pub(crate) pending_permissions: Mutex<HashMap<String, PendingPermission>>,
     pub(crate) pending_ask_questions: Mutex<HashMap<String, PendingAskQuestion>>,
+    pub(crate) pending_forms: Mutex<HashMap<String, PendingForm>>,
     max_content_length: usize,
     api: Arc<dyn PermissionBridgeApi>,
 
@@ -30,10 +32,14 @@ pub struct PermissionBridge {
         Mutex<Option<Box<dyn Fn(&str, &str, PermissionPayload) + Send + Sync>>>,
     pub(crate) on_ask_question_request:
         Mutex<Option<Box<dyn Fn(&str, &str, AskQuestionPayload) + Send + Sync>>>,
+    pub(crate) on_form_request: Mutex<Option<Box<dyn Fn(&str, &str, FormPayload) + Send + Sync>>>,
     pub(crate) on_permission_resolved:
         Mutex<Option<Box<dyn Fn(&str, &str, &str, &str) + Send + Sync>>>,
     pub(crate) on_ask_question_resolved:
         Mutex<Option<Box<dyn Fn(&str, &str, HashMap<String, String>) + Send + Sync>>>,
+    pub(crate) on_form_resolved: Mutex<
+        Option<Box<dyn Fn(&str, &str, HashMap<String, serde_json::Value>) + Send + Sync>>,
+    >,
     /// Fired when user selects "allow" (never ask again) for a tool.
     /// Signature: `(group_jid, tool_name)` — used to persist the approval to DB.
     pub(crate) on_tool_allowed: Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
@@ -44,6 +50,7 @@ impl PermissionBridge {
         Self {
             pending_permissions: Mutex::new(HashMap::new()),
             pending_ask_questions: Mutex::new(HashMap::new()),
+            pending_forms: Mutex::new(HashMap::new()),
             max_content_length: max_content_length.unwrap_or(200),
             api,
             tool_rules: Mutex::new(default_tool_rules()),
@@ -51,8 +58,10 @@ impl PermissionBridge {
             on_activity: Mutex::new(None),
             on_permission_request: Mutex::new(None),
             on_ask_question_request: Mutex::new(None),
+            on_form_request: Mutex::new(None),
             on_permission_resolved: Mutex::new(None),
             on_ask_question_resolved: Mutex::new(None),
+            on_form_resolved: Mutex::new(None),
             on_tool_allowed: Mutex::new(None),
         }
     }
@@ -222,6 +231,24 @@ impl PermissionBridge {
         *self.on_ask_question_request.lock().unwrap() = Some(Box::new(cb));
     }
 
+    /// Inject form-request notifier (WS notification to Web UI).
+    pub fn set_form_request_callback<F: Fn(&str, &str, FormPayload) + Send + Sync + 'static>(
+        &self,
+        cb: F,
+    ) {
+        *self.on_form_request.lock().unwrap() = Some(Box::new(cb));
+    }
+
+    /// Inject form-resolution notifier (broadcast to other endpoints).
+    pub fn set_form_resolved_callback<
+        F: Fn(&str, &str, HashMap<String, serde_json::Value>) + Send + Sync + 'static,
+    >(
+        &self,
+        cb: F,
+    ) {
+        *self.on_form_resolved.lock().unwrap() = Some(Box::new(cb));
+    }
+
     /// Inject permission-resolution notifier (broadcast to other endpoints).
     pub fn set_permission_resolved_callback<
         F: Fn(&str, &str, &str, &str) + Send + Sync + 'static,
@@ -364,6 +391,49 @@ impl PermissionBridge {
 
         if let Some(cb) = self.on_ask_question_resolved.lock().unwrap().as_ref() {
             cb(&pending.chat_jid, request_id, resolved);
+        }
+        true
+    }
+
+    /// Resolve a pending FormUI request (Web UI / app path). `submitted = false`
+    /// means the user skipped the form. First responder wins — returns `false`
+    /// if the request was already consumed.
+    pub fn resolve_form(
+        &self,
+        request_id: &str,
+        values: HashMap<String, serde_json::Value>,
+        submitted: bool,
+    ) -> bool {
+        let pending = {
+            let mut map = self.pending_forms.lock().unwrap();
+            map.remove(request_id)
+        };
+        let Some(pending) = pending else {
+            tracing::warn!(
+                "[PermissionBridge] resolve form ignored: unknown request id={}",
+                request_id
+            );
+            return false;
+        };
+
+        tracing::info!(
+            "[PermissionBridge] resolve form id={} group_jid={} chat_jid={} submitted={} values={}",
+            request_id,
+            pending.group_jid,
+            pending.chat_jid,
+            submitted,
+            values.len()
+        );
+        self.fire_activity(&pending.chat_jid);
+        self.api.respond_to_form(
+            &pending.group_jid,
+            &pending.agent_id,
+            values.clone(),
+            submitted,
+        );
+
+        if let Some(cb) = self.on_form_resolved.lock().unwrap().as_ref() {
+            cb(&pending.chat_jid, request_id, values);
         }
         true
     }
@@ -563,6 +633,81 @@ impl PermissionBridge {
         self.fire_activity(chat_jid);
     }
 
+    /// Handle a `form:request` event from sema-core.
+    ///
+    /// Rich forms can't be expressed as channel inline keyboards. Non-web
+    /// chats with no WS sink degrade to a read-only text snapshot plus an
+    /// auto-submit of each field's default (`submitted = false`) so the agent
+    /// never blocks forever. Otherwise the full form structure is pushed to
+    /// the Web UI / app via the `on_form_request` callback.
+    pub fn handle_form_request(
+        &self,
+        request: &crate::zen_core::FormRequestData,
+        group_jid: &str,
+        chat_jid: &str,
+        bot_token: Option<&str>,
+    ) {
+        let request_id = short_id();
+        {
+            let mut map = self.pending_forms.lock().unwrap();
+            map.insert(
+                request_id.clone(),
+                PendingForm {
+                    agent_id: request.agent_id.clone(),
+                    chat_jid: chat_jid.to_string(),
+                    group_jid: group_jid.to_string(),
+                },
+            );
+        }
+
+        let is_web = self.api.is_web_jid(chat_jid);
+        tracing::info!(
+            "[PermissionBridge] form request id={} group_jid={} chat_jid={} title={} surface={} fields={} is_web={}",
+            request_id,
+            group_jid,
+            chat_jid,
+            request.title,
+            request.surface,
+            request.fields.len(),
+            is_web
+        );
+
+        // Non-web channel with no WS sink → degrade: send read-only snapshot,
+        // auto-submit defaults so the agent isn't blocked forever.
+        if !is_web && self.on_form_request.lock().unwrap().is_none() {
+            let snapshot = format_form_snapshot(request);
+            if let Err(e) = self.api.send_message(chat_jid, &snapshot, bot_token) {
+                tracing::warn!("[PermissionBridge] form snapshot send failed for {chat_jid}: {e}");
+            }
+            self.pending_forms.lock().unwrap().remove(&request_id);
+            self.api.respond_to_form(
+                group_jid,
+                &request.agent_id,
+                build_default_values(&request.fields),
+                false,
+            );
+            return;
+        }
+
+        // Notify Web UI / app with the full form structure.
+        if let Some(cb) = self.on_form_request.lock().unwrap().as_ref() {
+            cb(
+                chat_jid,
+                &request_id,
+                FormPayload {
+                    agent_id: request.agent_id.clone(),
+                    title: request.title.clone(),
+                    surface: request.surface.clone(),
+                    submit_label: request.submit_label.clone(),
+                    fields: request.fields.clone(),
+                },
+            );
+        }
+
+        // Form pushed → reset the group idle timer (agent is waiting on the user).
+        self.fire_activity(chat_jid);
+    }
+
     // ===== Callback routing (called when a channel receives an inline-button press) =====
 
     /// Route an inline-keyboard callback press. Returns confirmation text to show
@@ -673,6 +818,46 @@ impl PermissionBridge {
 
         Some(format!("✅ Selected: {question_label}"))
     }
+}
+
+/// Initial `values` assembled from each field's declared default — used by the
+/// degraded (no interactive UI) auto-submit path.
+fn build_default_values(
+    fields: &[crate::zen_core::FormField],
+) -> HashMap<String, serde_json::Value> {
+    let mut values = HashMap::new();
+    for f in fields {
+        if let (Some(key), Some(default)) = (f.key(), f.default_value()) {
+            values.insert(key.to_string(), default);
+        }
+    }
+    values
+}
+
+/// Render the form as a read-only text snapshot (degraded channels).
+fn format_form_snapshot(request: &crate::zen_core::FormRequestData) -> String {
+    let lines: Vec<String> = request
+        .fields
+        .iter()
+        .map(|f| match f {
+            crate::zen_core::FormField::StaticText { text, .. } => text.clone(),
+            _ => {
+                let label = f.label().unwrap_or_default();
+                let required = if f.required() { " *" } else { "" };
+                let default = f
+                    .default_value()
+                    .map(|v| format!(" (default: {v})"))
+                    .unwrap_or_default();
+                format!("• {label}{required}{default}")
+            }
+        })
+        .collect();
+    format!(
+        "📋 *{}*\n\n{}\n\n(This channel does not support interactive forms; \
+         defaults were used. Please use the Web UI to fill it in.)",
+        request.title,
+        lines.join("\n")
+    )
 }
 
 fn default_tool_rules() -> Vec<ToolAutoAcceptRule> {

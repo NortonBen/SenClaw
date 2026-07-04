@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, SubAgentActivityEntry, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, FormMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, SubAgentActivityEntry, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -80,6 +80,12 @@ export interface WsHook {
   stopAndClearHistory: (jid: string) => void;
   resolvePermission: (requestId: string, optionKey: string) => void;
   resolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
+  /** Submit a FormUI form (`submitted = false` = user skipped). */
+  resolveForm: (requestId: string, values: Record<string, unknown>, submitted: boolean) => void;
+  /** jid → currently active dock form (surface:'dock'), null when none. */
+  formDock: Record<string, FormMessage | null>;
+  /** Latest arrived dock form — drives the workbench auto-foreground effect. */
+  formDockLatest: { jid: string; at: number } | null;
   registerGroup: (data: RegisterGroupPayload) => void;
   registerFeishuApp: (appId: string, appSecret: string, domain?: string) => void;
   registerQQApp: (appId: string, appSecret: string, sandbox?: boolean) => void;
@@ -228,6 +234,10 @@ export function useWebSocket(): WsHook {
   const [agentModes, setAgentModes] = useState<Record<string, AgentMode>>({});
   const [workbench, setWorkbench]             = useState<Record<string, WorkbenchState>>(loadWorkbench);
   const [workbenchLatest, setWorkbenchLatest] = useState<{ jid: string; artifactId: string; at: number } | null>(null);
+  /** jid → currently active dock form (surface:'dock'), null when none. */
+  const [formDock, setFormDock]               = useState<Record<string, FormMessage | null>>({});
+  /** Latest arrived dock form (jid + timestamp) — drives auto-foreground. */
+  const [formDockLatest, setFormDockLatest]   = useState<{ jid: string; at: number } | null>(null);
   const [activeJid, setActiveJid]             = useState<string | null>(null);
 
   // Mirror workbench state to localStorage so a refresh restores launched tabs.
@@ -335,6 +345,31 @@ export function useWebSocket(): WsHook {
         }
       }
       return next;
+    });
+  }, [rawSend]);
+
+  const resolveForm = useCallback((requestId: string, values: Record<string, unknown>, submitted: boolean) => {
+    rawSend({ type: 'form:response', requestId, values, submitted });
+    // Lock the inline card as resolved locally
+    setMessages(prev => {
+      const next = { ...prev };
+      for (const [jid, msgs] of Object.entries(prev)) {
+        const idx = msgs.findIndex(m => m.role === 'form' && (m as FormMessage).requestId === requestId);
+        if (idx >= 0) {
+          const f = msgs[idx] as FormMessage;
+          const updated: FormMessage = { ...f, values, resolved: true };
+          next[jid] = [...msgs.slice(0, idx), updated, ...msgs.slice(idx + 1)];
+          break;
+        }
+      }
+      return next;
+    });
+    // Dock form: drop it once submitted
+    setFormDock(prev => {
+      for (const [jid, fm] of Object.entries(prev)) {
+        if (fm?.requestId === requestId) return { ...prev, [jid]: null };
+      }
+      return prev;
     });
   }, [rawSend]);
 
@@ -641,7 +676,7 @@ export function useWebSocket(): WsHook {
             // been answered.
             const resolved = new Set<string>();
             for (const e of events) {
-              if ((e.eventType === 'permission:resolved' || e.eventType === 'question:resolved') && e.requestId) {
+              if ((e.eventType === 'permission:resolved' || e.eventType === 'question:resolved' || e.eventType === 'form:resolved') && e.requestId) {
                 resolved.add(`${e.eventType}|${e.requestId}`);
               }
             }
@@ -678,6 +713,33 @@ export function useWebSocket(): WsHook {
                   resolved:   false,
                   timestamp:  e.timestamp,
                 });
+              } else if (e.eventType === 'form:request' && e.requestId) {
+                if (resolved.has(`form:resolved|${e.requestId}`)) continue;
+                const fields = (p.fields as FormMessage['fields']) ?? [];
+                const initial: Record<string, unknown> = {};
+                for (const f of fields) {
+                  if (f.type === 'static_text') continue;
+                  if ('default' in f && f.default !== undefined) initial[f.key] = f.default;
+                }
+                const surface = (p.surface as FormMessage['surface']) ?? 'inline';
+                const formMsg: FormMessage = {
+                  id:          `f-${e.requestId}`,
+                  role:        'form',
+                  requestId:   e.requestId,
+                  agentId:     (p.agentId as string) ?? 'main',
+                  title:       (p.title as string) ?? '',
+                  surface,
+                  submitLabel: (p.submitLabel as string) ?? 'Submit',
+                  fields,
+                  values:      initial,
+                  resolved:    false,
+                  timestamp:   e.timestamp,
+                };
+                if (surface === 'dock') {
+                  setFormDock(prev => ({ ...prev, [hjid]: formMsg }));
+                } else {
+                  addMessage(hjid, formMsg);
+                }
               }
               // *:resolved events are handled implicitly via the pre-scan.
             }
@@ -820,6 +882,50 @@ export function useWebSocket(): WsHook {
               if (q.resolved) return m; // already resolved locally
               return { ...q, resolved: true };
             });
+            break;
+          }
+          case 'form:request': {
+            const fields = (msg.fields as FormMessage['fields']) ?? [];
+            // Seed controlled values from each field's `default`
+            const initial: Record<string, unknown> = {};
+            for (const f of fields) {
+              if (f.type === 'static_text') continue;
+              if ('default' in f && f.default !== undefined) initial[f.key] = f.default;
+            }
+            const fJid = msg.groupJid as string;
+            const surface = (msg.surface as FormMessage['surface']) ?? 'inline';
+            const formMsg: FormMessage = {
+              id:          `f-${msg.requestId as string}`,
+              role:        'form',
+              requestId:   msg.requestId as string,
+              agentId:     (msg.agentId as string) ?? 'main',
+              title:       (msg.title as string) ?? '',
+              surface,
+              submitLabel: (msg.submitLabel as string) ?? 'Submit',
+              fields,
+              values:      initial,
+              resolved:    false,
+              timestamp:   new Date().toISOString(),
+            };
+            if (surface === 'dock') {
+              // Dock forms live in the workbench panel, not the chat stream.
+              setFormDock(prev => ({ ...prev, [fJid]: formMsg }));
+              setFormDockLatest({ jid: fJid, at: Date.now() });
+            } else {
+              addMessage(fJid, formMsg);
+            }
+            break;
+          }
+          case 'form:resolved': {
+            const fJid = msg.groupJid as string;
+            const fId  = msg.requestId as string;
+            updateMessage(fJid, `f-${fId}`, (m) => {
+              const f = m as FormMessage;
+              if (f.resolved) return m; // already resolved locally
+              return { ...f, resolved: true };
+            });
+            // Dock form resolved (possibly from another client) → drop it
+            setFormDock(prev => (prev[fJid]?.requestId === fId ? { ...prev, [fJid]: null } : prev));
             break;
           }
           case 'plans:list': {
@@ -1358,6 +1464,7 @@ export function useWebSocket(): WsHook {
     spaceEventsRev,
     workbench, workbenchLatest, activeJid, setActiveJid,
     workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
+    resolveForm, formDock, formDockLatest,
   }), [
     status, groups, messages, agentStates, agentCompacting, agentUsage, subscribed, subscribe, refreshGroups, sendMessage, pauseAgent, resumeAgent, stopAgent, stopAndClearHistory, resolvePermission, resolveQuestion, registerGroup, registerFeishuApp, registerQQApp, unregisterGroup, updateGroup, dispatchParents, dispatchActivity, agentTodos, subscribeAll, coworkChanged, lastTaskResult, coworkResourceChanged,
     channels, agents, bindings,
@@ -1372,5 +1479,6 @@ export function useWebSocket(): WsHook {
     spaceEventsRev,
     workbench, workbenchLatest, activeJid, setActiveJid,
     workbenchMarkViewed, workbenchClose, workbenchReadFile, workbenchFetchLogs, workbenchSetCurrent,
+    resolveForm, formDock, formDockLatest,
   ]);
 }

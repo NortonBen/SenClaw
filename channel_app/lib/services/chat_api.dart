@@ -85,6 +85,18 @@ class ChatApi {
         'otherTexts': ?otherTexts,
       });
 
+  /// [values] is keyed by form field `key`; [submitted] = false = user skipped.
+  Future<void> respondForm(
+    String requestId,
+    Map<String, dynamic> values, {
+    bool submitted = true,
+  }) =>
+      _api.post('/api/chat/form/respond', body: {
+        'requestId': requestId,
+        'values': values,
+        'submitted': submitted,
+      });
+
   /// [selected] = 'startEditing' | 'clearContextAndStart' | 'cancelled'.
   Future<void> respondPlan(
     String groupJid,

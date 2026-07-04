@@ -40,6 +40,8 @@ pub enum EngineEvent {
     FileReference(FileReferenceData),
     AskQuestionRequest(AskQuestionRequestData),
     AskQuestionResponse(AskQuestionResponseData),
+    FormRequest(FormRequestData),
+    FormResponse(FormResponseData),
     PlanExitRequest(PlanExitRequestData),
     PlanExitResponse(PlanExitResponseData),
     PlanImplement(PlanImplementData),
@@ -107,6 +109,8 @@ pub struct ResponseRegistry {
     /// Pending ask-question responses, keyed by agent_id.
     ask_question_txs:
         std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<AskQuestionResponseData>>>,
+    /// Pending FormUI responses, keyed by agent_id.
+    form_txs: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<FormResponseData>>>,
 }
 
 impl ResponseRegistry {
@@ -114,6 +118,7 @@ impl ResponseRegistry {
         Self {
             tool_permission_txs: std::sync::Mutex::new(HashMap::new()),
             ask_question_txs: std::sync::Mutex::new(HashMap::new()),
+            form_txs: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -173,10 +178,34 @@ impl ResponseRegistry {
         }
     }
 
+    /// Register a waiter for a FormUI response.
+    pub fn register_form(
+        &self,
+        agent_id: &str,
+    ) -> tokio::sync::oneshot::Receiver<FormResponseData> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.form_txs
+            .lock()
+            .unwrap()
+            .insert(agent_id.to_owned(), tx);
+        rx
+    }
+
+    /// Deliver a FormUI response to the waiter.
+    pub fn deliver_form(&self, response: FormResponseData) -> bool {
+        if let Some(tx) = self.form_txs.lock().unwrap().remove(&response.agent_id) {
+            let _ = tx.send(response);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Remove all pending waiters.
     pub fn clear(&self) {
         self.tool_permission_txs.lock().unwrap().clear();
         self.ask_question_txs.lock().unwrap().clear();
+        self.form_txs.lock().unwrap().clear();
     }
 }
 
@@ -250,6 +279,35 @@ mod tests {
         let delivered = reg.deliver_tool_permission(ToolPermissionResponseData {
             tool_name: "Nope".into(),
             selected: "agree".into(),
+        });
+        assert!(!delivered);
+    }
+
+    #[test]
+    fn response_registry_form_round_trip() {
+        let reg = ResponseRegistry::new();
+        let mut rx = reg.register_form("main");
+        let mut values = HashMap::new();
+        values.insert("name".to_string(), serde_json::json!("Alice"));
+        values.insert("count".to_string(), serde_json::json!(3));
+        let delivered = reg.deliver_form(FormResponseData {
+            agent_id: "main".into(),
+            values,
+            submitted: true,
+        });
+        assert!(delivered);
+        let response = rx.try_recv().unwrap();
+        assert!(response.submitted);
+        assert_eq!(response.values["name"], serde_json::json!("Alice"));
+    }
+
+    #[test]
+    fn response_registry_form_unknown_agent() {
+        let reg = ResponseRegistry::new();
+        let delivered = reg.deliver_form(FormResponseData {
+            agent_id: "nobody".into(),
+            values: HashMap::new(),
+            submitted: false,
         });
         assert!(!delivered);
     }

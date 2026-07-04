@@ -71,6 +71,41 @@ pub(crate) async fn chat_question_respond(
 }
 
 #[derive(Deserialize)]
+pub(crate) struct FormRespondBody {
+    #[serde(rename = "requestId")]
+    request_id: String,
+    /// Structured values keyed by field `key`.
+    #[serde(default)]
+    values: serde_json::Value,
+    /// Missing counts as submitted; explicit `false` means the user skipped.
+    #[serde(default = "default_submitted")]
+    submitted: bool,
+}
+
+fn default_submitted() -> bool {
+    true
+}
+
+pub(crate) async fn chat_form_respond(
+    State(s): State<Arc<UiState>>,
+    Json(b): Json<FormRespondBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if b.request_id.is_empty() {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "requestId required".into(),
+        ));
+    }
+    let values = if b.values.is_null() {
+        serde_json::json!({})
+    } else {
+        b.values
+    };
+    agent_api(&s)?.resolve_form(&b.request_id, &values, b.submitted);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 pub(crate) struct PlanRespondBody {
     #[serde(rename = "groupJid")]
     group_jid: String,

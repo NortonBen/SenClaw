@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import type { WorkbenchState } from '../types';
+import type { WorkbenchState, FormMessage } from '../types';
 import { StaticRenderer } from './workbench/StaticRenderer';
 import { WebRenderer } from './workbench/WebRenderer';
 import { BackendRenderer } from './workbench/BackendRenderer';
 import { HistoryList } from './workbench/HistoryList';
+import { FormCard } from './FormCard';
 import { theme } from 'antd';
 
 // Drag-to-resize width, persisted to localStorage (mirrors AgentConsole).
@@ -41,9 +42,13 @@ interface Props {
   selectArtifact: (artifactId: string) => void;
   /** Mark as viewed (updates last_active). */
   markViewed: (artifactId: string) => void;
+  /** Active dock form (surface:'dock') — shown above/instead of the artifact. */
+  dockForm?: FormMessage | null;
+  /** Submit / skip the dock form. */
+  onResolveForm?: (requestId: string, values: Record<string, unknown>, submitted: boolean) => void;
 }
 
-export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact, selectArtifact, markViewed }: Props) {
+export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact, selectArtifact, markViewed, dockForm, onResolveForm }: Props) {
   const { token } = theme.useToken();
   const current = state?.current ?? null;
   const history = state?.history ?? [];
@@ -122,7 +127,7 @@ export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-semibold truncate" style={{ color: token.colorText }}>
-            {current ? current.title : 'Workbench'}
+            {current ? current.title : dockForm ? dockForm.title : 'Workbench'}
           </span>
           {current && (
             <span className="text-[10px] font-mono" style={{ color: token.colorTextTertiary }}>{current.mode}</span>
@@ -166,18 +171,32 @@ export function Workbench({ state, expanded, onCollapse, readFile, closeArtifact
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {!current ? (
-          <div className="flex h-full items-center justify-center text-xs px-4 text-center" style={{ color: token.colorTextTertiary }}>
-            No content yet
+      <div className="flex-1 min-h-0 flex flex-col">
+        {/* Active dock form takes priority (top strip when an artifact is open) */}
+        {dockForm && onResolveForm && (
+          <div
+            className={`overflow-y-auto p-3 ${current ? 'border-b max-h-[55%]' : 'flex-1'}`}
+            style={{ borderColor: token.colorBorderSecondary }}
+          >
+            <FormCard message={dockForm} onResolve={onResolveForm} variant="dock" />
           </div>
-        ) : current.mode === 'static' ? (
-          <StaticRenderer artifact={current} readFile={readFileForCurrent} />
-        ) : current.mode === 'web' ? (
-          <WebRenderer artifact={current} />
-        ) : (
-          <BackendRenderer artifact={current} />
         )}
+        {/* Artifact area (yields entirely to the form when no artifact is open) */}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {!current ? (
+            dockForm ? null : (
+              <div className="flex h-full items-center justify-center text-xs px-4 text-center" style={{ color: token.colorTextTertiary }}>
+                No content yet
+              </div>
+            )
+          ) : current.mode === 'static' ? (
+            <StaticRenderer artifact={current} readFile={readFileForCurrent} />
+          ) : current.mode === 'web' ? (
+            <WebRenderer artifact={current} />
+          ) : (
+            <BackendRenderer artifact={current} />
+          )}
+        </div>
       </div>
 
       {/* History */}

@@ -98,6 +98,25 @@ impl agent::permission_bridge::PermissionBridgeApi for RealPermissionApi {
         self.agent_pool
             .respond_to_ask_question(group_jid, agent_id, answers);
     }
+
+    fn respond_to_form(
+        &self,
+        group_jid: &str,
+        agent_id: &str,
+        values: HashMap<String, serde_json::Value>,
+        submitted: bool,
+    ) {
+        self.agent_pool
+            .respond_to_form(group_jid, agent_id, values, submitted);
+    }
+}
+
+/// Convert a JSON object of form values into the map shape AgentPool expects.
+fn form_values_map(values: &serde_json::Value) -> HashMap<String, serde_json::Value> {
+    values
+        .as_object()
+        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
 }
 
 #[async_trait]
@@ -187,6 +206,12 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         let _ = self
             .agent_pool
             .resolve_ask_question_batch(request_id, answers, other_texts);
+    }
+
+    fn resolve_form(&self, request_id: &str, values: &serde_json::Value, submitted: bool) {
+        let _ = self
+            .agent_pool
+            .resolve_form(request_id, form_values_map(values), submitted);
     }
 
     fn resume_agent(&self, group_jid: &str, query: Option<&str>) {
@@ -517,6 +542,40 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         tokio::spawn(async move {
             persist_chat_event(&db, &jid, "question:request", Some(&req), &payload);
             gw.notify_ask_question_request(&jid, &req, &payload).await;
+        });
+    }
+
+    fn notify_form_request(
+        &self,
+        chat_jid: &str,
+        request_id: &str,
+        payload: agent::permission_bridge::FormPayload,
+    ) {
+        let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
+        let jid = chat_jid.to_string();
+        let req = request_id.to_string();
+        let payload = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "form:request", Some(&req), &payload);
+            gw.notify_form_request(&jid, &req, &payload).await;
+        });
+    }
+
+    fn notify_form_resolved(
+        &self,
+        chat_jid: &str,
+        request_id: &str,
+        values: std::collections::HashMap<String, serde_json::Value>,
+    ) {
+        let gw = Arc::clone(&self.gateway);
+        let db = Arc::clone(&self.db);
+        let jid = chat_jid.to_string();
+        let req = request_id.to_string();
+        let values = serde_json::to_value(&values).unwrap_or(serde_json::Value::Null);
+        tokio::spawn(async move {
+            persist_chat_event(&db, &jid, "form:resolved", Some(&req), &values);
+            gw.notify_form_resolved(&jid, &req, &values).await;
         });
     }
 
@@ -2180,6 +2239,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let _ =
                     self.agent_pool
                         .resolve_ask_question_batch(request_id, answers, other_texts);
+            }
+            fn resolve_form(
+                &self,
+                request_id: &str,
+                values: &serde_json::Value,
+                submitted: bool,
+            ) {
+                let _ = self
+                    .agent_pool
+                    .resolve_form(request_id, form_values_map(values), submitted);
             }
             fn resolve_plan_exit(&self, group_jid: &str, agent_id: &str, selected: &str) {
                 self.agent_pool

@@ -101,6 +101,19 @@ pub struct AskQuestionPayload {
     pub questions: Vec<AskQuestionData>,
 }
 
+/// FormUI request payload pushed to the Web UI (mirrors TS `FormPayload`).
+#[derive(Debug, Clone, Serialize)]
+pub struct FormPayload {
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+    pub title: String,
+    /// `"inline"` (chat card) or `"dock"` (workbench panel).
+    pub surface: String,
+    #[serde(rename = "submitLabel")]
+    pub submit_label: String,
+    pub fields: Vec<crate::zen_core::FormField>,
+}
+
 // ===== Internal pending state =====
 
 pub(crate) struct PendingPermission {
@@ -119,4 +132,10 @@ pub(crate) struct PendingAskQuestion {
     pub answers: HashMap<String, String>,
     /// Remaining unanswered count; triggers respond when zero.
     pub pending_count: usize,
+}
+
+pub(crate) struct PendingForm {
+    pub agent_id: String,
+    pub chat_jid: String,
+    pub group_jid: String,
 }

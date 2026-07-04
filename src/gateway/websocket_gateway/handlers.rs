@@ -1530,6 +1530,30 @@ pub(crate) async fn handle_question_response(
         .resolve_ask_question(&request_id, answers, other_texts);
 }
 
+pub(crate) async fn handle_form_response(
+    clients: &Arc<Mutex<Vec<WsClient>>>,
+    client_idx: usize,
+    sender: &tokio::sync::mpsc::UnboundedSender<Message>,
+    state: &Arc<WsState>,
+    msg: &serde_json::Value,
+) {
+    if !require_auth(clients, client_idx, sender).await {
+        return;
+    }
+    let request_id = msg["requestId"].as_str().unwrap_or("").to_string();
+    if request_id.is_empty() {
+        send_json(
+            sender,
+            &serde_json::json!({"type": "error", "message": "requestId required"}),
+        );
+        return;
+    }
+    let values = msg.get("values").cloned().unwrap_or(serde_json::json!({}));
+    // Missing flag counts as submitted; explicit `false` means the user skipped.
+    let submitted = msg["submitted"].as_bool().unwrap_or(true);
+    state.api.resolve_form(&request_id, &values, submitted);
+}
+
 /// Handle the user's plan-exit decision from `PlanExitDialog`. Routes the
 /// choice to the suspended `ExitPlanMode` tool (which otherwise blocks
 /// forever) and broadcasts `plan:exit:response` so every connected client
