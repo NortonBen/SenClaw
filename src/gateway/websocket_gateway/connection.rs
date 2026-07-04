@@ -182,10 +182,6 @@ async fn handle_message(
             super::handlers::handle_notifications_pending(clients, client_idx, &sender, state, msg)
                 .await
         }
-        "notification:read" => {
-            super::handlers::handle_notification_read(clients, client_idx, &sender, state, msg)
-                .await
-        }
         "question:response" => {
             super::handlers::handle_question_response(clients, client_idx, &sender, state, msg)
                 .await
