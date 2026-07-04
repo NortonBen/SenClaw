@@ -243,6 +243,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
   /// and per-step timeout, saved via targeted PATCH (never rewrites the DAG).
   Future<void> _openTune(WorkflowDefSummary def) async {
     final wfCtrl = TextEditingController(text: def.guidance ?? '');
+    final wsCtrl = TextEditingController(text: def.workspace ?? '');
     final stepGuidance = {
       for (final s in def.steps)
         if (s.kind == 'agent') s.id: TextEditingController(text: s.guidance ?? ''),
@@ -280,6 +281,22 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                   maxLines: 3,
                   decoration:
                       const InputDecoration(border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: AppTokens.s12),
+                Text('Workspace (cwd of every step, persists across runs)',
+                    style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: wsCtrl,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    hintText: 'empty = default per-workflow directory',
+                  ),
+                  style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: AppTokens.s12),
                 for (final s in def.steps) ...[
@@ -370,6 +387,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
       }
       await patchWorkflowFields(ref, def.name, {
         'guidance': wfCtrl.text,
+        'workspace': wsCtrl.text,
         'steps': steps,
       });
       _snack('Saved guidance for "${def.name}"');

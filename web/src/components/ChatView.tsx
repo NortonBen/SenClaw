@@ -343,9 +343,20 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
     await transcribeAudio(encodeWav(merged, sampleRate), 'chat-recording.wav');
   };
 
+  // Text-only drafts can queue mid-turn (server injects them into the running
+  // turn); image messages need a full turn so they don't queue.
+  const queueableDraft = input.trim().length > 0 && pendingImages.length === 0;
+
   // ── Send / pause / resume single handler ──
   const handleActionButton = () => {
     if (isProcessing) {
+      // With a text draft: send now — the engine queues it and injects it into
+      // the running turn (or chains it as the next turn).
+      if (queueableDraft) {
+        onSend(input.trim(), []);
+        setInput('');
+        return;
+      }
       // No-op while compacting (button disabled; belt-and-suspenders)
       if (isCompacting) return;
       onPause();
@@ -368,11 +379,13 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   // ── Action button disabled rules ──
   const actionButtonDisabled =
     (agentState === 'idle' && !input.trim() && pendingImages.length === 0) ||   // idle: need text or images to send
-    (isProcessing && isCompacting);               // compacting: pause disabled
+    (isProcessing && isCompacting && !queueableDraft);  // compacting: pause disabled (queueing text still OK)
 
   const actionButtonTitle =
     isProcessing
-      ? (isCompacting ? 'Compacting context, please wait…' : 'Pause')
+      ? (queueableDraft
+        ? 'Gửi — xếp hàng cho lượt đang chạy'
+        : isCompacting ? 'Compacting context, please wait…' : 'Pause')
       : isPaused
       ? 'Resume'
       : 'Send';
@@ -669,6 +682,8 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
         className="px-6 py-4 backdrop-blur-xl flex-shrink-0"
         helperText={isPaused
           ? 'Press ▶ to resume · / @ # gợi ý · Shift+Enter xuống dòng'
+          : isProcessing
+          ? 'Agent đang chạy — Enter để xếp tin nhắn vào lượt hiện tại'
           : 'Enter để gửi · Shift+Enter xuống dòng · / @ # gợi ý'}
         agentMode={group.groupType === 'cowork' ? 'Dag' : agentMode}
         onModeChange={group.groupType === 'cowork' ? undefined : onModeChange}
@@ -677,7 +692,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           value={input}
           onChange={setInput}
           onSubmit={handleActionButton}
-          disabled={isProcessing}
+          disabled={false /* typing while processing queues the message server-side */}
           sending={false}
           commands={[]}
           mentionItems={[]}
@@ -722,7 +737,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
             </Tooltip>
           }
           renderActionIcon={
-            isProcessing ? (
+            isProcessing && !queueableDraft ? (
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
                 <path fillRule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25z" clipRule="evenodd" />
               </svg>

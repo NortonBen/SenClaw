@@ -59,9 +59,15 @@ class _TextBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    // Cross-channel user messages (e.g. from the mobile channel_app) arrive as
+    // MessageKind.other. They're still the user's own input, just from another
+    // client, so render them user-side (right-aligned, user bubble) while the
+    // source label below keeps showing where they came from ("mobile-app").
     final isUser = message.kind == MessageKind.user;
-    final align = isUser ? Alignment.centerRight : Alignment.centerLeft;
-    final bg = isUser ? c.bubbleUser : c.bubbleAgent;
+    final isOther = message.kind == MessageKind.other;
+    final userSide = isUser || isOther;
+    final align = userSide ? Alignment.centerRight : Alignment.centerLeft;
+    final bg = userSide ? c.bubbleUser : c.bubbleAgent;
     final parts = _splitThink(message.text ?? '');
 
     // Don't render an empty bubble (e.g. a reasoning-only message after the
@@ -138,7 +144,7 @@ class _TextBubble extends StatelessWidget {
                     // User bubbles hug their content; agent footers span so the
                     // timestamp sits flush right past the actions/tokens.
                     mainAxisSize:
-                        isUser ? MainAxisSize.min : MainAxisSize.max,
+                        userSide ? MainAxisSize.min : MainAxisSize.max,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       if (showTokens)
@@ -156,7 +162,7 @@ class _TextBubble extends StatelessWidget {
                                 .where((p) => !p.isThink)
                                 .map((p) => p.text)
                                 .join('\n\n')),
-                      if (!isUser) const Spacer(),
+                      if (!userSide) const Spacer(),
                       if (time.isNotEmpty)
                         Text(time,
                             style:

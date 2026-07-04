@@ -229,7 +229,7 @@ class _SessionListState extends ConsumerState<SessionList> {
 
   Widget _sectionLabel(String label) => Padding(
         padding: const EdgeInsets.fromLTRB(
-            AppTokens.s16, AppTokens.s12, AppTokens.s16, AppTokens.s4),
+            AppTokens.s16, AppTokens.s8, AppTokens.s16, AppTokens.s4),
         child: Text(label.toUpperCase(),
             style: TextStyle(
               color: context.colors.textMuted,
@@ -250,7 +250,7 @@ class _SessionListState extends ConsumerState<SessionList> {
             : 'Projects';
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-          AppTokens.s16, AppTokens.s12, AppTokens.s8, AppTokens.s4),
+          AppTokens.s16, AppTokens.s8, AppTokens.s8, AppTokens.s4),
       child: Row(
         children: [
           Expanded(
@@ -331,7 +331,7 @@ class _SessionListState extends ConsumerState<SessionList> {
         onTap: isRenaming ? null : () => _select(g.jid),
         child: Container(
           padding: const EdgeInsets.symmetric(
-              horizontal: AppTokens.s12, vertical: AppTokens.s6),
+              horizontal: AppTokens.s12, vertical: 3),
           decoration: BoxDecoration(
             color: isSelected ? c.accentSoft : Colors.transparent,
             borderRadius: BorderRadius.circular(AppTokens.rMd),
@@ -414,6 +414,15 @@ class _SessionListState extends ConsumerState<SessionList> {
       tooltip: '',
       padding: EdgeInsets.zero,
       iconSize: 16,
+      // Material's default 48x48 tap target dictates the row height — shrink
+      // it so list rows stay text-sized and more sessions fit on screen.
+      constraints: const BoxConstraints(),
+      style: const ButtonStyle(
+        minimumSize: WidgetStatePropertyAll(Size(24, 24)),
+        fixedSize: WidgetStatePropertyAll(Size(24, 24)),
+        padding: WidgetStatePropertyAll(EdgeInsets.zero),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
       icon: Icon(Icons.more_horiz, size: 16, color: c.textMuted),
       color: c.surface,
       elevation: 12,

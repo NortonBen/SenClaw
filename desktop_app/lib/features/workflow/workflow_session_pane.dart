@@ -86,7 +86,7 @@ class _WorkflowSessionSectionState
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(
-              AppTokens.s16, AppTokens.s12, AppTokens.s8, AppTokens.s4),
+              AppTokens.s16, AppTokens.s8, AppTokens.s8, AppTokens.s4),
           child: Row(
             children: [
               Expanded(
@@ -143,9 +143,9 @@ class _WorkflowSessionSectionState
       onTap: () => ref.read(selectedJidProvider.notifier).state = jid,
       child: Container(
         margin: const EdgeInsets.symmetric(
-            horizontal: AppTokens.s8, vertical: 2),
+            horizontal: AppTokens.s8, vertical: 1),
         padding: const EdgeInsets.symmetric(
-            horizontal: AppTokens.s8, vertical: AppTokens.s6),
+            horizontal: AppTokens.s8, vertical: 3),
         decoration: BoxDecoration(
           color: active ? c.accent.withValues(alpha: 0.10) : null,
           borderRadius: BorderRadius.circular(AppTokens.rMd),
@@ -183,6 +183,14 @@ class _WorkflowSessionSectionState
               tooltip: '',
               padding: EdgeInsets.zero,
               iconSize: 15,
+              // Kill the 48x48 default tap target so the row stays compact.
+              constraints: const BoxConstraints(),
+              style: const ButtonStyle(
+                minimumSize: WidgetStatePropertyAll(Size(24, 24)),
+                fixedSize: WidgetStatePropertyAll(Size(24, 24)),
+                padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               icon: Icon(Icons.more_vert_rounded,
                   size: 15, color: c.textMuted),
               onSelected: (v) async {

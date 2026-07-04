@@ -150,10 +150,20 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
           },
         );
       }
+      // A non-empty senderName marks a message that came in from another
+      // client/channel (e.g. the mobile channel_app "mobile-app") rather than
+      // this desktop. Keep it user-side but tag it `other` so the source label
+      // renders — matching the live `incoming` path.
+      final senderName = m['senderName'] as String?;
+      final fromOtherChannel = senderName != null && senderName.isNotEmpty;
       return ChatMessage(
         id: '${m['id']}',
-        kind: role == 'agent' ? MessageKind.agent : MessageKind.user,
-        sender: m['senderName'] as String?,
+        kind: role == 'agent'
+            ? MessageKind.agent
+            : fromOtherChannel
+                ? MessageKind.other
+                : MessageKind.user,
+        sender: senderName,
         text: '${m['text'] ?? ''}',
         ts: m['timestamp'] as String?,
       );

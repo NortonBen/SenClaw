@@ -138,6 +138,7 @@ export default function WorkflowsPanel() {
   const [tune, setTune] = useState<{
     name: string;
     guidance: string;
+    workspace: string;
     steps: { id: string; kind: 'agent' | 'script'; persona?: string; guidance: string; timeout?: number }[];
   } | null>(null);
   const [tuning, setTuning] = useState(false);
@@ -333,6 +334,7 @@ export default function WorkflowsPanel() {
     setTune({
       name: d.name,
       guidance: d.guidance ?? '',
+      workspace: d.workspace ?? '',
       steps: d.steps.map((s) => ({
         id: s.id,
         kind: s.kind,
@@ -352,6 +354,7 @@ export default function WorkflowsPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           guidance: tune.guidance,
+          workspace: tune.workspace,
           steps: tune.steps.map((s) => ({
             id: s.id,
             guidance: s.guidance,
@@ -685,6 +688,16 @@ export default function WorkflowsPanel() {
                 value={tune.guidance}
                 onChange={(e) => setTune((p) => (p ? { ...p, guidance: e.target.value } : p))}
                 autoSize={{ minRows: 2, maxRows: 6 }}
+                style={{ marginTop: 4 }}
+              />
+            </div>
+            <div>
+              <Text strong style={{ fontSize: 13 }}>Workspace</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}> — cwd của mọi step, giữ giữa các run; để trống = thư mục mặc định</Text>
+              <Input
+                value={tune.workspace}
+                onChange={(e) => setTune((p) => (p ? { ...p, workspace: e.target.value } : p))}
+                placeholder="/path/to/workspace"
                 style={{ marginTop: 4 }}
               />
             </div>
