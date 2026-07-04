@@ -13,6 +13,12 @@ on:
       - "hub-backend/**"
   workflow_dispatch:
 
+# The build job attaches the release binary on tag pushes (default token is
+# read-only) and the docker job pushes to GHCR.
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   # `paths:` filters don't apply to tag pushes — every tag would rebuild the
   # hub even when nothing under hub-backend/ changed. Compare against the
@@ -30,16 +36,16 @@ jobs:
       - id: check
         run: |
           set -e
-          # Diff base: previous tag for tag pushes, the pushed-range start for
-          # branch pushes. Only hub-backend/ itself counts — a workflow-file
-          # edit alone must not rebuild the hub.
+          # A release tag always builds and attaches its binary — a release
+          # must be self-contained. Branch pushes only rebuild when
+          # hub-backend/ actually changed (a workflow-file edit alone doesn't).
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            base=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-          else
-            base="${{ github.event.before }}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          base="${{ github.event.before }}"
           if [[ -z "$base" ]] || ! git rev-parse -q --verify "$base^{commit}" >/dev/null; then
-            # First tag / new branch / force push — no diff base, build to be safe.
+            # New branch / force push — no diff base, build to be safe.
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -85,6 +91,21 @@ jobs:
           name: hub-backend-linux-amd64
           path: /tmp/hub-server
           if-no-files-found: warn
+
+      # A release should ship the hub binary alongside the desktop/app assets.
+      # The asset name is the source filename, so stage a descriptive one.
+      - name: Stage release binary
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cp /tmp/hub-server /tmp/senclaw-hub-backend-linux-amd64
+
+      - name: Attach binary to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: /tmp/senclaw-hub-backend-linux-amd64
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
     name: Docker image
