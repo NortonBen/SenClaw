@@ -31,6 +31,7 @@ export function AppLayout({ sidebar, children, status }: Props) {
 
   const activeJid = ws.activeJid;
   const workbenchState = activeJid ? (ws.workbench[activeJid] ?? null) : null;
+  const dockForm = activeJid ? (ws.formDock[activeJid] ?? null) : null;
 
   // A new artifact for the active chat grabs the foreground (unless suppressed).
   useEffect(() => {
@@ -40,6 +41,14 @@ export function AppLayout({ sidebar, children, status }: Props) {
     if (latest.jid !== activeJid) return;
     setExpandedDock('workbench');
   }, [ws.workbenchLatest, suppressedLatestAt, activeJid]);
+
+  // A new dock form (surface:'dock') for the active chat grabs the foreground.
+  useEffect(() => {
+    const latest = ws.formDockLatest;
+    if (!latest) return;
+    if (latest.jid !== activeJid) return;
+    setExpandedDock('workbench');
+  }, [ws.formDockLatest, activeJid]);
 
   // Workbench callbacks pinned to the active chat jid.
   const { workbenchReadFile, workbenchClose, workbenchMarkViewed, workbenchSetCurrent, workbenchLatest } = ws;
@@ -117,6 +126,8 @@ export function AppLayout({ sidebar, children, status }: Props) {
         closeArtifact={wbClose}
         selectArtifact={wbSelect}
         markViewed={wbMarkViewed}
+        dockForm={dockForm}
+        onResolveForm={ws.resolveForm}
       />
       <DockBadges
         expanded={expandedDock}

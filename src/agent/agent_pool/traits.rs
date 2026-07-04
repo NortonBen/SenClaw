@@ -11,7 +11,7 @@ use super::types::{
     AskQuestionRequestData, CompactExecData, CompactStartData, MessageCompleteData,
     SessionErrorData, StateUpdateData, TodoSnapshot, TodosUpdateItem, ToolPermissionRequestData,
 };
-use crate::agent::permission_bridge::{AskQuestionPayload, PermissionPayload};
+use crate::agent::permission_bridge::{AskQuestionPayload, FormPayload, PermissionPayload};
 use crate::config::Config;
 use crate::mcp::helper::McpServerConfig;
 use crate::types::GroupBinding;
@@ -51,6 +51,14 @@ pub trait AgentEventSink: Send + Sync {
         chat_jid: &str,
         request_id: &str,
         answers: HashMap<String, String>,
+    ) {
+    }
+    fn notify_form_request(&self, chat_jid: &str, request_id: &str, payload: FormPayload) {}
+    fn notify_form_resolved(
+        &self,
+        chat_jid: &str,
+        request_id: &str,
+        values: HashMap<String, serde_json::Value>,
     ) {
     }
     fn notify_agent_todos(&self, agent_jid: &str, agent_name: &str, todos: &[TodoSnapshot]) {}
@@ -198,6 +206,12 @@ pub trait CoreApi: Send + Sync {
         _handler: Box<dyn Fn(AskQuestionRequestData) + Send + Sync>,
     ) {
     }
+    fn on_form_request(
+        &self,
+        _jid: &str,
+        _handler: Box<dyn Fn(crate::zen_core::FormRequestData) + Send + Sync>,
+    ) {
+    }
     fn on_conversation_usage(
         &self,
         _jid: &str,
@@ -217,6 +231,15 @@ pub trait CoreApi: Send + Sync {
         _jid: &str,
         _agent_id: &str,
         _answers: HashMap<String, String>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn respond_to_form(
+        &self,
+        _jid: &str,
+        _agent_id: &str,
+        _values: HashMap<String, serde_json::Value>,
+        _submitted: bool,
     ) -> Result<()> {
         Ok(())
     }
@@ -247,6 +270,7 @@ pub(crate) struct CoreHandlers {
     pub session_error: Option<Arc<dyn Fn(SessionErrorData) + Send + Sync>>,
     pub tool_permission_request: Option<Arc<dyn Fn(ToolPermissionRequestData) + Send + Sync>>,
     pub ask_question_request: Option<Arc<dyn Fn(AskQuestionRequestData) + Send + Sync>>,
+    pub form_request: Option<Arc<dyn Fn(crate::zen_core::FormRequestData) + Send + Sync>>,
     pub conversation_usage:
         Option<Arc<dyn Fn(crate::zen_core::ConversationUsageData) + Send + Sync>>,
 }

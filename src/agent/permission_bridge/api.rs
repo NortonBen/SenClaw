@@ -57,4 +57,14 @@ pub trait PermissionBridgeApi: Send + Sync {
         _answers: HashMap<String, String>,
     ) {
     }
+
+    /// Route a FormUI response to the correct sema-core instance.
+    fn respond_to_form(
+        &self,
+        _group_jid: &str,
+        _agent_id: &str,
+        _values: HashMap<String, serde_json::Value>,
+        _submitted: bool,
+    ) {
+    }
 }

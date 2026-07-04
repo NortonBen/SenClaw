@@ -17,7 +17,8 @@ pub(crate) mod utils;
 pub use api::PermissionBridgeApi;
 pub use bridge::PermissionBridge;
 pub use types::{
-    AskQuestionData, AskQuestionOption, AskQuestionPayload, PermissionOption, PermissionPayload,
+    AskQuestionData, AskQuestionOption, AskQuestionPayload, FormPayload, PermissionOption,
+    PermissionPayload,
 };
 
 #[cfg(test)]

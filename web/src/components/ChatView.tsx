@@ -29,6 +29,7 @@ interface Props {
   onStopAndClear: () => void;
   onResolvePermission: (requestId: string, optionKey: string) => void;
   onResolveQuestion: (requestId: string, answers: Record<number, number | number[]>, otherTexts?: Record<number, string>) => void;
+  onResolveForm: (requestId: string, values: Record<string, unknown>, submitted: boolean) => void;
   /** Active agent mode for this chat (defaults to 'Agent' when undefined). */
   agentMode?: AgentMode;
   onModeChange?: (mode: AgentMode) => void;
@@ -64,7 +65,7 @@ function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([view], { type: 'audio/wav' });
 }
 
-export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onStopAndClear, onResolvePermission, onResolveQuestion, agentMode, onModeChange }: Props) {
+export function ChatView({ group, messages, agentState, usage, isCompacting, onSend, onPause, onResume, onStop, onStopAndClear, onResolvePermission, onResolveQuestion, onResolveForm, agentMode, onModeChange }: Props) {
   const { token } = theme.useToken();
   const { ws } = useAppContext();
   const [input, setInput]           = useState('');
@@ -592,6 +593,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
               visibleMessages,
               onResolvePermission,
               onResolveQuestion,
+              onResolveForm,
             );
           }
           // Build a chronological segment list: messages-before-DAG, DAG,
@@ -624,6 +626,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
                   seg.items,
                   onResolvePermission,
                   onResolveQuestion,
+                  onResolveForm,
                 )
               : [
                   <InlineDispatchCard
@@ -981,6 +984,7 @@ function renderMessagesWithToolGroups(
     answers: Record<number, number | number[]>,
     otherTexts?: Record<number, string>,
   ) => void,
+  onResolveForm: (requestId: string, values: Record<string, unknown>, submitted: boolean) => void,
 ): JSX.Element[] {
   const nodes: JSX.Element[] = [];
   let pendingTools: ToolMessage[] = [];
@@ -1010,6 +1014,7 @@ function renderMessagesWithToolGroups(
           message={msg}
           onResolvePermission={onResolvePermission}
           onResolveQuestion={onResolveQuestion}
+          onResolveForm={onResolveForm}
         />,
       );
     }

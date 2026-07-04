@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::mcp::helper::McpServerConfig;
 use crate::types::GroupBinding;
 use crate::zen_core::{
-    AskQuestionResponseData, EngineEvent, PlanExitResponseData, SessionState,
+    AskQuestionResponseData, EngineEvent, FormResponseData, PlanExitResponseData, SessionState,
     ToolPermissionResponseData, ZenCore, ZenCoreOptions, ZenEngine,
 };
 use tokio::sync::broadcast::error::RecvError;
@@ -279,6 +279,11 @@ impl ZenCoreApi {
                                             })
                                             .collect(),
                                     });
+                                }
+                            }
+                            EngineEvent::FormRequest(data) => {
+                                if let Some(ref cb) = h.form_request {
+                                    cb(data);
                                 }
                             }
                             EngineEvent::ConversationUsage(data) => {
@@ -589,6 +594,16 @@ impl CoreApi for ZenCoreApi {
         });
     }
 
+    fn on_form_request(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(crate::zen_core::FormRequestData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.form_request = Some(Arc::from(handler));
+        });
+    }
+
     fn on_conversation_usage(
         &self,
         jid: &str,
@@ -625,6 +640,23 @@ impl CoreApi for ZenCoreApi {
             engine.respond_to_ask_question(AskQuestionResponseData {
                 agent_id: _agent_id.to_string(),
                 answers,
+            });
+        }
+        Ok(())
+    }
+
+    fn respond_to_form(
+        &self,
+        jid: &str,
+        agent_id: &str,
+        values: HashMap<String, serde_json::Value>,
+        submitted: bool,
+    ) -> Result<()> {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.respond_to_form(FormResponseData {
+                agent_id: agent_id.to_string(),
+                values,
+                submitted,
             });
         }
         Ok(())

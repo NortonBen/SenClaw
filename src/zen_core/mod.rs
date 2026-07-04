@@ -461,6 +461,278 @@ pub struct AskQuestionResponseData {
     pub answers: HashMap<String, String>,
 }
 
+/// Option for select / radio / multiselect form fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormFieldOption {
+    pub label: String,
+    /// The value returned when this option is chosen.
+    pub value: String,
+}
+
+/// Column definition for an editable_table form field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormTableColumn {
+    pub key: String,
+    pub label: String,
+    /// `"text"` (default) or `"number"`.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub col_type: Option<String>,
+}
+
+/// Closed widget catalog for the FormUI tool. Mirror of the TS sema-core
+/// `FormField` discriminated union — adding a widget means a new variant here
+/// plus a renderer in each frontend.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FormField {
+    Text {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(
+            default,
+            rename = "maxLength",
+            skip_serializing_if = "Option::is_none"
+        )]
+        max_length: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+    },
+    Textarea {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(
+            default,
+            rename = "maxLength",
+            skip_serializing_if = "Option::is_none"
+        )]
+        max_length: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+    },
+    Number {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<f64>,
+    },
+    Slider {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        min: f64,
+        max: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<f64>,
+    },
+    Select {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        options: Vec<FormFieldOption>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+    },
+    Radio {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        options: Vec<FormFieldOption>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+    },
+    Multiselect {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        options: Vec<FormFieldOption>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<Vec<String>>,
+    },
+    Checkbox {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<bool>,
+    },
+    Date {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+    },
+    /// Display-only text; never returns a value.
+    StaticText {
+        text: String,
+        /// `"heading"`, `"body"` (default) or `"divider"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variant: Option<String>,
+    },
+    EditableTable {
+        key: String,
+        label: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<String>,
+        columns: Vec<FormTableColumn>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
+        #[serde(
+            default,
+            rename = "allowAddRow",
+            skip_serializing_if = "Option::is_none"
+        )]
+        allow_add_row: Option<bool>,
+    },
+}
+
+impl FormField {
+    /// Value-bearing field key (`None` for static_text).
+    pub fn key(&self) -> Option<&str> {
+        match self {
+            FormField::Text { key, .. }
+            | FormField::Textarea { key, .. }
+            | FormField::Number { key, .. }
+            | FormField::Slider { key, .. }
+            | FormField::Select { key, .. }
+            | FormField::Radio { key, .. }
+            | FormField::Multiselect { key, .. }
+            | FormField::Checkbox { key, .. }
+            | FormField::Date { key, .. }
+            | FormField::EditableTable { key, .. } => Some(key),
+            FormField::StaticText { .. } => None,
+        }
+    }
+
+    /// Human-readable label (`None` for static_text).
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            FormField::Text { label, .. }
+            | FormField::Textarea { label, .. }
+            | FormField::Number { label, .. }
+            | FormField::Slider { label, .. }
+            | FormField::Select { label, .. }
+            | FormField::Radio { label, .. }
+            | FormField::Multiselect { label, .. }
+            | FormField::Checkbox { label, .. }
+            | FormField::Date { label, .. }
+            | FormField::EditableTable { label, .. } => Some(label),
+            FormField::StaticText { .. } => None,
+        }
+    }
+
+    /// Whether the field blocks submission until filled.
+    pub fn required(&self) -> bool {
+        match self {
+            FormField::Text { required, .. }
+            | FormField::Textarea { required, .. }
+            | FormField::Number { required, .. }
+            | FormField::Slider { required, .. }
+            | FormField::Select { required, .. }
+            | FormField::Radio { required, .. }
+            | FormField::Multiselect { required, .. }
+            | FormField::Checkbox { required, .. }
+            | FormField::Date { required, .. }
+            | FormField::EditableTable { required, .. } => *required,
+            FormField::StaticText { .. } => false,
+        }
+    }
+
+    /// Declared default value as JSON (`None` when absent or static_text).
+    pub fn default_value(&self) -> Option<serde_json::Value> {
+        match self {
+            FormField::Text { default, .. }
+            | FormField::Textarea { default, .. }
+            | FormField::Select { default, .. }
+            | FormField::Radio { default, .. }
+            | FormField::Date { default, .. } => {
+                default.as_ref().map(|v| serde_json::json!(v))
+            }
+            FormField::Number { default, .. } | FormField::Slider { default, .. } => {
+                default.map(|v| serde_json::json!(v))
+            }
+            FormField::Multiselect { default, .. } => {
+                default.as_ref().map(|v| serde_json::json!(v))
+            }
+            FormField::Checkbox { default, .. } => default.map(|v| serde_json::json!(v)),
+            FormField::EditableTable { rows, .. } => rows.as_ref().map(|v| serde_json::json!(v)),
+            FormField::StaticText { .. } => None,
+        }
+    }
+}
+
+/// Event: `form:request`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormRequestData {
+    pub agent_id: String,
+    pub title: String,
+    /// `"inline"` (chat card) or `"dock"` (workbench panel).
+    pub surface: String,
+    #[serde(rename = "submitLabel")]
+    pub submit_label: String,
+    pub fields: Vec<FormField>,
+}
+
+/// Event: `form:response`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormResponseData {
+    pub agent_id: String,
+    /// Structured values keyed by field `key`.
+    pub values: HashMap<String, serde_json::Value>,
+    /// `false` when the user skipped the form (values may be empty/defaults).
+    pub submitted: bool,
+}
+
 /// Event: `plan:exit:request`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanExitRequestData {
@@ -862,6 +1134,7 @@ pub trait ZenCore: Send + Sync {
     fn add_allowed_tool(&self, key: &str);
     fn respond_to_tool_permission(&self, response: ToolPermissionResponseData);
     fn respond_to_ask_question(&self, response: AskQuestionResponseData);
+    fn respond_to_form(&self, response: FormResponseData);
     fn respond_to_plan_exit(&self, response: PlanExitResponseData);
 
     fn set_handlers(&self, handlers: ZenCoreHandlers);

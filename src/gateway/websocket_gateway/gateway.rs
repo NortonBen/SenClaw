@@ -45,6 +45,8 @@ pub trait WsGatewayApi: Send + Sync {
         _other_texts: Option<&serde_json::Value>,
     ) {
     }
+    /// Resolve a pending FormUI form. `submitted = false` = user skipped.
+    fn resolve_form(&self, _request_id: &str, _values: &serde_json::Value, _submitted: bool) {}
     /// Pause the agent for a group.
     fn pause_agent(&self, _group_jid: &str) {}
     /// Resume the agent for a group, with optional follow-up query.

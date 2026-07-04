@@ -11,6 +11,7 @@ pub mod dispatch;
 pub mod edit;
 pub mod enter_plan_mode;
 pub mod exit_plan_mode;
+pub mod form_ui;
 pub mod glob;
 pub mod grep;
 pub mod launch_ui;
@@ -43,6 +44,7 @@ pub use dispatch::{
 pub use edit::EditTool;
 pub use enter_plan_mode::{EnterPlanFn, EnterPlanModeTool};
 pub use exit_plan_mode::ExitPlanModeTool;
+pub use form_ui::FormUITool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use launch_ui::LaunchUITool;
@@ -67,6 +69,8 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(AskUserTool),
         Arc::new(AskUserQuestionTool),
+        // Declarative interactive form — rich sibling of AskUserQuestion.
+        Arc::new(FormUITool),
         Arc::new(BashTool),
         Arc::new(GlobTool),
         Arc::new(GrepTool),

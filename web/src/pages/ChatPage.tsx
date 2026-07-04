@@ -254,6 +254,7 @@ export function ChatPage() {
                 onStopAndClear={() => ws.stopAndClearHistory(selectedJid!)}
                 onResolvePermission={ws.resolvePermission}
                 onResolveQuestion={ws.resolveQuestion}
+                onResolveForm={ws.resolveForm}
                 agentMode={ws.agentModes[selectedJid!] ?? 'Agent'}
                 onModeChange={(mode) => ws.setAgentMode(selectedJid!, mode)}
               />

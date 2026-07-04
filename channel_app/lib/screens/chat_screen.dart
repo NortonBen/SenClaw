@@ -26,7 +26,7 @@ class ChatMessage {
   final bool isHistory;
   final DateTime? timestamp;
   final Duration? latency;
-  final String role; // 'user', 'agent', 'other', 'tool', 'permission', 'question'
+  final String role; // 'user', 'agent', 'other', 'tool', 'permission', 'question', 'form', 'plan'
 
   // Tool-execution card fields (role == 'tool').
   final String? toolName;
@@ -413,6 +413,11 @@ class _ChatScreenState extends State<ChatScreen> {
     } else if (event.topic == 'question:request' && data is Map) {
       final m = data.cast<String, dynamic>();
       _addInteraction('question', (m['requestId'] ?? '').toString(), m);
+    } else if (event.topic == 'form:request' && data is Map) {
+      final m = data.cast<String, dynamic>();
+      _addInteraction('form', (m['requestId'] ?? '').toString(), m);
+    } else if (event.topic == 'form:resolved' && data is Map) {
+      _markResolved((data['requestId'] ?? '').toString(), null);
     } else if (event.topic == 'permission:resolved' && data is Map) {
       _markResolved((data['requestId'] ?? '').toString(),
           (data['optionLabel'] ?? data['optionKey'] ?? '').toString());
@@ -487,6 +492,19 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Lỗi gửi trả lời: $e')));
+      }
+    }
+  }
+
+  Future<void> _respondForm(
+      ChatMessage msg, Map<String, dynamic> values, bool submitted) async {
+    setState(() => msg.resolved = true);
+    try {
+      await ChatApi().respondForm(msg.requestId!, values, submitted: submitted);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Lỗi gửi biểu mẫu: $e')));
       }
     }
   }
@@ -1416,6 +1434,13 @@ class _ChatScreenState extends State<ChatScreen> {
         data: msg.interaction!,
         resolved: msg.resolved,
         onSubmit: (answers) => _respondQuestion(msg, answers),
+      );
+    }
+    if (msg.role == 'form' && msg.interaction != null) {
+      return FormCard(
+        data: msg.interaction!,
+        resolved: msg.resolved,
+        onSubmit: (values, submitted) => _respondForm(msg, values, submitted),
       );
     }
     if (msg.role == 'plan' && msg.interaction != null) {

@@ -297,3 +297,138 @@ fn test_resolve_ask_question_batch_not_found() {
     let bridge = PermissionBridge::new(stub_api(), None);
     assert!(!bridge.resolve_ask_question_batch("nonexistent", &serde_json::json!({"0": 0}), None));
 }
+
+// ===== FormUI bridge tests =====
+
+fn sample_form_request(agent_id: &str) -> crate::zen_core::FormRequestData {
+    let fields: Vec<crate::zen_core::FormField> = serde_json::from_value(serde_json::json!([
+        {"type": "static_text", "text": "Header", "variant": "heading"},
+        {"type": "text", "key": "env", "label": "Environment", "required": true, "default": "staging"},
+        {"type": "checkbox", "key": "dry_run", "label": "Dry run", "default": true}
+    ]))
+    .unwrap();
+    crate::zen_core::FormRequestData {
+        agent_id: agent_id.to_string(),
+        title: "Deploy".to_string(),
+        surface: "inline".to_string(),
+        submit_label: "Submit".to_string(),
+        fields,
+    }
+}
+
+/// Records `respond_to_form` deliveries plus plain messages (snapshot path).
+#[derive(Default)]
+struct FormRecordingApi {
+    forms: Mutex<Vec<(String, String, HashMap<String, serde_json::Value>, bool)>>,
+    sent: Mutex<Vec<String>>,
+    web: bool,
+}
+
+impl PermissionBridgeApi for FormRecordingApi {
+    fn is_web_jid(&self, _chat_jid: &str) -> bool {
+        self.web
+    }
+    fn send_message(
+        &self,
+        _chat_jid: &str,
+        text: &str,
+        _bot_token: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(text.to_string());
+        Ok(())
+    }
+    fn respond_to_form(
+        &self,
+        group_jid: &str,
+        agent_id: &str,
+        values: HashMap<String, serde_json::Value>,
+        submitted: bool,
+    ) {
+        self.forms.lock().unwrap().push((
+            group_jid.to_string(),
+            agent_id.to_string(),
+            values,
+            submitted,
+        ));
+    }
+}
+
+#[test]
+fn test_resolve_form_not_found() {
+    let bridge = PermissionBridge::new(stub_api(), None);
+    assert!(!bridge.resolve_form("nonexistent", HashMap::new(), true));
+}
+
+#[test]
+fn test_form_request_round_trip_via_web() {
+    let api = Arc::new(FormRecordingApi {
+        web: true,
+        ..Default::default()
+    });
+    let bridge = PermissionBridge::new(api.clone(), None);
+
+    // Capture the WS notification (requestId + payload).
+    let captured = Arc::new(Mutex::new(None::<(String, String)>));
+    {
+        let captured = Arc::clone(&captured);
+        bridge.set_form_request_callback(move |chat_jid, request_id, payload| {
+            *captured.lock().unwrap() = Some((request_id.to_string(), payload.title.clone()));
+            assert_eq!(chat_jid, "web:chat-1");
+            assert_eq!(payload.fields.len(), 3);
+        });
+    }
+    let resolved_cb = Arc::new(Mutex::new(None::<String>));
+    {
+        let resolved_cb = Arc::clone(&resolved_cb);
+        bridge.set_form_resolved_callback(move |_chat_jid, request_id, values| {
+            assert_eq!(values["env"], serde_json::json!("prod"));
+            *resolved_cb.lock().unwrap() = Some(request_id.to_string());
+        });
+    }
+
+    bridge.handle_form_request(&sample_form_request("main"), "group-1", "web:chat-1", None);
+    let (request_id, title) = captured.lock().unwrap().clone().expect("WS notified");
+    assert_eq!(title, "Deploy");
+
+    // First responder wins; second submit is a no-op.
+    let mut values = HashMap::new();
+    values.insert("env".to_string(), serde_json::json!("prod"));
+    assert!(bridge.resolve_form(&request_id, values.clone(), true));
+    assert!(!bridge.resolve_form(&request_id, values, true));
+
+    let forms = api.forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 1);
+    let (group_jid, agent_id, delivered, submitted) = &forms[0];
+    assert_eq!(group_jid, "group-1");
+    assert_eq!(agent_id, "main");
+    assert!(submitted);
+    assert_eq!(delivered["env"], serde_json::json!("prod"));
+    assert_eq!(resolved_cb.lock().unwrap().as_deref(), Some(request_id.as_str()));
+}
+
+#[test]
+fn test_form_request_degraded_channel_auto_submits_defaults() {
+    // Non-web jid + no WS sink → snapshot text + auto-submit defaults with
+    // submitted=false so the agent is never blocked forever.
+    let api = Arc::new(FormRecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+
+    bridge.handle_form_request(&sample_form_request("main"), "group-1", "tg:123", None);
+
+    let sent = api.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].contains("Deploy"));
+    assert!(sent[0].contains("Environment"));
+
+    let forms = api.forms.lock().unwrap().clone();
+    assert_eq!(forms.len(), 1);
+    let (_, _, values, submitted) = &forms[0];
+    assert!(!submitted);
+    assert_eq!(values["env"], serde_json::json!("staging"));
+    assert_eq!(values["dry_run"], serde_json::json!(true));
+    // static_text contributes no value
+    assert_eq!(values.len(), 2);
+
+    // Pending entry must be consumed — resolving later returns false.
+    assert!(!bridge.resolve_form("anything", HashMap::new(), true));
+}

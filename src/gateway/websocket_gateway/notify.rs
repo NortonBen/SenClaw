@@ -205,6 +205,47 @@ impl WebSocketGateway {
         self.broadcast_to_admins_excluding(chat_jid, &msg).await;
     }
 
+    pub async fn notify_form_request(
+        &self,
+        chat_jid: &str,
+        request_id: &str,
+        payload: &serde_json::Value,
+    ) {
+        let mut msg = payload.clone();
+        if let Some(obj) = msg.as_object_mut() {
+            obj.insert("type".into(), "form:request".into());
+            obj.insert("groupJid".into(), chat_jid.into());
+            obj.insert("requestId".into(), request_id.into());
+        }
+        tracing::info!("[WsGateway] notify form:request id={request_id} chat_jid={chat_jid}");
+        // Store for admin subscribe snapshot replay.
+        self.pending_interactions
+            .lock()
+            .await
+            .insert(request_id.to_string(), msg.clone());
+        // Broadcast to group subscribers + admins not already subscribed (no duplicate).
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
+    pub async fn notify_form_resolved(
+        &self,
+        chat_jid: &str,
+        request_id: &str,
+        values: &serde_json::Value,
+    ) {
+        // Remove from pending store.
+        self.pending_interactions.lock().await.remove(request_id);
+        let msg = serde_json::json!({
+            "type": "form:resolved",
+            "groupJid": chat_jid,
+            "requestId": request_id,
+            "values": values,
+        });
+        self.broadcast(chat_jid, &msg).await;
+        self.broadcast_to_admins_excluding(chat_jid, &msg).await;
+    }
+
     pub async fn notify_permission_resolved(
         &self,
         chat_jid: &str,

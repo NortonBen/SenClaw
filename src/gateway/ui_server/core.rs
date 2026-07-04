@@ -18,7 +18,8 @@ use crate::mcp::manager::McpManager;
 use crate::wiki::manager::WikiManager;
 
 use super::chat::{
-    chat_history, chat_permission_respond, chat_plan_respond, chat_question_respond, chat_states,
+    chat_form_respond, chat_history, chat_permission_respond, chat_plan_respond,
+    chat_question_respond, chat_states,
 };
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::embedding_config::{embedding_config_get, embedding_config_save};
@@ -126,6 +127,10 @@ pub trait UiApi: Send + Sync {
         _other_texts: Option<&serde_json::Value>,
     ) {
     }
+
+    /// Resolve a pending FormUI form. `values` is keyed by field `key`;
+    /// `submitted = false` means the user skipped. No-op by default.
+    fn resolve_form(&self, _request_id: &str, _values: &serde_json::Value, _submitted: bool) {}
 
     /// Resolve a pending ExitPlanMode request. `selected` is
     /// `startEditing` | `clearContextAndStart` | (anything else = cancelled).
@@ -626,6 +631,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(chat_permission_respond),
         )
         .route("/api/chat/question/respond", post(chat_question_respond))
+        .route("/api/chat/form/respond", post(chat_form_respond))
         .route("/api/chat/plan/respond", post(chat_plan_respond))
         // ── Chat sync for relay clients (delta history + agent-state snapshot) ──
         .route("/api/chat/history", get(chat_history))
