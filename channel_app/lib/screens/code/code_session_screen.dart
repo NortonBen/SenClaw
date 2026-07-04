@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../models/api_models.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
+import '../../services/language_service.dart';
 import '../../services/relay_manager.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/markdown_text.dart';
@@ -187,7 +188,8 @@ class _CodeChatTabState extends State<_CodeChatTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi gửi: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi gửi: $e', 'Send failed: $e'))));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -203,7 +205,8 @@ class _CodeChatTabState extends State<_CodeChatTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi dừng: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi dừng: $e', 'Stop failed: $e'))));
       }
     }
   }
@@ -229,14 +232,17 @@ class _CodeChatTabState extends State<_CodeChatTab>
       children: [
         Expanded(
           child: _loading
-              ? const LoadingState(text: 'Đang tải hội thoại…')
+              ? LoadingState(
+                  text: tr('Đang tải hội thoại…', 'Loading conversation…'))
               : _error != null
                   ? ErrorState(message: _error!, onRetry: _init)
                   : _messages.isEmpty
                       ? EmptyState(
                           icon: Icons.chat_bubble_outline,
-                          message: 'Bắt đầu hội thoại với code agent',
-                          hint: 'Yêu cầu agent đọc, sửa hoặc chạy code',
+                          message: tr('Bắt đầu hội thoại với code agent',
+                              'Start a conversation with the code agent'),
+                          hint: tr('Yêu cầu agent đọc, sửa hoặc chạy code',
+                              'Ask the agent to read, edit or run code'),
                         )
                       : RefreshIndicator(
                           onRefresh: _refreshMessages,
@@ -268,12 +274,12 @@ class _CodeChatTabState extends State<_CodeChatTab>
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text('Agent đang xử lý…',
+                  child: Text(tr('Agent đang xử lý…', 'Agent is working…'),
                       style: TextStyle(color: c.textSecondary, fontSize: 12)),
                 ),
                 TextButton(
                   onPressed: _stop,
-                  child: Text('Dừng',
+                  child: Text(tr('Dừng', 'Stop'),
                       style: TextStyle(color: AppTokens.danger, fontSize: 12)),
                 ),
               ],
@@ -338,8 +344,10 @@ class _CodeChatTabState extends State<_CodeChatTab>
               const SizedBox(height: 4),
               Text(
                 m.status == 'queued'
-                    ? 'Đang chờ${m.queuePosition != null ? ' (#${m.queuePosition})' : ''}…'
-                    : 'Đang xử lý…',
+                    ? tr(
+                        'Đang chờ${m.queuePosition != null ? ' (#${m.queuePosition})' : ''}…',
+                        'Waiting${m.queuePosition != null ? ' (#${m.queuePosition})' : ''}…')
+                    : tr('Đang xử lý…', 'Processing…'),
                 style: TextStyle(color: c.textMuted, fontSize: 10),
               ),
             ],
@@ -372,7 +380,8 @@ class _CodeChatTabState extends State<_CodeChatTab>
                 maxLines: 5,
                 style: TextStyle(color: c.textPrimary, fontSize: 14),
                 decoration: InputDecoration(
-                  hintText: 'Nhắn cho code agent…',
+                  hintText:
+                      tr('Nhắn cho code agent…', 'Message the code agent…'),
                   hintStyle: TextStyle(color: c.textMuted),
                   border: InputBorder.none,
                 ),
@@ -460,16 +469,20 @@ class _FilesTabState extends State<_FilesTab>
   Widget build(BuildContext context) {
     super.build(context);
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải cây thư mục…');
+    if (_loading) {
+      return LoadingState(
+          text: tr('Đang tải cây thư mục…', 'Loading file tree…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_tree.isEmpty) {
       return EmptyState(
         icon: Icons.folder_off_outlined,
-        message: 'Thư mục trống',
+        message: tr('Thư mục trống', 'Folder is empty'),
         action: OutlinedButton.icon(
           onPressed: _load,
           icon: Icon(Icons.refresh, color: c.accent, size: 18),
-          label: Text('Tải lại', style: TextStyle(color: c.accent)),
+          label: Text(tr('Tải lại', 'Reload'),
+              style: TextStyle(color: c.accent)),
           style: OutlinedButton.styleFrom(
             side: BorderSide(color: c.accent),
           ),
@@ -602,7 +615,8 @@ class _FileViewerState extends State<_FileViewer> {
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: _content!));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Đã sao chép')),
+                        SnackBar(
+                            content: Text(tr('Đã sao chép', 'Copied'))),
                       );
                     },
                   ),
@@ -620,7 +634,9 @@ class _FileViewerState extends State<_FileViewer> {
                         child: SizedBox(
                           width: double.infinity,
                           child: SelectableText(
-                            _content!.isEmpty ? '(tệp trống)' : _content!,
+                            _content!.isEmpty
+                                ? tr('(tệp trống)', '(empty file)')
+                                : _content!,
                             style: TextStyle(
                               color: c.textSecondary,
                               fontFamily: 'monospace',
@@ -690,21 +706,22 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Rollback commits',
+        title: Text(tr('Rollback commit', 'Rollback commits'),
             style: TextStyle(color: c.textPrimary)),
         content: TextField(
           controller: ctrl,
           keyboardType: TextInputType.number,
           style: TextStyle(color: c.textPrimary),
           decoration: InputDecoration(
-            labelText: 'Số commit lùi lại',
+            labelText:
+                tr('Số commit lùi lại', 'Number of commits to roll back'),
             labelStyle: TextStyle(color: c.textSecondary),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Huỷ'),
+            child: Text(tr('Huỷ', 'Cancel')),
           ),
           TextButton(
             onPressed: () =>
@@ -721,13 +738,16 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Đã rollback $steps commit')),
+          SnackBar(
+              content: Text(tr('Đã rollback $steps commit',
+                  'Rolled back $steps commit(s)'))),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi rollback: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi rollback: $e', 'Rollback failed: $e'))));
       }
     }
   }
@@ -736,23 +756,26 @@ class _GitTabState extends State<_GitTab> with AutomaticKeepAliveClientMixin {
   Widget build(BuildContext context) {
     super.build(context);
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải git log…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải git log…', 'Loading git log…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (!widget.session.gitEnabled) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.source_outlined,
-        message: 'Session này không bật git',
+        message:
+            tr('Session này không bật git', 'Git is not enabled for this session'),
       );
     }
     if (_log.isEmpty) {
       return EmptyState(
         icon: Icons.source_outlined,
-        message: 'Chưa có commit',
+        message: tr('Chưa có commit', 'No commits yet'),
         action: OutlinedButton.icon(
           onPressed: _load,
           icon: Icon(Icons.refresh, color: c.accent, size: 18),
-          label:
-              Text('Tải lại', style: TextStyle(color: c.accent)),
+          label: Text(tr('Tải lại', 'Reload'),
+              style: TextStyle(color: c.accent)),
           style: OutlinedButton.styleFrom(
             side: BorderSide(color: c.accent),
           ),

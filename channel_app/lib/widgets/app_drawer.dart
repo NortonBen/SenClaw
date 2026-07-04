@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/relay_providers.dart';
+import '../models/session_model.dart';
+import '../services/language_service.dart';
+import '../services/sessions_provider.dart';
 import '../theme/theme_mode_provider.dart';
 import '../theme/tokens.dart';
+import '../screens/sessions_screen.dart';
 import '../screens/code/code_screen.dart';
 import '../screens/cognitive/cognitive_screen.dart';
 import '../screens/cowork/cowork_screen.dart';
@@ -37,6 +41,20 @@ class AppDrawer extends ConsumerWidget {
       nav.popUntil((r) => r.isFirst);
       nav.push(MaterialPageRoute(builder: (_) => screen));
     }
+
+    // Activate a session and return to the chat root.
+    void openSession(SessionInfo s) {
+      ref.read(sessionsProvider.notifier).select(s.jid, folder: s.folder);
+      ref.read(selectedSessionJidProvider.notifier).state = s.jid;
+      goHome();
+    }
+
+    // Three most-recent sessions, freshest first.
+    final sessions = ref.watch(sessionsProvider);
+    final selectedJid = ref.watch(selectedSessionJidProvider);
+    final recents = [...sessions]
+      ..sort((a, b) => (b.lastActivity ?? 0).compareTo(a.lastActivity ?? 0));
+    final topRecents = recents.take(3).toList();
 
     return Drawer(
       backgroundColor: c.surface,
@@ -82,7 +100,10 @@ class AppDrawer extends ConsumerWidget {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          Text(connected ? 'Đã kết nối' : 'Mất kết nối',
+                          Text(
+                              connected
+                                  ? tr('Đã kết nối', 'Connected')
+                                  : tr('Mất kết nối', 'Disconnected'),
                               style:
                                   TextStyle(color: c.textMuted, fontSize: 11)),
                         ]),
@@ -90,7 +111,7 @@ class AppDrawer extends ConsumerWidget {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Cài đặt',
+                    tooltip: tr('Cài đặt', 'Settings'),
                     icon: Icon(Icons.settings_outlined, color: c.textSecondary),
                     onPressed: () => open(const MoreScreen()),
                   ),
@@ -102,29 +123,38 @@ class AppDrawer extends ConsumerWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 children: [
-                  _navTile(c, Icons.forum_outlined, 'Hội thoại',
+                  _navTile(c, Icons.forum_outlined, tr('Hội thoại', 'Chats'),
                       onTap: goHome),
-                  _sectionLabel(c, 'Space'),
-                  _navTile(c, Icons.apps_outlined, 'Apps',
+                  // Recent sessions (mini) + a "More" entry into the full list.
+                  for (final s in topRecents)
+                    _recentTile(c, s, s.jid == selectedJid,
+                        () => openSession(s)),
+                  _moreSessionsTile(c, sessions.length,
+                      () => open(const SessionsScreen())),
+                  _sectionLabel(c, tr('Space', 'Space')),
+                  _navTile(c, Icons.apps_outlined, tr('Apps', 'Apps'),
                       onTap: () => open(const AppsScreen())),
-                  _navTile(c, Icons.sticky_note_2_outlined, 'Notes',
+                  _navTile(
+                      c, Icons.sticky_note_2_outlined, tr('Ghi chú', 'Notes'),
                       onTap: () => open(const NotesScreen())),
-                  _navTile(c, Icons.event_note_outlined, 'Calendar',
+                  _navTile(c, Icons.event_note_outlined, tr('Lịch', 'Calendar'),
                       onTap: () => open(const CalendarScreen())),
-                  _navTile(c, Icons.schedule, 'Schedules',
+                  _navTile(c, Icons.schedule, tr('Lịch trình', 'Schedules'),
                       onTap: () => open(const SchedulesScreen())),
-                  _sectionLabel(c, 'Tương tác'),
-                  _navTile(c, Icons.code, 'Code sessions',
+                  _sectionLabel(c, tr('Tương tác', 'Interact')),
+                  _navTile(c, Icons.code, tr('Code sessions', 'Code sessions'),
                       onTap: () => open(const CodeScreen())),
-                  _navTile(c, Icons.groups_outlined, 'Cowork',
+                  _navTile(c, Icons.groups_outlined, tr('Cowork', 'Cowork'),
                       onTap: () => open(const CoworkScreen())),
-                  _navTile(c, Icons.account_tree_outlined, 'Workflow',
+                  _navTile(c, Icons.account_tree_outlined,
+                      tr('Workflow', 'Workflow'),
                       onTap: () => open(const WorkflowScreen())),
-                  _navTile(c, Icons.menu_book_outlined, 'Wiki',
+                  _navTile(c, Icons.menu_book_outlined, tr('Wiki', 'Wiki'),
                       onTap: () => open(const WikiScreen())),
-                  _navTile(c, Icons.hub_outlined, 'Tri thức',
+                  _navTile(c, Icons.hub_outlined, tr('Tri thức', 'Knowledge'),
                       onTap: () => open(const CognitiveScreen())),
-                  _navTile(c, Icons.extension_outlined, 'Plugins',
+                  _navTile(c, Icons.extension_outlined,
+                      tr('Plugins', 'Plugins'),
                       onTap: () => open(const PluginsScreen())),
                 ],
               ),
@@ -137,7 +167,7 @@ class AppDrawer extends ConsumerWidget {
                 children: [
                   Icon(Icons.palette_outlined, size: 18, color: c.textMuted),
                   const SizedBox(width: 12),
-                  Text('Giao diện',
+                  Text(tr('Giao diện', 'Theme'),
                       style: TextStyle(color: c.textSecondary, fontSize: 13)),
                   const Spacer(),
                   _themeBtn(c, Icons.brightness_auto, ThemeMode.system, mode, ref),
@@ -162,6 +192,86 @@ class AppDrawer extends ConsumerWidget {
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.8)),
       );
+
+  /// A compact recent-session row shown under "Chats": a small state dot, the
+  /// session title (mini) and its relative activity time.
+  Widget _recentTile(
+      AppColors c, SessionInfo s, bool isSelected, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.only(
+            left: 28, right: 12, top: 5, bottom: 5),
+        child: Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: s.active
+                    ? AppTokens.success
+                    : isSelected
+                        ? c.accent
+                        : c.textMuted.withValues(alpha: 0.5),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                s.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: isSelected ? c.accent : c.textSecondary,
+                  fontSize: 12.5,
+                  fontWeight:
+                      isSelected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+            Text(
+              _recentRelTime(s.lastActivity ?? 0),
+              style: TextStyle(color: c.textMuted, fontSize: 10.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The "More…" row that opens the full [SessionsScreen], with a session count.
+  Widget _moreSessionsTile(AppColors c, int count, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.only(
+            left: 28, right: 12, top: 6, bottom: 6),
+        child: Row(
+          children: [
+            Icon(Icons.more_horiz, size: 16, color: c.textMuted),
+            const SizedBox(width: 10),
+            Text(tr('Xem tất cả phiên', 'All sessions'),
+                style: TextStyle(color: c.textMuted, fontSize: 12.5)),
+            const Spacer(),
+            if (count > 0)
+              Text('$count',
+                  style: TextStyle(color: c.textMuted, fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _recentRelTime(int ms) {
+    if (ms <= 0) return '';
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+    final d = DateTime.now().difference(dt);
+    if (d.inMinutes < 60) return '${d.inMinutes}m';
+    if (d.inHours < 24) return '${d.inHours}h';
+    if (d.inDays < 7) return '${d.inDays}d';
+    return '${dt.day}/${dt.month}';
+  }
 
   Widget _navTile(AppColors c, IconData icon, String label,
       {Color? iconColor, Color? color, required VoidCallback onTap}) {

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../core/app_proxy/app_proxy.dart';
+import '../../services/language_service.dart';
 import '../../theme/tokens.dart';
 
 /// Renders a Space app's web UI remotely: a loopback [AppProxyServer] forwards
@@ -82,12 +83,13 @@ class _AppWebViewScreenState extends State<AppWebViewScreen> {
         actions: [
           if (_controller != null) ...[
             IconButton(
-              tooltip: 'Tải lại',
+              tooltip: tr('Tải lại', 'Reload'),
               icon: Icon(Icons.refresh, color: c.textSecondary),
               onPressed: () => _controller!.reload(),
             ),
             IconButton(
-              tooltip: 'Tải mới hoàn toàn (xoá cache)',
+              tooltip: tr('Tải mới hoàn toàn (xoá cache)',
+                  'Full reload (clear cache)'),
               icon: Icon(Icons.cloud_sync_outlined, color: c.textSecondary),
               onPressed: () async {
                 await AppProxyServer.clearAppCache(widget.appId);
@@ -99,13 +101,17 @@ class _AppWebViewScreenState extends State<AppWebViewScreen> {
       ),
       body: kIsWeb
           ? Center(
-              child: Text('Webview chỉ hỗ trợ trên thiết bị di động',
+              child: Text(
+                  tr('Webview chỉ hỗ trợ trên thiết bị di động',
+                      'Webview is only supported on mobile devices'),
                   style: TextStyle(color: c.textMuted)))
           : _error != null
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
-                    child: Text('Không mở được app:\n$_error',
+                    child: Text(
+                        tr('Không mở được app:\n$_error',
+                            'Could not open app:\n$_error'),
                         textAlign: TextAlign.center,
                         style: TextStyle(color: c.textSecondary)),
                   ),

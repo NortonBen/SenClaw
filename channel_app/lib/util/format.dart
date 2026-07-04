@@ -1,6 +1,8 @@
 /// Small shared formatting helpers used across feature screens.
 library;
 
+import '../services/language_service.dart';
+
 /// Relative "time ago" label from an ISO-8601 string (Vietnamese).
 String timeAgoIso(String? iso) {
   if (iso == null || iso.isEmpty) return '';
@@ -23,10 +25,16 @@ String timeAgoEpochMs(int? ms) {
 
 String _ago(DateTime dt) {
   final diff = DateTime.now().difference(dt);
-  if (diff.inSeconds < 60) return 'vừa xong';
-  if (diff.inMinutes < 60) return '${diff.inMinutes} phút trước';
-  if (diff.inHours < 24) return '${diff.inHours} giờ trước';
-  if (diff.inDays < 7) return '${diff.inDays} ngày trước';
+  if (diff.inSeconds < 60) return tr('vừa xong', 'just now');
+  if (diff.inMinutes < 60) {
+    return tr('${diff.inMinutes} phút trước', '${diff.inMinutes}m ago');
+  }
+  if (diff.inHours < 24) {
+    return tr('${diff.inHours} giờ trước', '${diff.inHours}h ago');
+  }
+  if (diff.inDays < 7) {
+    return tr('${diff.inDays} ngày trước', '${diff.inDays}d ago');
+  }
   final d = dt;
   return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 }

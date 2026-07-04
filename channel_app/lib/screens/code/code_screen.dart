@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
+import '../../services/language_service.dart';
 import '../../services/relay_manager.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
@@ -126,7 +127,7 @@ class _CodeScreenState extends State<CodeScreen> {
 
   Widget _buildBody() {
     if (_loading && !_loadedOnce) {
-      return const LoadingState(text: 'Đang tải sessions…');
+      return LoadingState(text: tr('Đang tải sessions…', 'Loading sessions…'));
     }
     if (_error != null && _sessions.isEmpty) {
       return ErrorState(message: _error!, onRetry: _load);
@@ -134,8 +135,9 @@ class _CodeScreenState extends State<CodeScreen> {
     if (_sessions.isEmpty) {
       return EmptyState(
         icon: Icons.code_off,
-        message: 'Chưa có code session',
-        hint: 'Nhấn + để tạo session từ một thư mục dự án',
+        message: tr('Chưa có code session', 'No code sessions yet'),
+        hint: tr('Nhấn + để tạo session từ một thư mục dự án',
+            'Tap + to create a session from a project folder'),
       );
     }
     final c = context.colors;
@@ -262,7 +264,8 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
     final name = _nameCtrl.text.trim();
     final ws = _workspace;
     if (name.isEmpty || ws == null || ws.isEmpty) {
-      setState(() => _error = 'Cần tên và thư mục dự án');
+      setState(() => _error =
+          tr('Cần tên và thư mục dự án', 'Name and project folder required'));
       return;
     }
     setState(() {
@@ -302,7 +305,7 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Tạo Code Session',
+            tr('Tạo Code Session', 'Create Code Session'),
             style: TextStyle(
               color: c.textPrimary,
               fontSize: 18,
@@ -310,7 +313,8 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
             ),
           ),
           const SizedBox(height: 18),
-          _field(_nameCtrl, 'Tên session', Icons.label_outline),
+          _field(_nameCtrl, tr('Tên session', 'Session name'),
+              Icons.label_outline),
           const SizedBox(height: 12),
           InkWell(
             onTap: _pickFolder,
@@ -329,7 +333,8 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      _workspace ?? 'Chọn thư mục dự án…',
+                      _workspace ??
+                          tr('Chọn thư mục dự án…', 'Choose a project folder…'),
                       style: TextStyle(
                         color: _workspace == null
                             ? c.textMuted
@@ -344,16 +349,19 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
             ),
           ),
           const SizedBox(height: 12),
-          _field(_langCtrl, 'Ngôn ngữ (tuỳ chọn)', Icons.terminal),
+          _field(_langCtrl, tr('Ngôn ngữ (tuỳ chọn)', 'Language (optional)'),
+              Icons.terminal),
           const SizedBox(height: 6),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _initGit,
             onChanged: (v) => setState(() => _initGit = v),
             activeThumbColor: c.accent,
-            title: Text('Khởi tạo git',
+            title: Text(tr('Khởi tạo git', 'Initialize git'),
                 style: TextStyle(color: c.textSecondary, fontSize: 14)),
-            subtitle: Text('Cho phép checkpoint & rollback',
+            subtitle: Text(
+                tr('Cho phép checkpoint & rollback',
+                    'Enables checkpoint & rollback'),
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           ),
           if (_error != null) ...[
@@ -378,7 +386,7 @@ class _CreateSessionSheetState extends State<_CreateSessionSheet> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white),
                     )
-                  : const Text('Tạo session'),
+                  : Text(tr('Tạo session', 'Create session')),
             ),
           ),
         ],

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/code_models.dart';
 import '../../services/code_api.dart';
+import '../../services/language_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
 
@@ -72,25 +73,25 @@ class _FolderPickerState extends State<FolderPicker> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Thư mục dự án mới',
+        title: Text(tr('Thư mục dự án mới', 'New project folder'),
             style: TextStyle(color: c.textPrimary)),
         content: TextField(
           controller: ctrl,
           autofocus: true,
           style: TextStyle(color: c.textPrimary),
           decoration: InputDecoration(
-            labelText: 'Tên thư mục',
+            labelText: tr('Tên thư mục', 'Folder name'),
             labelStyle: TextStyle(color: c.textSecondary),
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child:
-                  Text('Tạo', style: TextStyle(color: c.accent))),
+              child: Text(tr('Tạo', 'Create'),
+                  style: TextStyle(color: c.accent))),
         ],
       ),
     );
@@ -103,7 +104,9 @@ class _FolderPickerState extends State<FolderPicker> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi tạo thư mục: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(
+                    tr('Lỗi tạo thư mục: $e', 'Failed to create folder: $e'))));
       }
     }
   }
@@ -131,14 +134,14 @@ class _FolderPickerState extends State<FolderPicker> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  listing?.current ?? 'Chọn thư mục',
+                  listing?.current ?? tr('Chọn thư mục', 'Choose folder'),
                   style: TextStyle(color: c.textPrimary, fontSize: 13),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (listing != null)
                 IconButton(
-                  tooltip: 'Tạo thư mục mới',
+                  tooltip: tr('Tạo thư mục mới', 'New folder'),
                   icon: Icon(Icons.create_new_folder_outlined,
                       color: c.accent, size: 20),
                   onPressed: _createFolder,
@@ -186,7 +189,7 @@ class _FolderPickerState extends State<FolderPicker> {
                     ? null
                     : () => Navigator.pop(context, listing.current),
                 icon: const Icon(Icons.check),
-                label: const Text('Chọn thư mục này'),
+                label: Text(tr('Chọn thư mục này', 'Choose this folder')),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: c.accent,
                   foregroundColor: Colors.white,

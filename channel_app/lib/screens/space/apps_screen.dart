@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/space_models.dart';
+import '../../services/language_service.dart';
 import '../../services/space_api.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
@@ -11,7 +12,7 @@ class AppsScreen extends StatelessWidget {
   const AppsScreen({super.key});
   @override
   Widget build(BuildContext context) =>
-      const SpacePage(title: 'Apps', child: _AppsTab());
+      SpacePage(title: tr('Ứng dụng', 'Apps'), child: const _AppsTab());
 }
 
 // ─── Apps ─────────────────────────────────────────────────────────────────────
@@ -82,24 +83,24 @@ class _AppsTabState extends State<_AppsTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Thêm app từ manifest',
+        title: Text(tr('Thêm app từ manifest', 'Add app from manifest'),
             style: TextStyle(color: c.textPrimary)),
         content: TextField(
           controller: ctrl,
           autofocus: true,
           style: TextStyle(color: c.textPrimary),
           decoration: InputDecoration(
-            labelText: 'URL manifest',
+            labelText: tr('URL manifest', 'Manifest URL'),
             labelStyle: TextStyle(color: c.textMuted),
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Thêm',
+              child: Text(tr('Thêm', 'Add'),
                   style: TextStyle(color: c.accent))),
         ],
       ),
@@ -111,7 +112,7 @@ class _AppsTabState extends State<_AppsTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -127,13 +128,14 @@ class _AppsTabState extends State<_AppsTab>
     try {
       await _api.restartApp(a.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Đã khởi động lại ${a.name}')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                tr('Đã khởi động lại ${a.name}', 'Restarted ${a.name}'))));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -144,16 +146,17 @@ class _AppsTabState extends State<_AppsTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Gỡ app?', style: TextStyle(color: c.textPrimary)),
+        title: Text(tr('Gỡ app?', 'Remove app?'),
+            style: TextStyle(color: c.textPrimary)),
         content: Text(a.name, style: TextStyle(color: c.textSecondary)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Gỡ',
-                  style: TextStyle(color: AppTokens.danger))),
+              child: Text(tr('Gỡ', 'Remove'),
+                  style: const TextStyle(color: AppTokens.danger))),
         ],
       ),
     );
@@ -164,7 +167,7 @@ class _AppsTabState extends State<_AppsTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -197,7 +200,7 @@ class _AppsTabState extends State<_AppsTab>
                 Expanded(
                   child: SingleChildScrollView(
                     child: SelectableText(
-                      logs.isEmpty ? '(trống)' : logs,
+                      logs.isEmpty ? tr('(trống)', '(empty)') : logs,
                       style: TextStyle(
                           color: c.textSecondary,
                           fontFamily: 'monospace',
@@ -213,7 +216,7 @@ class _AppsTabState extends State<_AppsTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -236,13 +239,16 @@ class _AppsTabState extends State<_AppsTab>
 
   Widget _buildBody() {
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải apps…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải apps…', 'Loading apps…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_apps.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.apps_outlined,
-        message: 'Chưa có app',
-        hint: 'Nhấn + để thêm app từ URL manifest',
+        message: tr('Chưa có app', 'No apps yet'),
+        hint: tr('Nhấn + để thêm app từ URL manifest',
+            'Tap + to add an app from a manifest URL'),
       );
     }
     return RefreshIndicator(
@@ -286,20 +292,20 @@ class _AppsTabState extends State<_AppsTab>
                 itemBuilder: (_) => [
                   PopupMenuItem(
                       value: 'open',
-                      child: Text('Mở',
+                      child: Text(tr('Mở', 'Open'),
                           style: TextStyle(color: c.textPrimary))),
                   PopupMenuItem(
                       value: 'restart',
-                      child: Text('Khởi động lại',
+                      child: Text(tr('Khởi động lại', 'Restart'),
                           style: TextStyle(color: c.textPrimary))),
                   PopupMenuItem(
                       value: 'logs',
-                      child: Text('Xem log',
+                      child: Text(tr('Xem log', 'View logs'),
                           style: TextStyle(color: c.textPrimary))),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                       value: 'delete',
-                      child: Text('Gỡ',
-                          style: TextStyle(color: AppTokens.danger))),
+                      child: Text(tr('Gỡ', 'Remove'),
+                          style: const TextStyle(color: AppTokens.danger))),
                 ],
               ),
               onTap: () => _openApp(a),

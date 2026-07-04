@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../models/agent_model.dart';
+import '../models/session_model.dart';
 import 'config_service.dart';
 import 'crypto_service.dart';
 import 'local_cache.dart';
@@ -34,8 +36,28 @@ class RelayManager extends ChangeNotifier {
   bool _connected = false;
   bool get connected => _connected;
 
+  /// This device's channel id (set once the relay starts). Used to build the
+  /// default session jid `app:<channelId>:user:<senderId>`.
+  String? _channelId;
+  String? get channelId => _channelId;
+
+  /// The default (single-session) jid for this device, or null pre-pairing.
+  String? get defaultSessionJid =>
+      _channelId == null ? null : 'app:$_channelId:user:$senderId';
+
   List<AgentInfo> _agents = [];
   List<AgentInfo> get agents => List.unmodifiable(_agents);
+
+  /// Latest session list from the daemon (multi-session).
+  List<SessionInfo> _sessions = [];
+  List<SessionInfo> get sessions => List.unmodifiable(_sessions);
+
+  final _sessionsController =
+      StreamController<List<SessionInfo>>.broadcast();
+
+  /// Broadcast of session-list updates that survives relay recreation, so a
+  /// provider subscribes once and keeps receiving across reconnects.
+  Stream<List<SessionInfo>> get sessionUpdates => _sessionsController.stream;
 
   /// False while [agents] only holds the local-cache snapshot; true once a
   /// real AGENT_LIST_RESP arrived from the daemon this session.
@@ -44,6 +66,7 @@ class RelayManager extends ChangeNotifier {
 
   StreamSubscription? _connSub;
   StreamSubscription? _agentSub;
+  StreamSubscription? _sessionSub;
   Completer<bool>? _startCompleter;
 
   /// Whether a relay instance exists (started at least once this session).
@@ -78,6 +101,7 @@ class RelayManager extends ChangeNotifier {
       }
 
       final encKey = await CryptoService.deriveKey(key);
+      _channelId = cid;
       Log.i('[RelayManager] Starting shared relay — channel=$cid url=$url');
 
       final relay = RelayService(
@@ -90,6 +114,9 @@ class RelayManager extends ChangeNotifier {
 
       _connSub = relay.connectionUpdates.listen((c) {
         _connected = c;
+        // On every (re)connect, pull the session list — events sent while the
+        // socket was down are lost.
+        if (c) requestSessionList();
         notifyListeners();
       });
       _agentSub = relay.agentListUpdates.listen((list) {
@@ -97,6 +124,11 @@ class RelayManager extends ChangeNotifier {
         _agentsFresh = true;
         // Persist so the next launch renders the list instantly.
         unawaited(_cache.upsertAgents(list));
+        notifyListeners();
+      });
+      _sessionSub = relay.sessionUpdates.listen((list) {
+        _sessions = list;
+        _sessionsController.add(list);
         notifyListeners();
       });
 
@@ -123,6 +155,62 @@ class RelayManager extends ChangeNotifier {
     _relay?.sendControl(RelayControlType.agentListReq, '{}');
   }
 
+  // ── Multi-session controls ────────────────────────────────────────────────
+
+  /// Ask the daemon to (re)send this device's session list.
+  void requestSessionList() {
+    _relay?.sendControl(RelayControlType.sessionListReq, '{}');
+  }
+
+  /// Create a new session bound to [folder] (an agent folder); becomes active.
+  void createSession({
+    required String folder,
+    required String name,
+    String? mode,
+  }) {
+    _relay?.sendControl(
+      RelayControlType.sessionCreate,
+      jsonEncode({
+        'name': name,
+        'folder': folder,
+        if (mode != null && mode.isNotEmpty) 'mode': mode,
+      }),
+    );
+  }
+
+  /// Rename and/or rebind a session's agent folder.
+  void updateSession(String jid, {String? name, String? folder}) {
+    _relay?.sendControl(
+      RelayControlType.sessionUpdate,
+      jsonEncode({
+        'jid': jid,
+        'name': ?name,
+        if (folder != null && folder.isNotEmpty) 'folder': folder,
+      }),
+    );
+  }
+
+  /// Delete a session (default session is protected server-side).
+  void deleteSession(String jid) {
+    _relay?.sendControl(
+      RelayControlType.sessionDelete,
+      jsonEncode({'jid': jid}),
+    );
+  }
+
+  /// Make [jid] the active session (routes new messages there). Optionally
+  /// rebind its agent [folder] / agent [mode] in the same frame.
+  void selectSession(String jid, {String? folder, String? mode}) {
+    _relay?.sendControl(
+      RelayControlType.sessionSelect,
+      jsonEncode({
+        'jid': jid,
+        if (folder != null && folder.isNotEmpty) 'folder': folder,
+        if (mode != null && mode.isNotEmpty) 'mode': mode,
+      }),
+    );
+  }
+
   Future<void> _loadCachedAgents() async {
     if (_agentsFresh || _agents.isNotEmpty) return;
     final cached = await _cache.getAgents();
@@ -144,6 +232,7 @@ class RelayManager extends ChangeNotifier {
     await _disposeRelay();
     _agents = [];
     _agentsFresh = false;
+    _sessions = [];
     _connected = false;
     notifyListeners();
   }
@@ -151,8 +240,10 @@ class RelayManager extends ChangeNotifier {
   Future<void> _disposeRelay() async {
     await _connSub?.cancel();
     await _agentSub?.cancel();
+    await _sessionSub?.cancel();
     _connSub = null;
     _agentSub = null;
+    _sessionSub = null;
     final r = _relay;
     _relay = null;
     await r?.dispose();

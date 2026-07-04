@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/space_models.dart';
 import '../../services/config_service.dart';
+import '../../services/language_service.dart';
 import '../../services/space_api.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
@@ -10,8 +11,8 @@ import 'space_page.dart';
 class SchedulesScreen extends StatelessWidget {
   const SchedulesScreen({super.key});
   @override
-  Widget build(BuildContext context) =>
-      const SpacePage(title: 'Schedules', child: _SchedulesTab());
+  Widget build(BuildContext context) => SpacePage(
+      title: tr('Lịch trình', 'Schedules'), child: const _SchedulesTab());
 }
 
 // ─── Schedules ─────────────────────────────────────────────────────────────
@@ -104,8 +105,8 @@ class _SchedulesTabState extends State<_SchedulesTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title:
-            Text('Lịch trình mới', style: TextStyle(color: c.textPrimary)),
+        title: Text(tr('Lịch trình mới', 'New schedule'),
+            style: TextStyle(color: c.textPrimary)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -114,7 +115,7 @@ class _SchedulesTabState extends State<_SchedulesTab>
               maxLines: 3,
               style: TextStyle(color: c.textPrimary),
               decoration: InputDecoration(
-                labelText: 'Nội dung yêu cầu agent',
+                labelText: tr('Nội dung yêu cầu agent', 'Prompt for the agent'),
                 labelStyle: TextStyle(color: c.textMuted),
               ),
             ),
@@ -123,7 +124,7 @@ class _SchedulesTabState extends State<_SchedulesTab>
               controller: cronCtrl,
               style: TextStyle(color: c.textPrimary, fontFamily: 'monospace'),
               decoration: InputDecoration(
-                labelText: 'Cron (vd: 0 9 * * *)',
+                labelText: tr('Cron (vd: 0 9 * * *)', 'Cron (e.g. 0 9 * * *)'),
                 labelStyle: TextStyle(color: c.textMuted),
               ),
             ),
@@ -132,10 +133,10 @@ class _SchedulesTabState extends State<_SchedulesTab>
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Tạo',
+              child: Text(tr('Tạo', 'Create'),
                   style: TextStyle(color: c.accent))),
         ],
       ),
@@ -155,7 +156,8 @@ class _SchedulesTabState extends State<_SchedulesTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi tạo: $e')));
+            .showSnackBar(
+                SnackBar(content: Text(tr('Lỗi tạo: $e', 'Create error: $e'))));
       }
     }
   }
@@ -167,7 +169,8 @@ class _SchedulesTabState extends State<_SchedulesTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi huỷ: $e')));
+            .showSnackBar(
+                SnackBar(content: Text(tr('Lỗi huỷ: $e', 'Cancel error: $e'))));
       }
     }
   }
@@ -192,20 +195,25 @@ class _SchedulesTabState extends State<_SchedulesTab>
   }
 
   Widget _buildBody() {
-    if (_loading) return const LoadingState(text: 'Đang tải lịch trình…');
+    if (_loading) {
+      return LoadingState(
+          text: tr('Đang tải lịch trình…', 'Loading schedules…'));
+    }
     if (_groupFolder == null || _groupFolder!.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.schedule,
-        message: 'Chưa chọn agent',
-        hint: 'Mở tab Chat và chọn một agent trước để quản lý lịch trình',
+        message: tr('Chưa chọn agent', 'No agent selected'),
+        hint: tr('Mở tab Chat và chọn một agent trước để quản lý lịch trình',
+            'Open the Chat tab and pick an agent first to manage schedules'),
       );
     }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_schedules.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.event_repeat,
-        message: 'Chưa có lịch trình',
-        hint: 'Nhấn + để tạo tác vụ định kỳ cho agent',
+        message: tr('Chưa có lịch trình', 'No schedules yet'),
+        hint: tr('Nhấn + để tạo tác vụ định kỳ cho agent',
+            'Tap + to create a recurring task for the agent'),
       );
     }
     final c = context.colors;
@@ -252,7 +260,7 @@ class _SchedulesTabState extends State<_SchedulesTab>
                   fontFamily: 'monospace'),
             ),
             if (s.nextRun != null && s.nextRun!.isNotEmpty)
-              Text('Lần tới: ${s.nextRun}',
+              Text(tr('Lần tới: ${s.nextRun}', 'Next run: ${s.nextRun}'),
                   style: TextStyle(color: c.textMuted, fontSize: 11)),
           ],
         ),

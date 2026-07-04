@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/agent_model.dart';
+import '../services/language_service.dart';
 import '../theme/tokens.dart';
 
 class AgentSelectScreen extends StatelessWidget {
@@ -54,7 +55,7 @@ class AgentSelectScreen extends StatelessWidget {
                 const Icon(Icons.person_outline, color: AppTokens.cyan, size: 20),
                 const SizedBox(width: 10),
                 Text(
-                  'Chọn profile',
+                  tr('Chọn profile', 'Select profile'),
                   style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 16,

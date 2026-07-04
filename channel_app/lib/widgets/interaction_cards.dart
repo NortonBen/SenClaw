@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/language_service.dart';
 import '../theme/tokens.dart';
 import 'markdown_text.dart';
 
@@ -46,7 +47,10 @@ class PermissionCard extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  title.isNotEmpty ? title : 'Yêu cầu quyền: $toolName',
+                  title.isNotEmpty
+                      ? title
+                      : tr('Yêu cầu quyền: $toolName',
+                          'Permission request: $toolName'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 13,
@@ -67,7 +71,9 @@ class PermissionCard extends StatelessWidget {
           ],
           const SizedBox(height: 10),
           if (resolved)
-            _ResolvedRow(label: 'Đã chọn: ${resolvedText ?? ''}')
+            _ResolvedRow(
+                label: tr('Đã chọn: ${resolvedText ?? ''}',
+                    'Selected: ${resolvedText ?? ''}'))
           else
             Wrap(
               spacing: 8,
@@ -130,9 +136,11 @@ class PlanCard extends StatelessWidget {
     final planContent = (data['planContent'] ?? '').toString();
     final options = (data['options'] as Map?)?.cast<String, dynamic>() ?? const {};
     final startLabel =
-        (options['startEditing'] ?? 'Bắt đầu thực thi').toString();
-    final clearLabel =
-        (options['clearContextAndStart'] ?? 'Xoá ngữ cảnh & bắt đầu').toString();
+        (options['startEditing'] ?? tr('Bắt đầu thực thi', 'Start executing'))
+            .toString();
+    final clearLabel = (options['clearContextAndStart'] ??
+            tr('Xoá ngữ cảnh & bắt đầu', 'Clear context & start'))
+        .toString();
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -149,7 +157,7 @@ class PlanCard extends StatelessWidget {
             children: [
               Icon(Icons.checklist_rtl, color: c.accent, size: 16),
               const SizedBox(width: 6),
-              Text('Kế hoạch chờ duyệt',
+              Text(tr('Kế hoạch chờ duyệt', 'Plan awaiting approval'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 13,
@@ -168,7 +176,9 @@ class PlanCard extends StatelessWidget {
           ],
           const SizedBox(height: 12),
           if (resolved)
-            _ResolvedRow(label: 'Đã chọn: ${resolvedText ?? ''}')
+            _ResolvedRow(
+                label: tr('Đã chọn: ${resolvedText ?? ''}',
+                    'Selected: ${resolvedText ?? ''}'))
           else
             Column(
               children: [
@@ -198,7 +208,7 @@ class PlanCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 TextButton(
                   onPressed: () => onRespond('cancelled'),
-                  child: Text('Huỷ',
+                  child: Text(tr('Huỷ', 'Cancel'),
                       style: TextStyle(color: c.textMuted)),
                 ),
               ],
@@ -284,7 +294,7 @@ class _QuestionCardState extends State<QuestionCard> {
             children: [
               const Icon(Icons.help_outline, color: AppTokens.cyan, size: 16),
               const SizedBox(width: 6),
-              Text('Agent đang hỏi',
+              Text(tr('Agent đang hỏi', 'Agent is asking'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 13,
@@ -296,7 +306,7 @@ class _QuestionCardState extends State<QuestionCard> {
             _buildQuestion(qi, _questions[qi] as Map),
           const SizedBox(height: 6),
           if (widget.resolved)
-            _ResolvedRow(label: 'Đã trả lời')
+            _ResolvedRow(label: tr('Đã trả lời', 'Answered'))
           else
             SizedBox(
               width: double.infinity,
@@ -306,7 +316,7 @@ class _QuestionCardState extends State<QuestionCard> {
                   backgroundColor: AppTokens.cyan,
                   padding: const EdgeInsets.symmetric(vertical: 10),
                 ),
-                child: const Text('Gửi trả lời'),
+                child: Text(tr('Gửi trả lời', 'Submit answers')),
               ),
             ),
         ],

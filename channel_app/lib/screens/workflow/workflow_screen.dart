@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/workflow_models.dart';
+import '../../services/language_service.dart';
 import '../../services/workflow_api.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/markdown_text.dart';
@@ -56,7 +57,7 @@ Future<String?> _runSheet(BuildContext context, WorkflowDefSummary def,
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Run: ${def.name}',
+          Text(tr('Chạy: ${def.name}', 'Run: ${def.name}'),
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 12),
           for (final i in def.inputs) ...[
@@ -73,14 +74,15 @@ Future<String?> _runSheet(BuildContext context, WorkflowDefSummary def,
           ],
           FilledButton.icon(
             icon: const Icon(Icons.play_arrow_rounded),
-            label: const Text('Run workflow'),
+            label: Text(tr('Chạy quy trình', 'Run workflow')),
             onPressed: () async {
               final missing = def.inputs
                   .where((i) => i.required && ctrls[i.name]!.text.trim().isEmpty)
                   .map((i) => i.name);
               if (missing.isNotEmpty) {
                 ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                    content: Text('Missing: ${missing.join(', ')}')));
+                    content: Text(tr('Thiếu: ${missing.join(', ')}',
+                        'Missing: ${missing.join(', ')}'))));
                 return;
               }
               try {
@@ -92,7 +94,9 @@ Future<String?> _runSheet(BuildContext context, WorkflowDefSummary def,
               } catch (e) {
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx)
-                      .showSnackBar(SnackBar(content: Text('Run failed: $e')));
+                      .showSnackBar(SnackBar(
+                          content: Text(
+                              tr('Chạy thất bại: $e', 'Run failed: $e'))));
                 }
               }
             },
@@ -174,11 +178,12 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
         appBar: AppBar(
           backgroundColor: c.surface,
           elevation: 0,
-          title: Text('Workflow', style: TextStyle(color: c.textPrimary)),
+          title: Text(tr('Quy trình', 'Workflow'),
+              style: TextStyle(color: c.textPrimary)),
           iconTheme: IconThemeData(color: c.textPrimary),
           bottom: TabBar(tabs: [
-            Tab(text: 'Runs (${_runs.length})'),
-            Tab(text: 'Templates (${_defs.length})'),
+            Tab(text: tr('Lượt chạy (${_runs.length})', 'Runs (${_runs.length})')),
+            Tab(text: tr('Mẫu (${_defs.length})', 'Templates (${_defs.length})')),
           ]),
         ),
         body: _loading
@@ -193,7 +198,7 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
         child: _runs.isEmpty
             ? ListView(children: [
                 const SizedBox(height: 80),
-                Center(child: Text('No runs yet',
+                Center(child: Text(tr('Chưa có lượt chạy nào', 'No runs yet'),
                     style: TextStyle(color: c.textMuted))),
               ])
             : ListView.builder(
@@ -214,7 +219,8 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: c.textPrimary, fontSize: 14)),
                     subtitle: Text(
-                        '${r.status} · $done/${r.steps.length} steps · ${_fmtTime(r.createdAt)}',
+                        tr('${r.status} · $done/${r.steps.length} bước · ${_fmtTime(r.createdAt)}',
+                            '${r.status} · $done/${r.steps.length} steps · ${_fmtTime(r.createdAt)}'),
                         style: TextStyle(color: c.textMuted, fontSize: 11)),
                     trailing: PopupMenuButton<String>(
                       onSelected: (v) async {
@@ -228,7 +234,8 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
                               final ok = await showDialog<bool>(
                                 context: context,
                                 builder: (dctx) => AlertDialog(
-                                  title: const Text('Rename run'),
+                                  title: Text(
+                                      tr('Đổi tên lượt chạy', 'Rename run')),
                                   content: TextField(
                                       controller: ctrl,
                                       decoration:
@@ -237,11 +244,11 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
                                     TextButton(
                                         onPressed: () =>
                                             Navigator.pop(dctx, false),
-                                        child: const Text('Cancel')),
+                                        child: Text(tr('Hủy', 'Cancel'))),
                                     FilledButton(
                                         onPressed: () =>
                                             Navigator.pop(dctx, true),
-                                        child: const Text('Save')),
+                                        child: Text(tr('Lưu', 'Save'))),
                                   ],
                                 ),
                               );
@@ -260,14 +267,16 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
                         _refresh();
                       },
                       itemBuilder: (_) => [
-                        const PopupMenuItem(
-                            value: 'rename', child: Text('Rename')),
+                        PopupMenuItem(
+                            value: 'rename',
+                            child: Text(tr('Đổi tên', 'Rename'))),
                         if (r.isActive)
-                          const PopupMenuItem(
-                              value: 'cancel', child: Text('Cancel run'))
+                          PopupMenuItem(
+                              value: 'cancel',
+                              child: Text(tr('Hủy lượt chạy', 'Cancel run')))
                         else
-                          const PopupMenuItem(
-                              value: 'delete', child: Text('Delete')),
+                          PopupMenuItem(
+                              value: 'delete', child: Text(tr('Xóa', 'Delete'))),
                       ],
                     ),
                   );
@@ -280,7 +289,8 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
         child: _defs.isEmpty
             ? ListView(children: [
                 const SizedBox(height: 80),
-                Center(child: Text('No workflows defined',
+                Center(child: Text(
+                    tr('Chưa có quy trình nào', 'No workflows defined'),
                     style: TextStyle(color: c.textMuted))),
               ])
             : ListView.builder(
@@ -293,7 +303,8 @@ class _WorkflowScreenState extends State<WorkflowScreen> {
                     title: Text(d.name,
                         style: TextStyle(color: c.textPrimary, fontSize: 14)),
                     subtitle: Text(
-                        '${d.stepCount} steps${(d.description ?? '').isNotEmpty ? ' — ${d.description}' : ''}',
+                        tr('${d.stepCount} bước${(d.description ?? '').isNotEmpty ? ' — ${d.description}' : ''}',
+                            '${d.stepCount} steps${(d.description ?? '').isNotEmpty ? ' — ${d.description}' : ''}'),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: c.textMuted, fontSize: 11)),
@@ -377,7 +388,7 @@ class _WorkflowRunDetailScreenState extends State<WorkflowRunDetailScreen> {
         actions: [
           if (r != null && r.isActive)
             IconButton(
-              tooltip: 'Cancel run',
+              tooltip: tr('Hủy lượt chạy', 'Cancel run'),
               icon: Icon(Icons.stop_circle_outlined, color: AppTokens.danger),
               onPressed: () async {
                 try { await _api.cancelRun(r.id); } catch (_) {}
@@ -428,7 +439,8 @@ class _WorkflowRunDetailScreenState extends State<WorkflowRunDetailScreen> {
                             size: 14,
                             color: c.textMuted),
                         const SizedBox(width: 2),
-                        Text('ACTIVITY (${_activity.length})',
+                        Text(tr('HOẠT ĐỘNG (${_activity.length})',
+                                'ACTIVITY (${_activity.length})'),
                             style: TextStyle(
                                 color: c.textMuted,
                                 fontSize: 10,
@@ -444,7 +456,7 @@ class _WorkflowRunDetailScreenState extends State<WorkflowRunDetailScreen> {
                   const SizedBox(height: 14),
                 ],
 
-                Text('STEPS (${r.steps.length})',
+                Text(tr('BƯỚC (${r.steps.length})', 'STEPS (${r.steps.length})'),
                     style: TextStyle(
                         color: c.textMuted,
                         fontSize: 10,
@@ -471,7 +483,8 @@ class _WorkflowRunDetailScreenState extends State<WorkflowRunDetailScreen> {
     final title = switch (kind) {
       'tool' || 'tool_error' =>
         first.contains(' — ') ? first.substring(0, first.indexOf(' — ')) : first,
-      'think' => 'Thinking… (${text.length} chars)',
+      'think' => tr('Đang suy nghĩ… (${text.length} ký tự)',
+          'Thinking… (${text.length} chars)'),
       _ => first,
     };
     final open = _openActivity.contains(i);

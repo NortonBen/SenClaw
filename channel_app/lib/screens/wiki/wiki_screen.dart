@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/wiki_models.dart';
+import '../../services/language_service.dart';
 import '../../services/relay_manager.dart';
 import '../../services/wiki_api.dart';
 import '../../theme/tokens.dart';
@@ -52,10 +53,14 @@ class _WikiScreenState extends State<WikiScreen>
           indicatorColor: c.accent,
           labelColor: c.accent,
           unselectedLabelColor: c.textMuted,
-          tabs: const [
-            Tab(icon: Icon(Icons.home_outlined), text: 'Tổng quan'),
-            Tab(icon: Icon(Icons.folder_outlined), text: 'Thư mục'),
-            Tab(icon: Icon(Icons.search), text: 'Tìm kiếm'),
+          tabs: [
+            Tab(
+                icon: const Icon(Icons.home_outlined),
+                text: tr('Tổng quan', 'Overview')),
+            Tab(
+                icon: const Icon(Icons.folder_outlined),
+                text: tr('Thư mục', 'Folders')),
+            Tab(icon: const Icon(Icons.search), text: tr('Tìm kiếm', 'Search')),
           ],
         ),
       ),
@@ -130,14 +135,17 @@ class _WikiHomeTabState extends State<_WikiHomeTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    if (_loading) return const LoadingState(text: 'Đang tải tổng quan…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải tổng quan…', 'Loading overview…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     final s = _stats!;
     if (s.totalFiles == 0) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.menu_book_outlined,
-        message: 'Kho tri thức trống',
-        hint: 'Yêu cầu agent ghi lại kiến thức để xây dựng wiki',
+        message: tr('Kho tri thức trống', 'The knowledge base is empty'),
+        hint: tr('Yêu cầu agent ghi lại kiến thức để xây dựng wiki',
+            'Ask the agent to record knowledge to build the wiki'),
       );
     }
     final c = context.colors;
@@ -150,22 +158,24 @@ class _WikiHomeTabState extends State<_WikiHomeTab>
         children: [
           Row(
             children: [
-              _statCard(Icons.description_outlined, '${s.totalFiles}', 'Trang'),
+              _statCard(Icons.description_outlined, '${s.totalFiles}',
+                  tr('Trang', 'Pages')),
               const SizedBox(width: 10),
-              _statCard(Icons.folder_outlined, '${s.totalDirs}', 'Thư mục'),
+              _statCard(Icons.folder_outlined, '${s.totalDirs}',
+                  tr('Thư mục', 'Folders')),
               const SizedBox(width: 10),
-              _statCard(Icons.tag, '${s.byTag.length}', 'Tags'),
+              _statCard(Icons.tag, '${s.byTag.length}', tr('Thẻ', 'Tags')),
             ],
           ),
           if (s.recentFiles.isNotEmpty) ...[
             const SizedBox(height: 18),
-            _sectionLabel('Cập nhật gần đây'),
+            _sectionLabel(tr('Cập nhật gần đây', 'Recently updated')),
             const SizedBox(height: 6),
             ...s.recentFiles.take(8).map((f) => _recentTile(f)),
           ],
           if (s.byTag.isNotEmpty) ...[
             const SizedBox(height: 18),
-            _sectionLabel('Thẻ phổ biến'),
+            _sectionLabel(tr('Thẻ phổ biến', 'Popular tags')),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -188,7 +198,7 @@ class _WikiHomeTabState extends State<_WikiHomeTab>
           ],
           if (s.byCategory.isNotEmpty) ...[
             const SizedBox(height: 18),
-            _sectionLabel('Theo thư mục'),
+            _sectionLabel(tr('Theo thư mục', 'By folder')),
             const SizedBox(height: 8),
             ...s.byCategory.map((c) => _categoryBar(c, s.byCategory.first.count)),
           ],
@@ -263,7 +273,7 @@ class _WikiHomeTabState extends State<_WikiHomeTab>
           Row(
             children: [
               Expanded(
-                child: Text(cat.dir.isEmpty ? '(gốc)' : cat.dir,
+                child: Text(cat.dir.isEmpty ? tr('(gốc)', '(root)') : cat.dir,
                     style:
                         TextStyle(color: c.textSecondary, fontSize: 12)),
               ),
@@ -357,23 +367,25 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Trang mới', style: TextStyle(color: c.textPrimary)),
+        title: Text(tr('Trang mới', 'New page'),
+            style: TextStyle(color: c.textPrimary)),
         content: TextField(
           controller: pathCtrl,
           style: TextStyle(color: c.textPrimary, fontFamily: 'monospace'),
           decoration: InputDecoration(
-            labelText: 'Đường dẫn (vd: notes/ghi-chu.md)',
+            labelText: tr('Đường dẫn (vd: notes/ghi-chu.md)',
+                'Path (e.g. notes/my-note.md)'),
             labelStyle: TextStyle(color: c.textSecondary),
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child:
-                  Text('Tạo', style: TextStyle(color: c.accent))),
+              child: Text(tr('Tạo', 'Create'),
+                  style: TextStyle(color: c.accent))),
         ],
       ),
     );
@@ -390,7 +402,8 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi tạo: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi tạo: $e', 'Create failed: $e'))));
       }
     }
   }
@@ -402,23 +415,25 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: col.surface,
-        title: Text('Thư mục mới', style: TextStyle(color: col.textPrimary)),
+        title: Text(tr('Thư mục mới', 'New folder'),
+            style: TextStyle(color: col.textPrimary)),
         content: TextField(
           controller: ctrl,
           style: TextStyle(color: col.textPrimary, fontFamily: 'monospace'),
           decoration: InputDecoration(
-            labelText: 'Tên thư mục (kebab-case)',
+            labelText:
+                tr('Tên thư mục (kebab-case)', 'Folder name (kebab-case)'),
             labelStyle: TextStyle(color: col.textSecondary),
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child:
-                  Text('Tạo', style: TextStyle(color: col.accent))),
+              child: Text(tr('Tạo', 'Create'),
+                  style: TextStyle(color: col.accent))),
         ],
       ),
     );
@@ -431,7 +446,8 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(
+                SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -442,16 +458,17 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: col.surface,
-        title: Text('Xoá thư mục?', style: TextStyle(color: col.textPrimary)),
+        title: Text(tr('Xoá thư mục?', 'Delete folder?'),
+            style: TextStyle(color: col.textPrimary)),
         content: Text(node.path,
             style: TextStyle(color: col.textSecondary)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Xoá',
+              child: Text(tr('Xoá', 'Delete'),
                   style: TextStyle(color: AppTokens.danger))),
         ],
       ),
@@ -463,7 +480,8 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi xoá: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi xoá: $e', 'Delete failed: $e'))));
       }
     }
   }
@@ -500,13 +518,16 @@ class _WikiTreeTabState extends State<_WikiTreeTab>
 
   Widget _buildBody() {
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải thư mục…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải thư mục…', 'Loading folders…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_tree.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.folder_open_outlined,
-        message: 'Chưa có nội dung',
-        hint: 'Nhấn + để tạo trang hoặc thư mục',
+        message: tr('Chưa có nội dung', 'No content yet'),
+        hint: tr('Nhấn + để tạo trang hoặc thư mục',
+            'Tap + to create a page or folder'),
       );
     }
     return RefreshIndicator(
@@ -624,7 +645,7 @@ class _WikiSearchTabState extends State<_WikiSearchTab>
             textInputAction: TextInputAction.search,
             onSubmitted: _search,
             decoration: InputDecoration(
-              hintText: 'Tìm trong wiki…',
+              hintText: tr('Tìm trong wiki…', 'Search the wiki…'),
               hintStyle: TextStyle(color: c.textMuted),
               prefixIcon:
                   Icon(Icons.search, color: c.textMuted, size: 20),
@@ -656,16 +677,17 @@ class _WikiSearchTabState extends State<_WikiSearchTab>
     if (_loading) return const LoadingState();
     if (_error != null) return ErrorState(message: _error!);
     if (!_searched) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.search,
-        message: 'Tìm kiếm tri thức',
-        hint: 'Nhập từ khoá rồi nhấn Enter',
+        message: tr('Tìm kiếm tri thức', 'Search the knowledge base'),
+        hint: tr('Nhập từ khoá rồi nhấn Enter',
+            'Type a keyword and press Enter'),
       );
     }
     if (_results.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.search_off,
-        message: 'Không có kết quả',
+        message: tr('Không có kết quả', 'No results'),
       );
     }
     return ListView.builder(
@@ -789,7 +811,8 @@ class _WikiDocScreenState extends State<WikiDocScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi lưu: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi lưu: $e', 'Save failed: $e'))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -821,7 +844,8 @@ class _WikiDocScreenState extends State<WikiDocScreen> {
                       _editCtrl.text = d?.content ?? '';
                       setState(() => _editing = false);
                     },
-              child: Text('Huỷ', style: TextStyle(color: col.textSecondary)),
+              child: Text(tr('Huỷ', 'Cancel'),
+                  style: TextStyle(color: col.textSecondary)),
             ),
             TextButton(
               onPressed: _saving ? null : _save,
@@ -831,7 +855,7 @@ class _WikiDocScreenState extends State<WikiDocScreen> {
                       height: 16,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: col.accent))
-                  : Text('Lưu',
+                  : Text(tr('Lưu', 'Save'),
                       style: TextStyle(color: col.accent)),
             ),
           ],
@@ -861,7 +885,7 @@ class _WikiDocScreenState extends State<WikiDocScreen> {
               color: col.textPrimary, fontFamily: 'monospace', fontSize: 13),
           decoration: InputDecoration(
             border: InputBorder.none,
-            hintText: 'Nội dung markdown…',
+            hintText: tr('Nội dung markdown…', 'Markdown content…'),
             hintStyle: TextStyle(color: col.textMuted),
           ),
         ),
@@ -897,7 +921,9 @@ class _WikiDocScreenState extends State<WikiDocScreen> {
         ],
         if (d.frontmatter.updated != null) ...[
           const SizedBox(height: 6),
-          Text('Cập nhật ${timeAgoIso(d.frontmatter.updated)}',
+          Text(
+              tr('Cập nhật ${timeAgoIso(d.frontmatter.updated)}',
+                  'Updated ${timeAgoIso(d.frontmatter.updated)}'),
               style: TextStyle(color: col.textMuted, fontSize: 11)),
         ],
         const SizedBox(height: 14),
@@ -906,7 +932,7 @@ class _WikiDocScreenState extends State<WikiDocScreen> {
           const SizedBox(height: 24),
           Divider(color: col.border),
           const SizedBox(height: 8),
-          Text('Lịch sử',
+          Text(tr('Lịch sử', 'History'),
               style: TextStyle(
                   color: col.textSecondary,
                   fontSize: 13,

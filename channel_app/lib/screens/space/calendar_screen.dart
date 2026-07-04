@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../../models/space_models.dart';
 import '../../services/space_api.dart';
+import '../../services/language_service.dart';
 import '../../services/relay_manager.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_drawer.dart';
@@ -43,7 +44,7 @@ class _CalendarScreenState extends State<CalendarScreen>
         ),
         title: Row(
           children: [
-            Text('Calendar', style: TextStyle(color: c.textPrimary)),
+            Text(tr('Lịch', 'Calendar'), style: TextStyle(color: c.textPrimary)),
             const SizedBox(width: 8),
             AnimatedBuilder(
               animation: RelayManager(),
@@ -57,9 +58,13 @@ class _CalendarScreenState extends State<CalendarScreen>
           indicatorColor: c.accent,
           labelColor: c.accent,
           unselectedLabelColor: c.textMuted,
-          tabs: const [
-            Tab(icon: Icon(Icons.view_list_outlined), text: 'Danh sách'),
-            Tab(icon: Icon(Icons.calendar_month_outlined), text: 'Lịch'),
+          tabs: [
+            Tab(
+                icon: const Icon(Icons.view_list_outlined),
+                text: tr('Danh sách', 'List')),
+            Tab(
+                icon: const Icon(Icons.calendar_month_outlined),
+                text: tr('Lịch', 'Calendar')),
           ],
         ),
       ),
@@ -164,8 +169,8 @@ class _CalendarGridState extends State<_CalendarGrid>
       _load();
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi xoá: $err')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('Lỗi xoá: $err', 'Delete error: $err'))));
       }
     }
   }
@@ -174,7 +179,9 @@ class _CalendarGridState extends State<_CalendarGrid>
   Widget build(BuildContext context) {
     super.build(context);
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải lịch…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải lịch…', 'Loading calendar…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -201,10 +208,10 @@ class _CalendarGridState extends State<_CalendarGrid>
                 lastDay: DateTime(DateTime.now().year + 2, 12, 31),
                 focusedDay: _focused,
                 calendarFormat: _format,
-                availableCalendarFormats: const {
-                  CalendarFormat.month: 'Tháng',
-                  CalendarFormat.twoWeeks: '2 tuần',
-                  CalendarFormat.week: 'Tuần',
+                availableCalendarFormats: {
+                  CalendarFormat.month: tr('Tháng', 'Month'),
+                  CalendarFormat.twoWeeks: tr('2 tuần', '2 weeks'),
+                  CalendarFormat.week: tr('Tuần', 'Week'),
                 },
                 startingDayOfWeek: StartingDayOfWeek.monday,
                 selectedDayPredicate: (d) => isSameDay(_selected, d),
@@ -272,7 +279,8 @@ class _CalendarGridState extends State<_CalendarGrid>
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.event_available, color: c.textMuted, size: 40),
             const SizedBox(height: 10),
-            Text('Không có sự kiện ngày $label',
+            Text(
+                tr('Không có sự kiện ngày $label', 'No events on $label'),
                 style: TextStyle(color: c.textMuted, fontSize: 13)),
           ]),
         ),
@@ -283,7 +291,7 @@ class _CalendarGridState extends State<_CalendarGrid>
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Text('Sự kiện ngày $label',
+          child: Text(tr('Sự kiện ngày $label', 'Events on $label'),
               style: TextStyle(
                   color: c.textSecondary,
                   fontSize: 13,
@@ -297,7 +305,8 @@ class _CalendarGridState extends State<_CalendarGrid>
   Widget _gridEventCard(AppColors c, SpaceEvent e) {
     String hm(DateTime d) =>
         '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
-    final timeStr = e.allDay ? 'Cả ngày' : '${hm(e.start)} – ${hm(e.end)}';
+    final timeStr =
+        e.allDay ? tr('Cả ngày', 'All day') : '${hm(e.start)} – ${hm(e.end)}';
     return Card(
       color: c.surfaceAlt,
       margin: const EdgeInsets.only(bottom: 8),
@@ -403,8 +412,8 @@ class _CalendarTabState extends State<_CalendarTab>
       _load();
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi xoá: $err')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('Lỗi xoá: $err', 'Delete error: $err'))));
       }
     }
   }
@@ -428,13 +437,15 @@ class _CalendarTabState extends State<_CalendarTab>
 
   Widget _buildBody() {
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải sự kiện…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải sự kiện…', 'Loading events…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_events.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.event_busy,
-        message: 'Không có sự kiện',
-        hint: 'Nhấn + để thêm sự kiện',
+        message: tr('Không có sự kiện', 'No events'),
+        hint: tr('Nhấn + để thêm sự kiện', 'Tap + to add an event'),
       );
     }
     // Group by day.
@@ -477,9 +488,9 @@ class _CalendarTabState extends State<_CalendarTab>
     final diff = that.difference(today).inDays;
     final base =
         '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
-    if (diff == 0) return 'Hôm nay · $base';
-    if (diff == 1) return 'Ngày mai · $base';
-    if (diff == -1) return 'Hôm qua · $base';
+    if (diff == 0) return tr('Hôm nay · $base', 'Today · $base');
+    if (diff == 1) return tr('Ngày mai · $base', 'Tomorrow · $base');
+    if (diff == -1) return tr('Hôm qua · $base', 'Yesterday · $base');
     return base;
   }
 
@@ -487,7 +498,7 @@ class _CalendarTabState extends State<_CalendarTab>
     final c = context.colors;
     final color = _parseColor(e.color) ?? c.accent;
     final timeStr = e.allDay
-        ? 'Cả ngày'
+        ? tr('Cả ngày', 'All day')
         : '${_hm(e.start)} – ${_hm(e.end)}';
     return Card(
       color: c.surfaceAlt,
@@ -593,11 +604,12 @@ class _EventEditorState extends State<_EventEditor> {
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
-      setState(() => _error = 'Cần tiêu đề');
+      setState(() => _error = tr('Cần tiêu đề', 'Title is required'));
       return;
     }
     if (_end.isBefore(_start)) {
-      setState(() => _error = 'Thời gian kết thúc phải sau bắt đầu');
+      setState(() => _error = tr('Thời gian kết thúc phải sau bắt đầu',
+          'End time must be after start'));
       return;
     }
     setState(() {
@@ -633,7 +645,7 @@ class _EventEditorState extends State<_EventEditor> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Sự kiện mới',
+          Text(tr('Sự kiện mới', 'New event'),
               style: TextStyle(
                   color: c.textPrimary,
                   fontSize: 18,
@@ -642,13 +654,13 @@ class _EventEditorState extends State<_EventEditor> {
           TextField(
             controller: _titleCtrl,
             style: TextStyle(color: c.textPrimary),
-            decoration: _dec('Tiêu đề'),
+            decoration: _dec(tr('Tiêu đề', 'Title')),
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _locCtrl,
             style: TextStyle(color: c.textPrimary),
-            decoration: _dec('Địa điểm (tuỳ chọn)'),
+            decoration: _dec(tr('Địa điểm (tuỳ chọn)', 'Location (optional)')),
           ),
           const SizedBox(height: 6),
           SwitchListTile(
@@ -656,11 +668,11 @@ class _EventEditorState extends State<_EventEditor> {
             value: _allDay,
             onChanged: (v) => setState(() => _allDay = v),
             activeThumbColor: c.accent,
-            title: Text('Cả ngày',
+            title: Text(tr('Cả ngày', 'All day'),
                 style: TextStyle(color: c.textSecondary, fontSize: 14)),
           ),
-          _timeRow('Bắt đầu', _start, () => _pick(true)),
-          _timeRow('Kết thúc', _end, () => _pick(false)),
+          _timeRow(tr('Bắt đầu', 'Start'), _start, () => _pick(true)),
+          _timeRow(tr('Kết thúc', 'End'), _end, () => _pick(false)),
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(_error!,
@@ -682,7 +694,7 @@ class _EventEditorState extends State<_EventEditor> {
                       height: 18,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
-                  : const Text('Tạo sự kiện'),
+                  : Text(tr('Tạo sự kiện', 'Create event')),
             ),
           ),
         ],

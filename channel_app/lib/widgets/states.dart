@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/language_service.dart';
 import '../theme/tokens.dart';
 
 /// Centered spinner with an optional caption.
@@ -57,7 +58,7 @@ class ErrorState extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: onRetry,
                 icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('Thử lại'),
+                label: Text(tr('Thử lại', 'Retry')),
               ),
             ],
           ],

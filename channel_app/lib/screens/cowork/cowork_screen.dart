@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/cowork_models.dart';
 import '../../services/cowork_api.dart';
+import '../../services/language_service.dart';
 import '../../services/relay_manager.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
@@ -34,9 +35,13 @@ class _CoworkScreenState extends State<CoworkScreen>
       indicatorColor: c.accent,
       labelColor: c.accent,
       unselectedLabelColor: c.textMuted,
-      tabs: const [
-        Tab(icon: Icon(Icons.groups_outlined), text: 'Đội'),
-        Tab(icon: Icon(Icons.dashboard_customize_outlined), text: 'Mẫu'),
+      tabs: [
+        Tab(
+            icon: const Icon(Icons.groups_outlined),
+            text: tr('Đội', 'Teams')),
+        Tab(
+            icon: const Icon(Icons.dashboard_customize_outlined),
+            text: tr('Mẫu', 'Templates')),
       ],
     );
     return Scaffold(
@@ -171,7 +176,7 @@ class _TeamsTabState extends State<_TeamsTab>
         backgroundColor: c.accent,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
-        label: const Text('Đội mới'),
+        label: Text(tr('Đội mới', 'New team')),
       ),
       body: _buildBody(),
     );
@@ -179,13 +184,16 @@ class _TeamsTabState extends State<_TeamsTab>
 
   Widget _buildBody() {
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải đội…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải đội…', 'Loading teams…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_teams.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.groups_outlined,
-        message: 'Chưa có đội',
-        hint: 'Tạo đội mới hoặc dùng một mẫu có sẵn',
+        message: tr('Chưa có đội', 'No teams yet'),
+        hint: tr('Tạo đội mới hoặc dùng một mẫu có sẵn',
+            'Create a new team or use an existing template'),
       );
     }
     return RefreshIndicator(
@@ -217,7 +225,8 @@ class _TeamsTabState extends State<_TeamsTab>
               subtitle: Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'Quản lý: ${t.managerFolder} · ${t.members.length} thành viên',
+                  tr('Quản lý: ${t.managerFolder} · ${t.members.length} thành viên',
+                      'Manager: ${t.managerFolder} · ${t.members.length} members'),
                   style: TextStyle(color: c.textMuted, fontSize: 12),
                 ),
               ),
@@ -256,7 +265,8 @@ class _CreateTeamSheetState extends State<_CreateTeamSheet> {
 
   Future<void> _save() async {
     if (_name.text.trim().isEmpty || _manager.text.trim().isEmpty) {
-      setState(() => _error = 'Cần tên đội và quản lý');
+      setState(() =>
+          _error = tr('Cần tên đội và quản lý', 'Team name and manager are required'));
       return;
     }
     setState(() {
@@ -291,18 +301,18 @@ class _CreateTeamSheetState extends State<_CreateTeamSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Đội mới',
+            Text(tr('Đội mới', 'New team'),
                 style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
-            _f(_name, 'Tên đội'),
+            _f(_name, tr('Tên đội', 'Team name')),
             const SizedBox(height: 10),
-            _f(_manager, 'Quản lý (folder/persona)'),
+            _f(_manager, tr('Quản lý (folder/persona)', 'Manager (folder/persona)')),
             if (widget.personas.isNotEmpty) ...[
               const SizedBox(height: 12),
-              Text('Thành viên (persona)',
+              Text(tr('Thành viên (persona)', 'Members (persona)'),
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
               const SizedBox(height: 6),
               Wrap(
@@ -346,7 +356,7 @@ class _CreateTeamSheetState extends State<_CreateTeamSheet> {
                         height: 18,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
-                    : const Text('Tạo đội'),
+                    : Text(tr('Tạo đội', 'Create team')),
               ),
             ),
           ],
@@ -448,23 +458,24 @@ class _TemplatesTabState extends State<_TemplatesTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Tạo đội từ "${t.name}"',
+        title: Text(
+            tr('Tạo đội từ "${t.name}"', 'Create team from "${t.name}"'),
             style: TextStyle(color: c.textPrimary, fontSize: 16)),
         content: TextField(
           controller: nameCtrl,
           style: TextStyle(color: c.textPrimary),
           decoration: InputDecoration(
-            labelText: 'Tên đội',
+            labelText: tr('Tên đội', 'Team name'),
             labelStyle: TextStyle(color: c.textMuted),
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Tạo',
+              child: Text(tr('Tạo', 'Create'),
                   style: TextStyle(color: c.accent))),
         ],
       ),
@@ -473,13 +484,14 @@ class _TemplatesTabState extends State<_TemplatesTab>
     try {
       await _api.createFromTemplate(t.id, name: nameCtrl.text.trim());
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Đã tạo đội — xem tab Đội')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('Đã tạo đội — xem tab Đội',
+                'Team created — see the Teams tab'))));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -491,7 +503,7 @@ class _TemplatesTabState extends State<_TemplatesTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -500,12 +512,14 @@ class _TemplatesTabState extends State<_TemplatesTab>
   Widget build(BuildContext context) {
     super.build(context);
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải mẫu…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải mẫu…', 'Loading templates…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_templates.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.dashboard_customize_outlined,
-        message: 'Chưa có mẫu',
+        message: tr('Chưa có mẫu', 'No templates yet'),
       );
     }
     return RefreshIndicator(
@@ -544,7 +558,7 @@ class _TemplatesTabState extends State<_TemplatesTab>
                         color: c.surfaceAlt,
                         borderRadius: BorderRadius.circular(5),
                       ),
-                      child: Text('builtin',
+                      child: Text(tr('có sẵn', 'builtin'),
                           style:
                               TextStyle(color: c.textMuted, fontSize: 9)),
                     ),
@@ -553,7 +567,8 @@ class _TemplatesTabState extends State<_TemplatesTab>
               subtitle: Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  '${t.description}\n${t.manager} · ${t.members.length} thành viên',
+                  tr('${t.description}\n${t.manager} · ${t.members.length} thành viên',
+                      '${t.description}\n${t.manager} · ${t.members.length} members'),
                   style: TextStyle(color: c.textMuted, fontSize: 12),
                 ),
               ),
@@ -562,7 +577,7 @@ class _TemplatesTabState extends State<_TemplatesTab>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
-                    tooltip: 'Tạo đội',
+                    tooltip: tr('Tạo đội', 'Create team'),
                     icon: Icon(Icons.play_circle_outline,
                         color: c.accent),
                     onPressed: () => _use(t),

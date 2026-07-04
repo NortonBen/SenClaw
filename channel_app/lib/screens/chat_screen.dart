@@ -2,17 +2,21 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../models/agent_model.dart';
 import '../models/api_models.dart';
+import '../models/session_model.dart';
 import '../services/relay_service.dart';
 import '../services/relay_manager.dart';
 import '../services/config_service.dart';
 import '../services/chat_api.dart';
+import '../services/language_service.dart';
 import '../services/local_cache.dart';
 import '../services/llm_api.dart';
 import '../services/logger_service.dart';
+import '../services/sessions_provider.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/interaction_cards.dart';
@@ -56,14 +60,14 @@ class ChatMessage {
   }) : role = role ?? (isFromMe ? 'user' : 'agent');
 }
 
-class ChatScreen extends StatefulWidget {
+class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends ConsumerState<ChatScreen> {
   static const _agentListTimeout = Duration(seconds: 40);
 
   /// Max time the busy/typing indicator may stay on without any fresh
@@ -84,9 +88,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _busyWatchdog;
   Timer? _deltaSyncDebounce;
 
-  /// This device's chat JID on the daemon (`app:<channelId>:user:mobile-app`).
-  /// Keys the local message cache, sync cursor and agent-state lookups.
+  /// The active session's JID on the daemon. Defaults to this device's single
+  /// session (`app:<channelId>:user:mobile-app`) and follows the selected
+  /// session once multi-session is in play. Keys the local message cache,
+  /// sync cursor and agent-state lookups.
   String? _chatJid;
+
+  /// A first message queued to send once a freshly-created session becomes
+  /// active (see [_openNewChat] → [_switchSession]).
+  String? _pendingFirstMessage;
 
   /// Server message ids already rendered — dedups overlap between the local
   /// cache, HISTORY_RESP pages and REST delta fetches.
@@ -117,7 +127,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _hasMoreHistory = true;
   bool _isLoadingMore = false;
 
-  String _statusText = 'Đang kết nối tới relay…';
+  String _statusText = tr('Đang kết nối tới relay…', 'Connecting to relay…');
   bool _loadTimedOut = false;
   DateTime? _lastSendTime;
 
@@ -135,8 +145,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _loadTimedOut = true;
-        _statusText =
-            'Thiếu dữ liệu ghép cặp — hãy quét lại mã QR để kết nối.';
+        _statusText = tr(
+            'Thiếu dữ liệu ghép cặp — hãy quét lại mã QR để kết nối.',
+            'Missing pairing data — scan the QR code again to connect.');
       });
       return;
     }
@@ -237,8 +248,12 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         _loadTimedOut = true;
         _statusText = hubOk
-            ? 'Hub đã kết nối — chưa có Senclaw trên kênh này. Hãy chạy Senclaw với relay tới cùng hub.'
-            : 'Không nhận được phản hồi từ hub — kiểm tra mạng, domain và ghép cặp (token/kênh).';
+            ? tr(
+                'Hub đã kết nối — chưa có Senclaw trên kênh này. Hãy chạy Senclaw với relay tới cùng hub.',
+                'Hub connected — no Senclaw on this channel yet. Run Senclaw with a relay to the same hub.')
+            : tr(
+                'Không nhận được phản hồi từ hub — kiểm tra mạng, domain và ghép cặp (token/kênh).',
+                'No response from the hub — check network, domain and pairing (token/channel).');
       });
     });
   }
@@ -277,8 +292,10 @@ class _ChatScreenState extends State<ChatScreen> {
       _agentLoaded = true;
       _loadTimedOut = false;
       _statusText = agents.isEmpty
-          ? 'Không có profile nào được bind với kênh này'
-          : 'Đã tải ${agents.length} profile';
+          ? tr('Không có profile nào được bind với kênh này',
+              'No profile is bound to this channel')
+          : tr('Đã tải ${agents.length} profile',
+              'Loaded ${agents.length} profiles');
     });
 
     if (agents.isEmpty) return;
@@ -478,7 +495,9 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi gửi phản hồi: $e')));
+            .showSnackBar(SnackBar(
+                content:
+                    Text(tr('Lỗi gửi phản hồi: $e', 'Error sending response: $e'))));
       }
     }
   }
@@ -491,7 +510,9 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi gửi trả lời: $e')));
+            .showSnackBar(SnackBar(
+                content:
+                    Text(tr('Lỗi gửi trả lời: $e', 'Error sending answer: $e'))));
       }
     }
   }
@@ -522,7 +543,9 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi gửi lựa chọn: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(
+                    tr('Lỗi gửi lựa chọn: $e', 'Error sending selection: $e'))));
       }
     }
   }
@@ -724,7 +747,8 @@ class _ChatScreenState extends State<ChatScreen> {
         // Approximate the server page the cache already covers so "load
         // more" continues with older pages (overlap dedups by id).
         _currentPage = (cached.length / 20).ceil().clamp(1, 1 << 20);
-        _statusText = 'Đã tải ${cached.length} tin từ bộ nhớ đệm';
+        _statusText = tr('Đã tải ${cached.length} tin từ bộ nhớ đệm',
+            'Loaded ${cached.length} messages from cache');
       });
       _scrollToBottom(animate: false);
     }
@@ -753,7 +777,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _hasMoreHistory = true;
       _messages.clear();
       _seenMessageIds.clear();
-      _statusText = 'Đang tải lịch sử cho "${agent.name}"…';
+      _statusText = tr('Đang tải lịch sử cho "${agent.name}"…',
+          'Loading history for "${agent.name}"…');
     });
 
     _config.setSelectedAgentFolder(agent.folder);
@@ -767,6 +792,9 @@ class _ChatScreenState extends State<ChatScreen> {
           if (mode != null && mode.isNotEmpty) 'mode': mode,
         }),
       );
+      // AGENT_SELECT rebinds the active session's folder — refresh the list so
+      // its agent label stays in sync.
+      RelayManager().requestSessionList();
     }
     unawaited(_loadHistoryForSelected());
   }
@@ -775,7 +803,8 @@ class _ChatScreenState extends State<ChatScreen> {
     Log.i('[Chat] Người dùng yêu cầu tải lại danh sách agent');
     setState(() {
       _agentLoaded = false;
-      _statusText = 'Đang tải lại danh sách profile…';
+      _statusText =
+          tr('Đang tải lại danh sách profile…', 'Reloading profile list…');
     });
     _relay?.sendControl(RelayControlType.agentListReq, '{}');
   }
@@ -811,7 +840,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _loadTimedOut = false;
       _agentLoaded = false;
-      _statusText = 'Đang kết nối lại…';
+      _statusText = tr('Đang kết nối lại…', 'Reconnecting…');
     });
     _loadTimeout?.cancel();
     // The shared relay auto-reconnects; just re-request the agent list and
@@ -822,8 +851,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted || _agentLoaded) return;
       setState(() {
         _loadTimedOut = true;
-        _statusText =
-            'Vẫn chưa nhận được phản hồi — kiểm tra mạng và Senclaw daemon.';
+        _statusText = tr(
+            'Vẫn chưa nhận được phản hồi — kiểm tra mạng và Senclaw daemon.',
+            'Still no response — check the network and the Senclaw daemon.');
       });
     });
   }
@@ -857,7 +887,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Desktop-style "New" composer: pick Chat / Code / Cowork, an agent or a
   /// limited project, and a first message. Code/Cowork self-navigate to their
-  /// detail screens; a chat result switches to that agent here and sends.
+  /// detail screens; a chat result creates a NEW session bound to that agent
+  /// and sends the first message once the session becomes active.
   Future<void> _openNewChat() async {
     final result = await Navigator.of(context).push<NewChatResult>(
       MaterialPageRoute(builder: (_) => NewChatScreen(agents: _agents)),
@@ -865,20 +896,66 @@ class _ChatScreenState extends State<ChatScreen> {
     if (result == null || !mounted) return;
     final agent =
         _agents.where((a) => a.folder == result.agentFolder).firstOrNull;
-    if (agent != null && agent.folder != _selectedAgent?.folder) {
-      // Switching profile: select it and pin the chosen mode in one frame.
-      _selectAgent(agent, mode: result.mode);
-    } else if (agent != null && result.mode.isNotEmpty) {
-      // Same profile: just pin the mode (no conversation reset).
-      _relay?.sendControl(
-        RelayControlType.agentSelect,
-        jsonEncode({'folder': agent.folder, 'mode': result.mode}),
-      );
-    }
+    final name = agent?.name ?? tr('Phiên mới', 'New session');
+    // Create a fresh session; the daemon makes it active and re-sends the
+    // session list, which [_reconcileSession] follows.
+    ref.read(sessionsProvider.notifier).create(
+          folder: result.agentFolder,
+          name: name,
+          mode: result.mode,
+        );
+    // Clear any explicit selection so the chat follows the new active session.
+    ref.read(selectedSessionJidProvider.notifier).state = null;
     final text = result.message.trim();
-    if (text.isNotEmpty && (_selectedAgent != null || agent != null)) {
-      _messageController.text = text;
-      await _send();
+    _pendingFirstMessage = text.isEmpty ? null : text;
+  }
+
+  // ── Session reconciliation (multi-session) ─────────────────────────────────
+
+  /// Compute the session the chat should be showing — the explicit UI
+  /// selection, else the daemon's active session, else the device default —
+  /// and switch to it if it differs from the current [_chatJid].
+  void _reconcileSession() {
+    if (!mounted) return;
+    final selected = ref.read(selectedSessionJidProvider);
+    final sessions = ref.read(sessionsProvider);
+    var target = selected;
+    target ??= sessions.where((s) => s.active).firstOrNull?.jid ??
+        RelayManager().defaultSessionJid;
+    if (target != null && target != _chatJid) {
+      _switchSession(target, sessions);
+    }
+  }
+
+  /// Point the chat at session [jid]: reset the transcript, reflect the
+  /// session's agent in the app bar, ensure the daemon routes here, and reload
+  /// history. Flushes any queued first message afterwards.
+  void _switchSession(String jid, List<SessionInfo> sessions) {
+    final s = sessions.where((x) => x.jid == jid).firstOrNull;
+    Log.i('[Chat] Chuyển phiên → $jid');
+    setState(() {
+      _chatJid = jid;
+      _currentPage = 1;
+      _hasMoreHistory = true;
+      _messages.clear();
+      _seenMessageIds.clear();
+      if (s != null && s.folder.isNotEmpty) {
+        final a = _agents.where((x) => x.folder == s.folder).firstOrNull;
+        if (a != null) _selectedAgent = a;
+      }
+      _statusText = tr('Đang tải phiên…', 'Loading session…');
+    });
+    // Idempotent: make sure the daemon files new messages under this session.
+    RelayManager().selectSession(jid, folder: s?.folder);
+    unawaited(_loadHistoryForSelected());
+
+    final pending = _pendingFirstMessage;
+    if (pending != null) {
+      _pendingFirstMessage = null;
+      _messageController.text = pending;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_send());
+      });
     }
   }
 
@@ -910,7 +987,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Lỗi gửi: $e')));
+        ).showSnackBar(
+            SnackBar(content: Text(tr('Lỗi gửi: $e', 'Send error: $e'))));
       }
     }
   }
@@ -936,7 +1014,8 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi chọn ảnh: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi chọn ảnh: $e', 'Error picking image: $e'))));
       }
     }
   }
@@ -964,7 +1043,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final base = _messageController.text;
     setState(() => _recording = true);
     await _speech.listen(
-      listenOptions: stt.SpeechListenOptions(localeId: 'vi_VN'),
+      // Speech recognition follows the app language.
+      listenOptions: stt.SpeechListenOptions(
+          localeId: LanguageService().isVietnamese ? 'vi_VN' : 'en_US'),
       onResult: (r) {
         final sep = base.isEmpty || base.endsWith(' ') ? '' : ' ';
         _messageController.text = '$base$sep${r.recognizedWords}';
@@ -993,7 +1074,8 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi tải model: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi tải model: $e', 'Error loading models: $e'))));
       }
       return;
     }
@@ -1022,7 +1104,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Row(children: [
                 Icon(Icons.memory, color: c.accent, size: 18),
                 const SizedBox(width: 8),
-                Text('Chọn model',
+                Text(tr('Chọn model', 'Select model'),
                     style: TextStyle(
                         color: c.textPrimary, fontWeight: FontWeight.w600)),
               ]),
@@ -1030,7 +1112,7 @@ class _ChatScreenState extends State<ChatScreen> {
             if (list.configs.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text('Chưa có cấu hình model',
+                child: Text(tr('Chưa có cấu hình model', 'No model configured'),
                     style: TextStyle(color: c.textMuted, fontSize: 13)),
               )
             else
@@ -1069,7 +1151,8 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi đặt model: $e')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Lỗi đặt model: $e', 'Error setting model: $e'))));
       }
     }
   }
@@ -1100,6 +1183,12 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    // Follow the selected session (drawer / sessions screen) and the daemon's
+    // active-session changes.
+    ref.listen<String?>(
+        selectedSessionJidProvider, (_, next) => _reconcileSession());
+    ref.listen<List<SessionInfo>>(
+        sessionsProvider, (_, next) => _reconcileSession());
     return Scaffold(
       backgroundColor: c.bg,
       drawer: const AppDrawer(),
@@ -1188,12 +1277,12 @@ class _ChatScreenState extends State<ChatScreen> {
       actions: [
         IconButton(
           icon: Icon(Icons.add_comment_outlined, color: c.textSecondary),
-          tooltip: 'Tạo mới',
+          tooltip: tr('Tạo mới', 'New'),
           onPressed: _openNewChat,
         ),
         IconButton(
           icon: Icon(Icons.refresh, color: c.textMuted),
-          tooltip: 'Tải lại',
+          tooltip: tr('Tải lại', 'Reload'),
           onPressed: () {
             _reloadAgentList();
             if (_selectedAgent != null) _reloadHistory();
@@ -1243,9 +1332,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: Size.zero,
               ),
-              child: const Text(
-                'Thử lại',
-                style: TextStyle(color: AppTokens.cyan, fontSize: 12),
+              child: Text(
+                tr('Thử lại', 'Retry'),
+                style: const TextStyle(color: AppTokens.cyan, fontSize: 12),
               ),
             ),
         ],
@@ -1288,12 +1377,14 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Không có profile nào được bind với kênh này.',
+              tr('Không có profile nào được bind với kênh này.',
+                  'No profile is bound to this channel.'),
               style: TextStyle(color: c.textMuted),
             ),
             const SizedBox(height: 6),
             Text(
-              'Vào Web UI → Channels → bind profile cho kênh app này',
+              tr('Vào Web UI → Channels → bind profile cho kênh app này',
+                  'Open Web UI → Channels → bind a profile to this app channel'),
               style: TextStyle(color: c.textMuted, fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -1306,7 +1397,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 size: 16,
               ),
               label: Text(
-                'Tải lại',
+                tr('Tải lại', 'Reload'),
                 style: TextStyle(color: c.accent, fontSize: 13),
               ),
               style: OutlinedButton.styleFrom(
@@ -1398,7 +1489,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Expanded(child: Divider(color: c.border)),
           const SizedBox(width: 8),
           Text(
-            'Lịch sử',
+            tr('Lịch sử', 'History'),
             style: TextStyle(color: c.textMuted, fontSize: 11),
           ),
           const SizedBox(width: 8),
@@ -1632,9 +1723,9 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () {
                 Clipboard.setData(ClipboardData(text: text));
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Đã sao chép'),
-                      duration: Duration(seconds: 1)),
+                  SnackBar(
+                      content: Text(tr('Đã sao chép', 'Copied')),
+                      duration: const Duration(seconds: 1)),
                 );
               },
               borderRadius: BorderRadius.circular(4),
@@ -1723,7 +1814,9 @@ class _ChatScreenState extends State<ChatScreen> {
               onChanged: (_) => setState(() {}),
               style: TextStyle(color: c.textPrimary),
               decoration: InputDecoration(
-                hintText: enabled ? 'Nhắn tin…' : 'Chọn profile để bắt đầu',
+                hintText: enabled
+                    ? tr('Nhắn tin…', 'Type a message…')
+                    : tr('Chọn profile để bắt đầu', 'Select a profile to start'),
                 hintStyle: TextStyle(color: c.textMuted),
                 border: InputBorder.none,
                 isCollapsed: true,
@@ -1749,14 +1842,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Đính kèm ảnh',
+                  tooltip: tr('Đính kèm ảnh', 'Attach image'),
                   visualDensity: VisualDensity.compact,
                   icon: Icon(Icons.image_outlined,
                       color: enabled ? c.textSecondary : c.textMuted),
                   onPressed: enabled ? _pickImage : null,
                 ),
                 IconButton(
-                  tooltip: _recording ? 'Dừng ghi' : 'Nói',
+                  tooltip: _recording
+                      ? tr('Dừng ghi', 'Stop recording')
+                      : tr('Nói', 'Speak'),
                   visualDensity: VisualDensity.compact,
                   icon: Icon(_recording ? Icons.stop_circle : Icons.mic_none,
                       color: _recording
@@ -1772,7 +1867,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       color: canSend ? c.accent : c.surface,
                       shape: BoxShape.circle),
                   child: IconButton(
-                    tooltip: 'Gửi',
+                    tooltip: tr('Gửi', 'Send'),
                     visualDensity: VisualDensity.compact,
                     icon: Icon(Icons.arrow_upward,
                         size: 18,
@@ -1878,7 +1973,7 @@ class _ChatScreenState extends State<ChatScreen> {
           onPressed: _retryLoad,
           icon: Icon(Icons.refresh, color: c.accent),
           label: Text(
-            'Thử lại',
+            tr('Thử lại', 'Retry'),
             style: TextStyle(color: c.accent),
           ),
           style: OutlinedButton.styleFrom(
@@ -1914,28 +2009,30 @@ String _toolVerb(String raw) {
   final n = raw.contains('__') ? raw.split('__').last : raw;
   switch (n) {
     case 'Read':
-      return 'Đọc tệp';
+      return tr('Đọc tệp', 'Read file');
     case 'Write':
-      return 'Tạo tệp';
+      return tr('Tạo tệp', 'Create file');
     case 'Edit':
     case 'NotebookEdit':
-      return 'Sửa tệp';
+      return tr('Sửa tệp', 'Edit file');
     case 'Bash':
-      return 'Chạy lệnh';
+      return tr('Chạy lệnh', 'Run command');
     case 'Glob':
-      return 'Tìm tệp';
+      return tr('Tìm tệp', 'Find files');
     case 'Grep':
-      return 'Tìm nội dung';
+      return tr('Tìm nội dung', 'Search content');
     case 'WebFetch':
-      return 'Tải URL';
+      return tr('Tải URL', 'Fetch URL');
     case 'Task':
-      return 'Gọi subagent';
+      return tr('Gọi subagent', 'Call subagent');
     case 'Skill':
-      return 'Dùng skill';
+      return tr('Dùng skill', 'Use skill');
   }
-  if (raw.startsWith('mcp__browser__')) return 'Thao tác trình duyệt';
-  if (raw.startsWith('mcp__memory__')) return 'Tra trí nhớ';
-  if (raw.startsWith('mcp__wiki__')) return 'Thao tác wiki';
+  if (raw.startsWith('mcp__browser__')) {
+    return tr('Thao tác trình duyệt', 'Browser action');
+  }
+  if (raw.startsWith('mcp__memory__')) return tr('Tra trí nhớ', 'Memory lookup');
+  if (raw.startsWith('mcp__wiki__')) return tr('Thao tác wiki', 'Wiki action');
   if (raw.startsWith('mcp__')) return n.replaceAll('_', ' ');
   return n;
 }
@@ -1954,7 +2051,7 @@ class _ToolGroupCardState extends State<_ToolGroupCard> {
   String _summary() {
     final n = widget.messages.length;
     if (n == 1) return _toolVerb(widget.messages.first.toolName ?? 'tool');
-    return 'Đã dùng công cụ ×$n';
+    return tr('Đã dùng công cụ ×$n', 'Used tools ×$n');
   }
 
   @override
@@ -2083,7 +2180,7 @@ class _ReasoningCollapsibleState extends State<_ReasoningCollapsible> {
                   child: Text.rich(
                     TextSpan(children: [
                       TextSpan(
-                        text: 'Suy luận  ',
+                        text: tr('Suy luận  ', 'Reasoning  '),
                         style: TextStyle(
                             color: c.textSecondary,
                             fontSize: 12,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/cowork_models.dart';
 import '../../services/cowork_api.dart';
+import '../../services/language_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
 
@@ -31,13 +32,13 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
     try {
       await _api.saveAsTemplate(_team.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Đã lưu thành mẫu')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('Đã lưu thành mẫu', 'Saved as template'))));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -48,17 +49,18 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Xoá đội?', style: TextStyle(color: c.textPrimary)),
+        title: Text(tr('Xoá đội?', 'Delete team?'),
+            style: TextStyle(color: c.textPrimary)),
         content: Text(_team.name,
             style: TextStyle(color: c.textSecondary)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Xoá',
-                  style: TextStyle(color: AppTokens.danger))),
+              child: Text(tr('Xoá', 'Delete'),
+                  style: const TextStyle(color: AppTokens.danger))),
         ],
       ),
     );
@@ -69,7 +71,7 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -95,12 +97,12 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
             itemBuilder: (_) => [
               PopupMenuItem(
                   value: 'template',
-                  child: Text('Lưu thành mẫu',
+                  child: Text(tr('Lưu thành mẫu', 'Save as template'),
                       style: TextStyle(color: c.textPrimary))),
-              const PopupMenuItem(
+              PopupMenuItem(
                   value: 'delete',
-                  child: Text('Xoá đội',
-                      style: TextStyle(color: AppTokens.danger))),
+                  child: Text(tr('Xoá đội', 'Delete team'),
+                      style: const TextStyle(color: AppTokens.danger))),
             ],
           ),
         ],
@@ -109,10 +111,10 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
           indicatorColor: c.accent,
           labelColor: c.accent,
           unselectedLabelColor: c.textMuted,
-          tabs: const [
-            Tab(text: 'Công việc'),
-            Tab(text: 'Thành viên'),
-            Tab(text: 'Cài đặt'),
+          tabs: [
+            Tab(text: tr('Công việc', 'Tasks')),
+            Tab(text: tr('Thành viên', 'Members')),
+            Tab(text: tr('Cài đặt', 'Settings')),
           ],
         ),
       ),
@@ -142,14 +144,26 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
 // ─── Tasks (kanban list grouped by status) ────────────────────────────────────
 
 const _statuses = ['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked'];
-const _statusLabel = {
-  'backlog': 'Tồn đọng',
-  'todo': 'Cần làm',
-  'in_progress': 'Đang làm',
-  'review': 'Rà soát',
-  'done': 'Hoàn thành',
-  'blocked': 'Bị chặn',
-};
+
+/// Display label for a task status (raw status value falls through unchanged).
+String _statusLabel(String s) {
+  switch (s) {
+    case 'backlog':
+      return tr('Tồn đọng', 'Backlog');
+    case 'todo':
+      return tr('Cần làm', 'To do');
+    case 'in_progress':
+      return tr('Đang làm', 'In progress');
+    case 'review':
+      return tr('Rà soát', 'Review');
+    case 'done':
+      return tr('Hoàn thành', 'Done');
+    case 'blocked':
+      return tr('Bị chặn', 'Blocked');
+    default:
+      return s;
+  }
+}
 
 Color _statusColor(String s, AppColors c) {
   switch (s) {
@@ -218,24 +232,24 @@ class _TasksTabState extends State<_TasksTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Công việc mới',
+        title: Text(tr('Công việc mới', 'New task'),
             style: TextStyle(color: c.textPrimary)),
         content: TextField(
           controller: ctrl,
           autofocus: true,
           style: TextStyle(color: c.textPrimary),
           decoration: InputDecoration(
-            labelText: 'Tiêu đề',
+            labelText: tr('Tiêu đề', 'Title'),
             labelStyle: TextStyle(color: c.textMuted),
           ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Tạo',
+              child: Text(tr('Tạo', 'Create'),
                   style: TextStyle(color: c.accent))),
         ],
       ),
@@ -247,7 +261,7 @@ class _TasksTabState extends State<_TasksTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -259,7 +273,7 @@ class _TasksTabState extends State<_TasksTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -271,7 +285,7 @@ class _TasksTabState extends State<_TasksTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -297,10 +311,11 @@ class _TasksTabState extends State<_TasksTab>
     if (_loading) return const LoadingState();
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_tasks.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.task_alt_outlined,
-        message: 'Chưa có công việc',
-        hint: 'Nhấn + để thêm; agent quản lý cũng tự tạo khi xử lý',
+        message: tr('Chưa có công việc', 'No tasks yet'),
+        hint: tr('Nhấn + để thêm; agent quản lý cũng tự tạo khi xử lý',
+            'Tap + to add; the manager agent also creates tasks while working'),
       );
     }
     final byStatus = <String, List<CoworkTeamTask>>{};
@@ -333,7 +348,7 @@ class _TasksTabState extends State<_TasksTab>
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '${_statusLabel[st] ?? st} · ${byStatus[st]!.length}',
+                    '${_statusLabel(st)} · ${byStatus[st]!.length}',
                     style: TextStyle(
                         color: c.textSecondary,
                         fontSize: 13,
@@ -380,13 +395,13 @@ class _TasksTabState extends State<_TasksTab>
               if (st != t.status)
                 PopupMenuItem(
                   value: st,
-                  child: Text('→ ${_statusLabel[st] ?? st}',
+                  child: Text('→ ${_statusLabel(st)}',
                       style: TextStyle(color: c.textPrimary)),
                 ),
-            const PopupMenuItem(
+            PopupMenuItem(
                 value: 'delete',
-                child:
-                    Text('Xoá', style: TextStyle(color: AppTokens.danger))),
+                child: Text(tr('Xoá', 'Delete'),
+                    style: const TextStyle(color: AppTokens.danger))),
           ],
         ),
       ),
@@ -419,25 +434,26 @@ class _MembersTabState extends State<_MembersTab> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Thêm thành viên',
+        title: Text(tr('Thêm thành viên', 'Add member'),
             style: TextStyle(color: c.textPrimary)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _dlgField(folderCtrl, 'Folder/persona'),
             const SizedBox(height: 8),
-            _dlgField(roleCtrl, 'Vai trò (tuỳ chọn)'),
+            _dlgField(roleCtrl, tr('Vai trò (tuỳ chọn)', 'Role (optional)')),
             const SizedBox(height: 8),
-            _dlgField(respCtrl, 'Trách nhiệm (tuỳ chọn)'),
+            _dlgField(respCtrl,
+                tr('Trách nhiệm (tuỳ chọn)', 'Responsibilities (optional)')),
           ],
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Thêm',
+              child: Text(tr('Thêm', 'Add'),
                   style: TextStyle(color: c.accent))),
         ],
       ),
@@ -458,7 +474,7 @@ class _MembersTabState extends State<_MembersTab> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -471,7 +487,7 @@ class _MembersTabState extends State<_MembersTab> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -502,7 +518,7 @@ class _MembersTabState extends State<_MembersTab> {
               title: Text(_team.managerFolder,
                   style: TextStyle(
                       color: c.textPrimary, fontWeight: FontWeight.w600)),
-              subtitle: Text('Quản lý',
+              subtitle: Text(tr('Quản lý', 'Manager'),
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
             ),
           ),
@@ -510,7 +526,7 @@ class _MembersTabState extends State<_MembersTab> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Center(
-                child: Text('Chưa có thành viên',
+                child: Text(tr('Chưa có thành viên', 'No members yet'),
                     style: TextStyle(color: c.textMuted)),
               ),
             )
@@ -607,13 +623,13 @@ class _SettingsTabState extends State<_SettingsTab> {
       );
       widget.onChanged(updated);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Đã lưu cài đặt đội')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('Đã lưu cài đặt đội', 'Team settings saved'))));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -626,23 +642,31 @@ class _SettingsTabState extends State<_SettingsTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Preamble cho quản lý',
+        Text(tr('Preamble cho quản lý', 'Manager preamble'),
             style: TextStyle(color: c.textSecondary, fontSize: 13)),
         const SizedBox(height: 6),
-        _field(_preamble, 'Để trống = mặc định PLAN→DELEGATE→SYNTHESIZE',
+        _field(
+            _preamble,
+            tr('Để trống = mặc định PLAN→DELEGATE→SYNTHESIZE',
+                'Leave empty = default PLAN→DELEGATE→SYNTHESIZE'),
             maxLines: 5),
         const SizedBox(height: 16),
-        Text('Công cụ cho quản lý',
+        Text(tr('Công cụ cho quản lý', 'Manager tools'),
             style: TextStyle(color: c.textSecondary, fontSize: 13)),
         const SizedBox(height: 6),
-        _field(_tools, 'Phân tách bằng dấu phẩy (trống = Task + TodoWrite)'),
+        _field(
+            _tools,
+            tr('Phân tách bằng dấu phẩy (trống = Task + TodoWrite)',
+                'Comma-separated (empty = Task + TodoWrite)')),
         const SizedBox(height: 8),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           value: _autoCreate,
           onChanged: (v) => setState(() => _autoCreate = v),
           activeThumbColor: c.accent,
-          title: Text('Tự tạo công việc khi có tin nhắn',
+          title: Text(
+              tr('Tự tạo công việc khi có tin nhắn',
+                  'Auto-create tasks from incoming messages'),
               style: TextStyle(color: c.textPrimary, fontSize: 14)),
         ),
         const SizedBox(height: 16),
@@ -661,7 +685,7 @@ class _SettingsTabState extends State<_SettingsTab> {
                     height: 18,
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
-                : const Text('Lưu'),
+                : Text(tr('Lưu', 'Save')),
           ),
         ),
       ],

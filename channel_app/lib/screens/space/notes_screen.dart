@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/space_models.dart';
+import '../../services/language_service.dart';
 import '../../services/space_api.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/states.dart';
@@ -12,7 +13,7 @@ class NotesScreen extends StatelessWidget {
   const NotesScreen({super.key});
   @override
   Widget build(BuildContext context) =>
-      const SpacePage(title: 'Notes', child: _NotesTab());
+      SpacePage(title: tr('Ghi chú', 'Notes'), child: const _NotesTab());
 }
 
 // ─── Notes ───────────────────────────────────────────────────────────────────
@@ -99,18 +100,18 @@ class _NotesTabState extends State<_NotesTab>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
-        title: Text('Xoá ghi chú?',
+        title: Text(tr('Xoá ghi chú?', 'Delete note?'),
             style: TextStyle(color: c.textPrimary)),
         content: Text(note.title,
             style: TextStyle(color: c.textSecondary)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(tr('Huỷ', 'Cancel'))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Xoá',
-                  style: TextStyle(color: AppTokens.danger))),
+              child: Text(tr('Xoá', 'Delete'),
+                  style: const TextStyle(color: AppTokens.danger))),
         ],
       ),
     );
@@ -121,7 +122,8 @@ class _NotesTabState extends State<_NotesTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi xoá: $e')));
+            .showSnackBar(
+                SnackBar(content: Text(tr('Lỗi xoá: $e', 'Delete error: $e'))));
       }
     }
   }
@@ -149,7 +151,7 @@ class _NotesTabState extends State<_NotesTab>
                 _load();
               },
               decoration: InputDecoration(
-                hintText: 'Tìm ghi chú…',
+                hintText: tr('Tìm ghi chú…', 'Search notes…'),
                 hintStyle: TextStyle(color: c.textMuted),
                 prefixIcon:
                     Icon(Icons.search, color: c.textMuted, size: 20),
@@ -175,13 +177,15 @@ class _NotesTabState extends State<_NotesTab>
 
   Widget _buildList() {
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang tải ghi chú…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang tải ghi chú…', 'Loading notes…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_notes.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.sticky_note_2_outlined,
-        message: 'Chưa có ghi chú',
-        hint: 'Nhấn + để tạo ghi chú mới',
+        message: tr('Chưa có ghi chú', 'No notes yet'),
+        hint: tr('Nhấn + để tạo ghi chú mới', 'Tap + to create a note'),
       );
     }
     return RefreshIndicator(
@@ -216,7 +220,7 @@ class _NotesTabState extends State<_NotesTab>
               ),
             Expanded(
               child: Text(
-                n.title.isEmpty ? '(không tiêu đề)' : n.title,
+                n.title.isEmpty ? tr('(không tiêu đề)', '(untitled)') : n.title,
                 style: TextStyle(
                     color: c.textPrimary, fontWeight: FontWeight.w600),
               ),
@@ -296,7 +300,7 @@ class _NoteEditorState extends State<_NoteEditor> {
   Future<void> _save() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
-      setState(() => _error = 'Cần tiêu đề');
+      setState(() => _error = tr('Cần tiêu đề', 'Title is required'));
       return;
     }
     final tags = _tagsCtrl.text
@@ -336,17 +340,21 @@ class _NoteEditorState extends State<_NoteEditor> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.note == null ? 'Ghi chú mới' : 'Sửa ghi chú',
+          Text(
+              widget.note == null
+                  ? tr('Ghi chú mới', 'New note')
+                  : tr('Sửa ghi chú', 'Edit note'),
               style: TextStyle(
                   color: c.textPrimary,
                   fontSize: 18,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
-          _field(_titleCtrl, 'Tiêu đề'),
+          _field(_titleCtrl, tr('Tiêu đề', 'Title')),
           const SizedBox(height: 10),
-          _field(_bodyCtrl, 'Nội dung', maxLines: 6),
+          _field(_bodyCtrl, tr('Nội dung', 'Content'), maxLines: 6),
           const SizedBox(height: 10),
-          _field(_tagsCtrl, 'Tags (phân tách bằng dấu phẩy)'),
+          _field(_tagsCtrl,
+              tr('Tags (phân tách bằng dấu phẩy)', 'Tags (comma-separated)')),
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(_error!,
@@ -368,7 +376,7 @@ class _NoteEditorState extends State<_NoteEditor> {
                       height: 18,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
-                  : const Text('Lưu'),
+                  : Text(tr('Lưu', 'Save')),
             ),
           ),
         ],

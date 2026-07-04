@@ -7,6 +7,7 @@ import '../models/cowork_models.dart';
 import '../models/workflow_models.dart';
 import '../services/code_api.dart';
 import '../services/cowork_api.dart';
+import '../services/language_service.dart';
 import '../services/llm_api.dart';
 import '../services/workflow_api.dart';
 import '../theme/tokens.dart';
@@ -45,12 +46,13 @@ class NewChatScreen extends ConsumerStatefulWidget {
 
 class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   static const _kProjects = 'senclaw:projects';
-  static const _suggestions = [
-    'Tóm tắt tin nhắn chưa đọc',
-    'Lập kế hoạch cho một dự án',
-    'Nghiên cứu một chủ đề và trích nguồn',
-    'Giúp tôi debug một lỗi',
-  ];
+  static List<String> get _suggestions => [
+        tr('Tóm tắt tin nhắn chưa đọc', 'Summarize unread messages'),
+        tr('Lập kế hoạch cho một dự án', 'Plan a project'),
+        tr('Nghiên cứu một chủ đề và trích nguồn',
+            'Research a topic with sources'),
+        tr('Giúp tôi debug một lỗi', 'Help me debug an error'),
+      ];
 
   final _msg = TextEditingController();
   final _llmApi = LlmApi();
@@ -211,7 +213,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         .map((i) => i.name)
         .toList();
     if (missing.isNotEmpty) {
-      _wfSnack('Thiếu input bắt buộc: ${missing.join(', ')}');
+      _wfSnack(tr('Thiếu input bắt buộc: ${missing.join(', ')}',
+          'Missing required inputs: ${missing.join(', ')}'));
       return;
     }
     setState(() => _wfStarting = true);
@@ -228,14 +231,14 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       nav.push(MaterialPageRoute(
           builder: (_) => WorkflowRunDetailScreen(runId: runId)));
     } catch (e) {
-      _wfSnack('Chạy thất bại: $e');
+      _wfSnack(tr('Chạy thất bại: $e', 'Run failed: $e'));
       if (mounted) setState(() => _wfStarting = false);
     }
   }
 
   Future<void> _wfCreateWithAi() async {
     if (_wfDesc.text.trim().isEmpty) {
-      _wfSnack('Hãy mô tả quy trình trước');
+      _wfSnack(tr('Hãy mô tả quy trình trước', 'Describe the workflow first'));
       return;
     }
     setState(() => _wfDrafting = true);
@@ -244,7 +247,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       // Agent authors a validated draft — nothing saved yet.
       content = await _wfApi.draft(_wfDesc.text);
     } catch (e) {
-      _wfSnack('Soạn thảo thất bại: $e');
+      _wfSnack(tr('Soạn thảo thất bại: $e', 'Drafting failed: $e'));
       if (mounted) setState(() => _wfDrafting = false);
       return;
     }
@@ -269,7 +272,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         await _loadWorkflows();
         _wfPick(created);
         _wfDesc.clear();
-        _wfSnack('Đã lưu "$created" — điền input rồi bấm Chạy');
+        _wfSnack(tr('Đã lưu "$created" — điền input rồi bấm Chạy',
+            'Saved "$created" — fill in the inputs and press Run'));
         if (ctx.mounted) Navigator.pop(ctx);
       } catch (e) {
         setDlg(() => busy = false);
@@ -278,15 +282,16 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
           final ok = await showDialog<bool>(
             context: ctx,
             builder: (ctx2) => AlertDialog(
-              title: const Text('Workflow đã tồn tại'),
-              content: const Text('Ghi đè định nghĩa hiện có?'),
+              title: Text(tr('Workflow đã tồn tại', 'Workflow already exists')),
+              content: Text(tr('Ghi đè định nghĩa hiện có?',
+                  'Overwrite the existing definition?')),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(ctx2, false),
-                    child: const Text('Huỷ')),
+                    child: Text(tr('Huỷ', 'Cancel'))),
                 FilledButton(
                     onPressed: () => Navigator.pop(ctx2, true),
-                    child: const Text('Ghi đè')),
+                    child: Text(tr('Ghi đè', 'Overwrite'))),
               ],
             ),
           );
@@ -296,7 +301,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
           }
         } else {
           // Validation error — keep the editor open.
-          _wfSnack('Lưu thất bại: $msg');
+          _wfSnack(tr('Lưu thất bại: $msg', 'Save failed: $msg'));
         }
       }
     }
@@ -314,14 +319,15 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Xem lại bản nháp',
+                Text(tr('Xem lại bản nháp', 'Review the draft'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 16,
                         fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
                 Text(
-                    'Sửa nếu cần rồi Lưu (được kiểm tra DAG/persona khi lưu). Huỷ sẽ bỏ bản nháp.',
+                    tr('Sửa nếu cần rồi Lưu (được kiểm tra DAG/persona khi lưu). Huỷ sẽ bỏ bản nháp.',
+                        'Edit if needed, then Save (DAG/persona validated on save). Cancel discards the draft.'),
                     style: TextStyle(color: c.textMuted, fontSize: 12)),
                 const SizedBox(height: 10),
                 SizedBox(
@@ -346,12 +352,14 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   children: [
                     TextButton(
                       onPressed: busy ? null : () => Navigator.pop(ctx),
-                      child: const Text('Huỷ'),
+                      child: Text(tr('Huỷ', 'Cancel')),
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
                       onPressed: busy ? null : () => save(ctx, setDlg),
-                      child: Text(busy ? 'Đang lưu…' : 'Lưu workflow'),
+                      child: Text(busy
+                          ? tr('Đang lưu…', 'Saving…')
+                          : tr('Lưu workflow', 'Save workflow')),
                     ),
                   ],
                 ),
@@ -410,7 +418,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     Icon(Icons.folder_special_outlined,
                         color: c.accent, size: 18),
                     const SizedBox(width: 8),
-                    Text('Project cho phép',
+                    Text(tr('Project cho phép', 'Allowed projects'),
                         style: TextStyle(
                             color: c.textPrimary, fontWeight: FontWeight.w600)),
                   ]),
@@ -420,7 +428,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     padding:
                         const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
                     child: Text(
-                        'Chưa có project nào — thêm một thư mục để bắt đầu.',
+                        tr('Chưa có project nào — thêm một thư mục để bắt đầu.',
+                            'No projects yet — add a folder to get started.'),
                         style: TextStyle(color: c.textMuted, fontSize: 13)),
                   )
                 else
@@ -443,7 +452,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                                 style:
                                     TextStyle(color: c.textMuted, fontSize: 11)),
                             trailing: IconButton(
-                              tooltip: 'Bỏ ghim',
+                              tooltip: tr('Bỏ ghim', 'Unpin'),
                               icon: Icon(Icons.close,
                                   size: 16, color: c.textMuted),
                               onPressed: () async {
@@ -461,9 +470,11 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                 Divider(height: 1, color: c.border),
                 ListTile(
                   leading: Icon(Icons.add, color: c.accent),
-                  title: Text('Thêm project…',
+                  title: Text(tr('Thêm project…', 'Add project…'),
                       style: TextStyle(color: c.textPrimary)),
-                  subtitle: Text('Duyệt thư mục một lần rồi ghim vào danh sách',
+                  subtitle: Text(
+                      tr('Duyệt thư mục một lần rồi ghim vào danh sách',
+                          'Browse for a folder once, then pin it to the list'),
                       style: TextStyle(color: c.textMuted, fontSize: 11)),
                   onTap: () async {
                     final path = await FolderPicker.show(sheetCtx);
@@ -521,7 +532,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         if (mounted) {
           setState(() => _creating = false);
           ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Lỗi tạo session: $e')));
+              .showSnackBar(SnackBar(
+                  content: Text(tr('Lỗi tạo session: $e',
+                      'Failed to create session: $e'))));
         }
       }
       return;
@@ -543,7 +556,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       if (mounted) {
         setState(() => _creating = false);
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi tạo team: $e')));
+            .showSnackBar(SnackBar(
+                content:
+                    Text(tr('Lỗi tạo team: $e', 'Failed to create team: $e'))));
       }
     }
   }
@@ -559,7 +574,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       appBar: AppBar(
         backgroundColor: c.surface,
         elevation: 0,
-        title: Text('Tạo mới', style: TextStyle(color: c.textPrimary)),
+        title: Text(tr('Tạo mới', 'New'),
+            style: TextStyle(color: c.textPrimary)),
       ),
       body: Center(
         child: SingleChildScrollView(
@@ -704,7 +720,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
               Row(children: [
                 Icon(Icons.account_tree_outlined, size: 16, color: c.accent),
                 const SizedBox(width: 6),
-                Text('Chạy workflow có sẵn',
+                Text(tr('Chạy workflow có sẵn', 'Run a saved workflow'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontWeight: FontWeight.w600,
@@ -714,7 +730,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
               if (!_wfLoaded)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text('Đang tải danh sách…',
+                  child: Text(tr('Đang tải danh sách…', 'Loading list…'),
                       style: TextStyle(color: c.textMuted, fontSize: 13)),
                 )
               else
@@ -733,15 +749,17 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                       isExpanded: true,
                       hint: Text(
                           _wfDefs.isEmpty
-                              ? 'Chưa có workflow — tạo mới bên dưới'
-                              : 'Chọn workflow…',
+                              ? tr('Chưa có workflow — tạo mới bên dưới',
+                                  'No workflows yet — create one below')
+                              : tr('Chọn workflow…', 'Select a workflow…'),
                           style: TextStyle(color: c.textMuted, fontSize: 13)),
                       items: [
                         for (final d in _wfDefs)
                           DropdownMenuItem(
                             value: d.name,
                             child: Text(
-                              '${d.name} · ${d.stepCount} bước${(d.description ?? '').isEmpty ? '' : ' — ${d.description}'}',
+                              tr('${d.name} · ${d.stepCount} bước${(d.description ?? '').isEmpty ? '' : ' — ${d.description}'}',
+                                  '${d.name} · ${d.stepCount} steps${(d.description ?? '').isEmpty ? '' : ' — ${d.description}'}'),
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                   color: c.textPrimary, fontSize: 13),
@@ -778,7 +796,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                           height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.play_arrow_rounded, size: 18),
-                  label: Text(_wfStarting ? 'Đang khởi chạy…' : 'Chạy workflow'),
+                  label: Text(_wfStarting
+                      ? tr('Đang khởi chạy…', 'Starting…')
+                      : tr('Chạy workflow', 'Run workflow')),
                 ),
               ],
             ],
@@ -787,7 +807,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         const SizedBox(height: 8),
         Center(
             child:
-                Text('hoặc', style: TextStyle(color: c.textMuted, fontSize: 12))),
+                Text(tr('hoặc', 'or'),
+                    style: TextStyle(color: c.textMuted, fontSize: 12))),
         const SizedBox(height: 8),
         // ── Create a new one with the AI agent ──
         Container(
@@ -800,7 +821,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                 Icon(Icons.auto_awesome, size: 16, color: c.accent),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text('Tạo workflow mới bằng AI agent',
+                  child: Text(
+                      tr('Tạo workflow mới bằng AI agent',
+                          'Create a new workflow with an AI agent'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontWeight: FontWeight.w600,
@@ -815,8 +838,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                 style: TextStyle(color: c.textPrimary, fontSize: 14),
                 decoration: InputDecoration(
                   border: const OutlineInputBorder(),
-                  hintText:
+                  hintText: tr(
                       'Mô tả quy trình… vd: Hàng tuần nghiên cứu một chủ đề từ 3 góc nhìn song song, rồi tổng hợp thành một báo cáo.',
+                      'Describe the workflow… e.g.: Every week research a topic from 3 angles in parallel, then synthesize into one report.'),
                   hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
                 ),
               ),
@@ -830,12 +854,14 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.auto_awesome, size: 16),
                 label: Text(_wfDrafting
-                    ? 'Agent đang soạn (30–120s)…'
-                    : 'Tạo workflow'),
+                    ? tr('Agent đang soạn (30–120s)…',
+                        'Agent is drafting (30–120s)…')
+                    : tr('Tạo workflow', 'Create workflow')),
               ),
               const SizedBox(height: 6),
               Text(
-                'Bản nháp sẽ mở trong trình soạn để xem lại — Lưu để giữ, Huỷ để bỏ.',
+                tr('Bản nháp sẽ mở trong trình soạn để xem lại — Lưu để giữ, Huỷ để bỏ.',
+                    'The draft opens in the editor for review — Save to keep, Cancel to discard.'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: c.textMuted, fontSize: 11),
               ),
@@ -854,22 +880,25 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         base = parts.isEmpty ? null : parts.last;
       }
       return base != null
-          ? (heading: 'Xây gì trong $base?', sub: '')
+          ? (heading: tr('Xây gì trong $base?', 'What to build in $base?'), sub: '')
           : (
-              heading: 'Chọn project để bắt đầu',
-              sub: 'Chọn thư mục dự án bên dưới.'
+              heading: tr('Chọn project để bắt đầu', 'Pick a project to start'),
+              sub: tr('Chọn thư mục dự án bên dưới.',
+                  'Pick a project folder below.')
             );
     }
     if (_kind == 'cowork') {
       return (
-        heading: 'Tạo nhóm Cowork',
-        sub: 'Chọn mẫu, rồi mô tả mục tiêu.'
+        heading: tr('Tạo nhóm Cowork', 'Create a Cowork team'),
+        sub: tr('Chọn mẫu, rồi mô tả mục tiêu.',
+            'Pick a template, then describe the goal.')
       );
     }
     if (_kind == 'workflow') {
       return (
-        heading: 'Chạy một workflow',
-        sub: 'Chọn workflow có sẵn, hoặc để AI agent soạn quy trình mới.'
+        heading: tr('Chạy một workflow', 'Run a workflow'),
+        sub: tr('Chọn workflow có sẵn, hoặc để AI agent soạn quy trình mới.',
+            'Pick a saved workflow, or let an AI agent draft a new one.')
       );
     }
     final name = _agentFolder == null
@@ -879,14 +908,19 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
             .map((a) => a.name)
             .firstOrNull;
     return name != null
-        ? (heading: 'Chat với $name', sub: 'Không cần workspace — chỉ trò chuyện.')
-        : (heading: 'Mình giúp gì hôm nay?', sub: '');
+        ? (
+            heading: tr('Chat với $name', 'Chat with $name'),
+            sub: tr('Không cần workspace — chỉ trò chuyện.',
+                'No workspace needed — just chat.')
+          )
+        : (heading: tr('Mình giúp gì hôm nay?', 'How can I help today?'), sub: '');
   }
 
   String get _hint => switch (_kind) {
-        'code' => 'Tên session (tuỳ chọn)…',
-        'cowork' => 'Mục tiêu nhóm (tuỳ chọn)…',
-        _ => 'Hỏi bất cứ điều gì, hoặc mô tả một tác vụ…',
+        'code' => tr('Tên session (tuỳ chọn)…', 'Session name (optional)…'),
+        'cowork' => tr('Mục tiêu nhóm (tuỳ chọn)…', 'Team goal (optional)…'),
+        _ => tr('Hỏi bất cứ điều gì, hoặc mô tả một tác vụ…',
+            'Ask anything, or describe a task…'),
       };
 
   Widget _toolbar(AppColors c) {
@@ -968,8 +1002,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
               Flexible(
                 child: Text(
                     activeLabel != null
-                        ? 'Mặc định · $activeLabel'
-                        : 'Model mặc định',
+                        ? tr('Mặc định · $activeLabel',
+                            'Default · $activeLabel')
+                        : tr('Model mặc định', 'Default model'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: c.textSecondary)),
               ),
@@ -995,7 +1030,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     if (widget.agents.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Text('Chưa có profile nào trên kênh này',
+        child: Text(
+            tr('Chưa có profile nào trên kênh này',
+                'No profiles on this channel yet'),
             style: TextStyle(color: c.textMuted, fontSize: 13)),
       );
     }
@@ -1024,7 +1061,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
 
   Widget _templateDropdown(AppColors c) {
     if (_templates.isEmpty) {
-      return Text('Đang tải mẫu…',
+      return Text(tr('Đang tải mẫu…', 'Loading templates…'),
           style: TextStyle(color: c.textMuted, fontSize: 13));
     }
     return DropdownButtonHideUnderline(
@@ -1085,10 +1122,10 @@ class _KindSegmented extends StatelessWidget {
           border: Border.all(color: c.border),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          seg('💬 Chat', 'chat'),
-          seg('⌨️ Code', 'code'),
-          seg('👥 Cowork', 'cowork'),
-          seg('🔁 Flow', 'workflow'),
+          seg(tr('💬 Chat', '💬 Chat'), 'chat'),
+          seg(tr('⌨️ Code', '⌨️ Code'), 'code'),
+          seg(tr('👥 Cowork', '👥 Cowork'), 'cowork'),
+          seg(tr('🔁 Flow', '🔁 Flow'), 'workflow'),
         ]),
       ),
     );
@@ -1101,11 +1138,23 @@ class _ModeIcons extends StatelessWidget {
   final String value;
   final void Function(String) onChanged;
 
-  static const _opts = [
-    ('Agent', Icons.bolt, 'Agent — toàn quyền dùng công cụ'),
-    ('Plan', Icons.lightbulb_outline, 'Plan — nghiên cứu rồi đề xuất'),
-    ('Dag', Icons.account_tree_outlined, 'DAG — điều phối đa agent'),
-  ];
+  static List<(String, IconData, String)> get _opts => [
+        (
+          'Agent',
+          Icons.bolt,
+          tr('Agent — toàn quyền dùng công cụ', 'Agent — full tool access')
+        ),
+        (
+          'Plan',
+          Icons.lightbulb_outline,
+          tr('Plan — nghiên cứu rồi đề xuất', 'Plan — research then propose')
+        ),
+        (
+          'Dag',
+          Icons.account_tree_outlined,
+          tr('DAG — điều phối đa agent', 'DAG — multi-agent orchestration')
+        ),
+      ];
 
   @override
   Widget build(BuildContext context) {
@@ -1189,7 +1238,7 @@ class _ProjectPill extends StatelessWidget {
         ? (workDir!.split('/').where((s) => s.isNotEmpty).isEmpty
             ? 'Project'
             : workDir!.split('/').where((s) => s.isNotEmpty).last)
-        : 'Chọn project';
+        : tr('Chọn project', 'Select project');
     return GestureDetector(
       onTap: onTap,
       child: Container(

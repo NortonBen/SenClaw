@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Voice dictation (speech_to_text) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Local notifications for new agent messages (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="Senclaw Connect"
         android:name="${applicationName}"

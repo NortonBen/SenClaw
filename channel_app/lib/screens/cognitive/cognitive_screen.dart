@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../models/cognitive_models.dart';
 import '../../services/cognitive_api.dart';
+import '../../services/language_service.dart';
 import '../../services/relay_manager.dart';
 import '../../theme/tokens.dart';
 import '../../util/format.dart';
@@ -53,7 +54,8 @@ class _CognitiveScreenState extends State<CognitiveScreen>
         elevation: 0,
         title: Row(
           children: [
-            Text('Tri thức', style: TextStyle(color: c.textPrimary)),
+            Text(tr('Tri thức', 'Knowledge'),
+                style: TextStyle(color: c.textPrimary)),
             const SizedBox(width: 8),
             AnimatedBuilder(
               animation: RelayManager(),
@@ -69,11 +71,17 @@ class _CognitiveScreenState extends State<CognitiveScreen>
           indicatorColor: c.accent,
           labelColor: c.accent,
           unselectedLabelColor: c.textMuted,
-          tabs: const [
-            Tab(icon: Icon(Icons.psychology_outlined), text: 'Recall'),
-            Tab(icon: Icon(Icons.hub_outlined), text: 'Đồ thị'),
-            Tab(icon: Icon(Icons.add_circle_outline), text: 'Thêm'),
-            Tab(icon: Icon(Icons.storage_outlined), text: 'Dữ liệu'),
+          tabs: [
+            Tab(
+                icon: const Icon(Icons.psychology_outlined),
+                text: tr('Gợi nhớ', 'Recall')),
+            Tab(icon: const Icon(Icons.hub_outlined), text: tr('Đồ thị', 'Graph')),
+            Tab(
+                icon: const Icon(Icons.add_circle_outline),
+                text: tr('Thêm', 'Add')),
+            Tab(
+                icon: const Icon(Icons.storage_outlined),
+                text: tr('Dữ liệu', 'Data')),
           ],
         ),
       ),
@@ -154,7 +162,8 @@ class _RecallTabState extends State<_RecallTab>
           style: TextStyle(color: c.textPrimary),
           textInputAction: TextInputAction.search,
           onSubmitted: (_) => _ask(),
-          decoration: _inputDec(context, 'Hỏi từ trí nhớ…'),
+          decoration:
+              _inputDec(context, tr('Hỏi từ trí nhớ…', 'Ask from memory…')),
         ),
         const SizedBox(height: 10),
         SizedBox(
@@ -168,7 +177,7 @@ class _RecallTabState extends State<_RecallTab>
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.auto_awesome),
-            label: const Text('Hỏi'),
+            label: Text(tr('Hỏi', 'Ask')),
             style: ElevatedButton.styleFrom(
               backgroundColor: c.accent,
               foregroundColor: Colors.white,
@@ -204,7 +213,9 @@ class _RecallTabState extends State<_RecallTab>
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      _result!.grounded ? 'Có dẫn chứng' : 'Chưa tổng hợp',
+                      _result!.grounded
+                          ? tr('Có dẫn chứng', 'Grounded')
+                          : tr('Chưa tổng hợp', 'Not synthesized'),
                       style: TextStyle(
                           color: _result!.grounded
                               ? AppTokens.success
@@ -226,7 +237,7 @@ class _RecallTabState extends State<_RecallTab>
           ),
           if (_result!.sources.isNotEmpty) ...[
             const SizedBox(height: 14),
-            Text('Nguồn',
+            Text(tr('Nguồn', 'Sources'),
                 style: TextStyle(
                     color: c.textSecondary,
                     fontSize: 13,
@@ -338,18 +349,21 @@ class _GraphTabState extends State<_GraphTab>
   Widget build(BuildContext context) {
     super.build(context);
     final c = context.colors;
-    if (_loading) return const LoadingState(text: 'Đang dựng đồ thị…');
+    if (_loading) {
+      return LoadingState(text: tr('Đang dựng đồ thị…', 'Building graph…'));
+    }
     if (_error != null) return ErrorState(message: _error!, onRetry: _loadSample);
     final g = _graph;
     if (g == null || g.nodes.isEmpty) {
       return EmptyState(
         icon: Icons.hub_outlined,
-        message: 'Đồ thị trống',
-        hint: 'Thêm tri thức để xây dựng mạng liên kết',
+        message: tr('Đồ thị trống', 'Graph is empty'),
+        hint: tr('Thêm tri thức để xây dựng mạng liên kết',
+            'Add knowledge to build the link network'),
         action: OutlinedButton.icon(
           onPressed: _loadSample,
           icon: Icon(Icons.refresh, color: c.accent, size: 18),
-          label: Text('Tải lại',
+          label: Text(tr('Tải lại', 'Reload'),
               style: TextStyle(color: c.accent)),
           style: OutlinedButton.styleFrom(
               side: BorderSide(color: c.accent)),
@@ -366,24 +380,28 @@ class _GraphTabState extends State<_GraphTab>
             child: Row(
               children: [
                 Expanded(
-                  child: Text('Tâm: ${_selected!.name}',
+                  child: Text(
+                      tr('Tâm: ${_selected!.name}',
+                          'Center: ${_selected!.name}'),
                       style: TextStyle(
                           color: c.textSecondary, fontSize: 12),
                       overflow: TextOverflow.ellipsis),
                 ),
                 TextButton(
                   onPressed: _loadSample,
-                  child: Text('Đặt lại',
+                  child: Text(tr('Đặt lại', 'Reset'),
                       style: TextStyle(color: c.accent, fontSize: 12)),
                 ),
               ],
             ),
           ),
         if (g.truncated)
-          const Padding(
-            padding: EdgeInsets.all(6),
-            child: Text('Đồ thị đã bị cắt bớt (đạt giới hạn nút)',
-                style: TextStyle(color: AppTokens.warning, fontSize: 11)),
+          Padding(
+            padding: const EdgeInsets.all(6),
+            child: Text(
+                tr('Đồ thị đã bị cắt bớt (đạt giới hạn nút)',
+                    'Graph was truncated (node limit reached)'),
+                style: const TextStyle(color: AppTokens.warning, fontSize: 11)),
           ),
         Expanded(
           child: InteractiveViewer(
@@ -718,14 +736,18 @@ class _AddTabState extends State<_AddTab> with AutomaticKeepAliveClientMixin {
         TextField(
           controller: _tags,
           style: TextStyle(color: c.textPrimary),
-          decoration: _inputDec(context, 'Thẻ (phân tách bằng dấu phẩy, tuỳ chọn)'),
+          decoration: _inputDec(
+              context,
+              tr('Thẻ (phân tách bằng dấu phẩy, tuỳ chọn)',
+                  'Tags (comma-separated, optional)')),
         ),
         const SizedBox(height: 10),
         TextField(
           controller: _text,
           maxLines: 8,
           style: TextStyle(color: c.textPrimary),
-          decoration: _inputDec(context, 'Nội dung cần ghi nhớ…'),
+          decoration: _inputDec(
+              context, tr('Nội dung cần ghi nhớ…', 'Content to remember…')),
         ),
         const SizedBox(height: 12),
         SizedBox(
@@ -739,7 +761,7 @@ class _AddTabState extends State<_AddTab> with AutomaticKeepAliveClientMixin {
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.add),
-            label: const Text('Thêm vào trí nhớ'),
+            label: Text(tr('Thêm vào trí nhớ', 'Add to memory')),
             style: ElevatedButton.styleFrom(
               backgroundColor: c.accent,
               foregroundColor: Colors.white,
@@ -766,14 +788,17 @@ class _AddTabState extends State<_AddTab> with AutomaticKeepAliveClientMixin {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '+${_result!.chunksAdded} đoạn · +${_result!.entitiesAdded} thực thể · +${_result!.edgesAdded} liên kết',
+                  tr('+${_result!.chunksAdded} đoạn · +${_result!.entitiesAdded} thực thể · +${_result!.edgesAdded} liên kết',
+                      '+${_result!.chunksAdded} chunks · +${_result!.entitiesAdded} entities · +${_result!.edgesAdded} links'),
                   style: TextStyle(color: c.textPrimary, fontSize: 13),
                 ),
                 if (_result!.llmSkipped)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 6),
-                    child: Text('LLM đang ngủ — chỉ lưu thô',
-                        style: TextStyle(
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                        tr('LLM đang ngủ — chỉ lưu thô',
+                            'LLM is asleep — raw save only'),
+                        style: const TextStyle(
                             color: AppTokens.warning, fontSize: 11)),
                   ),
               ],
@@ -839,7 +864,8 @@ class _DataTabState extends State<_DataTab>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(
+                SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -849,14 +875,16 @@ class _DataTabState extends State<_DataTab>
       final r = await widget.api.maintenance();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Dọn dẹp: gộp ${r['entities_merged'] ?? 0} thực thể, bỏ ${r['orphan_entities_removed'] ?? 0} mồ côi')));
+            content: Text(tr(
+                'Dọn dẹp: gộp ${r['entities_merged'] ?? 0} thực thể, bỏ ${r['orphan_entities_removed'] ?? 0} mồ côi',
+                'Cleanup: merged ${r['entities_merged'] ?? 0} entities, removed ${r['orphan_entities_removed'] ?? 0} orphans'))));
       }
       _load();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+            .showSnackBar(
+                SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
       }
     }
   }
@@ -880,7 +908,7 @@ class _DataTabState extends State<_DataTab>
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
                           child: ChoiceChip(
-                            label: Text(k ?? 'Tất cả',
+                            label: Text(k ?? tr('Tất cả', 'All'),
                                 style: const TextStyle(fontSize: 12)),
                             selected: _kind == k,
                             onSelected: (_) {
@@ -898,7 +926,7 @@ class _DataTabState extends State<_DataTab>
                 ),
               ),
               IconButton(
-                tooltip: 'Dọn dẹp',
+                tooltip: tr('Dọn dẹp', 'Cleanup'),
                 icon: Icon(Icons.cleaning_services_outlined,
                     color: c.textSecondary, size: 20),
                 onPressed: _maintenance,
@@ -916,9 +944,9 @@ class _DataTabState extends State<_DataTab>
     if (_loading) return const LoadingState();
     if (_error != null) return ErrorState(message: _error!, onRetry: _load);
     if (_nodes.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.storage_outlined,
-        message: 'Chưa có dữ liệu',
+        message: tr('Chưa có dữ liệu', 'No data yet'),
       );
     }
     return RefreshIndicator(
@@ -956,7 +984,8 @@ class _DataTabState extends State<_DataTab>
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis),
                   Text(
-                      '${n.kind} · ${n.mentionCount} lần · ${timeAgoEpochSecs(n.lastSeenAt)}',
+                      tr('${n.kind} · ${n.mentionCount} lần · ${timeAgoEpochSecs(n.lastSeenAt)}',
+                          '${n.kind} · ${n.mentionCount} mentions · ${timeAgoEpochSecs(n.lastSeenAt)}'),
                       style: TextStyle(
                           color: c.textMuted, fontSize: 10)),
                 ],

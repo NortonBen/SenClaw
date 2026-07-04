@@ -31,6 +31,26 @@ class Prefs {
 
   Future<void> setStringList(String key, List<String> value) =>
       _p.setString(key, jsonEncode(value));
+
+  /// An unordered set of strings (`Set<String>`) stored as a JSON array
+  /// (pinned jids, collapsed buckets). Mirrors the desktop app's `stringSet`.
+  Set<String> stringSet(String key) => stringList(key).toSet();
+
+  Future<void> setStringSet(String key, Set<String> value) =>
+      setStringList(key, value.toList());
 }
 
 final prefsHelperProvider = Provider<Prefs>((ref) => Prefs(ref.watch(prefsProvider)));
+
+// ── Session-list UI state keys (parity with desktop_app) ─────────────────
+/// Pinned session jids (a `Set<String>`).
+const kPinnedKey = 'senclaw:pinned-jids';
+
+/// Collapsed bucket keys in the session list (a `Set<String>`).
+const kCollapsedKey = 'senclaw:collapsed-folders';
+
+/// Group-by mode name (GroupMode enum name).
+const kSessOrganizeKey = 'senclaw:sessionlist-organize';
+
+/// Sort mode name (SortMode enum name).
+const kSessSortKey = 'senclaw:sessionlist-sort';

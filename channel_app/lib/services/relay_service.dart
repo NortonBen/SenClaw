@@ -5,6 +5,7 @@ import 'package:fixnum/fixnum.dart';
 import 'package:web_socket_channel/io.dart';
 import '../models/agent_model.dart';
 import '../models/api_models.dart';
+import '../models/session_model.dart';
 import 'crypto_service.dart';
 import 'logger_service.dart';
 
@@ -23,6 +24,13 @@ class RelayControlType {
   static const int apiReq = 11;
   static const int apiResp = 12;
   static const int apiEvent = 13;
+  // Multi-session control frames (mirror src/channels/app.rs).
+  static const int sessionListReq = 14;
+  static const int sessionListResp = 15;
+  static const int sessionCreate = 16;
+  static const int sessionUpdate = 17;
+  static const int sessionDelete = 18;
+  static const int sessionSelect = 19;
 }
 
 class RelayService {
@@ -49,6 +57,10 @@ class RelayService {
 
   final _apiEventController = StreamController<ApiEvent>.broadcast();
   Stream<ApiEvent> get apiEvents => _apiEventController.stream;
+
+  final _sessionsController =
+      StreamController<List<SessionInfo>>.broadcast();
+  Stream<List<SessionInfo>> get sessionUpdates => _sessionsController.stream;
 
   /// Pending REST tunnel calls, keyed by requestId.
   final Map<String, Completer<ApiResponse>> _pendingApi = {};
@@ -248,6 +260,16 @@ class RelayService {
         } catch (e) {
           Log.e('API_EVENT parse error: $e');
         }
+      case RelayControlType.sessionListResp:
+        try {
+          final raw = jsonDecode(meta) as List<dynamic>;
+          final sessions = raw
+              .map((e) => SessionInfo.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _sessionsController.add(sessions);
+        } catch (e) {
+          Log.e('SESSION_LIST_RESP parse error: $e');
+        }
       default:
         Log.d('Control type=$type meta=$meta');
     }
@@ -424,6 +446,7 @@ class RelayService {
       _historyController.close(),
       _connectionController.close(),
       _apiEventController.close(),
+      _sessionsController.close(),
     ]);
   }
 

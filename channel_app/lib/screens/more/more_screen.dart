@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/agent_model.dart';
 import '../../services/config_service.dart';
 import '../../services/language_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/relay_manager.dart';
+import '../../services/settings_provider.dart';
 import '../../theme/theme_mode_provider.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_drawer.dart';
@@ -36,7 +38,7 @@ class MoreScreen extends ConsumerWidget {
         ),
         title: Row(
           children: [
-            const Text('Cài đặt'),
+            Text(tr('Cài đặt', 'Settings')),
             const SizedBox(width: 8),
             AnimatedBuilder(
               animation: RelayManager(),
@@ -47,7 +49,7 @@ class MoreScreen extends ConsumerWidget {
         ),
         actions: [
           IconButton(
-            tooltip: 'Tải lại',
+            tooltip: tr('Tải lại', 'Reload'),
             icon: Icon(Icons.refresh, color: c.textSecondary),
             onPressed: () => RelayManager().requestAgentList(),
           ),
@@ -66,13 +68,20 @@ class MoreScreen extends ConsumerWidget {
                 const SizedBox(height: 16),
 
                 // ── Connection / account controls (client-side only) ──────
-                _sectionLabel(context, 'Kết nối'),
+                _sectionLabel(context, tr('Kết nối', 'Connection')),
                 const SizedBox(height: 8),
                 const _ConnectionCard(),
                 const SizedBox(height: 16),
 
+                // ── Notifications & background sync ───────────────────────
+                _sectionLabel(
+                    context, tr('Thông báo & Đồng bộ', 'Notifications & Sync')),
+                const SizedBox(height: 8),
+                const _NotifySyncCard(),
+                const SizedBox(height: 16),
+
                 // ── Appearance ────────────────────────────────────────────
-                _sectionLabel(context, 'Giao diện'),
+                _sectionLabel(context, tr('Giao diện', 'Appearance')),
                 const SizedBox(height: 8),
                 _ThemeModeControl(
                   current: themeMode,
@@ -82,7 +91,7 @@ class MoreScreen extends ConsumerWidget {
                 const SizedBox(height: 16),
 
                 // ── Language ──────────────────────────────────────────────
-                _sectionLabel(context, 'Ngôn ngữ'),
+                _sectionLabel(context, tr('Ngôn ngữ', 'Language')),
                 const SizedBox(height: 8),
                 const _LanguageControl(),
               ],
@@ -171,7 +180,7 @@ class _ConnectionCard extends StatelessWidget {
               Divider(height: 1, color: c.border),
               ListTile(
                 leading: const Icon(Icons.qr_code_2, color: AppTokens.cyan),
-                title: Text('Ghép lại / Mã QR',
+                title: Text(tr('Ghép lại / Mã QR', 'Re-pair / QR code'),
                     style: TextStyle(color: c.textPrimary, fontSize: 14)),
                 trailing: Icon(Icons.chevron_right, color: c.textMuted),
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -193,6 +202,135 @@ class _ConnectionCard extends StatelessWidget {
   }
 }
 
+/// Notification toggle + periodic background-sync toggle and interval picker.
+class _NotifySyncCard extends ConsumerWidget {
+  const _NotifySyncCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final notif = ref.watch(notificationsEnabledProvider);
+    final bg = ref.watch(backgroundSyncEnabledProvider);
+    final interval = ref.watch(syncIntervalProvider);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: c.surfaceAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: c.border),
+      ),
+      child: Column(
+        children: [
+          SwitchListTile(
+            value: notif,
+            activeThumbColor: c.accent,
+            secondary: const Icon(Icons.notifications_active_outlined,
+                color: AppTokens.cyan),
+            title: Text(tr('Thông báo', 'Notifications'),
+                style: TextStyle(color: c.textPrimary, fontSize: 14)),
+            subtitle: Text(
+                tr('Báo khi có tin nhắn mới từ agent',
+                    'Alert on new agent messages'),
+                style: TextStyle(color: c.textMuted, fontSize: 12)),
+            onChanged: (v) async {
+              ref.read(notificationsEnabledProvider.notifier).set(v);
+              if (v && NotificationService().supported) {
+                final granted =
+                    await NotificationService().requestPermission();
+                if (!granted && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(tr('Chưa cấp quyền thông báo',
+                          'Notification permission not granted'))));
+                }
+              }
+            },
+          ),
+          Divider(height: 1, color: c.border),
+          SwitchListTile(
+            value: bg,
+            activeThumbColor: c.accent,
+            secondary: const Icon(Icons.sync, color: AppTokens.cyan),
+            title: Text(tr('Đồng bộ định kỳ', 'Periodic sync'),
+                style: TextStyle(color: c.textPrimary, fontSize: 14)),
+            subtitle: Text(
+                tr('Tự đồng bộ ngầm khi app đang chạy',
+                    'Auto-sync in the background while the app runs'),
+                style: TextStyle(color: c.textMuted, fontSize: 12)),
+            onChanged: (v) =>
+                ref.read(backgroundSyncEnabledProvider.notifier).set(v),
+          ),
+          // Interval picker — only relevant when periodic sync is on.
+          if (bg) ...[
+            Divider(height: 1, color: c.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr('Chu kỳ kiểm tra', 'Check interval'),
+                      style: TextStyle(color: c.textSecondary, fontSize: 13)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final m in kSyncIntervals)
+                        _IntervalChip(
+                          minutes: m,
+                          selected: m == interval,
+                          onTap: () =>
+                              ref.read(syncIntervalProvider.notifier).set(m),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A pill choice for one background-sync interval.
+class _IntervalChip extends StatelessWidget {
+  final int minutes;
+  final bool selected;
+  final VoidCallback onTap;
+  const _IntervalChip({
+    required this.minutes,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final label = minutes >= 60
+        ? '${minutes ~/ 60} ${tr('giờ', 'h')}'
+        : '$minutes ${tr('phút', 'min')}';
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? c.accentSoft : c.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? c.accent : c.border),
+        ),
+        child: Text(label,
+            style: TextStyle(
+              color: selected ? c.accent : c.textSecondary,
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            )),
+      ),
+    );
+  }
+}
+
 /// Segmented control for picking the app theme mode (system / light / dark).
 class _ThemeModeControl extends StatelessWidget {
   final ThemeMode current;
@@ -201,10 +339,10 @@ class _ThemeModeControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const options = [
-      (ThemeMode.system, Icons.brightness_auto, 'Hệ thống'),
-      (ThemeMode.light, Icons.light_mode, 'Sáng'),
-      (ThemeMode.dark, Icons.dark_mode, 'Tối'),
+    final options = [
+      (ThemeMode.system, Icons.brightness_auto, tr('Hệ thống', 'System')),
+      (ThemeMode.light, Icons.light_mode, tr('Sáng', 'Light')),
+      (ThemeMode.dark, Icons.dark_mode, tr('Tối', 'Dark')),
     ];
     return Row(
       children: [
@@ -317,7 +455,7 @@ class _DashboardCards extends StatelessWidget {
           context,
           Icons.wifi_tethering,
           RelayManager().connected ? 'Online' : 'Offline',
-          'Kết nối',
+          tr('Kết nối', 'Connection'),
         ),
       ],
     );

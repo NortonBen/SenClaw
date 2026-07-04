@@ -72,3 +72,8 @@ class LanguageService extends ChangeNotifier {
 
 // Global shortcut
 String t(String key) => LanguageService().translate(key);
+
+/// Inline-translation shortcut: pick the Vietnamese or English variant by the
+/// current app language. Preferred over key-based [t] for screen strings —
+/// both translations live at the call site, no registry to maintain.
+String tr(String vi, String en) => LanguageService().isVietnamese ? vi : en;
