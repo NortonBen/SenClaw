@@ -8,6 +8,7 @@ import '../../../theme/tokens.dart';
 import '../../../widgets/app_markdown.dart';
 import '../../dock/dispatch_provider.dart';
 import '../audio_service.dart';
+import 'form_card.dart';
 import 'question_card.dart';
 
 /// Dispatches a [ChatMessage] to the right bubble/card by kind.
@@ -17,6 +18,7 @@ class MessageItem extends StatelessWidget {
     required this.message,
     required this.onPermission,
     required this.onQuestion,
+    required this.onForm,
   });
   final ChatMessage message;
   final void Function(String requestId, String optionKey) onPermission;
@@ -25,6 +27,11 @@ class MessageItem extends StatelessWidget {
     Map<int, dynamic> answers,
     Map<int, String> otherTexts,
   ) onQuestion;
+  final void Function(
+    String requestId,
+    Map<String, dynamic> values,
+    bool submitted,
+  ) onForm;
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +42,8 @@ class MessageItem extends StatelessWidget {
         return _PermissionCard(message: message, onResolve: onPermission);
       case MessageKind.question:
         return QuestionCard(message: message, onSubmit: onQuestion);
+      case MessageKind.form:
+        return FormCard(message: message, onSubmit: onForm);
       case MessageKind.system:
         return _SystemNote(text: message.text ?? '');
       default:

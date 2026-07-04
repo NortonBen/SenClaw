@@ -108,6 +108,21 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
         ));
       case 'question:resolved':
         _resolve('q-${e['requestId']}', '');
+      case 'form:request':
+        _add(ChatMessage(
+          id: 'form-${e['requestId']}',
+          kind: MessageKind.form,
+          data: {
+            'requestId': e['requestId'],
+            'agentId': e['agentId'],
+            'title': e['title'],
+            'surface': e['surface'],
+            'submitLabel': e['submitLabel'],
+            'fields': e['fields'],
+          },
+        ));
+      case 'form:resolved':
+        _resolve('form-${e['requestId']}', '');
       case 'agent:mode:changed':
         final m = '${e['mode']}';
         if (m == 'Agent' || m == 'Plan' || m == 'Dag') {
@@ -243,6 +258,22 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
         'otherTexts': otherTexts.map((k, v) => MapEntry('$k', v)),
     });
     _resolve('q-$requestId', ''); // optimistic
+  }
+
+  /// values: keyed by form field `key`; [submitted] = false means the user
+  /// skipped the form (parity with web/channel_app FormCard).
+  void resolveForm(
+    String requestId,
+    Map<String, dynamic> values, {
+    bool submitted = true,
+  }) {
+    _ref.read(wsClientProvider).send({
+      'type': 'form:response',
+      'requestId': requestId,
+      'values': values,
+      'submitted': submitted,
+    });
+    _resolve('form-$requestId', ''); // optimistic
   }
 
   void setAgentMode(String mode) {

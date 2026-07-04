@@ -423,6 +423,8 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                           onQuestion: (rid, answers, otherTexts) => notifier
                               .resolveQuestion(rid, answers,
                                   otherTexts: otherTexts),
+                          onForm: (rid, values, submitted) => notifier
+                              .resolveForm(rid, values, submitted: submitted),
                         ));
                         i++;
                       }
