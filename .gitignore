@@ -69,6 +69,7 @@ test_prompt.sh
 /workbench/
 skills/agent-browser/*.html
 apps/ssh-manager/release
+apps/*/release/
 apps/**/*.zip
 .next
 dist
