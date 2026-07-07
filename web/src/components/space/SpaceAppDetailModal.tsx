@@ -120,7 +120,7 @@ export function SpaceAppDetailModal({ app, open, onClose }: Props) {
   };
 
 
-  const loadLogs = async (targetApp = app) => {
+  const loadLogs = async (targetApp = app, silent = false) => {
     if (!targetApp) return;
     setLogsLoading(true);
     try {
@@ -130,7 +130,8 @@ export function SpaceAppDetailModal({ app, open, onClose }: Props) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setLogs(await res.json());
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Không tải được log');
+      // Stay quiet on the 2 s auto-poll — only surface errors on explicit loads.
+      if (!silent) message.error(err instanceof Error ? err.message : 'Không tải được log');
     } finally {
       setLogsLoading(false);
     }
@@ -158,8 +159,12 @@ export function SpaceAppDetailModal({ app, open, onClose }: Props) {
     setLogs(null);
     const cancelMcp = loadMcpStatus();
     loadLogs(app);
+    // Auto-reload logs while the modal is open, so lines the app writes after
+    // you open it (e.g. during a slow startup) show up without reopening.
+    const poll = setInterval(() => loadLogs(app, true), 2000);
     return () => {
       cancelMcp?.();
+      clearInterval(poll);
     };
   }, [open, app]);
 

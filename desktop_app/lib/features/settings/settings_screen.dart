@@ -3725,22 +3725,8 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                       },
                     ),
                     const SizedBox(height: AppTokens.s12),
-                    // Logs
-                    _DetailFetchBlock(
-                      title: 'Logs',
-                      path: '/api/space/apps/${app.id}/logs?max_bytes=65536',
-                      mono: true,
-                      render: (data) {
-                        final text = data is Map
-                            ? '${data['logs'] ?? data['content'] ?? ''}'
-                            : '$data';
-                        return Text(text.isEmpty ? '(no logs)' : text,
-                            style: TextStyle(
-                                color: c.textMuted,
-                                fontSize: 11,
-                                fontFamily: AppTokens.fontMono));
-                      },
-                    ),
+                    // Logs — auto-reloads every 2s while this dialog is open.
+                    _LogsBlock(appId: app.id),
                   ],
                 ),
               ),
@@ -3774,14 +3760,10 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
 /// A titled block that fetches a path and renders the result (collapsible-ish).
 class _DetailFetchBlock extends ConsumerWidget {
   const _DetailFetchBlock(
-      {required this.title,
-      required this.path,
-      required this.render,
-      this.mono = false});
+      {required this.title, required this.path, required this.render});
   final String title;
   final String path;
   final Widget Function(dynamic data) render;
-  final bool mono;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3797,7 +3779,7 @@ class _DetailFetchBlock extends ConsumerWidget {
         const SizedBox(height: AppTokens.s6),
         Container(
           width: double.infinity,
-          constraints: BoxConstraints(maxHeight: mono ? 200 : 120),
+          constraints: const BoxConstraints(maxHeight: 120),
           padding: const EdgeInsets.all(AppTokens.s8),
           decoration: BoxDecoration(
             color: c.surfaceAlt,
@@ -3821,6 +3803,135 @@ class _DetailFetchBlock extends ConsumerWidget {
               return SingleChildScrollView(child: render(snap.data));
             },
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Runtime-logs panel for the Space-App detail dialog. Fetches on open and then
+/// **auto-reloads every 2 s** while the dialog is mounted, so logs that the app
+/// writes after you open the dialog show up without reopening it. Keeps the last
+/// content during a refresh (no spinner flicker) and offers a manual refresh.
+class _LogsBlock extends ConsumerStatefulWidget {
+  const _LogsBlock({required this.appId});
+  final String appId;
+  @override
+  ConsumerState<_LogsBlock> createState() => _LogsBlockState();
+}
+
+class _LogsBlockState extends ConsumerState<_LogsBlock> {
+  String _content = '';
+  Object? _error;
+  bool _loading = true;
+  bool _inFlight = false;
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _fetch());
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetch() async {
+    if (_inFlight) return; // don't stack requests if one is slow
+    _inFlight = true;
+    try {
+      final data = await ref
+          .read(apiClientProvider)
+          .get('/api/space/apps/${widget.appId}/logs?max_bytes=65536');
+      if (!mounted) return;
+      final text = data is Map
+          ? '${data['content'] ?? data['logs'] ?? ''}'
+          : '$data';
+      setState(() {
+        _content = text;
+        _error = null;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e;
+        _loading = false;
+      });
+    } finally {
+      _inFlight = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('Logs',
+                style: TextStyle(
+                    color: c.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(width: AppTokens.s6),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: c.accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(AppTokens.rSm),
+              ),
+              child: Text('auto',
+                  style: TextStyle(
+                      color: c.accent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600)),
+            ),
+            const Spacer(),
+            IconButton(
+              tooltip: 'Refresh logs',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              icon: Icon(Icons.refresh, size: 15, color: c.textMuted),
+              onPressed: _fetch,
+            ),
+          ],
+        ),
+        const SizedBox(height: AppTokens.s6),
+        Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(maxHeight: 200),
+          padding: const EdgeInsets.all(AppTokens.s8),
+          decoration: BoxDecoration(
+            color: c.surfaceAlt,
+            border: Border.all(color: c.border),
+            borderRadius: BorderRadius.circular(AppTokens.rSm),
+          ),
+          child: _loading && _content.isEmpty
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : _error != null && _content.isEmpty
+                  ? Text('$_error',
+                      style: const TextStyle(
+                          color: AppTokens.danger, fontSize: 11))
+                  : SingleChildScrollView(
+                      reverse: true,
+                      child: Text(_content.isEmpty ? '(no logs)' : _content,
+                          style: TextStyle(
+                              color: c.textMuted,
+                              fontSize: 11,
+                              fontFamily: AppTokens.fontMono)),
+                    ),
         ),
       ],
     );
