@@ -293,10 +293,48 @@ pub(crate) struct SkillCreateBody {
     description: String,
     #[serde(default)]
     content: String,
+    /// Keyword phrases that hint when the skill applies. Written into the
+    /// SKILL.md frontmatter as a `triggers:` YAML list so the daemon can
+    /// auto-surface the skill when a user prompt matches (see
+    /// `zen_core::engine::match_skill_name`).
+    #[serde(default)]
+    triggers: Vec<String>,
+    /// Overwrite an existing skill of the same name instead of 409-ing. Used by
+    /// the Skill Builder app to iterate on a draft it just created.
+    #[serde(default)]
+    overwrite: bool,
+}
+
+/// YAML-quote a scalar string for a double-quoted flow scalar.
+fn yaml_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Assemble a SKILL.md from its parts: `name` + `description` (+ optional
+/// `triggers` block sequence) frontmatter, then the markdown body. Kept separate
+/// from the handler so it can be unit-tested. `triggers` are trimmed and empties
+/// dropped; when none remain no `triggers:` key is emitted.
+fn build_skill_md(slug: &str, description: &str, content: &str, triggers: &[String]) -> String {
+    let desc = description.trim().replace(['\n', '\r'], " ");
+    let mut frontmatter = format!("name: {slug}\ndescription: {desc}\n");
+    let triggers: Vec<&String> = triggers.iter().filter(|t| !t.trim().is_empty()).collect();
+    if !triggers.is_empty() {
+        frontmatter.push_str("triggers:\n");
+        for t in &triggers {
+            frontmatter.push_str(&format!("  - {}\n", yaml_quote(t.trim())));
+        }
+    }
+    let body_md = if content.trim().is_empty() {
+        format!("# {slug}\n\nDescribe what this skill does and when to use it.\n")
+    } else {
+        format!("{}\n", content.trim())
+    };
+    format!("---\n{frontmatter}---\n\n{body_md}")
 }
 
 /// Create a new local skill: scaffolds `<managed_skills_dir>/<slug>/SKILL.md`
-/// with YAML frontmatter (`name`, `description`) plus the supplied body.
+/// with YAML frontmatter (`name`, `description`, optional `triggers`) plus the
+/// supplied body.
 pub(crate) async fn skills_create(
     State(s): State<Arc<UiState>>,
     Json(body): Json<SkillCreateBody>,
@@ -316,7 +354,7 @@ pub(crate) async fn skills_create(
     }
     let managed_dir = &s.config.paths.managed_skills_dir;
     let target = managed_dir.join(&slug);
-    if target.exists() {
+    if target.exists() && !body.overwrite {
         return Err(AppError(
             StatusCode::CONFLICT,
             "a skill with that name already exists".into(),
@@ -325,13 +363,9 @@ pub(crate) async fn skills_create(
     fs::create_dir_all(&target)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let desc = body.description.trim().replace(['\n', '\r'], " ");
-    let body_md = if body.content.trim().is_empty() {
-        format!("# {slug}\n\nDescribe what this skill does and when to use it.\n")
-    } else {
-        format!("{}\n", body.content.trim())
-    };
-    let md = format!("---\nname: {slug}\ndescription: {desc}\n---\n\n{body_md}");
+    // Triggers become a YAML block sequence so the scanner's `as_string_list`
+    // picks each phrase up verbatim (see `zen_core::engine::match_skill_name`).
+    let md = build_skill_md(&slug, &body.description, &body.content, &body.triggers);
     fs::write(target.join("SKILL.md"), md)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -413,4 +447,43 @@ pub(crate) async fn skills_toggle(
     Ok(Json(
         serde_json::json!({ "name": name, "disabled": disabled }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_skill_md;
+    use crate::skills::metadata::parse_skill_metadata;
+
+    #[test]
+    fn writes_triggers_into_frontmatter_and_roundtrips() {
+        let triggers = vec![
+            "who calls this".to_string(),
+            " find callers ".to_string(), // trimmed
+            "".to_string(),               // dropped
+            "ai gọi hàm \"này\"".to_string(), // quote-escaped
+        ];
+        let md = build_skill_md("sb-selftest", "Use when auditing callers", "# Body\n\nStep 1.", &triggers);
+
+        assert!(md.starts_with("---\nname: sb-selftest\n"));
+        assert!(md.contains("triggers:\n"));
+        assert!(md.contains("  - \"who calls this\"\n"));
+        assert!(md.contains("  - \"find callers\"\n")); // trimmed
+        assert!(md.contains(r#"  - "ai gọi hàm \"này\"""#)); // escaped
+        assert!(md.contains("\n---\n\n# Body"));
+
+        // The frontmatter must parse back to exactly the non-empty triggers so
+        // the trigger matcher can consume them.
+        let meta = parse_skill_metadata(&md, "sb-selftest", "");
+        assert_eq!(
+            meta.triggers,
+            vec!["who calls this", "find callers", "ai gọi hàm \"này\""]
+        );
+    }
+
+    #[test]
+    fn omits_triggers_key_when_none() {
+        let md = build_skill_md("plain", "desc", "body", &[]);
+        assert!(!md.contains("triggers:"));
+        assert!(md.contains("name: plain\ndescription: desc\n---"));
+    }
 }

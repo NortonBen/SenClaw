@@ -1127,11 +1127,63 @@ fn wire_app_channel_controls(
     }));
 }
 
+/// Raise the process's open-file-descriptor soft limit as high as the kernel
+/// allows. The daemon spawns a stdio MCP server subprocess *per built-in server
+/// per agent* — each holding several pipe/socket fds — so the macOS GUI default
+/// soft limit of 256 (inherited when launched from SenClaw Desktop.app) is
+/// exhausted quickly, surfacing as `Too many open files (os error 24)`. Bumping
+/// the soft limit toward the hard limit gives orders of magnitude more headroom.
+/// Best-effort: any failure is logged and ignored (the daemon still runs).
+fn raise_fd_limit() {
+    // A generous ceiling; macOS enforces `kern.maxfilesperproc` on top of this,
+    // so we try descending candidates until one is accepted.
+    const CANDIDATES: [u64; 4] = [1_048_576, 262_144, 65_536, 10_240];
+    unsafe {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            tracing::warn!("[SenClaw] getrlimit(RLIMIT_NOFILE) failed; leaving fd limit as-is");
+            return;
+        }
+        let old_soft = lim.rlim_cur;
+        for &target in CANDIDATES.iter() {
+            // Never exceed the hard limit (unless it's "infinity").
+            let want = if lim.rlim_max == libc::RLIM_INFINITY {
+                target
+            } else {
+                target.min(lim.rlim_max as u64)
+            };
+            if (want as libc::rlim_t) <= lim.rlim_cur {
+                continue;
+            }
+            let mut new_lim = lim;
+            new_lim.rlim_cur = want as libc::rlim_t;
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &new_lim) == 0 {
+                tracing::info!(
+                    old = old_soft as u64,
+                    new = want,
+                    "[SenClaw] raised open-file (RLIMIT_NOFILE) soft limit"
+                );
+                return;
+            }
+        }
+        tracing::warn!(
+            soft = old_soft as u64,
+            "[SenClaw] could not raise RLIMIT_NOFILE; watch for 'Too many open files'"
+        );
+    }
+}
+
 pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // ===== 0. Setup wizard =====
     setup::run_setup_if_needed(&cfg.paths.global_config_path);
 
     tracing::info!("[SenClaw] Starting...");
+
+    // Raise the fd limit before anything spawns subprocesses or opens sockets.
+    raise_fd_limit();
 
     // ===== 1. Database =====
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);

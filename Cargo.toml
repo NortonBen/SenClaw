@@ -1,5 +1,5 @@
 [workspace]
-members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar"]
+members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar", "apps/skill-builder"]
 resolver = "2"
 
 [package]
