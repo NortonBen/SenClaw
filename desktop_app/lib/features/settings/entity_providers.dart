@@ -316,7 +316,11 @@ class ToolRulesNotifier extends StateNotifier<List<ToolRule>> {
   void _pushAll() {
     final ws = _ref.read(wsClientProvider);
     for (final r in state) {
-      ws.send({'type': 'permission:rule:update', 'rule': r.toJson()});
+      // Use `add` (an upsert on the daemon) rather than `update`: the daemon's
+      // `update_rule` only mutates a rule already present in its in-memory
+      // bridge and silently drops anything new, so a fresh/reconnected daemon
+      // would never receive rules that live only in our local prefs.
+      ws.send({'type': 'permission:rule:add', 'rule': r.toJson()});
     }
   }
 
@@ -330,8 +334,13 @@ class ToolRulesNotifier extends StateNotifier<List<ToolRule>> {
 
   /// Upsert a rule (used for per-tool MCP auto-accept toggles).
   void add(ToolRule rule) {
+    // `permission:rule:add` is an upsert on the daemon (replace-if-same-id).
+    // `permission:rule:update` only mutates a rule already in the bridge, so a
+    // brand-new rule (e.g. an "Auto-accept all" wildcard) would persist to prefs
+    // + DB but never reach the live permission bridge — the agent would keep
+    // prompting even though the UI shows it enabled.
     _ref.read(wsClientProvider)
-        .send({'type': 'permission:rule:update', 'rule': rule.toJson()});
+        .send({'type': 'permission:rule:add', 'rule': rule.toJson()});
     state = [
       for (final r in state)
         if (r.id != rule.id) r,

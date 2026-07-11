@@ -21,11 +21,12 @@ import 'agent_usage_provider.dart';
 import 'audio_service.dart';
 import 'conversation_provider.dart';
 import 'plan_history_provider.dart';
+import '../../models/space_models.dart' show SpaceSchedule;
 import '../../widgets/app_markdown.dart';
+import '../../widgets/schedule_editor.dart';
 import 'groups_provider.dart';
 import 'mini_chat_screen.dart' show subWindowIdProvider;
 import 'new_chat_dialog.dart' show llmConfigsProvider, LlmConfig;
-import 'agents_provider.dart' show agentsProvider;
 import 'widgets/message_widgets.dart';
 import 'widgets/slash_mention_input.dart';
 
@@ -1703,15 +1704,14 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Queued to run now')));
+        Navigator.of(context).pop();
       }
-      await _load();
     } catch (e) {
       if (mounted) {
+        setState(() => _running = false);
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Run failed: $e')));
       }
-    } finally {
-      if (mounted) setState(() => _running = false);
     }
   }
 
@@ -1744,251 +1744,15 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
   String _localTs(String k) => _fmtTs(_s(k));
 
   Future<void> _edit() async {
-    final c = context.colors;
-    final prompt = TextEditingController(text: _s('prompt'));
-    final existingCron =
-        _s('cron').isNotEmpty ? _s('cron') : _s('schedule_value');
-    final cron = TextEditingController(
-        text: existingCron.isNotEmpty ? existingCron : '0 9 * * *');
-    final time = TextEditingController(text: '09:00');
-    // Default to advanced so the existing cron is preserved verbatim; the user
-    // can switch to a friendly frequency to overwrite it.
-    var freq = 'advanced';
-    var weekday = 1;
-    var dom = 1;
-    var mode = _s('agent_mode').isEmpty ? 'agent' : _s('agent_mode');
-    String? agentFolder =
-        _s('agent_folder').isNotEmpty ? _s('agent_folder') : null;
-    String? modelId = _s('model_id').isNotEmpty ? _s('model_id') : null;
-    var status = _s('status').isEmpty ? 'active' : _s('status');
-
-    const freqs = ['daily', 'weekly', 'monthly', 'once', 'advanced'];
-    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    final agents =
-        ref.read(agentsProvider).where((a) => !a.isSchedule).toList();
-    final llm = ref.read(llmConfigsProvider).valueOrNull;
-
-    final ok = await showDialog<bool>(
+    final schedule = SpaceSchedule.fromJson({
+      'id': widget.scheduleId,
+      ..._data ?? {},
+    });
+    await showDialog(
       context: context,
-      builder: (dctx) => StatefulBuilder(
-        builder: (dctx, setLocal) => Dialog(
-          backgroundColor: c.surface,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppTokens.rXl)),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(AppTokens.s24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(children: [
-                    Icon(Icons.event_repeat_outlined,
-                        size: 20, color: c.accent),
-                    const SizedBox(width: AppTokens.s8),
-                    Text('Edit schedule',
-                        style: TextStyle(
-                            color: c.textPrimary,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700)),
-                  ]),
-                  const SizedBox(height: AppTokens.s20),
-                  TextField(
-                    controller: prompt,
-                    minLines: 3,
-                    maxLines: 8,
-                    decoration: const InputDecoration(
-                        labelText: 'Prompt', border: OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: AppTokens.s12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: freq,
-                          decoration: const InputDecoration(
-                              labelText: 'Frequency',
-                              border: OutlineInputBorder()),
-                          items: [
-                            for (final f in freqs)
-                              DropdownMenuItem(value: f, child: Text(f)),
-                          ],
-                          onChanged: (v) =>
-                              setLocal(() => freq = v ?? 'advanced'),
-                        ),
-                      ),
-                      if (freq != 'advanced') ...[
-                        const SizedBox(width: AppTokens.s8),
-                        SizedBox(
-                          width: 110,
-                          child: TextField(
-                            controller: time,
-                            decoration: const InputDecoration(
-                                labelText: 'Time',
-                                hintText: 'HH:MM',
-                                border: OutlineInputBorder()),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  if (freq == 'weekly') ...[
-                    const SizedBox(height: AppTokens.s12),
-                    DropdownButtonFormField<int>(
-                      initialValue: weekday,
-                      decoration: const InputDecoration(
-                          labelText: 'Weekday', border: OutlineInputBorder()),
-                      items: [
-                        for (var i = 0; i < 7; i++)
-                          DropdownMenuItem(
-                              value: i + 1, child: Text(weekdays[i])),
-                      ],
-                      onChanged: (v) => setLocal(() => weekday = v ?? 1),
-                    ),
-                  ],
-                  if (freq == 'monthly') ...[
-                    const SizedBox(height: AppTokens.s12),
-                    DropdownButtonFormField<int>(
-                      initialValue: dom,
-                      decoration: const InputDecoration(
-                          labelText: 'Day of month',
-                          border: OutlineInputBorder()),
-                      items: [
-                        for (var d = 1; d <= 28; d++)
-                          DropdownMenuItem(value: d, child: Text('$d')),
-                      ],
-                      onChanged: (v) => setLocal(() => dom = v ?? 1),
-                    ),
-                  ],
-                  if (freq == 'advanced') ...[
-                    const SizedBox(height: AppTokens.s12),
-                    TextField(
-                      controller: cron,
-                      decoration: const InputDecoration(
-                          labelText: 'Cron expression',
-                          hintText: '0 9 * * *',
-                          border: OutlineInputBorder()),
-                      style: const TextStyle(fontFamily: AppTokens.fontMono),
-                    ),
-                  ],
-                  const SizedBox(height: AppTokens.s12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue:
-                              ['agent', 'plan'].contains(mode) ? mode : 'agent',
-                          decoration: const InputDecoration(
-                              labelText: 'Agent mode',
-                              border: OutlineInputBorder()),
-                          items: const [
-                            DropdownMenuItem(
-                                value: 'agent', child: Text('Agent')),
-                            DropdownMenuItem(
-                                value: 'plan', child: Text('Plan')),
-                          ],
-                          onChanged: (v) => setLocal(() => mode = v ?? 'agent'),
-                        ),
-                      ),
-                      const SizedBox(width: AppTokens.s8),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: agents.any((a) => a.folder == agentFolder)
-                              ? agentFolder
-                              : null,
-                          isExpanded: true,
-                          decoration: const InputDecoration(
-                              labelText: 'Profile',
-                              border: OutlineInputBorder()),
-                          hint: const Text('Default'),
-                          items: [
-                            for (final a in agents)
-                              DropdownMenuItem(
-                                  value: a.folder,
-                                  child: Text(a.name,
-                                      overflow: TextOverflow.ellipsis)),
-                          ],
-                          onChanged: (v) => setLocal(() => agentFolder = v),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTokens.s12),
-                  if (llm != null)
-                    DropdownButtonFormField<String?>(
-                      initialValue:
-                          llm.configs.any((m) => m.id == modelId) ? modelId : null,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                          labelText: 'Model', border: OutlineInputBorder()),
-                      items: [
-                        const DropdownMenuItem(
-                            value: null, child: Text('Active default')),
-                        for (final m in llm.configs)
-                          DropdownMenuItem(
-                              value: m.id,
-                              child: Text(m.label,
-                                  overflow: TextOverflow.ellipsis)),
-                      ],
-                      onChanged: (v) => setLocal(() => modelId = v),
-                    ),
-                  const SizedBox(height: AppTokens.s12),
-                  DropdownButtonFormField<String>(
-                    initialValue: ['active', 'paused', 'cancelled']
-                            .contains(status)
-                        ? status
-                        : 'active',
-                    decoration: const InputDecoration(
-                        labelText: 'Status', border: OutlineInputBorder()),
-                    items: const [
-                      DropdownMenuItem(value: 'active', child: Text('Active')),
-                      DropdownMenuItem(value: 'paused', child: Text('Paused')),
-                      DropdownMenuItem(
-                          value: 'cancelled', child: Text('Cancelled')),
-                    ],
-                    onChanged: (v) => setLocal(() => status = v ?? status),
-                  ),
-                  const SizedBox(height: AppTokens.s24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                          onPressed: () => Navigator.of(dctx).pop(false),
-                          child: const Text('Cancel')),
-                      const SizedBox(width: AppTokens.s8),
-                      FilledButton(
-                          onPressed: () => Navigator.of(dctx).pop(true),
-                          child: const Text('Save')),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
+      builder: (_) =>
+          ScheduleEditorDialog(existing: schedule, showStatus: true),
     );
-    if (ok != true) return;
-    final body = <String, dynamic>{
-      'prompt': prompt.text.trim(),
-      'agent_mode': mode,
-      'status': status,
-      if (agentFolder != null && agentFolder!.isNotEmpty)
-        'agent_folder': agentFolder,
-      if (modelId != null && modelId!.isNotEmpty) 'model_id': modelId,
-    };
-    if (freq == 'advanced') {
-      body['cron_advanced'] = cron.text.trim();
-    } else {
-      body['frequency'] = freq;
-      body['time_local'] = time.text.trim();
-      if (freq == 'weekly') body['weekday'] = weekday;
-      if (freq == 'monthly') body['day_of_month'] = dom;
-    }
-    await ref
-        .read(apiClientProvider)
-        .patch('/api/space/schedules/${widget.scheduleId}', body: body);
     await _load();
   }
 

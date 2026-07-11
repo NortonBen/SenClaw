@@ -708,7 +708,9 @@ class _ToolDetailRow extends StatefulWidget {
 }
 
 class _ToolDetailRowState extends State<_ToolDetailRow> {
-  bool _open = false;
+  // File-mutation tools reveal their diff immediately (web `shouldAutoExpand`
+  // parity) — the whole point of expanding the group is to read the change.
+  late bool _open = _isFileMutationTool(widget.tool.toolName);
 
   @override
   Widget build(BuildContext context) {
@@ -774,21 +776,197 @@ class _ToolDetailRowState extends State<_ToolDetailRow> {
             margin: const EdgeInsets.fromLTRB(
                 AppTokens.s12, 0, AppTokens.s12, AppTokens.s8),
             padding: const EdgeInsets.all(AppTokens.s8),
-            constraints: const BoxConstraints(maxHeight: 280),
+            constraints: const BoxConstraints(maxHeight: 320),
             decoration: BoxDecoration(
               color: c.sidebar,
               borderRadius: BorderRadius.circular(AppTokens.rSm),
               border: Border.all(color: c.border),
             ),
             child: SingleChildScrollView(
-              child: SelectableText(
-                t.toolContent,
-                style: const TextStyle(
-                    fontSize: 11, height: 1.4, fontFamily: AppTokens.fontMono),
-              ),
+              // Write/Edit tools carry a structured `{path, size, diff}` payload:
+              // render it as a colored code diff (web EditDetail parity) instead
+              // of a raw JSON dump. Falls back to the mono dump for other tools.
+              child: _DiffView.forTool(t) ??
+                  SelectableText(
+                    t.toolContent,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        height: 1.4,
+                        fontFamily: AppTokens.fontMono),
+                  ),
             ),
           ),
       ],
+    );
+  }
+}
+
+/// True for the file-mutation tools (native + MCP `*_file` variants) whose
+/// `content` payload should render as a code diff.
+bool _isFileMutationTool(String raw) {
+  final name = raw.contains('__') ? raw.split('__').last : raw;
+  return name == 'Write' ||
+      name == 'Edit' ||
+      name == 'NotebookEdit' ||
+      name == 'write_file' ||
+      name == 'edit_file';
+}
+
+/// Colored unified-diff view for Write/Edit tool results — the Flutter parity of
+/// the web `EditDetail`/`DiffBlock`. Renders `content.diff` line-by-line, coloring
+/// `+`/`-`/`@@`/header lines; falls back to `oldString`/`newString` when a
+/// structured diff isn't present. Returns null (via [forTool]) when the tool
+/// isn't a file mutation or carries nothing diffable, so the caller keeps the
+/// raw dump.
+class _DiffView extends StatelessWidget {
+  const _DiffView({required this.lines, this.path, this.plus, this.minus, this.size, this.newFile = false});
+
+  final List<String> lines;
+  final String? path;
+  final int? plus;
+  final int? minus;
+  final int? size;
+  final bool newFile;
+
+  static const int _maxLines = 400;
+
+  /// Build a diff view for [t] or null when not applicable.
+  static Widget? forTool(ChatMessage t) {
+    if (!_isFileMutationTool(t.toolName)) return null;
+    final c = t.toolContentMap;
+    if (c == null) return null;
+
+    final path = (c['path'] ?? c['filePath'])?.toString();
+    final size = c['size'] is num ? (c['size'] as num).toInt() : null;
+
+    // Path 1: native unified-diff string.
+    final diff = c['diff'];
+    if (diff is String && diff.isNotEmpty) {
+      final all = diff.split('\n');
+      var plus = 0, minus = 0;
+      for (final l in all) {
+        if (l.startsWith('+++') || l.startsWith('---')) continue;
+        if (l.startsWith('+')) {
+          plus++;
+        } else if (l.startsWith('-')) {
+          minus++;
+        }
+      }
+      return _DiffView(
+          lines: all, path: path, plus: plus, minus: minus, size: size);
+    }
+
+    // Path 2: oldString/newString (less-structured MCP edit payloads).
+    final oldStr = c['oldString'];
+    final newStr = c['newString'];
+    if (oldStr is String || newStr is String) {
+      if (oldStr is! String && newStr is String) {
+        // Write-style: preview of new content, no diff prefixes.
+        return _DiffView(
+            lines: newStr.split('\n'), path: path, size: size, newFile: true);
+      }
+      final oldLines = (oldStr is String ? oldStr : '').split('\n');
+      final newLines = (newStr is String ? newStr : '').split('\n');
+      return _DiffView(
+        lines: [
+          ...oldLines.map((l) => '-$l'),
+          ...newLines.map((l) => '+$l'),
+        ],
+        path: path,
+        plus: newLines.length,
+        minus: oldLines.length,
+        size: size,
+      );
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final shown = lines.length > _maxLines ? lines.sublist(0, _maxLines) : lines;
+    final extra = lines.length - shown.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header: path chip + +/- counts (or "New file").
+        Wrap(
+          spacing: AppTokens.s6,
+          runSpacing: AppTokens.s4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            if (path != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(path!,
+                    style: const TextStyle(
+                        fontSize: 11, fontFamily: AppTokens.fontMono)),
+              ),
+            if (newFile)
+              Text('New file',
+                  style: TextStyle(fontSize: 11, color: c.textMuted)),
+            if (plus != null)
+              Text('+$plus',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      color: AppTokens.success,
+                      fontWeight: FontWeight.w600)),
+            if (minus != null)
+              Text('−$minus',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      color: AppTokens.danger,
+                      fontWeight: FontWeight.w600)),
+            if (size != null)
+              Text('$size bytes',
+                  style: TextStyle(fontSize: 11, color: c.textMuted)),
+          ],
+        ),
+        const SizedBox(height: AppTokens.s6),
+        // Diff body: one colored row per line.
+        for (final l in shown) _diffLine(context, l),
+        if (extra > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('… $extra more lines',
+                style: TextStyle(fontSize: 11, color: c.textMuted)),
+          ),
+      ],
+    );
+  }
+
+  Widget _diffLine(BuildContext context, String l) {
+    final c = context.colors;
+    Color? bg;
+    Color fg = c.textSecondary;
+    if (newFile) {
+      // Plain new-file preview — no +/- coloring.
+    } else if (l.startsWith('+++') || l.startsWith('---')) {
+      fg = c.textMuted;
+    } else if (l.startsWith('@@')) {
+      fg = AppTokens.brand;
+      bg = AppTokens.brand.withValues(alpha: 0.10);
+    } else if (l.startsWith('+')) {
+      fg = AppTokens.success;
+      bg = AppTokens.success.withValues(alpha: 0.13);
+    } else if (l.startsWith('-')) {
+      fg = AppTokens.danger;
+      bg = AppTokens.danger.withValues(alpha: 0.13);
+    }
+    return Container(
+      width: double.infinity,
+      color: bg,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: SelectableText(
+        l.isEmpty ? ' ' : l,
+        style: TextStyle(
+            fontSize: 11, height: 1.5, fontFamily: AppTokens.fontMono, color: fg),
+      ),
     );
   }
 }

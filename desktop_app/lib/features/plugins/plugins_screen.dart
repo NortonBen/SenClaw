@@ -28,10 +28,13 @@ class SkillInfo {
         name,
         '${j['description'] ?? ''}',
         j['disabled'] != true,
-        // bundled/global sources are read-only (no uninstall) like web.
+        // bundled/global sources are read-only (no uninstall) like web. Skills
+        // installed by a Space App (source "app:<id>") are managed by that app —
+        // they can be enabled/disabled here but never edited or uninstalled.
         j['builtin'] == true ||
             source == 'bundled' ||
-            source.startsWith('global'),
+            source.startsWith('global') ||
+            source.startsWith('app:'),
         source);
   }
 }
@@ -101,20 +104,33 @@ class McpServer {
   final String transport;
   final bool enabled;
   final List<McpTool> tools;
-  const McpServer(this.name, this.description, this.builtin, this.transport,
-      this.enabled, this.tools);
 
-  factory McpServer.fromJson(Map<String, dynamic> j) => McpServer(
-    '${j['name'] ?? ''}',
-    '${j['description'] ?? ''}',
-    j['builtin'] == true,
-    '${j['transport'] ?? 'stdio'}',
-    j['enabled'] != false,
-    ((j['tools'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((m) => McpTool.fromJson(m.cast<String, dynamic>()))
-        .toList(),
-  );
+  /// Non-null when this server was registered by a Space App (the daemon injects
+  /// `SENCLAW_SPACE_APP_ID` into its env). Such servers are managed by the app —
+  /// they can be enabled/disabled here but never edited or deleted.
+  final String? appId;
+
+  const McpServer(this.name, this.description, this.builtin, this.transport,
+      this.enabled, this.tools, this.appId);
+
+  bool get fromSpaceApp => appId != null;
+
+  factory McpServer.fromJson(Map<String, dynamic> j) {
+    final env = (j['env'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final appId = '${env['SENCLAW_SPACE_APP_ID'] ?? ''}';
+    return McpServer(
+      '${j['name'] ?? ''}',
+      '${j['description'] ?? ''}',
+      j['builtin'] == true,
+      '${j['transport'] ?? 'stdio'}',
+      j['enabled'] != false,
+      ((j['tools'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => McpTool.fromJson(m.cast<String, dynamic>()))
+          .toList(),
+      appId.isEmpty ? null : appId,
+    );
+  }
 }
 
 
@@ -1832,6 +1848,10 @@ class _McpRowState extends ConsumerState<_McpRow> {
                 const SizedBox(width: AppTokens.s8),
                 _badge(c, 'built-in'),
               ],
+              if (server.fromSpaceApp) ...[
+                const SizedBox(width: AppTokens.s8),
+                _badge(c, 'app: ${server.appId}'),
+              ],
               const SizedBox(width: AppTokens.s8),
               _badge(c, server.transport),
             ],
@@ -1865,24 +1885,29 @@ class _McpRowState extends ConsumerState<_McpRow> {
                   TextButton(
                       onPressed: () => _act(ref, 'test'),
                       child: const Text('Test')),
-                  IconButton(
-                    tooltip: 'Edit',
-                    icon: const Icon(Icons.edit_outlined, size: 16),
-                    onPressed: () => showDialog(
-                        context: context,
-                        builder: (_) => _McpEditor(existing: server)),
-                  ),
-                  IconButton(
-                    tooltip: 'Delete',
-                    icon: const Icon(Icons.delete_outline,
-                        size: 16, color: AppTokens.danger),
-                    onPressed: () async {
-                      await ref
-                          .read(apiClientProvider)
-                          .delete('/api/mcp-servers/${server.name}');
-                      ref.invalidate(mcpServersProvider);
-                    },
-                  ),
+                  // Space-App servers are owned by their app: editing/deleting
+                  // them here would desync the app's manifest, so only the
+                  // enable/disable toggle + operational actions are offered.
+                  if (!server.fromSpaceApp) ...[
+                    IconButton(
+                      tooltip: 'Edit',
+                      icon: const Icon(Icons.edit_outlined, size: 16),
+                      onPressed: () => showDialog(
+                          context: context,
+                          builder: (_) => _McpEditor(existing: server)),
+                    ),
+                    IconButton(
+                      tooltip: 'Delete',
+                      icon: const Icon(Icons.delete_outline,
+                          size: 16, color: AppTokens.danger),
+                      onPressed: () async {
+                        await ref
+                            .read(apiClientProvider)
+                            .delete('/api/mcp-servers/${server.name}');
+                        ref.invalidate(mcpServersProvider);
+                      },
+                    ),
+                  ],
                 ],
               ],
             ),

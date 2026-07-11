@@ -1,0 +1,357 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/space_models.dart';
+import '../theme/tokens.dart';
+import '../features/space/space_providers.dart';
+import '../features/chat/agents_provider.dart';
+import '../features/chat/new_chat_dialog.dart' show llmConfigsProvider;
+
+/// Shared schedule create/edit dialog used from both the Space Schedules tab
+/// and the session-level schedule info popup.
+///
+/// When [existing] is non-null the dialog edits that schedule (PATCH); when
+/// null it creates a new one (POST). When [showStatus] is true an extra
+/// status dropdown (active/paused/cancelled) is shown — useful for the
+/// session-level popup.
+class ScheduleEditorDialog extends ConsumerStatefulWidget {
+  const ScheduleEditorDialog({super.key, this.existing, this.showStatus = false});
+  final SpaceSchedule? existing;
+  final bool showStatus;
+
+  @override
+  ConsumerState<ScheduleEditorDialog> createState() =>
+      _ScheduleEditorDialogState();
+}
+
+class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
+  late final _prompt = TextEditingController(
+      text: widget.existing?.prompt.isNotEmpty == true
+          ? widget.existing!.prompt
+          : (widget.existing?.label ?? ''));
+  late final _time = TextEditingController(text: _initTime());
+  late final _cron = TextEditingController(text: _initCronRaw());
+  late String _freq = _initFreq();
+  late int _weekday = _initWeekday();
+  late int _dom = _initDom();
+  late String _mode = widget.existing?.agentMode.isNotEmpty == true
+      ? widget.existing!.agentMode
+      : 'agent';
+  late String _status = widget.existing?.status.isNotEmpty == true
+      ? widget.existing!.status
+      : 'active';
+  String? _agentFolder;
+  String? _modelId;
+
+  static const _freqs = [
+    'daily',
+    'weekdays',
+    'weekly',
+    'monthly',
+    'once',
+    'advanced',
+  ];
+  static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  String _initFreq() {
+    final cron = widget.existing?.scheduleValue ?? '';
+    final parts = cron.trim().split(RegExp(r'\s+'));
+    if (parts.length != 5) return cron.isNotEmpty ? 'advanced' : 'daily';
+    final dom = parts[2], dow = parts[4];
+    if (dom == '*' && dow == '*') return 'daily';
+    if (dom == '*' && dow == '1-5') return 'weekdays';
+    if (dom == '*' && RegExp(r'^\d$').hasMatch(dow)) return 'weekly';
+    if (RegExp(r'^\d+$').hasMatch(dom) && dow == '*') return 'monthly';
+    return 'advanced';
+  }
+
+  String _initTime() {
+    final cron = widget.existing?.scheduleValue ?? '';
+    final parts = cron.trim().split(RegExp(r'\s+'));
+    if (parts.length == 5) {
+      final m = int.tryParse(parts[0]);
+      final h = int.tryParse(parts[1]);
+      if (m != null && h != null) {
+        return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+      }
+    }
+    return '09:00';
+  }
+
+  int _initWeekday() {
+    final cron = widget.existing?.scheduleValue ?? '';
+    final parts = cron.trim().split(RegExp(r'\s+'));
+    if (parts.length == 5 && RegExp(r'^\d$').hasMatch(parts[4])) {
+      final dow = int.tryParse(parts[4]) ?? 0;
+      return dow == 0 ? 7 : dow;
+    }
+    return 1;
+  }
+
+  int _initDom() {
+    final cron = widget.existing?.scheduleValue ?? '';
+    final parts = cron.trim().split(RegExp(r'\s+'));
+    if (parts.length == 5 && RegExp(r'^\d+$').hasMatch(parts[2])) {
+      return int.tryParse(parts[2]) ?? 1;
+    }
+    return 1;
+  }
+
+  String _initCronRaw() {
+    final cron = widget.existing?.scheduleValue ?? '';
+    final parts = cron.trim().split(RegExp(r'\s+'));
+    if (parts.length != 5) return cron;
+    final dom = parts[2], dow = parts[4];
+    if (dom == '*' && dow == '*') return '';
+    if (dom == '*' && dow == '1-5') return '';
+    if (dom == '*' && RegExp(r'^\d$').hasMatch(dow)) return '';
+    if (RegExp(r'^\d+$').hasMatch(dom) && dow == '*') return '';
+    return cron;
+  }
+
+  @override
+  void dispose() {
+    _prompt.dispose();
+    _time.dispose();
+    _cron.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final body = <String, dynamic>{
+      'prompt': _prompt.text.trim(),
+      'label': _prompt.text.trim().split('\n').first,
+      'agent_mode': _mode,
+      if (widget.showStatus) 'status': _status,
+      if (_agentFolder != null && _agentFolder!.isNotEmpty)
+        'agent_folder': _agentFolder,
+      if (_modelId != null && _modelId!.isNotEmpty) 'model_id': _modelId,
+    };
+    if (_freq == 'advanced') {
+      body['cron_advanced'] = _cron.text.trim();
+    } else {
+      body['frequency'] = _freq;
+      body['time_local'] = _time.text.trim();
+      if (_freq == 'weekly') body['weekday'] = _weekday;
+      if (_freq == 'monthly') body['day_of_month'] = _dom;
+    }
+    final api = ref.read(spaceApiProvider);
+    if (widget.existing != null) {
+      await api.updateSchedule(widget.existing!.id, body);
+    } else {
+      await api.createSchedule(body);
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return AlertDialog(
+      backgroundColor: c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTokens.rXl)),
+      title: Row(children: [
+        Icon(Icons.event_repeat_outlined, size: 20, color: c.accent),
+        const SizedBox(width: AppTokens.s8),
+        Text(widget.existing == null ? 'New schedule' : 'Edit schedule'),
+      ]),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: _prompt,
+                minLines: 3,
+                maxLines: 8,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(fontSize: 14, height: 1.4),
+                decoration: InputDecoration(
+                  labelText: 'Prompt',
+                  alignLabelWithHint: true,
+                  hintText: 'Describe the task to run on schedule…',
+                  filled: true,
+                  fillColor: c.surfaceAlt,
+                  contentPadding: const EdgeInsets.all(AppTokens.s12),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    borderSide: BorderSide(color: c.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    borderSide: BorderSide(color: c.accent, width: 1.5),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _freq,
+                      decoration: const InputDecoration(
+                          labelText: 'Frequency',
+                          border: OutlineInputBorder()),
+                      items: [
+                        for (final f in _freqs)
+                          DropdownMenuItem(value: f, child: Text(f)),
+                      ],
+                      onChanged: (v) => setState(() => _freq = v ?? 'daily'),
+                    ),
+                  ),
+                  const SizedBox(width: AppTokens.s8),
+                  if (_freq != 'advanced')
+                    SizedBox(
+                      width: 110,
+                      child: TextField(
+                        controller: _time,
+                        decoration: const InputDecoration(
+                            labelText: 'Time',
+                            hintText: 'HH:MM',
+                            border: OutlineInputBorder()),
+                      ),
+                    ),
+                ],
+              ),
+              if (_freq == 'weekly') ...[
+                const SizedBox(height: AppTokens.s12),
+                DropdownButtonFormField<int>(
+                  initialValue: _weekday,
+                  decoration: const InputDecoration(
+                      labelText: 'Weekday', border: OutlineInputBorder()),
+                  items: [
+                    for (var i = 0; i < 7; i++)
+                      DropdownMenuItem(
+                          value: i + 1, child: Text(_weekdays[i])),
+                  ],
+                  onChanged: (v) => setState(() => _weekday = v ?? 1),
+                ),
+              ],
+              if (_freq == 'monthly') ...[
+                const SizedBox(height: AppTokens.s12),
+                DropdownButtonFormField<int>(
+                  initialValue: _dom,
+                  decoration: const InputDecoration(
+                      labelText: 'Day of month',
+                      border: OutlineInputBorder()),
+                  items: [
+                    for (var d = 1; d <= 28; d++)
+                      DropdownMenuItem(value: d, child: Text('$d')),
+                  ],
+                  onChanged: (v) => setState(() => _dom = v ?? 1),
+                ),
+              ],
+              if (_freq == 'advanced') ...[
+                const SizedBox(height: AppTokens.s12),
+                TextField(
+                  controller: _cron,
+                  decoration: const InputDecoration(
+                      labelText: 'Cron expression',
+                      hintText: '0 9 * * *',
+                      border: OutlineInputBorder()),
+                  style: const TextStyle(fontFamily: AppTokens.fontMono),
+                ),
+              ],
+              const SizedBox(height: AppTokens.s12),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _mode,
+                      decoration: const InputDecoration(
+                          labelText: 'Agent mode',
+                          border: OutlineInputBorder()),
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'agent', child: Text('Agent')),
+                        DropdownMenuItem(
+                            value: 'plan', child: Text('Plan')),
+                      ],
+                      onChanged: (v) =>
+                          setState(() => _mode = v ?? 'agent'),
+                    ),
+                  ),
+                  const SizedBox(width: AppTokens.s8),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _agentFolder,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                          labelText: 'Profile (agent)',
+                          border: OutlineInputBorder()),
+                      hint: const Text('Default'),
+                      items: [
+                        for (final a in ref
+                            .watch(agentsProvider)
+                            .where((a) => !a.isSchedule))
+                          DropdownMenuItem(
+                              value: a.folder, child: Text(a.name)),
+                      ],
+                      onChanged: (v) =>
+                          setState(() => _agentFolder = v),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppTokens.s12),
+              ref.watch(llmConfigsProvider).maybeWhen(
+                    data: (d) => DropdownButtonFormField<String?>(
+                      initialValue: _modelId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                          labelText: 'Model',
+                          border: OutlineInputBorder()),
+                      items: [
+                        const DropdownMenuItem(
+                            value: null,
+                            child: Text('Active default')),
+                        for (final m in d.configs)
+                          DropdownMenuItem(
+                              value: m.id,
+                              child: Text(m.label,
+                                  overflow: TextOverflow.ellipsis)),
+                      ],
+                      onChanged: (v) =>
+                          setState(() => _modelId = v),
+                    ),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+              if (widget.showStatus && widget.existing != null) ...[
+                const SizedBox(height: AppTokens.s12),
+                DropdownButtonFormField<String>(
+                  initialValue:
+                      ['active', 'paused', 'cancelled'].contains(_status)
+                          ? _status
+                          : 'active',
+                  decoration: const InputDecoration(
+                      labelText: 'Status', border: OutlineInputBorder()),
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'active', child: Text('Active')),
+                    DropdownMenuItem(
+                        value: 'paused', child: Text('Paused')),
+                    DropdownMenuItem(
+                        value: 'cancelled', child: Text('Cancelled')),
+                  ],
+                  onChanged: (v) =>
+                      setState(() => _status = v ?? _status),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _prompt.text.trim().isEmpty ? null : _save,
+          child: Text(widget.existing == null ? 'Create' : 'Save'),
+        ),
+      ],
+    );
+  }
+}

@@ -72,6 +72,14 @@ class ChatMessage {
     }
   }
 
+  /// Structured tool `content` when the daemon sent a JSON object (Write/Edit
+  /// emit `{path, size, diff, …}`). Null when content is a bare string or
+  /// absent — lets the renderer pick a rich diff view over the raw dump.
+  Map<String, dynamic>? get toolContentMap {
+    final c = data['content'];
+    return c is Map ? c.cast<String, dynamic>() : null;
+  }
+
   // ── Permission accessors ───────────────────────────────────────────────
   String get requestId => '${data['requestId'] ?? ''}';
   String get permTitle => '${data['title'] ?? ''}';

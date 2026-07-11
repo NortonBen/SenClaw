@@ -81,6 +81,8 @@ class SpaceSchedule {
   final String prompt;
   final String groupFolder;
   final String agentMode;
+  final String scheduleValue;
+  final String status;
   final String? nextRun;
   final String? lastRun;
   final String? lastStatus;
@@ -91,6 +93,8 @@ class SpaceSchedule {
     this.prompt = '',
     this.groupFolder = '',
     this.agentMode = '',
+    this.scheduleValue = '',
+    this.status = 'active',
     this.nextRun,
     this.lastRun,
     this.lastStatus,
@@ -102,6 +106,8 @@ class SpaceSchedule {
     prompt: '${j['prompt'] ?? j['label'] ?? ''}',
     groupFolder: '${j['group_folder'] ?? ''}',
     agentMode: '${j['agent_mode'] ?? ''}',
+    scheduleValue: '${j['schedule_value'] ?? ''}',
+    status: '${j['status'] ?? 'active'}',
     nextRun: j['next_run'] as String?,
     lastRun: j['last_run'] as String?,
     lastStatus: j['last_status'] as String?,

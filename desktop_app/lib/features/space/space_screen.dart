@@ -7,10 +7,9 @@ import '../../models/space_models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
 import '../../widgets/embedded_web.dart';
+import '../../widgets/schedule_editor.dart';
 import 'space_providers.dart';
 import '../cowork/cowork_screen.dart';
-import '../chat/agents_provider.dart';
-import '../chat/new_chat_dialog.dart' show llmConfigsProvider;
 
 /// The host theme as the Space-app bridge string ('dark' | 'light'). Passed to
 /// [embeddedWebView], which delivers it to the app via postMessage (the app's
@@ -1834,7 +1833,7 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
               const SizedBox(width: AppTokens.s8),
               FilledButton.icon(
                 onPressed: () => showDialog(
-                    context: context, builder: (_) => const _ScheduleEditor()),
+                    context: context, builder: (_) => const ScheduleEditorDialog()),
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('New schedule'),
                 style: FilledButton.styleFrom(
@@ -1862,78 +1861,44 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
                     child: Text('No schedules',
                         style: TextStyle(color: c.textMuted)));
               }
+              final active = list.where((s) => s.status == 'active').toList()
+                ..sort((a, b) {
+                  final va = a.nextRun != null ? DateTime.tryParse(a.nextRun!)?.millisecondsSinceEpoch ?? 0 : 0;
+                  final vb = b.nextRun != null ? DateTime.tryParse(b.nextRun!)?.millisecondsSinceEpoch ?? 0 : 0;
+                  return va.compareTo(vb);
+                });
+              final paused = list.where((s) => s.status == 'paused').toList();
+              final other = list.where((s) => s.status != 'active' && s.status != 'paused').toList();
+              final sections = [
+                if (active.isNotEmpty) ('Đang chạy (${active.length})', active),
+                if (paused.isNotEmpty) ('Tạm dừng (${paused.length})', paused),
+                if (other.isNotEmpty) ('Khác (${other.length})', other),
+              ];
               return ListView.builder(
                 padding: const EdgeInsets.all(AppTokens.s16),
-                itemCount: list.length,
+                itemCount: sections.fold<int>(0, (sum, s) => sum + 1 + s.$2.length),
                 itemBuilder: (_, i) {
-                  final s = list[i];
-                  final label = s.label.split('\n').first;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: AppTokens.s8),
-                    padding: const EdgeInsets.all(AppTokens.s12),
-                    decoration: BoxDecoration(
-                      color: c.surface,
-                      border: Border.all(color: c.border),
-                      borderRadius: BorderRadius.circular(AppTokens.rMd),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.schedule,
-                            size: 16, color: AppTokens.brandAlt),
-                        const SizedBox(width: AppTokens.s12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      color: c.textPrimary,
-                                      fontWeight: FontWeight.w600)),
-                              Text(
-                                  'next: ${_fmtLocalTs(s.nextRun) ?? '—'}  ·  ${s.lastStatus ?? ''}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      color: c.textMuted, fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Run now',
-                          icon: const Icon(Icons.play_arrow, size: 18),
-                          onPressed: () async {
-                            await ref.read(spaceApiProvider).runSchedule(s.id);
-                            // The daemon rewinds next_run so its 30s poller
-                            // picks the task up — refresh so the list shows it.
-                            ref.invalidate(schedulesProvider);
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text(
-                                        'Queued — runs within ~30s (scheduler poll)')),
-                              );
-                            }
-                          },
-                        ),
-                        IconButton(
-                          tooltip: 'Edit',
-                          icon: const Icon(Icons.edit_outlined, size: 16),
-                          onPressed: () => showDialog(
-                              context: context,
-                              builder: (_) => _ScheduleEditor(existing: s)),
-                        ),
-                        IconButton(
-                          tooltip: 'Delete',
-                          icon: const Icon(Icons.delete_outline,
-                              size: 16, color: AppTokens.danger),
-                          onPressed: () =>
-                              ref.read(spaceApiProvider).deleteSchedule(s.id),
-                        ),
-                      ],
-                    ),
-                  );
+                  var idx = i;
+                  for (final (title, items) in sections) {
+                    if (idx == 0) {
+                      return Padding(
+                        padding: const EdgeInsets.only(
+                            bottom: AppTokens.s8, top: AppTokens.s4),
+                        child: Text(title,
+                            style: TextStyle(
+                                color: c.textMuted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.5)),
+                      );
+                    }
+                    idx--;
+                    if (idx < items.length) {
+                      return _ScheduleCard(schedule: items[idx]);
+                    }
+                    idx -= items.length;
+                  }
+                  return const SizedBox.shrink();
                 },
               );
             },
@@ -1944,236 +1909,195 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
   }
 }
 
-/// Create/edit a scheduled task (web ScheduleDetailPanel): prompt + frequency
-/// (daily/weekly/monthly/once/advanced cron) + time + agent mode.
-class _ScheduleEditor extends ConsumerStatefulWidget {
-  const _ScheduleEditor({this.existing});
-  final SpaceSchedule? existing;
-  @override
-  ConsumerState<_ScheduleEditor> createState() => _ScheduleEditorState();
+String _describeCron(String cron) {
+  final parts = cron.trim().split(RegExp(r'\s+'));
+  if (parts.length != 5) return cron;
+  final m = parts[0], h = parts[1], dom = parts[2], dow = parts[4];
+  final hhmm = '${h.padLeft(2, '0')}:${m.padLeft(2, '0')}';
+  const dayLabels = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+  if (dom == '*' && dow == '*') return 'Mỗi ngày · $hhmm';
+  if (dom == '*' && dow == '1-5') return 'Th 2–6 · $hhmm';
+  if (dom == '*' && RegExp(r'^\d$').hasMatch(dow)) {
+    final d = int.tryParse(dow) ?? 0;
+    return 'Mỗi ${d < dayLabels.length ? dayLabels[d] : dow} · $hhmm';
+  }
+  if (RegExp(r'^\d+$').hasMatch(dom) && dow == '*') {
+    return 'Ngày $dom mỗi tháng · $hhmm';
+  }
+  return cron;
 }
 
-class _ScheduleEditorState extends ConsumerState<_ScheduleEditor> {
-  late final _prompt = TextEditingController(
-      text: widget.existing?.prompt.isNotEmpty == true
-          ? widget.existing!.prompt
-          : (widget.existing?.label ?? ''));
-  final _time = TextEditingController(text: '09:00');
-  final _cron = TextEditingController();
-  String _freq = 'daily';
-  int _weekday = 1; // 1=Mon
-  int _dom = 1;
-  late String _mode =
-      widget.existing?.agentMode.isNotEmpty == true
-          ? widget.existing!.agentMode
-          : 'agent';
-  String? _agentFolder; // profile to run as
-  String? _modelId;
-
-  static const _freqs = ['daily', 'weekly', 'monthly', 'once', 'advanced'];
-  static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+class _ScheduleCard extends ConsumerWidget {
+  const _ScheduleCard({required this.schedule});
+  final SpaceSchedule schedule;
 
   @override
-  void dispose() {
-    _prompt.dispose();
-    _time.dispose();
-    _cron.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    final body = <String, dynamic>{
-      'prompt': _prompt.text.trim(),
-      'label': _prompt.text.trim().split('\n').first,
-      'agent_mode': _mode,
-      if (_agentFolder != null && _agentFolder!.isNotEmpty)
-        'agent_folder': _agentFolder,
-      if (_modelId != null && _modelId!.isNotEmpty) 'model_id': _modelId,
-    };
-    if (_freq == 'advanced') {
-      body['cron_advanced'] = _cron.text.trim();
-    } else {
-      body['frequency'] = _freq;
-      body['time_local'] = _time.text.trim();
-      if (_freq == 'weekly') body['weekday'] = _weekday;
-      if (_freq == 'monthly') body['day_of_month'] = _dom;
-    }
-    final api = ref.read(spaceApiProvider);
-    if (widget.existing != null) {
-      await api.updateSchedule(widget.existing!.id, body);
-    } else {
-      await api.createSchedule(body);
-    }
-    if (mounted) Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.existing == null ? 'New schedule' : 'Edit schedule'),
-      content: SizedBox(
-        width: 460,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: _prompt,
-                minLines: 3,
-                maxLines: 8,
-                onChanged: (_) => setState(() {}),
-                style: const TextStyle(fontSize: 14, height: 1.4),
-                decoration: InputDecoration(
-                  labelText: 'Prompt',
-                  alignLabelWithHint: true,
-                  hintText: 'Describe the task to run on schedule…',
-                  filled: true,
-                  fillColor: context.colors.surfaceAlt,
-                  contentPadding: const EdgeInsets.all(AppTokens.s12),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppTokens.rMd),
-                    borderSide: BorderSide(color: context.colors.border),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppTokens.rMd),
-                    borderSide:
-                        BorderSide(color: context.colors.accent, width: 1.5),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppTokens.s12),
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _freq,
-                      decoration: const InputDecoration(
-                          labelText: 'Frequency',
-                          border: OutlineInputBorder()),
-                      items: [
-                        for (final f in _freqs)
-                          DropdownMenuItem(value: f, child: Text(f)),
-                      ],
-                      onChanged: (v) => setState(() => _freq = v ?? 'daily'),
-                    ),
-                  ),
-                  const SizedBox(width: AppTokens.s8),
-                  if (_freq != 'advanced')
-                    SizedBox(
-                      width: 110,
-                      child: TextField(
-                        controller: _time,
-                        decoration: const InputDecoration(
-                            labelText: 'Time', hintText: 'HH:MM',
-                            border: OutlineInputBorder()),
-                      ),
-                    ),
-                ],
-              ),
-              if (_freq == 'weekly') ...[
-                const SizedBox(height: AppTokens.s12),
-                DropdownButtonFormField<int>(
-                  initialValue: _weekday,
-                  decoration: const InputDecoration(
-                      labelText: 'Weekday', border: OutlineInputBorder()),
-                  items: [
-                    for (var i = 0; i < 7; i++)
-                      DropdownMenuItem(
-                          value: i + 1, child: Text(_weekdays[i])),
-                  ],
-                  onChanged: (v) => setState(() => _weekday = v ?? 1),
-                ),
-              ],
-              if (_freq == 'monthly') ...[
-                const SizedBox(height: AppTokens.s12),
-                DropdownButtonFormField<int>(
-                  initialValue: _dom,
-                  decoration: const InputDecoration(
-                      labelText: 'Day of month',
-                      border: OutlineInputBorder()),
-                  items: [
-                    for (var d = 1; d <= 28; d++)
-                      DropdownMenuItem(value: d, child: Text('$d')),
-                  ],
-                  onChanged: (v) => setState(() => _dom = v ?? 1),
-                ),
-              ],
-              if (_freq == 'advanced') ...[
-                const SizedBox(height: AppTokens.s12),
-                TextField(
-                  controller: _cron,
-                  decoration: const InputDecoration(
-                      labelText: 'Cron expression',
-                      hintText: '0 9 * * *',
-                      border: OutlineInputBorder()),
-                ),
-              ],
-              const SizedBox(height: AppTokens.s12),
-              DropdownButtonFormField<String>(
-                initialValue: _mode,
-                decoration: const InputDecoration(
-                    labelText: 'Agent mode', border: OutlineInputBorder()),
-                items: const [
-                  DropdownMenuItem(value: 'agent', child: Text('Agent')),
-                  DropdownMenuItem(value: 'plan', child: Text('Plan')),
-                ],
-                onChanged: (v) => setState(() => _mode = v ?? 'agent'),
-              ),
-              const SizedBox(height: AppTokens.s12),
-              // Profile (agent) to run the schedule.
-              DropdownButtonFormField<String>(
-                initialValue: _agentFolder,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                    labelText: 'Profile (agent)',
-                    border: OutlineInputBorder()),
-                hint: const Text('Default'),
-                items: [
-                  for (final a in ref
-                      .watch(agentsProvider)
-                      .where((a) => !a.isSchedule))
-                    DropdownMenuItem(value: a.folder, child: Text(a.name)),
-                ],
-                onChanged: (v) => setState(() => _agentFolder = v),
-              ),
-              const SizedBox(height: AppTokens.s12),
-              // Model.
-              ref.watch(llmConfigsProvider).maybeWhen(
-                    data: (d) => DropdownButtonFormField<String?>(
-                      initialValue: _modelId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                          labelText: 'Model', border: OutlineInputBorder()),
-                      items: [
-                        const DropdownMenuItem(
-                            value: null, child: Text('Active default')),
-                        for (final m in d.configs)
-                          DropdownMenuItem(
-                              value: m.id,
-                              child: Text(m.label,
-                                  overflow: TextOverflow.ellipsis)),
-                      ],
-                      onChanged: (v) => setState(() => _modelId = v),
-                    ),
-                    orElse: () => const SizedBox.shrink(),
-                  ),
-            ],
-          ),
-        ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final label = schedule.label.split('\n').first;
+    final isActive = schedule.status == 'active';
+    final isPaused = schedule.status == 'paused';
+    final cronDesc = schedule.scheduleValue.isNotEmpty
+        ? _describeCron(schedule.scheduleValue)
+        : null;
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppTokens.s8),
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(
+            color: isActive ? c.accent.withValues(alpha: 0.4) : c.border),
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
       ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
-        FilledButton(
-          onPressed: _prompt.text.trim().isEmpty ? null : _save,
-          child: Text(widget.existing == null ? 'Create' : 'Save'),
-        ),
-      ],
+      child: Row(
+        children: [
+          Icon(Icons.schedule,
+              size: 16,
+              color: isActive
+                  ? AppTokens.brandAlt
+                  : isPaused
+                      ? AppTokens.warning
+                      : c.textMuted),
+          const SizedBox(width: AppTokens.s12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? AppTokens.success.withValues(alpha: 0.15)
+                            : isPaused
+                                ? AppTokens.warning.withValues(alpha: 0.15)
+                                : c.surfaceAlt,
+                        borderRadius: BorderRadius.circular(AppTokens.rSm),
+                      ),
+                      child: Text(
+                          isActive
+                              ? 'Đang chạy'
+                              : isPaused
+                                  ? 'Tạm dừng'
+                                  : schedule.status,
+                          style: TextStyle(
+                              color: isActive
+                                  ? AppTokens.success
+                                  : isPaused
+                                      ? AppTokens.warning
+                                      : c.textMuted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                    if (cronDesc != null) ...[
+                      const SizedBox(width: AppTokens.s8),
+                      Text(cronDesc,
+                          style: TextStyle(color: c.textMuted, fontSize: 11)),
+                    ],
+                    if (schedule.lastStatus == 'success') ...[
+                      const SizedBox(width: AppTokens.s6),
+                      Icon(Icons.check_circle, size: 12, color: AppTokens.success),
+                    ] else if (schedule.lastStatus == 'error') ...[
+                      const SizedBox(width: AppTokens.s6),
+                      Icon(Icons.cancel, size: 12, color: AppTokens.danger),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: c.textPrimary, fontWeight: FontWeight.w600)),
+                if (schedule.prompt.isNotEmpty &&
+                    schedule.prompt != schedule.label)
+                  Text(schedule.prompt,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textMuted, fontSize: 12)),
+                Row(
+                  children: [
+                    if (schedule.nextRun != null && isActive)
+                      Text(
+                          'Lần tới: ${_fmtLocalTs(schedule.nextRun) ?? '—'}',
+                          style: TextStyle(color: c.textMuted, fontSize: 11)),
+                    if (schedule.lastRun != null) ...[
+                      if (schedule.nextRun != null && isActive)
+                        Text('  ·  ',
+                            style:
+                                TextStyle(color: c.textMuted, fontSize: 11)),
+                      Text('Lần cuối: ${_fmtLocalTs(schedule.lastRun) ?? '—'}',
+                          style: TextStyle(color: c.textMuted, fontSize: 11)),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (isActive)
+            IconButton(
+              tooltip: 'Tạm dừng',
+              icon: const Icon(Icons.pause_circle_outline, size: 18),
+              onPressed: () async {
+                await ref
+                    .read(spaceApiProvider)
+                    .updateSchedule(schedule.id, {'status': 'paused'});
+                ref.invalidate(schedulesProvider);
+              },
+            )
+          else if (isPaused)
+            IconButton(
+              tooltip: 'Kích hoạt',
+              icon: Icon(Icons.play_circle_outline,
+                  size: 18, color: AppTokens.success),
+              onPressed: () async {
+                await ref
+                    .read(spaceApiProvider)
+                    .updateSchedule(schedule.id, {'status': 'active'});
+                ref.invalidate(schedulesProvider);
+              },
+            ),
+          if (isActive)
+            IconButton(
+              tooltip: 'Chạy ngay',
+              icon: Icon(Icons.bolt, size: 18, color: c.accent),
+              onPressed: () async {
+                await ref.read(spaceApiProvider).runSchedule(schedule.id);
+                ref.invalidate(schedulesProvider);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content:
+                            Text('Đã thêm vào hàng đợi — chạy trong vài giây')),
+                  );
+                }
+              },
+            ),
+          IconButton(
+            tooltip: 'Sửa',
+            icon: const Icon(Icons.edit_outlined, size: 16),
+            onPressed: () async {
+              await showDialog(
+                  context: context,
+                  builder: (_) => ScheduleEditorDialog(existing: schedule));
+              ref.invalidate(schedulesProvider);
+            },
+          ),
+          IconButton(
+            tooltip: 'Xoá',
+            icon: const Icon(Icons.delete_outline,
+                size: 16, color: AppTokens.danger),
+            onPressed: () =>
+                ref.read(spaceApiProvider).deleteSchedule(schedule.id),
+          ),
+        ],
+      ),
     );
   }
 }
+
 
 /// Fullscreen overlay for a Space app's embedded view.
 class _AppFullscreen extends StatelessWidget {
