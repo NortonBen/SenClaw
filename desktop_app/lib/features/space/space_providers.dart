@@ -123,21 +123,35 @@ final pinnedAppsProvider =
 /// Installed Space apps with their resolved iframe URL (mirrors web SpacePage).
 final spaceAppsProvider = FutureProvider<List<SpaceApp>>((ref) async {
   ref.watch(spaceRevProvider);
-  final base = ref.read(appConfigProvider).httpBase;
+  final cfg = ref.read(appConfigProvider);
+  final base = cfg.httpBase;
   final r = await ref.read(apiClientProvider).get('/api/space/apps');
   return _asMaps(r).map((row) {
     final m = (row['manifest'] as Map?)?.cast<String, dynamic>() ?? const {};
     final integ = (m['integration'] as Map?)?.cast<String, dynamic>() ??
         {'type': 'iframe', 'url': m['url'] ?? '/'};
-    final runtimeUrl =
-        ((m['runtime'] as Map?)?.cast<String, dynamic>())?['url'] as String?;
+    final runtime = (m['runtime'] as Map?)?.cast<String, dynamic>();
+    final runtimeUrl = runtime?['url'] as String?;
+    final runtimePort = (runtime?['port'] as num?)?.toInt();
+    final isServer = runtime?['kind'] == 'server';
     final integUrl = '${integ['url'] ?? '/'}';
+    final path = integUrl.startsWith('/') ? integUrl : '/$integUrl';
     var url = runtimeUrl != null
         ? '${runtimeUrl.replaceAll(RegExp(r'/$'), '')}$integUrl'
         : integUrl;
-    // Resolve a relative URL against the daemon, with a proxy fallback.
-    if (url.startsWith('/')) {
-      url = '$base$url';
+    if (runtimeUrl == null && isServer && runtimePort != null) {
+      // Server apps run as a local process on their OWN port. The desktop
+      // always talks to the daemon on localhost, so reach the app DIRECTLY at
+      // its origin — NOT the daemon root ('$base/', which is SenClaw's own UI)
+      // and NOT the daemon's HTTP reverse-proxy. Direct access is also the only
+      // thing that makes an app's own WebSocket work (e.g. mini-browser's live
+      // view): the reqwest-based /proxy/ endpoint can't tunnel a WS upgrade.
+      url = 'http://${cfg.host}:$runtimePort$path';
+    } else if (url.startsWith('/')) {
+      // Static/esm apps served by the daemon; '/' means the app root → proxy.
+      url = url == '/'
+          ? '$base/api/space/apps/${row['id']}/proxy/'
+          : '$base$url';
     } else if (!url.startsWith('http')) {
       url = '$base/api/space/apps/${row['id']}/proxy/';
     }
