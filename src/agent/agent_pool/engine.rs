@@ -39,6 +39,11 @@ pub struct ZenCoreApi {
     /// Per-jid LLM override (entry id in the global `llmConfigs` list). Cached so
     /// a lazily created engine picks up the group's model in `ensure_engine`.
     model_overrides: Mutex<HashMap<String, String>>,
+    /// Per-jid working directory. Cached so a lazily created engine picks up the
+    /// group's workspace dir in `ensure_engine`. Without this the engine keeps
+    /// the empty `ZenCoreOptions` default and every Bash spawn fails with ENOENT
+    /// (`current_dir("")`), so the whole "code" feature is dead on a fresh chat.
+    working_dirs: Mutex<HashMap<String, String>>,
     /// Callback invoked when an engine emits a plan-exit request. Caller
     /// (lib.rs) uses it to broadcast the event over WS so the UI can render
     /// the plan-approval modal. `Arc<Mutex>` so spawned event loops can hold
@@ -78,6 +83,7 @@ impl ZenCoreApi {
             workbench_bridge: Mutex::new(None),
             bot_tokens: Mutex::new(HashMap::new()),
             model_overrides: Mutex::new(HashMap::new()),
+            working_dirs: Mutex::new(HashMap::new()),
             on_plan_exit_request: Arc::new(Mutex::new(None)),
             on_tool_execution: Arc::new(Mutex::new(None)),
         }
@@ -134,9 +140,23 @@ impl ZenCoreApi {
         if let Some(engine) = engines.get(jid) {
             return engine.clone();
         }
+        // Seed the working dir from the per-jid cache (populated by
+        // `set_working_dir` before the engine is lazily created). Fall back to a
+        // valid directory rather than the empty default — an empty `working_dir`
+        // makes every Bash `current_dir("")` spawn fail with ENOENT, which breaks
+        // the code feature entirely.
+        let working_dir = self
+            .working_dirs
+            .lock()
+            .unwrap()
+            .get(jid)
+            .cloned()
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(default_working_dir);
         let opts = ZenCoreOptions {
             instance_id: jid.to_string(),
             model_config_id: self.model_overrides.lock().unwrap().get(jid).cloned(),
+            working_dir,
             ..Default::default()
         };
         let engine = ZenEngine::new(opts, self.mcp_manager.clone());
@@ -411,12 +431,22 @@ impl CoreApi for ZenCoreApi {
     }
 
     fn set_working_dir(&self, jid: &str, dir: &str) {
+        // Cache first so a not-yet-created engine picks the dir up in
+        // `ensure_engine` (mirrors the `model_overrides` pattern). Ignore empty
+        // dirs — they would re-introduce the `current_dir("")` ENOENT bug.
+        if !dir.is_empty() {
+            self.working_dirs
+                .lock()
+                .unwrap()
+                .insert(jid.to_string(), dir.to_string());
+        }
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.set_working_dir(dir);
         }
     }
 
     fn clear_working_dir(&self, jid: &str) {
+        self.working_dirs.lock().unwrap().remove(jid);
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.clear_working_dir();
         }
@@ -685,5 +715,36 @@ impl CoreApi for ZenCoreApi {
         self.with_handlers(jid, |entry| {
             *entry = CoreHandlers::default();
         });
+    }
+}
+
+/// A guaranteed-valid working directory to fall back to when no per-jid dir has
+/// been seeded. The user's home is the least surprising place for an agent to
+/// operate; if it is somehow unavailable, use the process cwd, then `/`. Never
+/// returns an empty string — that is exactly the value that breaks Bash spawns.
+fn default_working_dir() -> String {
+    if let Some(home) = dirs::home_dir() {
+        return home.to_string_lossy().to_string();
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        return cwd.to_string_lossy().to_string();
+    }
+    "/".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fallback must never be empty (an empty `current_dir` is exactly what
+    /// breaks Bash spawns) and must point at a directory that actually exists.
+    #[test]
+    fn default_working_dir_is_non_empty_and_exists() {
+        let dir = default_working_dir();
+        assert!(!dir.is_empty(), "default working dir must not be empty");
+        assert!(
+            std::path::Path::new(&dir).is_dir(),
+            "default working dir must exist: {dir}"
+        );
     }
 }

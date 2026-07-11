@@ -589,6 +589,53 @@ fn effective_agent_mode(base: AgentMode, entered_plan_mode: bool) -> AgentMode {
     }
 }
 
+/// Whether the DAG orchestrator *lead* may call `tool`. The lead researches and
+/// dispatches; it never mutates the workspace directly (workers do that in Agent
+/// mode with the full tool set). Keeping the lead's surface small is also what
+/// keeps the request under endpoint tool-count limits — the browser MCP alone is
+/// ~30 tools and is pure worker territory.
+///
+/// Kept: read-only builtins (Read/Grep/Glob/ToolSearch/Time…), the dispatch and
+/// memory MCP servers, and a short allowlist of non-read-only orchestration
+/// builtins the lead genuinely needs. Everything else — Write/Edit/Bash, the
+/// browser/wiki/send/workspace/schedule MCP surfaces — is withheld.
+fn is_dag_lead_tool(tool: &dyn Tool) -> bool {
+    let name = tool.name();
+    // Read-only research tools (Read, Grep, Glob, ToolSearch, Time, …).
+    if tool.is_read_only() {
+        return true;
+    }
+    // Dispatch (the lead's whole purpose) and memory recall for research. Match
+    // both the canonical `mcp__senclaw-<server>__` and the "senclaw-"-stripped
+    // bridge form so the filter is robust to either naming scheme.
+    if name.starts_with("mcp__senclaw-dispatch__")
+        || name.starts_with("mcp__dispatch__")
+        || name.starts_with("mcp__senclaw-memory__")
+        || name.starts_with("mcp__memory__")
+    {
+        return true;
+    }
+    // Non-read-only builtins the lead needs to orchestrate, plan, ask, and
+    // report. `DispatchCreateParent`/`DispatchCreateParentAndRun` are the builtin
+    // dispatch tools; the rest are interaction / planning / completion.
+    const ORCH_ALLOW: &[&str] = &[
+        "DispatchCreateParent",
+        "DispatchCreateParentAndRun",
+        "task_done",
+        "TodoWrite",
+        "Task",
+        "AskUser",
+        "AskUserQuestion",
+        "FormUI",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "PersonaUpdate",
+        "Skill",
+        "WebFetch",
+    ];
+    ORCH_ALLOW.contains(&name)
+}
+
 fn completion_nudge_for(
     mode: AgentMode,
     exit_plan_mode_called: bool,
@@ -835,6 +882,19 @@ pub async fn query(
         //    turn runs without tools so the model can only answer.
         let turn_tools: Vec<Arc<dyn Tool>> = if forcing_final {
             Vec::new()
+        } else if matches!(config.agent_mode, AgentMode::Dag) {
+            // The DAG orchestrator lead researches with read-only tools and
+            // delegates ALL mutating work (writing code, running commands,
+            // browsing) to dispatched workers (which run in Agent mode with the
+            // full tool set). Handing the lead the entire ~70-tool surface — 30
+            // of them browser tools — is not just semantically wrong; on
+            // tool-count-limited endpoints (observed with `ag/gemini-pro-agent`)
+            // it makes the model return an empty completion, surfacing as
+            // EMPTY_COMPLETION. Prune to the orchestration essentials.
+            (config.tools)()
+                .into_iter()
+                .filter(|t| is_dag_lead_tool(t.as_ref()))
+                .collect()
         } else {
             (config.tools)()
         };
@@ -1734,6 +1794,72 @@ mod tests {
         assert_eq!(stall_tool_turns(), 4);
         assert_eq!(max_empty_retries(), 2);
         assert_eq!(max_completion_nudges(), 2);
+    }
+
+    #[test]
+    fn dag_lead_tool_filter_keeps_orchestration_drops_worker_tools() {
+        struct T {
+            n: &'static str,
+            ro: bool,
+        }
+        #[async_trait::async_trait]
+        impl Tool for T {
+            fn name(&self) -> &str {
+                self.n
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({})
+            }
+            fn is_read_only(&self) -> bool {
+                self.ro
+            }
+            async fn call(
+                &self,
+                _i: serde_json::Value,
+                _c: &ToolContext<'_>,
+            ) -> Result<Vec<ToolOutput>> {
+                Ok(vec![])
+            }
+            fn gen_tool_result_message(
+                &self,
+                _d: &serde_json::Value,
+                _i: &serde_json::Value,
+            ) -> ToolResultMessage {
+                ToolResultMessage {
+                    title: String::new(),
+                    summary: String::new(),
+                    content: serde_json::Value::Null,
+                }
+            }
+            fn get_display_title(&self, _i: &serde_json::Value) -> String {
+                String::new()
+            }
+        }
+        let keep = |n: &'static str, ro: bool| is_dag_lead_tool(&T { n, ro });
+
+        // Kept: read-only research builtins, dispatch + memory MCP, and the
+        // non-read-only orchestration builtins the lead needs.
+        assert!(keep("Read", true));
+        assert!(keep("Grep", true));
+        assert!(keep("ToolSearch", true));
+        assert!(keep("DispatchCreateParentAndRun", false));
+        assert!(keep("task_done", false));
+        assert!(keep("TodoWrite", false));
+        assert!(keep("WebFetch", false));
+        assert!(keep("mcp__senclaw-dispatch__task", false));
+        assert!(keep("mcp__senclaw-memory__memory_search", false));
+
+        // Dropped: mutating builtins and the worker MCP surfaces (the 30-tool
+        // browser server is the dominant bulk that trips endpoint tool limits).
+        assert!(!keep("Bash", false));
+        assert!(!keep("Write", false));
+        assert!(!keep("Edit", false));
+        assert!(!keep("mcp__senclaw-browser__browser_click", false));
+        assert!(!keep("mcp__senclaw-wiki__wiki_write", false));
+        assert!(!keep("mcp__senclaw-send__send_message", false));
     }
 
     #[test]

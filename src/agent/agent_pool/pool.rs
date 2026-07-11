@@ -1015,6 +1015,21 @@ impl AgentPool {
             }
         }
 
+        // Seed the engine's working dir BEFORE it is lazily created in
+        // `create_session`. `ensure_engine` reads this via the per-jid cache;
+        // without it the engine keeps the empty `ZenCoreOptions` default and
+        // every Bash `current_dir("")` spawn fails with ENOENT (the whole "code"
+        // feature returns `{"error": true}` on a fresh chat). Honor the current
+        // dir already recorded in the state file (the user may have `cd`'d
+        // elsewhere in a prior run); fall back to the computed workspace default.
+        let effective_dir = std::fs::read_to_string(&state_file)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<WorkspaceStateFile>(&raw).ok())
+            .map(|s| s.current_dir)
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| workspace_dir.to_string_lossy().to_string());
+        self.core_api.set_working_dir(&binding.jid, &effective_dir);
+
         let custom_memory_dir: Option<String> = None;
         let memory_index_folder = binding.folder.clone();
 

@@ -67,6 +67,8 @@ struct NoteUpdateParams {
 struct NoteSearchParams {
     query: String,
     #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
     limit: Option<u32>,
 }
 
@@ -310,7 +312,7 @@ impl McpSpaceServer {
             .content
     }
 
-    #[rmcp::tool(description = "Tìm kiếm ghi chú full-text. Full-text search across all notes.")]
+    #[rmcp::tool(description = "Tìm kiếm ghi chú full-text, có thể lọc theo tag. Full-text search across all notes, optionally filtered by tag.")]
     fn space_note_search(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -318,7 +320,7 @@ impl McpSpaceServer {
         >,
     ) -> String {
         self.inner()
-            .note_search(p.query, p.limit.unwrap_or(20))
+            .note_search(p.query, p.tag, p.limit.unwrap_or(20))
             .content
     }
 
@@ -849,10 +851,11 @@ impl SpaceServer {
         }
     }
 
-    pub fn note_search(&self, query: String, limit: u32) -> ToolResult {
+    pub fn note_search(&self, query: String, tag: Option<String>, limit: u32) -> ToolResult {
         let result = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT n.id, n.title, snippet(space_notes_fts, 1, '<b>', '</b>', '...', 20) AS excerpt
+                "SELECT n.id, n.title, n.tags,
+                        snippet(space_notes_fts, 2, '<b>', '</b>', '...', 20) AS excerpt
                  FROM space_notes_fts f
                  JOIN space_notes n ON n.id = f.id
                  WHERE f.space_notes_fts MATCH ?1 AND n.deleted_at IS NULL
@@ -863,10 +866,23 @@ impl SpaceServer {
                     Ok(serde_json::json!({
                         "id": row.get::<_,String>(0)?,
                         "title": row.get::<_,String>(1)?,
-                        "excerpt": row.get::<_,String>(2)?,
+                        "tags": serde_json::from_str::<serde_json::Value>(
+                            &row.get::<_,String>(2).unwrap_or_default()
+                        ).unwrap_or_default(),
+                        "excerpt": row.get::<_,String>(3)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
+                .filter(|v| {
+                    if let Some(t) = &tag {
+                        v["tags"]
+                            .as_array()
+                            .map(|arr| arr.iter().any(|x| x.as_str() == Some(t.as_str())))
+                            .unwrap_or(false)
+                    } else {
+                        true
+                    }
+                })
                 .collect();
             Ok(rows)
         });

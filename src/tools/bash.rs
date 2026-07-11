@@ -352,6 +352,19 @@ mod tests {
         assert_eq!(code, 0);
         assert!(stdout.contains("hello"));
     }
+
+    /// An empty working_dir makes `Command::current_dir("")` fail to spawn with
+    /// ENOENT — the failure mode that returned `{"error": true}` for every Bash
+    /// call. The engine must never be handed an empty working dir; this test
+    /// documents why (see `default_working_dir` in agent_pool/engine.rs).
+    #[test]
+    fn test_execute_command_empty_working_dir_fails_to_spawn() {
+        let result = execute_command("echo hello", "");
+        assert!(
+            result.is_err(),
+            "empty working_dir must fail to spawn (ENOENT), not silently run"
+        );
+    }
 }
 
 fn check_cd_safety(command: &str, working_dir: &str) -> std::result::Result<(), String> {

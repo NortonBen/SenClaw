@@ -54,21 +54,32 @@ impl Tool for GlobTool {
             .unwrap_or(ctx.working_dir);
 
         let base = PathBuf::from(search_path);
-        let full_pattern = base.join(pattern);
 
         let mut files: Vec<String> = Vec::new();
-        let pattern_str = full_pattern.to_string_lossy().to_string();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        if let Ok(paths) = glob::glob(&pattern_str) {
-            for entry in paths.flatten() {
-                if files.len() >= MAX_RESULTS {
-                    break;
-                }
-                // Convert to relative path from working_dir
-                if let Ok(rel) = entry.strip_prefix(ctx.working_dir) {
-                    files.push(rel.to_string_lossy().to_string());
-                } else {
-                    files.push(entry.to_string_lossy().to_string());
+        // The Rust `glob` crate supports *, **, ?, [abc] but NOT brace
+        // alternation `{a,b,c}` — yet our tool description (and agents, following
+        // Node/Bash glob habits) rely on patterns like `**/*.{ts,tsx,json}`.
+        // Without expansion those match nothing → "No files found" → agents
+        // conclude the project is empty. Expand braces into concrete patterns
+        // and union the results (dedup, first-seen order preserved).
+        'outer: for expanded in expand_braces(pattern) {
+            let full_pattern = base.join(&expanded);
+            let pattern_str = full_pattern.to_string_lossy().to_string();
+            if let Ok(paths) = glob::glob(&pattern_str) {
+                for entry in paths.flatten() {
+                    if files.len() >= MAX_RESULTS {
+                        break 'outer;
+                    }
+                    // Convert to relative path from working_dir
+                    let rel = match entry.strip_prefix(ctx.working_dir) {
+                        Ok(rel) => rel.to_string_lossy().to_string(),
+                        Err(_) => entry.to_string_lossy().to_string(),
+                    };
+                    if seen.insert(rel.clone()) {
+                        files.push(rel);
+                    }
                 }
             }
         }
@@ -142,6 +153,90 @@ fn get_title(pattern: &str, path: &str) -> String {
     parts.join(", ")
 }
 
+/// Expand shell-style brace alternation (`{a,b,c}`) into concrete patterns,
+/// which the `glob` crate does not handle natively. Braces cartesian-multiply:
+/// `{a,b}/{c,d}` → `a/c`, `a/d`, `b/c`, `b/d`. A pattern with no braces returns
+/// itself. Unbalanced or empty (`{}`, `{a}`) braces are treated literally so we
+/// never silently drop a pattern.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    // Locate the first top-level `{ ... }` group (respecting nesting).
+    let bytes = pattern.as_bytes();
+    let Some(open) = pattern.find('{') else {
+        return vec![pattern.to_string()];
+    };
+    let mut depth = 0usize;
+    let mut close = None;
+    for (i, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        // Unbalanced brace — treat literally.
+        return vec![pattern.to_string()];
+    };
+
+    let prefix = &pattern[..open];
+    let inner = &pattern[open + 1..close];
+    let suffix = &pattern[close + 1..];
+
+    // Split the group body on top-level commas (ignore commas inside nested {}).
+    let alts = split_top_level_commas(inner);
+    // `{a}` / `{}` with no top-level comma isn't real alternation — keep literal
+    // so paths that legitimately contain braces still work.
+    if alts.len() < 2 {
+        let mut out = Vec::new();
+        for tail in expand_braces(suffix) {
+            out.push(format!("{prefix}{{{inner}}}{tail}"));
+        }
+        return out;
+    }
+
+    let mut out = Vec::new();
+    for alt in alts {
+        // Recursively expand alternatives (nested braces) and the suffix.
+        for alt_expanded in expand_braces(&alt) {
+            for tail in expand_braces(suffix) {
+                out.push(format!("{prefix}{alt_expanded}{tail}"));
+            }
+        }
+    }
+    out
+}
+
+/// Split on commas that are not nested inside another `{ }` group.
+fn split_top_level_commas(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut cur = String::new();
+    for ch in s.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                cur.push(ch);
+            }
+            ',' if depth == 0 => {
+                parts.push(std::mem::take(&mut cur));
+            }
+            _ => cur.push(ch),
+        }
+    }
+    parts.push(cur);
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +246,87 @@ mod tests {
         let tool = GlobTool;
         assert!(tool.is_read_only());
         assert_eq!(tool.name(), "Glob");
+    }
+
+    #[test]
+    fn test_expand_braces_none() {
+        assert_eq!(expand_braces("src/**/*.rs"), vec!["src/**/*.rs"]);
+    }
+
+    #[test]
+    fn test_expand_braces_simple() {
+        // The exact pattern from the failing review dispatch.
+        assert_eq!(
+            expand_braces("**/*.{ts,tsx,json}"),
+            vec!["**/*.ts", "**/*.tsx", "**/*.json"]
+        );
+    }
+
+    #[test]
+    fn test_expand_braces_cartesian() {
+        assert_eq!(
+            expand_braces("{a,b}/{c,d}"),
+            vec!["a/c", "a/d", "b/c", "b/d"]
+        );
+    }
+
+    #[test]
+    fn test_expand_braces_nested() {
+        assert_eq!(
+            expand_braces("src/{a,{b,c}}.ts"),
+            vec!["src/a.ts", "src/b.ts", "src/c.ts"]
+        );
+    }
+
+    #[test]
+    fn test_expand_braces_single_alt_is_literal() {
+        // `{a}` has no comma — not real alternation, keep literal.
+        assert_eq!(expand_braces("foo/{a}.ts"), vec!["foo/{a}.ts"]);
+    }
+
+    #[test]
+    fn test_expand_braces_unbalanced_literal() {
+        assert_eq!(expand_braces("foo/{a,b.ts"), vec!["foo/{a,b.ts"]);
+    }
+
+    /// End-to-end: the brace pattern that returned "No files found" must now
+    /// match real files under a temp dir tree.
+    #[test]
+    fn test_glob_brace_expansion_finds_files() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("senclaw-glob-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src/components")).unwrap();
+        fs::write(dir.join("src/App.tsx"), "x").unwrap();
+        fs::write(dir.join("src/types.ts"), "x").unwrap();
+        fs::write(dir.join("package.json"), "{}").unwrap();
+        fs::write(dir.join("src/components/Btn.tsx"), "x").unwrap();
+        fs::write(dir.join("README.md"), "x").unwrap();
+
+        let dir_s = dir.to_string_lossy().to_string();
+        let tool = GlobTool;
+        let ctx = ToolContext {
+            agent_id: "t",
+            working_dir: &dir_s,
+            agent_data_dir: &dir_s,
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out = rt
+            .block_on(tool.call(
+                serde_json::json!({ "pattern": "**/*.{ts,tsx,json}" }),
+                &ctx,
+            ))
+            .unwrap();
+        let data = match &out[0] {
+            ToolOutput::Result { data, .. } => data,
+            _ => panic!("expected result"),
+        };
+        let num = data.get("numFiles").and_then(|v| v.as_u64()).unwrap();
+        assert_eq!(num, 4, "should match the 4 ts/tsx/json files, not the .md");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

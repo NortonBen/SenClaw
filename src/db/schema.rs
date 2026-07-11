@@ -473,9 +473,24 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS space_notes_fts USING fts5(
-            id UNINDEXED, title, body,
+            id UNINDEXED, title, body, tags,
             content=space_notes, content_rowid=rowid
         );
+
+        CREATE TRIGGER IF NOT EXISTS space_notes_ai AFTER INSERT ON space_notes BEGIN
+            INSERT INTO space_notes_fts(rowid, id, title, body, tags)
+            VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+        END;
+        CREATE TRIGGER IF NOT EXISTS space_notes_ad AFTER DELETE ON space_notes BEGIN
+            INSERT INTO space_notes_fts(space_notes_fts, rowid, id, title, body, tags)
+            VALUES ('delete', old.rowid, old.id, old.title, old.body, old.tags);
+        END;
+        CREATE TRIGGER IF NOT EXISTS space_notes_au AFTER UPDATE ON space_notes BEGIN
+            INSERT INTO space_notes_fts(space_notes_fts, rowid, id, title, body, tags)
+            VALUES ('delete', old.rowid, old.id, old.title, old.body, old.tags);
+            INSERT INTO space_notes_fts(rowid, id, title, body, tags)
+            VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+        END;
 
         CREATE TABLE IF NOT EXISTS space_events (
             id              TEXT PRIMARY KEY,
@@ -519,6 +534,48 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
+
+    // Ensure FTS table has the tags column (older databases lack it).
+    // Check column count: id, title, body = 3 old; id, title, body, tags = 4 new.
+    let needs_rebuild: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('space_notes_fts') WHERE name='tags'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        == 0;
+
+    if needs_rebuild {
+        conn.execute_batch(
+            r#"
+            DROP TABLE IF EXISTS space_notes_fts;
+            CREATE VIRTUAL TABLE space_notes_fts USING fts5(
+                id UNINDEXED, title, body, tags,
+                content=space_notes, content_rowid=rowid
+            );
+            CREATE TRIGGER IF NOT EXISTS space_notes_ai AFTER INSERT ON space_notes BEGIN
+                INSERT INTO space_notes_fts(rowid, id, title, body, tags)
+                VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+            END;
+            CREATE TRIGGER IF NOT EXISTS space_notes_ad AFTER DELETE ON space_notes BEGIN
+                INSERT INTO space_notes_fts(space_notes_fts, rowid, id, title, body, tags)
+                VALUES ('delete', old.rowid, old.id, old.title, old.body, old.tags);
+            END;
+            CREATE TRIGGER IF NOT EXISTS space_notes_au AFTER UPDATE ON space_notes BEGIN
+                INSERT INTO space_notes_fts(space_notes_fts, rowid, id, title, body, tags)
+                VALUES ('delete', old.rowid, old.id, old.title, old.body, old.tags);
+                INSERT INTO space_notes_fts(rowid, id, title, body, tags)
+                VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+            END;
+            INSERT INTO space_notes_fts(space_notes_fts) VALUES('rebuild');
+            "#,
+        )?;
+    } else {
+        // Triggers use IF NOT EXISTS, so just rebuild to fill any gaps.
+        conn.execute_batch("INSERT INTO space_notes_fts(space_notes_fts) VALUES('rebuild');")?;
+    }
+
     Ok(())
 }
 

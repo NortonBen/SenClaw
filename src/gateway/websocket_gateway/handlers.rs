@@ -816,8 +816,14 @@ pub(crate) async fn handle_unregister_group(
         );
         return;
     };
-    // The implicit "main" group is structural and cannot be unregistered.
-    if group.folder == "main" {
+    // The structural implicit-main group cannot be unregistered — but ONLY the
+    // bare main group itself, identified by its exact jid. Per-session sub-chats
+    // (multi-session) legitimately SHARE the "main" agent folder while carrying
+    // distinct dynamic jids like `web:main:<id>`, and MUST be deletable. Matching
+    // on `folder == "main"` wrongly blocked deleting every main-folder session
+    // (the "can't delete chat" bug). The main agent's directory is re-ensured at
+    // every boot (see run_daemon), so losing the last main session is harmless.
+    if group.jid == "main" || group.jid == "web:main" {
         send_json(
             sender,
             &serde_json::json!({"type": "error", "message": "Cannot unregister the main group"}),
