@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { Layout as LayoutStyle, Shape, TreeNode } from '../api'
 import { layout, boxWidth, branchColor, PALETTE, SHAPES, type PNode, type PEdge } from '../lib'
 
@@ -31,6 +33,9 @@ interface Props {
   onDelete: (id: number) => void
   onGenerate: (id: number) => void
   onStyle: (id: number, patch: StylePatch) => void
+  onNote: (id: number) => void
+  onExpandNote: (id: number) => void
+  onContextMenu: (id: number, x: number, y: number) => void
   /** Persist new positions after a free-drag (node + its subtree). */
   onMove: (items: { id: number; x: number; y: number }[]) => void
 }
@@ -280,6 +285,12 @@ export default function MindmapCanvas(p: Props) {
               draggable={p.dragEnabled}
               showCount={p.showCount}
               onPointerDownNode={(e) => onNodePointerDown(n.id, e)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                p.onSelect(n.id)
+                p.onContextMenu(n.id, e.clientX, e.clientY)
+              }}
               onStartEdit={() => p.onStartEdit(n.id)}
               onCommit={(t) => p.onCommitEdit(n.id, t)}
               onCancel={p.onCancelEdit}
@@ -302,6 +313,7 @@ export default function MindmapCanvas(p: Props) {
             onEdit={() => p.onStartEdit(sel.id)}
             onGenerate={() => p.onGenerate(sel.id)}
             onDelete={() => p.onDelete(sel.id)}
+            onNote={() => p.onNote(sel.id)}
             onToggleStyle={() => setStyleOpen((v) => !v)}
           />
           {styleOpen && (
@@ -311,6 +323,15 @@ export default function MindmapCanvas(p: Props) {
               view={view}
               bounds={size}
               onStyle={(patch) => p.onStyle(sel.id, patch)}
+            />
+          )}
+          {!styleOpen && sel.note.trim() && (
+            <NotePreview
+              node={sel}
+              view={view}
+              bounds={size}
+              onExpand={() => p.onExpandNote(sel.id)}
+              onEdit={() => p.onNote(sel.id)}
             />
           )}
         </>
@@ -408,6 +429,7 @@ function NodeBox({
   draggable,
   showCount,
   onPointerDownNode,
+  onContextMenu,
   onStartEdit,
   onCommit,
   onCancel,
@@ -422,6 +444,7 @@ function NodeBox({
   draggable: boolean
   showCount: boolean
   onPointerDownNode: (e: React.PointerEvent) => void
+  onContextMenu: (e: React.MouseEvent) => void
   onStartEdit: () => void
   onCommit: (t: string) => void
   onCancel: () => void
@@ -468,6 +491,7 @@ function NodeBox({
         className={`node-box${isRoot ? ' root' : ''}${filled ? ' filled' : ''}${selected ? ' selected' : ''}`}
         style={style}
         onPointerDown={onPointerDownNode}
+        onContextMenu={onContextMenu}
         onDoubleClick={(e) => {
           e.stopPropagation()
           onStartEdit()
@@ -502,6 +526,11 @@ function NodeBox({
         ) : (
           <span className="label">{n.text || '…'}</span>
         )}
+        {n.note && (
+          <span className="note-dot" title={n.note}>
+            📝
+          </span>
+        )}
         {generating && <span className="spin" />}
         {!editing && hasChildren && !isRoot && (
           <span
@@ -532,6 +561,7 @@ function Toolbar({
   onEdit,
   onGenerate,
   onDelete,
+  onNote,
   onToggleStyle,
 }: {
   node: PNode
@@ -544,6 +574,7 @@ function Toolbar({
   onEdit: () => void
   onGenerate: () => void
   onDelete: () => void
+  onNote: () => void
   onToggleStyle: () => void
 }) {
   const isRoot = node.side === 0
@@ -573,6 +604,9 @@ function Toolbar({
       <button onClick={onEdit} title="Sửa tên (F2)">
         ✎
       </button>
+      <button onClick={onNote} title="Ghi chú">
+        📝
+      </button>
       <button className={styleOpen ? 'gen' : ''} onClick={onToggleStyle} title="Kiểu & màu sắc">
         🎨
       </button>
@@ -588,7 +622,23 @@ function Toolbar({
   )
 }
 
-const QUICK_ICONS = ['⭐', '✅', '❗', '💡', '🎯', '🔥', '❤️', '📌', '⏰', '📊']
+// A diverse, curated emoji set for node icons (scrollable picker).
+const EMOJIS = [
+  // status & priority
+  '⭐', '✅', '❌', '⚠️', '❗', '❓', '🔥', '🎯', '🚩', '🏆', '⏰', '📅',
+  // ideas & work
+  '💡', '📌', '📎', '📝', '📋', '🔖', '📊', '📈', '📉', '💰', '💵', '🧩',
+  // people & roles
+  '👤', '👥', '🧑‍💻', '👨‍💼', '🙋', '🤝', '🧠', '👀',
+  // tech
+  '⚙️', '🔧', '🛠️', '💻', '📱', '🌐', '☁️', '🔌', '🗄️', '🔒', '🔑', '🐛',
+  // communication
+  '💬', '📧', '📞', '📣', '🔔', '🔗',
+  // nature & misc
+  '🌱', '🌍', '☀️', '🌙', '💧', '⚡', '🎨', '🎵', '📷', '🎬', '🍀', '🚀',
+  // feelings & flags
+  '❤️', '👍', '👎', '😀', '💪', '🙏', '✨', '🟢', '🟡', '🔴',
+]
 
 function StylePanel({
   node,
@@ -605,8 +655,8 @@ function StylePanel({
 }) {
   const isRoot = node.side === 0
   const h = nodeHeight(node)
-  const PANEL_W = 232
-  const PANEL_H = isRoot ? 120 : 210
+  const PANEL_W = 244
+  const PANEL_H = isRoot ? 210 : 300
   const sx = view.x + node.x * view.k
   const nodeBottom = view.y + (node.y + h / 2) * view.k
   const nodeTop = view.y + (node.y - h / 2) * view.k
@@ -650,19 +700,74 @@ function StylePanel({
         </div>
       )}
 
-      <div className="sp-row sp-icons">
-        {QUICK_ICONS.map((ic) => (
+      <div className="sp-icons">
+        <div className="sp-icons-head">
+          <span>Icon</span>
           <button
-            key={ic}
-            className={`sp-emoji${node.icon === ic ? ' on' : ''}`}
-            onClick={() => onStyle({ icon: node.icon === ic ? null : ic })}
+            className={`sp-default${!node.icon ? ' on' : ''}`}
+            title="Không icon (mặc định)"
+            onClick={() => onStyle({ icon: null })}
           >
-            {ic}
+            ⊘ Mặc định
           </button>
-        ))}
-        <button className="sp-emoji clear" title="Xoá icon" onClick={() => onStyle({ icon: null })}>
-          ⊘
-        </button>
+        </div>
+        <div className="sp-icons-grid">
+          {EMOJIS.map((ic) => (
+            <button
+              key={ic}
+              className={`sp-emoji${node.icon === ic ? ' on' : ''}`}
+              onClick={() => onStyle({ icon: node.icon === ic ? null : ic })}
+            >
+              {ic}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NotePreview({
+  node,
+  view,
+  bounds,
+  onExpand,
+  onEdit,
+}: {
+  node: PNode
+  view: View
+  bounds: { w: number; h: number }
+  onExpand: () => void
+  onEdit: () => void
+}) {
+  const h = nodeHeight(node)
+  const W = Math.max(220, Math.min(360, bounds.w - 24))
+  const sx = view.x + node.x * view.k
+  const nodeBottom = view.y + (node.y + h / 2) * view.k
+  let top = nodeBottom + 10
+  // Keep it on-screen: if it would overflow the bottom, pin it near the bottom.
+  top = clamp(top, 6, Math.max(6, bounds.h - 90))
+  const left = clamp(sx, W / 2 + 6, bounds.w - W / 2 - 6)
+  return (
+    <div
+      className="note-preview"
+      style={{ left, top, width: W }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={onExpand}
+    >
+      <div className="np-head">
+        <span className="np-title">📝 Ghi chú</span>
+        <div className="np-actions">
+          <button title="Sửa" onClick={onEdit}>
+            ✎
+          </button>
+          <button title="Mở rộng" onClick={onExpand}>
+            ⤢
+          </button>
+        </div>
+      </div>
+      <div className="np-body markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.note}</ReactMarkdown>
       </div>
     </div>
   )

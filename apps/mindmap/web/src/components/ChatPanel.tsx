@@ -10,13 +10,17 @@ interface Props {
   busy: boolean
   importing: boolean
   hasMap: boolean
+  pins: { id: number; text: string; note: string }[]
   onSend: (text: string) => void
+  onUnpin: (id: number) => void
+  onClearPins: () => void
   onNewSession: () => void
   onSwitchSession: (id: number) => void
   onRenameSession: (id: number, title: string) => void
   onDeleteSession: (id: number) => void
   onAttach: (file: File) => void
   onGenerateFromText: (text: string) => void
+  onSaveNote: (text: string) => void
   onClose: () => void
 }
 
@@ -110,6 +114,14 @@ export default function ChatPanel(p: Props) {
                 >
                   🧠 Tạo sơ đồ
                 </button>
+                <button
+                  className="mk-map"
+                  title="Lưu câu trả lời này làm ghi chú của nút đang chọn"
+                  disabled={!p.hasMap || p.busy}
+                  onClick={() => p.onSaveNote(m.content)}
+                >
+                  📝 Ghi chú
+                </button>
                 {(m.model || m.ms) && (
                   <span className="tag">
                     {m.model}
@@ -126,6 +138,25 @@ export default function ChatPanel(p: Props) {
           </div>
         )}
       </div>
+
+      {p.pins.length > 0 && (
+        <div className="chat-pins">
+          <span className="pins-count" title="Ngữ cảnh đang ghim cho AI">
+            📌 {p.pins.length}
+          </span>
+          {p.pins.map((pin) => (
+            <span className="pin-chip" key={pin.id} title={pin.note || pin.text}>
+              {pin.text}
+              <button onClick={() => p.onUnpin(pin.id)} title="Bỏ ghim">
+                ×
+              </button>
+            </span>
+          ))}
+          <button className="pins-clear" onClick={p.onClearPins}>
+            xoá hết
+          </button>
+        </div>
+      )}
 
       <div className="cinput">
         <input

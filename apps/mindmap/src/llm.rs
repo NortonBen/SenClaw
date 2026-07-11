@@ -268,6 +268,21 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
+const NOTE_SYSTEM: &str = "You write a concise note for a single mind-map node. Given the \
+node label and its branch path, write 1-3 short sentences that explain, define, or add useful \
+detail about it. Plain text only — no markdown headers or bullets. Keep it under ~60 words. \
+Write in the same language as the node label.";
+
+/// Ask the LLM to write a short note for a node. Returns (note, model).
+pub async fn ai_note(topic: &str, parent_path: &[String]) -> Result<(String, String), String> {
+    let mut prompt = format!("Node: {topic}\n");
+    if !parent_path.is_empty() {
+        prompt.push_str(&format!("Branch path: {}\n", parent_path.join(" › ")));
+    }
+    prompt.push_str("\nWrite the note now.");
+    bridge_llm(NOTE_SYSTEM, &prompt, 300).await
+}
+
 /// The daemon's configured LLMs via the SDK → { activeId, configs:[…] }.
 pub async fn list_models() -> Result<Value, String> {
     let (active, configs) = client().list_models().await.map_err(|e| e.to_string())?;

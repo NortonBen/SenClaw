@@ -184,6 +184,11 @@ export const api = {
       body: JSON.stringify({ title, layout, children }),
     }),
 
+  aiNote: (nodeId: number) =>
+    req<{ note: string; model: string }>('/api/node/ai-note', {
+      method: 'POST',
+      body: JSON.stringify({ node_id: nodeId }),
+    }),
   generate: (
     parentId: number,
     opts: { topic?: string; instruction?: string; source?: string; replace?: boolean } = {},

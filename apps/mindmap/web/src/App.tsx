@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   api,
   outline,
@@ -193,6 +195,13 @@ export default function App() {
   const layoutRef = useRef<Layout>('mindmap')
   layoutRef.current = mapLayout
 
+  // Node notes, right-click menu, and chat context pins.
+  const [ctxMenu, setCtxMenu] = useState<{ nodeId: number; x: number; y: number } | null>(null)
+  const [noteEdit, setNoteEdit] = useState<{ nodeId: number; text: string; note: string } | null>(null)
+  const [noteView, setNoteView] = useState<{ nodeId: number; text: string; note: string } | null>(null)
+  const [notingId, setNotingId] = useState<number | null>(null)
+  const [pins, setPins] = useState<{ id: number; text: string; note: string }[]>([])
+
   const flash = useCallback((msg: string, err = false) => {
     setToast({ msg, err })
     setTimeout(() => setToast(null), 2600)
@@ -261,6 +270,8 @@ export default function App() {
         setEditingId(null)
         setUndoStack([])
         setRedoStack([])
+        setPins([])
+        setCtxMenu(null)
         await loadSessions(id)
       } catch (e) {
         flash(String(e), true)
@@ -397,6 +408,87 @@ export default function App() {
     setUndoStack((u) => [...u, { tree: treeRef.current!, layout: layoutRef.current }])
     await restoreSnapshot(next)
   }, [mapId, redoStack, restoreSnapshot])
+
+  // ---- notes ----
+  const openNote = (nodeId: number) => {
+    const node = findNode(tree, nodeId)
+    if (!node) return
+    setNoteEdit({ nodeId, text: node.text, note: node.note })
+    setCtxMenu(null)
+  }
+
+  const expandNote = (nodeId: number) => {
+    const node = findNode(tree, nodeId)
+    if (!node) return
+    setNoteView({ nodeId, text: node.text, note: node.note })
+  }
+
+  const saveNote = async (nodeId: number, note: string) => {
+    if (mapId == null) return
+    pushHistory()
+    setNoteEdit(null)
+    try {
+      await api.updateNode(nodeId, { note })
+      await refreshTree(mapId)
+    } catch (e) {
+      flash(String(e), true)
+    }
+  }
+
+  const removeNote = async (nodeId: number) => {
+    if (mapId == null) return
+    const node = findNode(tree, nodeId)
+    if (!node || !node.note) return
+    pushHistory()
+    try {
+      await api.updateNode(nodeId, { note: '' })
+      await refreshTree(mapId)
+      flash('Đã xoá ghi chú')
+    } catch (e) {
+      flash(String(e), true)
+    }
+  }
+
+  const aiWriteNote = async (nodeId: number) => {
+    if (mapId == null) return
+    setCtxMenu(null)
+    pushHistory()
+    setNotingId(nodeId)
+    try {
+      const r = await api.aiNote(nodeId)
+      flash(`AI đã viết ghi chú · ${r.model}`)
+      // If the note editor is open on this node, show the generated text.
+      setNoteEdit((prev) => (prev && prev.nodeId === nodeId ? { ...prev, note: r.note } : prev))
+    } catch (e) {
+      flash(String(e), true)
+    } finally {
+      setNotingId(null)
+      await refreshTree(mapId)
+    }
+  }
+
+  // ---- chat context pins ----
+  const pinNode = (nodeId: number) => {
+    const node = findNode(tree, nodeId)
+    if (!node) return
+    setPins((ps) => (ps.some((p) => p.id === nodeId) ? ps : [...ps, { id: nodeId, text: node.text, note: node.note }]))
+    setShowChat(true)
+    setCtxMenu(null)
+  }
+  const unpin = (id: number) => setPins((ps) => ps.filter((p) => p.id !== id))
+  const clearPins = () => setPins([])
+
+  // Save an AI answer as the note of the selected node (or the first pinned node).
+  const saveAiAsNote = async (textVal: string) => {
+    const target = selectedId ?? pins[0]?.id ?? null
+    if (target == null) {
+      flash('Chọn một nút để lưu ghi chú', true)
+      return
+    }
+    await saveNote(target, textVal.trim())
+    const node = findNode(tree, target)
+    flash(`Đã lưu ghi chú cho "${node?.text ?? 'nút'}"`)
+  }
 
   // ---- free-drag / positions ----
   const toggleDragMode = async () => {
@@ -588,6 +680,18 @@ export default function App() {
     return id
   }
 
+  // Build the chat grounding context: pinned nodes (with notes) then the outline.
+  const chatContext = (): string | null => {
+    let ctx = ''
+    if (pins.length) {
+      ctx += 'Các nút đang ghim làm ngữ cảnh:\n'
+      for (const p of pins) ctx += `- ${p.text}${p.note ? `: ${p.note}` : ''}\n`
+      ctx += '\n'
+    }
+    if (tree) ctx += `Sơ đồ hiện tại:\n${outline(tree)}`
+    return ctx.trim() ? ctx : null
+  }
+
   const sendChat = async (text: string) => {
     if (mapId == null) return
     const sid = await ensureSession(text)
@@ -596,7 +700,7 @@ export default function App() {
     setChatBusy(true)
     const t0 = performance.now()
     try {
-      const r = await api.chatSend(sid, text, tree ? outline(tree) : null)
+      const r = await api.chatSend(sid, text, chatContext())
       setChat((c) => [
         ...c,
         { role: 'assistant', content: r.text, model: r.model, ms: performance.now() - t0 },
@@ -895,7 +999,7 @@ export default function App() {
           style={mapLayout}
           selectedId={selectedId}
           editingId={editingId}
-          generatingId={generatingId}
+          generatingId={generatingId ?? notingId}
           dragEnabled={dragMode}
           fullLabels={settings.fullLabels}
           showCount={settings.showCount}
@@ -908,6 +1012,9 @@ export default function App() {
           onAddSibling={addSibling}
           onDelete={deleteNode}
           onStyle={styleNode}
+          onNote={openNote}
+          onExpandNote={expandNote}
+          onContextMenu={(id, x, y) => setCtxMenu({ nodeId: id, x, y })}
           onMove={onMovePositions}
           onGenerate={(id) => {
             const node = findNode(tree, id)
@@ -922,13 +1029,17 @@ export default function App() {
             busy={chatBusy}
             importing={importing}
             hasMap={mapId != null}
+            pins={pins}
             onSend={sendChat}
+            onUnpin={unpin}
+            onClearPins={clearPins}
             onNewSession={newSession}
             onSwitchSession={openSession}
             onRenameSession={renameSession}
             onDeleteSession={deleteSession}
             onAttach={attachFile}
             onGenerateFromText={generateFromText}
+            onSaveNote={saveAiAsNote}
             onClose={() => setShowChat(false)}
           />
         )}
@@ -983,6 +1094,60 @@ export default function App() {
             quickGenerate(genModal.nodeId)
           }}
           onGenerate={(instruction, replace) => generateWith(genModal.nodeId, instruction, replace)}
+        />
+      )}
+      {ctxMenu &&
+        (() => {
+          const node = findNode(tree, ctxMenu.nodeId)
+          if (!node) return null
+          const isRoot = tree?.id === node.id
+          return (
+            <NodeContextMenu
+              x={ctxMenu.x}
+              y={ctxMenu.y}
+              hasNote={!!node.note}
+              isRoot={isRoot}
+              onClose={() => setCtxMenu(null)}
+              items={[
+                { icon: '✎', label: 'Sửa tên', onClick: () => setEditingId(node.id) },
+                { icon: '📝', label: node.note ? 'Sửa ghi chú' : 'Thêm ghi chú', onClick: () => openNote(node.id) },
+                { icon: '✨', label: 'AI viết ghi chú', onClick: () => aiWriteNote(node.id) },
+                ...(node.note
+                  ? [{ icon: '🧹', label: 'Xoá ghi chú', onClick: () => removeNote(node.id), danger: true as const }]
+                  : []),
+                { sep: true as const },
+                { icon: '📌', label: 'Ghim vào hỏi AI', onClick: () => pinNode(node.id) },
+                { icon: '✨', label: 'AI mở rộng nhánh', onClick: () => setGenModal({ nodeId: node.id, text: node.text }) },
+                { icon: '＋', label: 'Thêm nhánh con', onClick: () => addChild(node.id) },
+                ...(!isRoot
+                  ? [
+                      { sep: true as const },
+                      { icon: '🗑', label: 'Xoá nút', onClick: () => deleteNode(node.id), danger: true as const },
+                    ]
+                  : []),
+              ]}
+            />
+          )
+        })()}
+      {noteEdit && (
+        <NoteEditorModal
+          nodeText={noteEdit.text}
+          note={noteEdit.note}
+          busy={notingId === noteEdit.nodeId}
+          onClose={() => setNoteEdit(null)}
+          onSave={(n) => saveNote(noteEdit.nodeId, n)}
+          onAiWrite={() => aiWriteNote(noteEdit.nodeId)}
+        />
+      )}
+      {noteView && (
+        <NoteViewDialog
+          nodeText={noteView.text}
+          note={noteView.note}
+          onClose={() => setNoteView(null)}
+          onEdit={() => {
+            setNoteView(null)
+            openNote(noteView.nodeId)
+          }}
         />
       )}
       {toast && <div className={`toast${toast.err ? ' err' : ''}`}>{toast.msg}</div>}
@@ -1280,6 +1445,143 @@ function ImportExportModal({
 
         <div className="row">
           <button className="btn" onClick={onClose}>
+            Đóng
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type MenuItem =
+  | { icon: string; label: string; onClick: () => void; danger?: boolean }
+  | { sep: true }
+
+function NodeContextMenu({
+  x,
+  y,
+  onClose,
+  items,
+}: {
+  x: number
+  y: number
+  hasNote: boolean
+  isRoot: boolean
+  onClose: () => void
+  items: MenuItem[]
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+  const left = Math.min(x, window.innerWidth - 210)
+  const top = Math.min(y, window.innerHeight - items.length * 34 - 12)
+  return (
+    <div className="ctx-menu" ref={ref} style={{ left, top }}>
+      {items.map((it, i) =>
+        'sep' in it ? (
+          <div key={i} className="ctx-sep" />
+        ) : (
+          <button
+            key={i}
+            className={`ctx-item${it.danger ? ' danger' : ''}`}
+            onClick={() => {
+              it.onClick()
+              onClose()
+            }}
+          >
+            <span className="ctx-ic">{it.icon}</span>
+            {it.label}
+          </button>
+        ),
+      )}
+    </div>
+  )
+}
+
+function NoteEditorModal({
+  nodeText,
+  note,
+  busy,
+  onClose,
+  onSave,
+  onAiWrite,
+}: {
+  nodeText: string
+  note: string
+  busy: boolean
+  onClose: () => void
+  onSave: (note: string) => void
+  onAiWrite: () => void
+}) {
+  const [val, setVal] = useState(note)
+  useEffect(() => setVal(note), [note])
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => ref.current?.focus(), [])
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>📝 Ghi chú: “{nodeText}”</h3>
+        <textarea
+          ref={ref}
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          placeholder="Nhập ghi chú cho nút này…"
+          style={{ width: '100%', minHeight: 130, resize: 'vertical' }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSave(val.trim())
+          }}
+        />
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <button className="btn" onClick={onAiWrite} disabled={busy}>
+            {busy ? <span className="spin" /> : '✨'} AI viết giúp
+          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn" onClick={onClose}>
+              Huỷ
+            </button>
+            <button className="btn primary" onClick={() => onSave(val.trim())}>
+              Lưu
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NoteViewDialog({
+  nodeText,
+  note,
+  onClose,
+  onEdit,
+}: {
+  nodeText: string
+  note: string
+  onClose: () => void
+  onEdit: () => void
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <h3>📝 {nodeText}</h3>
+        <div className="note-view markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{note}</ReactMarkdown>
+        </div>
+        <div className="row">
+          <button className="btn" onClick={onEdit}>
+            ✎ Sửa
+          </button>
+          <button className="btn primary" onClick={onClose}>
             Đóng
           </button>
         </div>

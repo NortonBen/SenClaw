@@ -694,6 +694,246 @@ button {
   }
 }
 
+/* ---- node note indicator ---- */
+.note-dot {
+  font-size: 11px;
+  flex-shrink: 0;
+  opacity: 0.9;
+  cursor: help;
+}
+
+/* ---- note preview (below a selected node) ---- */
+.note-preview {
+  position: absolute;
+  transform: translate(-50%, 0);
+  z-index: 22;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.np-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.np-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.np-actions {
+  display: flex;
+  gap: 2px;
+}
+.np-actions button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.np-actions button:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.np-body {
+  padding: 8px 12px;
+  max-height: 148px;
+  overflow-y: auto;
+  font-size: 12.5px;
+}
+
+/* ---- note view dialog ---- */
+.note-view {
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 4px 2px;
+  font-size: 14px;
+}
+
+/* ---- shared markdown rendering ---- */
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 6px 0;
+  line-height: 1.55;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+.markdown h1 {
+  font-size: 1.35em;
+}
+.markdown h2 {
+  font-size: 1.2em;
+}
+.markdown h3 {
+  font-size: 1.08em;
+}
+.markdown ul,
+.markdown ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.markdown li {
+  margin: 2px 0;
+}
+.markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+.markdown pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown blockquote {
+  margin: 8px 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+.markdown a {
+  color: var(--accent);
+}
+.markdown table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 0.95em;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+}
+.markdown img {
+  max-width: 100%;
+}
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
+
+/* ---- right-click context menu ---- */
+.ctx-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 196px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 5px;
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 13px;
+  text-align: left;
+}
+.ctx-item:hover {
+  background: var(--panel-2);
+}
+.ctx-item.danger:hover {
+  color: var(--danger);
+}
+.ctx-ic {
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+/* ---- chat context pins ---- */
+.chat-pins {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+.pins-count {
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 8px;
+  padding: 2px 4px 2px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pin-chip button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+.pin-chip button:hover {
+  opacity: 1;
+}
+.pins-clear {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.pins-clear:hover {
+  color: var(--text);
+}
+
 /* ---- modal ---- */
 .modal-backdrop {
   position: fixed;
@@ -899,27 +1139,58 @@ button {
   border-color: var(--accent);
 }
 .sp-icons {
-  gap: 3px;
   border-top: 1px solid var(--border);
   padding-top: 8px;
+}
+.sp-icons-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.sp-default {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sp-default:hover {
+  color: var(--text);
+}
+.sp-default.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sp-icons-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 108px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 .sp-emoji {
   border: none;
   background: transparent;
   border-radius: 6px;
-  padding: 2px 4px;
+  padding: 3px 0;
   font-size: 15px;
-  line-height: 1;
+  line-height: 1.2;
+  cursor: pointer;
+  text-align: center;
 }
 .sp-emoji:hover {
   background: var(--panel-2);
 }
 .sp-emoji.on {
   background: var(--accent-soft);
-}
-.sp-emoji.clear {
-  color: var(--muted);
-  margin-left: auto;
+  outline: 1.5px solid var(--accent);
 }
 
 /* ---- new-map layout picker ---- */

@@ -39,6 +39,13 @@ the `mindmap-mcp` MCP server.
   and small screens; custom-styled scrollbars throughout.
 - **Undo / Redo** — ↶ / ↷ (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z) restore and replay every change —
   edits, add/delete, AI generation, styling, drag, and layout — via snapshot history.
+- **Node notes** — every node can hold a note (📝 indicator when present). Add/edit via
+  the toolbar 📝, **right-click menu**, or let **AI write it** for you.
+- **Right-click menu** — rename, add/edit/clear note, AI-write note, pin to the chat,
+  AI-expand, add child, delete.
+- **Chat context pins** — pin nodes (with their notes) into the assistant as removable
+  context chips (📌 count · × · "xoá hết"); an AI answer can be saved back as a node's
+  note with one click.
 - **MCP server** (`mindmap-mcp`) — maps, nodes, layout, templates, styling, and
   `mindmap_generate` (see the table below).
 - **Skills** — `mindmap-generate` (start a map / use a template) and `mindmap-expand`
@@ -101,4 +108,5 @@ assigned `PORT`, serves the UI in an iframe, and auto-registers `mindmap-mcp`.
 | `mindmap_add_node` | Add a child under a node |
 | `mindmap_update_node` | Edit a node's text/note/color/shape/fill/icon |
 | `mindmap_delete_node` | Delete a node + subtree |
+| *(REST)* `/api/node/ai-note` | AI-write a note for a node |
 | `mindmap_generate` | AI-generate a hierarchy of sub-topics under a node |

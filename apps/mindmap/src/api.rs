@@ -58,6 +58,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/node/update", post(update_node))
         .route("/node/delete", post(delete_node))
         .route("/node/move", post(move_node))
+        .route("/node/ai-note", post(ai_note))
         .route("/positions", post(save_positions))
         .route("/map/clear-positions", post(reset_positions))
         .route("/map/restore", post(restore_map))
@@ -282,6 +283,26 @@ async fn move_node(
 ) -> Result<Json<Value>, ApiError> {
     s.db.move_node(b.id, b.new_parent, now()).map_err(bad)?;
     Ok(Json(json!({ "success": true })))
+}
+
+#[derive(Deserialize)]
+struct AiNoteBody {
+    node_id: i64,
+}
+
+/// AI-write a note for a node and save it. Returns the note.
+async fn ai_note(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<AiNoteBody>,
+) -> Result<Json<Value>, ApiError> {
+    let text = s.db.node_text(b.node_id).map_err(bad)?;
+    let path = s.db.ancestor_path(b.node_id).unwrap_or_default();
+    let (note, model) = llm::ai_note(&text, &path).await.map_err(gateway)?;
+    let note = note.trim();
+    s.db
+        .update_node(b.node_id, None, Some(note), None, None, None, None, None, now())
+        .map_err(bad)?;
+    Ok(Json(json!({ "note": note, "model": model })))
 }
 
 #[derive(Deserialize)]
