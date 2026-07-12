@@ -5,7 +5,7 @@ name: Space Apps build
 # run and attached to the GitHub Release when a v* tag is pushed.
 #
 # Rust apps (ssh-manager, email, deepwiki, code-ide, luna-calendar, mindmap,
-# mini-browser, skill-builder) are built on macOS arm64 — the binary inside the
+# mini-browser, skill-builder, crm) are built on macOS arm64 — the binary inside the
 # zip must match the machine SenClaw runs on. Node apps (test-manager) are
 # platform-independent. google-workspace-space-app is intentionally NOT built
 # here.
@@ -42,7 +42,7 @@ jobs:
       - id: check
         run: |
           set -e
-          RUST_APPS='[{"id":"ssh-manager","zip":"ssh-manager.zip"},{"id":"email","zip":"email-app.zip"},{"id":"deepwiki","zip":"deepwiki-app.zip"},{"id":"code-ide","zip":"code-ide-app.zip"},{"id":"luna-calendar","zip":"luna-calendar-app.zip"},{"id":"mindmap","zip":"mindmap-app.zip"},{"id":"mini-browser","zip":"mini-browser-app.zip"},{"id":"skill-builder","zip":"skill-builder-app.zip"}]'
+          RUST_APPS='[{"id":"ssh-manager","zip":"ssh-manager.zip"},{"id":"email","zip":"email-app.zip"},{"id":"deepwiki","zip":"deepwiki-app.zip"},{"id":"code-ide","zip":"code-ide-app.zip"},{"id":"luna-calendar","zip":"luna-calendar-app.zip"},{"id":"mindmap","zip":"mindmap-app.zip"},{"id":"mini-browser","zip":"mini-browser-app.zip"},{"id":"skill-builder","zip":"skill-builder-app.zip"},{"id":"crm","zip":"crm-app.zip"}]'
           NODE_APPS='[{"dir":"test-manager","zip":"test-manager.zip"}]'
 
           # A release tag must be self-contained: build EVERY app so all
