@@ -1131,13 +1131,8 @@ fn wire_app_channel_controls(
     }));
 }
 
-/// Raise the process's open-file-descriptor soft limit as high as the kernel
-/// allows. The daemon spawns a stdio MCP server subprocess *per built-in server
-/// per agent* — each holding several pipe/socket fds — so the macOS GUI default
-/// soft limit of 256 (inherited when launched from SenClaw Desktop.app) is
-/// exhausted quickly, surfacing as `Too many open files (os error 24)`. Bumping
-/// the soft limit toward the hard limit gives orders of magnitude more headroom.
-/// Best-effort: any failure is logged and ignored (the daemon still runs).
+#[cfg(unix)]
+#[cfg(unix)]
 fn raise_fd_limit() {
     // A generous ceiling; macOS enforces `kern.maxfilesperproc` on top of this,
     // so we try descending candidates until one is accepted.
@@ -1186,7 +1181,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     tracing::info!("[SenClaw] Starting...");
 
-    // Raise the fd limit before anything spawns subprocesses or opens sockets.
+    #[cfg(unix)]
     raise_fd_limit();
 
     // ===== 1. Database =====
@@ -2068,6 +2063,29 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     gw.notify_dispatch_update(&parents).await;
                 });
             }));
+        }
+
+        // Wire DispatchBridge → Cowork board. Dispatch task lifecycle events
+        // (registered/processing/done/error/timeout) update the CoworkTeamTask
+        // rows so the board columns reflect sub-agent progress in real time.
+        {
+            let db_for_lifecycle = Arc::clone(&db);
+            dispatch_bridge.set_task_lifecycle_callback(Arc::new(
+                move |task_id: &str,
+                      status: &str,
+                      label: &str,
+                      parent_goal: &str,
+                      result: Option<String>| {
+                    gateway::ui_server::cowork_runtime::on_dispatch_task_lifecycle(
+                        &db_for_lifecycle,
+                        task_id,
+                        status,
+                        label,
+                        parent_goal,
+                        result,
+                    );
+                },
+            ));
         }
 
         // Kanban → WS live updates. A 2s watcher polls a cheap per-board change
