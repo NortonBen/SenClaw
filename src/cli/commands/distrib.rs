@@ -63,6 +63,125 @@ pub async fn run_web(force: bool, version: Option<String>) -> Result<()> {
     crate::run_daemon(cfg).await
 }
 
+// ===== Update =====
+
+/// `senclaw update` — update the binary, Web UI (if present), and desktop app
+/// (if installed) to the latest (or specified) release.
+pub async fn run_update(version: Option<String>) -> Result<()> {
+    println!("Updating SenClaw…");
+
+    // 1. Update the binary itself
+    update_binary(version.as_deref()).await?;
+
+    // 2. Update Web UI if it was previously downloaded
+    let web_dist = home().join(".senclaw").join("web").join("dist");
+    if web_dist.join("index.html").exists() {
+        println!("\nUpdating Web UI…");
+        ensure_web_dist(true, version.clone()).await?;
+    }
+
+    // 3. Update desktop app if installed
+    if is_desktop_installed() {
+        println!("\nUpdating Desktop app…");
+        install_desktop(version).await?;
+    }
+
+    println!("\nAll components updated successfully.");
+    Ok(())
+}
+
+/// Download the latest senclaw binary and replace the current one.
+async fn update_binary(version: Option<&str>) -> Result<()> {
+    let target = binary_target()?;
+    let asset = format!("senclaw-{target}");
+    let url = asset_url(&asset, version);
+    let tmp = tmp_dir()?;
+    let tmp_bin = tmp.join("senclaw-update");
+
+    download(&url, &tmp_bin).await?;
+
+    // Make it executable (no-op on Windows)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp_bin, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    // Replace the running binary
+    let current_exe = std::env::current_exe().context("cannot determine current binary path")?;
+    let current_exe = current_exe
+        .canonicalize()
+        .unwrap_or_else(|_| current_exe.clone());
+
+    // On Unix we can atomically rename over the running binary.
+    // On Windows the running exe is locked, so we rename-away first.
+    #[cfg(windows)]
+    {
+        let bak = current_exe.with_extension("exe.bak");
+        let _ = std::fs::remove_file(&bak);
+        std::fs::rename(&current_exe, &bak)
+            .context("cannot move current binary aside — try running from an elevated prompt")?;
+    }
+
+    std::fs::rename(&tmp_bin, &current_exe).with_context(|| {
+        format!(
+            "cannot replace {} — you may need to run with sudo or adjust permissions",
+            current_exe.display()
+        )
+    })?;
+
+    println!("Binary updated: {}", current_exe.display());
+
+    // Print the new version
+    let output = std::process::Command::new(&current_exe)
+        .arg("--version")
+        .output();
+    if let Ok(out) = output {
+        let ver = String::from_utf8_lossy(&out.stdout);
+        print!("{ver}");
+    }
+    Ok(())
+}
+
+/// Rust target triple for the current platform (binary, not desktop bundle).
+fn binary_target() -> Result<&'static str> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Ok("aarch64-apple-darwin")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Ok("x86_64-apple-darwin")
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        Ok("x86_64-pc-windows-msvc")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Ok("x86_64-unknown-linux-gnu")
+    } else {
+        bail!(
+            "no prebuilt binary for this platform — build from source: \
+             `cargo build --release`"
+        )
+    }
+}
+
+/// Check whether the desktop app is currently installed on this platform.
+fn is_desktop_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/Applications/SenClaw Desktop.app").exists()
+            || home().join("Applications/SenClaw Desktop.app").exists()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_desktop_dir().exists()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_desktop_dir().exists()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        false
+    }
+}
+
 // ===== Desktop install / uninstall =====
 
 async fn install_desktop(version: Option<String>) -> Result<()> {

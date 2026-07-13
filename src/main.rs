@@ -58,6 +58,12 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
     },
+    /// Update SenClaw to the latest version (binary, Web UI, and desktop app)
+    Update {
+        /// Release tag to update to (e.g. v0.3.0). Default: latest.
+        #[arg(long)]
+        version: Option<String>,
+    },
 
     // ===== MCP servers (spawned as subprocesses by sema-core) =====
     /// Start the schedule MCP server (stdio JSON-RPC)
@@ -182,6 +188,7 @@ async fn main() -> Result<()> {
         Command::Web { force, version } => {
             senclaw::cli::commands::distrib::run_web(force, version).await
         }
+        Command::Update { version } => senclaw::cli::commands::distrib::run_update(version).await,
 
         // MCP servers
         Command::ScheduleServer => senclaw::mcp::schedule_server::run_stdio_server().await,
