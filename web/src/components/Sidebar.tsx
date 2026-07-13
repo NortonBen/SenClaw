@@ -21,6 +21,7 @@ import {
   MessageOutlined,
   AppstoreOutlined,
   CoffeeOutlined,
+  ProjectOutlined,
   DownOutlined,
   RightOutlined,
   FolderOutlined,
@@ -66,6 +67,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
   const isChats     = location.pathname === '/' || location.pathname.startsWith('/chats');
   const isSpace     = location.pathname.startsWith('/space');
   const isCowork    = location.pathname.startsWith('/cowork');
+  const isKanban    = location.pathname.startsWith('/kanban');
 
   const notifContent = (
     <div style={{ width: 300, maxHeight: 400, overflowY: 'auto' }}>
@@ -151,6 +153,9 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
           </Tooltip>
           <Tooltip title="Cowork">
             <Button type={isCowork ? 'primary' : 'text'} icon={<CoffeeOutlined style={{ fontSize: 16 }} />} onClick={() => navigate('/cowork')} className="flex-1" style={{ height: 38, borderRadius: 10 }} />
+          </Tooltip>
+          <Tooltip title="Kanban">
+            <Button type={isKanban ? 'primary' : 'text'} icon={<ProjectOutlined style={{ fontSize: 16 }} />} onClick={() => navigate('/kanban')} className="flex-1" style={{ height: 38, borderRadius: 10 }} />
           </Tooltip>
         </div>
 

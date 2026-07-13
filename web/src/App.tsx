@@ -12,6 +12,7 @@ import { CognitivePage } from './pages/CognitivePage';
 import { CoworkPage } from './pages/CoworkPage';
 import { CoworkTeamDetailPage } from './pages/CoworkTeamDetailPage';
 import { WorkflowRunsPage } from './pages/WorkflowRunsPage';
+import { KanbanPage } from './pages/KanbanPage';
 import { PlanExitDialog } from './components/PlanExitDialog';
 
 const SEARCH = new URLSearchParams(window.location.search);
@@ -74,6 +75,7 @@ export function App() {
           <Route path="cowork" element={<CoworkPage />} />
           <Route path="cowork/:id" element={<CoworkTeamDetailPage />} />
           <Route path="cognitive" element={<CognitivePage />} />
+          <Route path="kanban" element={<KanbanPage />} />
           <Route path="workflows/runs" element={<WorkflowRunsPage />} />
         </Routes>
         {/* Global Plan-mode approval modal — surfaces when any agent calls ExitPlanMode. */}
