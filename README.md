@@ -41,9 +41,17 @@ What that adds up to:
 | --- | --- |
 | ![Dashboard](docs/images/screenshots/senclaw-dashboard.png) | ![Chat](docs/images/screenshots/senclaw-chat.png) |
 
-| Plugins (Skills / MCP / Subagents) | Space (Notes · Calendar · Schedules) |
+| Kanban Board | Cowork (Multi-Agent Teams) |
 | --- | --- |
-| ![Plugins](docs/images/screenshots/senclaw-plugins.png) | ![Space](docs/images/screenshots/senclaw-space.png) |
+| ![Kanban](docs/images/screenshots/senclaw-kanban-board.png) | ![Cowork](docs/images/screenshots/senclaw-cowork.png) |
+
+| Space Apps | Knowledge (Wiki) |
+| --- | --- |
+| ![Space](docs/images/screenshots/senclaw-space.png) | ![Knowledge](docs/images/screenshots/senclaw-knowledge.png) |
+
+| Plugins (Skills / MCP / Subagents) | Kanban Boards |
+| --- | --- |
+| ![Plugins](docs/images/screenshots/senclaw-plugins.png) | ![Kanban List](docs/images/screenshots/senclaw-kanban.png) |
 
 ---
 
