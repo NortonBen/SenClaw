@@ -597,10 +597,10 @@ pub struct FullGraphQuery {
     pub connected_only: bool,
 }
 fn default_full_node_limit() -> usize {
-    2000
+    500
 }
 fn default_full_edge_limit() -> usize {
-    5000
+    2000
 }
 
 pub(crate) async fn cognitive_full_graph(

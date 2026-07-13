@@ -49,8 +49,8 @@ export function GraphExplorerView() {
       setLoading(true);
       try {
         const params = new URLSearchParams({
-          node_limit: '2000',
-          edge_limit: '5000',
+          node_limit: '500',
+          edge_limit: '2000',
           include_chunks: chunks ? 'true' : 'false',
           connected_only: connected ? 'true' : 'false',
         });
