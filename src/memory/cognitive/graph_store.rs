@@ -83,6 +83,13 @@ pub trait GraphStore: Send + Sync {
     /// browsing a knowledge graph.
     fn top_nodes_by_degree(&self, limit: usize) -> Result<Vec<NodeWithDegree>>;
 
+    fn full_graph(
+        &self,
+        node_limit: usize,
+        edge_limit: usize,
+        include_chunks: bool,
+    ) -> Result<(Vec<DataPoint>, Vec<RelationshipEdge>)>;
+
     /// Return edges that originate from a node inside the given NodeSet.
     /// Used by the persona-consolidate path to find "what the agent has
     /// learned about itself" and pour it back into SOUL.md.
@@ -1254,6 +1261,39 @@ impl GraphStore for SqliteGraphStore {
                 candidates_examined,
                 associations_created,
             })
+        })
+    }
+
+    fn full_graph(
+        &self,
+        node_limit: usize,
+        edge_limit: usize,
+        include_chunks: bool,
+    ) -> Result<(Vec<DataPoint>, Vec<RelationshipEdge>)> {
+        self.db.with_cog_conn(|conn| {
+            let kind_filter = if include_chunks { "" } else { "WHERE kind != 'chunk'" };
+            let node_sql = format!(
+                "SELECT * FROM cog_nodes {kind_filter}
+                 ORDER BY last_seen_at DESC LIMIT ?1"
+            );
+            let mut nstmt = conn.prepare(&node_sql)?;
+            let nodes: Vec<DataPoint> = nstmt
+                .query_map(params![node_limit as i64], row_to_node)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let id_set: std::collections::HashSet<Uuid> =
+                nodes.iter().map(|n| n.id).collect();
+            let mut estmt = conn.prepare(
+                "SELECT * FROM cog_edges
+                 ORDER BY strength DESC LIMIT ?1",
+            )?;
+            let all_edges: Vec<RelationshipEdge> = estmt
+                .query_map(params![edge_limit as i64], row_to_edge)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let edges: Vec<RelationshipEdge> = all_edges
+                .into_iter()
+                .filter(|e| id_set.contains(&e.src) && id_set.contains(&e.dst))
+                .collect();
+            Ok((nodes, edges))
         })
     }
 

@@ -582,6 +582,67 @@ pub(crate) async fn cognitive_subgraph(
 }
 
 // =====================================================================
+// GET /api/cognitive/full-graph
+// =====================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct FullGraphQuery {
+    #[serde(default = "default_full_node_limit")]
+    pub node_limit: usize,
+    #[serde(default = "default_full_edge_limit")]
+    pub edge_limit: usize,
+    #[serde(default)]
+    pub include_chunks: bool,
+    #[serde(default)]
+    pub connected_only: bool,
+}
+fn default_full_node_limit() -> usize {
+    2000
+}
+fn default_full_edge_limit() -> usize {
+    5000
+}
+
+pub(crate) async fn cognitive_full_graph(
+    State(_s): State<Arc<UiState>>,
+    Query(q): Query<FullGraphQuery>,
+) -> Result<Json<SubgraphResponse>, AppError> {
+    let sys = require_system()?;
+    let node_limit = q.node_limit.clamp(10, 5000);
+    let edge_limit = q.edge_limit.clamp(10, 10000);
+
+    let (nodes, edges) = sys
+        .graph
+        .full_graph(node_limit, edge_limit, q.include_chunks)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let (nodes, edges) = if q.connected_only {
+        use std::collections::HashSet;
+        let connected: HashSet<Uuid> = edges
+            .iter()
+            .flat_map(|e| [e.src, e.dst])
+            .collect();
+        let nodes: Vec<_> = nodes
+            .into_iter()
+            .filter(|n| connected.contains(&n.id))
+            .collect();
+        (nodes, edges)
+    } else {
+        (nodes, edges)
+    };
+
+    let n_view: Vec<NodeView> = nodes.into_iter().map(NodeView::from).collect();
+    let e_view: Vec<EdgeView> = edges.into_iter().map(EdgeView::from).collect();
+    let truncated = n_view.len() >= node_limit || e_view.len() >= edge_limit;
+
+    Ok(Json(SubgraphResponse {
+        nodes: n_view,
+        edges: e_view,
+        truncated,
+    }))
+}
+
+// =====================================================================
 // POST /api/cognitive/search
 // =====================================================================
 

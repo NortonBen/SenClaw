@@ -717,6 +717,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(super::cognitive::cognitive_sample),
         )
         .route(
+            "/api/cognitive/full-graph",
+            get(super::cognitive::cognitive_full_graph),
+        )
+        .route(
             "/api/cognitive/cleanup",
             post(super::cognitive::cognitive_cleanup),
         )
