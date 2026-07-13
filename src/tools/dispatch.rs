@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use crate::mcp::dispatch_server::{
     BuiltinAwarePersonaResolver, CreateParentParams, DispatchAllTasksParams, DispatchServer,
-    DispatchTaskInput, DispatchTaskParams, FsPersonaResolver, PersonaResolver,
+    DispatchTaskParams, FsPersonaResolver, PersonaResolver,
 };
 use crate::mcp::schedule_server::ToolResult;
 use crate::zen_core::{Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};

@@ -4,13 +4,11 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 use anyhow::Result;
-use regex::Regex;
-
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::GroupBinding;
 
-use super::config::{get_agent_allowed_work_dirs, remove_group_from_config, save_group_to_config};
+use super::config::{remove_group_from_config, save_group_to_config};
 use super::dirs::ensure_agent_dirs;
 use super::types::GroupBindingUpdate;
 

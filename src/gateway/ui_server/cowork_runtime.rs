@@ -120,28 +120,72 @@ pub fn on_agent_processing(db: &Arc<Db>, team_id: &str) {
     );
 }
 
-/// Mark the manager's pending task as `done` and persist the agent's reply
-/// as `result_output` when the agent finishes a turn. Mirrors the legacy
-/// "task complete on message_complete" flow in `b307fa8:src/cowork/mod.rs`.
+/// Classify the agent's reply to decide the task's terminal status.
+/// Returns `"done"` for substantive completions, `"blocked"` for replies that
+/// look like failures, unanswered questions, or timeouts — so the board
+/// accurately reflects whether the work actually finished.
+fn classify_reply(reply: &str) -> &'static str {
+    let lower = reply.to_lowercase();
+    let char_count = reply.chars().count();
+
+    // Very short replies are almost never real completions in a cowork context.
+    if char_count < 40 {
+        return "blocked";
+    }
+
+    // Timeout / infrastructure failure signals from the dispatch bridge or
+    // virtual worker pool.
+    let failure_signals = [
+        "timeout",
+        "timed out",
+        "không thể hoàn thành",
+        "không hoàn thành được",
+        "giới hạn cho phép",
+        "every dispatch task failed",
+        "deadlock",
+        "cancelled by user",
+    ];
+    for sig in &failure_signals {
+        if lower.contains(sig) {
+            return "blocked";
+        }
+    }
+
+    // Reply that is purely a question back to the user — the agent punted
+    // instead of doing the work.  Heuristic: ends with `?` and has no code
+    // block / tool output.
+    let trimmed = reply.trim();
+    if trimmed.ends_with('?') && !trimmed.contains("```") && char_count < 500 {
+        return "blocked";
+    }
+
+    "done"
+}
+
+/// Mark the manager's pending task based on result quality.  Substantive
+/// completions become `done`; failures / unanswered questions become
+/// `blocked` so the board surfaces that work is still pending.
 pub fn on_agent_reply(db: &Arc<Db>, team_id: &str, reply: &str) {
     let Some(task_id) = latest_manager_task_id(db, team_id) else { return };
     let now = local_iso_string_now();
+    let status = classify_reply(reply);
+    let completed_at = if status == "done" { Some(now.as_str()) } else { None };
     let _ = db.update_cowork_team_task(
         &task_id,
         None,
         None,
-        Some("done"),
+        Some(status),
         None,
         None,
         None,
         None,
         Some(reply),
         None,
-        Some(&now),
+        completed_at,
         &now,
     );
     tracing::info!(
-        "[cowork_runtime] team={team_id} task={task_id} → done (result_len={})",
+        "[cowork_runtime] team={team_id} task={task_id} → {status} (result_len={})",
         reply.len()
     );
 }
@@ -183,13 +227,23 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
         s.push_str(&format!("Shared workspace: {ws}\n"));
     }
     s.push_str(
-        "\nDAG mode is active. You orchestrate by DISPATCHING work to your team \
+        "\n## CRITICAL RULES\n\
+         DAG mode is active. You orchestrate by DISPATCHING work to your team \
          members — you do NOT do the work yourself, and you do NOT use the generic \
-         `Task` tool. Delegate with `DispatchCreateParentAndRun`.\n",
+         `Task` tool. Delegate with `DispatchCreateParentAndRun`.\n\
+         \n\
+         NEVER attempt to execute the user's request directly (writing code, running \
+         commands, creating files). You are the ORCHESTRATOR — your only job is to \
+         break the request into tasks and dispatch them to the right team members.\n\
+         \n\
+         NEVER ask the user clarifying questions for tasks your members can figure out \
+         autonomously. Make reasonable assumptions and delegate. Only ask when a \
+         fundamental requirement is genuinely ambiguous (e.g. target language not \
+         specified among multiple possibilities).\n",
     );
     s.push_str(
-        "\nYour team members — use each one as a DAG node's `agentName` (exactly \
-         `persona:<folder>` as shown):\n",
+        "\n## Your team members\n\
+         Use each one as a DAG node's `agentName` (exactly `persona:<folder>` as shown):\n",
     );
     for m in team.members.iter() {
         let role = m.role.as_deref().unwrap_or("specialist");
@@ -206,31 +260,67 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
         }
     }
     s.push_str(
-        "\nMANDATORY workflow:\n\
-         1. (optional) RESEARCH with read-only tools (Read/Grep/Glob) if you need \
+        "\n## MANDATORY workflow\n\
+         1. (optional) RESEARCH — use read-only tools (Read/Grep/Glob) if you need \
             context before planning the graph.\n\
-         2. DISPATCH — call `DispatchCreateParentAndRun` ONCE with a task graph:\n\
+         2. PLAN — decide which members to engage and in what order. Map the user's \
+            request to concrete sub-tasks, one per member. Design the dependency chain \
+            (e.g. implementer first, then reviewer dependsOn implementer, then tester \
+            dependsOn both). Each member's prompt must be SELF-CONTAINED: include all \
+            context, file paths, requirements, and acceptance criteria they need.\n\
+         3. DISPATCH — call `DispatchCreateParentAndRun` ONCE with the full task graph:\n\
+            • `goal` = the user's request, verbatim or lightly rephrased\n\
             • one task per member you need to engage\n\
             • `agentName` = `persona:<member folder>` from the list above\n\
             • `label` = the member folder (used by `dependsOn`)\n\
-            • `prompt` = that member's slice of the work — what to do + their \
-              acceptance criteria + the relevant part of the user request\n\
-            • `dependsOn` = labels of members whose output this one needs (e.g. a \
-              fact-checker dependsOn the scout; a writer dependsOn both). Prerequisite \
-              results are auto-injected, so don't copy them into the prompt.\n\
+            • `prompt` = that member's slice of the work, including:\n\
+              – WHAT to do (concrete deliverables, not vague direction)\n\
+              – WHERE (file paths, project root, workspace dir)\n\
+              – HOW to verify their own output (run tests, check build, etc.)\n\
+              – Acceptance criteria from the member definition above\n\
+            • `dependsOn` = labels of members whose output this one needs. \
+              Prerequisite results are auto-injected into the prompt.\n\
+            • `timeoutSeconds` = set higher (1800-3600) for tasks that involve \
+              npm install, cargo build, or other slow operations\n\
             This BLOCKS until every member finishes and returns all their results.\n\
-         3. SYNTHESIZE — after dispatch returns, merge the members' outputs into ONE \
+         4. SYNTHESIZE — after dispatch returns, merge the members' outputs into ONE \
             final answer for the user, attributing which member contributed what. \
-            Do NOT stop after dispatching — the final synthesized answer is required.\n\
+            Include: what was built/changed, where to find it, how to run it, and \
+            any issues encountered. Do NOT stop after dispatching.\n\
          \n\
-         ERROR HANDLING — if some tasks report status error/failed:\n\
+         ## Example dispatch for \"build a Todo app in React\":\n\
+         ```json\n\
+         {\n\
+           \"goal\": \"Build a Todo app in React with add/delete/toggle\",\n\
+           \"timeoutSeconds\": 1800,\n\
+           \"tasks\": [\n\
+             {\"label\": \"code-writer\", \"agentName\": \"persona:code-writer\",\n\
+              \"prompt\": \"Create a React Todo app at ~/workspace/todo-app with: ...detailed spec...\",\n\
+              \"dependsOn\": []},\n\
+             {\"label\": \"code-reviewer\", \"agentName\": \"persona:code-reviewer\",\n\
+              \"prompt\": \"Review the React Todo app created by code-writer at ~/workspace/todo-app. ...\",\n\
+              \"dependsOn\": [\"code-writer\"]},\n\
+             {\"label\": \"test-engineer\", \"agentName\": \"persona:test-engineer\",\n\
+              \"prompt\": \"Write and run tests for the Todo app at ~/workspace/todo-app. ...\",\n\
+              \"dependsOn\": [\"code-writer\"]}\n\
+           ]\n\
+         }\n\
+         ```\n\
+         \n\
+         ## ERROR HANDLING\n\
+         If some tasks report status error/failed:\n\
          • Use the successful results and any partial output included in the report.\n\
-         • Do NOT re-dispatch the whole DAG — that duplicates work already running \
-           in the daemon. If one specific output is truly missing, re-dispatch only \
-           that single task.\n\
-         • Do NOT do the members' work yourself (you don't have their tools), and \
-           NEVER attribute content to a member whose output you did not receive — \
-           if you had to answer from partial data, say so honestly.\n\
+         • Do NOT re-dispatch the whole DAG — only re-dispatch the single failed task \
+           if its output is truly required.\n\
+         • NEVER do the members' work yourself (you don't have their tools), and \
+           NEVER attribute content to a member whose output you did not receive.\n\
+         \n\
+         ## WHAT NOT TO DO (anti-patterns)\n\
+         ❌ Asking the user \"bạn có muốn tôi…\" — just dispatch and do it\n\
+         ❌ Running npm/cargo/code commands yourself — delegate to a member\n\
+         ❌ Creating only 1 task when you have 3 team members — use the team\n\
+         ❌ Skipping dispatch for \"simple\" requests — if it involves work, delegate\n\
+         ❌ Stopping after dispatch without synthesizing the results\n\
          \n\
          If the request is purely conversational (greeting, small talk), say so \
          explicitly: \"No specialist needed — answering directly.\" and answer. \
@@ -286,25 +376,28 @@ pub fn on_user_message(db: &Arc<Db>, team_id: &str, content: &str) {
         );
     }
 
-    // 2. Triggered follow-ups — one task per matching member rule. Each
-    //    rule that fires creates a task assigned to that member, with the
-    //    trigger ref in the title prefix for visibility.
+    // 2. Pre-create a backlog task for every team member so the board shows
+    //    the planned decomposition upfront.  These start as `backlog` and get
+    //    promoted to `in_progress` / `done` by the dispatch lifecycle bridge.
+    //    Members with matching triggers get `todo` instead (ready to start).
+    let mut member_task_ids: Vec<String> = Vec::new();
     for member in team.members.iter() {
-        let matches = count_matching_rules(member, sender, msg_type);
-        if matches == 0 {
-            continue;
-        }
-        let trig_title = format!("[triggered:{}] {}", member.folder, title);
+        let triggered = count_matching_rules(member, sender, msg_type) > 0;
+        let status = if triggered { "todo" } else { "backlog" };
+        let role_label = member.role.as_deref().unwrap_or("member");
+        let member_title = format!("[{}] {}", role_label, title);
+        let tid = uuid::Uuid::new_v4().to_string();
+        member_task_ids.push(tid.clone());
         let task = CoworkTeamTask {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: tid,
             team_id: team_id.to_string(),
-            title: trig_title,
+            title: member_title,
             description: Some(content.to_string()),
-            status: "todo".to_string(),
+            status: status.to_string(),
             assignee: Some(member.folder.clone()),
             reviewer: None,
             priority: "medium".to_string(),
-            depends_on: Vec::new(),
+            depends_on: vec![primary.id.clone()],
             result_output: None,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -313,15 +406,131 @@ pub fn on_user_message(db: &Arc<Db>, team_id: &str, content: &str) {
         };
         if let Err(e) = db.insert_cowork_team_task(&task) {
             tracing::warn!(
-                "[cowork_runtime] trigger task insert failed for {}: {e}",
+                "[cowork_runtime] member task insert failed for {}: {e}",
                 member.folder
             );
         } else {
             tracing::info!(
-                "[cowork_runtime] team={team_id} triggered {} rule(s) → task for member={}",
-                matches,
+                "[cowork_runtime] team={team_id} member task ({status}) for {}",
                 member.folder
             );
         }
+    }
+}
+
+/// Bridge a DispatchBridge task lifecycle event to the CoworkTeamTask board.
+///
+/// The `label` from dispatch is the member folder (e.g. "code-writer").
+/// We find the most recent non-terminal CoworkTeamTask assigned to that
+/// folder and update its status to match the dispatch status.
+///
+/// This is wired as the `set_task_lifecycle_callback` in `run_daemon()`.
+pub fn on_dispatch_task_lifecycle(
+    db: &Arc<Db>,
+    _dispatch_task_id: &str,
+    dispatch_status: &str,
+    label: &str,
+    _parent_goal: &str,
+    result: Option<String>,
+) {
+    let member_folder = label.strip_prefix("persona:").unwrap_or(label);
+
+    let cowork_status = match dispatch_status {
+        "registered" => "todo",
+        "processing" => "in_progress",
+        "done" => "done",
+        "error" | "timeout" => "blocked",
+        _ => return,
+    };
+
+    let now = local_iso_string_now();
+
+    // Scan all teams — a member folder may appear in multiple teams, but
+    // we only update the most recent non-terminal task per team.
+    let teams = match db.list_cowork_teams() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    for team in &teams {
+        let has_member = team
+            .members
+            .iter()
+            .any(|m| m.folder == member_folder);
+        if !has_member {
+            continue;
+        }
+        let tasks = match db.list_cowork_team_tasks(&team.id) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let target = tasks
+            .into_iter()
+            .filter(|t| t.assignee.as_deref() == Some(member_folder))
+            .filter(|t| !matches!(t.status.as_str(), "done" | "blocked"))
+            .max_by(|a, b| a.created_at.cmp(&b.created_at));
+        let Some(task) = target else { continue };
+
+        let completed_at = if cowork_status == "done" { Some(now.as_str()) } else { None };
+        let result_ref = result.as_deref();
+        let _ = db.update_cowork_team_task(
+            &task.id,
+            None,
+            None,
+            Some(cowork_status),
+            None,
+            None,
+            None,
+            None,
+            result_ref,
+            None,
+            completed_at,
+            &now,
+        );
+        tracing::info!(
+            "[cowork_runtime] dispatch lifecycle: team={} member={} task={} → {}",
+            team.id, member_folder, task.id, cowork_status
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_done_for_substantive_reply() {
+        let reply = "Tôi đã tạo dự án React Todo app thành công tại ~/workspace/todo-app. \
+                      Project structure: src/App.tsx, src/components/TodoList.tsx, \
+                      src/components/TodoItem.tsx. Chạy `npm run dev` để khởi động.";
+        assert_eq!(classify_reply(reply), "done");
+    }
+
+    #[test]
+    fn classify_blocked_for_question_reply() {
+        let reply = "Bạn có muốn tôi thử lại từng bước một (bắt đầu bằng việc khởi tạo \
+                      dự án trước, sau đó mới viết code) hay bạn đã có sẵn một dự án React \
+                      rỗng để chúng ta bắt đầu viết code ngay?";
+        assert_eq!(classify_reply(reply), "blocked");
+    }
+
+    #[test]
+    fn classify_blocked_for_timeout() {
+        let reply = "Có vẻ như quá trình khởi tạo dự án đang gặp lỗi timeout ở hệ thống ngầm. \
+                      Do npm install có thể tốn khá nhiều thời gian nên các tác vụ đã không thể \
+                      hoàn thành trong giới hạn cho phép.";
+        assert_eq!(classify_reply(reply), "blocked");
+    }
+
+    #[test]
+    fn classify_blocked_for_very_short() {
+        assert_eq!(classify_reply("OK"), "blocked");
+        assert_eq!(classify_reply("Đã xong."), "blocked");
+    }
+
+    #[test]
+    fn classify_done_for_long_question_with_code() {
+        let reply = "Here is the implementation:\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n\nDoes this look good?";
+        assert_eq!(classify_reply(reply), "done");
     }
 }

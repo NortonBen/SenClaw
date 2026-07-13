@@ -90,14 +90,14 @@ pub async fn execute_command_hook(
     }
 
     let result = if let Some(cancel_tok) = cancel {
-        let id = child.id();
+        let _id = child.id();
         tokio::select! {
             r = timeout(timeout_dur, child.wait_with_output()) => {
                 r.map_err(|_| anyhow!("Hook timed out after {timeout_secs}s"))?
             }
             _ = cancel_tok.cancelled() => {
                 #[cfg(unix)]
-                if let Some(pid) = id {
+                if let Some(pid) = _id {
                     unsafe { libc::kill(pid as i32, libc::SIGTERM); }
                 }
                 return Err(anyhow!("Hook aborted"));

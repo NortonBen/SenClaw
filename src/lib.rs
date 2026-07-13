@@ -1132,7 +1132,6 @@ fn wire_app_channel_controls(
 }
 
 #[cfg(unix)]
-#[cfg(unix)]
 fn raise_fd_limit() {
     // A generous ceiling; macOS enforces `kern.maxfilesperproc` on top of this,
     // so we try descending candidates until one is accepted.

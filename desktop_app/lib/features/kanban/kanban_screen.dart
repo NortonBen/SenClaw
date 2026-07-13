@@ -241,10 +241,9 @@ class _BoardView extends ConsumerWidget {
               style: TextStyle(color: c.textSecondary, fontSize: 12)),
           const SizedBox(width: AppTokens.s4),
           Switch(
-            value: lanes,
-            onChanged: (v) =>
-                ref.read(workerLanesProvider.notifier).state = v,
-          ),
+              value: lanes,
+              onChanged: (v) =>
+                  ref.read(workerLanesProvider.notifier).state = v),
         ]),
         const SizedBox(width: AppTokens.s8),
         if (assignees.isNotEmpty)
@@ -262,6 +261,12 @@ class _BoardView extends ConsumerWidget {
             onChanged: (v) =>
                 ref.read(assigneeFilterProvider.notifier).state = v,
           ),
+        const SizedBox(width: AppTokens.s8),
+        OutlinedButton.icon(
+          onPressed: () => _showAiTaskDialog(context, ref, boardId),
+          icon: const Icon(Icons.auto_awesome, size: 16),
+          label: const Text('AI Task'),
+        ),
         const SizedBox(width: AppTokens.s8),
         OutlinedButton.icon(
           onPressed: () => _showAddColumnDialog(context, ref, boardId),
@@ -940,6 +945,60 @@ Future<void> _showAddColumnDialog(
     await ref
         .read(kanbanApiProvider)
         .addColumn(boardId, ctl.text.trim(), role: role);
+  }
+}
+
+Future<void> _showAiTaskDialog(
+    BuildContext context, WidgetRef ref, int boardId) async {
+  final ctl = TextEditingController();
+  final messenger = ScaffoldMessenger.of(context);
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dctx) => AlertDialog(
+      backgroundColor: dctx.colors.surface,
+      title: const Text('✨ AI Task'),
+      content: SizedBox(
+        width: 480,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('Mô tả yêu cầu — AI sẽ tự break down thành các task và đưa vào board để chạy.',
+              style: TextStyle(
+                  color: dctx.colors.textMuted, fontSize: 12)),
+          const SizedBox(height: AppTokens.s12),
+          TextField(
+            controller: ctl,
+            autofocus: true,
+            maxLines: 4,
+            decoration: const InputDecoration(
+                labelText: 'Yêu cầu',
+                hintText: 'VD: Viết báo cáo phân tích thị trường Q3…'),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(dctx, true),
+            child: const Text('Generate')),
+      ],
+    ),
+  );
+  if (ok == true && ctl.text.trim().isNotEmpty) {
+    messenger.showSnackBar(
+        const SnackBar(content: Text('AI đang break down task…')));
+    try {
+      await ref.read(kanbanApiProvider).generateBoard(
+            ctl.text.trim(),
+            boardId: boardId,
+          );
+      messenger.clearSnackBars();
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Đã thêm tasks vào board')));
+    } catch (e) {
+      messenger.clearSnackBars();
+      messenger.showSnackBar(SnackBar(content: Text('AI failed: $e')));
+    }
   }
 }
 

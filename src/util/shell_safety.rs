@@ -159,7 +159,7 @@ fn split_segments(command: &str) -> Vec<String> {
     let mut in_double = false;
     let mut i = 0;
 
-    let mut flush = |cur: &mut String, segments: &mut Vec<String>| {
+    let flush = |cur: &mut String, segments: &mut Vec<String>| {
         let trimmed = cur.trim();
         if !trimmed.is_empty() {
             segments.push(trimmed.to_string());
