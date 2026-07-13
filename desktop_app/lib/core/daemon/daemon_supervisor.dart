@@ -94,8 +94,18 @@ class DaemonSupervisor extends ChangeNotifier {
         workingDirectory: bin.parent.path,
       );
       _proc = proc;
-      proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(_log);
-      proc.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(_log);
+      // Malformed-tolerant + never cancel: a strict utf8 decoder throws on any
+      // non-UTF-8 byte, which kills the subscription and CLOSES the pipe — the
+      // daemon's next eprintln! then panics with EPIPE (observed poisoning the
+      // Whisper engine mutex). Keep draining no matter what arrives.
+      proc.stdout
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .transform(const LineSplitter())
+          .listen(_log, onError: (Object _) {}, cancelOnError: false);
+      proc.stderr
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .transform(const LineSplitter())
+          .listen(_log, onError: (Object _) {}, cancelOnError: false);
       unawaited(proc.exitCode.then(_onExit));
     } catch (e) {
       _lastError = 'failed to spawn daemon: $e';

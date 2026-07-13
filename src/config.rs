@@ -222,9 +222,15 @@ pub struct CognitiveConfig {
     /// Reflection skips messages longer than this — a 10 KB paste would
     /// blow up the prompt token count. Caller can still CogAdd manually.
     pub reflect_max_chars: usize,
-    /// Minimum interval between reflection calls for the same agent.
+    /// Minimum interval between reflection *flushes* for the same agent.
     /// Defends against busy-chat storms. 0 = no cooldown.
     pub reflect_cooldown_ms: u64,
+    /// Session-window idle timeout: after the last buffered turn, wait this
+    /// long for the conversation to go quiet before flushing the window to
+    /// cognify. Buffering several turns into one extraction call is what
+    /// lets facts that span turns ("deadline khi nào?" → "tháng 8") reach
+    /// the graph. 0 = flush per message (legacy behavior).
+    pub reflect_window_idle_ms: u64,
     /// Cadence for the periodic maintenance sweep (cleanup junk +
     /// merge duplicate entities). `0` disables the sweep entirely; the
     /// user can still trigger it manually from the Settings UI.
@@ -247,6 +253,10 @@ impl Default for CognitiveConfig {
             // 2 s cooldown lets multi-line replies in quick succession
             // queue without firing 5 cognifies back-to-back.
             reflect_cooldown_ms: 2000,
+            // 2 min of silence closes a conversation window — long enough
+            // to span a question→answer exchange, short enough that facts
+            // land in the graph while the chat is still warm.
+            reflect_window_idle_ms: 120_000,
             // Daily maintenance. Cheap on small graphs; bigger ones can
             // raise the cadence via the Settings UI.
             maintenance_interval_hours: 24,
@@ -265,10 +275,35 @@ pub struct Config {
     pub cognitive: CognitiveConfig,
     pub ui_server: UiServerConfig,
     pub mcp: McpConfig,
+    pub dispatch: DispatchConfig,
+    /// Space-App health supervisor interval in seconds (`SENCLAW_SPACE_SUPERVISE_SECS`).
+    /// 0 disables the supervisor. Default 20.
+    pub space_supervise_secs: u64,
     pub ws_port: u16,
     /// POSIX shell override for workflow script steps
     /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
     pub workflow_shell: Option<String>,
+}
+
+/// MCPDispatcher — autonomously runs ready tasks from dispatch sources (e.g. the
+/// Kanban Space App) through persona worker agents. Off by default.
+#[derive(Debug, Clone)]
+pub struct DispatchConfig {
+    /// Master switch (`SENCLAW_DISPATCH_ENABLED`).
+    pub enabled: bool,
+    /// Poll cadence in seconds (`SENCLAW_DISPATCH_INTERVAL_SECS`).
+    pub interval_secs: u64,
+    /// Max worker agents at once (`SENCLAW_DISPATCH_MAX_CONCURRENT`).
+    pub max_concurrent: usize,
+    /// Max concurrent items per assignee (`SENCLAW_DISPATCH_PER_ASSIGNEE`).
+    pub per_assignee: usize,
+    /// Kanban app base URL to dispatch from (`SENCLAW_DISPATCH_KANBAN_URL`).
+    /// Empty = no Kanban source.
+    pub kanban_url: String,
+    /// Cap on a worker's agent turns (`SENCLAW_DISPATCH_MAX_TURNS`).
+    pub max_agent_turns: usize,
+    /// Per-item run timeout (`SENCLAW_DISPATCH_TIMEOUT_SECS`).
+    pub default_timeout_secs: u64,
 }
 
 fn home() -> PathBuf {
@@ -453,6 +488,10 @@ impl Config {
                 reflect_max_chars: env_int::<usize>("SENCLAW_COGNITIVE_REFLECT_MAX_CHARS", 2000)
                     .max(100),
                 reflect_cooldown_ms: env_int::<u64>("SENCLAW_COGNITIVE_REFLECT_COOLDOWN_MS", 2000),
+                reflect_window_idle_ms: env_int::<u64>(
+                    "SENCLAW_COGNITIVE_REFLECT_WINDOW_IDLE_MS",
+                    120_000,
+                ),
                 maintenance_interval_hours: env_int::<u64>(
                     "SENCLAW_COGNITIVE_MAINTENANCE_HOURS",
                     24,
@@ -472,6 +511,16 @@ impl Config {
                 litho_binary: env_or("SENCLAW_LITHO_BINARY", "deepwiki-rs"),
                 litho_model_efficient: env_or("SENCLAW_LITHO_MODEL_EFFICIENT", ""),
             },
+            dispatch: DispatchConfig {
+                enabled: env_bool("SENCLAW_DISPATCH_ENABLED", false),
+                interval_secs: env_int("SENCLAW_DISPATCH_INTERVAL_SECS", 30),
+                max_concurrent: env_int("SENCLAW_DISPATCH_MAX_CONCURRENT", 3),
+                per_assignee: env_int("SENCLAW_DISPATCH_PER_ASSIGNEE", 1),
+                kanban_url: env_or("SENCLAW_DISPATCH_KANBAN_URL", "http://127.0.0.1:4400"),
+                max_agent_turns: env_int("SENCLAW_DISPATCH_MAX_TURNS", 40),
+                default_timeout_secs: env_int("SENCLAW_DISPATCH_TIMEOUT_SECS", 600),
+            },
+            space_supervise_secs: env_int("SENCLAW_SPACE_SUPERVISE_SECS", 20),
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
             workflow_shell: env::var("SENCLAW_WORKFLOW_SHELL")
                 .ok()
@@ -571,6 +620,9 @@ impl Config {
             }
             if let Some(v) = cc.reflect_cooldown_ms {
                 self.cognitive.reflect_cooldown_ms = v;
+            }
+            if let Some(v) = cc.reflect_window_idle_ms {
+                self.cognitive.reflect_window_idle_ms = v;
             }
             if let Some(v) = cc.auto_reflection {
                 self.memory.cognitive_reflection = v;

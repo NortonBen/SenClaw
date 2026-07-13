@@ -23,6 +23,7 @@ use super::chat::{
 };
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::embedding_config::{embedding_config_get, embedding_config_save};
+use super::hf_validate::{local_models_validate, tts_validate, whisper_validate};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test, llm_config_update,
@@ -270,6 +271,11 @@ pub fn build_router(state: Arc<UiState>) -> Router {
                 .post(super::agent_behavior_config::agent_behavior_set),
         )
         .route(
+            "/api/dispatch-config",
+            get(super::dispatch_config::dispatch_config_get)
+                .post(super::dispatch_config::dispatch_config_set),
+        )
+        .route(
             "/api/admin-permissions",
             get(admin_perms_get).post(admin_perms_set),
         )
@@ -407,6 +413,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/local-models/:id/download",
             post(local_models_download),
         )
+        .route("/api/local-models/:id/validate", get(local_models_validate))
         .route("/api/local-models/:id/status", get(local_models_status))
         .route("/api/local-models/:id/cancel", post(local_models_cancel))
         .route("/api/local-models/:id", delete(local_models_delete))
@@ -431,6 +438,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/whisper/settings",
             get(whisper_settings_get).put(whisper_settings_put),
         )
+        .route("/api/whisper/models/:id/validate", get(whisper_validate))
         .route("/api/whisper/models/:id/download", post(whisper_download))
         .route("/api/whisper/models/:id/status", get(whisper_status))
         .route("/api/whisper/models/:id/cancel", post(whisper_cancel))
@@ -442,6 +450,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/tts/settings",
             get(tts_settings_get).put(tts_settings_put),
         )
+        .route("/api/tts/models/:id/validate", get(tts_validate))
         .route("/api/tts/models/:id/download", post(tts_download))
         .route("/api/tts/models/:id/status", get(tts_status))
         .route("/api/tts/models/:id/cancel", post(tts_cancel))
@@ -669,6 +678,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/cognitive/node/:id/re-extract",
             post(super::cognitive::cognitive_re_extract),
+        )
+        .route(
+            "/api/cognitive/re-extract-pending",
+            post(super::cognitive::cognitive_re_extract_pending),
         )
         .route(
             "/api/cognitive/decay-log",

@@ -14,6 +14,7 @@ import '../core/daemon/startup_gate.dart';
 import '../core/notifications/system_notifier.dart';
 import '../core/transport/connection.dart';
 import '../features/chat/mini_chat_screen.dart' show miniExpandRequestProvider;
+import '../features/chat/reminder_interaction.dart';
 import '../features/chat/widgets/plan_exit_dialog.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_mode_provider.dart';
@@ -231,6 +232,7 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
           children: [
             child ?? const SizedBox.shrink(),
             const PlanExitOverlay(),
+            const ReminderInteractionOverlay(),
           ],
         ),
       ),

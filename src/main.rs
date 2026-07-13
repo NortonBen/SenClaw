@@ -115,6 +115,9 @@ enum Command {
     /// Run one cognitive maintenance sweep on demand: cleanup junk, merge
     /// duplicate entities, and infer associative links. Safe while running.
     CognitiveMaintain,
+    /// Start the built-in Kanban board MCP server (stdio JSON-RPC). Native —
+    /// talks to the Kanban DB directly.
+    KanbanServer,
 }
 
 #[tokio::main]
@@ -143,6 +146,7 @@ async fn main() -> Result<()> {
                 | Command::OcrServer
                 | Command::JsServer
                 | Command::BrushSandbox { .. }
+                | Command::KanbanServer
         )
     );
 
@@ -204,5 +208,6 @@ async fn main() -> Result<()> {
             max_nodes,
         } => senclaw::cli::commands::cognitive::train(epochs, lr, neg_per_pos, max_nodes).await,
         Command::CognitiveMaintain => senclaw::cli::commands::cognitive::maintain().await,
+        Command::KanbanServer => senclaw::kanban::mcp::run_stdio_server().await,
     }
 }

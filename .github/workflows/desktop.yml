@@ -94,14 +94,21 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             platform: macos
+            # Full Apple-Silicon daemon feature set — keep in sync with the
+            # Makefile's DAEMON_FEATURES. Without local-mlx-tts /
+            # local-mlx-whisper the released daemon silently falls back to the
+            # macOS voice for TTS and has no local STT at all.
+            daemon_features: "local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal,tts-vieneu"
           # x86_64-apple-darwin (macos-13, Intel) temporarily disabled —
           # re-enable when an Intel build is actually needed.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows
+            daemon_features: ""
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux
+            daemon_features: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +143,14 @@ jobs:
           channel: stable
 
       - name: Build senclaw daemon binary
-        run: cargo build --release --bin senclaw --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.daemon_features }}" ]; then
+            cargo build --release --bin senclaw --target ${{ matrix.target }} \
+              --features "${{ matrix.daemon_features }}"
+          else
+            cargo build --release --bin senclaw --target ${{ matrix.target }}
+          fi
 
       - name: Build Flutter desktop app
         working-directory: desktop_app
@@ -153,6 +167,18 @@ jobs:
             macos)
               APP="desktop_app/build/macos/Build/Products/Release/SenClaw Desktop.app"
               cp "$BIN_DIR/senclaw" "$APP/Contents/Resources/senclaw"
+              # MLX resolves mlx.metallib next to the executable; the compiled-in
+              # METAL_PATH fallback points into the CI runner's target dir and
+              # does not exist on user machines — without this copy every MLX
+              # call (TTS/STT/local LLM) aborts with "Failed to load the
+              # default metallib".
+              METALLIB=$(find "target/${{ matrix.target }}/release/build" -name mlx.metallib | head -1)
+              if [ -n "$METALLIB" ]; then
+                cp "$METALLIB" "$APP/Contents/Resources/mlx.metallib"
+                cp "$METALLIB" "dist-artifacts/mlx-${{ matrix.target }}.metallib"
+              else
+                echo "::warning::mlx.metallib not found — MLX features will not work in the packaged app"
+              fi
               # zip the .app for upload
               ditto -c -k --keepParent "$APP" "dist-artifacts/SenClaw-${{ matrix.target }}.app.zip"
               cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"

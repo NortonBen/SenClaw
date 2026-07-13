@@ -52,7 +52,7 @@ fn ask_yes_no(prompt: &str, timeout_secs: u64) -> Option<bool> {
     io::stdout().flush().ok();
     match read_line_with_timeout(timeout_secs) {
         None => {
-            println!("\nTimed out.");
+            crate::safe_println!("\nTimed out.");
             None
         }
         Some(line) => {
@@ -67,16 +67,16 @@ fn ask_yes_no(prompt: &str, timeout_secs: u64) -> Option<bool> {
 }
 
 fn select_policy() -> Option<String> {
-    println!("\nSelect permission policy:");
-    println!("  [1] All agents require approval (safest, default)");
-    println!("  [2] Main agent bypasses approval");
-    println!("  [3] All agents bypass approval");
+    crate::safe_println!("\nSelect permission policy:");
+    crate::safe_println!("  [1] All agents require approval (safest, default)");
+    crate::safe_println!("  [2] Main agent bypasses approval");
+    crate::safe_println!("  [3] All agents bypass approval");
     print!("Choice (1/2/3): ");
     io::stdout().flush().ok();
 
     match read_line_with_timeout(SETUP_TIMEOUT_SECS) {
         None => {
-            println!("\nTimed out.");
+            crate::safe_println!("\nTimed out.");
             None
         }
         Some(line) => match line.trim() {
@@ -99,29 +99,29 @@ pub fn run_setup_if_needed(config_path: &Path) {
     let cfg = get_admin_permissions_config(config_path);
     let first_time = is_first_time(&cfg);
 
-    println!("\n=== SenClaw Setup ===\n");
+    crate::safe_println!("\n=== SenClaw Setup ===\n");
 
     if first_time {
-        println!("No permission policy found. Default policy: all agents require approval.");
+        crate::safe_println!("No permission policy found. Default policy: all agents require approval.");
         match ask_yes_no(
             "Configure permission policy now? (Will auto-skip after 2 minutes of inactivity)",
             SETUP_TIMEOUT_SECS,
         ) {
             None => {
-                println!("Timed out. Using default policy (approval required). Change it later in WebUI settings.");
-                println!("Starting...");
+                crate::safe_println!("Timed out. Using default policy (approval required). Change it later in WebUI settings.");
+                crate::safe_println!("Starting...");
                 return;
             }
             Some(false) => {
-                println!("Skipped setup. Using default policy (approval required).");
-                println!("Starting...");
+                crate::safe_println!("Skipped setup. Using default policy (approval required).");
+                crate::safe_println!("Starting...");
                 return;
             }
             Some(true) => {} // continue to policy selection
         }
     } else {
-        println!("Current permission policy: {}", describe(&cfg));
-        println!("Starting...");
+        crate::safe_println!("Current permission policy: {}", describe(&cfg));
+        crate::safe_println!("Starting...");
         return;
     }
 
@@ -129,8 +129,8 @@ pub fn run_setup_if_needed(config_path: &Path) {
     let choice = match select_policy() {
         Some(c) => c,
         None => {
-            println!("Cancelled. Keeping existing settings.");
-            println!("Starting...");
+            crate::safe_println!("Cancelled. Keeping existing settings.");
+            crate::safe_println!("Starting...");
             return;
         }
     };
@@ -141,11 +141,11 @@ pub fn run_setup_if_needed(config_path: &Path) {
     };
 
     if let Err(e) = save_admin_permissions_config(config_path, &next) {
-        eprintln!("Failed to save permission config: {e}");
+        crate::safe_eprintln!("Failed to save permission config: {e}");
     } else {
-        println!("Saved: {}", describe(&next));
+        crate::safe_println!("Saved: {}", describe(&next));
     }
-    println!("Starting...");
+    crate::safe_println!("Starting...");
 }
 
 #[cfg(test)]

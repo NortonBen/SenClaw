@@ -1509,12 +1509,12 @@ impl AgentPool {
         // longer written or read.
         let _ = &self.daily_logger;
 
-        // ---- P14: auto-reflection ----
-        // Fire-and-forget cognify on the user message so the knowledge
-        // graph grows passively while the agent works. Spawn runs in the
-        // background — failures are isolated to the spawn task and never
-        // affect this turn. The config flag lets ops disable it for
-        // privacy or cost reasons.
+        // ---- P14 v2: auto-reflection (session window) ----
+        // The user turn joins the group's reflection window; the window is
+        // cognified as ONE call when it fills up or the chat goes idle —
+        // see `agent_pool::reflection`. Non-blocking; failures stay inside
+        // the flush task. The config flag lets ops disable it for privacy
+        // or cost reasons.
         {
             let reflect_enabled = self
                 .config
@@ -1524,11 +1524,7 @@ impl AgentPool {
                 .map(|c| c.memory.cognitive_reflection)
                 .unwrap_or(true);
             if reflect_enabled {
-                let prompt_owned = prompt.to_string();
-                let folder_owned = group.folder.clone();
-                tokio::spawn(async move {
-                    cognitive_reflect(prompt_owned, folder_owned).await;
-                });
+                super::reflection::reflect_push(&group.folder, "User", prompt);
             }
         }
 
@@ -2469,7 +2465,23 @@ impl AgentPool {
                     );
                     // Assistant reply no longer appended to daily history log.
                     let _ = &pool.daily_logger;
-                    let _ = &folder;
+                    // P14 v2: the assistant turn joins the same reflection
+                    // window as the user turns, so cross-turn facts
+                    // (question → answer) reach the knowledge graph.
+                    let reflect_enabled = pool
+                        .config
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|c| c.memory.cognitive_reflection)
+                        .unwrap_or(true);
+                    if reflect_enabled {
+                        crate::agent::agent_pool::reflection::reflect_push(
+                            &folder,
+                            "Assistant",
+                            &data.content,
+                        );
+                    }
                 }),
             );
         }
@@ -3217,57 +3229,10 @@ pub(crate) fn should_reflect(text: &str, min_chars: usize, max_chars: usize) -> 
     !only_question
 }
 
-/// Fire-and-forget cognify on a user message. Runs in `tokio::spawn` from
-/// the call site so it never blocks the agent reply. Silently no-ops when:
-///   * cognitive system isn't booted (no embedding provider)
-///   * the configured Cognitive LLM is the disabled placeholder — the
-///     cognify pipeline will still embed the chunk (P14 graceful path) but
-///     produce zero edges, which is fine
-///   * `should_reflect` rejects the text
-async fn cognitive_reflect(text: String, group_folder: String) {
-    // Honor the master-enabled flag AND size bounds from CognitiveConfig.
-    // `Config::from_env` re-reads env each call — cheap (just var lookups)
-    // and lets ops tune limits live by exporting + restarting the daemon.
-    let cfg = crate::config::Config::from_env();
-    if !cfg.cognitive.enabled {
-        return;
-    }
-    if !should_reflect(
-        &text,
-        cfg.cognitive.reflect_min_chars,
-        cfg.cognitive.reflect_max_chars,
-    ) {
-        return;
-    }
-    let Some(sys) = crate::memory::cognitive::try_get_instance() else {
-        return;
-    };
-    if !sys.is_enabled() {
-        return;
-    }
-    let opts = crate::memory::cognitive::CognifyOptions {
-        node_sets: vec![crate::memory::cognitive::NodeSet::group(
-            &group_folder,
-            "default_memory",
-        )],
-        ..Default::default()
-    };
-    match sys.cognify(&text, "reflection", &opts).await {
-        Ok(r) => {
-            if r.entities_added > 0 || r.edges_added > 0 {
-                tracing::info!(
-                    chunks_added = r.chunks_added,
-                    entities_added = r.entities_added,
-                    edges_added = r.edges_added,
-                    "[reflection] auto-cognified user message"
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "[reflection] cognify failed");
-        }
-    }
-}
+// NOTE: the per-message `cognitive_reflect` was replaced by the session
+// window in `agent_pool::reflection` (P14 v2) — turns are buffered per
+// group and cognified as one call on size/idle flush. `should_reflect`
+// above is still the window-level gate.
 
 #[cfg(test)]
 mod merge_reasoning_tests {

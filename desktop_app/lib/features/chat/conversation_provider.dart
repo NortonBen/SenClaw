@@ -226,7 +226,16 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
 
   /// Send a user message. [attachments] are `{dataUrl, mimeType}` maps
   /// (base64 data URLs), matching the React `ImageAttachment` shape.
-  void sendText(String text, {List<Map<String, String>> attachments = const []}) {
+  ///
+  /// [contextPreamble], when set, is prepended to the text sent to the agent
+  /// but NOT shown in the user's bubble — used to inject hidden context (e.g.
+  /// the reminder a message is about) so the agent can resolve references
+  /// without cluttering the visible transcript.
+  void sendText(
+    String text, {
+    List<Map<String, String>> attachments = const [],
+    String? contextPreamble,
+  }) {
     final trimmed = text.trim();
     if (trimmed.isEmpty && attachments.isEmpty) return;
     final ws = _ref.read(wsClientProvider);
@@ -237,10 +246,13 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
       ts: DateTime.now().toIso8601String(),
       data: attachments.isEmpty ? const {} : {'attachments': attachments},
     ));
+    final payloadText = (contextPreamble != null && contextPreamble.isNotEmpty)
+        ? '$contextPreamble\n\n$trimmed'
+        : trimmed;
     ws.send({
       'type': 'message',
       'groupJid': jid,
-      'text': trimmed,
+      'text': payloadText,
       if (attachments.isNotEmpty) 'attachments': attachments,
     });
   }

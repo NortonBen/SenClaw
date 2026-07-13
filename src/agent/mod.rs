@@ -11,6 +11,7 @@ pub mod hook_config_loader;
 pub use hook_config_loader::load_zen_hook_config;
 pub mod input_builder;
 pub mod isolated_runner;
+pub mod mcp_dispatch;
 pub mod permission_bridge;
 pub mod persona_registry;
 pub mod send_bridge;

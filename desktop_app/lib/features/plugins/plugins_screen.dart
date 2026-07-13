@@ -5,6 +5,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/refresh_on_mount.dart';
 import '../settings/entity_providers.dart' show toolRulesProvider, ToolRule;
 import 'cowork_panel.dart' show CoworkPanel;
+import '../kanban/kanban_templates_panel.dart' show KanbanTemplatesPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
 import '../cognitive/cognitive_screen.dart' show CognitiveScreen;
 import '../workflow/workflow_panel.dart' show WorkflowPanel;
@@ -263,9 +264,10 @@ const _pluginsSections = [
   ('hooks', 'Hooks', Icons.webhook_outlined),
   ('code', 'Code', Icons.code),
   ('apps', 'Space Apps', Icons.apps_outlined),
+  ('kanban', 'Kanban', Icons.view_kanban_outlined),
   ('cowork', 'Cowork', Icons.groups_outlined),
   ('workflow', 'Workflow', Icons.account_tree_outlined),
-  ('memory', 'Memory', Icons.hub_outlined),
+  ('memory', 'Knowledge', Icons.hub_outlined),
   ('marketplace', 'Marketplace', Icons.store_outlined),
 ];
 
@@ -335,6 +337,7 @@ class PluginsScreen extends ConsumerWidget {
                 providers: [codeArtifactsProvider],
                 child: const _CodeTab()),
             'apps' => const SpaceAppsSection(),
+            'kanban' => const KanbanTemplatesPanel(),
             'cowork' => const CoworkPanel(),
             'workflow' => const WorkflowPanel(),
             'memory' => const CognitiveScreen(),

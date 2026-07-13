@@ -1,0 +1,98 @@
+{
+  "id": "docx-editor",
+  "name": "SenClaw DOCX Editor",
+  "description": "Soạn thảo và chia sẻ tài liệu Word (.docx) trong SenClaw. Tạo tài liệu mới, tải lên file .docx có sẵn để chỉnh sửa, tải xuống lại dưới dạng .docx chuẩn OOXML. AI Agent có thể mở, đọc, chỉnh sửa, tìm-thay-thế, ghi và lưu nội dung tài liệu qua MCP — người dùng thấy thay đổi đồng thời trên giao diện.",
+  "icon": "📄",
+  "runtime": {
+    "kind": "server",
+    "start": "./docx-editor",
+    "healthPath": "/api/status",
+    "port": 4380
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest"
+    ]
+  },
+  "mcp": {
+    "name": "docx-editor-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw DOCX Editor MCP: mở, đọc, sửa và lưu tài liệu Word (.docx) — list/create/open/read/write/append/replace/rename/delete + xuất URL tải .docx.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "docx-open",
+      "path": "skills/docx-open",
+      "triggers": [
+        "mở tài liệu",
+        "mở file docx",
+        "mở file word",
+        "đọc tài liệu",
+        "đọc file docx",
+        "đọc file word",
+        "xem nội dung tài liệu",
+        "liệt kê tài liệu",
+        "danh sách tài liệu word",
+        "tài liệu word của tôi",
+        "open document",
+        "open docx",
+        "open word file",
+        "read document",
+        "read docx",
+        "read word file",
+        "list documents",
+        "show my docs"
+      ]
+    },
+    {
+      "name": "docx-edit",
+      "path": "skills/docx-edit",
+      "triggers": [
+        "soạn tài liệu",
+        "soạn file word",
+        "tạo tài liệu word",
+        "tạo file docx",
+        "viết tài liệu",
+        "viết cho tôi tài liệu",
+        "chỉnh sửa tài liệu",
+        "sửa tài liệu",
+        "sửa file docx",
+        "sửa file word",
+        "cập nhật tài liệu",
+        "thêm đoạn vào tài liệu",
+        "thay thế trong tài liệu",
+        "tìm và thay thế trong docx",
+        "lưu tài liệu",
+        "xuất tài liệu word",
+        "tải tài liệu về máy",
+        "download docx",
+        "write a docx",
+        "create a word document",
+        "draft a word document",
+        "edit document",
+        "edit docx",
+        "edit word file",
+        "update document",
+        "append to document",
+        "find and replace in docx",
+        "save document",
+        "export docx",
+        "download the docx"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "docx-writer",
+      "path": "personas/docx-writer.md",
+      "description": "Người soạn thảo tài liệu Word đa năng: dựng dàn ý, viết, chỉnh sửa và giữ nhất quán về giọng văn và định dạng."
+    }
+  ]
+}

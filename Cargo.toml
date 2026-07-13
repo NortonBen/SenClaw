@@ -1,5 +1,5 @@
 [workspace]
-members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar", "apps/skill-builder", "apps/crm"]
+members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar", "apps/skill-builder", "apps/docx-editor", "apps/crm"]
 resolver = "2"
 
 [package]
@@ -167,6 +167,14 @@ minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
 russh = "0.44.1"
 russh-keys = "0.44.0"
 
+# VieNeu-TTS v3 Turbo backend (ONNX Runtime sidecar, CPU — works beyond Apple
+# Silicon). See src/tts/vieneu. `ort` downloads a prebuilt onnxruntime at build.
+ort = { version = "2.0.0-rc.10", optional = true, features = ["download-binaries"] }
+# Vendored sea-g2p core (src/tts/vieneu/sea_g2p) needs look-around regexes and
+# mmaps its phoneme dictionary.
+fancy-regex = { version = "0.18", optional = true }
+memmap2 = { version = "0.9", optional = true }
+
 # Native MLX inference on Apple Silicon (feature-gated; macOS-only build).
 half = { version = "2.4", optional = true }
 safetensors = { version = "0.4", optional = true }
@@ -202,6 +210,14 @@ image = { version = "0.25", optional = true, default-features = false, features 
 ocr-rs = { git = "https://github.com/zibo-chen/rust-paddle-ocr.git", branch = "next", optional = true, default-features = false }
 brush-core = "0.5"
 brush-builtins = "0.2"
+unicode-normalization = "0.1"
+
+# Shared Space-App SDK — dispatch protocol types + stdio↔HTTP MCP bridge used by
+# the MCPDispatcher engine (src/agent/mcp_dispatch).
+app-space-sdk = { path = "app-space-sdk" }
+
+# SSE streaming for the built-in Kanban MCP-over-HTTP endpoint (src/kanban/mcp.rs).
+async-stream = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
@@ -281,6 +297,11 @@ local-mlx-whisper = ["local-mlx", "whisper-audio"]
 # the pure-Rust config/tokenizer/weight-index tests need no feature flag.
 # Build: cargo build --features local-mlx-tts
 local-mlx-tts = ["local-mlx", "whisper-audio"]
+
+# VieNeu-TTS v3 Turbo (48 kHz Vietnamese TTS) via ONNX Runtime — CPU, no MLX
+# required, so this also works on Windows/Linux daemons.
+# Build: cargo build --features tts-vieneu
+tts-vieneu = ["dep:ort", "dep:fancy-regex", "dep:memmap2", "dep:tokenizers"]
 
 # Pure-Rust OCR via PaddleOCR + MNN backend (cross-platform; CPU by default).
 # Build: cargo build --features ocr-paddle

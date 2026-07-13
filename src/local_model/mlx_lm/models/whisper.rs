@@ -523,29 +523,29 @@ pub fn load_whisper_model(model_dir: impl AsRef<Path>) -> Result<WhisperModel, E
     let dims = get_whisper_dims(model_dir)?;
     let quantization = dims.quantization.clone();
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-        eprintln!("[whisper-debug] load dims quantization={quantization:?}");
+        crate::safe_eprintln!("[whisper-debug] load dims quantization={quantization:?}");
     }
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-        eprintln!("[whisper-debug] build dense model start");
+        crate::safe_eprintln!("[whisper-debug] build dense model start");
     }
     let mut model = WhisperModel::new(dims)?;
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-        eprintln!("[whisper-debug] build dense model done");
+        crate::safe_eprintln!("[whisper-debug] build dense model done");
     }
     if let Some(q) = quantization.as_ref() {
         if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] quantize model start group_size={} bits={}",
                 q.group_size, q.bits
             );
         }
         model = nn::quantize(model, Some(q.group_size), Some(q.bits))?;
         if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-            eprintln!("[whisper-debug] quantize model done");
+            crate::safe_eprintln!("[whisper-debug] quantize model done");
         }
     }
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-        eprintln!("[whisper-debug] load base model built");
+        crate::safe_eprintln!("[whisper-debug] load base model built");
     }
     let is_quantized = quantization.is_some();
 
@@ -558,14 +558,14 @@ pub fn load_whisper_model(model_dir: impl AsRef<Path>) -> Result<WhisperModel, E
         }
     };
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-        eprintln!(
+        crate::safe_eprintln!(
             "[whisper-debug] load safetensors path={}",
             weights.display()
         );
     }
     let loaded = Array::load_safetensors(&weights)?;
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
-        eprintln!("[whisper-debug] load safetensors decoded");
+        crate::safe_eprintln!("[whisper-debug] load safetensors decoded");
     }
     let mut params = model.parameters_mut().flatten();
     if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
@@ -575,7 +575,7 @@ pub fn load_whisper_model(model_dir: impl AsRef<Path>) -> Result<WhisperModel, E
             .map(|(k, v)| format!("{k}:{:?}", v.shape()))
             .collect::<Vec<_>>();
         sample.sort();
-        eprintln!("[whisper-debug] param tree sample={}", sample.join(", "));
+        crate::safe_eprintln!("[whisper-debug] param tree sample={}", sample.join(", "));
     }
     let mut token_embedding_weight: Option<Array> = None;
     let mut token_embedding_scales: Option<Array> = None;

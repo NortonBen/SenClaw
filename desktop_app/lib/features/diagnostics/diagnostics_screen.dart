@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/transport/connection.dart';
 import '../../core/daemon/daemon_provider.dart';
@@ -75,7 +76,40 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
               ],
             ),
             const SizedBox(height: AppTokens.s16),
-            Text('Logs', style: TextStyle(color: c.textSecondary, fontSize: 12)),
+            Row(
+              children: [
+                Text('Logs',
+                    style: TextStyle(color: c.textSecondary, fontSize: 12)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: sup.logs.isEmpty
+                      ? null
+                      : () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: sup.logs.join('\n')),
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Copied ${sup.logs.length} log lines'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.copy_all, size: 14),
+                  label: const Text('Copy all'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: c.textSecondary,
+                    textStyle: const TextStyle(fontSize: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: AppTokens.s8, vertical: 0),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: AppTokens.s8),
             Expanded(child: _LogView(logs: sup.logs)),
           ],
@@ -214,16 +248,20 @@ class _LogView extends StatelessWidget {
               child: Text('No logs yet',
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
             )
-          : ListView.builder(
-              reverse: true,
-              itemCount: logs.length,
-              itemBuilder: (_, i) => Text(
-                logs[logs.length - 1 - i],
-                style: TextStyle(
-                  color: c.textSecondary,
-                  fontFamily: AppTokens.fontMono,
-                  fontSize: 12,
-                  height: 1.45,
+          // SelectionArea makes the descendant log lines drag-selectable across
+          // lines with native Cmd/Ctrl+C copy (built ListView children only).
+          : SelectionArea(
+              child: ListView.builder(
+                reverse: true,
+                itemCount: logs.length,
+                itemBuilder: (_, i) => Text(
+                  logs[logs.length - 1 - i],
+                  style: TextStyle(
+                    color: c.textSecondary,
+                    fontFamily: AppTokens.fontMono,
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
                 ),
               ),
             ),

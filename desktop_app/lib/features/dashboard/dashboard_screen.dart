@@ -99,7 +99,7 @@ class DashboardScreen extends ConsumerWidget {
                   Icons.forum_outlined, AppTokens.brandAlt, '/chat'),
               _StatData('Wiki documents', wikiDocs?.toString() ?? '…',
                   Icons.menu_book_outlined, AppTokens.cyan, '/wiki'),
-              _StatData('Memory nodes', memNodes?.toString() ?? '…',
+              _StatData('Knowledge nodes', memNodes?.toString() ?? '…',
                   Icons.hub_outlined, AppTokens.success, '/cognitive'),
               _StatData('Skills', skills?.toString() ?? '…',
                   Icons.bolt_outlined, AppTokens.warning, '/plugins'),

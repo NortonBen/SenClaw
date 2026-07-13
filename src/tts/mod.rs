@@ -7,10 +7,12 @@
 //!
 //! ## Backends today
 //! - [`macos`] — native macOS `/usr/bin/say` (Vietnamese voice = Linh).
+//! - [`mms_vits`] — pure-Rust MLX port of `facebook/mms-tts-*` (VITS). Full
+//!   synthesis path behind the `local-mlx-tts` feature; honest 501 stub
+//!   without it.
 //! - [`zipvoice`] — pure-Rust MLX port of `k2-fsa/ZipVoice` (foundation built,
 //!   synthesis path WIP — returns 501 until the encoder/flow-decoder/vocoder
-//!   are wired). The first MLX backend; future MLX TTS models (Kokoro-MLX,
-//!   etc.) live as siblings under this module.
+//!   are wired).
 //!
 //! ## Adding a backend
 //! 1. Add a module under `src/tts/<name>/` implementing [`TtsBackend`].
@@ -23,7 +25,33 @@ use axum::http::StatusCode;
 
 pub mod macos;
 pub mod mms_vits;
+pub mod vieneu;
 pub mod zipvoice;
+
+/// Encode f32 samples as a 16-bit PCM mono WAV blob (shared by the native
+/// backends).
+pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + samples.len() * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits/sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
 
 /// Inputs to a single synthesis call.
 #[derive(Debug, Clone, Copy)]
@@ -105,10 +133,33 @@ pub trait TtsBackend: Send + Sync {
 /// Returns `None` if no backend recognises the id. Backend instances are
 /// stateless and constructed on demand — there's no shared registry.
 pub fn select_backend(model_id: &str) -> Option<Box<dyn TtsBackend>> {
+    select_backend_for(model_id, None)
+}
+
+/// Like [`select_backend`], additionally inspecting the downloaded model
+/// directory: any custom checkpoint whose `config.json` declares the HF
+/// `VitsModel` architecture (community MMS finetunes, e.g.
+/// `dvd1503/mms-tts-vie-finetuned`) routes to the native VITS backend instead
+/// of the ZipVoice default.
+pub fn select_backend_for(
+    model_id: &str,
+    model_dir: Option<&Path>,
+) -> Option<Box<dyn TtsBackend>> {
     match model_id {
         "macos-speech" => Some(Box::new(macos::MacosSpeech::VIETNAMESE)),
         "macos-speech-en" => Some(Box::new(macos::MacosSpeech::ENGLISH)),
-        "facebook/mms-tts-vie" => Some(Box::new(mms_vits::MmsVitsBackend::VIETNAMESE)),
+        // Whole MMS family: `facebook/mms-tts-<lang>` (vie, eng, …). The
+        // checkpoint itself defines the language.
+        id if id.starts_with("facebook/mms-tts-") => {
+            mms_vits::MmsVitsBackend::for_model_id(id).map(|b| Box::new(b) as Box<dyn TtsBackend>)
+        }
+        // VieNeu-TTS v3 Turbo (ONNX sidecar, 48 kHz Vietnamese).
+        id if id.starts_with("pnnbao-ump/VieNeu-TTS") => {
+            Some(Box::new(vieneu::VieNeuBackend))
+        }
+        id if model_dir.is_some_and(mms_vits::dir_is_vits_model) => {
+            Some(Box::new(mms_vits::MmsVitsBackend::for_custom(id)))
+        }
         // Any other id is assumed to be a HuggingFace ZipVoice-family model.
         // When more TTS families land their explicit ids go above this arm.
         _ => Some(Box::new(zipvoice::ZipVoiceBackend)),
@@ -132,7 +183,7 @@ pub fn synthesize(
     voice: Option<&str>,
     speed: f32,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    let backend = select_backend(model_id).ok_or_else(|| {
+    let backend = select_backend_for(model_id, model_dir).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
             format!("no TTS backend registered for `{model_id}`"),
@@ -180,7 +231,7 @@ pub fn synthesize_with_fallback(
     voice: Option<&str>,
     speed: f32,
 ) -> Result<SynthesisOutcome, (StatusCode, String)> {
-    let backend = select_backend(model_id).ok_or_else(|| {
+    let backend = select_backend_for(model_id, model_dir).ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
             format!("no TTS backend registered for `{model_id}`"),
@@ -240,6 +291,35 @@ mod tests {
         assert_eq!(backend.id(), zipvoice::ZipVoiceBackend.id());
     }
 
+    /// A custom checkpoint dir with a VitsModel config routes to the MMS-VITS
+    /// backend (community finetunes); anything else stays on the default.
+    #[test]
+    fn custom_vits_model_dir_routes_to_mms_backend() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"architectures":["VitsModel"],"model_type":"vits"}"#,
+        )
+        .unwrap();
+        let b = select_backend_for("dvd1503/mms-tts-vie-finetuned", Some(dir.path()))
+            .expect("dispatch");
+        assert!(b.label().contains("VITS"), "got: {}", b.label());
+        assert_eq!(b.id(), "dvd1503/mms-tts-vie-finetuned");
+
+        // Non-VITS config → default (ZipVoice) backend.
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"architectures":["SomethingElse"]}"#,
+        )
+        .unwrap();
+        let b = select_backend_for("someone/other-model", Some(dir.path())).expect("dispatch");
+        assert_eq!(b.id(), zipvoice::ZipVoiceBackend.id());
+
+        // Missing dir → default backend, no panic.
+        let b = select_backend_for("someone/other-model", None).expect("dispatch");
+        assert_eq!(b.id(), zipvoice::ZipVoiceBackend.id());
+    }
+
     #[test]
     fn macos_speech_id_dispatches_to_macos_backend() {
         let backend = select_backend("macos-speech").expect("dispatch");
@@ -263,7 +343,9 @@ mod tests {
     /// MMS-VITS fallback should produce audio via Vietnamese macOS preset
     /// (since the request language is `vi`) AND the reason must name MMS-VITS
     /// — not ZipVoice — so logs/headers are honest about which stub triggered.
-    #[cfg(target_os = "macos")]
+    /// Only without `local-mlx-tts`: with the feature the backend is real and
+    /// no fallback occurs.
+    #[cfg(all(target_os = "macos", not(feature = "local-mlx-tts")))]
     #[test]
     fn mms_vits_fallback_is_distinct_from_zipvoice_reason() {
         let outcome = synthesize_with_fallback(

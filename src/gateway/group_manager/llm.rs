@@ -108,6 +108,21 @@ pub fn save_memory_recall_enabled(config_path: &Path, enabled: bool) -> Result<(
     save_global_config(config_path, &cfg)
 }
 
+// ===== MCP dispatcher toggle (global, user-set) =====
+
+/// Autonomous MCP dispatcher. Default OFF — opt-in autonomous task execution:
+/// when enabled, ready tasks on dispatch sources (the Kanban board) are picked
+/// up and run by persona worker agents.
+pub fn get_dispatch_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path).dispatch_enabled.unwrap_or(false)
+}
+
+pub fn save_dispatch_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.dispatch_enabled = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== LLM config =====
 
 pub fn load_llm_configs(config_path: &Path) -> LlmConfigResult {

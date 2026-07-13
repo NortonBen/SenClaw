@@ -53,13 +53,13 @@ fn floats_to_blob(v: &[f32]) -> Vec<u8> {
     out
 }
 
-fn blob_to_floats(b: &[u8]) -> Vec<f32> {
+pub(crate) fn blob_to_floats(b: &[u8]) -> Vec<f32> {
     b.chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
 
-fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return f32::INFINITY;
     }

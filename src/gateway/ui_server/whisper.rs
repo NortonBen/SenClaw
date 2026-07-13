@@ -649,7 +649,7 @@ async fn transcribe_impl(
         Ok("1" | "true" | "TRUE" | "yes" | "YES")
     );
     if debug {
-        eprintln!(
+        crate::safe_eprintln!(
             "[whisper-debug] api transcribe request filename={filename:?} bytes={} model_dir={} language={:?}",
             bytes.len(),
             dir.display(),
@@ -687,7 +687,7 @@ async fn transcribe_impl(
     .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let _ = tokio::fs::remove_file(&tmp).await;
     if debug {
-        eprintln!(
+        crate::safe_eprintln!(
             "[whisper-debug] api transcribe response chars={} chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} total_ms={:.1}",
             text.chars().count(),
             stats.n_chunks,

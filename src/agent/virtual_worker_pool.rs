@@ -15,6 +15,7 @@ use anyhow::{bail, Result};
 use serde::Serialize;
 
 use crate::agent::persona_registry::PersonaConfig;
+use crate::mcp::manager::McpManager;
 use crate::zen_core::McpServerConfig;
 
 // ===== Types =====
@@ -645,7 +646,21 @@ fn radix36(mut n: u64) -> String {
 // ===== ZenVirtualCoreApi =====
 
 /// Real [`VirtualCoreApi`] backed by ZenEngine.
-pub struct ZenVirtualCoreApi;
+///
+/// Holds an optional shared [`McpManager`] so dispatched sub-agents see the same
+/// external MCP servers as the main agent — in particular the Space-App MCP
+/// servers auto-registered at `McpScopeType::Project`. Without it, a sub-agent
+/// running a Space-App persona/skill would find that app's `mcp__<app>-mcp__*`
+/// tools absent.
+pub struct ZenVirtualCoreApi {
+    mcp_manager: Option<Arc<McpManager>>,
+}
+
+impl ZenVirtualCoreApi {
+    pub fn new(mcp_manager: Option<Arc<McpManager>>) -> Self {
+        Self { mcp_manager }
+    }
+}
 
 impl VirtualCoreApi for ZenVirtualCoreApi {
     #[allow(clippy::too_many_arguments)]
@@ -690,8 +705,18 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
             ..Default::default()
         };
 
-        let engine = crate::zen_core::ZenEngine::new(opts, None);
+        let engine = crate::zen_core::ZenEngine::new(opts, self.mcp_manager.clone());
         engine.create_session(None)?;
+
+        // Pull in the shared external MCP tools (Space-App servers registered at
+        // Project scope + user MCP) so this sub-agent has parity with the main
+        // agent. Must run BEFORE injecting the per-worker subprocess servers
+        // below: refresh_mcp_tools() clears every `mcp__*` tool and re-adds only
+        // the manager's, which would otherwise wipe the freshly-injected browser
+        // tools.
+        if self.mcp_manager.is_some() {
+            handle.block_on(engine.refresh_mcp_tools());
+        }
 
         // Inject extra MCP servers (e.g. browser-mcp) so virtual agents have browser tools.
         // Then wait briefly to allow the async spawn tasks to register their tools before

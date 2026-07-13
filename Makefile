@@ -25,14 +25,16 @@ run-backend:
 run-web:
 	cd web && npm run dev
 
+# Includes local-mlx-tts so the dev daemon speaks with the native MMS-VITS
+# voice instead of silently falling back to macOS `say` (X-TTS-Fallback).
 run:
-	cargo run --features local-mlx --features local-embed-metal --features local-embed
+	cargo run --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-tts
 
 # Release build of the daemon. Strongly preferred when using the native MLX
 # local models: the gated-delta scan is host-dispatch-bound, so an optimized
 # build is ~3.5-5x faster on prefill (and keeps the GPU fed) vs. `make run`.
 run-release:
-	cargo run --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --features local-mlx-tts --features ocr-paddle-metal
+	cargo run --release --features local-mlx --features local-embed-metal --features local-embed --features local-mlx-whisper --features local-mlx-tts --features ocr-paddle-metal --features tts-vieneu
 
 build-extension:
 	cd senclaw-extension-chrome && npm run build
@@ -44,7 +46,7 @@ build-extension:
 # / web. Requires the Flutter SDK on PATH.
 DESKTOP_DIR := desktop_app
 # Full Apple-Silicon feature set — keep in sync with `run-release`.
-DAEMON_FEATURES := local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal
+DAEMON_FEATURES := local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal,tts-vieneu
 
 app-dev:
 	cd $(DESKTOP_DIR) && flutter run -d macos
@@ -56,6 +58,14 @@ app-build:
 	cd $(DESKTOP_DIR) && flutter build macos --release
 	cp target/release/senclaw \
 	    "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/senclaw"
+	@# Bundle MLX's compiled Metal kernels NEXT TO the binary. Without this the
+	@# installed daemon resolves mlx.metallib via the METAL_PATH compiled into
+	@# the build (a target/ path) — a later `cargo clean` then aborts every MLX
+	@# call with "Failed to load the default metallib" (TTS/STT/LLM all die).
+	@lib=$$(find target/release/build -name mlx.metallib 2>/dev/null | head -1); \
+	    test -n "$$lib" || (echo "[app-build] ERROR: mlx.metallib not found under target/release/build" && exit 1); \
+	    cp "$$lib" "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/mlx.metallib"; \
+	    echo "[app-build] bundled $$lib"
 	@echo "[app-build] bundled daemon into 'SenClaw Desktop.app/Contents/Resources/senclaw'"
 
 # Install the freshly-built .app into /Applications and launch it.

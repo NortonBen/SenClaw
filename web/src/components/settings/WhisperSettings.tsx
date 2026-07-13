@@ -170,6 +170,30 @@ export const WhisperSettings: React.FC = () => {
     refresh();
   };
 
+  // Custom repos: ask the daemon to verify loader compatibility (config.json
+  // + file tree, no weight download) BEFORE fetching hundreds of MB.
+  const validateThenDownload = async (id: string) => {
+    try {
+      const res = await fetch(`/api/whisper/models/${encodeURIComponent(id)}/validate`);
+      if (res.ok) {
+        const v = await res.json();
+        if (!v.supported && !v.inconclusive) {
+          message.error(`Model không tương thích: ${v.reason}`);
+          return;
+        }
+        if (v.supported) {
+          const gb = (v.total_size_bytes / 2 ** 30).toFixed(2);
+          message.info(`Hỗ trợ ✓ — ${v.reason}${v.total_size_bytes ? ` (~${gb} GB)` : ''}`);
+        } else {
+          message.warning(`Không kiểm tra được (${v.reason}) — vẫn thử tải.`);
+        }
+      }
+    } catch {
+      // validate unreachable → proceed, the download itself will error out
+    }
+    await download(id);
+  };
+
   const cancel = async (id: string) => {
     await fetch(`/api/whisper/models/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
     refresh();
@@ -313,7 +337,7 @@ export const WhisperSettings: React.FC = () => {
             type="primary"
             icon={<CloudDownloadOutlined />}
             disabled={!hfInput.trim()}
-            onClick={() => download(hfInput.trim())}
+            onClick={() => validateThenDownload(hfInput.trim())}
           >
             Tải
           </Button>

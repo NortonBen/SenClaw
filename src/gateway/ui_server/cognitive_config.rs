@@ -29,6 +29,8 @@ pub(crate) struct CognitiveConfigBody {
     pub reflect_max_chars: Option<usize>,
     #[serde(default, rename = "reflectCooldownMs")]
     pub reflect_cooldown_ms: Option<u64>,
+    #[serde(default, rename = "reflectWindowIdleMs")]
+    pub reflect_window_idle_ms: Option<u64>,
     #[serde(default, rename = "autoReflection")]
     pub auto_reflection: Option<bool>,
     #[serde(default, rename = "maintenanceIntervalHours")]
@@ -48,6 +50,7 @@ pub(crate) async fn cognitive_config_get(State(s): State<Arc<UiState>>) -> Json<
             "reflectMinChars": stored.reflect_min_chars,
             "reflectMaxChars": stored.reflect_max_chars,
             "reflectCooldownMs": stored.reflect_cooldown_ms,
+            "reflectWindowIdleMs": stored.reflect_window_idle_ms,
             "autoReflection": stored.auto_reflection,
             "maintenanceIntervalHours": stored.maintenance_interval_hours,
         },
@@ -61,6 +64,7 @@ pub(crate) async fn cognitive_config_get(State(s): State<Arc<UiState>>) -> Json<
             "reflectMinChars": s.config.cognitive.reflect_min_chars,
             "reflectMaxChars": s.config.cognitive.reflect_max_chars,
             "reflectCooldownMs": s.config.cognitive.reflect_cooldown_ms,
+            "reflectWindowIdleMs": s.config.cognitive.reflect_window_idle_ms,
             "autoReflection": s.config.memory.cognitive_reflection,
             "maintenanceIntervalHours": s.config.cognitive.maintenance_interval_hours,
         },
@@ -80,6 +84,7 @@ pub(crate) async fn cognitive_config_save(
         reflect_min_chars: body.reflect_min_chars,
         reflect_max_chars: body.reflect_max_chars,
         reflect_cooldown_ms: body.reflect_cooldown_ms,
+        reflect_window_idle_ms: body.reflect_window_idle_ms,
         auto_reflection: body.auto_reflection,
         maintenance_interval_hours: body.maintenance_interval_hours,
     };

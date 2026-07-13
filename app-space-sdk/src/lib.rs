@@ -1,4 +1,5 @@
 pub mod bridge;
+pub mod dispatch;
 pub mod events;
 pub mod fs;
 pub mod net;

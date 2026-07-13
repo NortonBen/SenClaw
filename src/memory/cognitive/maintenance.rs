@@ -34,6 +34,12 @@ use super::graph_store::{CleanupReport, GraphStore, InferenceReport, MergeReport
 const INFER_MIN_COOCCURRENCE: usize = 2;
 /// Cap on inferred edges per sweep so a dense graph can't explode.
 const INFER_MAX_PER_RUN: usize = 500;
+/// Cosine-similarity floor for embedding-based alias merge ("HN" ↔
+/// "Hà Nội"). 0.9 keeps merges conservative — near-duplicates only.
+const ALIAS_MIN_COSINE: f32 = 0.9;
+/// Alias merge examines only the top-N entities by mention count so the
+/// pairwise scan stays O(N²)-bounded per sweep.
+const ALIAS_MAX_CANDIDATES: usize = 300;
 
 #[derive(Debug, Clone)]
 pub struct MaintenanceConfig {
@@ -45,6 +51,7 @@ pub struct MaintenanceConfig {
 pub struct MaintenanceReport {
     pub cleanup: CleanupReport,
     pub merge: MergeReport,
+    pub alias_merge: super::graph_store::AliasMergeReport,
     pub inference: InferenceReport,
     pub duration_ms: i64,
 }
@@ -52,11 +59,15 @@ pub struct MaintenanceReport {
 pub fn run_maintenance(graph: &dyn GraphStore) -> Result<MaintenanceReport> {
     let started = std::time::Instant::now();
     let cleanup = graph.cleanup_junk()?;
+    // Name-based merge first collapses exact duplicates cheaply; the
+    // embedding pass then only has true aliases left to consider.
     let merge = graph.merge_duplicate_entities()?;
+    let alias_merge = graph.merge_alias_entities(ALIAS_MIN_COSINE, ALIAS_MAX_CANDIDATES)?;
     let inference = graph.infer_associative_edges(INFER_MIN_COOCCURRENCE, INFER_MAX_PER_RUN)?;
     Ok(MaintenanceReport {
         cleanup,
         merge,
+        alias_merge,
         inference,
         duration_ms: started.elapsed().as_millis() as i64,
     })
@@ -89,9 +100,14 @@ pub fn start_maintenance_ticker(
             match res {
                 Ok(Ok(rep)) => tracing::info!(
                     envelope_chunks = rep.cleanup.envelope_chunks_removed,
+                    markup_chunks = rep.cleanup.markup_chunks_removed,
+                    junk_entities = rep.cleanup.junk_entities_removed,
                     orphans = rep.cleanup.orphan_entities_removed,
+                    typeonly_entities = rep.cleanup.typeonly_entities_removed,
+                    orphan_types = rep.cleanup.orphan_type_nodes_removed,
                     groups_merged = rep.merge.groups_merged,
                     entities_merged = rep.merge.entities_merged,
+                    aliases_merged = rep.alias_merge.entities_merged,
                     associations_inferred = rep.inference.associations_created,
                     duration_ms = rep.duration_ms,
                     "[cognitive] maintenance sweep complete"
@@ -189,8 +205,11 @@ mod tests {
         // hits the default threshold. No direct edge between them exists.
         let alice = DataPoint::entity("Alice", now);
         let bob = DataPoint::entity("Bob", now);
-        let chunk1 = DataPoint::chunk("c1", Some("h1".into()), now);
-        let chunk2 = DataPoint::chunk("c2", Some("h2".into()), now);
+        // Realistic prose — cleanup's sanitize-parity pass drops chunks the
+        // ingest guard would reject (sub-10-char / markup-heavy), so bare
+        // placeholders like "c1" would vanish before inference runs.
+        let chunk1 = DataPoint::chunk("Alice met Bob at the market", Some("h1".into()), now);
+        let chunk2 = DataPoint::chunk("Alice and Bob shipped the release", Some("h2".into()), now);
         for n in [&alice, &bob, &chunk1, &chunk2] {
             g.upsert_node(n).unwrap();
         }

@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
+#[macro_use]
+pub mod safe_log;
+
 pub mod agent;
 pub mod apps;
 pub mod browser;
@@ -19,6 +22,7 @@ pub mod cli;
 pub mod config;
 pub mod db;
 pub mod gateway;
+pub mod kanban;
 pub mod local_model;
 pub mod marketplace;
 pub mod mcp;
@@ -1593,6 +1597,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     }
     tracing::info!("[SenClaw] MCP manager initialized");
 
+    // ===== Built-in Kanban board (folded into core — src/kanban) =====
+    // No separate process, port, or Space-App: the REST API is mounted on the
+    // daemon UI server (/api/kanban/*, wired where the UI router is built), the
+    // native Flutter screen renders it, the `kanban-server` subcommand serves
+    // its MCP to agents, and the in-process MCPDispatcher drives it directly.
+    let kanban_state = kanban::make_state();
+
     // Auto-launch + auto-register MCP servers declared by installed Space Apps
     // (manifest `mcp.autoRegister`). Lifecycle is tied to the daemon.
     //
@@ -1614,6 +1625,30 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 .await;
             tracing::info!("[space-mcp] background auto-register pass complete");
         });
+    }
+
+    // Space-App supervisor: periodically health-check every enabled server app
+    // and respawn any that has died or stopped responding — so a crashed app (or
+    // one that came up on a broken deploy) recovers on its own.
+    if cfg.space_supervise_secs > 0 {
+        let apps_dir = cfg.paths.workspace_dir.join("space-apps");
+        let base_url = format!("http://127.0.0.1:{}", cfg.ui_server.port);
+        let launcher = Arc::clone(&space_mcp_launcher);
+        let db_bg = Arc::clone(&db);
+        let mgr_bg = Arc::clone(&mcp_manager);
+        let interval = std::time::Duration::from_secs(cfg.space_supervise_secs.max(5));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            tick.tick().await; // skip immediate — the auto-register pass just ran
+            loop {
+                tick.tick().await;
+                launcher.supervise(&db_bg, &mgr_bg, &apps_dir, &base_url).await;
+            }
+        });
+        tracing::info!(
+            "[space-mcp] supervisor loop started ({}s interval)",
+            cfg.space_supervise_secs
+        );
     }
 
     // ===== 4. GroupQueue + AgentPool =====
@@ -1888,7 +1923,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 5b. VirtualWorkerPool =====
     let virtual_worker_pool = Arc::new(agent::virtual_worker_pool::VirtualWorkerPool::new(
-        Arc::new(agent::virtual_worker_pool::ZenVirtualCoreApi),
+        Arc::new(agent::virtual_worker_pool::ZenVirtualCoreApi::new(Some(
+            Arc::clone(&mcp_manager),
+        ))),
     ));
     // Wire permission config follow (mirrors main-agent skip-perms).
     {
@@ -2031,6 +2068,46 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     gw.notify_dispatch_update(&parents).await;
                 });
             }));
+        }
+
+        // Kanban → WS live updates. A 2s watcher polls a cheap per-board change
+        // signature and pushes `kanban:update {boardId}` on any change. Polling
+        // (vs. write hooks) is deliberate: board writers include the SEPARATE
+        // `kanban-server` stdio MCP process (dispatcher workers), which in-process
+        // hooks would never see — the shared SQLite file is the one truth.
+        {
+            let gw_for_kanban = Arc::clone(&gw);
+            let kanban_db = Arc::clone(&kanban_state.db);
+            tokio::spawn(async move {
+                let mut prev: std::collections::HashMap<i64, (i64, i64)> =
+                    std::collections::HashMap::new();
+                let mut first = true;
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    tick.tick().await;
+                    let sig = match kanban_db.change_signature() {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+                    let cur: std::collections::HashMap<i64, (i64, i64)> =
+                        sig.into_iter().map(|(id, up, n)| (id, (up, n))).collect();
+                    if !first {
+                        for (id, v) in &cur {
+                            if prev.get(id) != Some(v) {
+                                gw_for_kanban.notify_kanban_update(*id).await;
+                            }
+                        }
+                        // A deleted board also warrants a refresh of the board list.
+                        for id in prev.keys() {
+                            if !cur.contains_key(id) {
+                                gw_for_kanban.notify_kanban_update(*id).await;
+                            }
+                        }
+                    }
+                    prev = cur;
+                    first = false;
+                }
+            });
         }
 
         // Wire WorkbenchBridge → WebSocket gateway. Forwards artifact
@@ -2353,6 +2430,65 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }
         dispatch_bridge.start();
 
+        // ===== MCPDispatcher — autonomous task execution from dispatch sources =====
+        // Always constructed (so the Settings toggle can turn it on/off live); the
+        // poll loop idles unless the persisted `dispatchEnabled` flag is true. The
+        // env SENCLAW_DISPATCH_ENABLED just seeds that flag on first boot.
+        {
+            use app_space_sdk::dispatch::{
+                DispatchProvider, DispatchSource, LocalDispatchSource, McpServerSpec,
+            };
+            // Seed the persisted flag from the env default (does not override a
+            // value the user already set via Settings).
+            if cfg.dispatch.enabled {
+                let path = &cfg.paths.global_config_path;
+                if !gateway::group_manager::get_dispatch_enabled(path) {
+                    let _ = gateway::group_manager::save_dispatch_enabled(path, true);
+                }
+            }
+            // In-process Kanban source: the worker gets the NATIVE `kanban-server`
+            // stdio MCP (no HTTP bridge), and claims/finalizes go straight to the
+            // built-in board's DB.
+            let senclaw_exe = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "senclaw".into());
+            let worker_mcp = McpServerSpec::Stdio {
+                name: "senclaw-kanban".into(),
+                command: senclaw_exe,
+                args: vec!["kanban-server".into()],
+                env: Default::default(),
+            };
+            let provider: std::sync::Arc<dyn DispatchProvider> =
+                std::sync::Arc::new(kanban::dispatch::KanbanDispatchProvider::new(
+                    std::sync::Arc::clone(&kanban_state.db),
+                    worker_mcp,
+                ));
+            let sources: Vec<std::sync::Arc<dyn DispatchSource>> =
+                vec![std::sync::Arc::new(LocalDispatchSource::new("kanban", provider))];
+            let dcfg = agent::mcp_dispatch::DispatcherConfig {
+                interval_secs: cfg.dispatch.interval_secs,
+                max_concurrent: cfg.dispatch.max_concurrent,
+                per_assignee: cfg.dispatch.per_assignee,
+                max_agent_turns: (cfg.dispatch.max_agent_turns > 0).then_some(cfg.dispatch.max_agent_turns),
+                default_timeout_secs: cfg.dispatch.default_timeout_secs,
+                workdir_root: cfg
+                    .paths
+                    .db_path
+                    .parent()
+                    .map(|p| p.join("mcp-dispatch"))
+                    .unwrap_or_else(|| std::path::PathBuf::from(".senclaw/mcp-dispatch")),
+                config_path: cfg.paths.global_config_path.clone(),
+            };
+            let mcp_dispatcher = agent::mcp_dispatch::MCPDispatcher::new(
+                sources,
+                std::sync::Arc::clone(&persona_registry),
+                dcfg,
+            );
+            mcp_dispatcher.start();
+            // Keep the Arc alive for the life of the daemon.
+            let _mcp_dispatcher = mcp_dispatcher;
+        }
+
         let ws_router = gw.route(ws_state);
         let ws_port = cfg.ws_port;
         let ws_addr = format!("127.0.0.1:{ws_port}");
@@ -2567,7 +2703,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // Make the same state reachable to app-channel relay clients (REST tunnel).
         api_bridge.set(Arc::clone(&ui_state));
 
-        let ui_router = gateway::ui_server::build_router(ui_state);
+        // Mount the built-in Kanban board's REST API under /api/kanban/* on the
+        // daemon UI server (the native Flutter screen talks to these routes).
+        let ui_router = gateway::ui_server::build_router(ui_state)
+            .nest("/api/kanban", kanban::api::api_router(std::sync::Arc::clone(&kanban_state)));
         let http_port = cfg.ui_server.port;
         let http_addr = format!("127.0.0.1:{http_port}");
         let listener = tokio::net::TcpListener::bind(&http_addr)

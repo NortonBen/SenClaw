@@ -26,6 +26,7 @@ import {
   AudioOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
+import { speakPipelined } from '../../utils/ttsPipeline';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -166,23 +167,16 @@ export const TtsSettings: React.FC = () => {
     if (!testText.trim()) return;
     setSynthesizing(true);
     try {
-      const body = { text: testText, model_id: activeModel, voice, language, speed };
-      const res = await fetch('/api/tts/synthesize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      // Sentence-pipelined: first sentence plays while the rest synthesize.
+      const handle = speakPipelined(testText, {
+        body: { model_id: activeModel, voice, language, speed },
+        onFirstAudio: () => setSynthesizing(false),
+        onFallback: (reason) =>
+          message.warning(`Giọng thay thế đã được dùng: ${reason}`, 6),
       });
-      if (!res.ok) {
-        message.error(`Lỗi tạo giọng nói: ${await res.text()}`);
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.onended = () => URL.revokeObjectURL(url);
-      audio.play();
+      await handle.done;
     } catch (e: any) {
-      message.error(`Lỗi phát audio: ${e.message}`);
+      message.error(`Lỗi tạo giọng nói: ${e.message}`);
     } finally {
       setSynthesizing(false);
     }

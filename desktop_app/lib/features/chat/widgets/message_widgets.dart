@@ -241,14 +241,28 @@ class _AgentActionsState extends ConsumerState<_AgentActions> {
             }
           }),
           const SizedBox(width: AppTokens.s4),
-          _act(Icons.volume_up_outlined, 'Play (TTS)', () async {
-            try {
-              _flashMsg('Speaking…');
-              await ref.read(audioServiceProvider).speak(widget.text);
-            } catch (_) {
-              _flashMsg('TTS failed');
-            }
-          }),
+          // Play ⇄ Stop toggle: while THIS message is synthesizing/playing the
+          // icon becomes a stop button; stopping also cancels a synthesis that
+          // has not started playing yet.
+          ValueListenableBuilder<String?>(
+            valueListenable: ref.read(audioServiceProvider).speaking,
+            builder: (_, speakingText, child) {
+              final active = speakingText == widget.text;
+              if (active) {
+                return _act(Icons.stop_circle_outlined, 'Stop', () {
+                  ref.read(audioServiceProvider).stop();
+                });
+              }
+              return _act(Icons.volume_up_outlined, 'Play (TTS)', () async {
+                try {
+                  _flashMsg('Speaking…');
+                  await ref.read(audioServiceProvider).speak(widget.text);
+                } catch (_) {
+                  _flashMsg('TTS failed');
+                }
+              });
+            },
+          ),
           if (_flash != null) ...[
             const SizedBox(width: AppTokens.s8),
             Text(_flash!,

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { theme, Typography } from 'antd';
+import { message, theme, Typography } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -10,6 +10,7 @@ import { PermissionCard, QuestionCard } from './PermissionCard';
 import { FormCard } from './FormCard';
 import { useAppContext } from '../contexts/AppContext';
 import { extractLeadingReasoningBlocks } from '../utils/reasoningBlocks';
+import { speakPipelined, type SpeakHandle } from '../utils/ttsPipeline';
 import { ReasoningCollapsible } from './ReasoningCollapsible';
 
 const { Text } = Typography;
@@ -132,7 +133,7 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments, tokens }: { tex
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [playState, setPlayState] = useState<'idle' | 'playing' | 'loading' | 'error'>('idle');
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speakRef = useRef<SpeakHandle | null>(null);
   const { token } = theme.useToken();
   const { reasoning, body } = extractLeadingReasoningBlocks(text);
 
@@ -161,51 +162,40 @@ function AgentBubble({ text, timestamp, isDarkMode, attachments, tokens }: { tex
   };
 
   const handlePlay = async () => {
-    if (playState === 'playing') {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
+    // Toggle: stop cancels playback AND any in-flight sentence synthesis.
+    if (playState === 'playing' || playState === 'loading') {
+      speakRef.current?.stop();
+      speakRef.current = null;
       setPlayState('idle');
       return;
     }
-    if (playState === 'loading' || !body) return;
+    if (!body) return;
 
     setPlayState('loading');
+    const handle = speakPipelined(body, {
+      onFirstAudio: () => setPlayState('playing'),
+      onFallback: (reason) => message.info(`Giọng thay thế: ${reason}`, 5),
+    });
+    speakRef.current = handle;
     try {
-      const res = await fetch('/api/tts/synthesize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: body }),
-      });
-      if (!res.ok) throw new Error();
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => {
+      await handle.done;
+      if (speakRef.current === handle) {
+        speakRef.current = null;
         setPlayState('idle');
-        URL.revokeObjectURL(url);
-        audioRef.current = null;
-      };
-      audio.onerror = () => {
+      }
+    } catch {
+      if (speakRef.current === handle) {
+        speakRef.current = null;
         setPlayState('error');
         setTimeout(() => setPlayState('idle'), 2000);
-      };
-      audio.play();
-      setPlayState('playing');
-    } catch {
-      setPlayState('error');
-      setTimeout(() => setPlayState('idle'), 2000);
+      }
     }
   };
 
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
+      speakRef.current?.stop();
+      speakRef.current = null;
     };
   }, []);
 

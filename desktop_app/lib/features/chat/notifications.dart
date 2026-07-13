@@ -3,18 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/transport/connection.dart';
 import '../../core/transport/ws_client.dart';
 import '../../theme/tokens.dart';
+import 'reminder_interaction.dart';
 
 class AppNotification {
   final String id;
   final String? rawId; // daemon event-notification id for `notification:read`
   final String title;
   final String detail;
+
+  /// Non-null for calendar reminders/pending events — carries the context
+  /// needed to open the interactive reminder dialog on tap.
+  final ReminderTarget? target;
   bool read;
   AppNotification({
     required this.id,
     this.rawId,
     required this.title,
     required this.detail,
+    this.target,
     this.read = false,
   });
 }
@@ -45,21 +51,39 @@ class NotificationsNotifier extends StateNotifier<List<AppNotification>> {
       case 'space:event:reminder':
         _add('rem-${e['id'] ?? _seq++}', '⏰ ${e['title'] ?? 'Reminder'}',
             'Calendar reminder',
-            rawId: e['id']?.toString(), read: wasRead);
+            rawId: e['id']?.toString(),
+            read: wasRead,
+            target: _reminderTarget(e));
       case 'space:event:pending':
         _add('pend-${e['id'] ?? _seq++}', '📅 ${e['title'] ?? 'Upcoming'}',
             'Scheduled',
-            rawId: e['id']?.toString(), read: wasRead);
+            rawId: e['id']?.toString(),
+            read: wasRead,
+            target: _reminderTarget(e, kind: 'pending'));
     }
   }
 
+  /// Build the interactive-reminder context from a `space:event:*` frame.
+  ReminderTarget _reminderTarget(WsEvent e, {String? kind}) => ReminderTarget(
+        eventId: e['eventId']?.toString(),
+        title: '${e['title'] ?? 'Reminder'}',
+        startAtMs: (e['startAt'] as num?)?.toInt(),
+        kind: kind ?? '${e['kind'] ?? 'reminder'}',
+        notificationId: e['id']?.toString(),
+      );
+
   void _add(String id, String title, String detail,
-      {String? rawId, bool read = false}) {
+      {String? rawId, bool read = false, ReminderTarget? target}) {
     // Dedup by id (replay snapshots can repeat).
     if (state.any((n) => n.id == id)) return;
     state = [
       AppNotification(
-          id: id, rawId: rawId, title: title, detail: detail, read: read),
+          id: id,
+          rawId: rawId,
+          title: title,
+          detail: detail,
+          target: target,
+          read: read),
       ...state,
     ].take(50).toList();
   }
@@ -81,6 +105,7 @@ class NotificationsNotifier extends StateNotifier<List<AppNotification>> {
               rawId: n.rawId,
               title: n.title,
               detail: n.detail,
+              target: n.target,
               read: true)
         else
           n,
@@ -133,8 +158,20 @@ class NotificationsBell extends ConsumerWidget {
       onSelected: (id) {
         if (id == '__clear__') {
           ref.read(notificationsProvider.notifier).clearAll();
-        } else {
-          ref.read(notificationsProvider.notifier).markRead(id);
+          return;
+        }
+        AppNotification? item;
+        for (final n in items) {
+          if (n.id == id) {
+            item = n;
+            break;
+          }
+        }
+        ref.read(notificationsProvider.notifier).markRead(id);
+        // Calendar reminders open the interactive dialog; plain notifications
+        // just mark read.
+        if (item?.target != null) {
+          ref.read(pendingReminderProvider.notifier).state = item!.target;
         }
       },
       itemBuilder: (_) {

@@ -268,6 +268,14 @@ pub(super) struct GlobalConfig {
         rename = "memoryRecall"
     )]
     pub(super) memory_recall: Option<bool>,
+    /// Autonomous MCP dispatcher: when enabled, ready tasks on dispatch sources
+    /// (e.g. the Kanban board) are auto-run by persona worker agents.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "dispatchEnabled"
+    )]
+    pub(super) dispatch_enabled: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -329,6 +337,14 @@ pub struct PersistedCognitiveConfig {
         rename = "reflectCooldownMs"
     )]
     pub reflect_cooldown_ms: Option<u64>,
+    /// Session-window idle timeout (ms) before a buffered conversation
+    /// window is flushed to cognify. See `CognitiveConfig`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "reflectWindowIdleMs"
+    )]
+    pub reflect_window_idle_ms: Option<u64>,
     /// Toggle for `MemoryConfig.cognitive_reflection` — auto-cognify
     /// every user message. Off = manual CogAdd only.
     #[serde(

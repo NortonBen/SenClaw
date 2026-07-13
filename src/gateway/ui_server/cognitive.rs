@@ -694,13 +694,94 @@ pub(crate) async fn cognitive_re_extract(
 }
 
 // =====================================================================
+// POST /api/cognitive/re-extract-pending  { limit? }
+// =====================================================================
+//
+// Bulk backfill: re-run triplet extraction on every chunk still marked
+// `Pending` / `SkippedNoLlm` — the rows accumulated while the cognitive
+// LLM was dormant or misconfigured (e.g. an SSE-only gateway). Runs in a
+// background task (one chunk at a time through the cognify semaphore) and
+// returns the queued count immediately so the UI doesn't block on N LLM
+// calls; progress shows up as the node/edge stats grow.
+
+pub(crate) async fn cognitive_re_extract_pending(
+    State(_s): State<Arc<UiState>>,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let limit = body
+        .as_ref()
+        .and_then(|b| b.get("limit"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(500) as usize;
+
+    // Page through all chunks and keep the never-extracted ones.
+    use crate::memory::cognitive::ExtractionState as S;
+    let mut pending = Vec::new();
+    let mut offset = 0usize;
+    'scan: loop {
+        let batch = sys
+            .graph
+            .list_nodes(Some("chunk"), 500, offset)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if batch.is_empty() {
+            break;
+        }
+        offset += batch.len();
+        for n in batch {
+            if matches!(n.extraction_state, S::Pending | S::SkippedNoLlm)
+                && !n.summary.trim().is_empty()
+            {
+                pending.push(n.summary);
+                if pending.len() >= limit {
+                    break 'scan;
+                }
+            }
+        }
+    }
+
+    let queued = pending.len();
+    tokio::spawn(async move {
+        let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+            return;
+        };
+        let mut entities = 0usize;
+        let mut edges = 0usize;
+        let mut skipped = 0usize;
+        for text in pending {
+            let opts = crate::memory::cognitive::CognifyOptions::default();
+            match sys.cognify(&text, "re-extract", &opts).await {
+                Ok(r) => {
+                    entities += r.entities_added;
+                    edges += r.edges_added;
+                    if r.llm_skipped {
+                        skipped += 1;
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "[cognitive] backfill cognify failed"),
+            }
+        }
+        tracing::info!(
+            queued,
+            entities_added = entities,
+            edges_added = edges,
+            llm_skipped = skipped,
+            "[cognitive] pending re-extract backfill finished"
+        );
+    });
+
+    Ok(Json(serde_json::json!({ "queued": queued })))
+}
+
+// =====================================================================
 // POST /api/cognitive/cleanup
 // =====================================================================
 //
-// One-shot bulk-cleanup of junk that accumulated before the runtime
-// sanitizer existed (envelope-wrapped chunks, orphan entities). Triggered
-// from the DataPoints view header so users don't have to forget rows
-// one at a time.
+// One-shot bulk-cleanup of junk (envelope/markup-heavy chunks, symbol-only
+// and ungrounded entities, orphan entities and type nodes — see
+// `GraphStore::cleanup_junk` for the full category list). Triggered from
+// the DataPoints view header so users don't have to forget rows one at a
+// time.
 
 pub(crate) async fn cognitive_cleanup(
     State(_s): State<Arc<UiState>>,
@@ -710,10 +791,11 @@ pub(crate) async fn cognitive_cleanup(
         .graph
         .cleanup_junk()
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({
-        "envelope_chunks_removed": report.envelope_chunks_removed,
-        "orphan_entities_removed": report.orphan_entities_removed,
-    })))
+    // Full per-category counts + a total the UI can show as one line.
+    let mut body = serde_json::to_value(&report)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    body["total_removed"] = serde_json::json!(report.total_removed());
+    Ok(Json(body))
 }
 
 // =====================================================================
@@ -735,10 +817,17 @@ pub(crate) async fn cognitive_maintenance(
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({
         "envelope_chunks_removed": report.cleanup.envelope_chunks_removed,
+        "markup_chunks_removed": report.cleanup.markup_chunks_removed,
+        "junk_entities_removed": report.cleanup.junk_entities_removed,
         "orphan_entities_removed": report.cleanup.orphan_entities_removed,
+        "typeonly_entities_removed": report.cleanup.typeonly_entities_removed,
+        "orphan_type_nodes_removed": report.cleanup.orphan_type_nodes_removed,
+        "cleanup_total_removed": report.cleanup.total_removed(),
         "groups_merged": report.merge.groups_merged,
         "entities_merged": report.merge.entities_merged,
         "edges_redirected": report.merge.edges_redirected,
+        "aliases_merged": report.alias_merge.entities_merged,
+        "alias_edges_redirected": report.alias_merge.edges_redirected,
         "associations_inferred": report.inference.associations_created,
         "association_candidates": report.inference.candidates_examined,
         "duration_ms": report.duration_ms,

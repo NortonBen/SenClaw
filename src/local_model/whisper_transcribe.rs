@@ -185,7 +185,7 @@ impl MemorySampler {
             while !done2.load(Ordering::Relaxed) {
                 let ram = rss_mb();
                 let (mlx, cache) = mlx_memory_mb();
-                let mut s = state2.lock().unwrap();
+                let mut s = state2.lock().unwrap_or_else(|e| e.into_inner());
                 if ram > s.peak_ram_mb {
                     s.peak_ram_mb = ram;
                 }
@@ -213,7 +213,7 @@ impl MemorySampler {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
-        let s = self.state.lock().unwrap();
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let cpu_end = cpu_time_ms();
         (
             s.peak_ram_mb,
@@ -329,13 +329,18 @@ fn maybe_set_mlx_memory_limit() {
             let mut _prev: usize = 0;
             unsafe { mlx_sys::mlx_set_memory_limit(&mut _prev, bytes) };
             if whisper_debug_enabled() {
-                eprintln!("[whisper-debug] MLX memory limit set to {mb} MiB (prev={_prev})");
+                crate::safe_eprintln!("[whisper-debug] MLX memory limit set to {mb} MiB (prev={_prev})");
             }
         }
     }
 }
 
 /// A lazily-loaded Whisper engine bound to one model directory.
+///
+/// All lock acquisitions recover from poisoning: a panic mid-transcription
+/// (e.g. an `crate::safe_eprintln!` hitting a closed-stderr EPIPE under the desktop-app
+/// supervisor) must not permanently brick STT for the daemon's lifetime —
+/// the poisoned state is just a `None`/stale model that reloads on next use.
 pub struct WhisperEngine {
     model_dir: PathBuf,
     loaded: Mutex<Option<Loaded>>,
@@ -352,7 +357,7 @@ impl WhisperEngine {
     /// Unloads the model from memory and clears the MLX cache.
     /// The next transcription will automatically reload the model.
     pub fn unload(&self) {
-        let mut guard = self.loaded.lock().unwrap();
+        let mut guard = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
         #[cfg(feature = "local-mlx-whisper")]
         unsafe {
@@ -361,10 +366,10 @@ impl WhisperEngine {
     }
 
     fn ensure_loaded(&self) -> Result<()> {
-        let mut guard = self.loaded.lock().unwrap();
+        let mut guard = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             if whisper_debug_enabled() {
-                eprintln!(
+                crate::safe_eprintln!(
                     "[whisper-debug] load model dir={}",
                     self.model_dir.display()
                 );
@@ -383,7 +388,7 @@ impl WhisperEngine {
                 dtype,
             });
             if whisper_debug_enabled() {
-                eprintln!("[whisper-debug] model loaded dtype={dtype:?}");
+                crate::safe_eprintln!("[whisper-debug] model loaded dtype={dtype:?}");
             }
         }
         Ok(())
@@ -423,7 +428,7 @@ impl WhisperEngine {
     ) -> Result<(String, TranscribeStats)> {
         let debug = whisper_debug_enabled();
         self.ensure_loaded()?;
-        let mut guard = self.loaded.lock().unwrap();
+        let mut guard = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
         let Loaded {
             model,
             tokenizer,
@@ -443,7 +448,7 @@ impl WhisperEngine {
             sp.no_timestamps as i32,
         ];
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] transcribe start lang={lang} lang_tok={lang_tok} pcm_samples={} audio_secs={:.3} prompt={:?} thresholds={{peak:{:.4},rms:{:.4},no_speech:{:.2},logprob:{:.2},compression:{:.2}}}",
                 pcm.len(),
                 pcm.len() as f32 / audio::SAMPLE_RATE as f32,
@@ -489,7 +494,7 @@ impl WhisperEngine {
             };
             if peak < SILENCE_PEAK || rms < SILENCE_RMS {
                 if debug {
-                    eprintln!(
+                    crate::safe_eprintln!(
                         "[whisper-debug] chunk={chunk_idx} range={chunk_start_sec:.2}-{chunk_end_sec:.2}s decision=skip_energy peak={peak:.6} rms={rms:.6}"
                     );
                 }
@@ -497,7 +502,7 @@ impl WhisperEngine {
                 continue;
             }
             if debug {
-                eprintln!(
+                crate::safe_eprintln!(
                     "[whisper-debug] chunk={chunk_idx} range={chunk_start_sec:.2}-{chunk_end_sec:.2}s decision=run peak={peak:.6} rms={rms:.6} samples={}",
                     content.len()
                 );
@@ -506,7 +511,7 @@ impl WhisperEngine {
             let speech = extract_speech_pcm(content, debug, chunk_idx, chunk_start_sec);
             if speech.speech_ms < VAD_MIN_SPEECH_MS || speech.pcm.is_empty() {
                 if debug {
-                    eprintln!(
+                    crate::safe_eprintln!(
                         "[whisper-debug] chunk={chunk_idx} decision=skip_vad speech_ms={} segments={}",
                         speech.speech_ms,
                         speech.segments.len()
@@ -572,7 +577,7 @@ impl WhisperEngine {
             stats.avg_logprob = stats.avg_logprob.min(alp);
             if debug {
                 let (cur_mlx, cur_cache) = mlx_memory_mb();
-                eprintln!(
+                crate::safe_eprintln!(
                     "[whisper-debug] chunk={chunk_idx} timing mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} tokens={tokens} no_speech_prob={nsp:.3} avg_logprob={alp:.3} emitted_chars={} mlx_active_mb={:.1} mlx_cache_mb={:.1}",
                     chunk_mel_ms,
                     chunk_encode_ms,
@@ -606,7 +611,7 @@ impl WhisperEngine {
         stats.cpu_sys_ms = cpu_sys;
 
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] transcribe done chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} mel_ms={:.1} encode_ms={:.1} decode_ms={:.1} total_ms={:.1} peak_ram_mb={:.1} peak_mlx_mb={:.1} peak_mlx_cache_mb={:.1} cpu_user_ms={:.1} cpu_sys_ms={:.1} text={:?}",
                 stats.n_chunks,
                 stats.tokens,
@@ -741,13 +746,13 @@ fn decode_window(
     let max_chars = max_reasonable_chars(speech_secs);
     let max_tokens = max_reasonable_tokens(speech_secs);
     if debug {
-        eprintln!(
+        crate::safe_eprintln!(
             "[whisper-debug] chunk={chunk_idx} range={chunk_start_sec:.2}-{chunk_end_sec:.2}s decode stop={stop_reason} no_speech_prob={no_speech_prob:.3} avg_logprob={avg_logprob:.3} compression_ratio={compression_ratio:.3} speech_secs={speech_secs:.2} max_chars={max_chars} max_tokens={max_tokens} tokens={n} text={txt:?}"
         );
     }
     if no_speech_prob > NO_SPEECH_THRESHOLD && avg_logprob < LOGPROB_THRESHOLD {
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] chunk={chunk_idx} decision=reject_no_speech no_speech_prob={no_speech_prob:.3}>{NO_SPEECH_THRESHOLD:.3} avg_logprob={avg_logprob:.3}<{LOGPROB_THRESHOLD:.3}"
             );
         }
@@ -758,7 +763,7 @@ fn decode_window(
     // sampler, so rejecting the segment is safer than returning invented text.
     if n > 0 && avg_logprob < LOGPROB_THRESHOLD {
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] chunk={chunk_idx} decision=reject_low_logprob avg_logprob={avg_logprob:.3}<{LOGPROB_THRESHOLD:.3}"
             );
         }
@@ -766,7 +771,7 @@ fn decode_window(
     }
     if n > 0 && compression_ratio > COMPRESSION_RATIO_THRESHOLD {
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] chunk={chunk_idx} decision=reject_compression compression_ratio={compression_ratio:.3}>{COMPRESSION_RATIO_THRESHOLD:.3}"
             );
         }
@@ -774,7 +779,7 @@ fn decode_window(
     }
     if n > 0 && txt.chars().count() > max_chars {
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] chunk={chunk_idx} decision=reject_too_dense_chars chars={} max_chars={} speech_secs={speech_secs:.2}",
                 txt.chars().count(),
                 max_chars
@@ -784,7 +789,7 @@ fn decode_window(
     }
     if n > max_tokens {
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] chunk={chunk_idx} decision=reject_too_dense_tokens tokens={n} max_tokens={max_tokens} speech_secs={speech_secs:.2}"
             );
         }
@@ -792,14 +797,14 @@ fn decode_window(
     }
     if looks_like_common_outro_hallucination(&txt) {
         if debug {
-            eprintln!(
+            crate::safe_eprintln!(
                 "[whisper-debug] chunk={chunk_idx} decision=reject_common_outro text={txt:?}"
             );
         }
         return Ok((String::new(), n, no_speech_prob, avg_logprob));
     }
     if debug {
-        eprintln!("[whisper-debug] chunk={chunk_idx} decision=accept tokens={n}");
+        crate::safe_eprintln!("[whisper-debug] chunk={chunk_idx} decision=accept tokens={n}");
     }
     Ok((txt, n, no_speech_prob, avg_logprob))
 }
@@ -969,7 +974,7 @@ fn extract_speech_pcm(
     }
 
     if debug {
-        eprintln!(
+        crate::safe_eprintln!(
             "[whisper-debug] chunk={chunk_idx} vad noise_floor={noise_floor:.6} threshold={threshold:.6} segments={:?} speech_ms={speech_ms}",
             segments
                 .iter()

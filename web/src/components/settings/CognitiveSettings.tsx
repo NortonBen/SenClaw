@@ -28,6 +28,7 @@ interface CognitiveFormValues {
   reflectMinChars: number;
   reflectMaxChars: number;
   reflectCooldownMs: number;
+  reflectWindowIdleMs: number;
   autoReflection: boolean;
   maintenanceIntervalHours: number;
 }
@@ -39,6 +40,7 @@ interface EffectiveValues {
   reflectMinChars: number;
   reflectMaxChars: number;
   reflectCooldownMs: number;
+  reflectWindowIdleMs: number;
   autoReflection: boolean;
   maintenanceIntervalHours: number;
 }
@@ -50,6 +52,7 @@ const DEFAULTS: CognitiveFormValues = {
   reflectMinChars: 80,
   reflectMaxChars: 4000,
   reflectCooldownMs: 0,
+  reflectWindowIdleMs: 120000,
   autoReflection: true,
   maintenanceIntervalHours: 24,
 };
@@ -82,6 +85,10 @@ export const CognitiveSettings: React.FC = () => {
           saved.reflectCooldownMs ??
           json.effective?.reflectCooldownMs ??
           DEFAULTS.reflectCooldownMs,
+        reflectWindowIdleMs:
+          saved.reflectWindowIdleMs ??
+          json.effective?.reflectWindowIdleMs ??
+          DEFAULTS.reflectWindowIdleMs,
         autoReflection:
           saved.autoReflection ?? json.effective?.autoReflection ?? DEFAULTS.autoReflection,
         maintenanceIntervalHours:
@@ -136,6 +143,7 @@ export const CognitiveSettings: React.FC = () => {
       vals.reflectMinChars !== effective.reflectMinChars ||
       vals.reflectMaxChars !== effective.reflectMaxChars ||
       vals.reflectCooldownMs !== effective.reflectCooldownMs ||
+      vals.reflectWindowIdleMs !== effective.reflectWindowIdleMs ||
       vals.autoReflection !== effective.autoReflection ||
       vals.maintenanceIntervalHours !== effective.maintenanceIntervalHours
     );
@@ -152,10 +160,9 @@ export const CognitiveSettings: React.FC = () => {
       }
       const r = await res.json();
       message.success(
-        `Maintenance done — cleaned ${r.envelope_chunks_removed} chunks / ` +
-          `${r.orphan_entities_removed} orphans, merged ${r.entities_merged} entities ` +
-          `across ${r.groups_merged} groups, inferred ${r.associations_inferred ?? 0} ` +
-          `association(s) (${r.duration_ms} ms)`
+        `Maintenance done — cleaned ${r.cleanup_total_removed ?? r.envelope_chunks_removed} junk node(s), ` +
+          `merged ${r.entities_merged} duplicate(s) + ${r.aliases_merged ?? 0} alias(es), ` +
+          `inferred ${r.associations_inferred ?? 0} association(s) (${r.duration_ms} ms)`
       );
     } catch (err) {
       message.error(`Maintenance failed: ${(err as Error).message}`);
@@ -260,10 +267,19 @@ export const CognitiveSettings: React.FC = () => {
         <Form.Item
           name="reflectCooldownMs"
           label="Reflection cooldown (ms)"
-          tooltip="Minimum gap between auto-reflections in the same group. 0 = no throttle."
+          tooltip="Minimum gap between reflection window flushes in the same group. 0 = no throttle."
           rules={[{ required: true, type: 'number', min: 0, max: 600000 }]}
         >
           <InputNumber min={0} max={600000} step={500} style={{ width: 200 }} />
+        </Form.Item>
+
+        <Form.Item
+          name="reflectWindowIdleMs"
+          label="Reflection window idle (ms)"
+          tooltip="Turns are buffered into a conversation window; the window flushes to one extraction call after this much chat silence (or when it reaches max chars). 0 = flush per message."
+          rules={[{ required: true, type: 'number', min: 0, max: 3600000 }]}
+        >
+          <InputNumber min={0} max={3600000} step={1000} style={{ width: 200 }} />
         </Form.Item>
 
         <Divider style={{ margin: '12px 0' }} />
@@ -319,6 +335,7 @@ export const CognitiveSettings: React.FC = () => {
             <Tag>reflectMinChars: {effective.reflectMinChars}</Tag>
             <Tag>reflectMaxChars: {effective.reflectMaxChars}</Tag>
             <Tag>reflectCooldownMs: {effective.reflectCooldownMs}</Tag>
+            <Tag>reflectWindowIdleMs: {effective.reflectWindowIdleMs}</Tag>
             <Tag color={effective.autoReflection ? 'blue' : 'default'}>
               autoReflection: {String(effective.autoReflection)}
             </Tag>

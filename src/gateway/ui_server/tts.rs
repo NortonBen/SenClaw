@@ -74,24 +74,82 @@ static CATALOG: &[TtsCatalogEntry] = &[
     },
     TtsCatalogEntry {
         id: "facebook/mms-tts-vie",
-        label: "MMS-VITS Vietnamese (Meta, WIP)",
+        label: "MMS-VITS Vietnamese (Meta)",
         approx_size_gb: 0.3,
         languages: &["vi"],
         default_language: "vi",
-        description: "Meta Massively Multilingual Speech VITS (Vietnamese). Smaller (~145 MB safetensors) and simpler architecture than ZipVoice. Pure-Rust port in progress; until then requests transparently fall back to macOS native voice (signalled via X-TTS-Fallback header).",
+        description: "Meta Massively Multilingual Speech VITS (Vietnamese) — native pure-Rust MLX synthesis, no Python. Download once (~290 MB), then speaks Vietnamese fully offline. Requires a daemon built with the local-mlx-tts feature; otherwise falls back to macOS voice (X-TTS-Fallback header).",
+    },
+    // NOTE: community finetunes like dvd1503/mms-tts-vie-finetuned are no
+    // longer pinned in the catalog — any HF VitsModel repo still installs via
+    // "Add model from Hugging Face" (generic VitsModel routing).
+    TtsCatalogEntry {
+        id: "facebook/mms-tts-eng",
+        label: "MMS-VITS English (Meta)",
+        approx_size_gb: 0.3,
+        languages: &["en"],
+        default_language: "en",
+        description: "Meta MMS VITS English — native pure-Rust MLX synthesis, fully offline after download. Same runtime as the Vietnamese model.",
     },
     TtsCatalogEntry {
-        id: "mlx-community/zipvoice-vietnamese",
-        label: "ZipVoice Vietnamese (MLX, WIP)",
-        approx_size_gb: 0.4,
+        id: "pnnbao-ump/VieNeu-TTS-v3-Turbo",
+        label: "VieNeu-TTS v3 Turbo (48 kHz, 14 giọng)",
+        approx_size_gb: 0.31,
         languages: &["vi", "en"],
         default_language: "vi",
-        description: "Flow-matching TTS — pure-Rust port in progress; until it lands, requests transparently fall back to macOS native voice (signalled via X-TTS-Fallback header).",
+        description: "VieNeu-TTS v3 Turbo (Phạm Nguyễn Ngọc Bảo) — 48 kHz, 14 preset Vietnamese voices, En–Vi code-switching, emotion cues ([cười], [thở dài]). Runs the official ONNX path on CPU (daemon built with tts-vieneu). Set the Voice field to a preset name (default: Phạm Tuyên). Composite download: ONNX graphs + MOSS codec + voices + phoneme dictionary.",
     },
+    // NOTE: ZipVoice (mlx-community/zipvoice-vietnamese) was dropped from the
+    // catalog — the pure-Rust port is still WIP (never synthesized; always
+    // fell back to the macOS voice) and VieNeu now covers high-quality
+    // Vietnamese. The `crate::tts::zipvoice` port work remains for when the
+    // synthesis path lands.
 ];
 
 fn catalog_get(id: &str) -> Option<&'static TtsCatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)
+}
+
+/// Selectable voices for a model, if it exposes any: `(voices, default)`.
+/// VieNeu reads its preset list from the downloaded `voices_v3_turbo.json`
+/// (name + description + gender per voice); the macOS presets are static.
+fn model_voices(id: &str, dir: &std::path::Path) -> (Vec<serde_json::Value>, Option<String>) {
+    match id {
+        "macos-speech" => (
+            vec![json!({"name": "Linh", "description": "Giọng nữ tiếng Việt (macOS)"})],
+            Some("Linh".to_string()),
+        ),
+        "macos-speech-en" => (
+            vec![json!({"name": "Samantha", "description": "English female (macOS)"})],
+            Some("Samantha".to_string()),
+        ),
+        _ if id == crate::tts::vieneu::MODEL_ID => {
+            let Ok(s) = std::fs::read_to_string(dir.join("voices_v3_turbo.json")) else {
+                return (Vec::new(), None);
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else {
+                return (Vec::new(), None);
+            };
+            let default_voice = v["default_voice"].as_str().map(str::to_string);
+            let mut voices: Vec<serde_json::Value> = v["presets"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(name, p)| {
+                            json!({
+                                "name": name,
+                                "description": p["description"].as_str().unwrap_or(""),
+                                "gender": p["gender"].as_str().unwrap_or(""),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            voices.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+            (voices, default_voice)
+        }
+        _ => (Vec::new(), None),
+    }
 }
 
 fn safe_dirname(id: &str) -> String {
@@ -117,6 +175,9 @@ fn is_installed(state: &UiState, id: &str) -> bool {
         return true;
     }
     let dir = model_dir(state, id);
+    if id == crate::tts::vieneu::MODEL_ID {
+        return crate::tts::vieneu::dir_is_installed(&dir);
+    }
     dir.join("config.json").exists()
         && (dir.join("model.safetensors").exists()
             || dir.join("weights.npz").exists()
@@ -170,6 +231,7 @@ pub(crate) async fn tts_models_list(
     for e in CATALOG {
         let dir = model_dir(&state, e.id);
         let download = downloads.get(e.id).map(|h| h.state.lock().unwrap().clone());
+        let (voices, default_voice) = model_voices(e.id, &dir);
         models.push(json!({
             "id": e.id,
             "label": e.label,
@@ -181,6 +243,8 @@ pub(crate) async fn tts_models_list(
             "on_disk_path": dir.to_string_lossy(),
             "custom": false,
             "download": download,
+            "voices": voices,
+            "default_voice": default_voice,
         }));
     }
 
@@ -321,7 +385,11 @@ pub(crate) async fn tts_download(
 
     let weights_repo = id.clone();
     tokio::spawn(async move {
-        let result = run_tts_download(&weights_repo, &dir, progress.clone(), cancel).await;
+        let result = if weights_repo == crate::tts::vieneu::MODEL_ID {
+            run_vieneu_download(&dir, progress.clone(), cancel).await
+        } else {
+            run_tts_download(&weights_repo, &dir, progress.clone(), cancel).await
+        };
         let mut s = progress.lock().unwrap();
         match result {
             Ok(()) if s.status != DownloadStatus::Cancelled => s.status = DownloadStatus::Done,
@@ -466,6 +534,14 @@ pub(crate) async fn tts_synthesize(
         .or_else(|| settings.language.clone())
         .unwrap_or_else(|| "vi".to_string());
     let speed = body.speed.or(settings.speed).unwrap_or(1.0);
+    // Voice must fall back to the persisted setting like language/speed do —
+    // chat read-aloud sends only `text`, and without this it always spoke with
+    // the model's default voice instead of the one picked in Settings.
+    let voice = body
+        .voice
+        .clone()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| settings.voice.clone().filter(|v| !v.trim().is_empty()));
     let text = body.text.clone();
 
     let model_path = if model_id.starts_with("macos-speech") {
@@ -484,7 +560,7 @@ pub(crate) async fn tts_synthesize(
             model_path.as_deref(),
             &text,
             &language,
-            body.voice.as_deref(),
+            voice.as_deref(),
             speed,
         )
     })
@@ -544,6 +620,159 @@ fn should_skip(name: &str) -> bool {
         || lower.ends_with(".jpeg")
         || lower.ends_with(".gif")
         || lower.ends_with(".svg")
+}
+
+/// Composite download for VieNeu-TTS v3 Turbo — four sources into one model dir:
+///   1. int8 ONNX graphs + config + tokenizer (HF `pnnbao-ump/VieNeu-TTS-v3-Turbo`,
+///      subfolder `onnx_int8/`)
+///   2. MOSS codec decoder (HF `OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX`)
+///   3. preset voices JSON (upstream GitHub, Apache-2.0)
+///   4. `sea_g2p.bin` phoneme dictionary, extracted from the pinned sea-g2p
+///      wheel on PyPI (the dictionary is platform-independent data)
+async fn run_vieneu_download(
+    dir: &PathBuf,
+    progress: Arc<Mutex<DownloadState>>,
+    cancel: CancellationToken,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    const SEA_G2P_VERSION: &str = "0.7.18";
+    let vieneu = crate::tts::vieneu::MODEL_ID;
+    let codec = "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX";
+    let voices_url = "https://raw.githubusercontent.com/pnnbao97/VieNeu-TTS/main/src/vieneu/assets/voices_v3_turbo.json";
+
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    for f in [
+        "vieneu_prefill.onnx",
+        "vieneu_decode_step.onnx",
+        "vieneu_acoustic_cached.onnx",
+        "vieneu_backbone_shared.data",
+        "vieneu_v3_heads.npz",
+        "config.json",
+        "tokenizer.json",
+    ] {
+        files.push((
+            format!("{HF_BASE}/{vieneu}/resolve/main/onnx_int8/{f}"),
+            dir.join("onnx_int8").join(f),
+        ));
+    }
+    for f in [
+        "moss_audio_tokenizer_decode_full.onnx",
+        "moss_audio_tokenizer_decode_shared.data",
+    ] {
+        files.push((
+            format!("{HF_BASE}/{codec}/resolve/main/{f}"),
+            dir.join("codec").join(f),
+        ));
+    }
+    files.push((voices_url.to_string(), dir.join("voices_v3_turbo.json")));
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    progress.lock().unwrap().status = DownloadStatus::Listing;
+    // Resolve the sea-g2p wheel URL (any platform wheel carries the same .bin).
+    let pypi: serde_json::Value = client
+        .get(format!("https://pypi.org/pypi/sea-g2p/{SEA_G2P_VERSION}/json"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let wheel_url = pypi["urls"]
+        .as_array()
+        .and_then(|urls| {
+            urls.iter()
+                .find(|u| u["filename"].as_str().is_some_and(|f| f.ends_with(".whl")))
+        })
+        .and_then(|u| u["url"].as_str())
+        .context("no sea-g2p wheel found on PyPI")?
+        .to_string();
+
+    {
+        let mut s = progress.lock().unwrap();
+        s.files_total = (files.len() + 1) as u32;
+        s.status = DownloadStatus::Downloading;
+    }
+
+    for (url, dst) in &files {
+        if cancel.is_cancelled() {
+            progress.lock().unwrap().status = DownloadStatus::Cancelled;
+            return Ok(());
+        }
+        progress.lock().unwrap().current_file =
+            Some(dst.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        if let Some(parent) = dst.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        download_url_streaming(&client, url, dst, &progress, &cancel).await?;
+        if cancel.is_cancelled() {
+            progress.lock().unwrap().status = DownloadStatus::Cancelled;
+            return Ok(());
+        }
+        progress.lock().unwrap().files_done += 1;
+    }
+
+    // sea_g2p.bin: download the wheel to a temp file, extract the dictionary.
+    let bin_dst = dir.join("sea_g2p.bin");
+    if !bin_dst.exists() {
+        progress.lock().unwrap().current_file = Some("sea_g2p.bin (wheel)".into());
+        let tmp = dir.join(".sea_g2p.whl.part");
+        download_url_streaming(&client, &wheel_url, &tmp, &progress, &cancel).await?;
+        if cancel.is_cancelled() {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            progress.lock().unwrap().status = DownloadStatus::Cancelled;
+            return Ok(());
+        }
+        let bin_dst2 = bin_dst.clone();
+        let tmp2 = tmp.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let f = std::fs::File::open(&tmp2)?;
+            let mut zip = zip::ZipArchive::new(f).context("sea-g2p wheel is not a zip")?;
+            let mut entry = zip
+                .by_name("sea_g2p/sea_g2p.bin")
+                .context("sea_g2p.bin missing from wheel")?;
+            let mut out = std::fs::File::create(&bin_dst2)?;
+            std::io::copy(&mut entry, &mut out)?;
+            Ok(())
+        })
+        .await??;
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    progress.lock().unwrap().files_done += 1;
+    Ok(())
+}
+
+/// Stream one URL to a file with resume-by-size skip + progress accounting.
+async fn download_url_streaming(
+    client: &reqwest::Client,
+    url: &str,
+    dst: &std::path::Path,
+    progress: &Arc<Mutex<DownloadState>>,
+    cancel: &CancellationToken,
+) -> anyhow::Result<()> {
+    let resp = client.get(url).send().await?.error_for_status()?;
+    if let (Some(len), Ok(meta)) = (resp.content_length(), std::fs::metadata(dst)) {
+        if meta.len() == len {
+            progress.lock().unwrap().downloaded_bytes += len;
+            return Ok(()); // already complete
+        }
+    }
+    let mut stream = resp.bytes_stream();
+    let mut file = tokio::fs::File::create(dst).await?;
+    while let Some(chunk) = stream.next().await {
+        if cancel.is_cancelled() {
+            drop(file);
+            let _ = tokio::fs::remove_file(dst).await;
+            return Ok(());
+        }
+        let bytes = chunk?;
+        file.write_all(&bytes).await?;
+        progress.lock().unwrap().downloaded_bytes += bytes.len() as u64;
+    }
+    file.flush().await?;
+    Ok(())
 }
 
 async fn run_tts_download(

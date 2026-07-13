@@ -96,6 +96,12 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
     temperature: f32,
+    /// Always serialized as `false`. Some gateways (antigravity, various
+    /// local proxies) default to SSE streaming when the field is absent —
+    /// the streamed `data: {...chunk...}` body then fails the JSON parse
+    /// and every cognify call soft-fails to `SkippedNoLlm` (observed as
+    /// "N chunks, 0 edges" in the Knowledge UI).
+    stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
 }
@@ -151,6 +157,7 @@ pub(crate) fn build_body(
             },
         ],
         temperature: 0.1, // low — we want deterministic JSON
+        stream: false,
         response_format: if request_json_object {
             Some(ResponseFormat {
                 kind: "json_object",
@@ -163,6 +170,11 @@ pub(crate) fn build_body(
 }
 
 pub(crate) fn parse_response(raw: &str) -> Result<String> {
+    // Defence-in-depth: a gateway that streams despite `stream: false`
+    // hands us an SSE body. Reassemble it instead of failing the parse.
+    if raw.trim_start().starts_with("data:") {
+        return parse_sse_response(raw);
+    }
     let parsed: ChatResponse = serde_json::from_str(raw)
         .with_context(|| format!("chat-completion JSON parse failed: {raw}"))?;
     let choice = parsed
@@ -171,6 +183,38 @@ pub(crate) fn parse_response(raw: &str) -> Result<String> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("chat completion returned no choices"))?;
     Ok(choice.message.content)
+}
+
+/// Assemble assistant content from an OpenAI-style SSE stream body
+/// (`data: {"choices":[{"delta":{"content":"…"}}]}` lines, terminated by
+/// `data: [DONE]`). Non-JSON lines and empty deltas are skipped.
+pub(crate) fn parse_sse_response(raw: &str) -> Result<String> {
+    let mut out = String::new();
+    for line in raw.lines() {
+        let Some(payload) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+            continue;
+        };
+        if let Some(delta) = v
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("delta"))
+            .and_then(|d| d.get("content"))
+            .and_then(|s| s.as_str())
+        {
+            out.push_str(delta);
+        }
+    }
+    if out.is_empty() {
+        anyhow::bail!("SSE chat stream contained no assistant content");
+    }
+    Ok(out)
 }
 
 #[async_trait]
@@ -368,6 +412,33 @@ mod tests {
     fn build_body_skips_response_format_when_disabled() {
         let body = build_body("m", "s", "u", false);
         assert!(body.get("response_format").is_none());
+    }
+
+    /// Regression: gateways like antigravity default to SSE streaming when
+    /// `stream` is absent — the body must always pin it to false.
+    #[test]
+    fn build_body_pins_stream_false() {
+        let body = build_body("m", "s", "u", true);
+        assert_eq!(body["stream"], false);
+    }
+
+    /// Regression: a gateway that streams anyway must still parse — every
+    /// cognify call used to soft-fail here ("57 chunks, 0 edges").
+    #[test]
+    fn parse_response_reassembles_sse_stream() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"triplets\\\":\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"[]}\"}}]}\n\n",
+            "data: [DONE]\n",
+        );
+        assert_eq!(parse_response(raw).unwrap(), "{\"triplets\":[]}");
+    }
+
+    #[test]
+    fn parse_sse_response_errors_when_stream_has_no_content() {
+        let raw = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: [DONE]\n";
+        assert!(parse_sse_response(raw).is_err());
     }
 
     #[test]

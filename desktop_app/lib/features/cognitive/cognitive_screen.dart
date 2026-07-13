@@ -82,11 +82,16 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
           ),
           child: Row(
             children: [
-              Text('Knowledge',
-                  style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700)),
+              Tooltip(
+                message: 'User info aggregated from chats · extended with '
+                    'uploaded documents · Recall researches it for detailed, '
+                    'grounded answers',
+                child: Text('Knowledge',
+                    style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+              ),
               const SizedBox(width: AppTokens.s24),
               stats.when(
                 loading: () => const SizedBox.shrink(),
@@ -147,6 +152,9 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                       _runOp(context, ref, 'maintenance', 'Maintenance run');
                     case 'cleanup':
                       _runOp(context, ref, 'cleanup', 'Cleanup done');
+                    case 'backfill':
+                      _runOp(context, ref, 're-extract-pending',
+                          'Backfill started');
                     case 'decay':
                       showDialog(
                           context: context,
@@ -160,6 +168,14 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                       Icon(Icons.cleaning_services_outlined, size: 16),
                       SizedBox(width: AppTokens.s8),
                       Text('Maintain'),
+                    ]),
+                  ),
+                  PopupMenuItem(
+                    value: 'backfill',
+                    child: Row(children: [
+                      Icon(Icons.replay_outlined, size: 16),
+                      SizedBox(width: AppTokens.s8),
+                      Text('Re-extract pending'),
                     ]),
                   ),
                   PopupMenuItem(
@@ -212,7 +228,7 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                         padding: const EdgeInsets.all(AppTokens.s12),
                         child: TextField(
                           decoration: const InputDecoration(
-                            hintText: 'Search memory…',
+                            hintText: 'Search knowledge…',
                             prefixIcon: Icon(Icons.search, size: 16),
                           ),
                           onSubmitted: (v) => ref
@@ -402,12 +418,20 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
 
   Future<void> _runOp(
       BuildContext context, WidgetRef ref, String op, String msg) async {
-    await ref.read(apiClientProvider).post('/api/cognitive/$op');
+    final r = await ref.read(apiClientProvider).post('/api/cognitive/$op');
     ref.invalidate(cogStatsProvider);
     ref.invalidate(cogNodesProvider);
+    // Cleanup reports how much junk it swept; backfill how many chunks it
+    // queued — surface whichever count came back.
+    var text = msg;
+    if (r is Map && r['total_removed'] is num) {
+      text = '$msg — removed ${r['total_removed']} node(s)';
+    } else if (r is Map && r['queued'] is num) {
+      text = '$msg — ${r['queued']} chunk(s) queued';
+    }
     if (context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg)));
+          .showSnackBar(SnackBar(content: Text(text)));
     }
   }
 
@@ -496,7 +520,7 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
       Navigator.of(context).pop();
       final ok = resp.statusCode >= 200 && resp.statusCode < 300;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(ok ? '${f.name}: added to memory' : 'Upload failed: $body')));
+          content: Text(ok ? '${f.name}: added to knowledge' : 'Upload failed: $body')));
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
@@ -511,7 +535,7 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
     final c = context.colors;
     return AlertDialog(
       backgroundColor: c.surface,
-      title: const Text('Add memory'),
+      title: const Text('Add knowledge'),
       content: SizedBox(
         width: 460,
         child: Column(

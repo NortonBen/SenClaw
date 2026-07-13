@@ -30,7 +30,7 @@ const _sections = [
   ('llm', 'LLM Models', Icons.smart_toy_outlined),
   ('local', 'Local Models', Icons.memory),
   ('embedding', 'Embedding', Icons.scatter_plot_outlined),
-  ('memory', 'Memory', Icons.account_tree_outlined),
+  ('memory', 'Knowledge', Icons.account_tree_outlined),
   ('whisper', 'Speech-to-Text', Icons.mic_none_outlined),
   ('tts', 'Text-to-Speech', Icons.volume_up_outlined),
   ('ocr', 'OCR', Icons.document_scanner_outlined),
@@ -414,6 +414,25 @@ class _GeneralSection extends ConsumerWidget {
             ),
           ]),
         ),
+        const SizedBox(height: AppTokens.s16),
+        Text('Autonomous tasks',
+            style: TextStyle(
+                color: context.colors.textSecondary,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: AppTokens.s8),
+        ref.watch(dispatchConfigProvider).when(
+              loading: () => const LinearProgressIndicator(),
+              error: (e, _) => Text('$e'),
+              data: (d) => _ToggleRow(
+                label: 'Auto-run Kanban tasks (dispatcher)',
+                desc: 'Automatically assign a worker agent to each task in a '
+                    'Kanban board\'s Ready column, run it, and complete or block '
+                    'it. Agents act unattended — leave OFF unless you want that.',
+                value: d['enabled'] == true,
+                onChanged: (v) => api.post(
+                    '/api/dispatch-config', {'enabled': v}, dispatchConfigProvider),
+              ),
+            ),
       ],
     );
   }
@@ -2551,6 +2570,12 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
             );
           },
         ),
+        _HfAddModelCard(
+          key: const ValueKey('hf-add-local'),
+          apiBase: '/api/local-models',
+          onDownloaded: () => ref.invalidate(localModelsProvider),
+        ),
+        const SizedBox(height: AppTokens.s12),
         models.when(
           loading: () => const LinearProgressIndicator(),
           error: (e, _) => Text('$e'),
@@ -2733,8 +2758,22 @@ class _MediaModelsSectionState extends ConsumerState<_MediaModelsSection> {
     return _Body(
       title: widget.title,
       children: [
-        _MediaSettingsCard(domain: domain),
+        // Key by domain: without it Flutter reuses the card's State when
+        // switching between the Whisper/TTS/OCR sections (same widget type at
+        // the same tree position), so e.g. the TTS card kept showing the
+        // Whisper model as "current" — and Save would persist it.
+        _MediaSettingsCard(key: ValueKey('media-settings-$domain'), domain: domain),
         const SizedBox(height: AppTokens.s12),
+        // Custom HF model install with pre-download compatibility check
+        // (validate endpoints exist for whisper + tts, not ocr).
+        if (domain != 'ocr') ...[
+          _HfAddModelCard(
+            key: ValueKey('hf-add-$domain'),
+            apiBase: '/api/$domain/models',
+            onDownloaded: () => ref.invalidate(mediaModelsProvider(domain)),
+          ),
+          const SizedBox(height: AppTokens.s12),
+        ],
         models.when(
           loading: () => const LinearProgressIndicator(),
           error: (e, _) => Text('$e'),
@@ -3141,6 +3180,7 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
   final _reflectMinChars = TextEditingController();
   final _reflectMaxChars = TextEditingController();
   final _reflectCooldownMs = TextEditingController();
+  final _reflectWindowIdleMs = TextEditingController();
   final _maintenanceHours = TextEditingController();
   bool _saving = false;
 
@@ -3151,6 +3191,7 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
     _reflectMinChars.dispose();
     _reflectMaxChars.dispose();
     _reflectCooldownMs.dispose();
+    _reflectWindowIdleMs.dispose();
     _maintenanceHours.dispose();
     super.dispose();
   }
@@ -3164,6 +3205,7 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
     _reflectMinChars.text = s('reflectMinChars');
     _reflectMaxChars.text = s('reflectMaxChars');
     _reflectCooldownMs.text = s('reflectCooldownMs');
+    _reflectWindowIdleMs.text = s('reflectWindowIdleMs');
     _maintenanceHours.text = s('maintenanceIntervalHours');
   }
 
@@ -3180,6 +3222,8 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
         if (n(_reflectMaxChars) != null) 'reflectMaxChars': n(_reflectMaxChars),
         if (n(_reflectCooldownMs) != null)
           'reflectCooldownMs': n(_reflectCooldownMs),
+        if (n(_reflectWindowIdleMs) != null)
+          'reflectWindowIdleMs': n(_reflectWindowIdleMs),
         if (n(_maintenanceHours) != null)
           'maintenanceIntervalHours': n(_maintenanceHours),
       });
@@ -3203,14 +3247,14 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
     final cfg = ref.watch(cognitiveConfigProvider);
     return cfg.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _Body(title: 'Memory (Cognitive)', children: [Text('$e')]),
+      error: (e, _) => _Body(title: 'Knowledge (Cognitive)', children: [Text('$e')]),
       data: (d) {
         if (!_seeded) {
           _seeded = true;
           _seed(d);
         }
         return _Body(
-          title: 'Memory (Cognitive)',
+          title: 'Knowledge (Cognitive)',
           children: [
             _ToggleRow(
               label: 'Enable cognitive layer',
@@ -3246,13 +3290,20 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
             ),
             _NumberRow(
               label: 'Max chars',
-              desc: 'Truncate reflection input beyond this length.',
+              desc: 'Window size: buffered turns flush to one extraction '
+                  'call when they reach this length.',
               controller: _reflectMaxChars,
             ),
             _NumberRow(
               label: 'Cooldown (ms)',
-              desc: 'Minimum gap between reflections per agent.',
+              desc: 'Minimum gap between window flushes per agent.',
               controller: _reflectCooldownMs,
+            ),
+            _NumberRow(
+              label: 'Window idle (ms)',
+              desc: 'Flush the conversation window after this much chat '
+                  'silence. 0 = flush per message.',
+              controller: _reflectWindowIdleMs,
             ),
             const SizedBox(height: AppTokens.s16),
             _SettingsGroupLabel('Maintenance'),
@@ -3810,9 +3861,12 @@ class _DetailFetchBlock extends ConsumerWidget {
 }
 
 /// Runtime-logs panel for the Space-App detail dialog. Fetches on open and then
-/// **auto-reloads every 2 s** while the dialog is mounted, so logs that the app
+/// **auto-reloads every 3 s** while the dialog is mounted, so logs that the app
 /// writes after you open the dialog show up without reopening it. Keeps the last
-/// content during a refresh (no spinner flicker) and offers a manual refresh.
+/// content during a refresh (no spinner flicker), offers a manual refresh + a
+/// copy-all button, and renders the log as `SelectableText` so you can select
+/// and copy individual lines. Only rebuilds when the content actually changes,
+/// so an in-progress text selection survives idle auto-refreshes.
 class _LogsBlock extends ConsumerStatefulWidget {
   const _LogsBlock({required this.appId});
   final String appId;
@@ -3831,7 +3885,7 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
   void initState() {
     super.initState();
     _fetch();
-    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _fetch());
+    _poll = Timer.periodic(const Duration(seconds: 3), (_) => _fetch());
   }
 
   @override
@@ -3851,6 +3905,10 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
       final text = data is Map
           ? '${data['content'] ?? data['logs'] ?? ''}'
           : '$data';
+      // Skip the rebuild when nothing changed so an in-progress SelectableText
+      // selection is not cleared by the 3 s auto-refresh. Still clear the
+      // loading/error state on the first successful fetch.
+      if (text == _content && _error == null && !_loading) return;
       setState(() {
         _content = text;
         _error = null;
@@ -3867,9 +3925,18 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
     }
   }
 
+  void _copy() {
+    if (_content.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: _content));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Đã copy log')));
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    final hasLogs = _content.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3895,6 +3962,16 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
                       fontWeight: FontWeight.w600)),
             ),
             const Spacer(),
+            IconButton(
+              tooltip: 'Copy all logs',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              icon: Icon(Icons.copy_all,
+                  size: 15, color: hasLogs ? c.textMuted : c.textMuted.withValues(alpha: 0.4)),
+              onPressed: hasLogs ? _copy : null,
+            ),
+            const SizedBox(width: AppTokens.s8),
             IconButton(
               tooltip: 'Refresh logs',
               visualDensity: VisualDensity.compact,
@@ -3926,7 +4003,8 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
                           color: AppTokens.danger, fontSize: 11))
                   : SingleChildScrollView(
                       reverse: true,
-                      child: Text(_content.isEmpty ? '(no logs)' : _content,
+                      child: SelectableText(
+                          _content.isEmpty ? '(no logs)' : _content,
                           style: TextStyle(
                               color: c.textMuted,
                               fontSize: 11,
@@ -4272,10 +4350,201 @@ class _LocalInferenceSettingsState
   }
 }
 
+/// "Add model from Hugging Face" card with pre-download compatibility check.
+///
+/// Works for any domain whose API exposes `GET  $apiBase/:id/validate` and
+/// `POST $apiBase/:id/download` (tts, whisper, local-models). The Check step
+/// asks the daemon to inspect the repo's config.json + file tree against the
+/// actual native loader BEFORE anything heavy is fetched; Download is only
+/// offered when the model is supported (or when the check was inconclusive —
+/// e.g. HF unreachable — in which case it's explicitly a "try anyway").
+class _HfAddModelCard extends ConsumerStatefulWidget {
+  const _HfAddModelCard({
+    super.key,
+    required this.apiBase,
+    required this.onDownloaded,
+  });
+  final String apiBase;
+  final VoidCallback onDownloaded;
+  @override
+  ConsumerState<_HfAddModelCard> createState() => _HfAddModelCardState();
+}
+
+class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
+  final _input = TextEditingController();
+  bool _busy = false;
+  Map<String, dynamic>? _report; // last validate result
+  String? _error;
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  String get _enc => Uri.encodeComponent(_input.text.trim());
+
+  Future<void> _check() async {
+    setState(() {
+      _busy = true;
+      _report = null;
+      _error = null;
+    });
+    try {
+      final r = await ref
+          .read(apiClientProvider)
+          .get('${widget.apiBase}/$_enc/validate');
+      if (mounted && r is Map) {
+        setState(() => _report = r.cast<String, dynamic>());
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Check failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _download() async {
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(apiClientProvider)
+          .post('${widget.apiBase}/$_enc/download');
+      widget.onDownloaded();
+      if (mounted) {
+        setState(() {
+          _report = null;
+          _input.clear();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Download started — progress shows in the list below')));
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Download failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final rep = _report;
+    final supported = rep?['supported'] == true;
+    final inconclusive = rep?['inconclusive'] == true;
+    final sizeGb = ((rep?['total_size_bytes'] as num?) ?? 0) / (1 << 30);
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+        border: Border.all(color: c.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Add model from Hugging Face',
+              style:
+                  TextStyle(color: c.textPrimary, fontWeight: FontWeight.w700)),
+          const SizedBox(height: AppTokens.s8),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _input,
+                onSubmitted: (_) => _check(),
+                onChanged: (_) {
+                  // A new id invalidates the previous verdict.
+                  if (_report != null || _error != null) {
+                    setState(() {
+                      _report = null;
+                      _error = null;
+                    });
+                  }
+                },
+                decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: 'org/repo hoặc URL (vd: facebook/mms-tts-vie)'),
+              ),
+            ),
+            const SizedBox(width: AppTokens.s8),
+            OutlinedButton.icon(
+              onPressed: _busy || _input.text.trim().isEmpty ? null : _check,
+              icon: _busy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.rule, size: 16),
+              label: const Text('Check'),
+            ),
+          ]),
+          if (_error != null) ...[
+            const SizedBox(height: AppTokens.s8),
+            Text(_error!,
+                style: const TextStyle(color: AppTokens.danger, fontSize: 12)),
+          ],
+          if (rep != null) ...[
+            const SizedBox(height: AppTokens.s8),
+            Container(
+              padding: const EdgeInsets.all(AppTokens.s8),
+              decoration: BoxDecoration(
+                color: (supported
+                        ? AppTokens.success
+                        : inconclusive
+                            ? AppTokens.warning
+                            : AppTokens.danger)
+                    .withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(AppTokens.rSm),
+              ),
+              child: Row(children: [
+                Icon(
+                  supported
+                      ? Icons.check_circle_outline
+                      : inconclusive
+                          ? Icons.help_outline
+                          : Icons.block,
+                  size: 16,
+                  color: supported
+                      ? AppTokens.success
+                      : inconclusive
+                          ? AppTokens.warning
+                          : AppTokens.danger,
+                ),
+                const SizedBox(width: AppTokens.s8),
+                Expanded(
+                  child: Text(
+                    [
+                      '${rep['reason'] ?? ''}',
+                      if ((rep['architecture'] as String?)?.isNotEmpty ??
+                          false)
+                        'arch: ${rep['architecture']}',
+                      if (sizeGb > 0.001)
+                        'size: ${sizeGb.toStringAsFixed(2)} GB',
+                    ].join('  ·  '),
+                    style: TextStyle(color: c.textSecondary, fontSize: 12),
+                  ),
+                ),
+                if (supported || inconclusive) ...[
+                  const SizedBox(width: AppTokens.s8),
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _download,
+                    icon: const Icon(Icons.download, size: 16),
+                    label: Text(supported ? 'Download' : 'Try anyway'),
+                  ),
+                ],
+              ]),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 /// Per-domain media settings (web Whisper/Tts/OcrSettings): active model +
 /// language, plus voice/speed for TTS. GET/PUT `/api/$domain/settings`.
 class _MediaSettingsCard extends ConsumerStatefulWidget {
-  const _MediaSettingsCard({required this.domain});
+  const _MediaSettingsCard({super.key, required this.domain});
   final String domain;
   @override
   ConsumerState<_MediaSettingsCard> createState() => _MediaSettingsCardState();
@@ -4294,6 +4563,15 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
   bool get _isTts => widget.domain == 'tts';
   bool get _isOcr => widget.domain == 'ocr';
   bool get _isWhisper => widget.domain == 'whisper';
+
+  static String _langLabel(String code) => switch (code) {
+        'vi' => 'vi — Tiếng Việt',
+        'en' => 'en — English',
+        'zh' => 'zh — 中文',
+        'ja' => 'ja — 日本語',
+        'ko' => 'ko — 한국어',
+        _ => code,
+      };
 
   final _recorder = AudioRecorder();
   bool _recording = false;
@@ -4371,6 +4649,19 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MediaSettingsCard old) {
+    super.didUpdateWidget(old);
+    // Safety net if this State is ever reused for another domain (the section
+    // also keys the card by domain): reload that domain's settings.
+    if (old.domain != widget.domain) {
+      _loaded = false;
+      _modelId = null;
+      _flash = null;
+      _load();
+    }
   }
 
   /// Pick an image and run OCR with the current model/language, then show the
@@ -4459,9 +4750,23 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       );
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
         await _player.play(BytesSource(resp.bodyBytes, mimeType: 'audio/wav'));
+        // Never hide a model swap: the daemon reports transparent fallback
+        // (e.g. model missing or a build without local-mlx-tts) via headers.
+        final fallback = resp.headers['x-tts-fallback'];
+        final backend = resp.headers['x-tts-backend'];
+        if (mounted) {
+          if (fallback != null && fallback.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                duration: const Duration(seconds: 6),
+                content: Text('Fallback voice used: $fallback')));
+          } else if (backend != null && backend.isNotEmpty) {
+            setState(() => _flash = 'Spoke via $backend');
+          }
+        }
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Test failed: ${resp.statusCode}')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Test failed: ${resp.statusCode} ${utf8.decode(resp.bodyBytes, allowMalformed: true)}')));
       }
     } catch (e) {
       if (mounted) {
@@ -4496,8 +4801,14 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       'language': _language.text.trim(),
     };
     if (_isTts) {
+      final speedRaw = _speed.text.trim();
+      final speed = speedRaw.isEmpty ? 1.0 : double.tryParse(speedRaw);
+      if (speed == null || speed < 0.25 || speed > 4.0) {
+        setState(() => _flash = 'Speed must be 0.25–4.0');
+        return;
+      }
       body['voice'] = _voice.text.trim();
-      body['speed'] = double.tryParse(_speed.text.trim()) ?? 1.0;
+      body['speed'] = speed;
     }
     try {
       await ref
@@ -4571,41 +4882,142 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                       child: Text(m.label,
                           maxLines: 1, overflow: TextOverflow.ellipsis)),
               ],
-              onChanged: (v) => setState(() => _modelId = v),
+              onChanged: (v) {
+                setState(() {
+                  _modelId = v;
+                  final m = models.where((m) => m.id == v).firstOrNull;
+                  // Snap language to what the newly selected model supports.
+                  if (m != null && m.languages.isNotEmpty) {
+                    final cur = _language.text.trim().toLowerCase();
+                    if (!m.languages.contains(cur)) {
+                      _language.text = m.defaultLanguage ?? m.languages.first;
+                    }
+                  }
+                  // Snap voice to the model's preset list (VieNeu/macOS).
+                  if (m != null && m.voices.isNotEmpty) {
+                    final names = m.voices.map((v) => v['name']).toSet();
+                    if (!names.contains(_voice.text.trim())) {
+                      _voice.text =
+                          m.defaultVoice ?? m.voices.first['name'] ?? '';
+                    }
+                  }
+                });
+              },
             );
           }),
           const SizedBox(height: AppTokens.s8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _language,
-                  decoration: const InputDecoration(
-                      labelText: 'Language', isDense: true, hintText: 'vi'),
-                ),
-              ),
-              if (_isTts) ...[
-                const SizedBox(width: AppTokens.s8),
+          Builder(builder: (_) {
+            final selected =
+                models.where((m) => m.id == _modelId).firstOrNull;
+            // Language choices: the selected model's list, else the union
+            // across the catalog. Empty (e.g. whisper accepts any ISO code)
+            // → keep the free-text field.
+            final langs = selected != null && selected.languages.isNotEmpty
+                ? List<String>.from(selected.languages)
+                : models.expand((m) => m.languages).toSet().toList()
+              ..sort();
+            final curLang = _language.text.trim().toLowerCase();
+            if (curLang.isNotEmpty && !langs.contains(curLang)) {
+              langs.insert(0, curLang);
+            }
+            // Voice applies when the model exposes preset voices (VieNeu's 14
+            // named speakers, macOS system voices) — single-speaker MMS models
+            // ignore it, so hide the field there.
+            final voiceOptions = selected?.voices ?? const [];
+            final voiceApplies = _isTts &&
+                (voiceOptions.isNotEmpty ||
+                    _modelId == null ||
+                    _modelId!.startsWith('macos-speech'));
+            return Row(
+              children: [
                 Expanded(
-                  child: TextField(
-                    controller: _voice,
-                    decoration: const InputDecoration(
-                        labelText: 'Voice', isDense: true),
-                  ),
+                  child: langs.isEmpty
+                      ? TextField(
+                          controller: _language,
+                          decoration: const InputDecoration(
+                              labelText: 'Language',
+                              isDense: true,
+                              hintText: 'vi'),
+                        )
+                      : DropdownButtonFormField<String>(
+                          key: ValueKey(
+                              '${widget.domain}-lang-$curLang-${langs.join(',')}'),
+                          initialValue: curLang.isEmpty ? null : curLang,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                              labelText: 'Language', isDense: true),
+                          items: [
+                            for (final l in langs)
+                              DropdownMenuItem(
+                                  value: l, child: Text(_langLabel(l))),
+                          ],
+                          onChanged: (v) =>
+                              setState(() => _language.text = v ?? ''),
+                        ),
                 ),
-                const SizedBox(width: AppTokens.s8),
-                SizedBox(
-                  width: 80,
-                  child: TextField(
-                    controller: _speed,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                        labelText: 'Speed', isDense: true),
+                if (_isTts && voiceApplies) ...[
+                  const SizedBox(width: AppTokens.s8),
+                  Expanded(
+                    child: voiceOptions.isEmpty
+                        ? TextField(
+                            controller: _voice,
+                            decoration: const InputDecoration(
+                                labelText: 'Voice',
+                                isDense: true,
+                                hintText: 'Linh / Samantha…'),
+                          )
+                        : Builder(builder: (_) {
+                            final names = voiceOptions
+                                .map((v) => v['name'] ?? '')
+                                .where((n) => n.isNotEmpty)
+                                .toList();
+                            var cur = _voice.text.trim();
+                            if (!names.contains(cur)) {
+                              cur = selected?.defaultVoice ?? names.first;
+                            }
+                            return DropdownButtonFormField<String>(
+                              key: ValueKey(
+                                  '${widget.domain}-voice-$cur-${names.length}'),
+                              initialValue: cur,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                  labelText: 'Voice', isDense: true),
+                              items: [
+                                for (final v in voiceOptions)
+                                  DropdownMenuItem(
+                                    value: v['name'],
+                                    child: Text(
+                                      (v['description'] ?? '').isEmpty
+                                          ? (v['name'] ?? '')
+                                          : '${v['name']} — ${v['description']}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (v) =>
+                                  setState(() => _voice.text = v ?? ''),
+                            );
+                          }),
                   ),
-                ),
+                ],
+                if (_isTts) ...[
+                  const SizedBox(width: AppTokens.s8),
+                  SizedBox(
+                    width: 96,
+                    child: TextField(
+                      controller: _speed,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                          labelText: 'Speed',
+                          isDense: true,
+                          hintText: '1.0'),
+                    ),
+                  ),
+                ],
               ],
-            ],
-          ),
+            );
+          }),
           const SizedBox(height: AppTokens.s8),
           Row(
             children: [

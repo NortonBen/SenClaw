@@ -34,7 +34,7 @@ pub(crate) async fn run_qr_login(
         .context("fetch QR code")?;
     let mut qr_data: QrCodeResponse = resp.json().await.context("parse QR code response")?;
 
-    println!("\n[WeChatChannel] Please scan the QR code with WeChat to log in:");
+    crate::safe_println!("\n[WeChatChannel] Please scan the QR code with WeChat to log in:");
     // Print QR code to terminal if possible
     if let Ok(qr_img) = qrcode::QrCode::new(&qr_data.qrcode_img_content) {
         let rendered: String = qr_img
@@ -43,10 +43,10 @@ pub(crate) async fn run_qr_login(
             .module_dimensions(2, 1)
             .build();
         for line in rendered.split('\n') {
-            println!("  {line}");
+            crate::safe_println!("  {line}");
         }
     }
-    println!("  {}\n", qr_data.qrcode_img_content);
+    crate::safe_println!("  {}\n", qr_data.qrcode_img_content);
 
     let mut refresh_count = 0u32;
     let mut scanned_printed = false;
@@ -74,7 +74,7 @@ pub(crate) async fn run_qr_login(
             }
             "scaned" => {
                 if !scanned_printed {
-                    println!("\n[WeChatChannel] QR scanned, please confirm in WeChat...");
+                    crate::safe_println!("\n[WeChatChannel] QR scanned, please confirm in WeChat...");
                     scanned_printed = true;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -84,7 +84,7 @@ pub(crate) async fn run_qr_login(
                 if refresh_count > MAX_QR_REFRESH {
                     anyhow::bail!("QR code expired multiple times, please restart login flow");
                 }
-                println!(
+                crate::safe_println!(
                     "\n[WeChatChannel] QR code expired, refreshing ({refresh_count}/{})...",
                     MAX_QR_REFRESH
                 );
@@ -103,10 +103,10 @@ pub(crate) async fn run_qr_login(
                         .module_dimensions(2, 1)
                         .build();
                     for line in rendered.split('\n') {
-                        println!("  {line}");
+                        crate::safe_println!("  {line}");
                     }
                 }
-                println!("  {}\n", qr_data.qrcode_img_content);
+                crate::safe_println!("  {}\n", qr_data.qrcode_img_content);
                 scanned_printed = false;
             }
             "confirmed" => {
@@ -116,9 +116,9 @@ pub(crate) async fn run_qr_login(
                 let token = status
                     .bot_token
                     .ok_or_else(|| anyhow::anyhow!("missing bot_token"))?;
-                println!("\n[WeChatChannel] WeChat login successful!");
+                crate::safe_println!("\n[WeChatChannel] WeChat login successful!");
                 if let Some(ref uid) = status.ilink_user_id {
-                    println!("[WeChatChannel] Bound user: {uid}");
+                    crate::safe_println!("[WeChatChannel] Bound user: {uid}");
                 }
                 return Ok(QrLoginResult {
                     token,

@@ -10,6 +10,10 @@ final adminPermsProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
 final agentBehaviorProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
     _asMap(await ref.read(apiClientProvider).get('/api/agent-behavior')));
 
+/// Autonomous Kanban/MCP dispatcher toggle ({enabled}).
+final dispatchConfigProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
+    _asMap(await ref.read(apiClientProvider).get('/api/dispatch-config')));
+
 final embeddingConfigProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
     _asMap(await ref.read(apiClientProvider).get('/api/embedding-config')));
 
@@ -77,8 +81,17 @@ class MediaModel {
   final bool installed;
   final String? downloadStatus; // queued | downloading | error | done | null
   final double? downloadProgress; // 0..1 when downloading
+  final List<String> languages; // supported language codes (may be empty)
+  final String? defaultLanguage;
+  /// Selectable voices: [{name, description, gender}] (empty = free-form).
+  final List<Map<String, String>> voices;
+  final String? defaultVoice;
   const MediaModel(this.id, this.label, this.description, this.sizeGb,
-      this.installed, this.downloadStatus, this.downloadProgress);
+      this.installed, this.downloadStatus, this.downloadProgress,
+      [this.languages = const [],
+      this.defaultLanguage,
+      this.voices = const [],
+      this.defaultVoice]);
 
   /// True while a download is queued or in flight — used to disable the
   /// Download button and drive polling (matches the web `['queued',
@@ -104,6 +117,18 @@ class MediaModel {
       j['installed'] == true,
       d?['status'] as String?,
       prog,
+      (j['languages'] as List?)?.map((e) => '$e').toList() ?? const [],
+      j['default_language'] as String?,
+      (j['voices'] as List?)
+              ?.whereType<Map>()
+              .map((v) => {
+                    'name': '${v['name'] ?? ''}',
+                    'description': '${v['description'] ?? ''}',
+                    'gender': '${v['gender'] ?? ''}',
+                  })
+              .toList() ??
+          const [],
+      j['default_voice'] as String?,
     );
   }
 }

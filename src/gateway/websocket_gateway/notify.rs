@@ -337,6 +337,18 @@ impl WebSocketGateway {
         self.broadcast_to_admins(&msg).await;
     }
 
+    /// Push a built-in Kanban board change (any writer: REST, dispatcher worker,
+    /// or the `kanban-server` stdio MCP). The desktop Kanban screen re-fetches
+    /// the board on this event, so it updates live without a manual Refresh.
+    pub async fn notify_kanban_update(&self, board_id: i64) {
+        let msg = serde_json::json!({
+            "type": "kanban:update",
+            "boardId": board_id,
+        });
+        tracing::debug!("[WsGateway] emit kanban:update board={board_id}");
+        self.broadcast_to_admins(&msg).await;
+    }
+
     pub async fn notify_agent_todos(
         &self,
         agent_jid: &str,

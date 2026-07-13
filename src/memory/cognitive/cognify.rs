@@ -56,7 +56,12 @@ English predicates (e.g. `name`, `lives_in`, `likes`, `is_a`, `works_at`, `owns`
 subject and object with `subject_type` / `object_type`: a short, lowercase, English category for \
 the entity (e.g. `person`, `city`, `country`, `organization`, `food`, `animal`, `concept`). Use an \
 empty string when the category is genuinely unclear. Skip filler words and questions. Return JSON \
-only.\n\n\
+only.\n\
+The text may be a conversation transcript with lines like `alice: message`. Attribute each line's \
+first-person claims (I/tôi/我) to that line's speaker when the speaker is a plain name, and resolve \
+pronouns or references (it/he/nó/anh ấy/dự án đó) using earlier lines. Facts may span lines — a \
+question on one line answered on the next still yields a triplet, with the subject taken from the \
+question's context.\n\n\
 Schema: {\"triplets\":[{\"subject\":\"...\",\"subject_type\":\"...\",\"predicate\":\"...\",\"object\":\"...\",\"object_type\":\"...\"}]}\n\n\
 Example input: \"tôi tên là Sen, sống ở Hà Nội và thích cà phê đen.\"\n\
 Example output: {\"triplets\":[\
@@ -64,6 +69,10 @@ Example output: {\"triplets\":[\
 {\"subject\":\"tôi\",\"subject_type\":\"person\",\"predicate\":\"lives_in\",\"object\":\"Hà Nội\",\"object_type\":\"city\"},\
 {\"subject\":\"tôi\",\"subject_type\":\"person\",\"predicate\":\"likes\",\"object\":\"cà phê đen\",\"object_type\":\"food\"}\
 ]}";
+
+/// Cap on entity names injected into the extraction prompt as the
+/// "already known" hint — ~24 names ≈ a few dozen tokens per call.
+const KNOWN_ENTITIES_HINT_MAX: usize = 24;
 
 fn content_hash(text: &str) -> String {
     let mut h = Sha256::new();
@@ -104,18 +113,27 @@ pub fn sanitize_for_cognify(text: &str) -> Option<String> {
     // half-XML at best — message bodies may contain unescaped angle
     // brackets we'd choke on).
     let mut cleaned = trimmed.to_string();
-    for tag in ["</messages>", "<messages>", "</message>"] {
+    for tag in ["</messages>", "<messages>"] {
         cleaned = cleaned.replace(tag, " ");
     }
-    // Opening <message ...> tags carry attributes — drop the whole tag
-    // including its content up to '>'.
-    cleaned = strip_open_tag(&cleaned, "<message");
+    // Keep who-said-what: `<message sender="X" …>body</message>` becomes a
+    // `X: body` transcript line instead of dropping the attribution — the
+    // extractor's transcript guidance uses the speaker to resolve pronouns
+    // and first-person claims in group chats.
+    cleaned = cleaned.replace("</message>", "\n");
+    cleaned = speakerize_message_tags(&cleaned);
     // Drop <thinking> blocks if any made it through.
     cleaned = strip_block(&cleaned, "<thinking>", "</thinking>");
     cleaned = strip_block(&cleaned, "<think>", "</think>");
 
-    // Collapse runs of whitespace introduced by the strips above.
-    let cleaned: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Collapse whitespace per line but keep the line structure — speaker
+    // turns must stay on separate lines for the transcript guidance.
+    let cleaned: String = cleaned
+        .lines()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
     if cleaned.is_empty() {
         return None;
     }
@@ -136,15 +154,26 @@ pub fn sanitize_for_cognify(text: &str) -> Option<String> {
     Some(cleaned)
 }
 
-/// Remove every occurrence of `<open …>` (any attributes, up to and
-/// including the first `>`). Leaves the inner content alone.
-fn strip_open_tag(s: &str, open: &str) -> String {
+/// Replace every `<message …>` opening tag with a `sender: ` speaker
+/// prefix on its own line (attribution extracted from the `sender="…"`
+/// attribute). Tags without a sender degrade to plain stripping; a
+/// malformed tag (no closing `>`) drops the rest to avoid an infinite
+/// loop, mirroring the old strip behavior.
+fn speakerize_message_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
-    while let Some(start) = rest.find(open) {
+    while let Some(start) = rest.find("<message") {
         out.push_str(&rest[..start]);
-        let after_open = &rest[start + open.len()..];
+        let after_open = &rest[start + "<message".len()..];
         if let Some(close) = after_open.find('>') {
+            if let Some(sender) = attr_value(&after_open[..close], "sender=\"") {
+                let sender = sender.trim();
+                if !sender.is_empty() {
+                    out.push('\n');
+                    out.push_str(sender);
+                    out.push_str(": ");
+                }
+            }
             rest = &after_open[close + 1..];
         } else {
             // Malformed — drop the rest to avoid infinite loop.
@@ -154,6 +183,14 @@ fn strip_open_tag(s: &str, open: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Value of `key…"` inside a tag's attribute string, e.g.
+/// `attr_value(r#"sender="alice" time="t""#, "sender=\"")` → `Some("alice")`.
+fn attr_value<'a>(attrs: &'a str, key: &str) -> Option<&'a str> {
+    let start = attrs.find(key)? + key.len();
+    let rest = &attrs[start..];
+    rest.find('"').map(|end| &rest[..end])
 }
 
 /// Remove every `<open>…</close>` span (inclusive of the delimiters).
@@ -249,10 +286,22 @@ impl CognifyPipeline {
         let mut report = CognifyReport::default();
         let chunks = chunk_text(text, opts.chunker);
 
+        // Prompt hint: entity names the graph already knows, so the
+        // extractor reuses them instead of minting aliases ("HN" vs
+        // "Hà Nội"). Scoped to the first node-set (the chat group) when
+        // present. Best-effort — an empty hint degrades to old behavior.
+        let known_entities = self
+            .embedder
+            .graph
+            .top_entity_names(opts.node_sets.first(), KNOWN_ENTITIES_HINT_MAX)
+            .unwrap_or_default();
+
         for ch in chunks {
             // Sanitize before hashing so identical messages wrapped in
-            // varying envelopes (different `time="..."` attributes,
-            // different senders) all dedupe to the same content_hash.
+            // varying envelopes (different `time="..."` attributes) dedupe
+            // to the same content_hash. Senders are preserved as speaker
+            // prefixes, so the same text from two speakers is deliberately
+            // two different chunks.
             // Drops the chunk entirely when sanitize returns None — saves
             // an embedding call + an LLM call for pure-markup junk.
             let cleaned = match sanitize_for_cognify(&ch.text) {
@@ -320,7 +369,7 @@ impl CognifyPipeline {
             }
 
             let (triplets, skipped) = self
-                .extract_triplets(&cleaned)
+                .extract_triplets(&cleaned, &known_entities)
                 .await
                 .context("extract triplets")?;
             // Latch the skipped flag across chunks — one bad chunk shouldn't
@@ -329,8 +378,6 @@ impl CognifyPipeline {
             if skipped {
                 report.llm_skipped = true;
             }
-            // Persist the new state for this chunk so the next call can
-            // short-circuit at the dedupe gate above.
             let new_state = if skipped {
                 super::ExtractionState::SkippedNoLlm
             } else if triplets.is_empty() {
@@ -338,15 +385,20 @@ impl CognifyPipeline {
             } else {
                 super::ExtractionState::Done
             };
-            let _ = self
-                .embedder
-                .graph
-                .set_extraction_state(chunk_node.id, new_state, now);
 
             for raw in triplets.into_iter().take(opts.max_triplets_per_chunk) {
                 self.upsert_triplet(&chunk_node, &raw, opts, &mut report, now)
                     .await?;
             }
+
+            // Persist the state only AFTER the triplets landed, so the next
+            // call can short-circuit at the dedupe gate above. Writing it
+            // earlier marked chunks `Done` even when a mid-loop error threw
+            // their edges away — those chunks then never re-extracted.
+            let _ = self
+                .embedder
+                .graph
+                .set_extraction_state(chunk_node.id, new_state, now);
         }
 
         Ok(report)
@@ -360,8 +412,12 @@ impl CognifyPipeline {
     ///     configure an LLM" from "your text had no facts".
     ///   * `llm_skipped=false` + empty Vec means the LLM ran and produced
     ///     nothing useful (parse error or empty triplet list).
-    async fn extract_triplets(&self, text: &str) -> Result<(Vec<RawTriplet>, bool)> {
-        let user = build_user_prompt(text, &[]);
+    async fn extract_triplets(
+        &self,
+        text: &str,
+        known_entities: &[String],
+    ) -> Result<(Vec<RawTriplet>, bool)> {
+        let user = build_user_prompt(text, known_entities);
         let raw = match self.llm.complete(SYSTEM_PROMPT, &user).await {
             Ok(s) => s,
             Err(e) => {
@@ -558,6 +614,31 @@ mod sanitize_tests {
         assert!(!out.contains("<message"));
         assert!(!out.contains("sender="));
         assert!(!out.contains("time="));
+        // Attribution preserved as a speaker prefix.
+        assert!(
+            out.contains("ext:default: tôi tên là Sen"),
+            "speaker prefix expected, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn multi_speaker_envelope_becomes_transcript_lines() {
+        let raw = concat!(
+            r#"<messages><message sender="an" time="t1">SemaClaw deadline khi nào?</message>"#,
+            r#"<message sender="binh" time="t2">tháng 8 nhé</message></messages>"#,
+        );
+        let out = sanitize_for_cognify(raw).expect("transcript should survive");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "one line per turn: {out:?}");
+        assert_eq!(lines[0], "an: SemaClaw deadline khi nào?");
+        assert_eq!(lines[1], "binh: tháng 8 nhé");
+    }
+
+    #[test]
+    fn message_tag_without_sender_still_strips_cleanly() {
+        let raw = r#"<message time="t">nội dung không có sender</message>"#;
+        let out = sanitize_for_cognify(raw).expect("clean text");
+        assert_eq!(out, "nội dung không có sender");
     }
 
     #[test]

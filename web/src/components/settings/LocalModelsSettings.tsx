@@ -183,6 +183,30 @@ export const LocalModelsSettings: React.FC = () => {
     if (!raw) return;
     setInstalling(true);
     try {
+      // Verify loader compatibility (config.json + file tree, no weights)
+      // before a multi-GB download; inconclusive checks fall through.
+      try {
+        const vres = await fetch(
+          `/api/local-models/${encodeURIComponent(raw)}/validate`
+        );
+        if (vres.ok) {
+          const v = await vres.json();
+          if (!v.supported && !v.inconclusive) {
+            message.error(`Model không tương thích: ${v.reason}`);
+            return;
+          }
+          if (v.supported) {
+            const gb = (v.total_size_bytes / 2 ** 30).toFixed(2);
+            message.info(
+              `Hỗ trợ ✓ — ${v.reason}${v.total_size_bytes ? ` (~${gb} GB)` : ''}`
+            );
+          } else {
+            message.warning(`Không kiểm tra được (${v.reason}) — vẫn thử tải.`);
+          }
+        }
+      } catch {
+        // validate unreachable → proceed
+      }
       const res = await fetch(
         `/api/local-models/${encodeURIComponent(raw)}/download`,
         {

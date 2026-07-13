@@ -115,6 +115,61 @@ impl SpaceMcpLauncher {
         }
     }
 
+    /// Health-check every enabled server app and respawn any that is down or
+    /// stopped responding. Called on an interval by the daemon's Space-App
+    /// supervisor loop — this is what keeps a crashed/killed app (or one that
+    /// served a broken deploy) automatically coming back.
+    pub async fn supervise(&self, db: &Db, manager: &McpManager, apps_dir: &Path, base_url: &str) {
+        let apps: Vec<(String, Value)> = match db.with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps WHERE enabled = 1")?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .filter_map(|r| r.ok())
+                .filter_map(|(id, m)| serde_json::from_str::<Value>(&m).ok().map(|v| (id, v)))
+                .collect::<Vec<_>>();
+            Ok(rows)
+        }) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+
+        for (app_id, manifest) in apps {
+            if !is_server_runtime(&manifest) {
+                continue;
+            }
+            let runtime = manifest.get("runtime").cloned().unwrap_or(Value::Null);
+            let port = runtime.get("port").and_then(Value::as_u64).unwrap_or(0) as u16;
+            let health_path = runtime.get("healthPath").and_then(Value::as_str).unwrap_or("/health");
+
+            // Healthy if the fixed port answers its health endpoint; for a
+            // dynamic port, if the tracked child is still alive.
+            let healthy = if port > 0 {
+                self.is_healthy(&health_url(port, health_path)).await
+            } else {
+                let mut children = self.children.lock().await;
+                children
+                    .get_mut(&app_id)
+                    .map(|p| matches!(p.child.try_wait(), Ok(None)))
+                    .unwrap_or(false)
+            };
+            if healthy {
+                continue;
+            }
+
+            tracing::warn!("[space-mcp] supervisor: app '{app_id}' is DOWN → respawning");
+            // Drop any dead tracked child so ensure_server_running spawns fresh.
+            self.restart_app(&app_id).await;
+            let app_dir = app_install_dir(&manifest, apps_dir, &app_id);
+            match self
+                .run_and_register(db, manager, &app_id, &app_dir, &manifest, base_url)
+                .await
+            {
+                Ok(_) => tracing::info!("[space-mcp] supervisor: respawned '{app_id}'"),
+                Err(e) => tracing::warn!("[space-mcp] supervisor: respawn '{app_id}' failed: {e}"),
+            }
+        }
+    }
+
     /// Launch (if a server runtime) and auto-register a single app's MCP.
     /// Updates the stored manifest with the running origin. Returns the
     /// registered MCP server name, or `None` when nothing to register.

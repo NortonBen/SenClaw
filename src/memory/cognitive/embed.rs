@@ -133,7 +133,25 @@ impl CognitiveEmbedder {
         if self.provider.dimensions() == 0 {
             return Ok(Vec::new());
         }
-        embed_node(&*self.provider, &*self.vector, node).await
+        // Embedding is the vector-recall layer, not the graph's source of
+        // truth — a provider hiccup (model missing, feature not compiled,
+        // HTTP flake) must NOT abort the caller's triplet/chunk upsert.
+        // Observed failure mode before this guard: entity nodes persisted
+        // but the whole triplet aborted at the next embed → entities with
+        // no MENTIONS/semantic edges ("N entities, ~0 edges" graphs).
+        // Degrade to "node persisted, no vector": FTS + graph traversal
+        // still work, and a later re-extract can fill the vector in.
+        match embed_node(&*self.provider, &*self.vector, node).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                tracing::warn!(
+                    node = %node.name,
+                    error = %e,
+                    "[cognitive] embed failed; node kept without vector"
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 }
 

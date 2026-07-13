@@ -199,7 +199,9 @@ static MLX_SERIAL: Mutex<()> = Mutex::new(());
 /// Acquire [`MLX_SERIAL`], recovering from a poisoned lock (a prior MLX panic
 /// must not wedge all future inference). Blocks until it's this caller's turn —
 /// use only from blocking/`spawn_blocking` contexts (load + generate).
-fn mlx_serial_lock() -> std::sync::MutexGuard<'static, ()> {
+/// `pub(crate)` so other MLX subsystems (e.g. the TTS backends) can serialize
+/// against LLM inference instead of corrupting Metal state.
+pub(crate) fn mlx_serial_lock() -> std::sync::MutexGuard<'static, ()> {
     MLX_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -208,7 +210,9 @@ fn mlx_serial_lock() -> std::sync::MutexGuard<'static, ()> {
 /// (`unload` / `release_kv_cache`) so they (a) never block a tokio worker
 /// waiting on a long generation and (b) never free Metal buffers concurrently
 /// with that generation — the caller simply skips and retries later.
-fn mlx_serial_try_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+/// `pub(crate)` so other MLX subsystems' reapers (e.g. the TTS idle-model
+/// eviction) can use the same skip-when-busy discipline.
+pub(crate) fn mlx_serial_try_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
     match MLX_SERIAL.try_lock() {
         Ok(g) => Some(g),
         Err(std::sync::TryLockError::WouldBlock) => None,
