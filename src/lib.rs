@@ -2276,6 +2276,44 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             }));
         }
 
+        // Widget emit → persist + WS gateway. One-way `chat:widget` push
+        // (display-only, no response round-trip). Persist before broadcasting
+        // so a reload immediately after still replays it. Mirrors the
+        // tool_execution block above.
+        {
+            let gw_widget = Arc::clone(&gw);
+            let db_widget = Arc::clone(&db);
+            let default_msg_limit = cfg.agent.max_messages_per_group;
+            zen_core_api.set_on_widget_emit(Arc::new(move |jid, data| {
+                let gw = Arc::clone(&gw_widget);
+                let db = Arc::clone(&db_widget);
+                tokio::spawn(async move {
+                    // The tool's optional `chat_jid` overrides the engine's jid;
+                    // otherwise the emit targets the emitting agent's chat.
+                    let chat_jid = data.chat_jid.clone().unwrap_or(jid);
+                    let ts = chrono::Utc::now().to_rfc3339();
+                    let widget_val =
+                        serde_json::to_value(&data.widget).unwrap_or_else(|_| serde_json::json!({}));
+                    let widget_json =
+                        serde_json::to_string(&data.widget).unwrap_or_else(|_| "{}".to_string());
+                    if let Err(e) = db.insert_chat_widget(
+                        &data.id,
+                        &chat_jid,
+                        &widget_json,
+                        &ts,
+                        default_msg_limit,
+                    ) {
+                        tracing::warn!(
+                            error = %e,
+                            jid = %chat_jid,
+                            "[WsGateway] failed to persist chat widget; live broadcast continues"
+                        );
+                    }
+                    gw.notify_widget(&chat_jid, &data.id, &widget_val, &ts).await;
+                });
+            }));
+        }
+
         // Wire CoworkManager → WebSocket gateway. Every mutation fires
         // Wire DispatchBridge → AgentPool. The scheduler hands off augmented
         // prompts to sub-agents via GroupQueue + process_and_wait, mirroring

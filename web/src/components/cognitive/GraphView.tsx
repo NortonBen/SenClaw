@@ -211,6 +211,7 @@ export function GraphView({
   const [ty, setTy] = useState(0);
   const [scale, setScale] = useState(1);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  const nodeDragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<number | null>(null);
 
@@ -236,9 +237,10 @@ export function GraphView({
 
   const width = measuredWidth;
 
-  const sim = useMemo(() => {
-    if (!data) return [] as SimNode[];
-    return runForceLayout(data.nodes, data.edges, width, height);
+  const [sim, setSim] = useState<SimNode[]>([]);
+  useEffect(() => {
+    if (!data) { setSim([]); return; }
+    setSim(runForceLayout(data.nodes, data.edges, width, height));
   }, [data, width, height]);
 
   const posById = useMemo(() => new Map(sim.map(n => [n.id, n])), [sim]);
@@ -309,19 +311,35 @@ export function GraphView({
 
   const onMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
+    if (nodeDragRef.current) return;
     dragRef.current = { x: e.clientX - tx, y: e.clientY - ty };
   };
   const onMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (nodeDragRef.current) {
+      const nd = nodeDragRef.current;
+      const svgEl = e.currentTarget;
+      const rect = svgEl.getBoundingClientRect();
+      const mx = (e.clientX - rect.left - tx) / scale;
+      const my = (e.clientY - rect.top - ty) / scale;
+      nd.moved = true;
+      setSim(prev =>
+        prev.map(n =>
+          n.id === nd.id ? { ...n, x: mx, y: my } : n,
+        ),
+      );
+      return;
+    }
     if (!dragRef.current) return;
     setTx(e.clientX - dragRef.current.x);
     setTy(e.clientY - dragRef.current.y);
   };
   const onMouseUp = () => {
+    nodeDragRef.current = null;
     dragRef.current = null;
   };
 
   return (
-    <div ref={wrapperRef} style={{ width: '100%', lineHeight: 0, position: 'relative' }}>
+    <div ref={wrapperRef} style={{ width: '100%', lineHeight: 0, position: 'relative', overflow: 'hidden', borderRadius: 8 }}>
       {/* Legend */}
       {showLegend && (
         <div
@@ -538,12 +556,18 @@ export function GraphView({
                 key={n.id}
                 transform={`translate(${n.x},${n.y})`}
                 style={{
-                  cursor: 'pointer',
+                  cursor: nodeDragRef.current?.id === n.id ? 'grabbing' : 'pointer',
                   opacity: dimmed ? 0.08 : 1,
                   transition: 'opacity 0.2s',
                 }}
+                onMouseDown={ev => {
+                  ev.stopPropagation();
+                  if (ev.button !== 0) return;
+                  nodeDragRef.current = { id: n.id, startX: ev.clientX, startY: ev.clientY, moved: false };
+                }}
                 onClick={ev => {
                   ev.stopPropagation();
+                  if (nodeDragRef.current?.moved) return;
                   onNodeClick?.(n);
                 }}
                 onMouseEnter={() => { setHoveredNode(n.id); setHoveredEdge(null); }}

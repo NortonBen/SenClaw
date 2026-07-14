@@ -52,7 +52,7 @@ impl RelationshipEdge {
             props: Value::Object(Default::default()),
             valid_from: now,
             valid_to: None,
-            strength: 0.1,
+            strength: 0.35,
             tier: EdgeTier::L1Working,
             activation_count: 0,
             last_activated: now,

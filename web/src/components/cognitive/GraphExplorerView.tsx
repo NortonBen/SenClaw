@@ -377,7 +377,7 @@ export function GraphExplorerView() {
           opacity: 0.5,
         }}
       >
-        Drag = pan · Wheel = zoom · Click node = focus · Click again = unfocus
+        Drag node = move · Drag canvas = pan · Wheel = zoom · Click node = focus · Click again = unfocus
       </div>
     </div>
   );

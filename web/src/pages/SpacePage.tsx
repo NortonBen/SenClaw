@@ -9,6 +9,7 @@ import { CalendarView } from '../components/space/calendar/CalendarView';
 import { SchedulesList } from '../components/space/schedules/SchedulesList';
 import { AppsGallery } from '../components/space/AppsGallery';
 import { SpaceAppFrame, type SpaceAppRuntime } from '../components/space/SpaceAppFrame';
+import { Dashboard, type AppWithWidgets } from '../components/space/dashboard/Dashboard';
 import { useSpace } from '../hooks/useSpace';
 import { useAppContext } from '../contexts/AppContext';
 import type { SpaceNote } from '../hooks/useSpace';
@@ -16,14 +17,15 @@ import type { SpaceNote } from '../hooks/useSpace';
 const { Content } = Layout;
 
 export function SpacePage() {
-  const { ws } = useAppContext();
+  const { ws, isDarkMode } = useAppContext();
   const { token } = theme.useToken();
   const space = useSpace();
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [section, setSection] = useState<SpaceSection | `app:${string}`>('notes');
+  const [section, setSection] = useState<SpaceSection | `app:${string}`>('dashboard');
   const [spaceApps, setSpaceApps] = useState<SpaceAppRuntime[]>([]);
+  const [appsWithWidgets, setAppsWithWidgets] = useState<AppWithWidgets[]>([]);
 
   // Deep-link: /space/app/<id> opens that app's frame.
   useEffect(() => {
@@ -69,8 +71,34 @@ export function SpacePage() {
         };
       });
       setSpaceApps(apps);
+
+      const withWidgets: AppWithWidgets[] = (rows as Array<{ id: string; manifest: any; enabled: boolean }>)
+        .filter(row => Array.isArray(row.manifest?.widgets) && row.manifest.widgets.length > 0)
+        .map(row => {
+          const runtimeUrl: string | undefined = row.manifest?.runtime?.url;
+          const base = runtimeUrl
+            ? runtimeUrl.replace(/\/$/, '')
+            : `/api/space/apps/${encodeURIComponent(row.id)}/proxy`;
+          return {
+            appId: row.id,
+            appName: row.manifest?.name ?? row.id,
+            appIcon: row.manifest?.icon,
+            baseUrl: base,
+            widgets: row.manifest.widgets.map((w: any) => ({
+              id: w.id,
+              name: w.name,
+              description: w.description,
+              size: w.size ?? 'small',
+              refreshMs: w.refreshMs,
+              entryUrl: w.entryUrl ?? '/',
+              render: w.render ?? 'client',
+            })),
+          };
+        });
+      setAppsWithWidgets(withWidgets);
     } catch {
       setSpaceApps([]);
+      setAppsWithWidgets([]);
     }
   };
 
@@ -160,6 +188,7 @@ export function SpacePage() {
     : null;
 
   const contentMap: Record<SpaceSection, React.ReactNode> = {
+    dashboard: <Dashboard apps={appsWithWidgets} isDarkMode={isDarkMode} />,
     notes: NotesPanel,
     calendar: <CalendarView hook={space} />,
     schedules: <SchedulesList hook={space} />,

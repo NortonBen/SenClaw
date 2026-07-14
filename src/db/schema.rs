@@ -191,6 +191,19 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_tool_exec_chat_ts
           ON tool_executions(chat_jid, timestamp);
 
+        -- One-way chat widgets (chart/image/clock/weather) pushed by
+        -- `emit_widget`. Persisted so a page reload replays them in
+        -- `history:load`. `widget_json` is the full WidgetSpec {kind,title,data}.
+        -- Mirrors tool_executions (FIFO-trimmed per chat on insert).
+        CREATE TABLE IF NOT EXISTS chat_widgets (
+          id            TEXT PRIMARY KEY,
+          chat_jid      TEXT NOT NULL,
+          widget_json   TEXT NOT NULL DEFAULT '{}',
+          created_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_widgets_chat_ts
+          ON chat_widgets(chat_jid, created_at);
+
         CREATE TABLE IF NOT EXISTS dispatch_activity (
           id            INTEGER PRIMARY KEY AUTOINCREMENT,
           task_id       TEXT NOT NULL,

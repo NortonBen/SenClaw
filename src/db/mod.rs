@@ -32,6 +32,7 @@ mod schema;
 
 mod agent_todos;
 mod agents;
+mod chat_widgets;
 mod bindings;
 mod channels;
 mod chat_events;

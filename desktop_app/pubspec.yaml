@@ -70,6 +70,8 @@ dependencies:
   # 6.x uses the consistent 2.x federated packages.
   record: ^6.0.0
   audioplayers: ^6.1.0
+  flutter_graph_view: ^2.1.0
+  fl_chart: ^1.2.0
 
 dev_dependencies:
   flutter_test:

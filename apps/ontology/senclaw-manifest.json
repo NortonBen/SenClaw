@@ -1,0 +1,86 @@
+{
+  "id": "ontology",
+  "name": "SenClaw Ontology",
+  "description": "Turn raw data into a real knowledge graph, the right way. Profile a CSV/JSON source, design an ontology (T-Box) from competency questions, map raw rows to RDF with a declarative RML-lite mapping, mint stable IRIs, resolve duplicate entities, validate with SHACL, run RDFS/OWL-RL reasoning, and query everything with SPARQL — all provenance-tracked in per-import named graphs you can drop and reload. Backed by an embedded Oxigraph triple store; the ✨ AI actions (profile roles, draft T-Box, draft mapping, NL→SPARQL, draft SHACL, extract-from-text) run on SenClaw's configured LLM.",
+  "icon": "◎",
+  "runtime": {
+    "kind": "server",
+    "start": "./ontology",
+    "healthPath": "/api/status",
+    "port": 4410
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "ontology-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Ontology MCP: build knowledge graphs from raw data. Create projects, add & profile CSV/JSON sources, design a T-Box (classes/properties), author a declarative RML-lite mapping, lift rows into provenance batches, run SPARQL, save & run competency questions as a test suite, validate with SHACL-lite, materialize RDFS/OWL-RL inferences, resolve duplicate entities, and extract triples from unstructured text.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "ontology-build",
+      "path": "skills/ontology-build",
+      "triggers": [
+        "xây ontology",
+        "xây dựng ontology",
+        "tạo ontology từ",
+        "chuyển dữ liệu thành ontology",
+        "chuyển CSV thành RDF",
+        "biến bảng thành knowledge graph",
+        "map dữ liệu sang ontology",
+        "lift dữ liệu lên RDF",
+        "dựng knowledge graph từ",
+        "sinh triple từ CSV",
+        "mô hình hoá dữ liệu thành RDF",
+        "build an ontology",
+        "build a knowledge graph from",
+        "turn this CSV into RDF",
+        "map data to an ontology",
+        "lift CSV to RDF",
+        "generate triples from",
+        "model this data as RDF"
+      ]
+    },
+    {
+      "name": "ontology-query",
+      "path": "skills/ontology-query",
+      "triggers": [
+        "hỏi ontology",
+        "truy vấn SPARQL",
+        "chạy SPARQL",
+        "kiểm tra competency question",
+        "validate SHACL",
+        "kiểm tra ràng buộc ontology",
+        "suy luận ontology",
+        "materialize ontology",
+        "gộp thực thể trùng",
+        "trích triple từ văn bản",
+        "query the ontology",
+        "run a SPARQL query",
+        "check competency questions",
+        "validate with SHACL",
+        "reason over the ontology",
+        "resolve duplicate entities",
+        "extract triples from text"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "ontology-engineer",
+      "path": "personas/ontology-engineer.md",
+      "description": "A knowledge engineer who separates schema from data, designs from competency questions, and keeps every triple provenance-tracked"
+    }
+  ]
+}

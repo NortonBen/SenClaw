@@ -104,6 +104,12 @@ impl MemoryManager {
 
     /// Full scan + start polling watcher for an agent folder.
     pub async fn init_agent(self: &Arc<Self>, folder: &str) {
+        // Purge stale conversation-summary entries from MEMORY.md left by the
+        // old verbatim fallback (before the fix that skips the index for summaries).
+        let base = self.get_memory_dir_for_folder(folder);
+        if let Err(e) = crate::memory::curated::purge_summary_index_entries(&base) {
+            tracing::warn!("[MemoryManager] purge_summary_index_entries failed: {e}");
+        }
         tracing::info!("[MemoryManager] init_agent({folder}): sync starting...");
         self.sync_folder(folder).await;
         tracing::info!("[MemoryManager] init_agent({folder}): sync done, starting watcher");
@@ -659,7 +665,7 @@ pub fn format_search_results(results: &[SearchResult]) -> String {
             r.score
         ));
         let summary = if r.text.len() > 200 {
-            format!("{}...", &r.text[..200])
+            format!("{}...", crate::util::text::truncate_on_char_boundary(&r.text, 200))
         } else {
             r.text.clone()
         };

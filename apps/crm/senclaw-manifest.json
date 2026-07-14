@@ -27,6 +27,26 @@
     "description": "SenClaw CRM MCP: full read/write coverage of the CRM. Customers (13 roles: lead, prospect, customer, VIP, contact, partner, referrer, supplier, investor, employee, former, paused, lost) with avatar (URL or base64), tags, notes. Interactions (call/email/meeting/note/task/profile_update/deal_update). Deals across Kanban pipeline (qualifying → proposal → negotiation → won/lost). Tasks + reminders + upcoming feed (birthdays + due tasks). Directed relationship graph (11 kinds: referred_by, introduced_by, colleague_of, spouse_of, family_of, friend_of, reports_to, partner_of, supplier_of, competitor_of, contact_of), path finder (BFS shortest path + AI qualitative connections), similar-customer ranking, AI graph extraction from notes, AI common-theme discovery. FTS5 diacritic-folded full-text search across all data. Calendar sync (bi-directional with luna-calendar + event-space). Aggregate AI report + per-customer AI briefing. 36+ tools cover 100% of the app's write and query surface.",
     "autoRegister": true
   },
+  "widgets": [
+    {
+      "id": "crm-overview",
+      "name": "Tổng quan CRM",
+      "description": "Khách hàng, deals mở, việc cần làm và việc quá hạn",
+      "size": "medium",
+      "refreshMs": 60000,
+      "render": "client",
+      "entryUrl": "/widget/crm-overview.html"
+    },
+    {
+      "id": "crm-pipeline",
+      "name": "Pipeline",
+      "description": "Số deals đang mở và giá trị pipeline",
+      "size": "small",
+      "refreshMs": 60000,
+      "render": "client",
+      "entryUrl": "/widget/crm-pipeline.html"
+    }
+  ],
   "skills": [
     {
       "name": "crm-quick-lookup",

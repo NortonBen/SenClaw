@@ -265,7 +265,10 @@ pub fn format_hits_for_prompt(
         let body = if h.node.summary.is_empty() {
             String::new()
         } else if h.node.summary.len() > max_chars_per_hit {
-            format!("\n  {}...", &h.node.summary[..max_chars_per_hit])
+            format!(
+                "\n  {}...",
+                crate::util::text::truncate_on_char_boundary(&h.node.summary, max_chars_per_hit)
+            )
         } else {
             format!("\n  {}", h.node.summary)
         };

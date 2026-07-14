@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, AgentState, WsStatus, PermissionMessage, QuestionMessage, FormMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, SubAgentActivityEntry, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
+import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, WidgetMessage, WidgetSpec, AgentState, WsStatus, PermissionMessage, QuestionMessage, FormMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, SubAgentActivityEntry, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
 const ACCEPT_ALL_KEY = 'senclaw:dangerously-accept-all';
@@ -635,6 +635,14 @@ export function useWebSocket(): WsHook {
                     timestamp: m.timestamp as string,
                   } as ToolMessage;
                 }
+                if (m.role === 'widget') {
+                  return {
+                    id:        m.id as string,
+                    role:      'widget',
+                    widget:    m.widget as WidgetSpec,
+                    timestamp: m.timestamp as string,
+                  } as WidgetMessage;
+                }
                 return {
                   id:         m.id as string,
                   role:       (m.role === 'agent' ? 'agent' : 'user'),
@@ -955,6 +963,18 @@ export function useWebSocket(): WsHook {
               summary: (msg.summary as string) ?? '',
               content: msg.content,
               ok: msg.ok !== false,
+              timestamp: (msg.ts as string) ?? new Date().toISOString(),
+            });
+            break;
+          }
+          case 'chat:widget': {
+            // One-way rich inline widget push (chart/image/clock/weather).
+            // Mirrors tool:execution: append a WidgetMessage to that jid.
+            const jid = msg.groupJid as string;
+            addMessage(jid, {
+              id:        (msg.id as string) ?? `widget-${jid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              role:      'widget',
+              widget:    msg.widget as WidgetSpec,
               timestamp: (msg.ts as string) ?? new Date().toISOString(),
             });
             break;

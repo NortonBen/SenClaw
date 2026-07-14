@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../core/transport/connection.dart';
 import '../../models/space_models.dart';
@@ -8,8 +7,8 @@ import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
 import '../../widgets/embedded_web.dart';
 import '../../widgets/schedule_editor.dart';
+import '../../widgets/section_scaffold.dart';
 import 'space_providers.dart';
-import '../cowork/cowork_screen.dart';
 
 /// The host theme as the Space-app bridge string ('dark' | 'light'). Passed to
 /// [embeddedWebView], which delivers it to the app via postMessage (the app's
@@ -17,71 +16,33 @@ import '../cowork/cowork_screen.dart';
 String _embedTheme(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark ? 'dark' : 'light';
 
-class SpaceScreen extends ConsumerWidget {
-  const SpaceScreen({super.key});
+/// Top-level Notes screen (was the Space → Notes tab). Rail item `/notes`.
+class NotesScreen extends StatelessWidget {
+  const NotesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final c = context.colors;
-    // Optional deep-link: /space?tab=calendar|schedules|cowork selects a tab.
-    final tab = GoRouterState.of(context).uri.queryParameters['tab'];
-    final initialTab = switch (tab) {
-      'calendar' => 1,
-      'schedules' => 2,
-      'cowork' => 3,
-      _ => 0,
-    };
-    return DefaultTabController(
-      length: 4,
-      initialIndex: initialTab,
-      child: Column(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: c.border)),
-            ),
-            child: Row(
-              children: [
-                const SizedBox(width: AppTokens.s24),
-                Text('Space',
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    )),
-                const SizedBox(width: AppTokens.s24),
-                Expanded(
-                  child: TabBar(
-                    isScrollable: true,
-                    tabAlignment: TabAlignment.start,
-                    labelColor: c.accent,
-                    unselectedLabelColor: c.textMuted,
-                    indicatorColor: c.accent,
-                    tabs: const [
-                      Tab(text: 'Notes'),
-                      Tab(text: 'Calendar'),
-                      Tab(text: 'Schedules'),
-                      Tab(text: 'Cowork'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Expanded(
-            child: TabBarView(
-              children: [
-                _NotesTab(),
-                _CalendarTab(),
-                _SchedulesTab(),
-                CoworkScreen(),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      const SectionScaffold(title: 'Notes', body: _NotesTab());
+}
+
+/// Top-level Calendar screen (was the Space → Calendar tab). Rail item
+/// `/calendar`.
+class CalendarScreen extends StatelessWidget {
+  const CalendarScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) =>
+      const SectionScaffold(title: 'Calendar', body: _CalendarTab());
+}
+
+/// Schedules manager, surfaced as a Plugins section (was the Space →
+/// Schedules tab). Cowork moved to Plugins too, so Space no longer exists.
+class SchedulesPanel extends StatelessWidget {
+  const SchedulesPanel({super.key});
+
+  @override
+  Widget build(BuildContext context) =>
+      const SectionScaffold(title: 'Schedules', body: _SchedulesTab());
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────

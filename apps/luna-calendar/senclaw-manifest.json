@@ -27,6 +27,26 @@
     "description": "SenClaw Luna Calendar MCP: xem lịch âm & ngày tốt xấu. Tra âm lịch hôm nay hoặc ngày bất kỳ, xem ngày Hoàng Đạo/Hắc Đạo + giờ hoàng đạo, đổi ngày Âm⇄Dương, liệt kê ngày tốt/xấu trong tháng, và luận giải AI ngày có hợp việc.",
     "autoRegister": true
   },
+  "widgets": [
+    {
+      "id": "luna-today",
+      "name": "Hôm nay Âm lịch",
+      "description": "Thứ, ngày dương lịch, âm lịch và ngày Hoàng Đạo/Hắc Đạo",
+      "size": "small",
+      "refreshMs": 60000,
+      "render": "client",
+      "entryUrl": "/widget/luna-today.html"
+    },
+    {
+      "id": "luna-almanac",
+      "name": "Lịch vạn niên hôm nay",
+      "description": "Âm lịch, can chi ngày, giờ hoàng đạo và luận ngày tốt xấu",
+      "size": "medium",
+      "refreshMs": 60000,
+      "render": "client",
+      "entryUrl": "/widget/luna-almanac.html"
+    }
+  ],
   "skills": [
     {
       "name": "luna-xem-ngay",

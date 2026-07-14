@@ -2,7 +2,7 @@ import 'dart:convert';
 
 /// Discriminated chat message. Mirrors the React union of text / tool /
 /// permission / question bubbles; the renderer branches on [kind].
-enum MessageKind { user, other, agent, tool, permission, question, form, system }
+enum MessageKind { user, other, agent, tool, permission, question, form, widget, system }
 
 class ChatMessage {
   final String id;
@@ -94,6 +94,13 @@ class ChatMessage {
   String? get resolvedKey => data['resolvedKey'] as String?;
   bool get resolved => data['resolved'] == true || resolvedKey != null;
 
+  // ── Widget accessor ────────────────────────────────────────────────────
+  /// The inline WidgetSpec (`{kind, title, data}`) for a `widget` message.
+  Map<String, dynamic>? get widget {
+    final w = data['widget'];
+    return w is Map ? w.cast<String, dynamic>() : null;
+  }
+
   static MessageKind kindFromRole(String? role) {
     switch (role) {
       case 'user':
@@ -108,6 +115,8 @@ class ChatMessage {
         return MessageKind.question;
       case 'form':
         return MessageKind.form;
+      case 'widget':
+        return MessageKind.widget;
       case 'system':
         return MessageKind.system;
       default:

@@ -196,8 +196,47 @@ impl ZenEngine {
                     tracing::info!("[ToolSearch] discovered tool: {name}");
                 }
             });
+        // Skill resolver: lets ToolSearch surface installed SKILLS by keyword
+        // (e.g. `ToolSearch("ssh")` → `ssh-connect`, `ssh-guide`, …), not just
+        // deferred tools. Skills are still invoked via the `Skill` tool. Excludes
+        // `use: always` skills (already fully injected) and model-hidden ones.
+        let engine_for_skills = Arc::downgrade(&engine);
+        let skills_resolver: crate::tools::tool_search::SkillsFn = Arc::new(move || {
+            let Some(e) = engine_for_skills.upgrade() else {
+                return Vec::new();
+            };
+            e.skill_registry
+                .names()
+                .iter()
+                .filter_map(|n| e.skill_registry.find(n))
+                .filter(|s| {
+                    !s.metadata.disable_model_invocation
+                        && s.metadata.use_mode != crate::skills::SkillUseMode::Always
+                })
+                .map(|s| crate::tools::tool_search::SkillSearchRow {
+                    name: s.metadata.name.clone(),
+                    description: s.metadata.description.clone(),
+                    when_to_use: s.metadata.when_to_use.clone(),
+                    triggers: s.metadata.triggers.clone(),
+                })
+                .collect()
+        });
+        // All-tools resolver: lets ToolSearch's `select:` path resolve names
+        // against the full available set (active + deferred), so selecting an
+        // already-loaded tool like `Skill` confirms it rather than dead-ending
+        // on "0 matches".
+        let engine_for_all = Arc::downgrade(&engine);
+        let all_tools_resolver: crate::tools::tool_search::AllToolsFn = Arc::new(move || {
+            engine_for_all
+                .upgrade()
+                .map(|e| e.available_tools())
+                .unwrap_or_default()
+        });
         engine.register_tool(Arc::new(
-            ToolSearchTool::new(deferred_resolver).with_discovery(register_discovered),
+            ToolSearchTool::new(deferred_resolver)
+                .with_discovery(register_discovered)
+                .with_skills(skills_resolver)
+                .with_all_tools(all_tools_resolver),
         ));
 
         // EnterPlanMode — flip the engine's `agent_mode` to Plan. Mirror of
@@ -485,6 +524,23 @@ impl ZenEngine {
         deferred
     }
 
+    /// Union of active + deferred tools — everything the agent could invoke this
+    /// turn (after `use_tools` / Plan / DAG filters), deduped by name. Backs
+    /// `ToolSearch`'s `select:` path so naming an already-active tool (e.g.
+    /// `Skill`) confirms it's callable instead of returning a misleading
+    /// "0 matches" that sends the model into a retry spiral.
+    pub fn available_tools(&self) -> Vec<Arc<dyn Tool>> {
+        let mut out = self.tools_for_main_agent();
+        let mut seen: std::collections::HashSet<String> =
+            out.iter().map(|t| t.name().to_string()).collect();
+        for t in self.deferred_tools() {
+            if seen.insert(t.name().to_string()) {
+                out.push(t);
+            }
+        }
+        out
+    }
+
     /// Backwards-compatible alias used by existing call sites. Prefer
     /// [`Self::tools_for_main_agent`] in new code.
     pub fn get_tools(&self) -> Vec<Arc<dyn Tool>> {
@@ -625,6 +681,9 @@ impl ZenEngine {
             | EngineEvent::AskQuestionResponse(_)
             | EngineEvent::FormRequest(_)
             | EngineEvent::FormResponse(_)
+            // WidgetEmit — consumed by the AgentPool event loop via bus
+            // subscription (one-way, no handler dispatch), like FormRequest.
+            | EngineEvent::WidgetEmit(_)
             | EngineEvent::PlanExitResponse(_)
             | EngineEvent::PlanImplement(_)
             | EngineEvent::FileReference(_)

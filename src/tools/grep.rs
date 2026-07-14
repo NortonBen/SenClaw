@@ -274,7 +274,7 @@ fn get_title(pattern: &str, path: &str, glob: Option<&str>) -> String {
     }
     let s = parts.join(", ");
     if s.len() > 100 {
-        format!("{}...", &s[..100])
+        format!("{}...", crate::util::text::truncate_on_char_boundary(&s, 100))
     } else {
         s
     }

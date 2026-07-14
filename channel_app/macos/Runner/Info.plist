@@ -30,5 +30,14 @@
 	<string>NSApplication</string>
 	<key>NSCameraUsageDescription</key>
 	<string>This app needs camera access to scan QR codes for pairing with SemaClaw agents.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access for voice dictation in chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>This app uses speech recognition to transcribe your voice into chat messages.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

@@ -149,6 +149,20 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
   );
   const hasMore = sortedMessages.length > visibleCount;
 
+  // Shell-style ↑/↓ recall for the composer: the user's own prior messages in
+  // this group, chronological, with consecutive duplicates collapsed.
+  const inputHistory = useMemo(() => {
+    const out: string[] = [];
+    for (const m of sortedMessages) {
+      if (m.role !== 'user') continue;
+      const text = (m as { text?: string }).text?.trim();
+      if (!text) continue;
+      if (out[out.length - 1] === text) continue;
+      out.push(text);
+    }
+    return out;
+  }, [sortedMessages]);
+
   // On group switch / initial mount: jump scroll to bottom synchronously after layout
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -702,6 +716,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           onPaste={handlePaste}
           onFileSelect={handleFileSelect}
           textareaRef={textareaRef}
+          history={inputHistory}
           renderExtraActions={
             <Tooltip title={recording ? `Dừng & nhận diện (${recordElapsed}s)` : transcribing ? 'Đang nhận diện…' : 'Ghi âm bằng Whisper'}>
               <button

@@ -43,6 +43,9 @@ pub enum EngineEvent {
     AskQuestionResponse(AskQuestionResponseData),
     FormRequest(FormRequestData),
     FormResponse(FormResponseData),
+    /// One-way rich widget push (display-only, no response). Mirrors the
+    /// `tool:execution` push pattern rather than the `FormRequest` round-trip.
+    WidgetEmit(WidgetEmitData),
     PlanExitRequest(PlanExitRequestData),
     PlanExitResponse(PlanExitResponseData),
     PlanImplement(PlanImplementData),

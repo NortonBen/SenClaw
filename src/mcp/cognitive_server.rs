@@ -415,7 +415,7 @@ fn format_hits(hits: &[crate::memory::cognitive::SearchHit]) -> ToolResult {
     for (i, h) in hits.iter().enumerate() {
         let label = if h.node.name.is_empty() {
             let body = if h.node.summary.len() > 200 {
-                format!("{}...", &h.node.summary[..200])
+                format!("{}...", crate::util::text::truncate_on_char_boundary(&h.node.summary, 200))
             } else {
                 h.node.summary.clone()
             };

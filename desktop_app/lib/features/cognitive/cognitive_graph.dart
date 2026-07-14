@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_graph_view/flutter_graph_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
@@ -287,7 +288,7 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
               padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Row(children: [
-                Text('Drag = pan · Pinch = zoom · Tap node = focus',
+                Text('Drag node = move · Scroll = zoom · Tap node = focus',
                     style:
                         TextStyle(fontSize: 10, color: c.textMuted)),
                 if (g.truncated) ...[
@@ -492,8 +493,8 @@ class _DetailPanel extends StatelessWidget {
   }
 }
 
-// ── Graph canvas — shared by CogGraphView & CogGraphExplorer ─────────────
-class _GraphCanvas extends StatefulWidget {
+// ── Graph canvas — powered by flutter_graph_view ────────────────────────
+class _GraphCanvas extends StatelessWidget {
   const _GraphCanvas({
     required this.graph,
     required this.focusId,
@@ -504,365 +505,147 @@ class _GraphCanvas extends StatefulWidget {
   final String focusId;
   final void Function(GraphNode) onNodeTap;
   final String searchText;
-  @override
-  State<_GraphCanvas> createState() => _GraphCanvasState();
-}
-
-class _SimNode {
-  double x, y, vx = 0, vy = 0;
-  int degree;
-  final GraphNode node;
-  _SimNode(this.node, this.x, this.y, this.degree);
-}
-
-class _GraphCanvasState extends State<_GraphCanvas> {
-  static const double _w = 1200, _h = 800;
-  late List<_SimNode> _sim;
-  late List<({int s, int t, double w, bool inferred, int tier})> _links;
-  late Map<String, Set<String>> _neighborMap;
-
-  @override
-  void initState() {
-    super.initState();
-    _layout();
-  }
-
-  @override
-  void didUpdateWidget(covariant _GraphCanvas old) {
-    super.didUpdateWidget(old);
-    if (old.graph != widget.graph) _layout();
-  }
-
-  void _layout() {
-    final nodes = widget.graph.nodes;
-    final n = nodes.length;
-    if (n == 0) {
-      _sim = [];
-      _links = [];
-      _neighborMap = {};
-      return;
-    }
-
-    final degreeMap = <String, int>{};
-    for (final e in widget.graph.edges) {
-      degreeMap[e.src] = (degreeMap[e.src] ?? 0) + 1;
-      degreeMap[e.dst] = (degreeMap[e.dst] ?? 0) + 1;
-    }
-
-    _neighborMap = {};
-    for (final e in widget.graph.edges) {
-      (_neighborMap[e.src] ??= {}).add(e.dst);
-      (_neighborMap[e.dst] ??= {}).add(e.src);
-    }
-
-    final idx = <String, int>{};
-    for (var i = 0; i < n; i++) {
-      idx[nodes[i].id] = i;
-    }
-    _links = widget.graph.edges
-        .map((e) => (
-              s: idx[e.src] ?? -1,
-              t: idx[e.dst] ?? -1,
-              w: e.strength,
-              inferred: e.inferred,
-              tier: e.tier,
-            ))
-        .where((l) => l.s >= 0 && l.t >= 0 && l.s != l.t)
-        .toList();
-    _sim = [
-      for (var i = 0; i < n; i++)
-        _SimNode(
-          nodes[i],
-          _w / 2 + (_w * 0.35) * math.cos(2 * math.pi * i / n),
-          _h / 2 + (_h * 0.35) * math.sin(2 * math.pi * i / n),
-          degreeMap[nodes[i].id] ?? 0,
-        )
-    ];
-    final k = math.sqrt(_w * _h / n) * 0.85;
-    var temp = math.min(_w, _h) * 0.15;
-    final iters = math.min(300, 100 + n * 2);
-    final cooling = temp / iters;
-    for (var it = 0; it < iters; it++) {
-      for (var i = 0; i < n; i++) {
-        _sim[i].vx = 0;
-        _sim[i].vy = 0;
-        for (var j = i + 1; j < n; j++) {
-          var dx = _sim[i].x - _sim[j].x;
-          var dy = _sim[i].y - _sim[j].y;
-          var d = math.sqrt(dx * dx + dy * dy) + 0.1;
-          final f = (k * k) / d;
-          final fx = (dx / d) * f, fy = (dy / d) * f;
-          _sim[i].vx += fx;
-          _sim[i].vy += fy;
-          _sim[j].vx -= fx;
-          _sim[j].vy -= fy;
-        }
-      }
-      for (final l in _links) {
-        final a = _sim[l.s], b = _sim[l.t];
-        var dx = a.x - b.x, dy = a.y - b.y;
-        var d = math.sqrt(dx * dx + dy * dy) + 0.1;
-        final f = ((d * d) / k) * l.w.clamp(0.3, 2.0);
-        final fx = (dx / d) * f, fy = (dy / d) * f;
-        a.vx -= fx;
-        a.vy -= fy;
-        b.vx += fx;
-        b.vy += fy;
-      }
-      final cx = _w / 2, cy = _h / 2;
-      for (final s in _sim) {
-        final grav = s.degree == 0 ? 0.05 : 0.01;
-        s.vx += (cx - s.x) * grav;
-        s.vy += (cy - s.y) * grav;
-      }
-      for (final s in _sim) {
-        final disp = math.sqrt(s.vx * s.vx + s.vy * s.vy) + 0.01;
-        s.x = (s.x + (s.vx / disp) * math.min(disp, temp)).clamp(30.0, _w - 30);
-        s.y = (s.y + (s.vy / disp) * math.min(disp, temp)).clamp(30.0, _h - 30);
-      }
-      temp -= cooling;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: InteractiveViewer(
-            minScale: 0.3,
-            maxScale: 5,
-            boundaryMargin: const EdgeInsets.all(300),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapUp: (d) {
-                _SimNode? hit;
-                var best = 22.0;
-                for (final s in _sim) {
-                  final dd = (Offset(s.x, s.y) - d.localPosition).distance;
-                  if (dd < best) {
-                    best = dd;
-                    hit = s;
-                  }
-                }
-                if (hit != null) widget.onNodeTap(hit.node);
-              },
-              child: CustomPaint(
-                size: const Size(_w, _h),
-                painter: _GraphPainter(
-                  _sim,
-                  _links,
-                  widget.focusId,
-                  widget.searchText,
-                  _neighborMap,
-                  c.border,
-                  c.textPrimary,
-                ),
+    final nodeMap = {for (final n in graph.nodes) n.id: n};
+
+    final vertexes = <Map<String, dynamic>>{};
+    for (final n in graph.nodes) {
+      vertexes.add({
+        'id': n.id,
+        'tag': n.kind,
+        'tags': [n.kind],
+      });
+    }
+    final edges = <Map<String, dynamic>>{};
+    for (final e in graph.edges) {
+      edges.add({
+        'srcId': e.src,
+        'dstId': e.dst,
+        'edgeName': e.predicate,
+        'ranking': (e.strength * 100).round(),
+      });
+    }
+
+    final data = {'vertexes': vertexes, 'edges': edges};
+
+    final opts = Options();
+    opts.enableHit = true;
+    opts.panelDelay = const Duration(milliseconds: 300);
+    opts.showText = true;
+    opts.textGetter = (v) {
+      final n = nodeMap[v.id];
+      if (n == null) return '${v.id}'.substring(0, math.min(12, '${v.id}'.length));
+      final label = n.name.isEmpty ? n.kind : n.name;
+      return label.length > 24 ? '${label.substring(0, 22)}…' : label;
+    };
+    opts.onVertexTapUp = (v, _) {
+      final n = nodeMap[v.id];
+      if (n != null) onNodeTap(n);
+    };
+    opts.graphStyle = GraphStyle()
+      ..tagColor = {
+        'entity': const Color(0xFF5BBFE8),
+        'chunk': const Color(0xFF9CA3AF),
+        'summary': const Color(0xFF10B981),
+        'custom': const Color(0xFFF59E0B),
+      }
+      ..tagColorByIndex = [
+        const Color(0xFF5BBFE8),
+        const Color(0xFF9CA3AF),
+        const Color(0xFF10B981),
+        const Color(0xFFF59E0B),
+        const Color(0xFF3B82F6),
+        const Color(0xFF8B5CF6),
+      ];
+    opts.backgroundBuilder = (_) => Container(color: Colors.transparent);
+    opts.vertexPanelBuilder = (v) {
+      final n = nodeMap[v.id];
+      if (n == null) return const SizedBox.shrink();
+      return Container(
+        width: 220,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade900.withAlpha(230),
+          borderRadius: BorderRadius.circular(8),
+          border: Border(
+            left: BorderSide(color: _kindColor(n.kind), width: 3),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              n.name.isEmpty ? n.id.substring(0, 12) : n.name,
+              style: const TextStyle(
+                color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600,
               ),
             ),
-          ),
-        ),
-        // Legend
-        Positioned(
-          left: 8,
-          bottom: 8,
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: c.sidebar.withValues(alpha: 0.85),
-              borderRadius: BorderRadius.circular(8),
+            const SizedBox(height: 2),
+            Text(
+              '${n.kind} · ${v.degree} connections',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.6), fontSize: 10,
+              ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final e in _kindColors.entries)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Container(
-                        width: 9,
-                        height: 9,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: e.value,
-                          boxShadow: [
-                            BoxShadow(
-                                color: e.value.withValues(alpha: 0.5),
-                                blurRadius: 3),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 5),
-                      Text(e.key,
-                          style:
-                              TextStyle(color: c.textMuted, fontSize: 10)),
-                    ]),
-                  ),
-                Divider(height: 8, color: c.border),
-                for (var i = 0; i < _tierColors.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Container(width: 14, height: 2, color: _tierColors[i]),
-                      const SizedBox(width: 5),
-                      Text(['L1 working', 'L2 episodic', 'L3 semantic'][i],
-                          style:
-                              TextStyle(color: c.textMuted, fontSize: 10)),
-                    ]),
-                  ),
-              ],
-            ),
-          ),
+            if (n.summary.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                n.summary.length > 150
+                    ? '${n.summary.substring(0, 150)}…'
+                    : n.summary,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: 11, height: 1.4,
+                ),
+              ),
+            ],
+          ],
         ),
-      ],
+      );
+    };
+    opts.edgePanelBuilder = (e) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade900.withAlpha(220),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          '${e.edgeName}',
+          style: const TextStyle(color: Colors.white, fontSize: 11),
+        ),
+      );
+    };
+    opts.edgeShape = EdgeLineShape();
+    opts.vertexShape = VertexCircleShape();
+
+    // flutter_graph_view paints the graph via a `CustomPaint(size:
+    // Size.infinite)` inside a `Positioned.fill` in a `Stack`. Because the
+    // fill fits the Stack exactly, `RenderStack` sees no overflow and installs
+    // no clip, so nodes the force layout pushes off-canvas paint OUTSIDE the
+    // widget bounds (spilling into the sidebar). ClipRect is the Flutter analog
+    // of the web `overflow: hidden` fix — it clips the render to our bounds.
+    return ClipRect(
+      child: FlutterGraphWidget(
+        data: data,
+        algorithm: ForceDirected(
+          decorators: [
+            CoulombDecorator(),
+            HookeDecorator(),
+            CoulombCenterDecorator(),
+            HookeCenterDecorator(),
+            HookeBorderDecorator(),
+            ForceDecorator(),
+            ForceMotionDecorator(),
+            TimeCounterDecorator(),
+          ],
+        ),
+        convertor: MapConvertor(),
+        options: opts,
+      ),
     );
   }
-}
-
-// ── CustomPainter — draws edges + nodes with focus/search styling ─────────
-class _GraphPainter extends CustomPainter {
-  _GraphPainter(this.sim, this.links, this.focusId, this.searchText,
-      this.neighborMap, this.borderColor, this.labelColor);
-  final List<_SimNode> sim;
-  final List<({int s, int t, double w, bool inferred, int tier})> links;
-  final String focusId;
-  final String searchText;
-  final Map<String, Set<String>> neighborMap;
-  final Color borderColor;
-  final Color labelColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final hasFocus = focusId.isNotEmpty;
-    final focusNeighbors = hasFocus ? (neighborMap[focusId] ?? {}) : <String>{};
-    final searchLower = searchText.toLowerCase().trim();
-    final hasSearch = searchLower.isNotEmpty;
-
-    // Edges
-    for (final l in links) {
-      final a = sim[l.s], b = sim[l.t];
-      final isFocusEdge = hasFocus &&
-          (a.node.id == focusId || b.node.id == focusId);
-      final dimmed = hasFocus && !isFocusEdge;
-
-      final color = _tierColors.length > l.tier
-          ? _tierColors[l.tier]
-          : borderColor;
-      final paint = Paint()
-        ..color = color.withValues(alpha: dimmed ? 0.04 : (l.inferred ? 0.25 : 0.45))
-        ..strokeWidth =
-            isFocusEdge ? 2.5 : (0.5 + l.w.clamp(0.0, 3.0)).clamp(0.5, 3.0);
-
-      // Curved edge
-      final mx = (a.x + b.x) / 2;
-      final my = (a.y + b.y) / 2;
-      final dx = b.x - a.x;
-      final dy = b.y - a.y;
-      final len = math.sqrt(dx * dx + dy * dy) + 0.1;
-      final curveOff = math.min(20.0, len * 0.08);
-      final nx = -dy / len;
-      final ny = dx / len;
-      final cx = mx + nx * curveOff;
-      final cy = my + ny * curveOff;
-
-      final path = Path()
-        ..moveTo(a.x, a.y)
-        ..quadraticBezierTo(cx, cy, b.x, b.y);
-
-      if (l.inferred) {
-        _dashedPath(canvas, path, paint);
-      } else {
-        canvas.drawPath(path, paint..style = PaintingStyle.stroke);
-      }
-    }
-
-    // Nodes
-    for (final s in sim) {
-      final isFocused = s.node.id == focusId;
-      final isNeighbor = hasFocus && focusNeighbors.contains(s.node.id);
-      final dimmed = hasFocus && !isFocused && !isNeighbor;
-      final isSearchMatch =
-          hasSearch && s.node.name.toLowerCase().contains(searchLower);
-
-      final color = _kindColor(s.node.kind);
-      final r = _nodeR(s.degree, isFocused);
-      final opacity = dimmed ? 0.08 : 1.0;
-
-      // Glow for focused/search nodes
-      if (isFocused || isSearchMatch) {
-        final glowColor = isSearchMatch ? const Color(0xFFFFD700) : color;
-        canvas.drawCircle(
-          Offset(s.x, s.y),
-          r + 6,
-          Paint()
-            ..color = glowColor.withValues(alpha: 0.3 * opacity)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-        );
-      }
-
-      // Background circle
-      canvas.drawCircle(
-        Offset(s.x, s.y),
-        r,
-        Paint()..color = color.withValues(alpha: 0.12 * opacity),
-      );
-      // Ring
-      canvas.drawCircle(
-        Offset(s.x, s.y),
-        r - 1,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = isFocused ? 2.5 : 1.5
-          ..color = color.withValues(alpha: opacity),
-      );
-      // Inner dot
-      canvas.drawCircle(
-        Offset(s.x, s.y),
-        math.max(2, r * 0.35),
-        Paint()..color = color.withValues(alpha: opacity),
-      );
-
-      // Label
-      if (!dimmed || isFocused || isSearchMatch) {
-        final label = s.node.name.isEmpty ? s.node.kind : s.node.name;
-        final tp = TextPainter(
-          text: TextSpan(
-            text: label.length > 24 ? '${label.substring(0, 22)}…' : label,
-            style: TextStyle(
-              color: labelColor.withValues(alpha: opacity),
-              fontSize: isFocused ? 11 : 9,
-              fontWeight: isFocused ? FontWeight.w600 : FontWeight.w400,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        );
-        tp.layout();
-        tp.paint(canvas, Offset(s.x - tp.width / 2, s.y + r + 4));
-      }
-    }
-  }
-
-  double _nodeR(int degree, bool focused) {
-    final base = math.max(4.0, math.min(20.0, 4.0 + math.sqrt(degree) * 2.5));
-    return focused ? base + 3 : base;
-  }
-
-  void _dashedPath(Canvas canvas, Path path, Paint paint) {
-    for (final metric in path.computeMetrics()) {
-      var d = 0.0;
-      const dash = 5.0, gap = 4.0;
-      while (d < metric.length) {
-        final end = math.min(d + dash, metric.length);
-        final seg = metric.extractPath(d, end);
-        canvas.drawPath(seg, paint..style = PaintingStyle.stroke);
-        d += dash + gap;
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _GraphPainter old) =>
-      old.sim != sim || old.focusId != focusId || old.searchText != searchText;
 }

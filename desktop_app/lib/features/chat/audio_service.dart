@@ -8,15 +8,13 @@ import '../../core/transport/connection.dart';
 /// Voice round-trips to the daemon: Whisper transcription (mic → text) and TTS
 /// synthesis + playback (text → audio). Network base comes from AppConfig.
 class AudioService {
-  AudioService(this._ref) {
-    // Clear the speaking marker when playback finishes or is stopped, so
-    // Play/Stop toggles in the UI flip back automatically.
-    _player.onPlayerStateChanged.listen((s) {
-      if (s == PlayerState.completed || s == PlayerState.stopped) {
-        speaking.value = null;
-      }
-    });
-  }
+  AudioService(this._ref);
+  // NOTE: do NOT clear `speaking` from a global onPlayerStateChanged listener.
+  // Long text is pipelined into several sentence clips, so PlayerState.completed
+  // fires once per clip — clearing on the first clip's completion flipped the UI
+  // back to Play after one segment while the pipeline kept playing the rest.
+  // `speak()` owns `speaking`: it clears it in finally when the whole pipeline
+  // ends, and `stop()` clears it explicitly.
   final Ref _ref;
   final AudioPlayer _player = AudioPlayer();
 

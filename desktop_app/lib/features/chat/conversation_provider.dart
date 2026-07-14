@@ -82,6 +82,13 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
             'content': e['content'],
           },
         ));
+      case 'chat:widget':
+        _add(ChatMessage(
+          id: '${e['id'] ?? 'widget-$jid-${DateTime.now().microsecondsSinceEpoch}'}',
+          kind: MessageKind.widget,
+          ts: e['ts'] as String?,
+          data: {'widget': e['widget']},
+        ));
       case 'permission:request':
         _add(ChatMessage(
           id: 'perm-${e['requestId']}',
@@ -148,6 +155,14 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
             'ok': m['ok'],
             'content': m['content'],
           },
+        );
+      }
+      if (role == 'widget') {
+        return ChatMessage(
+          id: '${m['id']}',
+          kind: MessageKind.widget,
+          ts: m['timestamp'] as String?,
+          data: {'widget': m['widget']},
         );
       }
       // A non-empty senderName marks a message that came in from another

@@ -9,6 +9,7 @@ pub mod bg_jobs;
 pub mod cognitive;
 pub mod dispatch;
 pub mod edit;
+pub mod emit_widget;
 pub mod enter_plan_mode;
 pub mod exit_plan_mode;
 pub mod form_ui;
@@ -42,6 +43,7 @@ pub use dispatch::{
     DispatchListAgentsTool, DispatchTaskTool, DispatchToolsConfig,
 };
 pub use edit::EditTool;
+pub use emit_widget::EmitWidgetTool;
 pub use enter_plan_mode::{EnterPlanFn, EnterPlanModeTool};
 pub use exit_plan_mode::ExitPlanModeTool;
 pub use form_ui::FormUITool;
@@ -71,6 +73,9 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(AskUserQuestionTool),
         // Declarative interactive form — rich sibling of AskUserQuestion.
         Arc::new(FormUITool),
+        // One-way rich widget push (chart/image/clock/weather) — display-only
+        // sibling of FormUI (no user response round-trip).
+        Arc::new(EmitWidgetTool),
         Arc::new(BashTool),
         Arc::new(GlobTool),
         Arc::new(GrepTool),

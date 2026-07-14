@@ -179,14 +179,40 @@ fn select_matches(names: &[String], tools: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool
 /// supplies this so `ToolSearch` always sees the live registry.
 pub type DeferredToolsFn = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
 
+/// Closure returning EVERY tool the agent could invoke this turn (active +
+/// deferred, after `use_tools` / Plan / DAG filters). `select:` resolves names
+/// against this superset — not just the deferred subset — so naming an
+/// already-active tool (e.g. `Skill`) confirms availability instead of the
+/// misleading "0 matches" that made the model conclude the tool didn't exist
+/// and keep thrashing.
+pub type AllToolsFn = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
+
 /// Closure that registers a tool name as "discovered" — the engine then
 /// includes it in the active tool list for subsequent LLM turns. Without
 /// this, the model can read schemas but can't actually invoke the tool.
 pub type RegisterDiscoveredFn = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// A skill exposed to ToolSearch so keyword discovery surfaces SKILLS too, not
+/// just deferred tools. Skills aren't tools — they're loaded via the `Skill`
+/// tool — but users expect `ToolSearch("ssh")` to find `ssh-connect` etc. when
+/// there are ssh skills installed. Without this, a query only searches deferred
+/// tools (often zero), so skills are invisible to keyword discovery.
+#[derive(Clone)]
+pub struct SkillSearchRow {
+    pub name: String,
+    pub description: String,
+    pub when_to_use: Option<String>,
+    pub triggers: Vec<String>,
+}
+
+/// Closure returning the live list of model-invocable skills.
+pub type SkillsFn = Arc<dyn Fn() -> Vec<SkillSearchRow> + Send + Sync>;
+
 pub struct ToolSearchTool {
     deferred_resolver: DeferredToolsFn,
     register_discovered: Option<RegisterDiscoveredFn>,
+    skills_resolver: Option<SkillsFn>,
+    all_tools_resolver: Option<AllToolsFn>,
 }
 
 impl ToolSearchTool {
@@ -194,7 +220,66 @@ impl ToolSearchTool {
         Self {
             deferred_resolver,
             register_discovered: None,
+            skills_resolver: None,
+            all_tools_resolver: None,
         }
+    }
+
+    /// Inject the skill resolver so keyword searches also match installed
+    /// skills (returned with a hint to invoke them via the `Skill` tool).
+    pub fn with_skills(mut self, resolver: SkillsFn) -> Self {
+        self.skills_resolver = Some(resolver);
+        self
+    }
+
+    /// Inject the "all available tools" resolver used by the `select:` path so
+    /// it can resolve already-active tools (not just deferred ones). Without it,
+    /// `select:` falls back to the deferred pool and a `select:<active-tool>`
+    /// reports "0 matches" even though the tool is loaded and callable.
+    pub fn with_all_tools(mut self, resolver: AllToolsFn) -> Self {
+        self.all_tools_resolver = Some(resolver);
+        self
+    }
+
+    /// Rank skills by keyword overlap with name / triggers / when-to-use /
+    /// description — mirrors [`rank_matches`] but for the skill registry.
+    fn rank_skills(query: &str, skills: &[SkillSearchRow], limit: usize) -> Vec<SkillSearchRow> {
+        let q_lower = query.to_lowercase();
+        let q_terms: Vec<&str> = q_lower.split_whitespace().filter(|t| !t.is_empty()).collect();
+        if q_terms.is_empty() {
+            return Vec::new();
+        }
+        let mut scored: Vec<(i32, SkillSearchRow)> = skills
+            .iter()
+            .filter_map(|s| {
+                let name = s.name.to_lowercase();
+                let desc = s.description.to_lowercase();
+                let when = s.when_to_use.as_deref().unwrap_or("").to_lowercase();
+                let trigs = s.triggers.join(" ").to_lowercase();
+                let mut score = 0i32;
+                for term in &q_terms {
+                    if name.contains(term) {
+                        score += 100;
+                    }
+                    if trigs.contains(term) {
+                        score += 40;
+                    }
+                    if when.contains(term) {
+                        score += 25;
+                    }
+                    if desc.contains(term) {
+                        score += 10;
+                    }
+                }
+                if score > 0 {
+                    Some((score, s.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+        scored.into_iter().take(limit).map(|(_, s)| s).collect()
     }
 
     /// Inject the discovery callback. Engine calls this immediately after
@@ -277,10 +362,11 @@ impl Tool for ToolSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search for specialized tools that aren't loaded by default. Returns \
-         full schemas of matching tools so they can be called in subsequent \
-         turns. Use when a task needs capabilities beyond the core toolset \
-         (e.g. browser screenshots, calendar events, code graph queries)."
+        "Search for specialized tools AND skills that aren't loaded by default. \
+         Returns full schemas of matching tools (callable in subsequent turns) \
+         and matching skills (invoke via the `Skill` tool). Use when a task needs \
+         capabilities beyond the core toolset (e.g. browser screenshots, calendar \
+         events, code graph queries, or an installed skill like 'ssh')."
     }
 
     fn input_schema(&self) -> Value {
@@ -334,15 +420,61 @@ impl Tool for ToolSearchTool {
             .min(MAX_RESULTS_HARD_CAP as u64) as usize;
 
         let deferred = (self.deferred_resolver)();
-        let matches = if query.starts_with(SELECT_PREFIX) {
-            let names = parse_select_names(&query);
-            if names.is_empty() {
+        let is_select = query.starts_with(SELECT_PREFIX);
+
+        // `select:` resolves against the FULL available toolset (active +
+        // deferred), not just the deferred subset. Selecting an already-active
+        // tool (e.g. `Skill`) must confirm it's callable instead of returning a
+        // misleading "0 matches" that makes the model conclude the tool doesn't
+        // exist and keep retrying. Falls back to `deferred` if the engine didn't
+        // wire an all-tools resolver (e.g. in unit tests).
+        let select_pool: Vec<Arc<dyn Tool>> = if is_select {
+            match &self.all_tools_resolver {
+                Some(r) => r(),
+                None => deferred.clone(),
+            }
+        } else {
+            Vec::new()
+        };
+
+        let requested_names: Vec<String> = if is_select {
+            parse_select_names(&query)
+        } else {
+            Vec::new()
+        };
+
+        let matches = if is_select {
+            if requested_names.is_empty() {
                 Vec::new()
             } else {
-                select_matches(&names, &deferred)
+                select_matches(&requested_names, &select_pool)
             }
         } else {
             Self::rank_matches(&query, &deferred, limit)
+        };
+
+        // Names the model asked for that resolve to NO registered tool. Reported
+        // with actionable guidance so the model stops guessing tool spellings.
+        let not_found: Vec<String> = requested_names
+            .iter()
+            .filter(|n| resolve_tool_by_name(n, &select_pool).is_none())
+            .cloned()
+            .collect();
+
+        // Which resolved matches were deferred (freshly loaded) vs already
+        // active (a no-op confirm). Drives the per-tool status in the summary.
+        let deferred_names: std::collections::HashSet<String> =
+            deferred.iter().map(|t| t.name().to_string()).collect();
+
+        // Also search SKILLS (keyword queries only — `select:` loads tools by
+        // exact name). Skills are invoked via the `Skill` tool, not "loaded",
+        // so they're surfaced separately with an invocation hint.
+        let skill_matches: Vec<SkillSearchRow> = if is_select {
+            Vec::new()
+        } else if let Some(ref sr) = self.skills_resolver {
+            Self::rank_skills(&query, &sr(), limit)
+        } else {
+            Vec::new()
         };
 
         // Register each match as discovered — engine will include them in
@@ -365,17 +497,76 @@ impl Tool for ToolSearchTool {
             })
             .collect();
 
-        let text_summary = if matches.is_empty() {
+        let skills_payload: Vec<Value> = skill_matches
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "skill": s.name,
+                    "description": s.description,
+                    "invoke": format!("Skill {{ \"skill\": \"{}\" }}", s.name),
+                })
+            })
+            .collect();
+
+        let text_summary = if is_select {
+            // Explicit load-by-name path. Report loaded tools (distinguishing
+            // freshly-discovered from already-active) and give the model a way
+            // forward for names that resolve to nothing.
+            let mut s = String::new();
+            if !matches.is_empty() {
+                s.push_str(&format!("Loaded {} tool(s):\n", matches.len()));
+                for t in &matches {
+                    let status = if deferred_names.contains(t.name()) {
+                        "now available"
+                    } else {
+                        "already available — call it directly"
+                    };
+                    s.push_str(&format!("  - {} ({})\n", t.name(), status));
+                }
+                s.push_str("Call them directly in your next turn.\n");
+            }
+            if !not_found.is_empty() {
+                s.push_str(&format!(
+                    "\nNo registered tool for: {}.\n",
+                    not_found.join(", ")
+                ));
+                s.push_str(
+                    "These names don't resolve to any tool. If they came from a skill's \
+                     instructions, run the skill itself with the `Skill` tool \
+                     (e.g. `Skill {\"skill\": \"ssh-connect\"}`) — `Skill` is always loaded, \
+                     so never ToolSearch for `Skill`. If a real tool is missing, its MCP \
+                     server may not be installed; fall back to `Bash` or another available tool.\n",
+                );
+            }
+            if matches.is_empty() && not_found.is_empty() {
+                s.push_str("No tool names given to select. Use `select:name1,name2`.\n");
+            }
+            s
+        } else if matches.is_empty() && skill_matches.is_empty() {
             format!(
-                "No tools matched query '{query}'. {} deferred tools available — try broader keywords.",
+                "No tools or skills matched query '{query}'. {} deferred tools available — try broader keywords.",
                 deferred.len()
             )
         } else {
-            let mut s = format!("Found {} tool(s) matching '{}':\n", matches.len(), query);
-            for t in &matches {
-                s.push_str(&format!("  - {}: {}\n", t.name(), t.search_hint()));
+            let mut s = String::new();
+            if !matches.is_empty() {
+                s.push_str(&format!("Found {} tool(s) matching '{}':\n", matches.len(), query));
+                for t in &matches {
+                    s.push_str(&format!("  - {}: {}\n", t.name(), t.search_hint()));
+                }
+                s.push_str("These tools are now usable. Call them directly in your next turn.\n");
             }
-            s.push_str("\nThese tools are now usable. Call them directly in your next turn.");
+            if !skill_matches.is_empty() {
+                s.push_str(&format!(
+                    "\nFound {} skill(s) matching '{}' — invoke with the `Skill` tool (already loaded, do not ToolSearch for it):\n",
+                    skill_matches.len(),
+                    query
+                ));
+                for sk in &skill_matches {
+                    s.push_str(&format!("  - {}: {}\n", sk.name, sk.description));
+                }
+                s.push_str("Load one with `Skill {\"skill\": \"<name>\"}` before doing the task.\n");
+            }
             s
         };
 
@@ -383,6 +574,7 @@ impl Tool for ToolSearchTool {
             data: serde_json::json!({
                 "query": query,
                 "matches": payload,
+                "skills": skills_payload,
                 "deferred_total": deferred.len(),
             }),
             result_for_assistant: text_summary,
@@ -390,11 +582,17 @@ impl Tool for ToolSearchTool {
     }
 
     fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
-        let count = data
+        let tool_count = data
             .get("matches")
             .and_then(|v| v.as_array())
             .map(|a| a.len())
             .unwrap_or(0);
+        let skill_count = data
+            .get("skills")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let count = tool_count + skill_count;
         let query = data
             .get("query")
             .and_then(|v| v.as_str())
@@ -595,7 +793,7 @@ mod tests {
         };
         assert_eq!(data["matches"].as_array().unwrap().len(), 0);
         assert_eq!(data["deferred_total"], 3);
-        assert!(result_for_assistant.contains("No tools matched"));
+        assert!(result_for_assistant.contains("No tools or skills matched"));
     }
 
     #[test]
@@ -776,6 +974,160 @@ mod tests {
         let t = resolve_tool_by_name("space_event_create", &tools);
         assert!(t.is_some(), "should resolve via normalize + server_verb");
         assert_eq!(t.unwrap().name(), "mcp__senclaw-space__space_event_create");
+    }
+
+    fn skill_fixtures() -> Vec<SkillSearchRow> {
+        vec![
+            SkillSearchRow {
+                name: "ssh-connect".into(),
+                description: "Guide for connecting to SSH servers and running commands.".into(),
+                when_to_use: Some("connect to a server over ssh".into()),
+                triggers: vec!["ssh connect".into(), "run command on server".into()],
+            },
+            SkillSearchRow {
+                name: "ssh-reporting".into(),
+                description: "Report SSH connection status and stats.".into(),
+                when_to_use: None,
+                triggers: vec!["ssh status".into()],
+            },
+            SkillSearchRow {
+                name: "pdf-maker".into(),
+                description: "Create PDF documents.".into(),
+                when_to_use: None,
+                triggers: vec!["make a pdf".into()],
+            },
+        ]
+    }
+
+    #[test]
+    fn rank_skills_matches_by_name_and_triggers() {
+        let skills = skill_fixtures();
+        let hits = ToolSearchTool::rank_skills("ssh", &skills, 5);
+        // Both ssh skills match; the pdf skill does not.
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|s| s.name.starts_with("ssh-")));
+    }
+
+    #[tokio::test]
+    async fn call_returns_skills_when_no_tools_match() {
+        // Zero deferred tools (the reported bug: deferred_total == 0), but the
+        // query matches skills — those must still surface.
+        let resolver: DeferredToolsFn = Arc::new(Vec::new);
+        let skills: SkillsFn = Arc::new(skill_fixtures);
+        let tool = ToolSearchTool::new(resolver).with_skills(skills);
+        let ctx = ToolContext {
+            agent_id: "main",
+            working_dir: "/tmp",
+            agent_data_dir: "/tmp",
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
+        };
+        let out = tool
+            .call(serde_json::json!({"query": "ssh"}), &ctx)
+            .await
+            .unwrap();
+        let ToolOutput::Result {
+            data,
+            result_for_assistant,
+        } = &out[0]
+        else {
+            panic!();
+        };
+        assert_eq!(data["matches"].as_array().unwrap().len(), 0);
+        assert_eq!(data["deferred_total"], 0);
+        let skills_arr = data["skills"].as_array().unwrap();
+        assert_eq!(skills_arr.len(), 2);
+        assert_eq!(skills_arr[0]["skill"], "ssh-connect");
+        assert!(skills_arr[0]["invoke"]
+            .as_str()
+            .unwrap()
+            .contains("ssh-connect"));
+        assert!(result_for_assistant.contains("skill(s) matching"));
+    }
+
+    #[tokio::test]
+    async fn select_resolves_already_active_tool_via_all_pool() {
+        // Regression: `select:Skill` returned "0 matches" because `select_matches`
+        // only searched the DEFERRED pool, and always-loaded tools (Skill,
+        // ToolSearch) aren't deferred. With an all-tools resolver, selecting an
+        // active tool confirms it instead of dead-ending.
+        let active: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "Skill",
+            desc: "Execute an agent skill",
+            hint: "run a skill",
+            deferred: false,
+        });
+        let deferred_only: DeferredToolsFn = Arc::new(fixtures);
+        let all: AllToolsFn = Arc::new(move || {
+            let mut v = fixtures();
+            v.push(Arc::clone(&active));
+            v
+        });
+        let tool = ToolSearchTool::new(deferred_only).with_all_tools(all);
+        let ctx = ToolContext {
+            agent_id: "main",
+            working_dir: "/tmp",
+            agent_data_dir: "/tmp",
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
+        };
+        let out = tool
+            .call(serde_json::json!({"query": "select:Skill"}), &ctx)
+            .await
+            .unwrap();
+        let ToolOutput::Result {
+            data,
+            result_for_assistant,
+        } = &out[0]
+        else {
+            panic!();
+        };
+        let matches = data["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["name"], "Skill");
+        assert!(
+            result_for_assistant.contains("already available"),
+            "should tell the model Skill is already callable, got: {result_for_assistant}"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_not_found_gives_actionable_guidance() {
+        // `select:mcp__ssh__connect` for a non-existent MCP tool must not just
+        // say "0 matches" — it should point the model at the `Skill` tool / Bash.
+        let deferred_only: DeferredToolsFn = Arc::new(fixtures);
+        let all: AllToolsFn = Arc::new(fixtures);
+        let tool = ToolSearchTool::new(deferred_only).with_all_tools(all);
+        let ctx = ToolContext {
+            agent_id: "main",
+            working_dir: "/tmp",
+            agent_data_dir: "/tmp",
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
+        };
+        let out = tool
+            .call(
+                serde_json::json!({"query": "select:mcp__ssh__connect"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let ToolOutput::Result {
+            data,
+            result_for_assistant,
+        } = &out[0]
+        else {
+            panic!();
+        };
+        assert_eq!(data["matches"].as_array().unwrap().len(), 0);
+        assert!(result_for_assistant.contains("No registered tool for"));
+        assert!(
+            result_for_assistant.contains("Skill"),
+            "guidance should mention the Skill tool as the way to run skills"
+        );
     }
 
     #[test]

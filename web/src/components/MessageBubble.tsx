@@ -8,6 +8,8 @@ import 'highlight.js/styles/github.css';
 import type { ChatMessage, ImageAttachment } from '../types';
 import { PermissionCard, QuestionCard } from './PermissionCard';
 import { FormCard } from './FormCard';
+import { WidgetCard } from './WidgetCard';
+import type { WidgetSpec, WidgetKind } from '../types';
 import { useAppContext } from '../contexts/AppContext';
 import { extractLeadingReasoningBlocks } from '../utils/reasoningBlocks';
 import { speakPipelined, type SpeakHandle } from '../utils/ttsPipeline';
@@ -92,18 +94,61 @@ function SparkleIcon({ className }: { className?: string }) {
 }
 
 
+const WIDGET_FENCE_LANGS = new Set<string>(['widget', 'chart', 'weather', 'clock']);
+
+/**
+ * Try to interpret a fenced code block as a chat widget.
+ *  - ```widget → body is a full WidgetSpec `{kind,title,data}`
+ *  - ```chart / ```weather / ```clock → body is the kind-specific `data`,
+ *    wrapped into `{ kind: <lang>, data: <json> }`.
+ * Returns null (→ render as normal code) when the language isn't a widget
+ * fence or the body isn't yet valid JSON (e.g. still streaming).
+ */
+function tryParseWidgetFence(lang: string, body: string): WidgetSpec | null {
+  if (!WIDGET_FENCE_LANGS.has(lang)) return null;
+  try {
+    const parsed = JSON.parse(body);
+    if (lang === 'widget') {
+      if (parsed && typeof parsed === 'object' && typeof parsed.kind === 'string') {
+        return parsed as WidgetSpec;
+      }
+      return null;
+    }
+    // chart/weather/clock: the body is the raw `data` payload.
+    return { kind: lang as WidgetKind, data: parsed } as WidgetSpec;
+  } catch {
+    return null; // incomplete/invalid JSON → fall back to code rendering
+  }
+}
+
 function MarkdownContent({ content, isDarkMode }: { content: string, isDarkMode: boolean }) {
   if (typeof content !== 'string') return null;
-  
+
   return (
     <div className={`prose chat-markdown ${isDarkMode ? 'prose-invert' : ''} max-w-none`}>
-      <ReactMarkdown 
+      <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
           a: ({ ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />,
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          pre: ({ children }) => <pre className="chat-markdown-pre">{children}</pre>
+          pre: ({ children }) => <pre className="chat-markdown-pre">{children}</pre>,
+          code: ({ className, children, ...props }) => {
+            // Fenced blocks carry a `language-xxx` class; inline code doesn't.
+            const lang = /language-(\w+)/.exec(className ?? '')?.[1];
+            if (lang && WIDGET_FENCE_LANGS.has(lang)) {
+              const body = String(children ?? '').replace(/\n$/, '');
+              const widget = tryParseWidgetFence(lang, body);
+              if (widget) {
+                return (
+                  <div className="not-prose my-2">
+                    <WidgetCard widget={widget} />
+                  </div>
+                );
+              }
+            }
+            return <code className={className} {...props}>{children}</code>;
+          },
         }}
       >
         {content}
@@ -406,6 +451,14 @@ export function MessageBubble({ message, onResolvePermission, onResolveQuestion,
     return (
       <div className="flex justify-start">
         <FormCard message={message} onResolve={onResolveForm} />
+      </div>
+    );
+  }
+
+  if (message.role === 'widget') {
+    return (
+      <div className="flex justify-start">
+        <WidgetCard widget={message.widget} />
       </div>
     );
   }

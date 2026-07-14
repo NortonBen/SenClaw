@@ -209,7 +209,7 @@ impl Tool for SkillTool {
             ));
         }
         let preview = if skill_content.len() > 500 {
-            format!("{}...", &skill_content[..500])
+            format!("{}...", crate::util::text::truncate_on_char_boundary(skill_content, 500))
         } else {
             skill_content.to_string()
         };

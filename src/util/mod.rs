@@ -6,3 +6,4 @@ pub mod llm_log;
 pub mod local_time;
 pub mod paths;
 pub mod shell_safety;
+pub mod text;

@@ -411,10 +411,11 @@ pub(crate) async fn handle_subscribe(
     {
         let text_msgs = state.db.get_group_messages(&jid, None).unwrap_or_default();
         let tool_msgs = state.db.get_tool_executions(&jid, None).unwrap_or_default();
+        let widget_msgs = state.db.get_chat_widgets(&jid, None).unwrap_or_default();
 
-        if !text_msgs.is_empty() || !tool_msgs.is_empty() {
+        if !text_msgs.is_empty() || !tool_msgs.is_empty() || !widget_msgs.is_empty() {
             let mut history: Vec<serde_json::Value> =
-                Vec::with_capacity(text_msgs.len() + tool_msgs.len());
+                Vec::with_capacity(text_msgs.len() + tool_msgs.len() + widget_msgs.len());
             for m in &text_msgs {
                 history.push(serde_json::json!({
                     "id": m.message_id,
@@ -439,6 +440,18 @@ pub(crate) async fn handle_subscribe(
                     "content": content,
                     "ok": t.ok,
                     "timestamp": t.timestamp,
+                }));
+            }
+            for w in &widget_msgs {
+                // Parse widget_json back to a JSON value; fall back to an empty
+                // object so a malformed row can't crash the replay.
+                let widget: serde_json::Value = serde_json::from_str(&w.widget_json)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                history.push(serde_json::json!({
+                    "id": w.id,
+                    "role": "widget",
+                    "widget": widget,
+                    "timestamp": w.created_at,
                 }));
             }
             // Stable sort by timestamp string (RFC3339 / ISO8601 sorts
@@ -2080,9 +2093,13 @@ pub(crate) async fn handle_agent_control(
                 // 3. Ephemeral chat events (permission/question request+resolved pairs)
                 let del_events = db.delete_chat_events_for_jid(&jid).unwrap_or(0);
 
+                // 4. One-way chat widgets (chart/image/clock/weather cards)
+                let del_widgets = db.delete_chat_widgets_for_jid(&jid).unwrap_or(0);
+
                 tracing::info!(
                     "[handle_agent_control] stop_and_clear for {jid}: \
-                     {del_msg} messages, {del_tools} tool actions, {del_events} chat events deleted"
+                     {del_msg} messages, {del_tools} tool actions, {del_events} chat events, \
+                     {del_widgets} widgets deleted"
                 );
 
                 // Signal frontend to wipe its in-memory list.

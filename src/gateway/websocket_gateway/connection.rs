@@ -29,18 +29,27 @@ pub(crate) async fn handle_connection(
              Set GATEWAY_TOKEN via env for production."
         );
     }
-    {
+    // Register the client at a STABLE index. Reuse a tombstoned slot if one is
+    // free (keeps the `Vec` from growing unbounded) — otherwise append. Either
+    // way the returned index never shifts for the life of this connection, so
+    // every later `guard.get(client_idx)` stays correct even as other clients
+    // come and go. See `WsClient::dead`.
+    let client_idx: usize = {
         let mut guard = clients.lock().await;
-        guard.push(WsClient {
+        let new_client = WsClient {
             sender: tx.clone(),
             authenticated: auto_auth,
             is_admin: false,
             subscriptions: HashSet::new(),
-        });
-    }
-    let client_idx: usize = {
-        let guard = clients.lock().await;
-        guard.len() - 1
+            dead: false,
+        };
+        if let Some(pos) = guard.iter().position(|c| c.dead) {
+            guard[pos] = new_client;
+            pos
+        } else {
+            guard.push(new_client);
+            guard.len() - 1
+        }
     };
 
     if auto_auth {
@@ -84,9 +93,17 @@ pub(crate) async fn handle_connection(
 
     forward_handle.abort();
     {
+        // Tombstone this slot instead of removing it — `Vec::remove` would shift
+        // every later client down and invalidate their cached `client_idx`,
+        // misrouting their subscriptions and history. Clearing subscriptions +
+        // `authenticated=false` makes every broadcast skip this dead slot, and a
+        // future connection can reuse it. See `WsClient::dead`.
         let mut guard = clients.lock().await;
-        if client_idx < guard.len() {
-            guard.remove(client_idx);
+        if let Some(client) = guard.get_mut(client_idx) {
+            client.dead = true;
+            client.authenticated = false;
+            client.is_admin = false;
+            client.subscriptions.clear();
         }
     }
 }

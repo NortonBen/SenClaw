@@ -38,6 +38,13 @@ export interface AgentCommandInputProps {
   onFileSelect?: (files: File[]) => void;
   renderExtraActions?: React.ReactNode;
   textareaRef?: React.Ref<TextAreaRef>;
+  /**
+   * Previously-sent messages in this conversation, chronological (oldest → newest).
+   * Pressing ArrowUp on the first line recalls the newest, then walks backwards;
+   * ArrowDown walks forward and finally restores the in-progress draft — like a
+   * shell history. Omit to disable history recall.
+   */
+  history?: string[];
 }
 
 interface SubagentApiItem {
@@ -82,9 +89,14 @@ export function AgentCommandInput({
   onFileSelect,
   renderExtraActions,
   textareaRef,
+  history = [],
 }: AgentCommandInputProps) {
   const { token } = theme.useToken();
   const [activeIndex, setActiveIndex] = React.useState(0);
+  // Shell-style history recall. `histIdx === null` means "editing the live
+  // draft"; a number is the position within `history` currently shown.
+  const [histIdx, setHistIdx] = React.useState<number | null>(null);
+  const draftRef = React.useRef('');
   const [skills, setSkills] = React.useState<AgentCommandItem[]>([]);
   const [agentMentions, setAgentMentions] = React.useState<AgentCommandItem[]>([]);
   const [mcpMentions, setMcpMentions] = React.useState<AgentCommandItem[]>([]);
@@ -229,6 +241,46 @@ export function AgentCommandInput({
     setActiveIndex(0);
   };
 
+  // Leaving the field empty (e.g. right after a send) drops us out of history
+  // recall so the next ArrowUp starts fresh from the newest message.
+  React.useEffect(() => {
+    if (value === '') setHistIdx(null);
+  }, [value]);
+
+  // Genuine typing exits history-recall mode; the edited text becomes the draft.
+  const handleChange = (v: string) => {
+    setHistIdx(null);
+    onChange(v);
+  };
+
+  const navigateHistory = (dir: 'up' | 'down', el: HTMLTextAreaElement): boolean => {
+    if (history.length === 0) return false;
+    let nextIdx: number | null;
+    if (dir === 'up') {
+      if (histIdx === null) {
+        draftRef.current = value; // stash the live draft before diving into history
+        nextIdx = history.length - 1;
+      } else {
+        nextIdx = Math.max(0, histIdx - 1);
+      }
+    } else {
+      if (histIdx === null) return false; // nothing newer than the draft
+      nextIdx = histIdx >= history.length - 1 ? null : histIdx + 1;
+    }
+    const nextVal = nextIdx === null ? draftRef.current : history[nextIdx];
+    setHistIdx(nextIdx);
+    onChange(nextVal);
+    // Caret to end once the controlled value has re-rendered.
+    requestAnimationFrame(() => {
+      try {
+        el.selectionStart = el.selectionEnd = el.value.length;
+      } catch {
+        /* element detached */
+      }
+    });
+    return true;
+  };
+
   const titleByTrigger = triggerState?.trigger === '/' ? 'Command' : triggerState?.trigger === '@' ? 'Mention' : 'Skill';
   const labelByKind: Record<NonNullable<AgentCommandItem['kind']>, string> = {
     command: 'Command',
@@ -341,7 +393,7 @@ export function AgentCommandInput({
         <Input.TextArea
           ref={textareaRef}
           value={value}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => handleChange(e.target.value)}
           onPaste={onPaste}
           placeholder={placeholder}
           autoSize={{ minRows: 1, maxRows: 4 }}
@@ -371,6 +423,27 @@ export function AgentCommandInput({
                 e.preventDefault();
                 onChange(value.replace(/([/@#])[^\s]*$/, ''));
                 return;
+              }
+            }
+            // History recall (only when no suggestion popup is open and no
+            // modifier is held). ArrowUp works on the first line, ArrowDown on
+            // the last line, so multi-line caret movement is preserved.
+            if (!triggerState && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+              const el = e.currentTarget;
+              const caretStart = el.selectionStart ?? 0;
+              const caretEnd = el.selectionEnd ?? 0;
+              const collapsed = caretStart === caretEnd;
+              if (e.key === 'ArrowUp' && collapsed && !value.slice(0, caretStart).includes('\n')) {
+                if (navigateHistory('up', el)) {
+                  e.preventDefault();
+                  return;
+                }
+              }
+              if (e.key === 'ArrowDown' && collapsed && !value.slice(caretEnd).includes('\n')) {
+                if (navigateHistory('down', el)) {
+                  e.preventDefault();
+                  return;
+                }
               }
             }
             if (e.key === 'Enter' && !e.shiftKey) {

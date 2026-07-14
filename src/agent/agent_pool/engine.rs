@@ -55,6 +55,12 @@ pub struct ZenCoreApi {
     /// the chat UI can render a claude-code-style collapsible "Read 3 files,
     /// ran 1 command" tool-group card.
     on_tool_execution: Arc<Mutex<Option<Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>>>>,
+    /// Callback fired for every `EngineEvent::WidgetEmit`. Lets `lib.rs`
+    /// persist + push a one-way `chat:widget` WS frame so the chat UI renders
+    /// the inline widget card. Mirrors `on_tool_execution` (one-way, no
+    /// response round-trip).
+    on_widget_emit:
+        Arc<Mutex<Option<Arc<dyn Fn(String, crate::zen_core::WidgetEmitData) + Send + Sync>>>>,
 }
 
 /// Wire-format tool-execution event used by the AgentPool → WS gateway path.
@@ -86,6 +92,7 @@ impl ZenCoreApi {
             working_dirs: Mutex::new(HashMap::new()),
             on_plan_exit_request: Arc::new(Mutex::new(None)),
             on_tool_execution: Arc::new(Mutex::new(None)),
+            on_widget_emit: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -103,6 +110,16 @@ impl ZenCoreApi {
     /// so the chat UI can render tool-call activity inline.
     pub fn set_on_tool_execution(&self, cb: Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>) {
         *self.on_tool_execution.lock().unwrap() = Some(cb);
+    }
+
+    /// Wire a callback fired for every `EngineEvent::WidgetEmit`. Used by
+    /// lib.rs to persist the widget and broadcast a one-way `chat:widget`
+    /// frame over the WebSocket gateway.
+    pub fn set_on_widget_emit(
+        &self,
+        cb: Arc<dyn Fn(String, crate::zen_core::WidgetEmitData) + Send + Sync>,
+    ) {
+        *self.on_widget_emit.lock().unwrap() = Some(cb);
     }
 
     /// Inject the WorkbenchBridge so future-created engines emit artifact
@@ -197,6 +214,7 @@ impl ZenCoreApi {
         // can fire it without re-locking through `&self`.
         let plan_callback_for_loop = self.on_plan_exit_request.clone();
         let tool_exec_callback_for_loop = self.on_tool_execution.clone();
+        let widget_callback_for_loop = self.on_widget_emit.clone();
         let mut rx = engine.event_bus.subscribe();
 
         tokio::spawn(async move {
@@ -304,6 +322,15 @@ impl ZenCoreApi {
                             EngineEvent::FormRequest(data) => {
                                 if let Some(ref cb) = h.form_request {
                                     cb(data);
+                                }
+                            }
+                            EngineEvent::WidgetEmit(data) => {
+                                // One-way: forward to the global widget callback
+                                // (persist + broadcast). No CoreHandlers entry —
+                                // mirrors the ToolExecution path, not FormRequest.
+                                let cb_opt = widget_callback_for_loop.lock().unwrap().clone();
+                                if let Some(cb) = cb_opt {
+                                    cb(jid.clone(), data);
                                 }
                             }
                             EngineEvent::ConversationUsage(data) => {

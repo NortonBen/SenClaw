@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/prefs.dart';
 import '../../core/transport/connection.dart';
@@ -5,6 +6,112 @@ import '../../models/space_models.dart';
 
 List<Map<String, dynamic>> _asMaps(dynamic r) =>
     (r is List ? r : const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+
+/// A widget definition declared in a Space App's manifest.
+class AppWidgetDef {
+  final String id;
+  final String name;
+  final String description;
+  final String size; // 'small' | 'medium' | 'large'
+  final String entryUrl;
+  const AppWidgetDef({
+    required this.id,
+    required this.name,
+    this.description = '',
+    this.size = 'small',
+    this.entryUrl = '/',
+  });
+}
+
+/// A widget placed on the dashboard (persisted in prefs).
+class PlacedWidget {
+  final String appId;
+  final String widgetId;
+
+  /// User size override ('small' | 'medium' | 'large'); null = use the manifest
+  /// default declared by the widget.
+  final String? sizeOverride;
+  const PlacedWidget(this.appId, this.widgetId, {this.sizeOverride});
+
+  String get key => '$appId:$widgetId';
+
+  PlacedWidget copyWith({String? sizeOverride}) =>
+      PlacedWidget(appId, widgetId, sizeOverride: sizeOverride ?? this.sizeOverride);
+
+  Map<String, dynamic> toJson() => {
+        'appId': appId,
+        'widgetId': widgetId,
+        if (sizeOverride != null) 'size': sizeOverride,
+      };
+  factory PlacedWidget.fromJson(Map<String, dynamic> j) => PlacedWidget(
+        j['appId'] as String? ?? '',
+        j['widgetId'] as String? ?? '',
+        sizeOverride: j['size'] as String?,
+      );
+}
+
+const _kDashboardWidgetsKey = 'senclaw:dashboard-widgets';
+
+class DashboardWidgetsNotifier extends StateNotifier<List<PlacedWidget>> {
+  DashboardWidgetsNotifier(this._ref) : super(_load(_ref));
+  final Ref _ref;
+
+  static List<PlacedWidget> _load(Ref ref) {
+    final raw = ref.read(prefsHelperProvider).string(_kDashboardWidgetsKey, '');
+    if (raw.isEmpty) return [];
+    try {
+      final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+      return list.map(PlacedWidget.fromJson).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _save() {
+    _ref.read(prefsHelperProvider).setString(
+      _kDashboardWidgetsKey,
+      jsonEncode(state.map((w) => w.toJson()).toList()),
+    );
+  }
+
+  void add(PlacedWidget w) {
+    state = [...state, w];
+    _save();
+  }
+
+  void remove(int index) {
+    final next = [...state];
+    if (index < next.length) next.removeAt(index);
+    state = next;
+    _save();
+  }
+
+  /// Move the widget at [oldIndex] to [newIndex] (ReorderableListView semantics).
+  void reorder(int oldIndex, int newIndex) {
+    final next = [...state];
+    if (oldIndex < 0 || oldIndex >= next.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    newIndex = newIndex.clamp(0, next.length - 1);
+    final item = next.removeAt(oldIndex);
+    next.insert(newIndex, item);
+    state = next;
+    _save();
+  }
+
+  /// Override the size of the widget at [index].
+  void setSize(int index, String size) {
+    final next = [...state];
+    if (index < 0 || index >= next.length) return;
+    next[index] = PlacedWidget(next[index].appId, next[index].widgetId,
+        sizeOverride: size);
+    state = next;
+    _save();
+  }
+}
+
+final dashboardWidgetsProvider =
+    StateNotifierProvider<DashboardWidgetsNotifier, List<PlacedWidget>>(
+        (ref) => DashboardWidgetsNotifier(ref));
 
 /// Bumped to force note/event/schedule lists to refetch after a mutation.
 final spaceRevProvider = StateProvider<int>((ref) => 0);
@@ -62,6 +169,21 @@ class SpaceApp {
   }
 
   String get version => '${manifest['version'] ?? ''}';
+
+  /// Widget definitions declared in the manifest.
+  List<AppWidgetDef> get widgets {
+    final raw = manifest['widgets'];
+    if (raw is! List) return const [];
+    return raw.whereType<Map>().map((w) {
+      return AppWidgetDef(
+        id: '${w['id'] ?? ''}',
+        name: '${w['name'] ?? ''}',
+        description: '${w['description'] ?? ''}',
+        size: '${w['size'] ?? 'small'}',
+        entryUrl: '${w['entryUrl'] ?? '/'}',
+      );
+    }).toList();
+  }
 }
 
 /// Which Space apps are "running" (their web view stays mounted, Android-style)

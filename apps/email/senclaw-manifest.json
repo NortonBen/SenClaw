@@ -6,7 +6,8 @@
   "runtime": {
     "kind": "server",
     "start": "./email",
-    "healthPath": "/"
+    "healthPath": "/",
+    "port": 8082
   },
   "integration": {
     "type": "iframe",
@@ -23,6 +24,26 @@
     "description": "Email MCP for reading the inbox, searching, and composing/sending email via IMAP/SMTP",
     "autoRegister": true
   },
+  "widgets": [
+    {
+      "id": "email-unread",
+      "name": "Thư chưa đọc",
+      "description": "Số thư chưa đọc trong hộp thư.",
+      "size": "small",
+      "refreshMs": 30000,
+      "render": "client",
+      "entryUrl": "/widget/email-unread.html"
+    },
+    {
+      "id": "email-inbox",
+      "name": "Hộp thư chưa đọc",
+      "description": "Danh sách thư chưa đọc gần đây.",
+      "size": "medium",
+      "refreshMs": 30000,
+      "render": "client",
+      "entryUrl": "/widget/email-inbox.html"
+    }
+  ],
   "skills": [
     {
       "name": "email-reporting",

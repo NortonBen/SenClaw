@@ -131,21 +131,30 @@ pub async fn consolidate_summary(
         }
     }
 
-    // Path 2: verbatim fallback — keep the dropped history recallable.
-    let name = format!("conversation-summary-{date}");
-    let description = format!("Auto-saved conversation summary from compaction on {date}");
-    curated::save(
-        base,
-        &name,
-        &description,
-        summary,
-        "project",
-        Some(&format!("Conversation summary {date}")),
-        folder,
-        date,
-        true, // same-day compactions update the same file
-    )?;
-    tracing::info!("[consolidate] saved verbatim summary memory '{name}'");
+    // Path 2: verbatim fallback — keep the dropped history recallable via
+    // FTS, but do NOT pollute the curated MEMORY.md index. Write the file
+    // directly into `memory/` so MemoryManager indexes it, but skip
+    // `curated::save` (which would push a noisy index entry every compaction).
+    let slug = format!("conversation-summary-{date}");
+    let dir = base.join("memory");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{slug}.md"));
+
+    let mut content = String::new();
+    content.push_str("---\n");
+    content.push_str(&format!("name: {slug}\n"));
+    content.push_str(&format!(
+        "description: Auto-saved conversation summary from compaction on {date}\n"
+    ));
+    content.push_str("metadata:\n");
+    content.push_str("  node_type: conversation_summary\n");
+    content.push_str(&format!("  originSessionId: {folder}\n"));
+    content.push_str(&format!("  createdAt: {date}\n"));
+    content.push_str("---\n\n");
+    content.push_str(summary);
+    content.push('\n');
+    std::fs::write(&path, content)?;
+    tracing::info!("[consolidate] saved verbatim summary '{slug}' (FTS-only, not indexed in MEMORY.md)");
     Ok(1)
 }
 
@@ -222,7 +231,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn llm_failure_falls_back_to_verbatim() {
+    async fn llm_failure_falls_back_to_verbatim_without_index() {
         let base = tmp_base("fallback");
         let n = consolidate_summary(&base, "g1", "the summary", Some(Arc::new(FailLlm)), "2026-07-03")
             .await
@@ -231,16 +240,22 @@ mod tests {
         let file =
             std::fs::read_to_string(base.join("memory/conversation-summary-2026-07-03.md")).unwrap();
         assert!(file.contains("the summary"));
+        assert!(file.contains("node_type: conversation_summary"));
+        // Verbatim fallback must NOT create/pollute MEMORY.md.
+        assert!(!base.join("MEMORY.md").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
-    async fn no_llm_saves_verbatim() {
+    async fn no_llm_saves_verbatim_without_index() {
         let base = tmp_base("nollm");
         let n = consolidate_summary(&base, "g1", "raw summary", None, "2026-07-03")
             .await
             .unwrap();
         assert_eq!(n, 1);
+        // File exists but MEMORY.md is not created.
+        assert!(base.join("memory/conversation-summary-2026-07-03.md").exists());
+        assert!(!base.join("MEMORY.md").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -173,7 +173,96 @@ export interface FormMessage {
   timestamp: string;
 }
 
-export type ChatMessage = TextMessage | PermissionMessage | QuestionMessage | ToolMessage | FormMessage;
+// ===== Chat Widgets (one-way inline rich cards) =====
+
+export type WidgetKind = 'chart' | 'image' | 'clock' | 'weather';
+
+export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'scatter';
+
+export interface ChartPoint {
+  x: string | number;
+  y: number;
+}
+
+export interface ChartSeries {
+  name: string;
+  /** Optional explicit color; client palette used when absent. */
+  color?: string;
+  points: ChartPoint[];
+}
+
+export interface ChartData {
+  chartType: ChartType;
+  series: ChartSeries[];
+  xLabel?: string;
+  yLabel?: string;
+  /** bar/area only */
+  stacked?: boolean;
+}
+
+export interface ImageData {
+  url?: string;
+  dataUrl?: string;
+  caption?: string;
+  alt?: string;
+}
+
+export interface ClockData {
+  /** IANA tz; defaults to local when absent. */
+  tz?: string;
+  label?: string;
+  showSeconds?: boolean;
+  showDate?: boolean;
+  format24h?: boolean;
+}
+
+export type WeatherIcon =
+  | 'sunny'
+  | 'partly_cloudy'
+  | 'cloudy'
+  | 'rain'
+  | 'thunderstorm'
+  | 'snow'
+  | 'fog'
+  | 'wind';
+
+export interface WeatherCurrent {
+  temp: number;
+  condition: string;
+  icon: WeatherIcon;
+  humidity?: number;
+  wind?: number;
+}
+
+export interface WeatherDay {
+  day: string;
+  hi: number;
+  lo: number;
+  icon: WeatherIcon;
+}
+
+export interface WeatherData {
+  location: string;
+  unit?: 'C' | 'F';
+  current: WeatherCurrent;
+  daily?: WeatherDay[];
+}
+
+export interface WidgetSpec {
+  kind: WidgetKind;
+  title?: string;
+  /** kind-specific payload; validated/narrowed inside WidgetCard. */
+  data: ChartData | ImageData | ClockData | WeatherData | Record<string, unknown>;
+}
+
+export interface WidgetMessage {
+  id: string;
+  role: 'widget';
+  widget: WidgetSpec;
+  timestamp: string;
+}
+
+export type ChatMessage = TextMessage | PermissionMessage | QuestionMessage | ToolMessage | FormMessage | WidgetMessage;
 
 export type AgentState = 'idle' | 'processing' | string;
 

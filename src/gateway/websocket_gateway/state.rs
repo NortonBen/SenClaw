@@ -13,6 +13,15 @@ pub(crate) struct WsClient {
     pub(crate) authenticated: bool,
     pub(crate) is_admin: bool,
     pub(crate) subscriptions: HashSet<String>,
+    /// Tombstone flag. Connections are identified by their positional index in
+    /// the `Vec<WsClient>` (`client_idx`), captured once at connect. `Vec::remove`
+    /// would shift every later element down and invalidate those cached indices —
+    /// so a disconnecting client would misroute the events of everyone after it
+    /// (its `subscribe` recorded on the wrong client, its `history:load` sent to
+    /// the wrong socket). Instead we mark the slot `dead` (indices stay stable)
+    /// and reuse it for the next connection. Dead slots are `authenticated=false`
+    /// with empty `subscriptions`, so every broadcast already skips them.
+    pub(crate) dead: bool,
 }
 
 // ===== Shared state passed through to handlers =====

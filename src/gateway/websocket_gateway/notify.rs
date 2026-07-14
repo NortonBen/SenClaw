@@ -471,6 +471,27 @@ impl WebSocketGateway {
         self.broadcast(chat_jid, &msg).await;
     }
 
+    /// Broadcast a one-way rich widget (chart/image/clock/weather) so the chat
+    /// UI can render an inline widget card. Display-only — there is no response
+    /// round-trip (unlike `form:request`). Only sent to clients subscribed to
+    /// `chat_jid`. Mirrors [`Self::notify_tool_execution`].
+    pub async fn notify_widget(
+        &self,
+        chat_jid: &str,
+        id: &str,
+        widget: &serde_json::Value,
+        ts: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "chat:widget",
+            "groupJid": chat_jid,
+            "id": id,
+            "widget": widget,
+            "ts": ts,
+        });
+        self.broadcast(chat_jid, &msg).await;
+    }
+
     // ===== Plan mode (ExitPlanMode tool) =====
 
     /// Forwarded from `EngineEvent::PlanExitRequest`. UI renders the modal

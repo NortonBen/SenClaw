@@ -228,7 +228,7 @@ impl Tool for BashTool {
 
         Some(ToolPermissionInfo {
             title: if title.len() > 300 {
-                title[..300].to_string()
+                crate::util::text::truncate_on_char_boundary(&title, 300).to_string()
             } else {
                 title
             },
@@ -244,7 +244,7 @@ fn get_title(command: &str) -> String {
     // Process heredoc markers for display
     let cleaned = command.replace("<<'EOF'", "").replace("<<EOF", "");
     if cleaned.len() > 100 {
-        format!("{}...", &cleaned[..100])
+        format!("{}...", crate::util::text::truncate_on_char_boundary(&cleaned, 100))
     } else {
         cleaned
     }

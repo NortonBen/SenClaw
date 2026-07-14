@@ -9,7 +9,8 @@ import '../features/kanban/kanban_screen.dart';
 import '../features/diagnostics/diagnostics_screen.dart';
 import '../features/plugins/plugins_screen.dart';
 import '../features/settings/settings_screen.dart';
-import '../features/space/space_screen.dart' show SpaceScreen, SpaceAppsScreen;
+import '../features/space/space_screen.dart'
+    show NotesScreen, CalendarScreen, SpaceAppsScreen;
 import '../features/wiki/wiki_screen.dart';
 import '../features/workflow/workflow_runs_screen.dart';
 import 'shell.dart';
@@ -53,8 +54,13 @@ final appRouter = GoRouter(
           pageBuilder: (context, state) => _noTransition(const KanbanScreen()),
         ),
         GoRoute(
-          path: '/space',
-          pageBuilder: (context, state) => _noTransition(const SpaceScreen()),
+          path: '/notes',
+          pageBuilder: (context, state) => _noTransition(const NotesScreen()),
+        ),
+        GoRoute(
+          path: '/calendar',
+          pageBuilder: (context, state) =>
+              _noTransition(const CalendarScreen()),
         ),
         GoRoute(
           path: '/wiki',

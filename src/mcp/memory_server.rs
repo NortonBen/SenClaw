@@ -352,7 +352,7 @@ impl MemoryServer {
                 r.score
             ));
             let summary = if r.text.len() > 300 {
-                format!("{}...", &r.text[..300])
+                format!("{}...", crate::util::text::truncate_on_char_boundary(&r.text, 300))
             } else {
                 r.text.clone()
             };

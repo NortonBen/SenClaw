@@ -27,6 +27,7 @@ import '../../widgets/schedule_editor.dart';
 import 'groups_provider.dart';
 import 'mini_chat_screen.dart' show subWindowIdProvider;
 import 'new_chat_dialog.dart' show llmConfigsProvider, LlmConfig;
+import 'voice_chat_overlay.dart';
 import 'widgets/message_widgets.dart';
 import 'widgets/slash_mention_input.dart';
 
@@ -148,6 +149,20 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
     if (mounted) setState(() => _recording = true);
   }
 
+  /// The user's own prior messages, chronological, with consecutive duplicates
+  /// collapsed — feeds the composer's ↑/↓ shell-style recall.
+  List<String> _inputHistory(List<ChatMessage> messages) {
+    final out = <String>[];
+    for (final m in messages) {
+      if (m.kind != MessageKind.user) continue;
+      final t = m.text?.trim();
+      if (t == null || t.isEmpty) continue;
+      if (out.isNotEmpty && out.last == t) continue;
+      out.add(t);
+    }
+    return out;
+  }
+
   void _send() {
     final text = _input.text;
     if (text.trim().isEmpty && _attachments.isEmpty) return;
@@ -263,6 +278,12 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                 ),
               ),
               _ContextUsageMeter(jid: widget.jid),
+              IconButton(
+                tooltip: 'Trò chuyện thoại (giọng nói)',
+                icon: const Icon(Icons.graphic_eq, size: 18),
+                onPressed: () =>
+                    showVoiceChat(context, widget.jid, widget.title),
+              ),
               IconButton(
                 tooltip: 'Chat info',
                 icon: const Icon(Icons.info_outline, size: 18),
@@ -505,6 +526,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
           mode: convo.agentMode,
           onMode: notifier.setAgentMode,
           controller: _input,
+          history: _inputHistory(convo.messages),
           attachments: _attachments,
           recording: _recording,
           transcribing: _transcribing,
@@ -582,6 +604,7 @@ class _Composer extends ConsumerWidget {
     required this.mode,
     required this.onMode,
     required this.controller,
+    required this.history,
     required this.attachments,
     required this.recording,
     required this.transcribing,
@@ -594,6 +617,7 @@ class _Composer extends ConsumerWidget {
   final String mode;
   final void Function(String) onMode;
   final TextEditingController controller;
+  final List<String> history;
   final List<Map<String, String>> attachments;
   final bool recording;
   final bool transcribing;
@@ -644,6 +668,7 @@ class _Composer extends ConsumerWidget {
           SlashMentionField(
             controller: controller,
             onSend: onSend,
+            history: history,
             style: TextStyle(color: c.textPrimary, fontSize: 14),
             decoration: InputDecoration(
               hintText: 'Message the agent…   / command · @ file',

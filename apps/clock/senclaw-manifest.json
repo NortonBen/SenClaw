@@ -1,0 +1,49 @@
+{
+  "id": "clock",
+  "name": "Đồng hồ · Clock",
+  "description": "Đồng hồ thế giới, đếm ngược, hẹn giờ và bấm giờ. Widget hiển thị giờ hiện tại trên dashboard.",
+  "icon": "🕐",
+  "runtime": {
+    "kind": "server",
+    "start": "./clock",
+    "healthPath": "/api/status",
+    "port": 4381
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "mcp": {
+    "name": "clock-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Clock MCP: world clock, timers, stopwatch",
+    "autoRegister": true
+  },
+  "widgets": [
+    {
+      "id": "clock-analog",
+      "name": "Đồng hồ",
+      "description": "Đồng hồ analog hiển thị giờ hiện tại",
+      "size": "small",
+      "refreshMs": 1000,
+      "render": "client",
+      "entryUrl": "/widget/clock-analog.html"
+    },
+    {
+      "id": "clock-world",
+      "name": "Giờ thế giới",
+      "description": "Hiển thị giờ nhiều múi giờ",
+      "size": "medium",
+      "refreshMs": 1000,
+      "render": "client",
+      "entryUrl": "/widget/clock-world.html"
+    }
+  ],
+  "skills": [],
+  "personas": []
+}

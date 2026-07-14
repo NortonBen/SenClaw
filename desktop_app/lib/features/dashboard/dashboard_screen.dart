@@ -12,12 +12,15 @@ import '../chat/agent_states_provider.dart';
 import '../chat/agents_provider.dart';
 import '../chat/groups_provider.dart';
 import '../chat/notifications.dart';
+import '../chat/voice_chat_overlay.dart';
 import '../cognitive/cognitive_screen.dart' show cogStatsProvider;
 import '../dock/dispatch_provider.dart';
-import '../plugins/plugins_screen.dart' show skillsProvider, mcpServersProvider;
+import '../plugins/plugins_screen.dart'
+    show skillsProvider, mcpServersProvider, pluginsSectionProvider;
 import '../space/space_providers.dart';
 import '../space/space_screen.dart'
     show showCreateEventDialog, showDayEventsDialog, showCreateNoteDialog;
+import '../../widgets/embedded_web.dart';
 
 /// Total wiki documents (sum of per-category counts from /api/wiki/stats).
 final wikiDocCountProvider = FutureProvider<int>((ref) async {
@@ -49,9 +52,12 @@ class DashboardScreen extends ConsumerWidget {
     final unreadChats =
         groups.fold<int>(0, (sum, g) => sum + g.unread);
     final pinnedAppIds = ref.watch(pinnedAppsProvider);
-    final pinnedApps = (ref.watch(spaceAppsProvider).valueOrNull ?? const [])
+    final allApps = ref.watch(spaceAppsProvider).valueOrNull ?? const [];
+    final pinnedApps = allApps
         .where((a) => pinnedAppIds.contains(a.id))
         .toList();
+    final dashWidgets = ref.watch(dashboardWidgetsProvider);
+    final appsWithWidgets = allApps.where((a) => a.widgets.isNotEmpty).toList();
 
     final activeChats = agentStates.entries
         .where((e) => kActiveStates.contains(e.value))
@@ -64,12 +70,20 @@ class DashboardScreen extends ConsumerWidget {
       ref.invalidate(cogStatsProvider);
       ref.invalidate(skillsProvider);
       ref.invalidate(mcpServersProvider);
+      // Reload installed apps so widget URLs pick up any port/registration
+      // changes (a stale URL renders a blank widget).
+      ref.invalidate(spaceAppsProvider);
     }
 
     return SectionScaffold(
       title: 'Dashboard',
       subtitle: 'Overview of your SenClaw agents and activity',
       actions: [
+        FilledButton.icon(
+          onPressed: () => showDefaultVoiceChat(context, ref),
+          icon: const Icon(Icons.graphic_eq, size: 16),
+          label: const Text('Trò chuyện thoại'),
+        ),
         OutlinedButton.icon(
           onPressed: refreshAll,
           icon: const Icon(Icons.refresh, size: 16),
@@ -114,6 +128,15 @@ class DashboardScreen extends ConsumerWidget {
               final left = Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // Widgets sit ABOVE pinned apps (user preference).
+                  if (dashWidgets.isNotEmpty || appsWithWidgets.isNotEmpty) ...[
+                    _DashboardWidgets(
+                      placed: dashWidgets,
+                      allApps: allApps,
+                      appsWithWidgets: appsWithWidgets,
+                    ),
+                    const SizedBox(height: AppTokens.s16),
+                  ],
                   if (pinnedApps.isNotEmpty) ...[
                     _PinnedApps(apps: pinnedApps),
                     const SizedBox(height: AppTokens.s16),
@@ -663,6 +686,418 @@ class _PinnedApps extends ConsumerWidget {
   }
 }
 
+// ── Dashboard widgets (iOS-style embeddable app widgets) ─────────────────────
+
+/// The host theme as the Space-app bridge string ('dark' | 'light').
+String _embedTheme(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? 'dark' : 'light';
+
+const _kWidgetSizes = ['small', 'medium', 'large'];
+
+String _sizeLabel(String s) => switch (s) {
+      'small' => 'Nhỏ',
+      'medium' => 'Vừa',
+      'large' => 'Lớn',
+      _ => s,
+    };
+
+class _DashboardWidgets extends ConsumerStatefulWidget {
+  const _DashboardWidgets({
+    required this.placed,
+    required this.allApps,
+    required this.appsWithWidgets,
+  });
+  final List<PlacedWidget> placed;
+  final List<SpaceApp> allApps;
+  final List<SpaceApp> appsWithWidgets;
+
+  @override
+  ConsumerState<_DashboardWidgets> createState() => _DashboardWidgetsState();
+}
+
+class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
+  bool _edit = false;
+
+  List<PlacedWidget> get placed => widget.placed;
+  List<SpaceApp> get allApps => widget.allApps;
+
+  /// Resolve a placed widget to its app + definition (null if uninstalled).
+  (SpaceApp, AppWidgetDef)? _resolve(PlacedWidget pw) {
+    final app = allApps.where((a) => a.id == pw.appId).firstOrNull;
+    if (app == null) return null;
+    final def = app.widgets.where((w) => w.id == pw.widgetId).firstOrNull;
+    if (def == null) return null;
+    return (app, def);
+  }
+
+  String _effSize(PlacedWidget pw, AppWidgetDef def) =>
+      pw.sizeOverride ?? def.size;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final theme = _embedTheme(context);
+
+    Widget body;
+    if (placed.isEmpty) {
+      body = const _EmptyHint('Chưa có widget — bấm "Thêm" để thêm.');
+    } else {
+      // ONE grid for both view + edit. In edit mode each tile gains in-place
+      // remove/resize controls and becomes drag-to-reorder.
+      body = Padding(
+        padding: const EdgeInsets.all(AppTokens.s16),
+        child: LayoutBuilder(
+          builder: (context, cns) {
+            const gap = AppTokens.s12;
+            final colWidth = (cns.maxWidth - gap) / 2;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (var i = 0; i < placed.length; i++)
+                  _gridTile(placed[i], i, colWidth, gap, theme, c),
+              ],
+            );
+          },
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(AppTokens.rLg),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header with title + edit toggle + add.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppTokens.s20, AppTokens.s8, AppTokens.s8, AppTokens.s8),
+            child: Row(
+              children: [
+                Icon(Icons.widgets_outlined, size: 16, color: c.textSecondary),
+                const SizedBox(width: AppTokens.s8),
+                Text(
+                  'Widgets',
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: () => _showAddWidgetDialog(context),
+                  icon: const Icon(Icons.add, size: 15),
+                  label: const Text('Thêm'),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: AppTokens.s8, vertical: 2),
+                    minimumSize: const Size(0, 30),
+                  ),
+                ),
+                if (placed.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => setState(() => _edit = !_edit),
+                    icon: Icon(_edit ? Icons.check : Icons.tune, size: 15),
+                    label: Text(_edit ? 'Xong' : 'Sửa'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _edit ? AppTokens.brand : null,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppTokens.s8, vertical: 2),
+                      minimumSize: const Size(0, 30),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: c.border),
+          body,
+        ],
+      ),
+    );
+  }
+
+  (double, double) _dims(String size, double colWidth, double gap) {
+    final wide = size == 'medium' || size == 'large';
+    final tall = size == 'large';
+    final width = wide ? colWidth * 2 + gap : colWidth;
+    final height = tall ? 340.0 : 180.0;
+    return (width, height);
+  }
+
+  /// One grid tile. View mode = clean live widget (no label). Edit mode = same
+  /// live widget with in-place remove + resize controls, drag-to-reorder.
+  Widget _gridTile(PlacedWidget pw, int index, double colWidth, double gap,
+      String theme, AppColors c) {
+    final resolved = _resolve(pw);
+    if (resolved == null) return const SizedBox.shrink();
+    final app = resolved.$1;
+    final wDef = resolved.$2;
+    final size = _effSize(pw, wDef);
+    final (width, height) = _dims(size, colWidth, gap);
+
+    final baseUrl = app.url.replaceAll(RegExp(r'/$'), '');
+    final widgetUrl = '$baseUrl${wDef.entryUrl}?theme=$theme';
+
+    final web = ClipRRect(
+      borderRadius: BorderRadius.circular(AppTokens.rLg),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: c.border),
+          borderRadius: BorderRadius.circular(AppTokens.rLg),
+        ),
+        child: embeddedWebView(widgetUrl,
+            title: wDef.name, theme: theme, instanceKey: 'widget-${pw.key}'),
+      ),
+    );
+
+    // View mode: clean tile, NO label overlay.
+    if (!_edit) {
+      return SizedBox(width: width, height: height, child: web);
+    }
+
+    // Edit mode: absorb the webview's pointers so the tile drags; overlay
+    // remove (top-left) + resize (bottom-right); drop a tile here to reorder.
+    final notifier = ref.read(dashboardWidgetsProvider.notifier);
+    final tile = SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(child: web),
+          // Transparent Flutter layer composited ON TOP of the native webview —
+          // reliably captures the long-press-drag (AbsorbPointer alone doesn't
+          // stop a platform view from eating gestures) and blocks widget taps
+          // while editing.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              child: const SizedBox.expand(),
+            ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppTokens.rLg),
+                  border: Border.all(
+                      color: AppTokens.brand.withValues(alpha: 0.55), width: 2),
+                ),
+              ),
+            ),
+          ),
+          // Remove.
+          Positioned(
+            top: 4,
+            left: 4,
+            child: _circleBtn(Icons.remove, AppTokens.danger,
+                () => notifier.remove(index)),
+          ),
+          // Resize (cycles small → medium → large).
+          Positioned(
+            bottom: 6,
+            right: 6,
+            child: _sizeChip(size, () {
+              final next = _kWidgetSizes[
+                  (_kWidgetSizes.indexOf(size) + 1) % _kWidgetSizes.length];
+              notifier.setSize(index, next);
+            }),
+          ),
+        ],
+      ),
+    );
+
+    return DragTarget<int>(
+      onWillAcceptWithDetails: (d) => d.data != index,
+      onAcceptWithDetails: (d) => notifier.reorder(d.data, index),
+      builder: (ctx, cand, rej) {
+        final over = cand.isNotEmpty;
+        return AnimatedScale(
+          scale: over ? 1.04 : 1.0,
+          duration: const Duration(milliseconds: 120),
+          child: LongPressDraggable<int>(
+            data: index,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: _dragFeedback(app, wDef, width, height, c),
+            childWhenDragging: Opacity(opacity: 0.25, child: tile),
+            child: tile,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _circleBtn(IconData icon, Color color, VoidCallback onTap) => Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 3)],
+            ),
+            child: Icon(icon, size: 14, color: Colors.white),
+          ),
+        ),
+      );
+
+  Widget _sizeChip(String size, VoidCallback onTap) => Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppTokens.rFull),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(AppTokens.rFull),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.aspect_ratio, size: 12, color: Colors.white70),
+                const SizedBox(width: 4),
+                Text(_sizeLabel(size),
+                    style: const TextStyle(fontSize: 11, color: Colors.white)),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  Widget _dragFeedback(SpaceApp app, AppWidgetDef wDef, double width,
+          double height, AppColors c) =>
+      Material(
+        color: Colors.transparent,
+        child: Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: c.surface,
+            borderRadius: BorderRadius.circular(AppTokens.rLg),
+            border: Border.all(color: AppTokens.brand, width: 2),
+            boxShadow: const [
+              BoxShadow(color: Colors.black38, blurRadius: 14, offset: Offset(0, 6)),
+            ],
+          ),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(app.icon, style: const TextStyle(fontSize: 30)),
+                const SizedBox(height: 6),
+                Text(wDef.name,
+                    style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  void _showAddWidgetDialog(BuildContext context) {
+    final ref = this.ref;
+    final appsWithWidgets = widget.appsWithWidgets;
+    final c = context.colors;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Thêm Widget'),
+        content: SizedBox(
+          width: 400,
+          child: appsWithWidgets.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(AppTokens.s24),
+                    child: Text('Không có widget khả dụng.\nCài app hỗ trợ widget để bắt đầu.'),
+                  ),
+                )
+              : SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final app in appsWithWidgets) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(
+                              top: AppTokens.s12, bottom: AppTokens.s8),
+                          child: Row(
+                            children: [
+                              Text(app.icon,
+                                  style: const TextStyle(fontSize: 16)),
+                              const SizedBox(width: AppTokens.s8),
+                              Text(app.name,
+                                  style: TextStyle(
+                                    color: c.textPrimary,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  )),
+                            ],
+                          ),
+                        ),
+                        for (final w in app.widgets)
+                          ListTile(
+                            dense: true,
+                            leading: Icon(
+                              w.size == 'small'
+                                  ? Icons.crop_square
+                                  : Icons.crop_landscape,
+                              size: 18,
+                              color: c.textSecondary,
+                            ),
+                            title: Text(w.name,
+                                style: const TextStyle(fontSize: 13)),
+                            subtitle: w.description.isNotEmpty
+                                ? Text(w.description,
+                                    style: TextStyle(
+                                        fontSize: 11, color: c.textMuted))
+                                : null,
+                            trailing: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: c.surfaceAlt,
+                                borderRadius:
+                                    BorderRadius.circular(AppTokens.rSm),
+                              ),
+                              child: Text(w.size,
+                                  style: TextStyle(
+                                      fontSize: 10, color: c.textMuted)),
+                            ),
+                            onTap: () {
+                              ref
+                                  .read(dashboardWidgetsProvider.notifier)
+                                  .add(PlacedWidget(app.id, w.id));
+                              Navigator.of(ctx).pop();
+                            },
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Mini calendar ────────────────────────────────────────────────────────────
 
 /// Compact month calendar for the current month with today highlighted and a
@@ -918,7 +1353,7 @@ class _EventsPanel extends ConsumerWidget {
             child: Row(
               children: [
                 TextButton.icon(
-                  onPressed: () => context.go('/space?tab=calendar'),
+                  onPressed: () => context.go('/calendar'),
                   icon: const Icon(Icons.calendar_month_outlined, size: 14),
                   label: const Text('Open calendar'),
                 ),
@@ -1057,7 +1492,10 @@ class _SchedulesPanel extends ConsumerWidget {
             child: Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => context.go('/space?tab=schedules'),
+                onPressed: () {
+                  ref.read(pluginsSectionProvider.notifier).state = 'schedules';
+                  context.go('/plugins');
+                },
                 icon: const Icon(Icons.open_in_new, size: 14),
                 label: const Text('Manage schedules'),
               ),

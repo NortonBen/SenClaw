@@ -737,6 +737,40 @@ pub struct FormResponseData {
     pub submitted: bool,
 }
 
+/// A one-way rich widget the agent pushes into the chat box (display-only —
+/// no user response, unlike [`FormRequestData`]). See `WIDGET_CONTRACT.md`.
+///
+/// `data` is intentionally kept as an opaque [`serde_json::Value`]; the web
+/// (`WidgetCard.tsx`) and desktop (`widget_card.dart`) clients validate and
+/// render the kind-specific shape. The backend only checks that `kind` is one
+/// of the known kinds and that `data` is an object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WidgetSpec {
+    /// One of `chart | image | clock | weather`.
+    pub kind: String,
+    /// Optional card header shown above the widget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Kind-specific payload (opaque to the backend).
+    pub data: serde_json::Value,
+}
+
+/// Event: `chat:widget` — carrier for a one-way widget emit. Mirrors the
+/// one-way `tool:execution` push (no [`ResponseRegistry`], no suspend).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WidgetEmitData {
+    pub agent_id: String,
+    /// Target chat JID; `None` = the emitting agent's current chat (the
+    /// engine's instance id is used for routing in that case).
+    #[serde(rename = "chatJid", skip_serializing_if = "Option::is_none")]
+    pub chat_jid: Option<String>,
+    /// The widget to render.
+    pub widget: WidgetSpec,
+    /// Stable id (`widget-<uuid>`) so the live frame and the history replay
+    /// row can be deduped client-side.
+    pub id: String,
+}
+
 /// Event: `plan:exit:request`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanExitRequestData {

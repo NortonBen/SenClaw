@@ -9,6 +9,7 @@ import '../kanban/kanban_templates_panel.dart' show KanbanTemplatesPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
 import '../cognitive/cognitive_screen.dart' show CognitiveScreen;
 import '../workflow/workflow_panel.dart' show WorkflowPanel;
+import '../space/space_screen.dart' show SchedulesPanel;
 
 // ── Models ──────────────────────────────────────────────────────────────────
 class SkillInfo {
@@ -266,6 +267,7 @@ const _pluginsSections = [
   ('apps', 'Space Apps', Icons.apps_outlined),
   ('kanban', 'Kanban', Icons.view_kanban_outlined),
   ('cowork', 'Cowork', Icons.groups_outlined),
+  ('schedules', 'Schedules', Icons.schedule_outlined),
   ('workflow', 'Workflow', Icons.account_tree_outlined),
   ('memory', 'Knowledge', Icons.hub_outlined),
   ('marketplace', 'Marketplace', Icons.store_outlined),
@@ -339,6 +341,7 @@ class PluginsScreen extends ConsumerWidget {
             'apps' => const SpaceAppsSection(),
             'kanban' => const KanbanTemplatesPanel(),
             'cowork' => const CoworkPanel(),
+            'schedules' => const SchedulesPanel(),
             'workflow' => const WorkflowPanel(),
             'memory' => const CognitiveScreen(),
             'marketplace' => RefreshOnMount(

@@ -152,13 +152,42 @@ pub fn delete(base: &Path, name: &str) -> Result<bool> {
 }
 
 /// Insert/replace the index line for `slug`, keeping it newest-first.
+/// Also prunes any leftover `conversation-summary-*` entries that were
+/// written by older versions of the verbatim fallback — those are now
+/// FTS-only and should not appear in the curated index.
 fn update_index(base: &Path, slug: &str, title: &str, description: &str) -> Result<()> {
     let link = format!("memory/{slug}.md");
     let new_line = format!("- [{title}]({link}) — {description}");
     write_index(base, |bullets| {
-        bullets.retain(|b| !b.contains(&format!("]({link})")));
+        bullets.retain(|b| {
+            !b.contains(&format!("]({link})"))
+                && !b.contains("memory/conversation-summary-")
+        });
         bullets.insert(0, new_line.clone());
     })
+}
+
+/// Remove all `conversation-summary-*` entries from MEMORY.md. Called
+/// once at startup or when the first real curated memory is saved, so
+/// profiles polluted by the old verbatim fallback are cleaned up.
+pub fn purge_summary_index_entries(base: &Path) -> Result<usize> {
+    let index_path = base.join("MEMORY.md");
+    if !index_path.exists() {
+        return Ok(0);
+    }
+    let before = fs::read_to_string(&index_path).unwrap_or_default();
+    let count = before
+        .lines()
+        .filter(|l| l.contains("memory/conversation-summary-"))
+        .count();
+    if count == 0 {
+        return Ok(0);
+    }
+    write_index(base, |bullets| {
+        bullets.retain(|b| !b.contains("memory/conversation-summary-"));
+    })?;
+    tracing::info!("[curated] purged {count} conversation-summary entries from MEMORY.md");
+    Ok(count)
 }
 
 fn remove_from_index(base: &Path, slug: &str) -> Result<()> {
@@ -374,6 +403,55 @@ mod tests {
         let third = index.find("memory/third.md").unwrap();
         let first = index.find("memory/first.md").unwrap();
         assert!(third < first, "newest (third) must come before oldest (first)");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn purge_removes_summary_entries_keeps_curated() {
+        let base = tmp().join("purge");
+        let _ = fs::remove_dir_all(&base);
+
+        // Simulate old state: MEMORY.md has both curated and summary entries.
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("MEMORY.md"),
+            "# Memory\n\n\
+             - [Conversation summary 2026-07-11](memory/conversation-summary-2026-07-11.md) — Auto-saved\n\
+             - [real memory](memory/real-memory.md) — a real curated memory\n\
+             - [Conversation summary 2026-07-07](memory/conversation-summary-2026-07-07.md) — Auto-saved\n",
+        )
+        .unwrap();
+
+        let purged = purge_summary_index_entries(&base).unwrap();
+        assert_eq!(purged, 2);
+
+        let index = fs::read_to_string(base.join("MEMORY.md")).unwrap();
+        assert!(!index.contains("conversation-summary"));
+        assert!(index.contains("real-memory.md"));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_also_prunes_legacy_summary_entries() {
+        let base = tmp().join("save-prune");
+        let _ = fs::remove_dir_all(&base);
+
+        // Pre-populate with a summary entry (simulates old behavior).
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("MEMORY.md"),
+            "# Memory\n\n\
+             - [Conversation summary 2026-07-11](memory/conversation-summary-2026-07-11.md) — Auto-saved\n",
+        )
+        .unwrap();
+
+        // Save a real curated memory — should prune the summary entry.
+        save(&base, "real-thing", "hook", "body", "project", None, "g", "2026-07-13", false).unwrap();
+        let index = fs::read_to_string(base.join("MEMORY.md")).unwrap();
+        assert!(!index.contains("conversation-summary"), "summary entry should be pruned");
+        assert!(index.contains("real-thing.md"));
+
         let _ = fs::remove_dir_all(&base);
     }
 }

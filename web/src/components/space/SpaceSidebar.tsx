@@ -4,12 +4,13 @@ import {
   FileTextOutlined,
   CalendarOutlined,
   ClockCircleOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 import type { TodaySummary } from '../../hooks/useSpace';
 
 const { Text } = Typography;
 
-export type SpaceSection = 'notes' | 'calendar' | 'apps' | 'schedules';
+export type SpaceSection = 'dashboard' | 'notes' | 'calendar' | 'apps' | 'schedules';
 
 export interface SpaceSidebarApp {
   id: string;
@@ -36,6 +37,7 @@ export function SpaceSidebar({ activeSection, onSelect, todaySummary, apps = [] 
 
   // Static, built-in sections.
   const staticItems: NavItem[] = [
+    { key: 'dashboard', icon: <AppstoreOutlined />, label: 'Dashboard' },
     { key: 'notes', icon: <FileTextOutlined />, label: 'Ghi chú' },
     {
       key: 'calendar',

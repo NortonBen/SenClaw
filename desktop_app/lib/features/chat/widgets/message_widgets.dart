@@ -10,6 +10,7 @@ import '../../dock/dispatch_provider.dart';
 import '../audio_service.dart';
 import 'form_card.dart';
 import 'question_card.dart';
+import 'widget_card.dart';
 
 /// Dispatches a [ChatMessage] to the right bubble/card by kind.
 class MessageItem extends StatelessWidget {
@@ -44,6 +45,8 @@ class MessageItem extends StatelessWidget {
         return QuestionCard(message: message, onSubmit: onQuestion);
       case MessageKind.form:
         return FormCard(message: message, onSubmit: onForm);
+      case MessageKind.widget:
+        return WidgetCard(spec: message.widget ?? const {});
       case MessageKind.system:
         return _SystemNote(text: message.text ?? '');
       default:
@@ -129,11 +132,18 @@ class _TextBubble extends StatelessWidget {
               // Reasoning-only ("think") messages get no footer/time.
               Builder(builder: (_) {
                 final hasContent = parts.any((p) => !p.isThink);
+                final isAgent = message.kind == MessageKind.agent;
                 final showTokens =
                     message.tokens != null || message.streaming;
-                final showActions = message.kind == MessageKind.agent &&
-                    !message.streaming &&
-                    hasContent;
+                // Agent messages get the full row (copy · save · TTS); user-side
+                // messages (own input, incl. cross-channel "other") get copy only.
+                final showActions = !message.streaming &&
+                    hasContent &&
+                    (isAgent || userSide);
+                final contentText = parts
+                    .where((p) => !p.isThink)
+                    .map((p) => p.text)
+                    .join('\n\n');
                 final time = hasContent ? _fmtTime(message.ts) : '';
                 if (!showTokens && !showActions && time.isEmpty) {
                   return const SizedBox.shrink();
@@ -157,12 +167,15 @@ class _TextBubble extends StatelessWidget {
                           ),
                         ),
                       if (showActions)
-                        _AgentActions(
-                            text: parts
-                                .where((p) => !p.isThink)
-                                .map((p) => p.text)
-                                .join('\n\n')),
-                      if (!userSide) const Spacer(),
+                        _MessageActions(
+                          text: contentText,
+                          showSave: isAgent,
+                          showTts: isAgent,
+                        ),
+                      if (!userSide)
+                        const Spacer()
+                      else if (showActions && time.isNotEmpty)
+                        const SizedBox(width: AppTokens.s8),
                       if (time.isNotEmpty)
                         Text(time,
                             style:
@@ -199,16 +212,23 @@ String _fmtTime(String? s) {
   return '$dm $hm';
 }
 
-/// Hover/persistent action row under an agent message: copy + save-to-notes
-/// (mirrors the web MessageBubble actions).
-class _AgentActions extends ConsumerStatefulWidget {
-  const _AgentActions({required this.text});
+/// Persistent action row under a message: Copy is always available; save-to-
+/// notes and the Play/Stop TTS toggle are agent-only (a user's own input needs
+/// neither). Mirrors the web MessageBubble actions.
+class _MessageActions extends ConsumerStatefulWidget {
+  const _MessageActions({
+    required this.text,
+    this.showSave = true,
+    this.showTts = true,
+  });
   final String text;
+  final bool showSave;
+  final bool showTts;
   @override
-  ConsumerState<_AgentActions> createState() => _AgentActionsState();
+  ConsumerState<_MessageActions> createState() => _MessageActionsState();
 }
 
-class _AgentActionsState extends ConsumerState<_AgentActions> {
+class _MessageActionsState extends ConsumerState<_MessageActions> {
   String? _flash; // transient "Copied" / "Saved"
 
   void _flashMsg(String m) {
@@ -229,40 +249,44 @@ class _AgentActionsState extends ConsumerState<_AgentActions> {
             await Clipboard.setData(ClipboardData(text: widget.text));
             _flashMsg('Copied');
           }),
-          const SizedBox(width: AppTokens.s4),
-          _act(Icons.bookmark_add_outlined, 'Save note', () async {
-            try {
-              await ref
-                  .read(apiClientProvider)
-                  .post('/api/quicknotes', body: {'text': widget.text});
-              _flashMsg('Saved');
-            } catch (_) {
-              _flashMsg('Failed');
-            }
-          }),
-          const SizedBox(width: AppTokens.s4),
-          // Play ⇄ Stop toggle: while THIS message is synthesizing/playing the
-          // icon becomes a stop button; stopping also cancels a synthesis that
-          // has not started playing yet.
-          ValueListenableBuilder<String?>(
-            valueListenable: ref.read(audioServiceProvider).speaking,
-            builder: (_, speakingText, child) {
-              final active = speakingText == widget.text;
-              if (active) {
-                return _act(Icons.stop_circle_outlined, 'Stop', () {
-                  ref.read(audioServiceProvider).stop();
-                });
+          if (widget.showSave) ...[
+            const SizedBox(width: AppTokens.s4),
+            _act(Icons.bookmark_add_outlined, 'Save note', () async {
+              try {
+                await ref
+                    .read(apiClientProvider)
+                    .post('/api/quicknotes', body: {'text': widget.text});
+                _flashMsg('Saved');
+              } catch (_) {
+                _flashMsg('Failed');
               }
-              return _act(Icons.volume_up_outlined, 'Play (TTS)', () async {
-                try {
-                  _flashMsg('Speaking…');
-                  await ref.read(audioServiceProvider).speak(widget.text);
-                } catch (_) {
-                  _flashMsg('TTS failed');
+            }),
+          ],
+          if (widget.showTts) ...[
+            const SizedBox(width: AppTokens.s4),
+            // Play ⇄ Stop toggle: while THIS message is synthesizing/playing the
+            // icon becomes a stop button; stopping also cancels a synthesis that
+            // has not started playing yet.
+            ValueListenableBuilder<String?>(
+              valueListenable: ref.read(audioServiceProvider).speaking,
+              builder: (_, speakingText, child) {
+                final active = speakingText == widget.text;
+                if (active) {
+                  return _act(Icons.stop_circle_outlined, 'Stop', () {
+                    ref.read(audioServiceProvider).stop();
+                  });
                 }
-              });
-            },
-          ),
+                return _act(Icons.volume_up_outlined, 'Play (TTS)', () async {
+                  try {
+                    _flashMsg('Speaking…');
+                    await ref.read(audioServiceProvider).speak(widget.text);
+                  } catch (_) {
+                    _flashMsg('TTS failed');
+                  }
+                });
+              },
+            ),
+          ],
           if (_flash != null) ...[
             const SizedBox(width: AppTokens.s8),
             Text(_flash!,

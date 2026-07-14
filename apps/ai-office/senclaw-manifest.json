@@ -1,0 +1,93 @@
+{
+  "id": "ai-office",
+  "name": "AI Office",
+  "description": "Công ty một người vận hành bằng đội AI Agents. Giao nhiệm vụ cho Trưởng phòng — phòng làm việc ảo (Nghiên cứu, Nội dung, Phân tích, Kiểm định) sẽ phân công, bàn giao lẫn nhau và nộp lại Báo cáo tổng hợp, kèm mô phỏng văn phòng 3D isometric theo thời gian thực. Hỗ trợ chế độ DEMO (mô phỏng, không gọi API) và LIVE (agent xử lý thật qua LLM).",
+  "icon": "🏢",
+  "runtime": {
+    "kind": "server",
+    "start": "./ai-office",
+    "healthPath": "/api/status",
+    "port": 4420
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "ai-office-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Điều hành AI Office: giao nhiệm vụ cho văn phòng (office_create_task), xem tiến độ và nhật ký bàn giao (office_get_task, office_status), lấy báo cáo tổng hợp (office_get_report), quản lý nhân sự ảo (office_list_agents, office_update_agent) và thống kê chi phí LLM (office_stats).",
+    "autoRegister": true
+  },
+  "widgets": [
+    {
+      "id": "office-status",
+      "name": "AI Office — Trực ca",
+      "description": "Trạng thái phòng làm việc: agent đang trực, nhiệm vụ đang chạy và báo cáo gần nhất.",
+      "size": "medium",
+      "refreshMs": 5000,
+      "render": "client",
+      "entryUrl": "/widget/office-status.html"
+    }
+  ],
+  "skills": [
+    {
+      "name": "ai-office-run",
+      "path": "skills/ai-office-run",
+      "triggers": [
+        "giao việc cho văn phòng",
+        "giao nhiệm vụ cho ai office",
+        "cho phòng làm việc xử lý",
+        "văn phòng ai",
+        "công ty một người",
+        "run the ai office",
+        "assign a task to the office",
+        "one-person company"
+      ]
+    },
+    {
+      "name": "ai-office-status",
+      "path": "skills/ai-office-status",
+      "triggers": [
+        "văn phòng đang làm gì",
+        "tình hình phòng làm việc",
+        "báo cáo của văn phòng",
+        "xem báo cáo tổng hợp",
+        "office status",
+        "office report"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "office-manager",
+      "path": "personas/office-manager.md",
+      "description": "Trưởng phòng AI Office — nhận nhiệm vụ từ Sếp, phân công cho các agent chuyên môn, giám sát bàn giao và tổng hợp báo cáo cuối cùng."
+    },
+    {
+      "name": "office-research",
+      "path": "personas/office-research.md",
+      "description": "Nhân viên Nghiên cứu — thu thập & phân tích thông tin, phân tích đề bài và chuẩn bị đầu vào cho cả phòng."
+    },
+    {
+      "name": "office-content",
+      "path": "personas/office-content.md",
+      "description": "Nhân viên Nội dung — viết & biên tập, triển khai phần việc chính từ đầu vào của Nghiên cứu."
+    },
+    {
+      "name": "office-analysis",
+      "path": "personas/office-analysis.md",
+      "description": "Nhân viên Phân tích — số liệu, logic, đánh giá; rà soát và hoàn thiện kết quả."
+    },
+    {
+      "name": "office-qa",
+      "path": "personas/office-qa.md",
+      "description": "Nhân viên Kiểm định — giám sát chất lượng & rủi ro trước khi bàn giao cho Trưởng phòng."
+    }
+  ]
+}
