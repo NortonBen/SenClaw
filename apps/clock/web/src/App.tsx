@@ -151,10 +151,58 @@ function WorldClock() {
   )
 }
 
+/// Three short ascending beeps via the Web Audio API — an audible alert that
+/// works even when OS notifications are blocked (the timer was started by a
+/// user gesture, so the audio context is already unlocked).
+function beep() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const tone = (at: number, freq: number) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain); gain.connect(ctx.destination)
+      osc.type = 'sine'; osc.frequency.value = freq
+      const t0 = ctx.currentTime + at
+      gain.gain.setValueAtTime(0.0001, t0)
+      gain.gain.exponentialRampToValueAtTime(0.3, t0 + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35)
+      osc.start(t0); osc.stop(t0 + 0.36)
+    }
+    tone(0, 880); tone(0.42, 880); tone(0.84, 1174)
+    setTimeout(() => { try { ctx.close() } catch { /* noop */ } }, 1600)
+  } catch { /* audio unavailable */ }
+}
+
+/// Ask for OS-notification permission up front (must be triggered by a user
+/// gesture — we call it when the timer starts).
+async function ensureNotifyPermission() {
+  try {
+    if (typeof Notification === 'undefined') return
+    if (Notification.permission === 'default') await Notification.requestPermission()
+  } catch { /* ignore */ }
+}
+
+/// Fire an OS system notification (Web Notification API → native macOS/Win
+/// notification in browsers & WKWebView). Also posts to the SenClaw host as a
+/// best-effort fallback.
+function systemNotify(title: string, body: string) {
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      new Notification(title, { body, tag: 'clock-timer', requireInteraction: false })
+    }
+  } catch { /* ignore */ }
+  try {
+    window.parent?.postMessage({ type: 'senclaw:notify', title, body }, '*')
+  } catch { /* ignore */ }
+}
+
 function Timer() {
   const [totalSec, setTotalSec] = useState(300)
   const [remaining, setRemaining] = useState(300)
   const [running, setRunning] = useState(false)
+  const [done, setDone] = useState(false)
   const col = useThemeColors()
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -166,8 +214,15 @@ function Timer() {
   }, [running, remaining])
 
   useEffect(() => {
-    if (remaining === 0 && running) setRunning(false)
-  }, [remaining, running])
+    if (remaining === 0 && running) {
+      setRunning(false)
+      setDone(true)
+      // Fire the alert once, as the countdown reaches zero.
+      const label = totalSec >= 60 ? `${Math.round(totalSec / 60)} phút` : `${totalSec} giây`
+      systemNotify('⏰ Hết giờ!', `Bộ đếm ngược ${label} đã kết thúc.`)
+      beep()
+    }
+  }, [remaining, running, totalSec])
 
   const mm = Math.floor(remaining / 60)
   const ss = remaining % 60
@@ -187,15 +242,20 @@ function Timer() {
             style={{ transform: 'rotate(-90deg)', transformOrigin: 'center', transition: 'stroke-dashoffset 0.3s' }}
           />
         </svg>
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span style={{ fontSize: 36, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontSize: 36, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: done ? '#ef4444' : 'var(--text)' }}>
             {String(mm).padStart(2, '0')}:{String(ss).padStart(2, '0')}
           </span>
+          {done && (
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginTop: 2 }}>
+              Hết giờ!
+            </span>
+          )}
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
         {presets.map(p => (
-          <button key={p} onClick={() => { setTotalSec(p); setRemaining(p); setRunning(false) }}
+          <button key={p} onClick={() => { setTotalSec(p); setRemaining(p); setRunning(false); setDone(false) }}
             style={{
               padding: '6px 14px', borderRadius: 8, border: '1px solid var(--border)',
               background: totalSec === p ? 'var(--accent)' : 'var(--bg-card)',
@@ -206,13 +266,24 @@ function Timer() {
         ))}
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
-        <button onClick={() => setRunning(!running)} style={{
-          padding: '10px 28px', borderRadius: 10, border: 'none', fontSize: 15, fontWeight: 600,
-          background: running ? '#ef4444' : 'var(--accent)', color: '#fff', cursor: 'pointer',
-        }}>
+        <button
+          onClick={() => {
+            if (!running) {
+              // Starting: unlock OS-notification permission (user gesture) and
+              // restart from the top if the previous countdown had finished.
+              ensureNotifyPermission()
+              setDone(false)
+              if (remaining === 0) setRemaining(totalSec)
+            }
+            setRunning(!running)
+          }}
+          style={{
+            padding: '10px 28px', borderRadius: 10, border: 'none', fontSize: 15, fontWeight: 600,
+            background: running ? '#ef4444' : 'var(--accent)', color: '#fff', cursor: 'pointer',
+          }}>
           {running ? 'Dừng' : 'Bắt đầu'}
         </button>
-        <button onClick={() => { setRunning(false); setRemaining(totalSec) }} style={{
+        <button onClick={() => { setRunning(false); setRemaining(totalSec); setDone(false) }} style={{
           padding: '10px 28px', borderRadius: 10, border: '1px solid var(--border)',
           background: 'var(--bg-card)', color: 'var(--text)', cursor: 'pointer', fontSize: 15,
         }}>

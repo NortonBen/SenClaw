@@ -75,19 +75,41 @@ impl CognitiveRetriever {
     }
 
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
-        let hits = match query.query_type {
-            SearchType::Chunks => self.search_chunks(query).await?,
-            SearchType::Triplet => self.search_triplet(query).await?,
-            SearchType::GraphCompletion => self.search_graph_completion(query).await?,
-            SearchType::SpreadingActivation => self.search_spreading(query).await?,
-            SearchType::Fts => self.search_fts(query)?,
-            SearchType::Hybrid => self.search_hybrid(query).await?,
+        let hits = if query.node_sets.is_empty() {
+            self.dispatch(query).await?
+        } else {
+            // Scoped search (knowledge space): the seed indexes (vector/FTS)
+            // are global, so over-fetch candidates and keep only nodes that
+            // are members of any requested set.
+            let mut wide = query.clone();
+            wide.limit = query.limit.saturating_mul(8).clamp(query.limit, 400);
+            let raw = self.dispatch(&wide).await?;
+            let allowed = self
+                .embedder
+                .graph
+                .node_ids_in_sets(&query.node_sets)
+                .context("resolve node-set membership")?;
+            raw.into_iter()
+                .filter(|h| allowed.contains(&h.node.id))
+                .take(query.limit)
+                .collect()
         };
         if query.rerank {
             self.apply_rerank(query, hits).await
         } else {
             Ok(hits)
         }
+    }
+
+    async fn dispatch(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        Ok(match query.query_type {
+            SearchType::Chunks => self.search_chunks(query).await?,
+            SearchType::Triplet => self.search_triplet(query).await?,
+            SearchType::GraphCompletion => self.search_graph_completion(query).await?,
+            SearchType::SpreadingActivation => self.search_spreading(query).await?,
+            SearchType::Fts => self.search_fts(query)?,
+            SearchType::Hybrid => self.search_hybrid(query).await?,
+        })
     }
 
     /// Re-rank the candidate set using the configured [`GraphScorer`]. If

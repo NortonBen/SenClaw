@@ -152,6 +152,10 @@ pub struct UiState {
     pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
     pub space_mcp_launcher: Option<Arc<super::space_mcp::SpaceMcpLauncher>>,
     pub workflow_service: Option<Arc<crate::workflow::WorkflowService>>,
+    /// Headless agent runtime (tools + MCP + browser). Lets Space Apps run a
+    /// full tool-enabled agent via the `agent.run` bridge action.
+    pub virtual_worker_pool:
+        Option<Arc<crate::agent::virtual_worker_pool::VirtualWorkerPool>>,
     /// Live per-group agent state map (`jid → "processing"/"idle"/…`), shared
     /// with the WebSocket gateway's `last_known_states`. Backs
     /// `GET /api/chat/states` so relay clients can reconcile after a drop.
@@ -666,6 +670,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/cognitive/stats",
             get(super::cognitive::cognitive_stats),
+        )
+        .route(
+            "/api/cognitive/spaces",
+            get(super::cognitive::cognitive_spaces),
         )
         .route(
             "/api/cognitive/nodes",

@@ -3,12 +3,68 @@
 //! Both the `imap` and `lettre` SMTP clients are blocking, so these functions
 //! are synchronous and are expected to be called from `tokio::task::spawn_blocking`.
 
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
+
 use anyhow::{anyhow, Result};
 use imap::types::Flag;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 
 use crate::models::AccountSecret;
+
+/// Fail fast on a wrong/filtered host instead of blocking on the OS default
+/// (~75s) TCP connect timeout.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+/// Cap on individual socket reads/writes once connected.
+const IO_TIMEOUT: Duration = Duration::from_secs(45);
+
+type ImapSession = imap::Session<native_tls::TlsStream<TcpStream>>;
+
+/// Open an IMAP+TLS session and authenticate.
+///
+/// Mirrors `imap::connect` but uses `TcpStream::connect_timeout` so a misconfigured
+/// host (e.g. `imap.google.com` instead of `imap.gmail.com`) surfaces a clear error
+/// quickly rather than hanging the request. Shared by fetch and the verify path.
+fn imap_login(acct: &AccountSecret) -> Result<ImapSession> {
+    let host = acct.imap_host.trim();
+    let port = acct.imap_port as u16;
+
+    let addr = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| anyhow!("Không phân giải được IMAP host \"{host}\": {e}"))?
+        .next()
+        .ok_or_else(|| anyhow!("Không tìm thấy địa chỉ cho IMAP host \"{host}\""))?;
+
+    let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        .map_err(|e| anyhow!("Không kết nối được tới {host}:{port}: {e}"))?;
+    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+
+    let tls = native_tls::TlsConnector::builder().build()?;
+    let tls_stream = tls
+        .connect(host, stream)
+        .map_err(|e| anyhow!("Bắt tay TLS với {host} thất bại: {e}"))?;
+
+    let mut client = imap::Client::new(tls_stream);
+    client
+        .read_greeting()
+        .map_err(|e| anyhow!("Không nhận được greeting IMAP từ {host}: {e}"))?;
+
+    client
+        .login(&acct.username, &acct.plain_password())
+        .map_err(|(e, _)| anyhow!("Đăng nhập IMAP thất bại: {e}"))
+}
+
+/// Verify IMAP credentials by logging in and immediately logging out.
+///
+/// Used to reject broken accounts at save time and to power the "test connection"
+/// button, so users never persist an account that can't actually authenticate.
+pub fn verify_imap(acct: &AccountSecret) -> Result<()> {
+    let mut session = imap_login(acct)?;
+    let _ = session.logout();
+    Ok(())
+}
 
 /// A message fetched from IMAP and parsed into Space's cache shape.
 pub struct FetchedMsg {
@@ -24,13 +80,7 @@ pub struct FetchedMsg {
 
 /// Fetch the most recent `limit` messages from the account's INBOX over IMAP+TLS.
 pub fn fetch_imap(acct: &AccountSecret, limit: u32) -> Result<Vec<FetchedMsg>> {
-    let tls = native_tls::TlsConnector::builder().build()?;
-    let host = acct.imap_host.clone();
-    let client = imap::connect((host.as_str(), acct.imap_port as u16), host.as_str(), &tls)?;
-
-    let mut session = client
-        .login(&acct.username, &acct.plain_password())
-        .map_err(|(e, _)| anyhow!("IMAP login failed: {e}"))?;
+    let mut session = imap_login(acct)?;
 
     let mailbox = session.select("INBOX")?;
     let total = mailbox.exists;

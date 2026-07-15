@@ -1,9 +1,26 @@
+import { useEffect, useRef } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Avatar } from './avatar'
+import { SpeakButton } from './voice'
 import type { Agent, OfficeEvent } from './types'
 
 function hhmmss(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('vi-VN', { hour12: false })
+}
+
+/** Single newlines become hard breaks so plain-text messages (bullets,
+ *  handover notes) keep their line structure under markdown rendering. */
+function withBreaks(text: string): string {
+  return text.replace(/\n/g, '  \n')
+}
+
+export function Md({ children }: { children: string }) {
+  return (
+    <div className="report-md">
+      <Markdown remarkPlugins={[remarkGfm]}>{withBreaks(children)}</Markdown>
+    </div>
+  )
 }
 
 export function Feed({
@@ -15,6 +32,13 @@ export function Feed({
   agents: Agent[]
   dayLabel: string
 }) {
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = boxRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [events.length])
+
   const nameOf = (key: string): string => {
     if (key === 'sep') return 'SẾP'
     if (key === 'he-thong') return 'HỆ THỐNG'
@@ -23,7 +47,7 @@ export function Feed({
   }
 
   return (
-    <div className="feed">
+    <div className="feed" ref={boxRef}>
       <div className="feed-day">{dayLabel}</div>
       {events.map((e) => {
         switch (e.kind) {
@@ -32,20 +56,27 @@ export function Feed({
             return (
               <div key={e.id} className={`msg${fromBoss ? ' sep-msg' : ''}`}>
                 <div className="who">
-                  {nameOf(e.actor)} · {hhmmss(e.created_at)}
+                  {!fromBoss && <Avatar agentKey={e.actor} size={15} />} {nameOf(e.actor)} ·{' '}
+                  {hhmmss(e.created_at)} {fromBoss && <Avatar agentKey="sep" size={15} />}
                 </div>
-                <div className="box">{e.text}</div>
+                <div className="box">
+                  <Md>{e.text}</Md>
+                </div>
               </div>
             )
           }
           case 'report':
             return (
               <div key={e.id} className="msg report">
-                <div className="who">
-                  {nameOf(e.actor)} — BÁO CÁO · {hhmmss(e.created_at)}
+                <div className="who" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Avatar agentKey={e.actor} size={15} /> {nameOf(e.actor)} — BÁO CÁO ·{' '}
+                  {hhmmss(e.created_at)}
+                  <span style={{ marginLeft: 'auto' }}>
+                    <SpeakButton text={e.text} label="Đọc" />
+                  </span>
                 </div>
-                <div className="box report-md">
-                  <Markdown remarkPlugins={[remarkGfm]}>{e.text}</Markdown>
+                <div className="box">
+                  <Md>{e.text}</Md>
                 </div>
               </div>
             )
@@ -54,6 +85,24 @@ export function Feed({
             return (
               <div key={e.id} className="logline">
                 · {hhmmss(e.created_at)} — {nameOf(e.actor)} → {nameOf(e.target)}: {e.text}
+              </div>
+            )
+          case 'wiki':
+            return (
+              <div key={e.id} className="logline">
+                📚 {hhmmss(e.created_at)} — {nameOf(e.actor)}: {e.text}
+              </div>
+            )
+          case 'file':
+            return (
+              <div key={e.id} className="logline">
+                📁 {hhmmss(e.created_at)} — {nameOf(e.actor)}: {e.text}
+              </div>
+            )
+          case 'tool':
+            return (
+              <div key={e.id} className="logline" style={{ color: 'var(--working)' }}>
+                🔧 {hhmmss(e.created_at)} — {nameOf(e.actor)}: {e.text}
               </div>
             )
           case 'system':

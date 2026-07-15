@@ -60,6 +60,11 @@ export const api = {
   listAccounts: () => apiFetch<Account[]>('/api/accounts'),
   createAccount: (payload: AccountCreate) =>
     apiFetch<Account>('/api/accounts', { method: 'POST', body: JSON.stringify(payload) }),
+  testAccount: (payload: AccountCreate) =>
+    apiFetch<{ ok: boolean; imap_host: string; smtp_host: string }>('/api/accounts/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   deleteAccount: (id: string) =>
     apiFetch<{ success: boolean }>(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 

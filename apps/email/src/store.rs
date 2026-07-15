@@ -13,6 +13,77 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Correct well-known host typos so common muscle-memory values still work.
+/// Gmail's servers are `imap.gmail.com` / `smtp.gmail.com`, NOT `*.google.com`,
+/// which is a frequent reason accounts "won't log in".
+pub fn normalize_host(host: &str) -> String {
+    let h = host.trim().trim_end_matches('.').to_lowercase();
+    match h.as_str() {
+        "imap.google.com" | "imap.googlemail.com" => "imap.gmail.com".into(),
+        "smtp.google.com" | "smtp.googlemail.com" => "smtp.gmail.com".into(),
+        "pop.google.com" => "pop.gmail.com".into(),
+        _ => h,
+    }
+}
+
+/// Gmail app-passwords are 16 characters shown in four space-separated groups
+/// (e.g. `abcd efgh ijkl mnop`); the real secret has no spaces. Users routinely
+/// paste the spaced form, which fails auth — strip the spaces when the value
+/// unambiguously matches that shape, and leave every other password untouched.
+pub fn normalize_app_password(pw: &str) -> String {
+    let has_ws = pw.chars().any(|c| c.is_whitespace());
+    let compact: String = pw.chars().filter(|c| !c.is_whitespace()).collect();
+    if has_ws && compact.len() == 16 && compact.chars().all(|c| c.is_ascii_alphanumeric()) {
+        compact
+    } else {
+        pw.to_string()
+    }
+}
+
+/// Clean up an incoming create payload in place: trim text fields, fix host
+/// typos, and de-space Gmail app passwords.
+pub fn normalize_account(b: &mut AccountCreate) {
+    b.label = b.label.trim().to_string();
+    b.email = b.email.trim().to_string();
+    b.username = b.username.trim().to_string();
+    b.imap_host = normalize_host(&b.imap_host);
+    b.smtp_host = normalize_host(&b.smtp_host);
+    b.password = normalize_app_password(&b.password);
+}
+
+/// Field/port validation shared by create and the connection-test endpoint.
+pub fn validate_account(b: &AccountCreate) -> Result<()> {
+    if b.label.trim().is_empty()
+        || b.email.trim().is_empty()
+        || b.imap_host.trim().is_empty()
+        || b.smtp_host.trim().is_empty()
+        || b.username.trim().is_empty()
+        || b.password.is_empty()
+    {
+        return Err(anyhow!("Missing required email account fields"));
+    }
+    if !(1..=65_535).contains(&b.imap_port) || !(1..=65_535).contains(&b.smtp_port) {
+        return Err(anyhow!("Invalid email port"));
+    }
+    Ok(())
+}
+
+/// Build an in-memory secret (not persisted) so a payload can be verified
+/// against the live IMAP server before it is saved.
+pub fn secret_from_create(b: &AccountCreate) -> AccountSecret {
+    AccountSecret {
+        id: String::new(),
+        email: b.email.clone(),
+        imap_host: b.imap_host.clone(),
+        imap_port: b.imap_port,
+        smtp_host: b.smtp_host.clone(),
+        smtp_port: b.smtp_port,
+        username: b.username.clone(),
+        password: format!("plaintext:{}", b.password),
+        use_tls: b.use_tls,
+    }
+}
+
 pub fn list_accounts(db: &Db) -> Result<Vec<Account>> {
     db.with_conn(|conn| {
         let mut stmt = conn.prepare(
@@ -56,7 +127,7 @@ pub fn account_secret(db: &Db, account_id: Option<&str>) -> Result<AccountSecret
             })
         };
         let cols = "id, email, imap_host, imap_port, smtp_host, smtp_port, username, password, use_tls";
-        let acct = match account_id {
+        let mut acct = match account_id {
             Some(id) => conn.query_row(
                 &format!("SELECT {cols} FROM space_email_accounts WHERE id=?1"),
                 params![id],
@@ -69,23 +140,19 @@ pub fn account_secret(db: &Db, account_id: Option<&str>) -> Result<AccountSecret
             ),
         }
         .map_err(|e| anyhow!("No email account configured: {e}"))?;
+        // Auto-heal legacy rows saved with a typo'd host (e.g. imap.google.com)
+        // or a Gmail app-password that was stored with its display spaces.
+        acct.imap_host = normalize_host(&acct.imap_host);
+        acct.smtp_host = normalize_host(&acct.smtp_host);
+        if let Some(inner) = acct.password.strip_prefix("plaintext:") {
+            acct.password = format!("plaintext:{}", normalize_app_password(inner));
+        }
         Ok(acct)
     })
 }
 
 pub fn create_account(db: &Db, b: &AccountCreate) -> Result<Account> {
-    if b.label.trim().is_empty()
-        || b.email.trim().is_empty()
-        || b.imap_host.trim().is_empty()
-        || b.smtp_host.trim().is_empty()
-        || b.username.trim().is_empty()
-        || b.password.is_empty()
-    {
-        return Err(anyhow!("Missing required email account fields"));
-    }
-    if !(1..=65_535).contains(&b.imap_port) || !(1..=65_535).contains(&b.smtp_port) {
-        return Err(anyhow!("Invalid email port"));
-    }
+    validate_account(b)?;
 
     let id = Uuid::new_v4().to_string();
     let now = now_ms();
@@ -247,4 +314,51 @@ pub fn record_sent(
         Ok(())
     })?;
     Ok(msg_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_gmail_host_typos() {
+        assert_eq!(normalize_host("imap.google.com"), "imap.gmail.com");
+        assert_eq!(normalize_host("SMTP.Google.com "), "smtp.gmail.com");
+        assert_eq!(normalize_host("imap.googlemail.com"), "imap.gmail.com");
+        assert_eq!(normalize_host("smtp.gmail.com."), "smtp.gmail.com");
+        // Unknown hosts pass through (lower-cased + trimmed) unchanged.
+        assert_eq!(normalize_host(" mail.example.com "), "mail.example.com");
+    }
+
+    #[test]
+    fn strips_spaces_from_gmail_app_password() {
+        assert_eq!(normalize_app_password("abcd efgh ijkl mnop"), "abcdefghijklmnop");
+        // Not the 16-char app-password shape → left exactly as typed.
+        assert_eq!(normalize_app_password("my real pass"), "my real pass");
+        assert_eq!(normalize_app_password("secret-with-no-spaces"), "secret-with-no-spaces");
+        assert_eq!(normalize_app_password("abcdefghijklmnop"), "abcdefghijklmnop");
+    }
+
+    #[test]
+    fn normalize_account_cleans_all_fields() {
+        let mut b = AccountCreate {
+            label: "  Work  ".into(),
+            email: " me@gmail.com ".into(),
+            imap_host: "imap.google.com".into(),
+            imap_port: 993,
+            smtp_host: "smtp.google.com".into(),
+            smtp_port: 587,
+            username: " me@gmail.com ".into(),
+            password: "abcd efgh ijkl mnop".into(),
+            use_tls: true,
+        };
+        normalize_account(&mut b);
+        assert_eq!(b.label, "Work");
+        assert_eq!(b.email, "me@gmail.com");
+        assert_eq!(b.imap_host, "imap.gmail.com");
+        assert_eq!(b.smtp_host, "smtp.gmail.com");
+        assert_eq!(b.username, "me@gmail.com");
+        assert_eq!(b.password, "abcdefghijklmnop");
+        assert!(validate_account(&b).is_ok());
+    }
 }

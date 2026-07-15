@@ -47,6 +47,9 @@ struct AddParams {
     /// Optional node_set tags (free-form). Defaults to the active group scope.
     #[serde(default)]
     tags: Vec<String>,
+    /// Optional knowledge space id — isolates this memory into a named space.
+    #[serde(default)]
+    space: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -56,6 +59,9 @@ struct CognifyParams {
     source: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    /// Optional knowledge space id — isolates this memory into a named space.
+    #[serde(default)]
+    space: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -70,6 +76,9 @@ struct SearchParams {
     limit: Option<usize>,
     #[serde(default)]
     hops: Option<u8>,
+    /// Optional knowledge space id — restrict search to that space only.
+    #[serde(default)]
+    space: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -79,6 +88,9 @@ struct RecallParams {
     limit: Option<usize>,
     #[serde(default)]
     hops: Option<u8>,
+    /// Optional knowledge space id — restrict recall to that space only.
+    #[serde(default)]
+    space: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -144,7 +156,7 @@ impl McpCognitiveServer {
         match self.open_system() {
             Ok(sys) => {
                 CognitiveServer::new(sys, self.group_folder.clone())
-                    .cog_add(&p.text, p.source.as_deref(), &p.tags)
+                    .cog_add(&p.text, p.source.as_deref(), &p.tags, p.space.as_deref())
                     .await
                     .content
             }
@@ -164,7 +176,7 @@ impl McpCognitiveServer {
         match self.open_system() {
             Ok(sys) => {
                 CognitiveServer::new(sys, self.group_folder.clone())
-                    .cog_cognify(&p.text, p.source.as_deref(), &p.tags)
+                    .cog_cognify(&p.text, p.source.as_deref(), &p.tags, p.space.as_deref())
                     .await
                     .content
             }
@@ -184,7 +196,7 @@ impl McpCognitiveServer {
         match self.open_system() {
             Ok(sys) => {
                 CognitiveServer::new(sys, self.group_folder.clone())
-                    .cog_search(&p.query, p.mode.as_deref(), p.limit, p.hops)
+                    .cog_search(&p.query, p.mode.as_deref(), p.limit, p.hops, p.space.as_deref())
                     .await
                     .content
             }
@@ -204,7 +216,7 @@ impl McpCognitiveServer {
         match self.open_system() {
             Ok(sys) => {
                 CognitiveServer::new(sys, self.group_folder.clone())
-                    .cog_recall(&p.query, p.limit, p.hops)
+                    .cog_recall(&p.query, p.limit, p.hops, p.space.as_deref())
                     .await
                     .content
             }
@@ -290,16 +302,25 @@ impl CognitiveServer {
         Self { sys, group_folder }
     }
 
-    fn build_node_sets(&self, extra: &[String]) -> Vec<NodeSet> {
-        let mut sets = Vec::with_capacity(extra.len() + 1);
+    fn build_node_sets(&self, extra: &[String], space: Option<&str>) -> Vec<NodeSet> {
+        let mut sets = Vec::with_capacity(extra.len() + 2);
         sets.push(NodeSet::group(&self.group_folder, "default_memory"));
+        if let Some(space) = space.map(str::trim).filter(|s| !s.is_empty()) {
+            sets.push(NodeSet::space(space));
+        }
         for tag in extra {
             sets.push(NodeSet::group(&self.group_folder, tag));
         }
         sets
     }
 
-    pub async fn cog_add(&self, text: &str, source: Option<&str>, tags: &[String]) -> ToolResult {
+    pub async fn cog_add(
+        &self,
+        text: &str,
+        source: Option<&str>,
+        tags: &[String],
+        space: Option<&str>,
+    ) -> ToolResult {
         // `cog_add` is the agent's "remember this" entry point. Originally we
         // shipped a chunk-only fast path here so it'd work even without an
         // LLM, but that turned out to be the wrong default: callers expect
@@ -310,7 +331,7 @@ impl CognitiveServer {
         // existing graceful-degradation in `extract_triplets`) so we don't
         // regress the no-LLM case.
         let opts = CognifyOptions {
-            node_sets: self.build_node_sets(tags),
+            node_sets: self.build_node_sets(tags, space),
             ..Default::default()
         };
         match self
@@ -332,9 +353,10 @@ impl CognitiveServer {
         text: &str,
         source: Option<&str>,
         tags: &[String],
+        space: Option<&str>,
     ) -> ToolResult {
         let opts = CognifyOptions {
-            node_sets: self.build_node_sets(tags),
+            node_sets: self.build_node_sets(tags, space),
             ..Default::default()
         };
         match self.sys.cognify(text, source.unwrap_or("mcp"), &opts).await {
@@ -353,6 +375,7 @@ impl CognitiveServer {
         mode: Option<&str>,
         limit: Option<usize>,
         hops: Option<u8>,
+        space: Option<&str>,
     ) -> ToolResult {
         let q_type = match mode.unwrap_or("graph") {
             "chunks" => SearchType::Chunks,
@@ -366,6 +389,9 @@ impl CognitiveServer {
         q.query_type = q_type;
         q.hops = hops.unwrap_or(2);
         q.decay_per_hop = 0.6;
+        if let Some(space) = space.map(str::trim).filter(|s| !s.is_empty()) {
+            q.node_sets = vec![NodeSet::space(space)];
+        }
         match self.sys.search(&q).await {
             Ok(hits) => format_hits(&hits),
             Err(e) => ToolResult::err(format!("cog_search failed: {e}")),
@@ -377,8 +403,12 @@ impl CognitiveServer {
         query: &str,
         limit: Option<usize>,
         hops: Option<u8>,
+        space: Option<&str>,
     ) -> ToolResult {
-        let q = SearchQuery::spreading(query, limit.unwrap_or(8), hops.unwrap_or(2));
+        let mut q = SearchQuery::spreading(query, limit.unwrap_or(8), hops.unwrap_or(2));
+        if let Some(space) = space.map(str::trim).filter(|s| !s.is_empty()) {
+            q.node_sets = vec![NodeSet::space(space)];
+        }
         match self.sys.search(&q).await {
             Ok(hits) => format_hits(&hits),
             Err(e) => ToolResult::err(format!("cog_recall failed: {e}")),
@@ -481,11 +511,11 @@ mod tests {
     async fn cog_add_then_search() {
         let srv = build_server(vec![]);
         let r = srv
-            .cog_add("the compiler runs on the machine", None, &[])
+            .cog_add("the compiler runs on the machine", None, &[], None)
             .await;
         assert!(!r.is_error, "{}", r.content);
         let s = srv
-            .cog_search("compiler", Some("chunks"), Some(5), None)
+            .cog_search("compiler", Some("chunks"), Some(5), None, None)
             .await;
         assert!(!s.is_error);
         assert!(s.content.contains("compiler"), "got: {}", s.content);
@@ -494,8 +524,8 @@ mod tests {
     #[tokio::test]
     async fn cog_add_dedupes_on_repeat() {
         let srv = build_server(vec![]);
-        let r1 = srv.cog_add("identical payload", None, &[]).await;
-        let r2 = srv.cog_add("identical payload", None, &[]).await;
+        let r1 = srv.cog_add("identical payload", None, &[], None).await;
+        let r2 = srv.cog_add("identical payload", None, &[], None).await;
         assert!(
             r2.content.contains("deduped"),
             "second add should dedupe, got: {}",
@@ -511,12 +541,12 @@ mod tests {
                 .to_string();
         let srv = build_server(vec![canned]);
         let c = srv
-            .cog_cognify("Ada invented the compiler.", None, &[])
+            .cog_cognify("Ada invented the compiler.", None, &[], None)
             .await;
         assert!(!c.is_error, "{}", c.content);
         assert!(c.content.contains("entities_added"));
 
-        let r = srv.cog_recall("compiler", Some(5), Some(2)).await;
+        let r = srv.cog_recall("compiler", Some(5), Some(2), None).await;
         assert!(!r.is_error);
         assert!(r.content.contains("Found") || r.content.contains("No matching"));
     }

@@ -71,6 +71,14 @@ pub trait GraphStore: Send + Sync {
     fn tag_node(&self, node: Uuid, set: &NodeSet) -> Result<()>;
     fn nodes_in_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<DataPoint>>;
 
+    /// All node ids tagged into ANY of the given sets. Used to restrict
+    /// search results to a knowledge space (any-of semantics).
+    fn node_ids_in_sets(&self, sets: &[NodeSet]) -> Result<std::collections::HashSet<Uuid>>;
+
+    /// Registry of every node set with its member count — the "knowledge
+    /// spaces" listing for the UI/API.
+    fn list_node_sets(&self) -> Result<Vec<NodeSetInfo>>;
+
     /// Paginated node listing for the Web UI. `kind=None` returns all kinds.
     fn list_nodes(&self, kind: Option<&str>, limit: usize, offset: usize)
         -> Result<Vec<DataPoint>>;
@@ -250,6 +258,18 @@ pub struct InferenceReport {
 pub struct NodeWithDegree {
     pub node: DataPoint,
     pub degree: usize,
+}
+
+/// Row shape returned by [`GraphStore::list_node_sets`] — one knowledge
+/// space/scope with its member count.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NodeSetInfo {
+    #[serde(rename = "scopeKind")]
+    pub scope_kind: String,
+    #[serde(rename = "scopeId")]
+    pub scope_id: String,
+    pub tag: String,
+    pub nodes: usize,
 }
 
 /// Row shape returned by [`GraphStore::recent_decay_runs`].
@@ -1373,6 +1393,58 @@ impl GraphStore for SqliteGraphStore {
             Ok(rows)
         })
     }
+
+    fn node_ids_in_sets(&self, sets: &[NodeSet]) -> Result<std::collections::HashSet<Uuid>> {
+        let mut out = std::collections::HashSet::new();
+        if sets.is_empty() {
+            return Ok(out);
+        }
+        self.db.with_cog_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT t.node_id FROM cog_node_tags t
+                 JOIN cog_node_sets s ON s.id = t.node_set_id
+                 WHERE s.scope_kind = ?1 AND s.scope_id = ?2 AND s.tag = ?3",
+            )?;
+            for set in sets {
+                let ids = stmt
+                    .query_map(
+                        params![set.scope_kind.as_str(), set.scope_id, set.tag],
+                        |row| row.get::<_, Vec<u8>>(0),
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for blob in ids {
+                    if let Ok(u) = Uuid::from_slice(&blob) {
+                        out.insert(u);
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    fn list_node_sets(&self) -> Result<Vec<NodeSetInfo>> {
+        self.db.with_cog_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT s.scope_kind, s.scope_id, s.tag, COUNT(t.node_id) AS n
+                 FROM cog_node_sets s
+                 LEFT JOIN cog_node_tags t ON t.node_set_id = s.id
+                 GROUP BY s.id
+                 ORDER BY n DESC",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(NodeSetInfo {
+                        scope_kind: row.get(0)?,
+                        scope_id: row.get(1)?,
+                        tag: row.get(2)?,
+                        nodes: row.get::<_, i64>(3)? as usize,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1384,6 +1456,32 @@ mod tests {
     fn test_db() -> Arc<Db> {
         let cfg = Config::from_env();
         Arc::new(Db::open_in_memory(&cfg).expect("open in-memory db"))
+    }
+
+    #[test]
+    fn node_sets_isolate_spaces() {
+        let store = SqliteGraphStore::new(test_db());
+        let a = DataPoint::entity("Alpha", 100);
+        let b = DataPoint::entity("Beta", 100);
+        store.upsert_node(&a).unwrap();
+        store.upsert_node(&b).unwrap();
+        let space_a = NodeSet::space("ai-office:nghien-cuu");
+        let space_b = NodeSet::space("ai-office:noi-dung");
+        store.tag_node(a.id, &space_a).unwrap();
+        store.tag_node(b.id, &space_b).unwrap();
+
+        // Membership is per-space — no leakage between the two.
+        let ids_a = store.node_ids_in_sets(&[space_a.clone()]).unwrap();
+        assert!(ids_a.contains(&a.id) && !ids_a.contains(&b.id));
+        let ids_both = store.node_ids_in_sets(&[space_a, space_b.clone()]).unwrap();
+        assert_eq!(ids_both.len(), 2);
+        assert!(store.node_ids_in_sets(&[]).unwrap().is_empty());
+
+        // Registry lists both spaces with one member each.
+        let sets = store.list_node_sets().unwrap();
+        let get = |id: &str| sets.iter().find(|s| s.scope_id == id).unwrap().nodes;
+        assert_eq!(get("ai-office:nghien-cuu"), 1);
+        assert_eq!(get("ai-office:noi-dung"), 1);
     }
 
     #[test]

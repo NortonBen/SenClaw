@@ -39,7 +39,7 @@ impl AccountSecret {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AccountCreate {
     pub label: String,
     pub email: String,

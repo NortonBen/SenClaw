@@ -3,9 +3,62 @@ export interface Agent {
   name: string
   role: string
   duty: string
+  kind: 'manager' | 'worker' | 'qa' | string
+  enabled: boolean
+  auto_assign: boolean
+  skills: string[]
   status: 'idle' | 'working' | 'done' | 'handoff' | string
   status_note: string
   sort: number
+}
+
+export interface KnowledgeSummary {
+  space: string
+  count: number
+}
+
+export interface InventoryItem {
+  name: string
+  description: string
+}
+
+export interface SkillsInventory {
+  skills: InventoryItem[]
+  personas: InventoryItem[]
+}
+
+export interface OfficeFeatures {
+  memory: boolean
+  wiki: boolean
+  workspace: boolean
+  tools: boolean
+  autocontinue: boolean
+}
+
+export interface OfficeSettings {
+  workspaceDir: string
+  workspaceFiles: number
+  workspaceIsDefault: boolean
+  features: OfficeFeatures
+}
+
+export interface WorkspaceFile {
+  rel: string
+  size: number
+  modified: number
+  text: boolean
+}
+
+export interface WorkspaceListing {
+  dir: string
+  files: WorkspaceFile[]
+}
+
+export interface DirListing {
+  path: string
+  parent: string | null
+  home: string
+  dirs: string[]
 }
 
 export interface Task {
@@ -16,6 +69,8 @@ export interface Task {
   report: string
   llm_calls: number
   llm_model: string
+  tokens_in: number
+  tokens_out: number
   created_at: number
   finished_at: number | null
 }
@@ -45,5 +100,7 @@ export interface Stats {
   tasksDone: number
   tasksLive: number
   llmCalls: number
+  tokensIn: number
+  tokensOut: number
   lastModel: string
 }

@@ -84,6 +84,19 @@ impl TaskScheduler {
     /// We advance *before* execution so a slow handler can't cause re-pickup
     /// on the next tick.
     async fn dispatch(&self, task: ScheduledTask) {
+        // `once_delete`: remove the row up-front (same re-pickup guard as the
+        // advance below) and then run it. The run still records to
+        // `task_run_logs`, but the schedule itself is gone afterward.
+        if task.schedule_type == ScheduleType::OnceDelete {
+            if let Err(e) = self.db.delete_task(&task.id) {
+                tracing::error!(task_id = %task.id, error = %e, "[TaskScheduler] delete (once_delete) failed");
+                return;
+            }
+            tracing::info!(task_id = %task.id, "[TaskScheduler] once_delete task fired and removed");
+            self.executor.execute(task).await;
+            return;
+        }
+
         let next_run = compute_next_run(&task);
         let next_status = if task.schedule_type == ScheduleType::Once {
             TaskStatus::Completed
@@ -112,7 +125,8 @@ impl TaskScheduler {
 ///   normalize 5-field input by prefixing `0 ` (run at the top of the second).
 pub fn compute_next_run(task: &ScheduledTask) -> Option<String> {
     match task.schedule_type {
-        ScheduleType::Once => None,
+        // One-shot types never produce a subsequent run.
+        ScheduleType::Once | ScheduleType::OnceDelete => None,
         ScheduleType::Interval => {
             let ms: i64 = task.schedule_value.parse().ok()?;
             if ms <= 0 {
@@ -180,6 +194,11 @@ mod tests {
     #[test]
     fn next_run_for_once_is_none() {
         assert!(compute_next_run(&task(ScheduleType::Once, "ignored", None)).is_none());
+    }
+
+    #[test]
+    fn next_run_for_once_delete_is_none() {
+        assert!(compute_next_run(&task(ScheduleType::OnceDelete, "ignored", None)).is_none());
     }
 
     #[test]
@@ -294,5 +313,29 @@ mod tests {
         let after = db.list_all_tasks().unwrap();
         assert_eq!(after[0].status, TaskStatus::Completed);
         assert!(after[0].next_run.is_none());
+    }
+
+    #[tokio::test]
+    async fn once_delete_task_removed_after_dispatch() {
+        let cfg = crate::config::Config::from_env();
+        let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
+        let mut t = task(
+            ScheduleType::OnceDelete,
+            "ignored",
+            Some("2020-01-01T00:00:00Z"),
+        );
+        t.id = "one-shot".into();
+        db.insert_task(&t).unwrap();
+
+        let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+        TaskScheduler::new(db.clone(), recorder.clone(), 60)
+            .tick()
+            .await
+            .unwrap();
+
+        // It ran exactly once...
+        assert_eq!(recorder.0.lock().unwrap().clone(), vec!["one-shot"]);
+        // ...and the row is gone entirely (not just marked completed).
+        assert!(db.list_all_tasks().unwrap().is_empty());
     }
 }

@@ -99,7 +99,6 @@ name = "ai-office"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "app-space-sdk",
  "async-stream",
  "axum",
  "dotenvy",
@@ -1320,10 +1319,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "app-space-sdk",
+ "async-stream",
  "axum",
  "chrono",
  "chrono-tz",
  "dotenvy",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
@@ -4658,6 +4659,25 @@ dependencies = [
  "bindgen 0.72.1",
  "cc",
  "cmake",
+]
+
+[[package]]
+name = "moltbook"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app-space-sdk",
+ "async-stream",
+ "axum",
+ "dotenvy",
+ "futures-util",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower-http 0.5.2",
 ]
 
 [[package]]

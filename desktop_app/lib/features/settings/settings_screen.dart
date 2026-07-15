@@ -3626,12 +3626,24 @@ class SpaceAppsSection extends ConsumerWidget {
                             ),
                             TextButton(
                               onPressed: () async {
-                                await ref.read(apiClientProvider).post(
-                                    '/api/space/apps/${a.id}/restart');
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text('Restarting…')));
+                                final messenger =
+                                    ScaffoldMessenger.of(context);
+                                messenger.showSnackBar(const SnackBar(
+                                  content: Text('Đang khởi động lại…'),
+                                  duration: Duration(seconds: 40),
+                                ));
+                                try {
+                                  await ref.read(apiClientProvider).post(
+                                      '/api/space/apps/${a.id}/restart');
+                                  messenger.hideCurrentSnackBar();
+                                  messenger.showSnackBar(const SnackBar(
+                                      content: Text('Đã khởi động lại')));
+                                  ref.invalidate(spaceAppsProvider);
+                                } catch (e) {
+                                  messenger.hideCurrentSnackBar();
+                                  messenger.showSnackBar(SnackBar(
+                                      content: Text(
+                                          'Khởi động lại thất bại: $e')));
                                 }
                               },
                               child: const Text('Restart'),
@@ -3787,12 +3799,23 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                 children: [
                   FilledButton.icon(
                     onPressed: () async {
-                      await ref
-                          .read(apiClientProvider)
-                          .post('/api/space/apps/${app.id}/restart');
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Restarting…')));
+                      final messenger = ScaffoldMessenger.of(context);
+                      messenger.showSnackBar(const SnackBar(
+                        content: Text('Đang khởi động lại…'),
+                        duration: Duration(seconds: 40),
+                      ));
+                      try {
+                        await ref
+                            .read(apiClientProvider)
+                            .post('/api/space/apps/${app.id}/restart');
+                        messenger.hideCurrentSnackBar();
+                        messenger.showSnackBar(const SnackBar(
+                            content: Text('Đã khởi động lại')));
+                        ref.invalidate(spaceAppsProvider);
+                      } catch (e) {
+                        messenger.hideCurrentSnackBar();
+                        messenger.showSnackBar(SnackBar(
+                            content: Text('Khởi động lại thất bại: $e')));
                       }
                     },
                     icon: const Icon(Icons.restart_alt, size: 16),

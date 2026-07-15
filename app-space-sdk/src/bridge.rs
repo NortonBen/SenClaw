@@ -90,6 +90,89 @@ impl SpaceClient {
         }
     }
 
+    async fn bridge_action(&self, action: &str, payload: Value) -> Result<Value> {
+        let url = format!("{}/api/space/apps/{}/bridge", self.base_url, self.app_id);
+        let v: Value = self
+            .http
+            .post(&url)
+            .json(&json!({ "action": action, "payload": payload }))
+            .timeout(Duration::from_secs(125))
+            .send()
+            .await
+            .map_err(|e| anyhow!("bridge {action} failed ({url}): {e}"))?
+            .json()
+            .await
+            .map_err(|e| anyhow!("invalid bridge response: {e}"))?;
+        match v.get("status").and_then(|x| x.as_str()) {
+            Some("ok") => Ok(v),
+            _ => Err(anyhow!(v
+                .get("message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown bridge error")
+                .to_string())),
+        }
+    }
+
+    /// Save a memory into a knowledge space. `space = None` uses the app's
+    /// own private space (named after the app id). Each space is an
+    /// independent memory partition — recall/search scoped to one space
+    /// never sees another space's items.
+    pub async fn knowledge_save(
+        &self,
+        text: &str,
+        space: Option<&str>,
+        source: Option<&str>,
+    ) -> Result<()> {
+        self.bridge_action(
+            "knowledge.save",
+            json!({ "text": text, "space": space, "source": source }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Scoped search over one knowledge space. Returns raw hits as
+    /// `(name, summary, score)`.
+    pub async fn knowledge_search(
+        &self,
+        query: &str,
+        space: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<(String, String, f64)>> {
+        let v = self
+            .bridge_action(
+                "knowledge.search",
+                json!({ "query": query, "space": space, "limit": limit }),
+            )
+            .await?;
+        Ok(v.get("hits")
+            .and_then(|h| h.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|h| {
+                        (
+                            h.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            h.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            h.get("score").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Scoped recall with LLM synthesis: returns the synthesized answer
+    /// (empty when the space holds nothing relevant).
+    pub async fn knowledge_recall(&self, query: &str, space: Option<&str>) -> Result<String> {
+        let v = self
+            .bridge_action(
+                "knowledge.recall",
+                json!({ "query": query, "space": space }),
+            )
+            .await?;
+        Ok(v.get("answer").and_then(|x| x.as_str()).unwrap_or("").to_string())
+    }
+
     /// List the daemon's configured LLMs (id + display name + provider).
     /// The active model's id is returned separately.
     pub async fn list_models(&self) -> Result<(Option<String>, Vec<ModelInfo>)> {

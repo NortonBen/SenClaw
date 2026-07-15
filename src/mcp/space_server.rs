@@ -231,7 +231,13 @@ struct RecurringCreateParams {
     label: Option<String>,
     /// Giờ chạy theo giờ máy ("HH:MM", 24h). Bắt buộc khi không dùng cron_advanced.
     time_local: Option<String>,
-    /// "daily" | "weekdays" | "weekly" | "monthly". Mặc định "daily".
+    /// Ngày chạy ("YYYY-MM-DD", giờ máy) — chỉ dùng cho once/once_delete để hẹn
+    /// một ngày cụ thể (vd 3 ngày sau, 1 tuần sau). Bỏ trống thì lấy lần kế tiếp
+    /// của time_local (hôm nay hoặc mai).
+    date_local: Option<String>,
+    /// "daily" | "weekdays" | "weekly" | "monthly" | "once" (chạy 1 lần rồi
+    /// đánh dấu completed) | "once_delete" (chạy 1 lần rồi xoá luôn). Với
+    /// once/once_delete, dùng date_local + time_local để hẹn mốc chạy. Mặc định "daily".
     frequency: Option<String>,
     /// 0=Chủ nhật .. 6=Thứ Bảy, dùng khi frequency = "weekly".
     weekday: Option<u32>,
@@ -257,6 +263,8 @@ struct RecurringUpdateParams {
     /// "active" | "paused" | "completed"
     status: Option<String>,
     time_local: Option<String>,
+    /// Ngày chạy ("YYYY-MM-DD") cho once/once_delete.
+    date_local: Option<String>,
     frequency: Option<String>,
     weekday: Option<u32>,
     day_of_month: Option<u32>,
@@ -700,7 +708,8 @@ impl McpSpaceServer {
     #[rmcp::tool(
         description = "Tạo lịch định kỳ tự động cho agent. \
 Mỗi lịch sẽ tự tạo một chat session riêng và mỗi lần đến giờ agent sẽ chạy prompt trong chat đó. \
-Dùng `time_local` (HH:MM, giờ máy) + `frequency` (daily/weekdays/weekly/monthly), hoặc `cron_advanced` (5 trường). \
+Dùng `time_local` (HH:MM, giờ máy) + `frequency` (daily/weekdays/weekly/monthly/once/once_delete), hoặc `cron_advanced` (5 trường). \
+once = chạy 1 lần rồi giữ lại (completed); once_delete = chạy 1 lần rồi tự xoá lịch. \
 VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'."
     )]
     async fn space_recurring_create(
@@ -714,6 +723,7 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
                 p.prompt,
                 p.label,
                 p.time_local,
+                p.date_local,
                 p.frequency,
                 p.weekday,
                 p.day_of_month,
@@ -761,6 +771,7 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
                 p.label,
                 p.status,
                 p.time_local,
+                p.date_local,
                 p.frequency,
                 p.weekday,
                 p.day_of_month,
@@ -1366,11 +1377,13 @@ impl SpaceServer {
     // `schedule:<id>`, folder `schedule_<id>`). Agent output streams into that
     // chat session. Used by the Space UI and the `space_recurring_*` MCP tools.
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn recurring_create(
         &self,
         prompt: String,
         label: Option<String>,
         time_local: Option<String>,
+        date_local: Option<String>,
         frequency: Option<String>,
         weekday: Option<u32>,
         day_of_month: Option<u32>,
@@ -1382,15 +1395,23 @@ impl SpaceServer {
         if prompt.trim().is_empty() {
             return ToolResult::err("prompt is required".into());
         }
-        let cron = match build_schedule_cron(
+        let spec = match build_schedule_spec(
             cron_advanced.as_deref(),
             time_local.as_deref(),
+            date_local.as_deref(),
             frequency.as_deref(),
             weekday,
             day_of_month,
         ) {
-            Ok(c) => c,
+            Ok(s) => s,
             Err(e) => return ToolResult::err(e),
+        };
+        let (sched_type, sched_value) = match &spec {
+            ScheduleSpec::Cron(c) => ("cron", c.clone()),
+            ScheduleSpec::Once { at, delete_after } => (
+                if *delete_after { "once_delete" } else { "once" },
+                at.clone(),
+            ),
         };
         let id = Uuid::new_v4().to_string();
         let chat_jid = format!("{SCHEDULE_JID_PREFIX}{id}");
@@ -1435,8 +1456,8 @@ impl SpaceServer {
                 &group_folder,
                 &chat_jid,
                 &prompt,
-                "cron",
-                &cron,
+                sched_type,
+                &sched_value,
                 Some("group"),
                 None,
             )
@@ -1569,6 +1590,7 @@ impl SpaceServer {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn recurring_update(
         &self,
         id: &str,
@@ -1576,6 +1598,7 @@ impl SpaceServer {
         label: Option<String>,
         status: Option<String>,
         time_local: Option<String>,
+        date_local: Option<String>,
         frequency: Option<String>,
         weekday: Option<u32>,
         day_of_month: Option<u32>,
@@ -1603,18 +1626,20 @@ impl SpaceServer {
 
         let touches_schedule = cron_advanced.is_some()
             || time_local.is_some()
+            || date_local.is_some()
             || frequency.is_some()
             || weekday.is_some()
             || day_of_month.is_some();
-        let new_cron = if touches_schedule {
-            match build_schedule_cron(
+        let new_spec = if touches_schedule {
+            match build_schedule_spec(
                 cron_advanced.as_deref(),
                 time_local.as_deref(),
+                date_local.as_deref(),
                 frequency.as_deref(),
                 weekday,
                 day_of_month,
             ) {
-                Ok(c) => Some(c),
+                Ok(s) => Some(s),
                 Err(e) => return ToolResult::err(e),
             }
         } else {
@@ -1637,19 +1662,38 @@ impl SpaceServer {
             }
         }
 
-        if let Some(cron) = &new_cron {
-            let mut tmp = task.clone();
-            tmp.schedule_value = cron.clone();
-            tmp.next_run = None;
-            let next = crate::scheduler::task_scheduler::compute_next_run(&tmp);
+        if let Some(spec) = &new_spec {
+            use crate::types::ScheduleType;
+            let (sched_type, sched_value, next_run): (ScheduleType, String, Option<String>) =
+                match spec {
+                    ScheduleSpec::Cron(c) => {
+                        let mut tmp = task.clone();
+                        tmp.schedule_type = ScheduleType::Cron;
+                        tmp.schedule_value = c.clone();
+                        tmp.next_run = None;
+                        let next = crate::scheduler::task_scheduler::compute_next_run(&tmp);
+                        (ScheduleType::Cron, c.clone(), next)
+                    }
+                    // One-shot fires exactly at `at`; the scheduler's
+                    // compute_next_run returns None for one-shot types, so set
+                    // next_run to the target instant directly.
+                    ScheduleSpec::Once { at, delete_after } => {
+                        let st = if *delete_after {
+                            ScheduleType::OnceDelete
+                        } else {
+                            ScheduleType::Once
+                        };
+                        (st, at.clone(), Some(at.clone()))
+                    }
+                };
             if let Err(e) = self.db.with_conn(|c| {
                 c.execute(
-                    "UPDATE scheduled_tasks SET schedule_value=?1, next_run=?2 WHERE id=?3",
-                    rusqlite::params![cron, next, id],
+                    "UPDATE scheduled_tasks SET schedule_type=?1, schedule_value=?2, next_run=?3 WHERE id=?4",
+                    rusqlite::params![sched_type.as_str(), sched_value, next_run, id],
                 )?;
                 Ok(())
             }) {
-                return ToolResult::err(format!("update cron: {e}"));
+                return ToolResult::err(format!("update schedule: {e}"));
             }
         }
 
@@ -1771,6 +1815,97 @@ impl SpaceServer {
 
 pub(crate) const SCHEDULE_FOLDER_PREFIX: &str = "schedule_";
 pub(crate) const SCHEDULE_JID_PREFIX: &str = "schedule:";
+
+/// Interpretation of the schedule form fields: either a recurring cron
+/// expression or a one-shot instant.
+pub(crate) enum ScheduleSpec {
+    /// Recurring — `schedule_value` is a 5-field cron expression.
+    Cron(String),
+    /// One-shot — `schedule_value` is an RFC3339 instant. `delete_after` picks
+    /// `once_delete` (row removed after firing) over `once` (kept, completed).
+    Once { at: String, delete_after: bool },
+}
+
+/// Interpret the schedule form fields. A `frequency` of `once` / `once_delete`
+/// resolves to a single instant: `date_local` ("YYYY-MM-DD") + `time_local`
+/// when a date is given, otherwise the next occurrence of `time_local` (today
+/// if still ahead, else tomorrow). Every other frequency delegates to
+/// [`build_schedule_cron`]. An explicit `cron_advanced` always wins.
+pub(crate) fn build_schedule_spec(
+    advanced: Option<&str>,
+    time_local: Option<&str>,
+    date_local: Option<&str>,
+    frequency: Option<&str>,
+    weekday: Option<u32>,
+    day_of_month: Option<u32>,
+) -> std::result::Result<ScheduleSpec, String> {
+    let has_advanced = advanced.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let freq = frequency.unwrap_or("daily");
+    if !has_advanced && (freq == "once" || freq == "once_delete") {
+        let time = time_local.unwrap_or("").trim();
+        let (h, m) =
+            parse_hhmm(time).ok_or_else(|| "time_local must be HH:MM (24h)".to_owned())?;
+        let at = resolve_once_instant(date_local, h, m)?;
+        return Ok(ScheduleSpec::Once {
+            at,
+            delete_after: freq == "once_delete",
+        });
+    }
+    build_schedule_cron(advanced, time_local, frequency, weekday, day_of_month)
+        .map(ScheduleSpec::Cron)
+}
+
+/// Combine a local date + time into an RFC3339 UTC instant. With no date, falls
+/// back to the next occurrence of the time-of-day (today or tomorrow).
+fn resolve_once_instant(
+    date_local: Option<&str>,
+    h: u32,
+    m: u32,
+) -> std::result::Result<String, String> {
+    use chrono::NaiveDate;
+    match date_local.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(d) => {
+            let date = NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .map_err(|_| "date_local must be YYYY-MM-DD".to_owned())?;
+            local_naive_to_utc_rfc3339(date, h, m)
+                .ok_or_else(|| "could not resolve one-shot date/time".to_owned())
+        }
+        None => next_local_occurrence(h, m)
+            .ok_or_else(|| "could not resolve one-shot time".to_owned()),
+    }
+}
+
+/// Attach a local time to a `NaiveDate` and convert to a UTC RFC3339 string,
+/// tolerating DST gaps/overlaps.
+fn local_naive_to_utc_rfc3339(date: chrono::NaiveDate, h: u32, m: u32) -> Option<String> {
+    use chrono::{Duration, Local, LocalResult, TimeZone};
+    let naive = date.and_hms_opt(h, m, 0)?;
+    let dt = match Local.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => dt,
+        LocalResult::Ambiguous(dt, _) => dt,
+        // Skipped by a DST forward jump — nudge past the gap.
+        LocalResult::None => Local.from_local_datetime(&(naive + Duration::hours(1))).single()?,
+    };
+    Some(dt.with_timezone(&Utc).to_rfc3339())
+}
+
+/// Resolve an "HH:MM" local wall-clock time to the next RFC3339 UTC instant at
+/// or after now — today if the time is still ahead, otherwise tomorrow.
+fn next_local_occurrence(h: u32, m: u32) -> Option<String> {
+    use chrono::{Duration, Local, LocalResult, TimeZone};
+    let now = Local::now();
+    let naive = now.date_naive().and_hms_opt(h, m, 0)?;
+    let mut candidate = match Local.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => dt,
+        LocalResult::Ambiguous(dt, _) => dt,
+        // Skipped by a DST forward jump — nudge past the gap.
+        LocalResult::None => Local.from_local_datetime(&(naive + Duration::hours(1))).single()?,
+    };
+    if candidate <= now {
+        candidate += Duration::days(1);
+    }
+    Some(candidate.with_timezone(&Utc).to_rfc3339())
+}
 
 pub(crate) fn build_schedule_cron(
     advanced: Option<&str>,
@@ -1929,5 +2064,107 @@ mod local_time_tests {
     fn rejects_garbage() {
         assert_eq!(parse_local_datetime_ms("tomorrow 10pm"), None);
         assert_eq!(parse_local_datetime_ms(""), None);
+    }
+}
+
+#[cfg(test)]
+mod schedule_spec_tests {
+    use super::{build_schedule_spec, ScheduleSpec};
+    use chrono::{DateTime, Datelike, Local, Timelike, Utc};
+
+    #[test]
+    fn recurring_frequency_builds_cron() {
+        match build_schedule_spec(None, Some("09:00"), None, Some("daily"), None, None).unwrap() {
+            ScheduleSpec::Cron(c) => assert_eq!(c, "0 9 * * *"),
+            _ => panic!("daily should be a cron spec"),
+        }
+    }
+
+    #[test]
+    fn once_resolves_to_future_instant_without_delete() {
+        let spec =
+            build_schedule_spec(None, Some("16:00"), None, Some("once"), None, None).unwrap();
+        match spec {
+            ScheduleSpec::Once { at, delete_after } => {
+                assert!(!delete_after, "plain 'once' must keep the row");
+                let parsed = DateTime::parse_from_rfc3339(&at).unwrap();
+                assert!(parsed > Utc::now(), "one-shot instant must be in the future");
+            }
+            _ => panic!("'once' should be a one-shot spec"),
+        }
+    }
+
+    #[test]
+    fn once_delete_sets_delete_after() {
+        let spec = build_schedule_spec(None, Some("16:00"), None, Some("once_delete"), None, None)
+            .unwrap();
+        match spec {
+            ScheduleSpec::Once { delete_after, .. } => assert!(delete_after),
+            _ => panic!("'once_delete' should be a one-shot spec"),
+        }
+    }
+
+    #[test]
+    fn once_with_explicit_date_targets_that_day() {
+        // A specific future date (e.g. a week out) is honoured verbatim.
+        let spec = build_schedule_spec(
+            None,
+            Some("08:30"),
+            Some("2030-01-07"),
+            Some("once"),
+            None,
+            None,
+        )
+        .unwrap();
+        match spec {
+            ScheduleSpec::Once { at, .. } => {
+                let local = DateTime::parse_from_rfc3339(&at)
+                    .unwrap()
+                    .with_timezone(&Local);
+                assert_eq!(local.year(), 2030);
+                assert_eq!(local.month(), 1);
+                assert_eq!(local.day(), 7);
+                assert_eq!(local.hour(), 8);
+                assert_eq!(local.minute(), 30);
+            }
+            _ => panic!("'once' with a date should be a one-shot spec"),
+        }
+    }
+
+    #[test]
+    fn once_rejects_bad_date() {
+        assert!(build_schedule_spec(
+            None,
+            Some("08:30"),
+            Some("07/01/2030"),
+            Some("once"),
+            None,
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn once_requires_valid_time() {
+        assert!(build_schedule_spec(None, Some("nope"), None, Some("once"), None, None).is_err());
+        assert!(build_schedule_spec(None, None, None, Some("once"), None, None).is_err());
+    }
+
+    #[test]
+    fn advanced_cron_wins_over_once_frequency() {
+        // An explicit cron expression takes precedence even if frequency=once.
+        match build_schedule_spec(
+            Some("*/5 * * * *"),
+            Some("16:00"),
+            Some("2030-01-07"),
+            Some("once"),
+            None,
+            None,
+        )
+        .unwrap()
+        {
+            ScheduleSpec::Cron(c) => assert_eq!(c, "*/5 * * * *"),
+            _ => panic!("advanced cron should win"),
+        }
     }
 }

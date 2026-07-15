@@ -1,4 +1,5 @@
 mod api;
+mod mcp;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;
@@ -8,8 +9,9 @@ use tower_http::services::{ServeDir, ServeFile};
 async fn main() {
     dotenvy::dotenv().ok();
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "4380".to_string());
-    let api_router = api::api_router();
+    let port = std::env::var("PORT").unwrap_or_else(|_| "4381".to_string());
+    let state = api::make_state();
+    let api_router = api::api_router(state);
 
     let exe_dir = std::env::current_exe()
         .map(|p| p.parent().unwrap().to_path_buf())

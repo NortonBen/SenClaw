@@ -228,6 +228,11 @@ pub enum ScheduleType {
     Cron,
     Interval,
     Once,
+    /// Fire exactly once (like [`Once`]) and then delete the task row entirely,
+    /// instead of leaving it behind with `status = completed`. `schedule_value`
+    /// is an ISO-8601 timestamp, same as `Once`.
+    #[serde(rename = "once_delete")]
+    OnceDelete,
 }
 
 impl ScheduleType {
@@ -236,14 +241,23 @@ impl ScheduleType {
             Self::Cron => "cron",
             Self::Interval => "interval",
             Self::Once => "once",
+            Self::OnceDelete => "once_delete",
         }
     }
     pub fn parse(raw: &str) -> Self {
         match raw {
             "interval" => Self::Interval,
             "once" => Self::Once,
+            // Accept a couple of spellings so callers don't have to guess.
+            "once_delete" | "once-delete" | "oncedelete" => Self::OnceDelete,
             _ => Self::Cron,
         }
+    }
+
+    /// True for one-shot schedule types (`once` and `once_delete`) that never
+    /// produce a subsequent `next_run`.
+    pub fn is_one_shot(self) -> bool {
+        matches!(self, Self::Once | Self::OnceDelete)
     }
 }
 

@@ -8,6 +8,16 @@ import { api, type Account, type AccountCreate } from '../api';
 
 const { Title, Text, Paragraph } = Typography;
 
+/** IMAP/SMTP presets keyed by email domain, used to auto-fill the host fields. */
+const PROVIDERS: Record<string, { imap: string; smtp: string }> = {
+  'gmail.com': { imap: 'imap.gmail.com', smtp: 'smtp.gmail.com' },
+  'googlemail.com': { imap: 'imap.gmail.com', smtp: 'smtp.gmail.com' },
+  'outlook.com': { imap: 'outlook.office365.com', smtp: 'smtp.office365.com' },
+  'hotmail.com': { imap: 'outlook.office365.com', smtp: 'smtp.office365.com' },
+  'yahoo.com': { imap: 'imap.mail.yahoo.com', smtp: 'smtp.mail.yahoo.com' },
+  'icloud.com': { imap: 'imap.mail.me.com', smtp: 'smtp.mail.me.com' },
+};
+
 export function AccountsView() {
   const { token } = theme.useToken();
   const { message } = App.useApp();
@@ -15,6 +25,7 @@ export function AccountsView() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
   const loadAccounts = async () => {
@@ -37,7 +48,7 @@ export function AccountsView() {
     setSaving(true);
     try {
       await api.createAccount(values);
-      message.success('Đã lưu tài khoản');
+      message.success('Đã lưu tài khoản — đăng nhập IMAP thành công');
       form.resetFields();
       setShowForm(false);
       await loadAccounts();
@@ -46,6 +57,34 @@ export function AccountsView() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const testAccount = async () => {
+    const values = await form.validateFields();
+    setTesting(true);
+    try {
+      await api.testAccount(values);
+      message.success('Kết nối thành công — đăng nhập IMAP OK');
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Kết nối thất bại');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // Auto-fill host/username from the email domain so a bare address is enough.
+  const onValuesChange = (changed: Partial<AccountCreate>) => {
+    if (!changed.email) return;
+    const domain = changed.email.split('@')[1]?.toLowerCase();
+    const preset = domain ? PROVIDERS[domain] : undefined;
+    const cur = form.getFieldsValue();
+    const patch: Partial<AccountCreate> = {};
+    if (!cur.username) patch.username = changed.email;
+    if (preset) {
+      if (!cur.imap_host) patch.imap_host = preset.imap;
+      if (!cur.smtp_host) patch.smtp_host = preset.smtp;
+    }
+    if (Object.keys(patch).length) form.setFieldsValue(patch);
   };
 
   const deleteAccount = async (id: string) => {
@@ -76,12 +115,12 @@ export function AccountsView() {
         showIcon
         style={{ marginBottom: 16 }}
         message="Gợi ý cấu hình"
-        description="Với Gmail: IMAP imap.gmail.com:993, SMTP smtp.gmail.com:587, bật TLS, và dùng App Password thay cho mật khẩu thường."
+        description="Với Gmail: IMAP imap.gmail.com:993, SMTP smtp.gmail.com:587, bật TLS, và bắt buộc dùng App Password (16 ký tự) thay cho mật khẩu thường — mật khẩu Google thông thường sẽ báo lỗi đăng nhập. Nhập email @gmail.com để tự điền host."
       />
 
       {showForm && (
         <Card size="small" style={{ marginBottom: 16, borderColor: token.colorBorderSecondary }} styles={{ body: { padding: 16 } }}>
-          <Form form={form} layout="vertical" initialValues={{ imap_port: 993, smtp_port: 587, use_tls: true }}>
+          <Form form={form} layout="vertical" onValuesChange={onValuesChange} initialValues={{ imap_port: 993, smtp_port: 587, use_tls: true }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
               <Form.Item name="label" label="Nhãn" rules={[{ required: true, message: 'Nhập nhãn' }]}>
                 <Input placeholder="Work Gmail" />
@@ -113,6 +152,7 @@ export function AccountsView() {
             </Form.Item>
             <Space>
               <Button onClick={() => setShowForm(false)}>Hủy</Button>
+              <Button loading={testing} onClick={testAccount}>Kiểm tra kết nối</Button>
               <Button type="primary" loading={saving} onClick={addAccount}>Lưu tài khoản</Button>
             </Space>
           </Form>

@@ -56,8 +56,8 @@ pub use gnn_sage::{
     TrainingFixture as SageTrainingFixture,
 };
 pub use graph_store::{
-    CleanupReport, DecayLogRow, GraphStore, InferenceReport, MergeReport, NodeWithDegree,
-    SqliteGraphStore,
+    CleanupReport, DecayLogRow, GraphStore, InferenceReport, MergeReport, NodeSetInfo,
+    NodeWithDegree, SqliteGraphStore,
 };
 pub use llm::{LlmClient, RawTriplet};
 pub use llm_anthropic::AnthropicLlm;

@@ -33,6 +33,7 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
   late String _freq = _initFreq();
   late int _weekday = _initWeekday();
   late int _dom = _initDom();
+  late DateTime? _onceDate = _initOnceDate();
   late String _mode = widget.existing?.agentMode.isNotEmpty == true
       ? widget.existing!.agentMode
       : 'agent';
@@ -48,11 +49,25 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
     'weekly',
     'monthly',
     'once',
+    'once_delete',
     'advanced',
   ];
+  static const _freqLabels = {
+    'daily': 'Daily',
+    'weekdays': 'Weekdays',
+    'weekly': 'Weekly',
+    'monthly': 'Monthly',
+    'once': 'Once',
+    'once_delete': 'Once (auto-delete)',
+    'advanced': 'Advanced (cron)',
+  };
   static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   String _initFreq() {
+    // One-shot schedules carry an ISO datetime (not a cron) in scheduleValue;
+    // trust the explicit schedule_type instead of parsing.
+    final type = widget.existing?.scheduleType ?? '';
+    if (type == 'once' || type == 'once_delete') return type;
     final cron = widget.existing?.scheduleValue ?? '';
     final parts = cron.trim().split(RegExp(r'\s+'));
     if (parts.length != 5) return cron.isNotEmpty ? 'advanced' : 'daily';
@@ -65,6 +80,15 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
   }
 
   String _initTime() {
+    final type = widget.existing?.scheduleType ?? '';
+    if (type == 'once' || type == 'once_delete') {
+      final dt = DateTime.tryParse(widget.existing?.scheduleValue ?? '');
+      if (dt != null) {
+        final l = dt.toLocal();
+        return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+      }
+      return '09:00';
+    }
     final cron = widget.existing?.scheduleValue ?? '';
     final parts = cron.trim().split(RegExp(r'\s+'));
     if (parts.length == 5) {
@@ -96,7 +120,35 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
     return 1;
   }
 
+  DateTime? _initOnceDate() {
+    final type = widget.existing?.scheduleType ?? '';
+    if (type == 'once' || type == 'once_delete') {
+      final dt = DateTime.tryParse(widget.existing?.scheduleValue ?? '');
+      if (dt != null) {
+        final l = dt.toLocal();
+        return DateTime(l.year, l.month, l.day);
+      }
+    }
+    return null;
+  }
+
+  String _fmtDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _onceDate ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 3650)),
+    );
+    if (picked != null) setState(() => _onceDate = picked);
+  }
+
   String _initCronRaw() {
+    final type = widget.existing?.scheduleType ?? '';
+    if (type == 'once' || type == 'once_delete') return '';
     final cron = widget.existing?.scheduleValue ?? '';
     final parts = cron.trim().split(RegExp(r'\s+'));
     if (parts.length != 5) return cron;
@@ -133,12 +185,25 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
       body['time_local'] = _time.text.trim();
       if (_freq == 'weekly') body['weekday'] = _weekday;
       if (_freq == 'monthly') body['day_of_month'] = _dom;
+      if ((_freq == 'once' || _freq == 'once_delete') && _onceDate != null) {
+        body['date_local'] = _fmtDate(_onceDate!);
+      }
     }
     final api = ref.read(spaceApiProvider);
-    if (widget.existing != null) {
-      await api.updateSchedule(widget.existing!.id, body);
-    } else {
-      await api.createSchedule(body);
+    try {
+      if (widget.existing != null) {
+        await api.updateSchedule(widget.existing!.id, body);
+      } else {
+        await api.createSchedule(body);
+      }
+    } catch (e) {
+      // Surface the failure instead of silently leaving the dialog open.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không lưu được lịch: $e')),
+        );
+      }
+      return;
     }
     if (mounted) Navigator.of(context).pop();
   }
@@ -196,7 +261,8 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                           border: OutlineInputBorder()),
                       items: [
                         for (final f in _freqs)
-                          DropdownMenuItem(value: f, child: Text(f)),
+                          DropdownMenuItem(
+                              value: f, child: Text(_freqLabels[f] ?? f)),
                       ],
                       onChanged: (v) => setState(() => _freq = v ?? 'daily'),
                     ),
@@ -215,6 +281,37 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                     ),
                 ],
               ),
+              if (_freq == 'once' || _freq == 'once_delete') ...[
+                const SizedBox(height: AppTokens.s12),
+                InkWell(
+                  onTap: _pickDate,
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Ngày chạy',
+                      border: OutlineInputBorder(),
+                      suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+                    ),
+                    child: Text(
+                      _onceDate != null
+                          ? _fmtDate(_onceDate!)
+                          : 'Lần kế tiếp của giờ (hôm nay / mai)',
+                      style: TextStyle(
+                        color: _onceDate != null ? c.textPrimary : c.textMuted,
+                      ),
+                    ),
+                  ),
+                ),
+                if (_onceDate != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _onceDate = null),
+                      icon: const Icon(Icons.clear, size: 16),
+                      label: const Text('Bỏ chọn ngày'),
+                    ),
+                  ),
+              ],
               if (_freq == 'weekly') ...[
                 const SizedBox(height: AppTokens.s12),
                 DropdownButtonFormField<int>(

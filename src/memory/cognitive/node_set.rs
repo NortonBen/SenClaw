@@ -72,4 +72,18 @@ impl NodeSet {
             tag: tag.into(),
         }
     }
+    pub fn custom(scope_id: impl Into<String>, tag: impl Into<String>) -> Self {
+        Self {
+            scope_kind: ScopeKind::Custom,
+            scope_id: scope_id.into(),
+            tag: tag.into(),
+        }
+    }
+    /// A named "knowledge space": an independent memory partition addressed
+    /// by a single string id (e.g. `ai-office:nghien-cuu`). Spaces are
+    /// `custom` scopes with the standard memory tag, so ingest/search can be
+    /// isolated per space while unscoped queries still see everything.
+    pub fn space(space_id: impl Into<String>) -> Self {
+        Self::custom(space_id, "default_memory")
+    }
 }

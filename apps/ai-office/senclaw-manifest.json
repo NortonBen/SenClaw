@@ -1,7 +1,7 @@
 {
   "id": "ai-office",
   "name": "AI Office",
-  "description": "Công ty một người vận hành bằng đội AI Agents. Giao nhiệm vụ cho Trưởng phòng — phòng làm việc ảo (Nghiên cứu, Nội dung, Phân tích, Kiểm định) sẽ phân công, bàn giao lẫn nhau và nộp lại Báo cáo tổng hợp, kèm mô phỏng văn phòng 3D isometric theo thời gian thực. Hỗ trợ chế độ DEMO (mô phỏng, không gọi API) và LIVE (agent xử lý thật qua LLM).",
+  "description": "Công ty một người vận hành bằng đội AI Agents. Giao nhiệm vụ cho Trưởng phòng — phòng làm việc ảo (Nghiên cứu, Nội dung, Phân tích, Kiểm định…) sẽ phân công, bàn giao lẫn nhau và nộp lại Báo cáo tổng hợp, kèm mô phỏng văn phòng 3D isometric theo thời gian thực. Biên chế tuỳ chỉnh: thêm/tạm dừng nhân sự, chọn chế độ tự nhận nhiệm vụ, gán skill/sub-agent; mỗi nhân sự có trí nhớ (knowledge space) riêng và báo cáo tự lưu vào wiki.",
   "icon": "🏢",
   "runtime": {
     "kind": "server",
@@ -21,7 +21,7 @@
     "name": "ai-office-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "Điều hành AI Office: giao nhiệm vụ cho văn phòng (office_create_task), xem tiến độ và nhật ký bàn giao (office_get_task, office_status), lấy báo cáo tổng hợp (office_get_report), quản lý nhân sự ảo (office_list_agents, office_update_agent) và thống kê chi phí LLM (office_stats).",
+    "description": "Điều hành AI Office: giao nhiệm vụ cho văn phòng (office_create_task), xem tiến độ và nhật ký bàn giao (office_get_task, office_status), lấy báo cáo tổng hợp (office_get_report — cũng được tự lưu vào wiki), quản lý biên chế nhân sự ảo (office_list_agents, office_add_agent, office_remove_agent, office_update_agent — mỗi nhân sự có knowledge space riêng ai-office:<key>) và thống kê chi phí LLM/token (office_stats).",
     "autoRegister": true
   },
   "widgets": [

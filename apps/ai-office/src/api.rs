@@ -1,7 +1,7 @@
 use crate::db::{default_data_dir, Db};
-use crate::engine;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Multipart, Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -17,10 +17,13 @@ pub struct AppState {
 pub fn make_state() -> Arc<AppState> {
     let db_path = default_data_dir("ai-office").join("ai-office.db");
     let db = Arc::new(Db::open(&db_path).expect("open ai-office db"));
-    // A previous process may have died mid-task; don't leave zombies "running".
+    // A previous process may have died mid-task; fail actively-running jobs
+    // (queued `pending` tasks are kept and resumed by the drainer).
     let _ = db.fail_stale_running();
     let _ = db.reset_agent_statuses();
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
+    // Single FIFO worker that drains the task queue one job at a time.
+    crate::engine::spawn_drainer(db.clone());
     Arc::new(AppState { db, mcp_tx })
 }
 
@@ -29,9 +32,17 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/status", get(status))
         .route("/llm-info", get(llm_info))
         .route("/stats", get(stats))
-        .route("/agents", get(list_agents))
-        .route("/agents/:key", patch(update_agent))
+        .route("/agents", get(list_agents).post(add_agent))
+        .route("/agents/:key", patch(update_agent).delete(delete_agent))
+        .route("/agents/:key/knowledge", get(agent_knowledge))
+        .route("/skills-inventory", get(skills_inventory))
+        .route("/settings", get(get_settings).post(update_settings))
+        .route("/workspace/files", get(workspace_files))
+        .route("/fs/dirs", get(fs_dirs))
+        .route("/stt", post(stt))
+        .route("/tts", post(tts))
         .route("/tasks", get(list_tasks).post(create_task))
+        .route("/queue", get(queue))
         .route("/tasks/:id", get(get_task))
         .route("/tasks/:id/events", get(task_events))
         .route("/events/recent", get(recent_events))
@@ -71,6 +82,9 @@ struct AgentPatch {
     name: Option<String>,
     role: Option<String>,
     duty: Option<String>,
+    enabled: Option<bool>,
+    auto_assign: Option<bool>,
+    skills: Option<Vec<String>>,
 }
 
 async fn update_agent(
@@ -78,14 +92,268 @@ async fn update_agent(
     Path(key): Path<String>,
     Json(body): Json<AgentPatch>,
 ) -> Result<Json<Value>, ApiError> {
+    // Disabling staff mid-task would strand the pipeline on their desk.
+    if body.enabled == Some(false) && s.db.has_running_task().map_err(internal)? {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "phòng đang xử lý nhiệm vụ — chờ xong rồi tạm dừng nhân sự",
+        ));
+    }
+    if body.enabled == Some(false) {
+        let agents = s.db.list_agents().map_err(internal)?;
+        if let Some(agent) = agents.iter().find(|a| a.key == key) {
+            if agent.kind == "manager" {
+                return Err(err(StatusCode::BAD_REQUEST, "không thể tạm dừng Trưởng phòng"));
+            }
+            if agent.kind == "worker"
+                && agents.iter().filter(|a| a.kind == "worker" && a.enabled).count() <= 1
+            {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "phòng cần ít nhất một nhân sự chuyên môn đang hoạt động",
+                ));
+            }
+        }
+    }
     let found = s
         .db
-        .update_agent(&key, body.name.as_deref(), body.role.as_deref(), body.duty.as_deref())
+        .update_agent(
+            &key,
+            body.name.as_deref(),
+            body.role.as_deref(),
+            body.duty.as_deref(),
+            body.enabled,
+            body.auto_assign,
+            body.skills.as_deref(),
+        )
         .map_err(internal)?;
     if !found {
         return Err(err(StatusCode::NOT_FOUND, format!("không có agent '{}'", key)));
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct AgentCreate {
+    name: String,
+    role: Option<String>,
+    duty: Option<String>,
+    kind: Option<String>,
+}
+
+async fn add_agent(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<AgentCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "tên nhân sự trống"));
+    }
+    let kind = match body.kind.as_deref() {
+        Some("manager") => "manager",
+        Some("qa") => "qa",
+        _ => "worker",
+    };
+    let agents = s.db.list_agents().map_err(internal)?;
+    if kind != "worker" && agents.iter().any(|a| a.kind == kind) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            format!("phòng đã có một nhân sự giữ vai trò '{}'", kind),
+        ));
+    }
+    let agent = s
+        .db
+        .add_agent(name, body.role.as_deref().unwrap_or(""), body.duty.as_deref().unwrap_or(""), kind)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "agent": agent })))
+}
+
+async fn delete_agent(
+    State(s): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if s.db.has_running_task().map_err(internal)? {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "phòng đang xử lý nhiệm vụ — chờ xong rồi thay đổi nhân sự",
+        ));
+    }
+    let agents = s.db.list_agents().map_err(internal)?;
+    let Some(agent) = agents.iter().find(|a| a.key == key) else {
+        return Err(err(StatusCode::NOT_FOUND, format!("không có agent '{}'", key)));
+    };
+    if agent.kind == "manager" {
+        return Err(err(StatusCode::BAD_REQUEST, "không thể xoá Trưởng phòng"));
+    }
+    if agent.kind == "worker" && agents.iter().filter(|a| a.kind == "worker").count() <= 1 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "phòng cần ít nhất một nhân sự chuyên môn (worker)",
+        ));
+    }
+    s.db.delete_agent(&key).map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Per-agent private-memory SUMMARY (count + space id). The staff dialog
+/// deliberately shows only this — browsing the actual items belongs to the
+/// Knowledge screen (desktop_app) with its space picker.
+async fn agent_knowledge(
+    State(s): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Query(_q): Query<EventsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if s.db.get_agent(&key).map_err(internal)?.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, format!("không có agent '{}'", key)));
+    }
+    let space = crate::senclaw::agent_space(&key);
+    match crate::senclaw::knowledge_count(&space).await {
+        Ok(count) => Ok(Json(json!({ "space": space, "count": count }))),
+        Err(e) => Err(err(StatusCode::BAD_GATEWAY, e)),
+    }
+}
+
+/// Skills + sub-agents (personas) available on the daemon — feeds the
+/// staff-dialog picker.
+async fn skills_inventory() -> Json<Value> {
+    Json(crate::senclaw::skills_inventory_grouped().await)
+}
+
+async fn get_settings(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let dir = s.db.workspace_dir();
+    let files = crate::workspace::list_files(&dir);
+    Ok(Json(json!({
+        "workspaceDir": dir.to_string_lossy(),
+        "workspaceFiles": files.len(),
+        "workspaceIsDefault": s.db.get_setting("workspace_dir").map_err(internal)?
+            .map(|v| v.trim().is_empty()).unwrap_or(true),
+        "features": s.db.features_json(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct SettingsPatch {
+    #[serde(rename = "workspaceDir")]
+    workspace_dir: Option<String>,
+    /// Feature toggles: memory, wiki, workspace, tools, autocontinue.
+    features: Option<std::collections::HashMap<String, bool>>,
+}
+
+async fn update_settings(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<SettingsPatch>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(feats) = body.features {
+        for (k, v) in feats {
+            if ["memory", "wiki", "workspace", "tools", "autocontinue"].contains(&k.as_str()) {
+                s.db.set_setting(&format!("feat_{k}"), if v { "1" } else { "0" }).map_err(internal)?;
+            }
+        }
+    }
+    if let Some(dir) = body.workspace_dir {
+        let trimmed = dir.trim().to_string();
+        if trimmed.is_empty() {
+            // Quay về thư mục mặc định.
+            s.db.set_setting("workspace_dir", "").map_err(internal)?;
+        } else {
+            let path = crate::workspace::resolve(&trimmed);
+            if !path.is_absolute() {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "đường dẫn workspace phải là đường dẫn tuyệt đối (hoặc bắt đầu bằng ~/)",
+                ));
+            }
+            crate::workspace::ensure_dir(&path)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("không tạo được thư mục: {}", e)))?;
+            s.db.set_setting("workspace_dir", &trimmed).map_err(internal)?;
+        }
+    }
+    get_settings(State(s)).await
+}
+
+async fn workspace_files(State(s): State<Arc<AppState>>) -> Json<Value> {
+    Json(crate::workspace::files_json(&s.db.workspace_dir()))
+}
+
+/// Speech → text: forward the recorded clip to the daemon's Whisper endpoint.
+async fn stt(mut multipart: Multipart) -> Result<Json<Value>, ApiError> {
+    let mut audio: Option<(String, Vec<u8>)> = None;
+    let mut language: Option<String> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("đọc audio lỗi: {}", e)))?
+    {
+        match field.name().unwrap_or("") {
+            "language" => language = field.text().await.ok().filter(|s| !s.is_empty()),
+            _ => {
+                let fname = field.file_name().unwrap_or("audio.webm").to_string();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, format!("đọc audio lỗi: {}", e)))?;
+                audio = Some((fname, bytes.to_vec()));
+            }
+        }
+    }
+    let (fname, bytes) = audio.ok_or_else(|| err(StatusCode::BAD_REQUEST, "thiếu audio"))?;
+    match crate::senclaw::stt(bytes, &fname, language.as_deref()).await {
+        Ok(text) => Ok(Json(json!({ "text": text }))),
+        Err(e) => Err(err(StatusCode::BAD_GATEWAY, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct TtsBody {
+    text: String,
+}
+
+/// Text → speech: return the daemon's synthesized WAV for the browser to play.
+async fn tts(Json(body): Json<TtsBody>) -> Result<Response, ApiError> {
+    if body.text.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "text trống"));
+    }
+    // Cap length so read-aloud of a huge report stays responsive.
+    let text: String = body.text.chars().take(4000).collect();
+    match crate::senclaw::tts(&text).await {
+        Ok(wav) => Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response()),
+        Err(e) => Err(err(StatusCode::BAD_GATEWAY, e)),
+    }
+}
+
+#[derive(Deserialize)]
+struct FsDirsQuery {
+    path: Option<String>,
+}
+
+/// Server-side directory browser for the workspace folder picker (the web UI
+/// runs in an iframe and has no native folder dialog with real paths).
+/// Lists only directories, hidden entries skipped.
+async fn fs_dirs(Query(q): Query<FsDirsQuery>) -> Result<Json<Value>, ApiError> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let path = match q.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => crate::workspace::resolve(p),
+        None => std::path::PathBuf::from(&home),
+    };
+    let canon = path.canonicalize().unwrap_or(path.clone());
+    if !canon.is_dir() {
+        return Err(err(StatusCode::BAD_REQUEST, "không phải thư mục"));
+    }
+    let mut dirs: Vec<String> = std::fs::read_dir(&canon)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("không đọc được thư mục: {}", e)))?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    dirs.sort_by_key(|n| n.to_lowercase());
+    dirs.truncate(300);
+    Ok(Json(json!({
+        "path": canon.to_string_lossy(),
+        "parent": canon.parent().map(|p| p.to_string_lossy().to_string()),
+        "home": home,
+        "dirs": dirs,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -104,6 +372,8 @@ async fn list_tasks(
 #[derive(Deserialize)]
 struct CreateTask {
     title: String,
+    /// Kept for backward compatibility; every task now runs LIVE.
+    #[allow(dead_code)]
     mode: Option<String>,
 }
 
@@ -115,19 +385,21 @@ async fn create_task(
     if title.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "nhiệm vụ trống"));
     }
-    if s.db.has_running_task().map_err(internal)? {
+    let agents = s.db.list_agents().map_err(internal)?;
+    if !agents.iter().any(|a| a.kind == "worker" && a.enabled) {
         return Err(err(
-            StatusCode::CONFLICT,
-            "phòng đang xử lý một nhiệm vụ khác — chờ xong rồi giao tiếp",
+            StatusCode::BAD_REQUEST,
+            "không còn nhân sự chuyên môn nào đang hoạt động — bật lại nhân sự trong mục Nhân sự",
         ));
     }
-    let mode = match body.mode.as_deref() {
-        Some("live") => "live",
-        _ => "demo",
-    };
-    let task = s.db.create_task(title, mode).map_err(internal)?;
-    engine::spawn(s.db.clone(), task.id);
-    Ok(Json(json!({ "task": task })))
+    // Always queue; the drainer runs jobs one at a time (busy → xếp hàng đợi).
+    let task = s.db.create_task(title, "live").map_err(internal)?;
+    let queued = s.db.has_running_task().map_err(internal)?;
+    Ok(Json(json!({ "task": task, "queued": queued })))
+}
+
+async fn queue(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({ "pending": s.db.pending_tasks().map_err(internal)? })))
 }
 
 async fn get_task(

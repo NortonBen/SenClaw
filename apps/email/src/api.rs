@@ -42,6 +42,7 @@ pub fn api_router() -> Router {
 
     Router::new()
         .route("/accounts", get(list_accounts).post(create_account))
+        .route("/accounts/test", post(test_account))
         .route("/accounts/:id", delete(delete_account))
         .route("/inbox", get(inbox))
         .route("/messages/:id", get(read_message))
@@ -61,10 +62,42 @@ async fn list_accounts(State(s): State<Arc<AppState>>) -> Result<Json<Value>, Ap
 
 async fn create_account(
     State(s): State<Arc<AppState>>,
-    Json(b): Json<AccountCreate>,
+    Json(mut b): Json<AccountCreate>,
 ) -> Result<Json<Value>, ApiError> {
+    store::normalize_account(&mut b);
+    store::validate_account(&b).map_err(bad)?;
+
+    // Prove the credentials actually authenticate before persisting, so a broken
+    // account can never be silently saved — the #1 "can't log in" foot-gun.
+    verify_login(b.clone()).await?;
+
     let acct = store::create_account(&s.db, &b).map_err(bad)?;
     Ok(Json(serde_json::to_value(acct).unwrap_or_default()))
+}
+
+/// Dry-run an account's IMAP login without saving it (powers the UI's
+/// "test connection" button).
+async fn test_account(Json(mut b): Json<AccountCreate>) -> Result<Json<Value>, ApiError> {
+    store::normalize_account(&mut b);
+    store::validate_account(&b).map_err(bad)?;
+    verify_login(b.clone()).await?;
+    Ok(Json(json!({
+        "ok": true,
+        "imap_host": b.imap_host,
+        "imap_port": b.imap_port,
+        "smtp_host": b.smtp_host,
+        "smtp_port": b.smtp_port,
+    })))
+}
+
+/// Run the blocking IMAP verification on a worker thread, mapping auth/network
+/// failures to a 502 with the underlying reason.
+async fn verify_login(b: AccountCreate) -> Result<(), ApiError> {
+    let probe = store::secret_from_create(&b);
+    tokio::task::spawn_blocking(move || mailer::verify_imap(&probe))
+        .await
+        .map_err(server)?
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e.to_string()))
 }
 
 async fn delete_account(

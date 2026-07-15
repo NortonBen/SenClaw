@@ -1,7 +1,23 @@
-use axum::{extract::Query, routing::get, Json, Router};
+use axum::{
+    extract::Query,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::Utc;
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Shared state: only the MCP SSE broadcast channel (the clock itself is
+/// stateless — every value is computed from the system clock on demand).
+pub struct AppState {
+    pub mcp_tx: tokio::sync::broadcast::Sender<String>,
+}
+
+pub fn make_state() -> Arc<AppState> {
+    let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
+    Arc::new(AppState { mcp_tx })
+}
 
 #[derive(Serialize)]
 struct StatusResponse {
@@ -23,13 +39,13 @@ struct TimeResponse {
     zones: Vec<ZoneTime>,
 }
 
-#[derive(Serialize)]
-struct ZoneTime {
-    zone: String,
-    label: String,
-    time: String,
-    date: String,
-    offset: String,
+#[derive(Serialize, Clone)]
+pub struct ZoneTime {
+    pub zone: String,
+    pub label: String,
+    pub time: String,
+    pub date: String,
+    pub offset: String,
 }
 
 #[derive(Deserialize)]
@@ -38,14 +54,17 @@ struct TimeQuery {
     zones: String,
 }
 
+pub const DEFAULT_ZONES: &str = "Asia/Ho_Chi_Minh,America/New_York,Europe/London,Asia/Tokyo";
+
 fn default_zones() -> String {
-    "Asia/Ho_Chi_Minh,America/New_York,Europe/London,Asia/Tokyo".to_string()
+    DEFAULT_ZONES.to_string()
 }
 
-async fn get_time(Query(q): Query<TimeQuery>) -> Json<TimeResponse> {
+/// Compute the current wall-clock for each zone in a comma-separated list.
+/// Unparseable zones are silently skipped.
+pub fn compute_zones(zones_csv: &str) -> Vec<ZoneTime> {
     let now = Utc::now();
-    let zones: Vec<ZoneTime> = q
-        .zones
+    zones_csv
         .split(',')
         .filter_map(|z| {
             let tz: Tz = z.trim().parse().ok()?;
@@ -58,16 +77,19 @@ async fn get_time(Query(q): Query<TimeQuery>) -> Json<TimeResponse> {
                 offset: local.format("%:z").to_string(),
             })
         })
-        .collect();
+        .collect()
+}
 
+async fn get_time(Query(q): Query<TimeQuery>) -> Json<TimeResponse> {
+    let now = Utc::now();
     Json(TimeResponse {
         utc: now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         unix: now.timestamp(),
-        zones,
+        zones: compute_zones(&q.zones),
     })
 }
 
-fn friendly_label(zone: &str) -> String {
+pub fn friendly_label(zone: &str) -> String {
     match zone {
         "Asia/Ho_Chi_Minh" => "Hà Nội".to_string(),
         "America/New_York" => "New York".to_string(),
@@ -81,8 +103,14 @@ fn friendly_label(zone: &str) -> String {
     }
 }
 
-pub fn api_router() -> Router {
+pub fn api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/status", get(status))
         .route("/time", get(get_time))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
+        .route("/mcp/message", post(crate::mcp::mcp_message))
+        .with_state(state)
 }

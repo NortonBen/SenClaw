@@ -49,7 +49,9 @@ struct McpScheduleServer {
 
 #[rmcp::tool_router(server_handler)]
 impl McpScheduleServer {
-    #[rmcp::tool(description = "Schedule a new recurring or one-off task")]
+    #[rmcp::tool(
+        description = "Schedule a new task. schedule_type is one of: 'cron' (recurring, schedule_value is a cron expr), 'interval' (recurring, schedule_value is milliseconds), 'once' (fire once at the ISO-8601 schedule_value, then keep the row marked completed), or 'once_delete' (fire once at the ISO-8601 schedule_value, then delete the task entirely)"
+    )]
     async fn schedule_task(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -435,7 +437,7 @@ fn compute_next_run(schedule_type: &ScheduleType, value: &str) -> Result<String>
             }
             Ok((Utc::now() + chrono::Duration::milliseconds(ms)).to_rfc3339())
         }
-        ScheduleType::Once => {
+        ScheduleType::Once | ScheduleType::OnceDelete => {
             // value is used directly as ISO time
             let _ = chrono::DateTime::parse_from_rfc3339(value)?;
             Ok(value.to_owned())
@@ -463,6 +465,14 @@ mod tests {
     fn compute_next_run_once() {
         let result = compute_next_run(&ScheduleType::Once, "2026-12-25T00:00:00+00:00").unwrap();
         assert!(result.contains("2026-12-25"));
+    }
+
+    #[test]
+    fn compute_next_run_once_delete() {
+        let result =
+            compute_next_run(&ScheduleType::OnceDelete, "2026-12-25T00:00:00+00:00").unwrap();
+        assert!(result.contains("2026-12-25"));
+        assert_eq!(ScheduleType::parse("once_delete"), ScheduleType::OnceDelete);
     }
 
     #[test]

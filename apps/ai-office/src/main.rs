@@ -3,6 +3,8 @@ mod db;
 mod engine;
 mod llm;
 mod mcp;
+mod senclaw;
+mod workspace;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;

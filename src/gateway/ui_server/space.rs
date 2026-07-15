@@ -592,6 +592,8 @@ pub(crate) struct ScheduleCreateBody {
     prompt: String,
     label: Option<String>,
     time_local: Option<String>,
+    #[serde(default)]
+    date_local: Option<String>,
     frequency: Option<String>,
     weekday: Option<u32>,
     day_of_month: Option<u32>,
@@ -609,6 +611,8 @@ pub(crate) struct ScheduleUpdateBody {
     label: Option<String>,
     status: Option<String>,
     time_local: Option<String>,
+    #[serde(default)]
+    date_local: Option<String>,
     frequency: Option<String>,
     weekday: Option<u32>,
     day_of_month: Option<u32>,
@@ -652,6 +656,7 @@ pub(crate) async fn space_schedules_create(
             b.prompt,
             b.label,
             b.time_local,
+            b.date_local,
             b.frequency,
             b.weekday,
             b.day_of_month,
@@ -682,6 +687,7 @@ pub(crate) async fn space_schedules_update(
         b.label,
         b.status,
         b.time_local,
+        b.date_local,
         b.frequency,
         b.weekday,
         b.day_of_month,
@@ -1086,10 +1092,52 @@ pub(crate) async fn space_apps_restart(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(launcher) = &s.space_mcp_launcher {
-        launcher.restart_app(&id).await;
+    let (Some(launcher), Some(mgr), Some(db)) = (
+        s.space_mcp_launcher.as_ref(),
+        s.mcp_manager.as_ref(),
+        s.db.as_deref(),
+    ) else {
+        return Err(AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "App runtime not available".into(),
+        ));
+    };
+
+    // Load the current manifest so we can kill + respawn the right process.
+    let manifest: serde_json::Value = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "App not found".into()))?;
+
+    let app_dir = manifest
+        .get("install")
+        .and_then(|i| i.get("localPath"))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .or_else(|| space_app_dir(&s, &id).ok())
+        .unwrap_or_default();
+    let base_url = format!("http://127.0.0.1:{}", s.config.ui_server.port);
+
+    // Kill the old process group (incl. any orphan holding the port), then
+    // respawn a fresh one and wait until it is healthy. Fully restarts even if
+    // the app wasn't running.
+    match launcher
+        .restart_and_respawn(db, mgr, &id, &app_dir, &manifest, &base_url)
+        .await
+    {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(AppError(
+            StatusCode::BAD_GATEWAY,
+            format!("Restart failed: {e}"),
+        )),
     }
-    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 pub(crate) async fn space_apps_static(
@@ -1143,9 +1191,75 @@ pub(crate) async fn space_apps_bridge(
     match b.action.as_str() {
         "capabilities" => Ok(Json(serde_json::json!({
             "appId": id,
-            "capabilities": ["llm.request", "mcp.call", "space.rest"],
+            "capabilities": [
+                "llm.request", "agent.run", "mcp.call", "space.rest",
+                "knowledge.save", "knowledge.search", "knowledge.recall",
+            ],
             "status": "available",
         }))),
+        // Run a FULL tool-enabled agent (default tools + the app's own MCP +
+        // browser/web-search) headless and return its final text.
+        // Payload: { prompt, system?, workspace?, timeoutSeconds? }.
+        "agent.run" => {
+            let payload = b.payload.clone().unwrap_or_default();
+            let prompt = payload.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            if prompt.trim().is_empty() {
+                return Err(AppError(StatusCode::BAD_REQUEST, "prompt is required".into()));
+            }
+            let Some(pool) = s.virtual_worker_pool.clone() else {
+                return Ok(Json(serde_json::json!({
+                    "appId": id, "status": "error", "message": "agent runtime not available",
+                })));
+            };
+            let system = payload
+                .get("system")
+                .and_then(|v| v.as_str())
+                .unwrap_or("You are a helpful AI assistant. Use your tools when they help.")
+                .to_string();
+            let timeout = payload
+                .get("timeoutSeconds")
+                .and_then(|v| v.as_u64())
+                .map(|t| std::time::Duration::from_secs(t.clamp(10, 1800)));
+            let workspace = payload
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| s.config.paths.workspace_dir.clone());
+            let mem_folder = payload
+                .get("space")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("space-app-{id}"));
+            let persona = crate::agent::persona_registry::PersonaConfig {
+                name: format!("space-app-{id}"),
+                description: "Space App headless agent".into(),
+                tools: None,
+                model: None,
+                max_concurrent: 4,
+                system_prompt: system,
+                file_path: std::path::PathBuf::new(),
+                location: crate::agent::persona_registry::PersonaLocation::Project,
+            };
+            match pool
+                .run(
+                    &persona,
+                    prompt,
+                    &workspace.to_string_lossy(),
+                    None,
+                    timeout,
+                    None,
+                    Some(&mem_folder),
+                )
+                .await
+            {
+                Ok(r) => Ok(Json(serde_json::json!({
+                    "appId": id, "status": "ok", "text": r.result, "durationMs": r.duration_ms,
+                }))),
+                Err(e) => Ok(Json(serde_json::json!({
+                    "appId": id, "status": "error", "message": e.to_string(),
+                }))),
+            }
+        }
         // Run a one-shot completion on SenClaw's active LLM on the app's behalf.
         // Payload: { prompt: string, system?: string, maxTokens?: number }.
         "llm.request" => {
@@ -1174,13 +1288,169 @@ pub(crate) async fn space_apps_bridge(
             )
             .await
             {
-                Ok((text, model)) => Ok(Json(serde_json::json!({
+                Ok((text, model, finish)) => Ok(Json(serde_json::json!({
                     "appId": id, "status": "ok", "text": text, "model": model,
+                    "finish": finish,
                 }))),
                 Err(e) => Ok(Json(serde_json::json!({
                     "appId": id, "status": "error", "message": e,
                 }))),
             }
+        }
+        // Knowledge-space bridge: each Space App (and each of its internal
+        // agents) can keep isolated memories. `space` defaults to the app id
+        // so an app gets a private space with zero configuration.
+        // Payloads:
+        //   knowledge.save   { text, space?, tags?: string[], source? }
+        //   knowledge.search { query, space?, mode?, limit? }
+        //   knowledge.recall { query, space?, mode?, limit?, hops? }
+        "knowledge.save" => {
+            let payload = b.payload.clone().unwrap_or_default();
+            let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            if text.trim().is_empty() {
+                return Err(AppError(StatusCode::BAD_REQUEST, "text is required".into()));
+            }
+            let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+                return Ok(Json(serde_json::json!({
+                    "appId": id, "status": "error",
+                    "message": "cognitive system is not initialized",
+                })));
+            };
+            let space = payload
+                .get("space")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| id.clone());
+            let mut node_sets = vec![
+                crate::memory::cognitive::NodeSet::global("default_memory"),
+                crate::memory::cognitive::NodeSet::space(&space),
+            ];
+            if let Some(tags) = payload.get("tags").and_then(|v| v.as_array()) {
+                for t in tags {
+                    if let Some(t) = t.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                        node_sets.push(crate::memory::cognitive::NodeSet::global(t));
+                    }
+                }
+            }
+            let opts = crate::memory::cognitive::CognifyOptions {
+                node_sets,
+                ..Default::default()
+            };
+            let source = payload
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("space-app")
+                .to_string();
+            match sys.cognify(text, &source, &opts).await {
+                Ok(report) => Ok(Json(serde_json::json!({
+                    "appId": id, "status": "ok", "space": space,
+                    "chunksAdded": report.chunks_added,
+                    "entitiesAdded": report.entities_added,
+                }))),
+                Err(e) => Ok(Json(serde_json::json!({
+                    "appId": id, "status": "error", "message": e.to_string(),
+                }))),
+            }
+        }
+        "knowledge.search" | "knowledge.recall" => {
+            let payload = b.payload.clone().unwrap_or_default();
+            let query = payload.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            if query.trim().is_empty() {
+                return Err(AppError(StatusCode::BAD_REQUEST, "query is required".into()));
+            }
+            let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+                return Ok(Json(serde_json::json!({
+                    "appId": id, "status": "error",
+                    "message": "cognitive system is not initialized",
+                })));
+            };
+            let space = payload
+                .get("space")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| id.clone());
+            let limit = payload
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(6)
+                .clamp(1, 30) as usize;
+            let mut q = crate::memory::cognitive::SearchQuery::chunks(query.to_string(), limit);
+            q.query_type = super::cognitive::search_type_from_mode(
+                payload.get("mode").and_then(|v| v.as_str()),
+            );
+            q.hops = payload
+                .get("hops")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(2)
+                .clamp(1, 6) as u8;
+            q.decay_per_hop = 0.6;
+            q.node_sets = vec![crate::memory::cognitive::NodeSet::space(&space)];
+            let hits = match sys.search(&q).await {
+                Ok(h) => h,
+                Err(e) => {
+                    return Ok(Json(serde_json::json!({
+                        "appId": id, "status": "error", "message": e.to_string(),
+                    })))
+                }
+            };
+            let sources: Vec<serde_json::Value> = hits
+                .iter()
+                .map(|h| {
+                    serde_json::json!({
+                        "id": h.node.id.to_string(),
+                        "kind": h.node.kind.as_str(),
+                        "name": h.node.name,
+                        "summary": h.node.summary,
+                        "score": h.score,
+                    })
+                })
+                .collect();
+            if b.action == "knowledge.search" {
+                return Ok(Json(serde_json::json!({
+                    "appId": id, "status": "ok", "space": space, "hits": sources,
+                })));
+            }
+            // knowledge.recall — synthesize an answer over the scoped hits;
+            // degrades to joined snippets when no cognitive LLM is configured.
+            if hits.is_empty() {
+                return Ok(Json(serde_json::json!({
+                    "appId": id, "status": "ok", "space": space,
+                    "answer": "", "grounded": false, "sources": [],
+                })));
+            }
+            let context = hits
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let text = if h.node.summary.trim().is_empty() {
+                        h.node.name.clone()
+                    } else {
+                        h.node.summary.clone()
+                    };
+                    format!("[{}] {}", i + 1, text.trim())
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let answer = match crate::memory::cognitive::create_cognitive_llm(s.config.as_ref()) {
+                Some(llm) => {
+                    let user = format!(
+                        "Context:\n{context}\n\nQuestion: {}\n\nAnswer using only the context above, citing sources as [n].",
+                        query.trim()
+                    );
+                    llm.complete(super::cognitive::RECALL_SYSTEM, &user)
+                        .await
+                        .unwrap_or_else(|_| context.clone())
+                }
+                None => context.clone(),
+            };
+            Ok(Json(serde_json::json!({
+                "appId": id, "status": "ok", "space": space,
+                "answer": answer, "grounded": true, "sources": sources,
+            })))
         }
         "mcp.call" => Ok(Json(serde_json::json!({
             "appId": id,
@@ -1821,12 +2091,6 @@ pub(crate) async fn space_apps_proxy(
     let manifest =
         manifest.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "App not found".into()))?;
 
-    let port = manifest
-        .get("runtime")
-        .and_then(|r| r.get("port"))
-        .and_then(|p| p.as_u64())
-        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, "App does not have a port".into()))?;
-
     let path_str = if path.starts_with('/') {
         path.clone()
     } else {
@@ -1837,9 +2101,6 @@ pub(crate) async fn space_apps_proxy(
         .query()
         .map(|q| format!("?{}", q))
         .unwrap_or_default();
-    let target_url = format!("http://127.0.0.1:{}{}{}", port, path_str, query_string);
-
-    let client = reqwest::Client::new();
 
     let (parts, body) = req.into_parts();
     let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
@@ -1849,20 +2110,72 @@ pub(crate) async fn space_apps_proxy(
         )
     })?;
 
-    let mut builder = client.request(parts.method.clone(), &target_url);
-    for (name, value) in parts.headers.iter() {
-        if name != axum::http::header::HOST {
-            builder = builder.header(name, value);
-        }
-    }
+    // Lazy self-heal: bring the app up if it isn't running (or crashed) so a
+    // proxied request never renders as a blank iframe. `ensure_running` spawns +
+    // health-gates the process (serialized per app), so we forward only once the
+    // backend is actually up.
+    let ensure_port = || async {
+        let (Some(launcher), Some(db)) = (s.space_mcp_launcher.as_ref(), s.db.as_deref()) else {
+            return Err(AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "App runtime not available".into(),
+            ));
+        };
+        let app_dir = manifest
+            .get("install")
+            .and_then(|i| i.get("localPath"))
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .or_else(|| space_app_dir(&s, &id).ok())
+            .unwrap_or_default();
+        let base_url = format!("http://127.0.0.1:{}", s.config.ui_server.port);
+        launcher
+            .ensure_running(db, &id, &app_dir, &manifest, &base_url)
+            .await
+            .map_err(|e| AppError(StatusCode::BAD_GATEWAY, format!("App is not running: {e}")))
+    };
 
-    let reqwest_req = builder.body(body_bytes).build().map_err(internal)?;
-    let res = client.execute(reqwest_req).await.map_err(|e| {
-        AppError(
-            StatusCode::BAD_GATEWAY,
-            format!("Proxy request failed: {}", e),
-        )
-    })?;
+    // Prefer the last-known port; if none is recorded, start the app first.
+    let mut port = match manifest
+        .get("runtime")
+        .and_then(|r| r.get("port"))
+        .and_then(|p| p.as_u64())
+    {
+        Some(p) => p as u16,
+        None => ensure_port().await?,
+    };
+
+    let forward = |port: u16| {
+        let method = parts.method.clone();
+        let headers = parts.headers.clone();
+        let url = format!("http://127.0.0.1:{}{}{}", port, path_str, query_string);
+        let body = body_bytes.clone();
+        async move {
+            let client = reqwest::Client::new();
+            let mut builder = client.request(method, &url);
+            for (name, value) in headers.iter() {
+                if name != axum::http::header::HOST {
+                    builder = builder.header(name, value);
+                }
+            }
+            builder.body(body).send().await
+        }
+    };
+
+    // First attempt; if the backend is unreachable (killed / not yet up),
+    // (re)start it and retry once.
+    let res = match forward(port).await {
+        Ok(r) => r,
+        Err(_) => {
+            port = ensure_port().await?;
+            forward(port).await.map_err(|e| {
+                AppError(
+                    StatusCode::BAD_GATEWAY,
+                    format!("Proxy request failed: {}", e),
+                )
+            })?
+        }
+    };
 
     let mut response_builder = Response::builder().status(res.status());
     for (name, value) in res.headers() {

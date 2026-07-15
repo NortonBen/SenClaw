@@ -1870,6 +1870,22 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
   }
 }
 
+/// Human label for a schedule's timing. One-shot schedules carry an ISO
+/// datetime in scheduleValue; recurring ones carry a 5-field cron.
+String? _describeSchedule(SpaceSchedule s) {
+  if (s.scheduleType == 'once' || s.scheduleType == 'once_delete') {
+    final suffix = s.scheduleType == 'once_delete' ? ' · tự xoá' : '';
+    final dt = DateTime.tryParse(s.scheduleValue);
+    if (dt == null) return 'Một lần$suffix';
+    final l = dt.toLocal();
+    final d = '${l.day.toString().padLeft(2, '0')}/${l.month.toString().padLeft(2, '0')}';
+    final hhmm =
+        '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+    return 'Một lần · $d $hhmm$suffix';
+  }
+  return s.scheduleValue.isNotEmpty ? _describeCron(s.scheduleValue) : null;
+}
+
 String _describeCron(String cron) {
   final parts = cron.trim().split(RegExp(r'\s+'));
   if (parts.length != 5) return cron;
@@ -1898,9 +1914,7 @@ class _ScheduleCard extends ConsumerWidget {
     final label = schedule.label.split('\n').first;
     final isActive = schedule.status == 'active';
     final isPaused = schedule.status == 'paused';
-    final cronDesc = schedule.scheduleValue.isNotEmpty
-        ? _describeCron(schedule.scheduleValue)
-        : null;
+    final cronDesc = _describeSchedule(schedule);
     return Container(
       margin: const EdgeInsets.only(bottom: AppTokens.s8),
       padding: const EdgeInsets.all(AppTokens.s12),

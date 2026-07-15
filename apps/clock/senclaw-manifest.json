@@ -21,7 +21,7 @@
     "name": "clock-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "SenClaw Clock MCP: world clock, timers, stopwatch",
+    "description": "SenClaw Clock MCP: giờ hiện tại (clock_now), giờ thế giới nhiều múi giờ (clock_world), đổi múi giờ (clock_convert), và tính thời điểm kết thúc đếm ngược (clock_countdown). Mọi giá trị lấy từ đồng hồ hệ thống, chính xác.",
     "autoRegister": true
   },
   "widgets": [
@@ -44,6 +44,46 @@
       "entryUrl": "/widget/clock-world.html"
     }
   ],
-  "skills": [],
-  "personas": []
+  "skills": [
+    {
+      "name": "clock-time",
+      "path": "skills/clock-time",
+      "triggers": [
+        "bây giờ mấy giờ",
+        "mấy giờ rồi",
+        "giờ hiện tại",
+        "mấy giờ ở",
+        "giờ thế giới",
+        "đổi múi giờ",
+        "chênh lệch múi giờ",
+        "what time is it",
+        "current time",
+        "world clock",
+        "time in",
+        "timezone"
+      ]
+    },
+    {
+      "name": "clock-timer",
+      "path": "skills/clock-timer",
+      "triggers": [
+        "hẹn giờ",
+        "đếm ngược",
+        "countdown",
+        "báo tôi sau",
+        "nhắc tôi sau",
+        "phút nữa là mấy giờ",
+        "set a timer",
+        "timer for",
+        "remind me in"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "clock-keeper",
+      "path": "personas/clock-keeper.md",
+      "description": "Người giữ giờ gọn gàng: xem giờ hiện tại, giờ thế giới, đổi múi giờ và tính thời điểm kết thúc đếm ngược chính xác"
+    }
+  ]
 }

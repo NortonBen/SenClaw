@@ -218,12 +218,15 @@ pub(crate) async fn llm_config_fetch_models(
 /// Run a one-shot chat completion against the active LLM config. Used by the
 /// Space-App bridge (`llm.request`) so apps can reuse SenClaw's configured LLM.
 /// Returns `(answer_text, model_name)`.
+/// Returns `(text, model, finish_reason)`. `finish_reason` is `"length"`
+/// when the provider cut the output at the token cap (callers can continue),
+/// `"stop"` on natural completion, `""` when the provider didn't say.
 pub(crate) async fn chat_completion(
     config_path: &std::path::Path,
     system: &str,
     user: &str,
     max_tokens: u32,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, String), String> {
     let stored = load_llm_configs(config_path);
     let cfg = stored
         .active_id
@@ -298,7 +301,20 @@ pub(crate) async fn chat_completion(
     if answer.trim().is_empty() {
         return Err("LLM returned an empty response".into());
     }
-    Ok((answer, cfg.model_name.clone()))
+    let finish = if is_anthropic {
+        match json["stop_reason"].as_str().unwrap_or("") {
+            "max_tokens" => "length".to_string(),
+            "" => String::new(),
+            _ => "stop".to_string(),
+        }
+    } else {
+        match json["choices"][0]["finish_reason"].as_str().unwrap_or("") {
+            "length" => "length".to_string(),
+            "" => String::new(),
+            _ => "stop".to_string(),
+        }
+    };
+    Ok((answer, cfg.model_name.clone(), finish))
 }
 
 /// Fetch model list from a provider's /models endpoint.

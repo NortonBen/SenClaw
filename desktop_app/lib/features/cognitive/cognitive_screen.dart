@@ -34,20 +34,56 @@ final cogStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
 
 final cogQueryProvider = StateProvider<String>((ref) => '');
 
+/// Selected knowledge space (custom scope id). null = all knowledge.
+final cogSpaceProvider = StateProvider<String?>((ref) => null);
+
+class CogSpace {
+  final String scopeKind;
+  final String scopeId;
+  final String tag;
+  final int nodes;
+  const CogSpace(this.scopeKind, this.scopeId, this.tag, this.nodes);
+
+  /// Display label, e.g. `ai-office:nghien-cuu (12)`.
+  String get label => scopeId.isEmpty ? tag : scopeId;
+}
+
+/// Registry of knowledge spaces (custom scopes) — e.g. one private space per
+/// AI-Office staff member. Global/group tags are filtered out; only named
+/// spaces are switchable here.
+final cogSpacesProvider = FutureProvider<List<CogSpace>>((ref) async {
+  final r = await ref.read(apiClientProvider).get('/api/cognitive/spaces');
+  final spaces = (r is Map ? r['spaces'] : r) as List? ?? const [];
+  return spaces
+      .whereType<Map>()
+      .map((m) => CogSpace('${m['scopeKind'] ?? ''}', '${m['scopeId'] ?? ''}',
+          '${m['tag'] ?? ''}', (m['nodes'] as num?)?.toInt() ?? 0))
+      .where((s) => s.scopeKind == 'custom' && s.scopeId.isNotEmpty)
+      .toList();
+});
+
 /// Top nodes when the query is empty; semantic search results otherwise.
+/// Both respect the selected knowledge space.
 final cogNodesProvider = FutureProvider<List<CogNode>>((ref) async {
   final q = ref.watch(cogQueryProvider).trim();
+  final space = ref.watch(cogSpaceProvider);
   final api = ref.read(apiClientProvider);
   if (q.isEmpty) {
-    final r = await api.get('/api/cognitive/top-nodes', query: {'limit': 60});
+    final r = await api.get('/api/cognitive/top-nodes', query: {
+      'limit': 60,
+      if (space != null && space.isNotEmpty) 'space': space,
+    });
     final nodes = (r is Map ? r['nodes'] : r) as List? ?? const [];
     return nodes.whereType<Map>().map((m) {
       final n = (m['node'] ?? m) as Map;
       return CogNode.fromJson(n.cast<String, dynamic>());
     }).toList();
   }
-  final r = await api.post('/api/cognitive/search',
-      body: {'query': q, 'limit': 40});
+  final r = await api.post('/api/cognitive/search', body: {
+    'query': q,
+    'limit': 40,
+    if (space != null && space.isNotEmpty) 'space': space,
+  });
   final hits = (r is Map ? r['hits'] : r) as List? ?? const [];
   return hits.whereType<Map>().map((m) {
     final n = (m['node'] ?? m) as Map;
@@ -126,6 +162,34 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                 selected: {_tab},
                 onSelectionChanged: (s) => setState(() => _tab = s.first),
               ),
+              const SizedBox(width: AppTokens.s12),
+              // Knowledge-space switcher: All ↔ one isolated space (e.g. a
+              // single AI-Office staff member's private memory).
+              ref.watch(cogSpacesProvider).maybeWhen(
+                    data: (spaces) => spaces.isEmpty
+                        ? const SizedBox.shrink()
+                        : DropdownButton<String?>(
+                            value: ref.watch(cogSpaceProvider),
+                            underline: const SizedBox.shrink(),
+                            isDense: true,
+                            style: TextStyle(
+                                color: c.textPrimary, fontSize: 12.5),
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                  value: null,
+                                  child: Text('🌐 Toàn bộ knowledge')),
+                              for (final s in spaces)
+                                DropdownMenuItem<String?>(
+                                    value: s.scopeId,
+                                    child: Text(
+                                        '🔒 ${s.label} (${s.nodes})')),
+                            ],
+                            onChanged: (v) => ref
+                                .read(cogSpaceProvider.notifier)
+                                .state = v,
+                          ),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
               const Spacer(),
               // Primary actions stand out (tonal); maintenance ops fold into ⋯.
               FilledButton.tonalIcon(
@@ -478,9 +542,12 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
         .where((t) => t.isNotEmpty)
         .toList();
     try {
-      await ref
-          .read(apiClientProvider)
-          .post('/api/cognitive/add', body: {'text': _text.text.trim(), 'tags': tags});
+      final space = ref.read(cogSpaceProvider);
+      await ref.read(apiClientProvider).post('/api/cognitive/add', body: {
+        'text': _text.text.trim(),
+        'tags': tags,
+        if (space != null && space.isNotEmpty) 'space': space,
+      });
       ref.invalidate(cogStatsProvider);
       ref.invalidate(cogNodesProvider);
       if (mounted) Navigator.of(context).pop();
@@ -737,8 +804,15 @@ class _RecallDialogState extends ConsumerState<_RecallDialog> {
       _error = null;
     });
     try {
+      final space = ref.read(cogSpaceProvider);
       final r = await ref.read(apiClientProvider).post('/api/cognitive/recall',
-          body: {'query': q, 'mode': _mode, 'limit': 6, 'hops': 2});
+          body: {
+            'query': q,
+            'mode': _mode,
+            'limit': 6,
+            'hops': 2,
+            if (space != null && space.isNotEmpty) 'space': space,
+          });
       if (r is Map) {
         _answer = '${r['answer'] ?? ''}';
         _sources = (r['sources'] as List?) ?? const [];

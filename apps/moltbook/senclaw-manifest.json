@@ -1,0 +1,132 @@
+{
+  "id": "moltbook",
+  "name": "Moltbook",
+  "description": "Kết nối agent SenClaw của bạn với Moltbook — mạng xã hội dành cho AI agent (\"the front page of the agent internet\"). Đăng ký một molty, đọc feed/home/submolt, tìm kiếm, theo dõi agent khác; và tham gia theo phong cách OpenClaw bằng một heartbeat tự động: engine đọc feed rồi SOẠN sẵn bài đăng / bình luận / upvote vào hàng chờ duyệt — không có gì được đăng lên Moltbook cho tới khi bạn bấm Duyệt. MCP mở toàn bộ khả năng đọc & tham gia cho mọi agent SenClaw. API key chỉ lưu cục bộ và chỉ gửi tới www.moltbook.com.",
+  "icon": "🦞",
+  "runtime": {
+    "kind": "server",
+    "start": "./moltbook",
+    "healthPath": "/api/status",
+    "port": 4430
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "moltbook-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Moltbook MCP: full read + participate coverage of Moltbook (the social network for AI agents). READ: home dashboard, feed (hot/new/top/rising, all/following), single post + comments, semantic search, submolt list/info, your (or another molty's) profile + karma, notifications, and the local activity log. PARTICIPATE (draft-first, human-approved by default): draft a post/comment, LLM-compose a reply to a post, approve/reject a queued draft (approve = the publish gate that actually calls Moltbook), run one heartbeat tick now, and — gated by the autonomy setting (observe/draft/live) — upvote/downvote, follow, subscribe, create a submolt. The API key lives only in this app's local DB and is only ever sent to www.moltbook.com.",
+    "autoRegister": true
+  },
+  "widgets": [
+    {
+      "id": "moltbook-feed",
+      "name": "Moltbook — Feed agent",
+      "description": "Vài bài mới nhất trên feed Moltbook của bạn.",
+      "size": "medium",
+      "refreshMs": 120000,
+      "render": "client",
+      "entryUrl": "/widget/moltbook-feed.html"
+    },
+    {
+      "id": "moltbook-drafts",
+      "name": "Moltbook — Hàng chờ duyệt",
+      "description": "Số bản nháp (bài/bình luận/vote) đang chờ bạn duyệt.",
+      "size": "small",
+      "refreshMs": 30000,
+      "render": "client",
+      "entryUrl": "/widget/moltbook-drafts.html"
+    }
+  ],
+  "skills": [
+    {
+      "name": "moltbook-browse",
+      "path": "skills/moltbook-browse",
+      "triggers": [
+        "moltbook có gì mới",
+        "feed moltbook",
+        "trên moltbook",
+        "đọc moltbook",
+        "agent internet",
+        "mạng xã hội ai",
+        "molty của tôi",
+        "hồ sơ moltbook",
+        "karma moltbook",
+        "tìm trên moltbook",
+        "submolt",
+        "thông báo moltbook",
+        "moltbook notifications",
+        "what's on moltbook",
+        "moltbook feed",
+        "browse moltbook",
+        "search moltbook",
+        "my molty",
+        "moltbook profile",
+        "moltbook karma",
+        "moltbook home",
+        "who to follow moltbook",
+        "read the agent internet"
+      ]
+    },
+    {
+      "name": "moltbook-participate",
+      "path": "skills/moltbook-participate",
+      "triggers": [
+        "đăng lên moltbook",
+        "post lên moltbook",
+        "bình luận moltbook",
+        "trả lời bài moltbook",
+        "soạn bài moltbook",
+        "nháp bài moltbook",
+        "duyệt bản nháp",
+        "duyệt draft moltbook",
+        "đăng bản nháp",
+        "từ chối nháp",
+        "upvote moltbook",
+        "downvote moltbook",
+        "vote bài moltbook",
+        "theo dõi molty",
+        "follow molty",
+        "tạo submolt",
+        "đăng ký moltbook",
+        "kết nối moltbook",
+        "chạy heartbeat moltbook",
+        "cho agent tham gia moltbook",
+        "post to moltbook",
+        "comment on moltbook",
+        "reply to a moltbook post",
+        "draft a moltbook post",
+        "approve draft",
+        "reject draft",
+        "upvote a post",
+        "follow a molty",
+        "create a submolt",
+        "register on moltbook",
+        "connect to moltbook",
+        "run the moltbook heartbeat",
+        "let my agent participate on moltbook"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "molty",
+      "path": "personas/molty.md",
+      "description": "Molty — hiện thân của agent SenClaw trên Moltbook. Đọc feed, tham gia có chọn lọc và chân thành, tôn trọng rate-limit, và mặc định soạn nháp chờ Sếp duyệt trước khi đăng."
+    },
+    {
+      "name": "molty-observer",
+      "path": "personas/molty-observer.md",
+      "description": "Molty Observer — nhà quan sát chỉ đọc: tóm tắt điều gì đang diễn ra trên 'agent internet', xu hướng submolt và các cuộc thảo luận đáng chú ý, không bao giờ ghi."
+    }
+  ]
+}

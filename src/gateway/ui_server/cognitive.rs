@@ -52,7 +52,7 @@ fn parse_uuid(raw: &str) -> Result<Uuid, AppError> {
 
 /// Map a wire `mode` string to a [`SearchType`]. Shared by search + recall.
 /// Unknown / missing modes default to graph completion.
-fn search_type_from_mode(mode: Option<&str>) -> SearchType {
+pub(crate) fn search_type_from_mode(mode: Option<&str>) -> SearchType {
     match mode.unwrap_or("graph") {
         "chunks" => SearchType::Chunks,
         "triplet" => SearchType::Triplet,
@@ -311,6 +311,10 @@ pub(crate) async fn cognitive_decay_log(
 pub struct TopNodesQuery {
     #[serde(default = "default_top_limit")]
     pub limit: usize,
+    /// Restrict to one knowledge space (custom scope id). None = global,
+    /// ordered by degree; with a space, ordered by recency within the space.
+    #[serde(default)]
+    pub space: Option<String>,
 }
 fn default_top_limit() -> usize {
     20
@@ -328,6 +332,20 @@ pub(crate) async fn cognitive_top_nodes(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let sys = require_system()?;
     let limit = q.limit.clamp(1, 200);
+    if let Some(space) = q.space.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let nodes = sys
+            .graph
+            .nodes_in_set(&cognitive::NodeSet::space(space), limit)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let views: Vec<TopNodeView> = nodes
+            .into_iter()
+            .map(|n| TopNodeView {
+                node: n.into(),
+                degree: 0,
+            })
+            .collect();
+        return Ok(Json(serde_json::json!({ "nodes": views })));
+    }
     let rows = sys
         .graph
         .top_nodes_by_degree(limit)
@@ -340,6 +358,25 @@ pub(crate) async fn cognitive_top_nodes(
         })
         .collect();
     Ok(Json(serde_json::json!({ "nodes": views })))
+}
+
+// =====================================================================
+// GET /api/cognitive/spaces
+// =====================================================================
+//
+// Registry of knowledge spaces/scopes with member counts. The UI space
+// picker uses this to let the user switch between independent memories
+// (e.g. each AI-Office staff member's private space).
+
+pub(crate) async fn cognitive_spaces(
+    State(_s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let sets = sys
+        .graph
+        .list_node_sets()
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "spaces": sets })))
 }
 
 // =====================================================================
@@ -658,6 +695,9 @@ pub struct SearchBody {
     pub hops: u8,
     #[serde(default)]
     pub rerank: bool,
+    /// Restrict to one knowledge space (custom scope id). None = global.
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -684,6 +724,9 @@ pub(crate) async fn cognitive_search(
     q.hops = body.hops.clamp(1, 6);
     q.rerank = body.rerank;
     q.decay_per_hop = 0.6;
+    if let Some(space) = body.space.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        q.node_sets = vec![cognitive::NodeSet::space(space)];
+    }
 
     let hits = sys
         .search(&q)
@@ -922,9 +965,14 @@ pub(crate) async fn cognitive_forget(
 // can be partitioned without a parallel multi-KB table system.
 
 /// Build the node-set tags for a UI ingestion. Always includes the default
-/// memory scope; extra non-empty tags become additional `global` scopes.
-fn ingest_node_sets(tags: &[String]) -> Vec<cognitive::NodeSet> {
+/// memory scope; extra non-empty tags become additional `global` scopes and
+/// an optional knowledge `space` adds its custom scope so the item is
+/// recallable from that space in isolation.
+fn ingest_node_sets(tags: &[String], space: Option<&str>) -> Vec<cognitive::NodeSet> {
     let mut sets = vec![cognitive::NodeSet::global("default_memory")];
+    if let Some(space) = space.map(str::trim).filter(|s| !s.is_empty()) {
+        sets.push(cognitive::NodeSet::space(space));
+    }
     for t in tags {
         let t = t.trim();
         if !t.is_empty() && t != "default_memory" {
@@ -955,6 +1003,9 @@ pub struct AddTextBody {
     /// Knowledge-base tags (NodeSet scopes). Empty = default memory only.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Also tag into this knowledge space (custom scope id).
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 pub(crate) async fn cognitive_add(
@@ -966,7 +1017,7 @@ pub(crate) async fn cognitive_add(
         return Err(AppError(StatusCode::BAD_REQUEST, "text is empty".into()));
     }
     let opts = cognitive::CognifyOptions {
-        node_sets: ingest_node_sets(&body.tags),
+        node_sets: ingest_node_sets(&body.tags, body.space.as_deref()),
         ..Default::default()
     };
     let source = body.source.as_deref().unwrap_or("ui:add");
@@ -986,6 +1037,7 @@ pub(crate) async fn cognitive_upload(
     let mut file: Option<(String, String, Vec<u8>)> = None; // (name, content_type, bytes)
     let mut tags: Vec<String> = Vec::new();
     let mut source: Option<String> = None;
+    let mut space: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -1004,6 +1056,9 @@ pub(crate) async fn cognitive_upload(
             }
             "source" => {
                 source = field.text().await.ok().filter(|s| !s.is_empty());
+            }
+            "space" => {
+                space = field.text().await.ok().filter(|s| !s.is_empty());
             }
             _ => {
                 // Any other field is treated as the file payload.
@@ -1031,7 +1086,7 @@ pub(crate) async fn cognitive_upload(
     }
 
     let opts = cognitive::CognifyOptions {
-        node_sets: ingest_node_sets(&tags),
+        node_sets: ingest_node_sets(&tags, space.as_deref()),
         ..Default::default()
     };
     let src = source.unwrap_or_else(|| format!("upload:{filename}"));
@@ -1053,7 +1108,7 @@ pub(crate) async fn cognitive_upload(
 // returns the raw matches with `grounded=false` so the UI still shows
 // evidence instead of failing.
 
-const RECALL_SYSTEM: &str = "You are a precise retrieval assistant. Answer the user's question \
+pub(crate) const RECALL_SYSTEM: &str = "You are a precise retrieval assistant. Answer the user's question \
 using ONLY the numbered context provided. Cite the sources you use inline as [n]. If the context \
 does not contain the answer, say so plainly — do not invent facts. Keep the answer concise and \
 in the same language as the question.";
@@ -1068,6 +1123,9 @@ pub struct RecallBody {
     pub limit: Option<usize>,
     #[serde(default)]
     pub hops: Option<u8>,
+    /// Restrict to one knowledge space (custom scope id). None = global.
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 fn truncate_chars(s: &str, n: usize) -> String {
@@ -1094,6 +1152,9 @@ pub(crate) async fn cognitive_recall(
     q.query_type = search_type_from_mode(body.mode.as_deref());
     q.hops = body.hops.unwrap_or(2).clamp(1, 6);
     q.decay_per_hop = 0.6;
+    if let Some(space) = body.space.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        q.node_sets = vec![cognitive::NodeSet::space(space)];
+    }
 
     let hits = sys
         .search(&q)
@@ -1203,7 +1264,7 @@ mod tests {
 
     #[test]
     fn ingest_node_sets_always_includes_default_and_dedupes() {
-        let sets = ingest_node_sets(&["kb-a".into(), " ".into(), "default_memory".into()]);
+        let sets = ingest_node_sets(&["kb-a".into(), " ".into(), "default_memory".into()], None);
         // default + kb-a (blank and explicit default are dropped)
         assert_eq!(sets.len(), 2);
         assert!(sets.iter().any(|s| s.tag == "default_memory"));
@@ -1211,6 +1272,18 @@ mod tests {
         assert!(sets
             .iter()
             .all(|s| s.scope_kind == crate::memory::cognitive::ScopeKind::Global));
+    }
+
+    #[test]
+    fn ingest_node_sets_adds_space_scope() {
+        let sets = ingest_node_sets(&[], Some("ai-office:nghien-cuu"));
+        assert_eq!(sets.len(), 2);
+        assert!(sets.iter().any(|s| {
+            s.scope_kind == crate::memory::cognitive::ScopeKind::Custom
+                && s.scope_id == "ai-office:nghien-cuu"
+        }));
+        // blank space is ignored
+        assert_eq!(ingest_node_sets(&[], Some("  ")).len(), 1);
     }
 
     #[test]
