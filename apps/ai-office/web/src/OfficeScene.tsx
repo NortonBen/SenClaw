@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { traitsFor } from './avatar'
+import { tr } from './i18n'
 import type { Agent, OfficeEvent, Team } from './types'
 
 /* Isometric wireframe office. The whole COMPANY is shown at once: every team
@@ -469,7 +470,7 @@ export function OfficeScene({
 
   /* ---- lay the whole company out: one pod per team, side by side -------- */
   const teamList: Team[] =
-    teams.length > 0 ? teams : [{ key: '', name: 'VĂN PHÒNG', description: '', sort: 0 }]
+    teams.length > 0 ? teams : [{ key: '', name: tr('VĂN PHÒNG'), description: '', sort: 0 }]
 
   const byTeam = new Map<string, Agent[]>()
   for (const t of teamList) byTeam.set(t.key, [])
@@ -517,7 +518,7 @@ export function OfficeScene({
   const FW = Math.max(rowW, 6)
   const ceoY = MARGIN + LABEL_H + maxDepth + CEO_GAP
   const FD = ceoY + 2.4 + MARGIN
-  const SEP_DESK = { x: FW / 2 - 0.75, y: ceoY, label: 'SẾP (BẠN)' }
+  const SEP_DESK = { x: FW / 2 - 0.75, y: ceoY, label: tr('SẾP (BẠN)') }
 
   setScene(FW, FD, rotation)
 
@@ -583,7 +584,7 @@ export function OfficeScene({
   const isDim = (team: string) => activeTeam !== '' && teamList.length > 1 && team !== activeTeam
 
   return (
-    <svg className={`office${spin ? ' spin' : ''}`} viewBox={viewBox} role="img" aria-label="Mô phỏng văn phòng">
+    <svg className={`office${spin ? ' spin' : ''}`} viewBox={viewBox} role="img" aria-label={tr('Mô phỏng văn phòng')}>
       <defs>
         <radialGradient id="floorGlow" cx="50%" cy="50%" r="60%">
           <stop offset="0%" stopColor="var(--paper)" stopOpacity="0.55" />
@@ -675,7 +676,7 @@ export function OfficeScene({
         {/* team name plates, floating above each pod */}
         {pods.map((p) => {
           const [lx, ly] = iso(p.x + p.w / 2, p.y - 0.5)
-          const label = p.name.toUpperCase()
+          const label = tr(p.name).toUpperCase()
           const plateW = label.length * 6.4 + 16
           const active = p.team === activeTeam && teamList.length > 1
           return (
@@ -714,7 +715,7 @@ export function OfficeScene({
             const active = !!agent && agent.enabled && agent.status === 'working'
             const w = d.sep ? 1.5 : 1.1
             const [lx, ly] = iso(d.x + w / 2, d.y + 0.31)
-            const label = d.label.toUpperCase()
+            const label = tr(d.label).toUpperCase()
             const plateW = label.length * 6.2 + 10
             const dim = (agent && !agent.enabled) || (!d.sep && isDim(d.team))
             return (

@@ -4,6 +4,7 @@ import { Avatar } from './avatar'
 import { Feed, Md } from './Feed'
 import { OfficeScene } from './OfficeScene'
 import { MicButton } from './voice'
+import { setLang, tr, getLang, type Lang } from './i18n'
 import type {
   Agent,
   DirListing,
@@ -56,6 +57,11 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('ai-office-theme') as Theme) || 'auto',
   )
+  const [lang, setLangState] = useState<Lang>(
+    () => (localStorage.getItem('ai-office-lang') as Lang) || 'vi',
+  )
+  // Apply before children render so every tr() this pass sees the language.
+  setLang(lang)
   const [panel, setPanel] = useState<Panel>('none')
   const [input, setInput] = useState('')
   const [error, setError] = useState('')
@@ -144,6 +150,12 @@ export default function App() {
 
   const cycleTheme = () =>
     setTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto')
+
+  const toggleLang = () => {
+    const next: Lang = lang === 'vi' ? 'en' : 'vi'
+    setLangState(next)
+    localStorage.setItem('ai-office-lang', next)
+  }
 
   // Rotation in degrees [0, 360). Persist rounded so refresh is stable.
   const rotate = (deg: number) => {
@@ -239,38 +251,45 @@ export default function App() {
   }
 
   const workingCount = teamAgents.filter((a) => a.status === 'working').length
-  const teamName = teams.find((t) => t.key === activeTeam)?.name ?? 'ĐỘI'
-  const dayLabel = `${teamName} — ${new Date().toLocaleDateString('vi-VN')} · ${teamAgents.length} agent trực ca${
-    busy ? ` · ${workingCount} đang làm` : ''
+  const teamName = tr(teams.find((t) => t.key === activeTeam)?.name ?? 'ĐỘI')
+  const dayLabel = `${teamName} — ${new Date().toLocaleDateString(getLang() === 'en' ? 'en-US' : 'vi-VN')} · ${teamAgents.length} ${tr('agent trực ca')}${
+    busy ? ` · ${workingCount} ${tr('đang làm')}` : ''
   }`
 
   return (
     <div className="app">
       <header className="hdr">
         <h1>
-          AI OFFICE <span>// công ty một người — v1.0</span>
+          AI OFFICE <span>// {tr('công ty một người — v1.0')}</span>
         </h1>
         <div className="spacer" />
         <button
           className="btn"
-          title="Giao diện: Auto theo hệ thống / Sáng / Tối"
+          title={lang === 'vi' ? 'Switch to English' : 'Chuyển sang Tiếng Việt'}
+          onClick={toggleLang}
+        >
+          {lang === 'vi' ? '🇻🇳 VI' : '🇬🇧 EN'}
+        </button>
+        <button
+          className="btn"
+          title={tr('Giao diện: Auto theo hệ thống / Sáng / Tối')}
           onClick={cycleTheme}
         >
-          {THEME_LABEL[theme]}
+          {tr(THEME_LABEL[theme])}
         </button>
         <button className="btn" onClick={() => setShow3d(!show3d)}>
-          3D: {show3d ? 'BẬT' : 'TẮT'}
+          3D: {show3d ? tr('BẬT') : tr('TẮT')}
         </button>
-        <button className="btn" onClick={() => openPanel('ledger')}>Kế toán</button>
-        <button className="btn" onClick={() => openPanel('staff')}>Nhân sự</button>
-        <button className="btn" onClick={() => openPanel('history')}>Lịch sử</button>
+        <button className="btn" onClick={() => openPanel('ledger')}>{tr('Kế toán')}</button>
+        <button className="btn" onClick={() => openPanel('staff')}>{tr('Nhân sự')}</button>
+        <button className="btn" onClick={() => openPanel('history')}>{tr('Lịch sử')}</button>
         <button
           className="btn"
           onClick={() => setNewTaskOpen(true)}
         >
-          Nhiệm vụ mới{queue.length > 0 ? ` (${queue.length})` : ''}
+          {tr('Nhiệm vụ mới')}{queue.length > 0 ? ` (${queue.length})` : ''}
         </button>
-        <button className="btn" onClick={() => openPanel('settings')}>Cài đặt</button>
+        <button className="btn" onClick={() => openPanel('settings')}>{tr('Cài đặt')}</button>
       </header>
 
       <div className="team-tabs">
@@ -282,22 +301,22 @@ export default function App() {
             <button
               key={t.key}
               className={`team-tab${t.key === activeTeam ? ' active' : ''}`}
-              title={t.description}
+              title={tr(t.description)}
               onClick={() => selectTeam(t.key)}
             >
               {running && <span className="team-dot" />}
-              {t.name}
+              {tr(t.name)}
             </button>
           )
         })}
-        <button className="team-tab add" title="Quản lý đội nhóm" onClick={() => openPanel('staff')}>
-          + Đội
+        <button className="team-tab add" title={tr('Quản lý đội nhóm')} onClick={() => openPanel('staff')}>
+          + {tr('Đội')}
         </button>
       </div>
 
       <div className="main">
         <aside className="sidebar">
-          <div className="cap">Nhân sự · {teamName}</div>
+          <div className="cap">{tr('Nhân sự')} · {teamName}</div>
           {teamAgents.map((a) => (
             <div className="staff" key={a.key} style={a.enabled ? undefined : { opacity: 0.45 }}>
               <div className="nm">
@@ -306,11 +325,11 @@ export default function App() {
                   className="dot"
                   style={{ background: a.enabled ? ({ working: 'var(--working)', done: 'var(--done)', handoff: 'var(--handoff)' }[a.status] ?? 'var(--idle)') : 'var(--idle)' }}
                 />
-                {a.name}
-                {!a.enabled && <span style={{ color: 'var(--faint)', fontWeight: 400 }}> (tạm nghỉ)</span>}
+                {tr(a.name)}
+                {!a.enabled && <span style={{ color: 'var(--faint)', fontWeight: 400 }}> ({tr('tạm nghỉ')})</span>}
               </div>
-              <div className="rl">{a.role}</div>
-              <div className="dt">{a.duty}</div>
+              <div className="rl">{tr(a.role)}</div>
+              <div className="dt">{tr(a.duty)}</div>
               {a.skills.length > 0 && (
                 <div className="dt">⚡ {a.skills.join(', ')}</div>
               )}
@@ -318,8 +337,7 @@ export default function App() {
             </div>
           ))}
           <div className="hint">
-            Gõ nhiệm vụ vào ô bên dưới rồi Enter. Trưởng phòng sẽ phân công agent làm việc &amp; bàn
-            giao, cuối cùng nộp báo cáo tổng hợp cho Sếp.
+            {tr('Gõ nhiệm vụ vào ô bên dưới rồi Enter. Trưởng phòng sẽ phân công agent làm việc & bàn giao, cuối cùng nộp báo cáo tổng hợp cho Sếp.')}
           </div>
         </aside>
 
@@ -334,14 +352,14 @@ export default function App() {
               onPointerCancel={onSceneUp}
               onContextMenu={(e) => e.preventDefault()}
             >
-              <div className="scene-cap">· Mô phỏng — kéo để xoay · lăn chuột phóng to · giữ Shift kéo để dời</div>
+              <div className="scene-cap">{tr('· Mô phỏng — kéo để xoay · lăn chuột phóng to · giữ Shift kéo để dời')}</div>
               <div className="scene-tools" onPointerDown={(e) => e.stopPropagation()}>
-                <button className="btn scene-rotate" title="Xoay nhanh 45°" onClick={() => rotate(Math.round(rotation / 45) * 45 + 45)}>
+                <button className="btn scene-rotate" title={tr('Xoay nhanh 45°')} onClick={() => rotate(Math.round(rotation / 45) * 45 + 45)}>
                   ↻ {Math.round(rotation)}°
                 </button>
-                <button className="btn scene-zbtn" title="Phóng to" onClick={() => setZoomClamped(zoom * 1.2)}>+</button>
-                <button className="btn scene-zbtn" title="Thu nhỏ" onClick={() => setZoomClamped(zoom / 1.2)}>−</button>
-                <button className="btn scene-zbtn" title="Về mặc định" onClick={resetView}>⤢</button>
+                <button className="btn scene-zbtn" title={tr('Phóng to')} onClick={() => setZoomClamped(zoom * 1.2)}>+</button>
+                <button className="btn scene-zbtn" title={tr('Thu nhỏ')} onClick={() => setZoomClamped(zoom / 1.2)}>−</button>
+                <button className="btn scene-zbtn" title={tr('Về mặc định')} onClick={resetView}>⤢</button>
               </div>
               <OfficeScene
                 agents={agents}
@@ -353,16 +371,16 @@ export default function App() {
                 pan={pan}
               />
               <div className="legend">
-                <span><span className="dot" style={{ background: 'var(--working)' }} />đang làm</span>
-                <span style={{ color: 'var(--done)' }}>✓ xong</span>
-                <span><span className="dot" style={{ background: 'var(--handoff)' }} />đi bàn giao</span>
+                <span><span className="dot" style={{ background: 'var(--working)' }} />{tr('đang làm')}</span>
+                <span style={{ color: 'var(--done)' }}>✓ {tr('xong')}</span>
+                <span><span className="dot" style={{ background: 'var(--handoff)' }} />{tr('đi bàn giao')}</span>
               </div>
             </div>
           )}
           <Feed events={events} agents={agents} dayLabel={dayLabel} />
           {queue.length > 0 && (
             <div className="queue-bar">
-              ⏳ Hàng đợi ({queue.length}):{' '}
+              ⏳ {tr('Hàng đợi')} ({queue.length}):{' '}
               {queue.slice(0, 3).map((q, i) => (
                 <span key={q.id}>
                   {i > 0 && ' · '}
@@ -378,14 +396,14 @@ export default function App() {
               id="task-input"
               placeholder={
                 busy
-                  ? 'Phòng đang bận — gõ hoặc nói để xếp vào hàng đợi…'
-                  : 'Giao nhiệm vụ cho phòng (gõ hoặc bấm 🎤 để nói)…'
+                  ? tr('Phòng đang bận — gõ hoặc nói để xếp vào hàng đợi…')
+                  : tr('Giao nhiệm vụ cho phòng (gõ hoặc bấm 🎤 để nói)…')
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && submit()}
             />
-            <button className="btn" onClick={submit}>{busy ? '+ Hàng đợi' : 'Giao việc'}</button>
+            <button className="btn" onClick={submit}>{busy ? `+ ${tr('Hàng đợi')}` : tr('Giao việc')}</button>
           </div>
           {error && <div className="sysline" style={{ padding: '0 16px 8px' }}>⚠ {error}</div>}
         </div>
@@ -452,7 +470,7 @@ function StaffPanel({
   const team = teams.find((t) => t.key === activeTeam)
 
   const remove = async (a: Agent) => {
-    if (!window.confirm(`Cho ${a.name} nghỉ việc? Bàn làm việc sẽ bị thu hồi.`)) return
+    if (!window.confirm(`${tr('Cho')} ${a.name} ${tr('nghỉ việc? Bàn làm việc sẽ bị thu hồi.')}`)) return
     setError('')
     try {
       await api.deleteAgent(a.key)
@@ -488,7 +506,7 @@ function StaffPanel({
 
   const removeTeam = async () => {
     if (!team) return
-    if (!window.confirm(`Giải thể đội "${team.name}"? Toàn bộ nhân sự của đội sẽ bị xoá.`)) return
+    if (!window.confirm(`${tr('Giải thể đội')} "${team.name}"? ${tr('Toàn bộ nhân sự của đội sẽ bị xoá.')}`)) return
     setError('')
     try {
       await api.deleteTeam(team.key)
@@ -502,8 +520,8 @@ function StaffPanel({
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>
-          Đội nhóm &amp; nhân sự
-          <button className="btn" onClick={onClose}>Đóng</button>
+          {tr('Đội nhóm & nhân sự')}
+          <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         {/* team switcher + management */}
         <div className="team-tabs" style={{ margin: '0 0 10px', borderBottom: 'none', paddingLeft: 0 }}>
@@ -513,31 +531,31 @@ function StaffPanel({
               className={`team-tab${t.key === activeTeam ? ' active' : ''}`}
               onClick={() => onSelectTeam(t.key)}
             >
-              {t.name}
+              {tr(t.name)}
             </button>
           ))}
         </div>
         <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
           <input
             style={{ border: '1px solid var(--line-strong)', background: 'var(--panel)', padding: '3px 6px', flex: 1 }}
-            placeholder="Tên đội mới, ví dụ: Chăm sóc khách hàng"
+            placeholder={tr('Tên đội mới, ví dụ: Chăm sóc khách hàng')}
             value={newTeam}
             onChange={(e) => setNewTeam(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && addTeam()}
           />
-          <button className="btn" onClick={addTeam} disabled={!newTeam.trim()}>+ Tạo đội</button>
+          <button className="btn" onClick={addTeam} disabled={!newTeam.trim()}>+ {tr('Tạo đội')}</button>
           {teams.length > 1 && (
-            <button className="btn" style={{ color: 'var(--danger)' }} onClick={removeTeam}>Giải thể đội</button>
+            <button className="btn" style={{ color: 'var(--danger)' }} onClick={removeTeam}>{tr('Giải thể đội')}</button>
           )}
         </div>
-        {team?.description && <div style={{ color: 'var(--faint)', fontSize: 11, marginBottom: 8 }}>{team.description}</div>}
+        {team?.description && <div style={{ color: 'var(--faint)', fontSize: 11, marginBottom: 8 }}>{tr(team.description)}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-          <button className="btn" onClick={() => setEditing('new')}>+ Tuyển nhân sự vào đội</button>
+          <button className="btn" onClick={() => setEditing('new')}>+ {tr('Tuyển nhân sự vào đội')}</button>
         </div>
         {error && <div className="sysline">⚠ {error}</div>}
         <table>
           <thead>
-            <tr><th>Tên</th><th>Vai trò</th><th>Loại</th><th>Chế độ</th><th /></tr>
+            <tr><th>{tr('Tên')}</th><th>{tr('Vai trò')}</th><th>{tr('Loại')}</th><th>{tr('Chế độ')}</th><th /></tr>
           </thead>
           <tbody>
             {teamAgents.map((a) => (
@@ -548,30 +566,30 @@ function StaffPanel({
                     className="dot"
                     style={{ background: a.enabled ? ({ working: 'var(--working)', done: 'var(--done)', handoff: 'var(--handoff)' }[a.status] ?? 'var(--idle)') : 'var(--idle)' }}
                   />{' '}
-                  <b>{a.name}</b>
+                  <b>{tr(a.name)}</b>
                   {a.skills.length > 0 && (
                     <div style={{ color: 'var(--faint)', fontSize: 11 }}>⚡ {a.skills.join(', ')}</div>
                   )}
                 </td>
-                <td>{a.role}</td>
-                <td>{KIND_LABEL[a.kind] ?? a.kind}</td>
+                <td>{tr(a.role)}</td>
+                <td>{tr(KIND_LABEL[a.kind] ?? a.kind)}</td>
                 <td>
                   {!a.enabled
-                    ? 'tạm nghỉ'
+                    ? tr('tạm nghỉ')
                     : a.kind === 'worker'
-                      ? a.auto_assign ? 'tự nhận việc' : 'tăng cường'
-                      : 'trực ca'}
+                      ? a.auto_assign ? tr('tự nhận việc') : tr('tăng cường')
+                      : tr('trực ca')}
                 </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
-                  <button className="row-btn" onClick={() => setDetail(a)}>Chi tiết</button>{' '}
-                  <button className="row-btn" onClick={() => setEditing(a)}>Sửa</button>{' '}
+                  <button className="row-btn" onClick={() => setDetail(a)}>{tr('Chi tiết')}</button>{' '}
+                  <button className="row-btn" onClick={() => setEditing(a)}>{tr('Sửa')}</button>{' '}
                   {a.kind !== 'manager' && (
                     <>
                       <button className="row-btn" onClick={() => toggleEnabled(a)}>
-                        {a.enabled ? 'Tạm dừng' : 'Kích hoạt'}
+                        {a.enabled ? tr('Tạm dừng') : tr('Kích hoạt')}
                       </button>{' '}
                       <button className="row-btn" style={{ color: 'var(--danger)' }} onClick={() => remove(a)}>
-                        Xoá
+                        {tr('Xoá')}
                       </button>
                     </>
                   )}
@@ -652,68 +670,67 @@ function StaffDialog({
     <div className="overlay" onClick={onClose}>
       <div className="modal" style={{ width: 'min(520px, 90vw)' }} onClick={(e) => e.stopPropagation()}>
         <h2>
-          {agent ? `Sửa hồ sơ — ${agent.name}` : 'Tuyển nhân sự mới'}
-          <button className="btn" onClick={onClose}>Đóng</button>
+          {agent ? `${tr('Sửa hồ sơ')} — ${tr(agent.name)}` : tr('Tuyển nhân sự mới')}
+          <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         <div className="form-grid">
-          <label>Tên hiển thị</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: THIẾT KẾ" />
-          <label>Vai trò</label>
-          <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="VD: Thiết kế & hình ảnh" />
-          <label>Nhiệm vụ cố định</label>
+          <label>{tr('Tên hiển thị')}</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={tr('VD: THIẾT KẾ')} />
+          <label>{tr('Vai trò')}</label>
+          <input value={role} onChange={(e) => setRole(e.target.value)} placeholder={tr('VD: Thiết kế & hình ảnh')} />
+          <label>{tr('Nhiệm vụ cố định')}</label>
           <textarea
             rows={4}
             value={duty}
             onChange={(e) => setDuty(e.target.value)}
-            placeholder="Mô tả nhiệm vụ mà nhân sự này luôn đảm nhận trong quy trình…"
+            placeholder={tr('Mô tả nhiệm vụ mà nhân sự này luôn đảm nhận trong quy trình…')}
           />
-          <label>Loại</label>
+          <label>{tr('Loại')}</label>
           {agent ? (
-            <div>{KIND_LABEL[agent.kind] ?? agent.kind} (không đổi được)</div>
+            <div>{tr(KIND_LABEL[agent.kind] ?? agent.kind)} ({tr('không đổi được')})</div>
           ) : (
             <select value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="worker">Chuyên môn (worker)</option>
-              <option value="manager" disabled={hasManager}>Trưởng phòng {hasManager ? '— đã có' : ''}</option>
-              <option value="qa" disabled={hasQa}>Kiểm định {hasQa ? '— đã có' : ''}</option>
+              <option value="worker">{tr('Chuyên môn (worker)')}</option>
+              <option value="manager" disabled={hasManager}>{tr('Trưởng phòng')} {hasManager ? tr('— đã có') : ''}</option>
+              <option value="qa" disabled={hasQa}>{tr('Kiểm định')} {hasQa ? tr('— đã có') : ''}</option>
             </select>
           )}
           {(agent?.kind ?? kind) === 'worker' && (
             <>
-              <label>Nhận việc</label>
+              <label>{tr('Nhận việc')}</label>
               <label style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12, color: 'var(--ink)', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
                   checked={autoAssign}
                   onChange={(e) => setAutoAssign(e.target.checked)}
                 />{' '}
-                Tự nhận nhiệm vụ — luôn có phần việc trong mọi kế hoạch. Bỏ chọn = tăng cường
-                (Trưởng phòng chỉ giao khi cần chuyên môn này).
+                {tr('Tự nhận nhiệm vụ — luôn có phần việc trong mọi kế hoạch. Bỏ chọn = tăng cường (Trưởng phòng chỉ giao khi cần chuyên môn này).')}
               </label>
             </>
           )}
-          <label>Skill / sub-agent nắm giữ</label>
+          <label>{tr('Skill / sub-agent nắm giữ')}</label>
           <div>
             {skills.length > 0 && (
               <div className="chips">
                 {skills.map((s) => (
                   <span className="chip" key={s}>
                     ⚡ {s}
-                    <button type="button" onClick={() => toggleSkill(s)} title="Bỏ chọn">×</button>
+                    <button type="button" onClick={() => toggleSkill(s)} title={tr('Bỏ chọn')}>×</button>
                   </span>
                 ))}
               </div>
             )}
             <input
-              placeholder="🔍 Tìm skill / sub-agent…"
+              placeholder={tr('🔍 Tìm skill / sub-agent…')}
               value={skillQuery}
               onChange={(e) => setSkillQuery(e.target.value)}
               style={{ marginBottom: 6 }}
             />
             <div className="skill-picker">
-              {inventory === null && <div style={{ color: 'var(--faint)' }}>Đang tải danh mục…</div>}
+              {inventory === null && <div style={{ color: 'var(--faint)' }}>{tr('Đang tải danh mục…')}</div>}
               {inventory && inventory.skills.length === 0 && inventory.personas.length === 0 && (
                 <div style={{ color: 'var(--faint)' }}>
-                  Không lấy được danh mục từ daemon — kiểm tra SenClaw daemon.
+                  {tr('Không lấy được danh mục từ daemon — kiểm tra SenClaw daemon.')}
                 </div>
               )}
               {(['skills', 'personas'] as const).map((group) => {
@@ -728,7 +745,7 @@ function StaffDialog({
                 if (items.length === 0) return null
                 return (
                   <div key={group}>
-                    <div className="cap">{group === 'skills' ? 'Skills' : 'Sub-agents'} ({items.length})</div>
+                    <div className="cap">{group === 'skills' ? tr('Skills') : tr('Sub-agents')} ({items.length})</div>
                     {items.map((it) => (
                       <label key={it.name} title={it.description}>
                         <input
@@ -749,7 +766,7 @@ function StaffDialog({
                 skillQuery.trim() !== '' &&
                 !inventory.skills.some((s) => s.name.toLowerCase().includes(skillQuery.trim().toLowerCase()) || s.description.toLowerCase().includes(skillQuery.trim().toLowerCase())) &&
                 !inventory.personas.some((p) => p.name.toLowerCase().includes(skillQuery.trim().toLowerCase()) || p.description.toLowerCase().includes(skillQuery.trim().toLowerCase())) && (
-                  <div style={{ color: 'var(--faint)' }}>Không có mục nào khớp "{skillQuery}".</div>
+                  <div style={{ color: 'var(--faint)' }}>{tr('Không có mục nào khớp')} "{skillQuery}".</div>
                 )}
             </div>
           </div>
@@ -757,7 +774,7 @@ function StaffDialog({
         {error && <div className="sysline">⚠ {error}</div>}
         <div style={{ marginTop: 12, textAlign: 'right' }}>
           <button className="btn" onClick={save} disabled={!name.trim()}>
-            {agent ? 'Lưu hồ sơ' : 'Tuyển vào phòng'}
+            {agent ? tr('Lưu hồ sơ') : tr('Tuyển vào phòng')}
           </button>
         </div>
       </div>
@@ -785,36 +802,36 @@ function StaffDetailDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
         <h2>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <Avatar agentKey={agent.key} size={26} />
-            {agent.name}
+            {tr(agent.name)}
           </span>
-          <button className="btn" onClick={onClose}>Đóng</button>
+          <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         <div className="kv">
-          <div className="k">Loại</div><div>{KIND_LABEL[agent.kind] ?? agent.kind}</div>
-          <div className="k">Vai trò</div><div>{agent.role || '—'}</div>
-          <div className="k">Nhiệm vụ cố định</div><div><Md>{agent.duty || '—'}</Md></div>
-          <div className="k">Chế độ</div>
+          <div className="k">{tr('Loại')}</div><div>{tr(KIND_LABEL[agent.kind] ?? agent.kind)}</div>
+          <div className="k">{tr('Vai trò')}</div><div>{tr(agent.role) || '—'}</div>
+          <div className="k">{tr('Nhiệm vụ cố định')}</div><div><Md>{tr(agent.duty) || '—'}</Md></div>
+          <div className="k">{tr('Chế độ')}</div>
           <div>
             {!agent.enabled
-              ? 'Tạm nghỉ — không tham gia nhiệm vụ'
+              ? tr('Tạm nghỉ — không tham gia nhiệm vụ')
               : agent.kind === 'worker'
                 ? agent.auto_assign
-                  ? 'Tự nhận nhiệm vụ — luôn có phần việc'
-                  : 'Tăng cường — chỉ được giao khi cần chuyên môn'
-                : 'Trực ca'}
+                  ? tr('Tự nhận nhiệm vụ — luôn có phần việc')
+                  : tr('Tăng cường — chỉ được giao khi cần chuyên môn')
+                : tr('Trực ca')}
           </div>
-          <div className="k">Skill / sub-agent</div>
+          <div className="k">{tr('Skill / sub-agent')}</div>
           <div>{agent.skills.length > 0 ? agent.skills.map((s) => `⚡ ${s}`).join('  ') : '—'}</div>
-          <div className="k">Trạng thái</div><div>{agent.status}{agent.status_note ? ` — ${agent.status_note}` : ''}</div>
-          <div className="k">Trí nhớ riêng</div>
+          <div className="k">{tr('Trạng thái')}</div><div>{agent.status}{agent.status_note ? ` — ${agent.status_note}` : ''}</div>
+          <div className="k">{tr('Trí nhớ riêng')}</div>
           <div>
-            {memErr && <span style={{ color: 'var(--faint)' }}>không đọc được ({memErr})</span>}
-            {!memErr && mem === null && 'đang đếm…'}
+            {memErr && <span style={{ color: 'var(--faint)' }}>{tr('không đọc được')} ({memErr})</span>}
+            {!memErr && mem === null && tr('đang đếm…')}
             {!memErr && mem !== null && (
               <>
-                {mem.count >= 100 ? '100+' : mem.count} ký ức trong space <code>{mem.space}</code>
+                {mem.count >= 100 ? '100+' : mem.count} {tr('ký ức trong space')} <code>{mem.space}</code>
                 <div style={{ color: 'var(--faint)', fontSize: 11 }}>
-                  Xem chi tiết trong Knowledge (desktop app) — chọn space này ở bộ lọc.
+                  {tr('Xem chi tiết trong Knowledge (desktop app) — chọn space này ở bộ lọc.')}
                 </div>
               </>
             )}
@@ -852,12 +869,12 @@ function NewTaskDialog({
     <div className="overlay" onClick={onClose}>
       <div className="modal" style={{ width: 'min(560px, 92vw)' }} onClick={(e) => e.stopPropagation()}>
         <h2>
-          Nhiệm vụ mới <button className="btn" onClick={onClose}>Đóng</button>
+          {tr('Nhiệm vụ mới')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         <div style={{ color: 'var(--faint)', fontSize: 12, marginBottom: 8 }}>
           {busy
-            ? `Phòng đang bận — nhiệm vụ này sẽ xếp vào hàng đợi (hiện có ${queueLen} chờ) và tự chạy khi xong việc trước.`
-            : 'Trưởng phòng sẽ nhận và phân công cho cả phòng ngay.'}
+            ? `${tr('Phòng đang bận — nhiệm vụ này sẽ xếp vào hàng đợi (hiện có')} ${queueLen} ${tr('chờ) và tự chạy khi xong việc trước.')}`
+            : tr('Trưởng phòng sẽ nhận và phân công cho cả phòng ngay.')}
         </div>
         <textarea
           rows={4}
@@ -865,14 +882,14 @@ function NewTaskDialog({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => (e.key === 'Enter' && (e.metaKey || e.ctrlKey) ? submit() : undefined)}
-          placeholder="Ví dụ: nghiên cứu 5 xu hướng nội thất 2026 và đề xuất bộ sưu tập ra mắt"
+          placeholder={tr('Ví dụ: nghiên cứu 5 xu hướng nội thất 2026 và đề xuất bộ sưu tập ra mắt')}
           style={{ width: '100%', border: '1px solid var(--line-strong)', background: 'var(--panel)', padding: 8 }}
         />
         {err && <div className="sysline">⚠ {err}</div>}
         <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <MicButton onText={(t) => setText((prev) => (prev.trim() ? `${prev} ${t}` : t))} />
           <button className="btn" onClick={submit} disabled={!text.trim()}>
-            {busy ? '+ Xếp hàng đợi' : 'Giao việc'}
+            {busy ? `+ ${tr('Xếp hàng đợi')}` : tr('Giao việc')}
           </button>
         </div>
       </div>
@@ -892,19 +909,19 @@ function HistoryPanel({ tasks, onClose }: { tasks: Task[]; onClose: () => void }
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>
-          Lịch sử nhiệm vụ <button className="btn" onClick={onClose}>Đóng</button>
+          {tr('Lịch sử nhiệm vụ')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         {open ? (
           <div>
-            <button className="row-btn" onClick={() => setOpen(null)}>← danh sách</button>
+            <button className="row-btn" onClick={() => setOpen(null)}>← {tr('danh sách')}</button>
             <h3 style={{ fontSize: 13 }}>{open.title}</h3>
-            <Md>{open.report || '*(chưa có báo cáo)*'}</Md>
+            <Md>{open.report || `*(${tr('chưa có báo cáo')})*`}</Md>
           </div>
         ) : (
           <>
             <table>
               <thead>
-                <tr><th>#</th><th>Nhiệm vụ</th><th>Trạng thái</th><th>LLM</th><th>Token</th></tr>
+                <tr><th>#</th><th>{tr('Nhiệm vụ')}</th><th>{tr('Trạng thái')}</th><th>LLM</th><th>Token</th></tr>
               </thead>
               <tbody>
                 {slice.map((t) => (
@@ -917,19 +934,19 @@ function HistoryPanel({ tasks, onClose }: { tasks: Task[]; onClose: () => void }
                       </span>
                     </td>
                     <td>{t.llm_calls > 0 ? `${t.llm_calls} calls` : '—'}</td>
-                    <td>{t.tokens_in + t.tokens_out > 0 ? `~${(t.tokens_in + t.tokens_out).toLocaleString('vi-VN')}` : '—'}</td>
+                    <td>{t.tokens_in + t.tokens_out > 0 ? `~${(t.tokens_in + t.tokens_out).toLocaleString(getLang() === 'en' ? 'en-US' : 'vi-VN')}` : '—'}</td>
                   </tr>
                 ))}
                 {tasks.length === 0 && (
-                  <tr><td colSpan={5}>Chưa có nhiệm vụ nào — giao việc đầu tiên cho phòng đi Sếp!</td></tr>
+                  <tr><td colSpan={5}>{tr('Chưa có nhiệm vụ nào — giao việc đầu tiên cho phòng đi Sếp!')}</td></tr>
                 )}
               </tbody>
             </table>
             {pages > 1 && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'center', marginTop: 10 }}>
-                <button className="btn" disabled={p === 0} onClick={() => setPage(p - 1)}>← Trước</button>
-                <span style={{ fontSize: 12 }}>Trang {p + 1}/{pages} · {tasks.length} nhiệm vụ</span>
-                <button className="btn" disabled={p >= pages - 1} onClick={() => setPage(p + 1)}>Sau →</button>
+                <button className="btn" disabled={p === 0} onClick={() => setPage(p - 1)}>← {tr('Trước')}</button>
+                <span style={{ fontSize: 12 }}>{tr('Trang')} {p + 1}/{pages} · {tasks.length} {tr('nhiệm vụ')}</span>
+                <button className="btn" disabled={p >= pages - 1} onClick={() => setPage(p + 1)}>{tr('Sau')} →</button>
               </div>
             )}
           </>
@@ -944,24 +961,24 @@ function LedgerPanel({ stats, onClose }: { stats: Stats | null; onClose: () => v
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>
-          Kế toán <button className="btn" onClick={onClose}>Đóng</button>
+          {tr('Kế toán')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         {stats ? (
           <div className="kv">
-            <div className="k">Tổng nhiệm vụ</div><div>{stats.tasksTotal}</div>
-            <div className="k">Đã hoàn thành</div><div>{stats.tasksDone}</div>
-            <div className="k">Lượt gọi LLM</div><div>{stats.llmCalls}</div>
-            <div className="k">Token đã dùng (ước tính)</div>
+            <div className="k">{tr('Tổng nhiệm vụ')}</div><div>{stats.tasksTotal}</div>
+            <div className="k">{tr('Đã hoàn thành')}</div><div>{stats.tasksDone}</div>
+            <div className="k">{tr('Lượt gọi LLM')}</div><div>{stats.llmCalls}</div>
+            <div className="k">{tr('Token đã dùng (ước tính)')}</div>
             <div>
               {stats.tokensIn + stats.tokensOut > 0
-                ? `${(stats.tokensIn + stats.tokensOut).toLocaleString('vi-VN')} (vào ${stats.tokensIn.toLocaleString('vi-VN')} · ra ${stats.tokensOut.toLocaleString('vi-VN')})`
+                ? `${(stats.tokensIn + stats.tokensOut).toLocaleString(getLang() === 'en' ? 'en-US' : 'vi-VN')} (${tr('vào')} ${stats.tokensIn.toLocaleString(getLang() === 'en' ? 'en-US' : 'vi-VN')} · ${tr('ra')} ${stats.tokensOut.toLocaleString(getLang() === 'en' ? 'en-US' : 'vi-VN')})`
                 : '0'}
             </div>
-            <div className="k">Model gần nhất</div><div>{stats.lastModel || '—'}</div>
-            <div className="k">Lương nhân sự</div><div>0 ₫ (agent không nhận lương 😜)</div>
+            <div className="k">{tr('Model gần nhất')}</div><div>{stats.lastModel || '—'}</div>
+            <div className="k">{tr('Lương nhân sự')}</div><div>{tr('0 ₫ (agent không nhận lương 😜)')}</div>
           </div>
         ) : (
-          <div>Đang tải…</div>
+          <div>{tr('Đang tải…')}</div>
         )}
       </div>
     </div>
@@ -1007,7 +1024,7 @@ function SettingsPanel({
       const s = await api.updateSettings({ workspaceDir: wsDir.trim() })
       setSettings(s)
       setWsDir(s.workspaceDir)
-      setWsMsg('✓ đã lưu')
+      setWsMsg(`✓ ${tr('đã lưu')}`)
       setWsFiles((await api.workspaceFiles()).files.slice(0, 8))
     } catch (e) {
       setWsMsg(`⚠ ${String((e as Error).message)}`)
@@ -1027,27 +1044,26 @@ function SettingsPanel({
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>
-          Cài đặt <button className="btn" onClick={onClose}>Đóng</button>
+          {tr('Cài đặt')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         <div className="kv">
-          <div className="k">Workspace folder</div>
+          <div className="k">{tr('Workspace folder')}</div>
           <div>
             <div style={{ display: 'flex', gap: 6 }}>
               <input
                 style={{ flex: 1, border: '1px solid var(--line-strong)', background: 'var(--panel)', padding: '4px 6px' }}
                 value={wsDir}
                 onChange={(e) => setWsDir(e.target.value)}
-                placeholder="~/Documents/ai-office hoặc đường dẫn tuyệt đối"
+                placeholder={tr('~/Documents/ai-office hoặc đường dẫn tuyệt đối')}
               />
-              <button className="btn" onClick={() => setPickerOpen(true)}>Chọn…</button>
-              <button className="btn" onClick={saveWs}>Lưu</button>
+              <button className="btn" onClick={() => setPickerOpen(true)}>{tr('Chọn…')}</button>
+              <button className="btn" onClick={saveWs}>{tr('Lưu')}</button>
             </div>
             <div style={{ color: 'var(--faint)', fontSize: 11, marginTop: 4 }}>
-              Kho tài liệu chung của phòng: Sếp bỏ tệp tham khảo vào đây (mở bằng Finder),
-              nhân sự sẽ đọc khi làm việc và ghi kết quả vào <code>task-&lt;id&gt;/…</code>.
-              Để trống rồi Lưu = quay về thư mục mặc định.
+              {tr('Kho tài liệu chung của phòng: Sếp bỏ tệp tham khảo vào đây (mở bằng Finder), nhân sự sẽ đọc khi làm việc và ghi kết quả vào')} <code>task-&lt;id&gt;/…</code>.
+              {' '}{tr('Để trống rồi Lưu = quay về thư mục mặc định.')}
               {settings && (
-                <> Hiện có <b>{settings.workspaceFiles}</b> tệp{settings.workspaceIsDefault ? ' (mặc định)' : ''}.</>
+                <> {tr('Hiện có')} <b>{settings.workspaceFiles}</b> {tr('tệp')}{settings.workspaceIsDefault ? ` (${tr('mặc định')})` : ''}.</>
               )}
             </div>
             {wsMsg && <div style={{ fontSize: 11, marginTop: 2 }}>{wsMsg}</div>}
@@ -1059,7 +1075,7 @@ function SettingsPanel({
               </div>
             )}
           </div>
-          <div className="k">Góc nhìn văn phòng</div>
+          <div className="k">{tr('Góc nhìn văn phòng')}</div>
           <div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input
@@ -1085,11 +1101,10 @@ function SettingsPanel({
               ))}
             </div>
             <div style={{ color: 'var(--faint)', fontSize: 11, marginTop: 4 }}>
-              Xoay tự do 360° quanh tâm sàn — kéo chuột trái/phải ngay trên khung mô phỏng,
-              hoặc chỉnh bằng thanh trượt / nút góc ở đây.
+              {tr('Xoay tự do 360° quanh tâm sàn — kéo chuột trái/phải ngay trên khung mô phỏng, hoặc chỉnh bằng thanh trượt / nút góc ở đây.')}
             </div>
           </div>
-          <div className="k feat-head">Chức năng phòng</div>
+          <div className="k feat-head">{tr('Chức năng phòng')}</div>
           <div className="feat-list">
             {FEATURE_ROWS.map(([key, label, desc]) => {
               const on = settings?.features?.[key] ?? true
@@ -1104,23 +1119,23 @@ function SettingsPanel({
                     <span className="slider" />
                   </span>
                   <span className="feat-text">
-                    <b>{label}</b>
-                    <span className="feat-desc">{desc}</span>
+                    <b>{tr(label)}</b>
+                    <span className="feat-desc">{tr(desc)}</span>
                   </span>
                 </label>
               )
             })}
           </div>
-          <div className="k">Vận hành</div>
+          <div className="k">{tr('Vận hành')}</div>
           <div>
-            Mỗi agent xử lý thật phần việc của mình qua LLM của SenClaw daemon.
-            {llmOk === false && <span style={{ color: 'var(--danger)' }}> Hiện không kết nối được daemon LLM.</span>}
-            {llmOk === true && <span style={{ color: 'var(--done)' }}> Daemon LLM sẵn sàng.</span>}
+            {tr('Mỗi agent xử lý thật phần việc của mình qua LLM của SenClaw daemon.')}
+            {llmOk === false && <span style={{ color: 'var(--danger)' }}> {tr('Hiện không kết nối được daemon LLM.')}</span>}
+            {llmOk === true && <span style={{ color: 'var(--done)' }}> {tr('Daemon LLM sẵn sàng.')}</span>}
           </div>
-          <div className="k">MCP cho agent ngoài</div>
+          <div className="k">{tr('MCP cho agent ngoài')}</div>
           <div>
-            Server <code>ai-office-mcp</code> — agent SenClaw có thể giao việc bằng{' '}
-            <code>office_create_task</code> và lấy kết quả bằng <code>office_get_report</code>.
+            {tr('Server')} <code>ai-office-mcp</code> — {tr('agent SenClaw có thể giao việc bằng')}{' '}
+            <code>office_create_task</code> {tr('và lấy kết quả bằng')} <code>office_get_report</code>.
           </div>
         </div>
         {pickerOpen && (
@@ -1135,7 +1150,7 @@ function SettingsPanel({
                 const s = await api.updateSettings({ workspaceDir: path })
                 setSettings(s)
                 setWsDir(s.workspaceDir)
-                setWsMsg('✓ đã lưu')
+                setWsMsg(`✓ ${tr('đã lưu')}`)
                 setWsFiles((await api.workspaceFiles()).files.slice(0, 8))
               } catch (e) {
                 setWsMsg(`⚠ ${String((e as Error).message)}`)
@@ -1178,10 +1193,10 @@ function FolderPicker({
 
   const shortcuts: [string, string][] = listing
     ? [
-        ['🏠 Home', listing.home],
-        ['📄 Documents', `${listing.home}/Documents`],
-        ['🖥 Desktop', `${listing.home}/Desktop`],
-        ['⬇ Downloads', `${listing.home}/Downloads`],
+        [`🏠 ${tr('Home')}`, listing.home],
+        [`📄 ${tr('Documents')}`, `${listing.home}/Documents`],
+        [`🖥 ${tr('Desktop')}`, `${listing.home}/Desktop`],
+        [`⬇ ${tr('Downloads')}`, `${listing.home}/Downloads`],
       ]
     : []
 
@@ -1189,8 +1204,8 @@ function FolderPicker({
     <div className="overlay" onClick={onClose}>
       <div className="modal" style={{ width: 'min(560px, 90vw)' }} onClick={(e) => e.stopPropagation()}>
         <h2>
-          Chọn workspace folder
-          <button className="btn" onClick={onClose}>Đóng</button>
+          {tr('Chọn workspace folder')}
+          <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         {shortcuts.length > 0 && (
           <div className="chips" style={{ marginBottom: 8 }}>
@@ -1207,7 +1222,7 @@ function FolderPicker({
         {error && <div className="sysline">⚠ {error}</div>}
         <div className="dir-list">
           {listing?.parent && (
-            <div className="dir-row" onClick={() => load(listing.parent!)}>⬆ .. (lên thư mục cha)</div>
+            <div className="dir-row" onClick={() => load(listing.parent!)}>⬆ .. ({tr('lên thư mục cha')})</div>
           )}
           {listing?.dirs.map((d) => (
             <div className="dir-row" key={d} onClick={() => load(`${listing.path}/${d}`)}>
@@ -1215,12 +1230,12 @@ function FolderPicker({
             </div>
           ))}
           {listing && listing.dirs.length === 0 && (
-            <div style={{ color: 'var(--faint)', padding: 6 }}>(không có thư mục con)</div>
+            <div style={{ color: 'var(--faint)', padding: 6 }}>({tr('không có thư mục con')})</div>
           )}
         </div>
         <div style={{ marginTop: 10, textAlign: 'right' }}>
           <button className="btn" disabled={!listing} onClick={() => listing && onSelect(listing.path)}>
-            ✓ Chọn thư mục này
+            ✓ {tr('Chọn thư mục này')}
           </button>
         </div>
       </div>

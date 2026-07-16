@@ -4,9 +4,12 @@ import remarkGfm from 'remark-gfm'
 import { Avatar } from './avatar'
 import { SpeakButton } from './voice'
 import type { Agent, OfficeEvent } from './types'
+import { tr, getLang } from './i18n'
 
 function hhmmss(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString('vi-VN', { hour12: false })
+  return new Date(ts * 1000).toLocaleTimeString(getLang() === 'en' ? 'en-US' : 'vi-VN', {
+    hour12: false,
+  })
 }
 
 /** Single newlines become hard breaks so plain-text messages (bullets,
@@ -40,8 +43,8 @@ export function Feed({
   }, [events.length])
 
   const nameOf = (key: string): string => {
-    if (key === 'sep') return 'SẾP'
-    if (key === 'he-thong') return 'HỆ THỐNG'
+    if (key === 'sep') return tr('SẾP')
+    if (key === 'he-thong') return tr('HỆ THỐNG')
     const found = agents.find((a) => a.key === key)
     return found ? found.name : key.replace(/-/g, ' ').toUpperCase()
   }
@@ -69,10 +72,10 @@ export function Feed({
             return (
               <div key={e.id} className="msg report">
                 <div className="who" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Avatar agentKey={e.actor} size={15} /> {nameOf(e.actor)} — BÁO CÁO ·{' '}
+                  <Avatar agentKey={e.actor} size={15} /> {nameOf(e.actor)} — {tr('BÁO CÁO')} ·{' '}
                   {hhmmss(e.created_at)}
                   <span style={{ marginLeft: 'auto' }}>
-                    <SpeakButton text={e.text} label="Đọc" />
+                    <SpeakButton text={e.text} label={tr('Đọc')} />
                   </span>
                 </div>
                 <div className="box">

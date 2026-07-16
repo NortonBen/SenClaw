@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { api } from './api'
+import { tr } from './i18n'
 
 /* Voice I/O for the office: a mic button that records PCM in the browser,
    encodes a WAV (the daemon's Whisper decoder uses symphonia, which reads WAV
@@ -95,7 +96,7 @@ export function MicButton({ onText, disabled }: { onText: (t: string) => void; d
       try {
         await start()
       } catch {
-        setErr('Không truy cập được micro')
+        setErr(tr('Không truy cập được micro'))
       }
       return
     }
@@ -105,7 +106,7 @@ export function MicButton({ onText, disabled }: { onText: (t: string) => void; d
     try {
       const { text } = await api.stt(blob)
       if (text) onText(text)
-      else setErr('Không nghe rõ, thử lại')
+      else setErr(tr('Không nghe rõ, thử lại'))
     } catch (e) {
       setErr(String((e as Error).message))
     } finally {
@@ -118,11 +119,11 @@ export function MicButton({ onText, disabled }: { onText: (t: string) => void; d
       <button
         type="button"
         className={`btn mic${recording ? ' rec' : ''}`}
-        title={recording ? 'Dừng & chuyển thành chữ' : 'Giao việc bằng giọng nói'}
+        title={recording ? tr('Dừng & chuyển thành chữ') : tr('Giao việc bằng giọng nói')}
         disabled={disabled || busy}
         onClick={toggle}
       >
-        {busy ? '…' : recording ? '● Dừng' : '🎤'}
+        {busy ? '…' : recording ? `● ${tr('Dừng')}` : '🎤'}
       </button>
       {err && <span className="mic-err">{err}</span>}
     </span>
@@ -168,7 +169,7 @@ export function SpeakButton({ text, label }: { text: string; label?: string }) {
   }
 
   return (
-    <button type="button" className="btn speak" title="Đọc to bằng giọng nói" onClick={toggle}>
+    <button type="button" className="btn speak" title={tr('Đọc to bằng giọng nói')} onClick={toggle}>
       {state === 'loading' ? '…' : state === 'playing' ? '⏹' : '🔊'}
       {label ? ` ${label}` : ''}
     </button>
