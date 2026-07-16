@@ -28,6 +28,49 @@ pub struct JsonRpcResponse {
     pub error: Option<Value>,
 }
 
+/// Actionable error for `ssh_start_connect` / `ssh_execute_command` when the
+/// connection parameters can't be resolved. The old message ("Missing host,
+/// port, or user") gave the model nothing to correct, so it would blindly
+/// re-issue the same failing call and spin. This spells out exactly what to
+/// pass — and, when a `host_id` was supplied but didn't match, says so instead
+/// of pretending the parameters were simply absent.
+fn missing_connection_params_error(args: &Value, state: &AppState) -> String {
+    let hosts = state.hosts.get_all();
+    let known: Vec<String> = hosts
+        .iter()
+        .map(|h| format!("- id={} (name: {}, {}@{}:{})", h.id, h.name, h.user, h.host, h.port))
+        .collect();
+
+    if let Some(id) = args["host_id"].as_str() {
+        if !id.is_empty() && !hosts.iter().any(|h| h.id == id) {
+            return if known.is_empty() {
+                format!(
+                    "host_id '{id}' was not found and no hosts are saved. Add one with ssh_add_host, \
+                     or pass explicit host, port and user — do not retry the same host_id."
+                )
+            } else {
+                format!(
+                    "host_id '{id}' was not found. Call ssh_list_hosts and use the exact `id` of the \
+                     target server (do not retry the same value). Known hosts:\n{}",
+                    known.join("\n")
+                )
+            };
+        }
+    }
+
+    if known.is_empty() {
+        "Missing connection parameters. Pass either a saved `host_id`, or all of `host`, `port` and \
+         `user`. No hosts are currently saved — add one with ssh_add_host first."
+            .to_string()
+    } else {
+        format!(
+            "Missing connection parameters. Pass either `host_id` (from ssh_list_hosts) OR all three of \
+             `host`, `port`, `user` — not an empty call. Saved hosts:\n{}",
+            known.join("\n")
+        )
+    }
+}
+
 pub async fn mcp_sse(State(state): State<Arc<AppState>>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.mcp_tx.subscribe();
     
@@ -378,9 +421,8 @@ pub async fn mcp_message(
             }
 
             if host.is_none() || user.is_none() || port.is_none() {
-                let result = json!({ "isError": true, "content": [{ "type": "text", "text": "Missing host, port, or user" }
-
-] });
+                let text = missing_connection_params_error(args, &state);
+                let result = json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
                 let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
                 let _ = state.mcp_tx.send(resp.to_string());
                 return Json(resp);
@@ -525,9 +567,8 @@ pub async fn mcp_message(
                 }
 
                 if host.is_none() || user.is_none() || port.is_none() {
-                    let result = json!({ "isError": true, "content": [{ "type": "text", "text": "Missing host, port, or user" }
-
-] });
+                    let text = missing_connection_params_error(args, &state);
+                    let result = json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
                     let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
                     let _ = state.mcp_tx.send(resp.to_string());
                     return Json(resp);

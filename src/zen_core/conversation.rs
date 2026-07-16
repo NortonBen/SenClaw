@@ -535,6 +535,26 @@ to the user now, in the user's language. Include the concrete findings, data, an
 collected. Do not mention the tool budget, do not apologize, and do not describe what you would \
 have done — just deliver the best answer possible from the information above.";
 
+/// Instruction injected when a tool has failed several times in a row with the
+/// same error. Gives the model one clear chance to self-correct (fix the
+/// argument the error names) or stop honestly — before the hard stop below.
+const TOOL_ERROR_NUDGE: &str = "The tool you just called has now failed several times in a row \
+with the same error (see the error results above). Stop repeating the identical call. Either \
+(a) fix the specific problem the error describes — for example supply the missing or incorrect \
+argument it names — and try once more, or (b) if you cannot fix it, stop calling tools and tell \
+the user plainly, in their language, that the operation failed, quoting the error. Do NOT \
+fabricate, estimate, or guess any result you were unable to obtain.";
+
+/// Instruction injected when a repeated tool-error loop is force-stopped. Unlike
+/// `FINAL_ANSWER_NUDGE` this must NOT invite the model to synthesize findings —
+/// there are none; the whole point is that the tool never succeeded — so it
+/// explicitly forbids inventing data and asks for an honest failure report.
+const TOOL_ERROR_FINAL_NUDGE: &str = "A tool you depended on kept returning errors (see the \
+repeated error results above) and tool access is now disabled. You could NOT obtain the \
+information this task required. Do not invent, estimate, or guess any results. Reply to the user \
+in their language: state clearly which operation failed, quote the error message, and say the \
+task could not be completed. Do not add anything you did not actually obtain.";
+
 /// Max retries for silent empty completions (LLM returned 200 OK with 0 blocks
 /// and 0 tool calls — observed with MLX 4-bit / qwen3.5-4b-optiq under heavy
 /// tool counts). Each retry backs off 500ms × attempt. Override with
@@ -747,6 +767,42 @@ fn is_duplicate_exempt(block: &ContentBlock) -> bool {
         if DUPLICATE_EXEMPT_TOOLS.contains(&name.as_str()))
 }
 
+/// True when every freshly-executed tool call this turn came back as an error.
+/// Only the results belonging to `fresh` (actually-run) calls are considered —
+/// synthetic duplicate-interception notes (`is_error: false`) are ignored, and
+/// a turn with no fresh calls returns false. Used by the error-loop guard so a
+/// tool that keeps failing (e.g. `ssh_start_connect` → "Missing host, port, or
+/// user") is caught regardless of whether the model narrates text alongside it.
+fn fresh_results_all_errored(results: &[ContentBlock], fresh: &[ContentBlock]) -> bool {
+    let fresh_ids: std::collections::HashSet<&str> = fresh
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    if fresh_ids.is_empty() {
+        return false;
+    }
+    let mut saw = false;
+    for r in results {
+        if let ContentBlock::ToolResult {
+            tool_use_id,
+            is_error,
+            ..
+        } = r
+        {
+            if fresh_ids.contains(tool_use_id.as_str()) {
+                saw = true;
+                if !*is_error {
+                    return false;
+                }
+            }
+        }
+    }
+    saw
+}
+
 /// Run the conversation query loop. Returns the final message history.
 ///
 /// This is an async generator conceptually — each "turn" is a call to the LLM
@@ -768,6 +824,16 @@ pub async fn query(
     let mut last_sig: Option<String> = None;
     let mut stall_streak: usize = 0;
     let mut nudged = false;
+    // Error-loop guard: consecutive turns whose freshly-executed tool calls ALL
+    // returned an error for the same tool(s). Tracked independently of the
+    // text-based stall above because a model that narrates a sentence every turn
+    // while re-calling a failing tool resets `stall_streak` and would otherwise
+    // spin until the `max_turns` backstop — then salvage the loop into a
+    // *fabricated* final answer. This guard nudges early and, if unresolved,
+    // stops with a reported error instead of a made-up success.
+    let mut last_error_sig: Option<String> = None;
+    let mut error_streak: usize = 0;
+    let mut error_nudged = false;
     // Set when the turn budget (or stall hard-stop) is exhausted: the next LLM
     // call runs with tools disabled and its text reply is accepted as the final
     // answer — salvaging the gathered context instead of erroring out with
@@ -1572,29 +1638,87 @@ pub async fn query(
         } else {
             stall_streak = 0;
         }
-        last_sig = Some(sig);
+        last_sig = Some(sig.clone());
 
-        let hard_stop = stall_streak >= stall_limit * 2;
+        // 6b. Error-loop detection: consecutive turns whose freshly-run tool
+        //     calls ALL errored on the same tool(s). Unlike the stall counter
+        //     above this ignores narration text — a model that comments every
+        //     turn while a tool keeps failing (e.g. `ssh_start_connect` →
+        //     "Missing host, port, or user") never trips the text-based stall,
+        //     so without this it would loop to the `max_turns` cap and then
+        //     salvage the failures into a *fabricated* answer. Nudge to
+        //     fix-or-report, then hard-stop with a reported error.
+        let fresh_all_errored = fresh_results_all_errored(&tool_results, &fresh);
+        if fresh_all_errored && Some(&sig) == last_error_sig.as_ref() {
+            error_streak += 1;
+        } else {
+            error_streak = 0;
+        }
+        last_error_sig = if fresh_all_errored { Some(sig.clone()) } else { None };
+
+        let stall_hard_stop = stall_streak >= stall_limit * 2;
         let should_nudge = !nudged && stall_streak >= stall_limit;
+        let error_hard_stop = error_streak >= stall_limit * 2;
+        let error_should_nudge = !error_nudged && error_streak >= stall_limit;
+        let hard_stop = stall_hard_stop || error_hard_stop;
 
         // 7. Recurse: append the assistant turn and the tool results. A stall
         //    hard-stop doesn't abort the session — it disables tools and forces
         //    one final answer turn so the gathered context isn't thrown away.
         messages.push(assistant_msg);
         if hard_stop {
+            forcing_final = true;
+        }
+        if error_hard_stop {
+            warn!(
+                "[{}] tool-error loop not resolved ({} consecutive all-error turns on '{}') — reporting failure and forcing an honest final answer",
+                config.agent_id, error_streak, sig
+            );
+            // Report the failure so schedules / the UI record a real error
+            // instead of a silent (fabricated) success. The forced-final turn
+            // below still runs so the user also gets a plain-language reply.
+            config
+                .event_bus
+                .emit(EngineEvent::SessionError(SessionErrorData {
+                    error_type: "tool_error_loop".to_string(),
+                    error: SessionErrorDetail {
+                        code: "TOOL_ERROR_LOOP".to_string(),
+                        message: format!(
+                            "Tool '{sig}' failed on {error_streak} consecutive turns; stopping so \
+                             the failure is reported instead of looping or fabricating a result."
+                        ),
+                        details: None,
+                    },
+                }));
+        } else if stall_hard_stop {
             warn!(
                 "[{}] tool-call stall not resolved after nudge ({} consecutive turns) — forcing a final answer (tools disabled)",
                 config.agent_id, stall_streak
             );
-            forcing_final = true;
         }
+        // Prefer the error-specific final nudge (which forbids fabricating
+        // results) when we stopped because of a tool-error loop.
+        let final_nudge = if error_hard_stop {
+            TOOL_ERROR_FINAL_NUDGE
+        } else {
+            FINAL_ANSWER_NUDGE
+        };
         if !tool_results.is_empty() {
             let mut blocks = tool_results;
             // Mid-turn user messages ride along with this round's tool results.
             inject_pending_inputs(&mut blocks, config);
             if hard_stop {
                 blocks.push(ContentBlock::Text {
-                    text: FINAL_ANSWER_NUDGE.to_string(),
+                    text: final_nudge.to_string(),
+                });
+            } else if error_should_nudge {
+                error_nudged = true;
+                info!(
+                    "[{}] tool-error loop detected ({} consecutive all-error turns on '{}') — nudging to fix or report",
+                    config.agent_id, error_streak, sig
+                );
+                blocks.push(ContentBlock::Text {
+                    text: TOOL_ERROR_NUDGE.to_string(),
                 });
             } else if should_nudge {
                 nudged = true;
@@ -1611,7 +1735,7 @@ pub async fn query(
             messages.push(create_user_message(blocks));
         } else if hard_stop {
             messages.push(create_user_message(vec![ContentBlock::Text {
-                text: FINAL_ANSWER_NUDGE.to_string(),
+                text: final_nudge.to_string(),
             }]));
         }
 
@@ -1781,6 +1905,49 @@ mod tests {
         assert_ne!(a, b);
         // Non-tool block → no signature.
         assert!(tool_call_sig(&ContentBlock::Text { text: "x".into() }).is_none());
+    }
+
+    #[test]
+    fn fresh_all_errored_only_counts_freshly_run_calls() {
+        let tu = |id: &str, name: &str| ContentBlock::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input: serde_json::json!({}),
+        };
+        let res = |id: &str, is_error: bool| ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: "x".into(),
+            is_error,
+        };
+
+        // Single fresh call that errored → true.
+        assert!(fresh_results_all_errored(
+            &[res("a", true)],
+            &[tu("a", "ssh_start_connect")]
+        ));
+
+        // Fresh call that succeeded → false.
+        assert!(!fresh_results_all_errored(
+            &[res("a", false)],
+            &[tu("a", "ssh_start_connect")]
+        ));
+
+        // Mixed: one fresh error, one fresh success → not ALL errored → false.
+        assert!(!fresh_results_all_errored(
+            &[res("a", true), res("b", false)],
+            &[tu("a", "t"), tu("b", "t")]
+        ));
+
+        // No fresh calls (all were duplicates) → false, even if a synthetic
+        // duplicate note happens to be present.
+        assert!(!fresh_results_all_errored(&[res("dup", false)], &[]));
+
+        // A non-fresh (duplicate) success note must not mask a fresh error:
+        // only the fresh id 'a' is inspected → true.
+        assert!(fresh_results_all_errored(
+            &[res("a", true), res("dup", false)],
+            &[tu("a", "t")]
+        ));
     }
 
     #[test]
