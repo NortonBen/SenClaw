@@ -1,25 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import { traitsFor } from './avatar'
-import type { Agent, OfficeEvent } from './types'
+import type { Agent, OfficeEvent, Team } from './types'
 
-/* Isometric wireframe office, mirroring the reel: desks on a 2:1 iso grid,
-   one figure per agent, status dots, walk-to-handoff animation and speech
-   bubbles. Pure SVG, theme-aware (every color is a CSS variable). */
+/* Isometric wireframe office. The whole COMPANY is shown at once: every team
+   sits as its own pod (a compact 2-column cluster of desks), the pods laid
+   out side by side, with the CEO's desk front-and-centre. The view orbits
+   freely (any angle): `iso()` rotates a layout point around the floor centre
+   before projecting, so the whole room turns together. `isoRaw()` is the pure
+   projection (rotation-invariant centre only). Pure SVG, theme-aware. */
 
 const ISO_X = 46
 const ISO_Y = 23
 
-/* Fixed 9×5 floor. The view orbits freely (any angle): `iso()` rotates a
-   layout point around the floor centre before projecting, so the whole room
-   — desks, figures, props, walls — turns together. `isoRaw()` is the pure
-   projection (rotation-invariant centre only). */
-const FW = 9
-const FD = 5
-const CXL = FW / 2 // floor centre in layout units
-const CYL = FD / 2
-
+/* Floor size is dynamic (depends on how many teams / how big they are). The
+   centre is recomputed each render via setScene(). */
 let ROT_RAD = 0
-function setRotation(deg: number) {
+let CXL = 4.5
+let CYL = 2.5
+function setScene(fw: number, fd: number, deg: number) {
+  CXL = fw / 2
+  CYL = fd / 2
   ROT_RAD = (deg * Math.PI) / 180
 }
 
@@ -47,36 +47,42 @@ function pts(list: [number, number][]): string {
   return list.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(' ')
 }
 
-/** Desk slots spread evenly across the floor: four along the back wall,
- *  manager front-left, QA front-centre, the boss's larger desk front-right. */
-const MANAGER_SLOT = { x: 0.9, y: 3.4 }
-const QA_SLOT = { x: 4.9, y: 3.4 }
-const WORKER_SLOTS = [
-  { x: 0.9, y: 1.0 },
-  { x: 2.9, y: 1.0 },
-  { x: 4.9, y: 1.0 },
-  { x: 6.9, y: 1.0 },
-  { x: 2.9, y: 3.4 },
-]
-const SEP_DESK = { x: 6.9, y: 3.5, label: 'SẾP (BẠN)' }
+/* ---- pod geometry (one cluster per team) ------------------------------- */
+const DESK_W = 1.1
+const COL_GAP = 1.7 // horizontal spacing between the 2 columns of a pod
+const ROW_GAP = 2.3 // depth between desk rows (leaves room for a figure)
+const POD_COLS = 2
+const POD_PAD = 0.5 // padding inside a pod zone
+const POD_GAP = 1.6 // gap between adjacent pods
+const LABEL_H = 1.0 // space above a pod for its team name plate
+const MARGIN = 1.0 // floor margin around everything
+const CEO_GAP = 1.4 // gap between the pods row and the CEO desk
 
-function deskMap(agents: Agent[]): Record<string, { x: number; y: number; label: string }> {
-  const map: Record<string, { x: number; y: number; label: string }> = { sep: SEP_DESK }
-  let w = 0
-  let mgrUsed = false
-  let qaUsed = false
-  for (const a of agents) {
-    if (a.kind === 'manager' && !mgrUsed) {
-      map[a.key] = { ...MANAGER_SLOT, label: a.name }
-      mgrUsed = true
-    } else if (a.kind === 'qa' && !qaUsed) {
-      map[a.key] = { ...QA_SLOT, label: a.name }
-      qaUsed = true
-    } else {
-      map[a.key] = { ...(WORKER_SLOTS[w++] ?? MANAGER_SLOT), label: a.name }
-    }
-  }
-  return map
+const podWidth = (POD_COLS - 1) * COL_GAP + DESK_W // 2.8
+function podRows(n: number): number {
+  return Math.max(1, Math.ceil(Math.max(n, 1) / POD_COLS))
+}
+function podDepth(n: number): number {
+  return (podRows(n) - 1) * ROW_GAP + 0.62 + 1.4 // desk depth + figure room
+}
+
+const KIND_RANK: Record<string, number> = { manager: 0, worker: 1, qa: 2 }
+
+interface DeskInfo {
+  x: number
+  y: number
+  label: string
+  team: string
+  agentKey: string
+}
+interface Pod {
+  team: string
+  name: string
+  x: number
+  y: number
+  w: number
+  depth: number
+  list: Agent[]
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -311,13 +317,22 @@ function Wall({
   const p2 = iso(b[0], b[1])
   const t1: [number, number] = [p1[0], p1[1] - wallH]
   const t2: [number, number] = [p2[0], p2[1] - wallH]
-  const zTop = 62
-  const zBot = 26
-  const zMid = (zTop + zBot) / 2
   const at = (f: number, z: number): [number, number] => {
     const base = lerp(p1, p2, f)
     return [base[0], base[1] - z]
   }
+  // Window = a horizontal glass ribbon divided into fixed-size panes, so it
+  // reads the same whether the wall is short or very long (many teams).
+  const lenWorld = Math.hypot(b[0] - a[0], b[1] - a[1])
+  const zTop = 58
+  const zBot = 30
+  const zMid = (zTop + zBot) / 2
+  const pad = 0.9
+  const usable = lenWorld - 2 * pad
+  const nPanes = usable > 1 ? Math.max(1, Math.round(usable / 1.5)) : 0
+  const f0 = pad / lenWorld
+  const f1 = 1 - pad / lenWorld
+  const fAt = (k: number) => f0 + ((f1 - f0) * k) / nPanes
   return (
     <g>
       <polygon points={pts([t1, t2, p2, p1])} fill="var(--ink)" fillOpacity="0.04" stroke="none" />
@@ -325,27 +340,29 @@ function Wall({
         <polyline points={pts([t1, p1, p2, t2])} />
         <line x1={t1[0]} y1={t1[1]} x2={t2[0]} y2={t2[1]} />
       </g>
-      {win && (
+      {win && nPanes > 0 && (
         <g stroke="var(--line-strong)" strokeWidth="1">
+          {/* glass */}
           <polygon
-            points={pts([at(0.3, zTop), at(0.7, zTop), at(0.7, zBot), at(0.3, zBot)])}
+            points={pts([at(f0, zTop), at(f1, zTop), at(f1, zBot), at(f0, zBot)])}
             fill="var(--handoff)"
             fillOpacity="0.07"
           />
-          <line x1={at(0.5, zTop)[0]} y1={at(0.5, zTop)[1]} x2={at(0.5, zBot)[0]} y2={at(0.5, zBot)[1]} />
-          <line x1={at(0.3, zMid)[0]} y1={at(0.3, zMid)[1]} x2={at(0.7, zMid)[0]} y2={at(0.7, zMid)[1]} />
-          <g stroke="var(--faint)" strokeWidth="0.8" opacity="0.7" fill="none">
-            {sun ? (
-              <circle cx={at(0.6, 48)[0]} cy={at(0.6, 48)[1]} r="4.5" fill="var(--working)" fillOpacity="0.25" />
-            ) : (
-              <polyline
-                points={pts([
-                  at(0.34, 30), at(0.34, 42), at(0.43, 43), at(0.43, 50), at(0.52, 51),
-                  at(0.52, 37), at(0.6, 38), at(0.6, 47), at(0.66, 47), at(0.66, 31),
-                ])}
-              />
-            )}
-          </g>
+          {/* sun on one wall, sitting behind the glass */}
+          {sun && (
+            <circle cx={at(f0 + (f1 - f0) * 0.5, 47)[0]} cy={at(f0 + (f1 - f0) * 0.5, 47)[1]} r="5" fill="var(--working)" fillOpacity="0.22" stroke="none" />
+          )}
+          {/* frame + horizontal transom */}
+          <polygon
+            points={pts([at(f0, zTop), at(f1, zTop), at(f1, zBot), at(f0, zBot)])}
+            fill="none"
+          />
+          <line x1={at(f0, zMid)[0]} y1={at(f0, zMid)[1]} x2={at(f1, zMid)[0]} y2={at(f1, zMid)[1]} strokeWidth="0.8" />
+          {/* vertical mullions between panes */}
+          {Array.from({ length: nPanes - 1 }, (_, i) => {
+            const f = fAt(i + 1)
+            return <line key={i} x1={at(f, zTop)[0]} y1={at(f, zTop)[1]} x2={at(f, zBot)[0]} y2={at(f, zBot)[1]} strokeWidth="0.8" />
+          })}
         </g>
       )}
       {clock && (
@@ -379,8 +396,8 @@ function Plant({ x, y }: { x: number; y: number }) {
 /** Pendant lamp hanging from (unseen) ceiling with a light cone hint. */
 function Lamp({ x, y }: { x: number; y: number }) {
   const p = iso(x, y)
-  const zCord = 118
-  const zShade = 92
+  const zCord = 108
+  const zShade = 86
   return (
     <g stroke="var(--ink)" strokeWidth="0.9">
       <line x1={p[0]} y1={p[1] - zCord} x2={p[0]} y2={p[1] - zShade} />
@@ -399,28 +416,6 @@ function Lamp({ x, y }: { x: number; y: number }) {
   )
 }
 
-/** Rug under the boss's corner. */
-function Rug() {
-  return (
-    <g>
-      <polygon
-        points={pts([iso(6.45, 3.15), iso(8.75, 3.15), iso(8.75, 4.95), iso(6.45, 4.95)])}
-        fill="var(--handoff)"
-        fillOpacity="0.07"
-        stroke="var(--line-strong)"
-        strokeWidth="0.8"
-        strokeDasharray="3 2"
-      />
-      <polygon
-        points={pts([iso(6.7, 3.35), iso(8.5, 3.35), iso(8.5, 4.75), iso(6.7, 4.75)])}
-        fill="none"
-        stroke="var(--line)"
-        strokeWidth="0.6"
-      />
-    </g>
-  )
-}
-
 interface Bubble {
   actor: string
   text: string
@@ -429,14 +424,21 @@ interface Bubble {
 
 export function OfficeScene({
   agents,
+  teams,
+  activeTeam,
   events,
   rotation = 0,
+  zoom = 1,
+  pan = { fx: 0, fy: 0 },
 }: {
   agents: Agent[]
+  teams: Team[]
+  activeTeam: string
   events: OfficeEvent[]
   rotation?: number
+  zoom?: number
+  pan?: { fx: number; fy: number }
 }) {
-  setRotation(rotation)
   const [bubble, setBubble] = useState<Bubble | null>(null)
 
   // While the room is turning, suppress the walk-transition so figures spin
@@ -465,27 +467,83 @@ export function OfficeScene({
     }
   }, [events])
 
-  const desks = deskMap(agents)
-  const fallbackDesk = { ...MANAGER_SLOT, label: '' }
+  /* ---- lay the whole company out: one pod per team, side by side -------- */
+  const teamList: Team[] =
+    teams.length > 0 ? teams : [{ key: '', name: 'VĂN PHÒNG', description: '', sort: 0 }]
+
+  const byTeam = new Map<string, Agent[]>()
+  for (const t of teamList) byTeam.set(t.key, [])
+  for (const a of agents) {
+    const bucket = byTeam.get(a.team) ?? byTeam.get(teamList[0].key)!
+    bucket.push(a)
+  }
+  for (const list of byTeam.values()) {
+    list.sort((a, b) => (KIND_RANK[a.kind] ?? 1) - (KIND_RANK[b.kind] ?? 1) || a.sort - b.sort)
+  }
+
+  const pods: Pod[] = []
+  let cursorX = MARGIN
+  for (const t of teamList) {
+    const list = byTeam.get(t.key) ?? []
+    pods.push({
+      team: t.key,
+      name: t.name,
+      x: cursorX + POD_PAD,
+      y: MARGIN + LABEL_H,
+      w: podWidth,
+      depth: podDepth(list.length),
+      list,
+    })
+    cursorX += podWidth + POD_PAD * 2 + POD_GAP
+  }
+  const rowW = cursorX - POD_GAP + MARGIN
+  const maxDepth = Math.max(3, ...pods.map((p) => p.depth))
+
+  const desks: DeskInfo[] = []
+  for (const p of pods) {
+    p.list.forEach((a, i) => {
+      const col = i % POD_COLS
+      const row = Math.floor(i / POD_COLS)
+      desks.push({
+        x: p.x + col * COL_GAP,
+        y: p.y + row * ROW_GAP,
+        label: a.name,
+        team: p.team,
+        agentKey: a.key,
+      })
+    })
+  }
+
+  const FW = Math.max(rowW, 6)
+  const ceoY = MARGIN + LABEL_H + maxDepth + CEO_GAP
+  const FD = ceoY + 2.4 + MARGIN
+  const SEP_DESK = { x: FW / 2 - 0.75, y: ceoY, label: 'SẾP (BẠN)' }
+
+  setScene(FW, FD, rotation)
+
+  const deskByKey = new Map(desks.map((d) => [d.agentKey, d]))
+  const fallback: DeskInfo = { x: SEP_DESK.x, y: SEP_DESK.y, label: '', team: '', agentKey: '' }
 
   const posOf = (a: Agent): { x: number; y: number } => {
-    const home = desks[a.key] ?? fallbackDesk
+    const home = deskByKey.get(a.key) ?? fallback
     if (a.status === 'handoff') {
       const last = [...events]
         .reverse()
         .find((e) => (e.kind === 'bubble' || e.kind === 'handoff') && e.actor === a.key)
-      const target = last && desks[last.target] ? desks[last.target] : fallbackDesk
+      const target = last && deskByKey.get(last.target) ? deskByKey.get(last.target)! : home
       return { x: target.x - 0.55, y: target.y + 0.4 }
     }
     return { x: home.x + 0.5, y: home.y + 1.05 }
   }
 
+  /* floor grid */
+  const gw = Math.ceil(FW)
+  const gd = Math.ceil(FD)
   const tiles: [number, number][] = []
-  for (let i = 0; i < FW; i++)
-    for (let j = 0; j < FD; j++) if ((i + j) % 2 === 0) tiles.push([i, j])
+  for (let i = 0; i < gw; i++) for (let j = 0; j < gd; j++) if ((i + j) % 2 === 0) tiles.push([i, j])
   const grid: [number, number][][] = []
-  for (let i = 0; i <= FW; i++) grid.push([iso(i, 0), iso(i, FD)])
-  for (let j = 0; j <= FD; j++) grid.push([iso(0, j), iso(FW, j)])
+  for (let i = 0; i <= gw; i++) grid.push([iso(i, 0), iso(i, FD)])
+  for (let j = 0; j <= gd; j++) grid.push([iso(0, j), iso(FW, j)])
 
   // The floor's four edges; the two with the smallest screen-y midpoint are
   // furthest back → they become the walls (so walls never occlude desks).
@@ -501,13 +559,31 @@ export function OfficeScene({
   // Floor centre is rotation-invariant → stable centering offset.
   const floorCenter = isoRaw(CXL, CYL)
 
+  // Dynamic viewBox: bound the projected floor corners, then pad generously
+  // upward (walls + lamps + name plates) and a little on the other sides.
+  const corners = [iso(0, 0), iso(FW, 0), iso(FW, FD), iso(0, FD)]
+  const xs = corners.map((c) => c[0])
+  const ys = corners.map((c) => c[1])
+  const minX = Math.min(...xs) - floorCenter[0] - 46
+  const maxX = Math.max(...xs) - floorCenter[0] + 46
+  const minY = Math.min(...ys) - floorCenter[1] - 150
+  const maxY = Math.max(...ys) - floorCenter[1] + 44
+  // Apply zoom (shrink the box around its centre) and pan (fraction of the
+  // zoomed box, so dragging tracks the pointer 1:1 at any zoom level).
+  const w0 = maxX - minX
+  const h0 = maxY - minY
+  const cx = minX + w0 / 2
+  const cy = minY + h0 / 2
+  const vw = w0 / zoom
+  const vh = h0 / zoom
+  const vx = cx - vw / 2 - pan.fx * vw
+  const vy = cy - vh / 2 - pan.fy * vh
+  const viewBox = `${vx.toFixed(0)} ${vy.toFixed(0)} ${vw.toFixed(0)} ${vh.toFixed(0)}`
+
+  const isDim = (team: string) => activeTeam !== '' && teamList.length > 1 && team !== activeTeam
+
   return (
-    <svg
-      className={`office${spin ? ' spin' : ''}`}
-      viewBox="-372 -262 744 486"
-      role="img"
-      aria-label="Mô phỏng văn phòng"
-    >
+    <svg className={`office${spin ? ' spin' : ''}`} viewBox={viewBox} role="img" aria-label="Mô phỏng văn phòng">
       <defs>
         <radialGradient id="floorGlow" cx="50%" cy="50%" r="60%">
           <stop offset="0%" stopColor="var(--paper)" stopOpacity="0.55" />
@@ -531,7 +607,7 @@ export function OfficeScene({
             stroke="none"
           />
         ))}
-        <ellipse cx={floorCenter[0]} cy={floorCenter[1]} rx="270" ry="105" fill="url(#floorGlow)" stroke="none" />
+        <ellipse cx={floorCenter[0]} cy={floorCenter[1]} rx={FW * 34} ry={FD * 24} fill="url(#floorGlow)" stroke="none" />
         <g stroke="var(--line)" strokeWidth="0.7">
           {grid.map(([a, b], i) => (
             <line key={i} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} />
@@ -544,18 +620,39 @@ export function OfficeScene({
           return <Wall key={ei} a={a} b={b} window sun={idx === 1} clock={idx === 0} />
         })}
 
-        {/* floor decor (rotates with the room) */}
-        <Rug />
-        <Plant x={8.55} y={0.45} />
-        <Plant x={0.45} y={4.6} />
-        <Lamp x={2.9} y={2.2} />
-        <Lamp x={4.9} y={2.2} />
-        <Lamp x={6.9} y={2.2} />
+        {/* per-team zone: a soft rug the pod sits on + lamp overhead */}
+        {pods.map((p) => {
+          const dim = isDim(p.team)
+          const active = p.team === activeTeam && teamList.length > 1
+          const x0 = p.x - POD_PAD
+          const y0 = p.y - 0.35
+          const x1 = p.x + p.w + POD_PAD
+          const y1 = p.y + p.depth
+          return (
+            <g key={`zone-${p.team}`} opacity={dim ? 0.5 : 1}>
+              <polygon
+                points={pts([iso(x0, y0), iso(x1, y0), iso(x1, y1), iso(x0, y1)])}
+                fill={active ? 'var(--working)' : 'var(--handoff)'}
+                fillOpacity={active ? 0.07 : 0.035}
+                stroke={active ? 'var(--working)' : 'var(--line-strong)'}
+                strokeOpacity={active ? 0.5 : 0.4}
+                strokeWidth="0.8"
+                strokeDasharray={active ? undefined : '3 2'}
+              />
+              <Lamp x={p.x + p.w / 2} y={p.y + Math.min(p.depth, maxDepth) / 2} />
+            </g>
+          )
+        })}
+
+        {/* corner plants scale to floor */}
+        <Plant x={FW - 0.5} y={0.45} />
+        <Plant x={0.45} y={FD - 0.5} />
+        <Lamp x={SEP_DESK.x + 0.75} y={SEP_DESK.y + 0.3} />
 
         {/* handoff paths: dashed marching line from walker to target desk */}
         {agents.map((a) => {
           if (!a.enabled || a.status !== 'handoff') return null
-          const from = desks[a.key] ?? fallbackDesk
+          const from = deskByKey.get(a.key) ?? fallback
           const p = posOf(a)
           const f = iso(from.x + 0.5, from.y + 1.05)
           const t = iso(p.x, p.y)
@@ -575,22 +672,55 @@ export function OfficeScene({
           )
         })}
 
+        {/* team name plates, floating above each pod */}
+        {pods.map((p) => {
+          const [lx, ly] = iso(p.x + p.w / 2, p.y - 0.5)
+          const label = p.name.toUpperCase()
+          const plateW = label.length * 6.4 + 16
+          const active = p.team === activeTeam && teamList.length > 1
+          return (
+            <g key={`label-${p.team}`} opacity={isDim(p.team) ? 0.55 : 1}>
+              <rect
+                x={lx - plateW / 2}
+                y={ly - 92}
+                width={plateW}
+                height="15"
+                rx="3"
+                fill={active ? 'var(--ink)' : 'var(--paper)'}
+                fillOpacity={active ? 0.9 : 0.85}
+                stroke={active ? 'var(--working)' : 'var(--line-strong)'}
+                strokeWidth="0.8"
+              />
+              <text
+                x={lx}
+                y={ly - 81.5}
+                textAnchor="middle"
+                fontSize="9.2"
+                fontWeight="600"
+                letterSpacing="1.2"
+                fill={active ? 'var(--paper)' : 'var(--faint)'}
+              >
+                {label}
+              </text>
+            </g>
+          )
+        })}
+
         {/* desks, back-to-front so overlaps read correctly */}
-        {Object.entries(desks)
-          .sort((p, q) => iso(p[1].x, p[1].y)[1] - iso(q[1].x, q[1].y)[1])
-          .map(([key, d]) => {
-            const isSep = key === 'sep'
-            const agent = agents.find((a) => a.key === key)
+        {[...desks.map((d) => ({ ...d, sep: false })), { ...SEP_DESK, team: '', agentKey: 'sep', sep: true }]
+          .sort((p, q) => iso(p.x, p.y)[1] - iso(q.x, q.y)[1])
+          .map((d) => {
+            const agent = agents.find((a) => a.key === d.agentKey)
             const active = !!agent && agent.enabled && agent.status === 'working'
-            const w = isSep ? 1.5 : 1.1
+            const w = d.sep ? 1.5 : 1.1
             const [lx, ly] = iso(d.x + w / 2, d.y + 0.31)
             const label = d.label.toUpperCase()
             const plateW = label.length * 6.2 + 10
+            const dim = (agent && !agent.enabled) || (!d.sep && isDim(d.team))
             return (
-              <g key={key} opacity={agent && !agent.enabled ? 0.35 : 1}>
+              <g key={`desk-${d.agentKey}`} opacity={dim ? 0.4 : 1}>
                 <Chair x={d.x + w * 0.42} y={d.y + 0.95} />
-                <Desk x={d.x} y={d.y} active={active} wide={isSep} />
-                {/* name plate */}
+                <Desk x={d.x} y={d.y} active={active} wide={d.sep} />
                 <rect
                   x={lx - plateW / 2}
                   y={ly - 66}
@@ -619,7 +749,7 @@ export function OfficeScene({
           )
         })()}
 
-        {/* agents */}
+        {/* agents — every team's staff, non-active teams dimmed */}
         {agents.map((a) => {
           const p = posOf(a)
           const [px, py] = iso(p.x, p.y)
@@ -629,13 +759,9 @@ export function OfficeScene({
           const text = showBubble ? (bubble.text.length > 38 ? bubble.text.slice(0, 37) + '…' : bubble.text) : ''
           const bw = 14 + text.length * 4.6
           const variant = a.kind === 'manager' ? 'manager' : a.kind === 'qa' ? 'qa' : undefined
+          const dim = !a.enabled || isDim(a.team)
           return (
-            <g
-              key={a.key}
-              className="walker"
-              transform={`translate(${px},${py})`}
-              opacity={a.enabled ? 1 : 0.3}
-            >
+            <g key={a.key} className="walker" transform={`translate(${px},${py})`} opacity={dim ? 0.32 : 1}>
               <Figure color={color} working={working} variant={variant} agentKey={a.key} />
               {working && (
                 <g fill="var(--working)">

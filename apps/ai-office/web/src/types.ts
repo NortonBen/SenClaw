@@ -1,9 +1,17 @@
+export interface Team {
+  key: string
+  name: string
+  description: string
+  sort: number
+}
+
 export interface Agent {
   key: string
   name: string
   role: string
   duty: string
   kind: 'manager' | 'worker' | 'qa' | string
+  team: string
   enabled: boolean
   auto_assign: boolean
   skills: string[]
@@ -65,6 +73,7 @@ export interface Task {
   id: number
   title: string
   mode: 'demo' | 'live' | string
+  team: string
   status: 'pending' | 'planning' | 'running' | 'review' | 'done' | 'error' | string
   report: string
   llm_calls: number

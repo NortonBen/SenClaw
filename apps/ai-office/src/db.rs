@@ -12,6 +12,12 @@ pub struct Db {
 }
 
 const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS teams (
+  key         TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  sort        INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS agents (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   key         TEXT NOT NULL UNIQUE,
@@ -19,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agents (
   role        TEXT NOT NULL DEFAULT '',
   duty        TEXT NOT NULL DEFAULT '',
   kind        TEXT NOT NULL DEFAULT 'worker',
+  team        TEXT NOT NULL DEFAULT '',
   enabled     INTEGER NOT NULL DEFAULT 1,
   auto_assign INTEGER NOT NULL DEFAULT 1,
   skills      TEXT NOT NULL DEFAULT '[]',
@@ -30,6 +37,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   title       TEXT NOT NULL,
   mode        TEXT NOT NULL DEFAULT 'demo',
+  team        TEXT NOT NULL DEFAULT '',
   status      TEXT NOT NULL DEFAULT 'pending',
   report      TEXT NOT NULL DEFAULT '',
   llm_calls   INTEGER NOT NULL DEFAULT 0,
@@ -78,50 +86,62 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE agents ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE agents ADD COLUMN auto_assign INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE agents ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE agents ADD COLUMN team TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE tasks ADD COLUMN team TEXT NOT NULL DEFAULT ''",
 ];
 
-/// The default staff of the one-person company, mirroring the reel:
-/// manager, research, content, analysis, QA. `(key, name, role, duty, kind)`.
-pub const DEFAULT_AGENTS: &[(&str, &str, &str, &str, &str)] = &[
+/// A member of a team's default roster: `(name, role, duty, kind)`.
+type RosterMember = (&'static str, &'static str, &'static str, &'static str);
+
+/// The AI Office ships with several teams, each an independent crew (one
+/// manager, specialist workers, one QA) that the CEO (user) commands.
+/// `(key, name, description, roster)`.
+pub const DEFAULT_TEAMS: &[(&str, &str, &str, &[RosterMember])] = &[
     (
-        "truong-phong",
-        "TRƯỞNG PHÒNG",
-        "Điều phối & tổng hợp",
-        "Nhận nhiệm vụ từ Sếp, phân công cho anh em, giám sát bàn giao và nộp báo cáo tổng hợp.",
-        "manager",
+        "nctt",
+        "NGHIÊN CỨU THỊ TRƯỜNG",
+        "Đội nghiên cứu thị trường, đối thủ, hành vi khách hàng và cơ hội kinh doanh.",
+        &[
+            ("TRƯỞNG NHÓM", "Điều phối & tổng hợp", "Nhận nhiệm vụ từ Sếp, phân công cho đội và nộp báo cáo tổng hợp.", "manager"),
+            ("NGHIÊN CỨU", "Thu thập & phân tích thông tin", "Phân tích đề bài, thu thập dữ kiện thị trường làm đầu vào cho đội.", "worker"),
+            ("PHÂN TÍCH", "Số liệu, logic, đánh giá", "Rà soát logic, bổ sung số liệu và hoàn thiện kết quả nghiên cứu.", "worker"),
+            ("KIỂM ĐỊNH", "Giám sát chất lượng & rủi ro", "Soát lỗi, chỉ ra rủi ro trước khi bàn giao Trưởng nhóm.", "qa"),
+        ],
     ),
     (
-        "nghien-cuu",
-        "NGHIÊN CỨU",
-        "Thu thập & phân tích thông tin",
-        "Phân tích đề bài, thu thập dữ kiện nền và chuẩn bị đầu vào cho cả phòng.",
-        "worker",
+        "ptud",
+        "PHÁT TRIỂN ỨNG DỤNG",
+        "Đội phát triển sản phẩm/ứng dụng: thiết kế, lập trình, kiểm thử.",
+        &[
+            ("TRƯỞNG NHÓM", "Điều phối & tổng hợp", "Nhận yêu cầu từ Sếp, chia việc cho đội và tổng hợp kết quả bàn giao.", "manager"),
+            ("THIẾT KẾ", "Thiết kế & trải nghiệm", "Phác thảo giao diện, luồng người dùng và trải nghiệm sản phẩm.", "worker"),
+            ("LẬP TRÌNH", "Phát triển tính năng", "Triển khai tính năng, mô tả kỹ thuật và giải pháp khả thi.", "worker"),
+            ("KIỂM THỬ", "Kiểm thử & chất lượng", "Soát lỗi, rủi ro kỹ thuật và xác nhận chất lượng trước khi bàn giao.", "qa"),
+        ],
     ),
     (
-        "noi-dung",
-        "NỘI DUNG",
-        "Viết & biên tập",
-        "Triển khai phần việc chính dựa trên đầu vào của Nghiên cứu.",
-        "worker",
-    ),
-    (
-        "phan-tich",
-        "PHÂN TÍCH",
-        "Số liệu, logic, đánh giá",
-        "Rà soát tính logic, bổ sung số liệu và hoàn thiện kết quả.",
-        "worker",
-    ),
-    (
-        "kiem-dinh",
-        "KIỂM ĐỊNH",
-        "Giám sát chất lượng & rủi ro",
-        "Soát lỗi, chỉ ra rủi ro và xác nhận chất lượng trước khi bàn giao Trưởng phòng.",
-        "qa",
+        "dltk",
+        "DỮ LIỆU & THỐNG KÊ",
+        "Đội tìm kiếm, tổng hợp và thống kê dữ liệu để ra quyết định.",
+        &[
+            ("TRƯỞNG NHÓM", "Điều phối & tổng hợp", "Nhận nhiệm vụ dữ liệu từ Sếp, phân công và tổng hợp báo cáo.", "manager"),
+            ("THU THẬP DL", "Tìm kiếm & thu thập dữ liệu", "Tìm nguồn, thu thập và làm sạch dữ liệu cho đội.", "worker"),
+            ("THỐNG KÊ", "Thống kê & trực quan hoá", "Phân tích thống kê, rút ra xu hướng và trực quan hoá số liệu.", "worker"),
+            ("KIỂM ĐỊNH DL", "Giám sát chất lượng dữ liệu", "Xác minh độ chính xác, chỉ ra sai lệch trước khi bàn giao.", "qa"),
+        ],
     ),
 ];
 
-/// The office floor only has this many desks (plus the boss's).
+/// Each team's floor only has this many desks (plus the boss's).
 pub const MAX_AGENTS: usize = 7;
+
+#[derive(Serialize, Clone)]
+pub struct Team {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub sort: i64,
+}
 
 #[derive(Serialize, Clone)]
 pub struct Agent {
@@ -130,6 +150,8 @@ pub struct Agent {
     pub role: String,
     pub duty: String,
     pub kind: String,
+    /// Which team this staff member belongs to (team key).
+    pub team: String,
     /// Disabled staff keep their desk but are excluded from every pipeline.
     pub enabled: bool,
     /// "Tự nhận nhiệm vụ": when true the worker is always included in the
@@ -153,6 +175,7 @@ pub struct Task {
     pub id: i64,
     pub title: String,
     pub mode: String,
+    pub team: String,
     pub status: String,
     pub report: String,
     pub llm_calls: i64,
@@ -244,7 +267,7 @@ impl Db {
             let _ = conn.execute(m, []);
         }
         let db = Self { conn: Mutex::new(conn) };
-        db.seed_agents()?;
+        db.seed()?;
         Ok(db)
     }
 
@@ -253,18 +276,102 @@ impl Db {
         f(&conn)
     }
 
-    fn seed_agents(&self) -> Result<()> {
+    /// Ensure the default teams exist, adopt any team-less legacy agents into
+    /// the first team, and seed a fresh roster for any team that has none.
+    fn seed(&self) -> Result<()> {
         self.with(|c| {
-            let count: i64 = c.query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))?;
-            if count == 0 {
-                for (i, (key, name, role, duty, kind)) in DEFAULT_AGENTS.iter().enumerate() {
+            // 1. teams
+            let team_count: i64 = c.query_row("SELECT COUNT(*) FROM teams", [], |r| r.get(0))?;
+            if team_count == 0 {
+                for (i, (key, name, desc, _)) in DEFAULT_TEAMS.iter().enumerate() {
                     c.execute(
-                        "INSERT INTO agents(key,name,role,duty,kind,sort) VALUES(?1,?2,?3,?4,?5,?6)",
-                        params![key, name, role, duty, kind, i as i64],
+                        "INSERT INTO teams(key,name,description,sort) VALUES(?1,?2,?3,?4)",
+                        params![key, name, desc, i as i64],
                     )?;
                 }
             }
+            let first_team: String = c.query_row("SELECT key FROM teams ORDER BY sort LIMIT 1", [], |r| r.get(0))?;
+            // 2. legacy agents with no team → first team
+            c.execute("UPDATE agents SET team=?1 WHERE team=''", params![first_team])?;
+            // 3. seed roster for any team that is empty
+            for (tkey, _, _, roster) in DEFAULT_TEAMS.iter() {
+                let n: i64 = c.query_row(
+                    "SELECT COUNT(*) FROM agents WHERE team=?1",
+                    params![tkey],
+                    |r| r.get(0),
+                )?;
+                if n == 0 {
+                    for (i, (name, role, duty, kind)) in roster.iter().enumerate() {
+                        let key = format!("{}-{}", tkey, slugify(name));
+                        c.execute(
+                            "INSERT OR IGNORE INTO agents(key,name,role,duty,kind,team,sort) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                            params![key, name, role, duty, kind, tkey, i as i64],
+                        )?;
+                    }
+                }
+            }
             Ok(())
+        })
+    }
+
+    // ---- teams ----
+
+    pub fn list_teams(&self) -> Result<Vec<Team>> {
+        self.with(|c| {
+            let mut stmt = c.prepare("SELECT key,name,description,sort FROM teams ORDER BY sort")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(Team { key: r.get(0)?, name: r.get(1)?, description: r.get(2)?, sort: r.get(3)? })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    pub fn add_team(&self, name: &str, description: &str) -> Result<Team> {
+        let teams = self.list_teams()?;
+        let base = slugify(name);
+        let mut key = base.clone();
+        let mut n = 2;
+        while teams.iter().any(|t| t.key == key) {
+            key = format!("{}-{}", base, n);
+            n += 1;
+        }
+        let sort = teams.iter().map(|t| t.sort).max().unwrap_or(-1) + 1;
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO teams(key,name,description,sort) VALUES(?1,?2,?3,?4)",
+                params![key, name, description, sort],
+            )?;
+            Ok(())
+        })?;
+        // New team starts with a manager so it can accept work immediately.
+        let mkey = format!("{}-truong-nhom", key);
+        self.with(|c| {
+            c.execute(
+                "INSERT OR IGNORE INTO agents(key,name,role,duty,kind,team,sort) VALUES(?1,?2,?3,?4,'manager',?5,0)",
+                params![mkey, "TRƯỞNG NHÓM", "Điều phối & tổng hợp", "Nhận nhiệm vụ từ Sếp, phân công cho đội và tổng hợp báo cáo.", key],
+            )?;
+            Ok(())
+        })?;
+        Ok(Team { key, name: name.to_string(), description: description.to_string(), sort })
+    }
+
+    pub fn update_team(&self, key: &str, name: Option<&str>, description: Option<&str>) -> Result<bool> {
+        self.with(|c| {
+            let n = c.execute(
+                "UPDATE teams SET name=COALESCE(?2,name), description=COALESCE(?3,description) WHERE key=?1",
+                params![key, name, description],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    pub fn delete_team(&self, key: &str) -> Result<bool> {
+        self.with(|c| {
+            c.execute("DELETE FROM agents WHERE team=?1", params![key])?;
+            let n = c.execute("DELETE FROM teams WHERE key=?1", params![key])?;
+            Ok(n > 0)
         })
     }
 
@@ -273,7 +380,7 @@ impl Db {
     pub fn list_agents(&self) -> Result<Vec<Agent>> {
         self.with(|c| {
             let mut stmt = c.prepare(
-                "SELECT key,name,role,duty,kind,enabled,auto_assign,skills,status,status_note,sort
+                "SELECT key,name,role,duty,kind,team,enabled,auto_assign,skills,status,status_note,sort
                  FROM agents ORDER BY sort",
             )?;
             let rows = stmt
@@ -284,12 +391,13 @@ impl Db {
                         role: r.get(2)?,
                         duty: r.get(3)?,
                         kind: r.get(4)?,
-                        enabled: r.get::<_, i64>(5)? != 0,
-                        auto_assign: r.get::<_, i64>(6)? != 0,
-                        skills: skills_from_json(&r.get::<_, String>(7)?),
-                        status: r.get(8)?,
-                        status_note: r.get(9)?,
-                        sort: r.get(10)?,
+                        team: r.get(5)?,
+                        enabled: r.get::<_, i64>(6)? != 0,
+                        auto_assign: r.get::<_, i64>(7)? != 0,
+                        skills: skills_from_json(&r.get::<_, String>(8)?),
+                        status: r.get(9)?,
+                        status_note: r.get(10)?,
+                        sort: r.get(11)?,
                     })
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -297,25 +405,31 @@ impl Db {
         })
     }
 
+    /// Agents belonging to one team.
+    pub fn list_agents_in(&self, team: &str) -> Result<Vec<Agent>> {
+        Ok(self.list_agents()?.into_iter().filter(|a| a.team == team).collect())
+    }
+
     /// Create a staff member. Generates an ASCII slug key from the name and
     /// enforces the desk limit plus one-manager/one-QA invariants upstream.
-    pub fn add_agent(&self, name: &str, role: &str, duty: &str, kind: &str) -> Result<Agent> {
-        let agents = self.list_agents()?;
-        if agents.len() >= MAX_AGENTS {
-            anyhow::bail!("văn phòng chỉ có {} bàn — xoá bớt nhân sự trước", MAX_AGENTS);
+    pub fn add_agent(&self, name: &str, role: &str, duty: &str, kind: &str, team: &str) -> Result<Agent> {
+        let all = self.list_agents()?;
+        let team_count = all.iter().filter(|a| a.team == team).count();
+        if team_count >= MAX_AGENTS {
+            anyhow::bail!("đội chỉ có {} bàn — xoá bớt nhân sự trước", MAX_AGENTS);
         }
-        let base = slugify(name);
+        let base = format!("{}-{}", team, slugify(name));
         let mut key = base.clone();
         let mut n = 2;
-        while agents.iter().any(|a| a.key == key) {
+        while all.iter().any(|a| a.key == key) {
             key = format!("{}-{}", base, n);
             n += 1;
         }
-        let sort = agents.iter().map(|a| a.sort).max().unwrap_or(-1) + 1;
+        let sort = all.iter().filter(|a| a.team == team).map(|a| a.sort).max().unwrap_or(-1) + 1;
         self.with(|c| {
             c.execute(
-                "INSERT INTO agents(key,name,role,duty,kind,sort) VALUES(?1,?2,?3,?4,?5,?6)",
-                params![key, name, role, duty, kind, sort],
+                "INSERT INTO agents(key,name,role,duty,kind,team,sort) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![key, name, role, duty, kind, team, sort],
             )?;
             Ok(())
         })?;
@@ -325,6 +439,7 @@ impl Db {
             role: role.to_string(),
             duty: duty.to_string(),
             kind: kind.to_string(),
+            team: team.to_string(),
             enabled: true,
             auto_assign: true,
             skills: Vec::new(),
@@ -394,27 +509,34 @@ impl Db {
         })
     }
 
-    pub fn reset_agent_statuses(&self) -> Result<()> {
+    /// Reset statuses. With a team, only that team's agents (so a parallel
+    /// team's live statuses aren't wiped); empty team = all agents.
+    pub fn reset_agent_statuses(&self, team: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE agents SET status='idle', status_note=''", [])?;
+            if team.is_empty() {
+                c.execute("UPDATE agents SET status='idle', status_note=''", [])?;
+            } else {
+                c.execute("UPDATE agents SET status='idle', status_note='' WHERE team=?1", params![team])?;
+            }
             Ok(())
         })
     }
 
     // ---- tasks ----
 
-    pub fn create_task(&self, title: &str, mode: &str) -> Result<Task> {
+    pub fn create_task(&self, title: &str, mode: &str, team: &str) -> Result<Task> {
         let ts = now();
         self.with(|c| {
             c.execute(
-                "INSERT INTO tasks(title,mode,status,created_at) VALUES(?1,?2,'pending',?3)",
-                params![title, mode, ts],
+                "INSERT INTO tasks(title,mode,team,status,created_at) VALUES(?1,?2,?3,'pending',?4)",
+                params![title, mode, team, ts],
             )?;
             let id = c.last_insert_rowid();
             Ok(Task {
                 id,
                 title: title.to_string(),
                 mode: mode.to_string(),
+                team: team.to_string(),
                 status: "pending".into(),
                 report: String::new(),
                 llm_calls: 0,
@@ -432,19 +554,20 @@ impl Db {
             id: r.get(0)?,
             title: r.get(1)?,
             mode: r.get(2)?,
-            status: r.get(3)?,
-            report: r.get(4)?,
-            llm_calls: r.get(5)?,
-            llm_model: r.get(6)?,
-            tokens_in: r.get(7)?,
-            tokens_out: r.get(8)?,
-            created_at: r.get(9)?,
-            finished_at: r.get(10)?,
+            team: r.get(3)?,
+            status: r.get(4)?,
+            report: r.get(5)?,
+            llm_calls: r.get(6)?,
+            llm_model: r.get(7)?,
+            tokens_in: r.get(8)?,
+            tokens_out: r.get(9)?,
+            created_at: r.get(10)?,
+            finished_at: r.get(11)?,
         })
     }
 
     const TASK_COLS: &'static str =
-        "id,title,mode,status,report,llm_calls,llm_model,tokens_in,tokens_out,created_at,finished_at";
+        "id,title,mode,team,status,report,llm_calls,llm_model,tokens_in,tokens_out,created_at,finished_at";
 
     pub fn get_task(&self, id: i64) -> Result<Option<Task>> {
         self.with(|c| {
@@ -518,25 +641,34 @@ impl Db {
         })
     }
 
-    /// A task is actively being worked (not merely queued as `pending`).
-    pub fn has_running_task(&self) -> Result<bool> {
+    /// Whether a team is actively working a task (not merely queued). Empty
+    /// team = any team.
+    pub fn has_running_task(&self, team: &str) -> Result<bool> {
         self.with(|c| {
-            let n: i64 = c.query_row(
-                "SELECT COUNT(*) FROM tasks WHERE status IN ('planning','running','review')",
-                [],
-                |r| r.get(0),
-            )?;
+            let n: i64 = if team.is_empty() {
+                c.query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE status IN ('planning','running','review')",
+                    [],
+                    |r| r.get(0),
+                )?
+            } else {
+                c.query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE team=?1 AND status IN ('planning','running','review')",
+                    params![team],
+                    |r| r.get(0),
+                )?
+            };
             Ok(n > 0)
         })
     }
 
-    /// Oldest queued task id waiting to run (FIFO).
-    pub fn next_pending(&self) -> Result<Option<i64>> {
+    /// Oldest queued task id for a team (FIFO within the team).
+    pub fn next_pending(&self, team: &str) -> Result<Option<i64>> {
         self.with(|c| {
             let id = c
                 .query_row(
-                    "SELECT id FROM tasks WHERE status='pending' ORDER BY id LIMIT 1",
-                    [],
+                    "SELECT id FROM tasks WHERE team=?1 AND status='pending' ORDER BY id LIMIT 1",
+                    params![team],
                     |r| r.get::<_, i64>(0),
                 )
                 .optional()?;

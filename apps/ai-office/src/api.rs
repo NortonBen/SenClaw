@@ -20,10 +20,10 @@ pub fn make_state() -> Arc<AppState> {
     // A previous process may have died mid-task; fail actively-running jobs
     // (queued `pending` tasks are kept and resumed by the drainer).
     let _ = db.fail_stale_running();
-    let _ = db.reset_agent_statuses();
+    let _ = db.reset_agent_statuses("");
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
-    // Single FIFO worker that drains the task queue one job at a time.
-    crate::engine::spawn_drainer(db.clone());
+    // Scheduler: each team drains its own queue; teams run in parallel.
+    crate::engine::spawn_scheduler(db.clone());
     Arc::new(AppState { db, mcp_tx })
 }
 
@@ -32,6 +32,8 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/status", get(status))
         .route("/llm-info", get(llm_info))
         .route("/stats", get(stats))
+        .route("/teams", get(list_teams).post(add_team))
+        .route("/teams/:key", patch(update_team).delete(delete_team))
         .route("/agents", get(list_agents).post(add_agent))
         .route("/agents/:key", patch(update_agent).delete(delete_agent))
         .route("/agents/:key/knowledge", get(agent_knowledge))
@@ -92,25 +94,25 @@ async fn update_agent(
     Path(key): Path<String>,
     Json(body): Json<AgentPatch>,
 ) -> Result<Json<Value>, ApiError> {
-    // Disabling staff mid-task would strand the pipeline on their desk.
-    if body.enabled == Some(false) && s.db.has_running_task().map_err(internal)? {
-        return Err(err(
-            StatusCode::CONFLICT,
-            "phòng đang xử lý nhiệm vụ — chờ xong rồi tạm dừng nhân sự",
-        ));
-    }
     if body.enabled == Some(false) {
         let agents = s.db.list_agents().map_err(internal)?;
         if let Some(agent) = agents.iter().find(|a| a.key == key) {
+            // Disabling staff mid-task would strand that team's pipeline.
+            if s.db.has_running_task(&agent.team).map_err(internal)? {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "đội đang xử lý nhiệm vụ — chờ xong rồi tạm dừng nhân sự",
+                ));
+            }
             if agent.kind == "manager" {
-                return Err(err(StatusCode::BAD_REQUEST, "không thể tạm dừng Trưởng phòng"));
+                return Err(err(StatusCode::BAD_REQUEST, "không thể tạm dừng Trưởng nhóm"));
             }
             if agent.kind == "worker"
-                && agents.iter().filter(|a| a.kind == "worker" && a.enabled).count() <= 1
+                && agents.iter().filter(|a| a.team == agent.team && a.kind == "worker" && a.enabled).count() <= 1
             {
                 return Err(err(
                     StatusCode::BAD_REQUEST,
-                    "phòng cần ít nhất một nhân sự chuyên môn đang hoạt động",
+                    "đội cần ít nhất một nhân sự chuyên môn đang hoạt động",
                 ));
             }
         }
@@ -133,12 +135,80 @@ async fn update_agent(
     Ok(Json(json!({ "ok": true })))
 }
 
+// ---- teams ----
+
+async fn list_teams(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({ "teams": s.db.list_teams().map_err(internal)? })))
+}
+
+#[derive(Deserialize)]
+struct TeamCreate {
+    name: String,
+    description: Option<String>,
+}
+
+async fn add_team(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<TeamCreate>,
+) -> Result<Json<Value>, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "tên đội trống"));
+    }
+    let team = s
+        .db
+        .add_team(name, body.description.as_deref().unwrap_or(""))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "team": team })))
+}
+
+#[derive(Deserialize)]
+struct TeamPatch {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+async fn update_team(
+    State(s): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Json(body): Json<TeamPatch>,
+) -> Result<Json<Value>, ApiError> {
+    let found = s
+        .db
+        .update_team(&key, body.name.as_deref(), body.description.as_deref())
+        .map_err(internal)?;
+    if !found {
+        return Err(err(StatusCode::NOT_FOUND, format!("không có đội '{}'", key)));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_team(
+    State(s): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let teams = s.db.list_teams().map_err(internal)?;
+    if teams.len() <= 1 {
+        return Err(err(StatusCode::BAD_REQUEST, "văn phòng cần ít nhất một đội"));
+    }
+    if s.db.has_running_task(&key).map_err(internal)? {
+        return Err(err(StatusCode::CONFLICT, "đội đang xử lý nhiệm vụ — chờ xong rồi xoá"));
+    }
+    if !s.db.delete_team(&key).map_err(internal)? {
+        return Err(err(StatusCode::NOT_FOUND, format!("không có đội '{}'", key)));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---- agents ----
+
 #[derive(Deserialize)]
 struct AgentCreate {
     name: String,
     role: Option<String>,
     duty: Option<String>,
     kind: Option<String>,
+    team: Option<String>,
 }
 
 async fn add_agent(
@@ -154,16 +224,24 @@ async fn add_agent(
         Some("qa") => "qa",
         _ => "worker",
     };
+    let teams = s.db.list_teams().map_err(internal)?;
+    let team = body
+        .team
+        .as_deref()
+        .filter(|t| teams.iter().any(|x| &x.key == t))
+        .or_else(|| teams.first().map(|t| t.key.as_str()))
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "chưa có đội nào"))?
+        .to_string();
     let agents = s.db.list_agents().map_err(internal)?;
-    if kind != "worker" && agents.iter().any(|a| a.kind == kind) {
+    if kind != "worker" && agents.iter().any(|a| a.team == team && a.kind == kind) {
         return Err(err(
             StatusCode::CONFLICT,
-            format!("phòng đã có một nhân sự giữ vai trò '{}'", kind),
+            format!("đội đã có một nhân sự giữ vai trò '{}'", kind),
         ));
     }
     let agent = s
         .db
-        .add_agent(name, body.role.as_deref().unwrap_or(""), body.duty.as_deref().unwrap_or(""), kind)
+        .add_agent(name, body.role.as_deref().unwrap_or(""), body.duty.as_deref().unwrap_or(""), kind, &team)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "agent": agent })))
 }
@@ -172,23 +250,25 @@ async fn delete_agent(
     State(s): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if s.db.has_running_task().map_err(internal)? {
-        return Err(err(
-            StatusCode::CONFLICT,
-            "phòng đang xử lý nhiệm vụ — chờ xong rồi thay đổi nhân sự",
-        ));
-    }
     let agents = s.db.list_agents().map_err(internal)?;
     let Some(agent) = agents.iter().find(|a| a.key == key) else {
         return Err(err(StatusCode::NOT_FOUND, format!("không có agent '{}'", key)));
     };
-    if agent.kind == "manager" {
-        return Err(err(StatusCode::BAD_REQUEST, "không thể xoá Trưởng phòng"));
+    if s.db.has_running_task(&agent.team).map_err(internal)? {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "đội đang xử lý nhiệm vụ — chờ xong rồi thay đổi nhân sự",
+        ));
     }
-    if agent.kind == "worker" && agents.iter().filter(|a| a.kind == "worker").count() <= 1 {
+    if agent.kind == "manager" {
+        return Err(err(StatusCode::BAD_REQUEST, "không thể xoá Trưởng nhóm"));
+    }
+    if agent.kind == "worker"
+        && agents.iter().filter(|a| a.team == agent.team && a.kind == "worker").count() <= 1
+    {
         return Err(err(
             StatusCode::BAD_REQUEST,
-            "phòng cần ít nhất một nhân sự chuyên môn (worker)",
+            "đội cần ít nhất một nhân sự chuyên môn (worker)",
         ));
     }
     s.db.delete_agent(&key).map_err(internal)?;
@@ -359,20 +439,27 @@ async fn fs_dirs(Query(q): Query<FsDirsQuery>) -> Result<Json<Value>, ApiError> 
 #[derive(Deserialize)]
 struct TaskListQuery {
     limit: Option<i64>,
+    team: Option<String>,
 }
 
 async fn list_tasks(
     State(s): State<Arc<AppState>>,
     Query(q): Query<TaskListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let tasks = s.db.list_tasks(q.limit.unwrap_or(30).clamp(1, 200)).map_err(internal)?;
+    let limit = q.limit.unwrap_or(30).clamp(1, 200);
+    let mut tasks = s.db.list_tasks(limit.max(50)).map_err(internal)?;
+    if let Some(team) = q.team.as_deref().filter(|t| !t.is_empty()) {
+        tasks.retain(|t| t.team == team);
+    }
+    tasks.truncate(limit as usize);
     Ok(Json(json!({ "tasks": tasks })))
 }
 
 #[derive(Deserialize)]
 struct CreateTask {
     title: String,
-    /// Kept for backward compatibility; every task now runs LIVE.
+    /// Which team handles the task. Defaults to the first team.
+    team: Option<String>,
     #[allow(dead_code)]
     mode: Option<String>,
 }
@@ -385,16 +472,24 @@ async fn create_task(
     if title.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "nhiệm vụ trống"));
     }
-    let agents = s.db.list_agents().map_err(internal)?;
+    let teams = s.db.list_teams().map_err(internal)?;
+    let team = body
+        .team
+        .as_deref()
+        .filter(|t| teams.iter().any(|x| &x.key == t))
+        .or_else(|| teams.first().map(|t| t.key.as_str()))
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "chưa có đội nào"))?
+        .to_string();
+    let agents = s.db.list_agents_in(&team).map_err(internal)?;
     if !agents.iter().any(|a| a.kind == "worker" && a.enabled) {
         return Err(err(
             StatusCode::BAD_REQUEST,
-            "không còn nhân sự chuyên môn nào đang hoạt động — bật lại nhân sự trong mục Nhân sự",
+            "đội này không còn nhân sự chuyên môn nào đang hoạt động — bật lại trong mục Nhân sự",
         ));
     }
-    // Always queue; the drainer runs jobs one at a time (busy → xếp hàng đợi).
-    let task = s.db.create_task(title, "live").map_err(internal)?;
-    let queued = s.db.has_running_task().map_err(internal)?;
+    // Always queue; the scheduler runs one task per team (busy → hàng đợi).
+    let task = s.db.create_task(title, "live", &team).map_err(internal)?;
+    let queued = s.db.has_running_task(&team).map_err(internal)?;
     Ok(Json(json!({ "task": task, "queued": queued })))
 }
 

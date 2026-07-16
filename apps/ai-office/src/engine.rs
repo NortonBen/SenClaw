@@ -20,25 +20,38 @@ use std::time::Duration;
 /// into its context.
 /// Single background worker that drains the task queue FIFO — one task at a
 /// time so the office never runs two jobs at once. Spawned once at startup.
-pub fn spawn_drainer(db: Arc<Db>) {
+/// Scheduler: every team drains its own queue FIFO, and teams run in
+/// PARALLEL (each team at most one task at a time). Spawned once at startup.
+pub fn spawn_scheduler(db: Arc<Db>) {
     tokio::spawn(async move {
         loop {
-            match db.next_pending() {
-                Ok(Some(task_id)) => {
-                    if let Err(e) = run(db.clone(), task_id).await {
-                        let _ = db.add_event(
-                            Some(task_id),
-                            "system",
-                            "he-thong",
-                            "",
-                            &format!("Nhiệm vụ dừng vì lỗi: {}", e),
-                        );
-                        let _ = db.set_task_status(task_id, "error");
-                        let _ = db.reset_agent_statuses();
-                    }
+            let teams = db.list_teams().unwrap_or_default();
+            for team in teams {
+                // Skip teams already busy; claim the next queued task.
+                if db.has_running_task(&team.key).unwrap_or(true) {
+                    continue;
                 }
-                _ => tokio::time::sleep(Duration::from_millis(600)).await,
+                if let Ok(Some(task_id)) = db.next_pending(&team.key) {
+                    // Claim it immediately so the next tick sees the team busy.
+                    let _ = db.set_task_status(task_id, "planning");
+                    let db2 = db.clone();
+                    let tkey = team.key.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = run(db2.clone(), task_id).await {
+                            let _ = db2.add_event(
+                                Some(task_id),
+                                "system",
+                                "he-thong",
+                                "",
+                                &format!("Nhiệm vụ dừng vì lỗi: {}", e),
+                            );
+                            let _ = db2.set_task_status(task_id, "error");
+                            let _ = db2.reset_agent_statuses(&tkey);
+                        }
+                    });
+                }
             }
+            tokio::time::sleep(Duration::from_millis(600)).await;
         }
     });
 }
@@ -93,7 +106,8 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     let task = db
         .get_task(task_id)?
         .ok_or_else(|| anyhow::anyhow!("task {} không tồn tại", task_id))?;
-    let agents = db.list_agents()?;
+    // Only this task's team works on it (teams run in parallel).
+    let agents = db.list_agents_in(&task.team)?;
     let Roster { manager, qa, workers } = roster(&agents)?;
     let mgr = manager.key.as_str();
     let name_of = |key: &str| -> String {
@@ -111,7 +125,7 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     let feat_tools = db.feature("tools");
     let feat_autocontinue = db.feature("autocontinue");
 
-    db.reset_agent_statuses()?;
+    db.reset_agent_statuses(&task.team)?;
     db.set_task_status(task_id, "planning")?;
 
     // Sếp giao việc xuất hiện trong feed.

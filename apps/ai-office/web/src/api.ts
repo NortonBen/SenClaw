@@ -9,6 +9,7 @@ import type {
   Stats,
   Step,
   Task,
+  Team,
   WorkspaceListing,
 } from './types'
 
@@ -40,20 +41,27 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const api = {
+  teams: () => get<{ teams: Team[] }>('teams'),
+  addTeam: (body: { name: string; description?: string }) =>
+    send<{ team: Team }>('POST', 'teams', body),
+  updateTeam: (key: string, patch: { name?: string; description?: string }) =>
+    send<{ ok: boolean }>('PATCH', `teams/${key}`, patch),
+  deleteTeam: (key: string) => send<{ ok: boolean }>('DELETE', `teams/${key}`),
   agents: () => get<{ agents: Agent[] }>('agents'),
   updateAgent: (
     key: string,
     patch: Partial<Pick<Agent, 'name' | 'role' | 'duty' | 'enabled' | 'auto_assign' | 'skills'>>,
   ) => send<{ ok: boolean }>('PATCH', `agents/${key}`, patch),
-  addAgent: (body: { name: string; role: string; duty: string; kind: string }) =>
+  addAgent: (body: { name: string; role: string; duty: string; kind: string; team: string }) =>
     send<{ agent: Agent }>('POST', 'agents', body),
   deleteAgent: (key: string) => send<{ ok: boolean }>('DELETE', `agents/${key}`),
   agentKnowledge: (key: string) => get<KnowledgeSummary>(`agents/${key}/knowledge`),
   skillsInventory: () => get<SkillsInventory>('skills-inventory'),
-  tasks: (limit = 30) => get<{ tasks: Task[] }>(`tasks?limit=${limit}`),
+  tasks: (limit = 30, team?: string) =>
+    get<{ tasks: Task[] }>(`tasks?limit=${limit}${team ? `&team=${encodeURIComponent(team)}` : ''}`),
   task: (id: number) => get<{ task: Task; steps: Step[] }>(`tasks/${id}`),
-  createTask: (title: string, mode: string) =>
-    send<{ task: Task }>('POST', 'tasks', { title, mode }),
+  createTask: (title: string, team: string) =>
+    send<{ task: Task; queued: boolean }>('POST', 'tasks', { title, team }),
   events: (taskId: number, after = 0) =>
     get<{ events: OfficeEvent[] }>(`tasks/${taskId}/events?after=${after}`),
   recentEvents: (limit = 40) => get<{ events: OfficeEvent[] }>(`events/recent?limit=${limit}`),

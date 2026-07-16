@@ -14,6 +14,7 @@ import type {
   SkillsInventory,
   Stats,
   Task,
+  Team,
   WorkspaceFile,
 } from './types'
 
@@ -42,7 +43,16 @@ export default function App() {
   const [rotation, setRotation] = useState<number>(
     () => Number(localStorage.getItem('ai-office-rot') ?? '0') || 0,
   )
-  const dragRef = useRef<{ x: number; rot: number } | null>(null)
+  const [zoom, setZoom] = useState<number>(
+    () => Number(localStorage.getItem('ai-office-zoom') ?? '1') || 1,
+  )
+  const [pan, setPan] = useState<{ fx: number; fy: number }>({ fx: 0, fy: 0 })
+  const sceneRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<
+    | { mode: 'rotate'; x: number; rot: number }
+    | { mode: 'pan'; x: number; y: number; fx: number; fy: number }
+    | null
+  >(null)
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('ai-office-theme') as Theme) || 'auto',
   )
@@ -54,14 +64,31 @@ export default function App() {
   const [llmOk, setLlmOk] = useState<boolean | null>(null)
   const [queue, setQueue] = useState<Task[]>([])
   const [newTaskOpen, setNewTaskOpen] = useState(false)
+  const [teams, setTeams] = useState<Team[]>([])
+  const [activeTeam, setActiveTeam] = useState<string>(
+    () => localStorage.getItem('ai-office-team') ?? '',
+  )
 
   const taskRef = useRef<number | null>(null)
   const lastEventRef = useRef(0)
+  const activeTeamRef = useRef(activeTeam)
+  activeTeamRef.current = activeTeam
 
   const poll = useCallback(async () => {
     try {
-      const [{ agents }, { tasks }] = await Promise.all([api.agents(), api.tasks(1)])
+      const [{ teams }, { agents }] = await Promise.all([api.teams(), api.agents()])
+      setTeams(teams)
       setAgents(agents)
+      // Pick a valid active team (default to first).
+      let team = activeTeamRef.current
+      if (!team || !teams.some((t) => t.key === team)) {
+        team = teams[0]?.key ?? ''
+        if (team) {
+          activeTeamRef.current = team
+          setActiveTeam(team)
+        }
+      }
+      const { tasks } = await api.tasks(1, team)
       const latest = tasks[0] ?? null
       setTask(latest)
       if (latest) {
@@ -75,12 +102,28 @@ export default function App() {
           lastEventRef.current = fresh[fresh.length - 1].id
           setEvents((prev) => [...prev, ...fresh])
         }
+      } else {
+        taskRef.current = null
+        setEvents([])
       }
-      setQueue((await api.queue()).pending)
+      setQueue((await api.queue()).pending.filter((t) => t.team === team))
     } catch {
       /* backend briefly unavailable — next tick will retry */
     }
   }, [])
+
+  // Switching teams resets the feed to that team's current task.
+  const selectTeam = (key: string) => {
+    setActiveTeam(key)
+    localStorage.setItem('ai-office-team', key)
+    taskRef.current = null
+    lastEventRef.current = 0
+    setEvents([])
+    setTask(null)
+    poll()
+  }
+
+  const teamAgents = agents.filter((a) => a.team === activeTeam)
 
   useEffect(() => {
     poll()
@@ -109,30 +152,66 @@ export default function App() {
     localStorage.setItem('ai-office-rot', String(Math.round(v)))
   }
 
-  // Drag left/right on the scene to orbit the office freely.
+  const setZoomClamped = (z: number) => {
+    const v = Math.min(4, Math.max(0.4, z))
+    setZoom(v)
+    localStorage.setItem('ai-office-zoom', String(v.toFixed(2)))
+  }
+  const resetView = () => {
+    setZoomClamped(1)
+    setPan({ fx: 0, fy: 0 })
+  }
+
+  // Left-drag orbits the office; Shift-drag (or middle/right button) pans the
+  // view; the mouse wheel zooms. Reset with the ⤢ button.
   const onSceneDown = (e: React.PointerEvent) => {
-    dragRef.current = { x: e.clientX, rot: rotation }
+    const panMode = e.shiftKey || e.button === 1 || e.button === 2
+    if (panMode) {
+      dragRef.current = { mode: 'pan', x: e.clientX, y: e.clientY, fx: pan.fx, fy: pan.fy }
+    } else {
+      dragRef.current = { mode: 'rotate', x: e.clientX, rot: rotation }
+    }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     ;(e.currentTarget as HTMLElement).classList.add('dragging')
   }
   const onSceneMove = (e: React.PointerEvent) => {
-    if (!dragRef.current) return
-    rotate(dragRef.current.rot + (e.clientX - dragRef.current.x) * 0.55)
+    const d = dragRef.current
+    if (!d) return
+    if (d.mode === 'rotate') {
+      rotate(d.rot + (e.clientX - d.x) * 0.55)
+    } else {
+      const rect = sceneRef.current?.getBoundingClientRect()
+      const w = rect?.width || 1
+      const h = rect?.height || 1
+      setPan({ fx: d.fx + (e.clientX - d.x) / w, fy: d.fy + (e.clientY - d.y) / h })
+    }
   }
   const onSceneUp = (e: React.PointerEvent) => {
     dragRef.current = null
     ;(e.currentTarget as HTMLElement).classList.remove('dragging')
   }
 
+  // Wheel-to-zoom (native listener so we can preventDefault the page scroll).
+  useEffect(() => {
+    const el = sceneRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      setZoomClamped(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoom])
+
   const busy = !!task && !['done', 'error'].includes(task.status)
 
-  // Queue a task (works whether busy or idle — the office drains FIFO).
+  // Queue a task for the active team (teams run in parallel).
   const addTask = async (title: string) => {
     const t = title.trim()
-    if (!t) return
+    if (!t || !activeTeam) return
     setError('')
     try {
-      await api.createTask(t, 'live')
+      await api.createTask(t, activeTeam)
       poll()
     } catch (e) {
       setError(String((e as Error).message))
@@ -142,10 +221,10 @@ export default function App() {
 
   const submit = async () => {
     const title = input.trim()
-    if (!title) return
+    if (!title || !activeTeam) return
     setError('')
     try {
-      await api.createTask(title, 'live')
+      await api.createTask(title, activeTeam)
       setInput('')
       poll()
     } catch (e) {
@@ -159,8 +238,9 @@ export default function App() {
     if (p === 'history') setHistory((await api.tasks(200).catch(() => ({ tasks: [] }))).tasks)
   }
 
-  const workingCount = agents.filter((a) => a.status === 'working').length
-  const dayLabel = `PHÒNG LÀM VIỆC MỞ CỬA — ${new Date().toLocaleDateString('vi-VN')} · ${agents.length} agent trực ca${
+  const workingCount = teamAgents.filter((a) => a.status === 'working').length
+  const teamName = teams.find((t) => t.key === activeTeam)?.name ?? 'ĐỘI'
+  const dayLabel = `${teamName} — ${new Date().toLocaleDateString('vi-VN')} · ${teamAgents.length} agent trực ca${
     busy ? ` · ${workingCount} đang làm` : ''
   }`
 
@@ -193,10 +273,32 @@ export default function App() {
         <button className="btn" onClick={() => openPanel('settings')}>Cài đặt</button>
       </header>
 
+      <div className="team-tabs">
+        {teams.map((t) => {
+          const running = agents.some(
+            (a) => a.team === t.key && a.enabled && (a.status === 'working' || a.status === 'handoff'),
+          )
+          return (
+            <button
+              key={t.key}
+              className={`team-tab${t.key === activeTeam ? ' active' : ''}`}
+              title={t.description}
+              onClick={() => selectTeam(t.key)}
+            >
+              {running && <span className="team-dot" />}
+              {t.name}
+            </button>
+          )
+        })}
+        <button className="team-tab add" title="Quản lý đội nhóm" onClick={() => openPanel('staff')}>
+          + Đội
+        </button>
+      </div>
+
       <div className="main">
         <aside className="sidebar">
-          <div className="cap">Nhân sự trực ca</div>
-          {agents.map((a) => (
+          <div className="cap">Nhân sự · {teamName}</div>
+          {teamAgents.map((a) => (
             <div className="staff" key={a.key} style={a.enabled ? undefined : { opacity: 0.45 }}>
               <div className="nm">
                 <Avatar agentKey={a.key} size={20} />
@@ -225,21 +327,31 @@ export default function App() {
           {show3d && (
             <div
               className="scene-wrap"
+              ref={sceneRef}
               onPointerDown={onSceneDown}
               onPointerMove={onSceneMove}
               onPointerUp={onSceneUp}
               onPointerCancel={onSceneUp}
+              onContextMenu={(e) => e.preventDefault()}
             >
-              <div className="scene-cap">· Mô phỏng văn phòng — kéo chuột để xoay</div>
-              <button
-                className="btn scene-rotate"
-                title="Xoay nhanh 45°"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => rotate(Math.round(rotation / 45) * 45 + 45)}
-              >
-                ↻ {Math.round(rotation)}°
-              </button>
-              <OfficeScene agents={agents} events={events} rotation={rotation} />
+              <div className="scene-cap">· Mô phỏng — kéo để xoay · lăn chuột phóng to · giữ Shift kéo để dời</div>
+              <div className="scene-tools" onPointerDown={(e) => e.stopPropagation()}>
+                <button className="btn scene-rotate" title="Xoay nhanh 45°" onClick={() => rotate(Math.round(rotation / 45) * 45 + 45)}>
+                  ↻ {Math.round(rotation)}°
+                </button>
+                <button className="btn scene-zbtn" title="Phóng to" onClick={() => setZoomClamped(zoom * 1.2)}>+</button>
+                <button className="btn scene-zbtn" title="Thu nhỏ" onClick={() => setZoomClamped(zoom / 1.2)}>−</button>
+                <button className="btn scene-zbtn" title="Về mặc định" onClick={resetView}>⤢</button>
+              </div>
+              <OfficeScene
+                agents={agents}
+                teams={teams}
+                activeTeam={activeTeam}
+                events={events}
+                rotation={rotation}
+                zoom={zoom}
+                pan={pan}
+              />
               <div className="legend">
                 <span><span className="dot" style={{ background: 'var(--working)' }} />đang làm</span>
                 <span style={{ color: 'var(--done)' }}>✓ xong</span>
@@ -288,7 +400,14 @@ export default function App() {
         />
       )}
       {panel === 'staff' && (
-        <StaffPanel agents={agents} onClose={() => setPanel('none')} onChanged={poll} />
+        <StaffPanel
+          agents={agents}
+          teams={teams}
+          activeTeam={activeTeam}
+          onSelectTeam={selectTeam}
+          onClose={() => setPanel('none')}
+          onChanged={poll}
+        />
       )}
       {panel === 'history' && <HistoryPanel tasks={history} onClose={() => setPanel('none')} />}
       {panel === 'ledger' && <LedgerPanel stats={stats} onClose={() => setPanel('none')} />}
@@ -312,16 +431,25 @@ const KIND_LABEL: Record<string, string> = {
 
 function StaffPanel({
   agents,
+  teams,
+  activeTeam,
+  onSelectTeam,
   onClose,
   onChanged,
 }: {
   agents: Agent[]
+  teams: Team[]
+  activeTeam: string
+  onSelectTeam: (key: string) => void
   onClose: () => void
   onChanged: () => void
 }) {
   const [editing, setEditing] = useState<Agent | 'new' | null>(null)
   const [detail, setDetail] = useState<Agent | null>(null)
   const [error, setError] = useState('')
+  const [newTeam, setNewTeam] = useState('')
+  const teamAgents = agents.filter((a) => a.team === activeTeam)
+  const team = teams.find((t) => t.key === activeTeam)
 
   const remove = async (a: Agent) => {
     if (!window.confirm(`Cho ${a.name} nghỉ việc? Bàn làm việc sẽ bị thu hồi.`)) return
@@ -344,23 +472,75 @@ function StaffPanel({
     }
   }
 
+  const addTeam = async () => {
+    const name = newTeam.trim()
+    if (!name) return
+    setError('')
+    try {
+      const { team } = await api.addTeam({ name })
+      setNewTeam('')
+      onChanged()
+      onSelectTeam(team.key)
+    } catch (e) {
+      setError(String((e as Error).message))
+    }
+  }
+
+  const removeTeam = async () => {
+    if (!team) return
+    if (!window.confirm(`Giải thể đội "${team.name}"? Toàn bộ nhân sự của đội sẽ bị xoá.`)) return
+    setError('')
+    try {
+      await api.deleteTeam(team.key)
+      onChanged()
+    } catch (e) {
+      setError(String((e as Error).message))
+    }
+  }
+
   return (
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>
-          Nhân sự
-          <span>
-            <button className="btn" onClick={() => setEditing('new')}>+ Tuyển nhân sự</button>{' '}
-            <button className="btn" onClick={onClose}>Đóng</button>
-          </span>
+          Đội nhóm &amp; nhân sự
+          <button className="btn" onClick={onClose}>Đóng</button>
         </h2>
+        {/* team switcher + management */}
+        <div className="team-tabs" style={{ margin: '0 0 10px', borderBottom: 'none', paddingLeft: 0 }}>
+          {teams.map((t) => (
+            <button
+              key={t.key}
+              className={`team-tab${t.key === activeTeam ? ' active' : ''}`}
+              onClick={() => onSelectTeam(t.key)}
+            >
+              {t.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+          <input
+            style={{ border: '1px solid var(--line-strong)', background: 'var(--panel)', padding: '3px 6px', flex: 1 }}
+            placeholder="Tên đội mới, ví dụ: Chăm sóc khách hàng"
+            value={newTeam}
+            onChange={(e) => setNewTeam(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addTeam()}
+          />
+          <button className="btn" onClick={addTeam} disabled={!newTeam.trim()}>+ Tạo đội</button>
+          {teams.length > 1 && (
+            <button className="btn" style={{ color: 'var(--danger)' }} onClick={removeTeam}>Giải thể đội</button>
+          )}
+        </div>
+        {team?.description && <div style={{ color: 'var(--faint)', fontSize: 11, marginBottom: 8 }}>{team.description}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+          <button className="btn" onClick={() => setEditing('new')}>+ Tuyển nhân sự vào đội</button>
+        </div>
         {error && <div className="sysline">⚠ {error}</div>}
         <table>
           <thead>
             <tr><th>Tên</th><th>Vai trò</th><th>Loại</th><th>Chế độ</th><th /></tr>
           </thead>
           <tbody>
-            {agents.map((a) => (
+            {teamAgents.map((a) => (
               <tr key={a.key} style={a.enabled ? undefined : { opacity: 0.5 }}>
                 <td>
                   <Avatar agentKey={a.key} size={20} />{' '}
@@ -403,7 +583,8 @@ function StaffPanel({
         {editing && (
           <StaffDialog
             agent={editing === 'new' ? null : editing}
-            agents={agents}
+            agents={teamAgents}
+            team={activeTeam}
             onClose={() => setEditing(null)}
             onSaved={() => {
               setEditing(null)
@@ -421,11 +602,13 @@ function StaffPanel({
 function StaffDialog({
   agent,
   agents,
+  team,
   onClose,
   onSaved,
 }: {
   agent: Agent | null
   agents: Agent[]
+  team: string
   onClose: () => void
   onSaved: () => void
 }) {
@@ -454,7 +637,7 @@ function StaffDialog({
       if (agent) {
         await api.updateAgent(agent.key, { name, role, duty, auto_assign: autoAssign, skills })
       } else {
-        const { agent: created } = await api.addAgent({ name, role, duty, kind })
+        const { agent: created } = await api.addAgent({ name, role, duty, kind, team })
         if (!autoAssign || skills.length > 0) {
           await api.updateAgent(created.key, { auto_assign: autoAssign, skills })
         }

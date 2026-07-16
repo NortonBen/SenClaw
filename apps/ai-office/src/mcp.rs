@@ -76,15 +76,29 @@ fn error_result(text: String) -> Value {
 fn tools_list() -> Value {
     json!([
         {
+            "name": "office_list_teams",
+            "description": "Danh sách các đội nhóm trong AI Office (mỗi đội có roster riêng, chạy song song). Trả về key + tên + mô tả. Dùng key này khi giao việc/tuyển nhân sự cho đúng đội.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "office_add_team",
+            "description": "Tạo một đội nhóm mới (tự có sẵn 1 Trưởng nhóm). Ví dụ: 'Nghiên cứu thị trường', 'Phát triển ứng dụng', 'Dữ liệu & thống kê'.",
+            "inputSchema": { "type": "object", "properties": {
+                "name": { "type": "string", "description": "Tên đội" },
+                "description": { "type": "string", "description": "Mô tả nhiệm vụ của đội" }
+            }, "required": ["name"] }
+        },
+        {
             "name": "office_status",
-            "description": "Tình hình văn phòng AI ngay lúc này: trạng thái từng agent (đang làm / xong / đi bàn giao) và nhiệm vụ đang chạy (nếu có). Gọi trước khi giao việc mới.",
+            "description": "Tình hình AI Office ngay lúc này: danh sách đội, trạng thái từng agent (đang làm / xong / đi bàn giao) và nhiệm vụ gần nhất. Gọi trước khi giao việc mới.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "office_create_task",
-            "description": "Giao một nhiệm vụ mới cho văn phòng. Nếu phòng đang bận, nhiệm vụ được XẾP VÀO HÀNG ĐỢI và tự chạy khi xong việc trước (trả về queued=true). Trưởng phòng lập kế hoạch phân công các nhân sự đang hoạt động (nhân sự 'tự nhận nhiệm vụ' luôn có phần việc, nhân sự tăng cường chỉ khi cần); nhân sự nắm skill/sub-agent sẽ dùng công cụ thật (MCP/search/browser). Kiểm định soát chất lượng rồi Trưởng phòng nộp báo cáo tổng hợp. Trả về id; theo dõi bằng office_get_task.",
+            "description": "Giao một nhiệm vụ mới cho MỘT ĐỘI. Nếu đội đang bận, nhiệm vụ XẾP VÀO HÀNG ĐỢI của đội và tự chạy khi xong việc trước (các đội chạy song song). Trưởng nhóm lập kế hoạch phân công (nhân sự 'tự nhận nhiệm vụ' luôn có phần việc, tăng cường chỉ khi cần); nhân sự nắm skill/sub-agent dùng công cụ thật (MCP/search/browser). Kiểm định soát chất lượng rồi Trưởng nhóm nộp báo cáo tổng hợp.",
             "inputSchema": { "type": "object", "properties": {
-                "title": { "type": "string", "description": "Nội dung nhiệm vụ Sếp giao, ví dụ: 'lập kế hoạch marketing ra mắt hệ thống Agent office'" }
+                "title": { "type": "string", "description": "Nội dung nhiệm vụ, ví dụ: 'nghiên cứu đối thủ ngành gia dụng'" },
+                "team": { "type": "string", "description": "Key đội xử lý (từ office_list_teams). Bỏ trống = đội đầu tiên." }
             }, "required": ["title"] }
         },
         {
@@ -110,8 +124,10 @@ fn tools_list() -> Value {
         },
         {
             "name": "office_list_agents",
-            "description": "Danh sách nhân sự ảo của văn phòng: tên, vai trò, mô tả nhiệm vụ cố định và trạng thái hiện tại.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "Danh sách nhân sự ảo: tên, vai trò, đội (team), trạng thái. Truyền 'team' để lọc theo một đội.",
+            "inputSchema": { "type": "object", "properties": {
+                "team": { "type": "string", "description": "Key đội để lọc (tùy chọn)" }
+            } }
         },
         {
             "name": "office_update_agent",
@@ -128,12 +144,13 @@ fn tools_list() -> Value {
         },
         {
             "name": "office_add_agent",
-            "description": "Tuyển thêm một nhân sự ảo vào văn phòng (tối đa 7 bàn). kind: 'worker' (chuyên môn — mặc định), 'manager'/'qa' chỉ khi chưa có. Nhân sự mới có knowledge space riêng ai-office:<key>.",
+            "description": "Tuyển thêm một nhân sự ảo vào MỘT ĐỘI (tối đa 7 bàn/đội). kind: 'worker' (mặc định), 'manager'/'qa' chỉ khi đội chưa có. Nhân sự mới có knowledge space riêng ai-office:<key>.",
             "inputSchema": { "type": "object", "properties": {
                 "name": { "type": "string", "description": "Tên hiển thị, ví dụ 'THIẾT KẾ'" },
-                "role": { "type": "string", "description": "Vai trò ngắn gọn, ví dụ 'Thiết kế & hình ảnh'" },
+                "role": { "type": "string", "description": "Vai trò ngắn gọn" },
                 "duty": { "type": "string", "description": "Mô tả nhiệm vụ cố định" },
-                "kind": { "type": "string", "enum": ["worker", "manager", "qa"], "description": "Loại nhân sự, mặc định worker" }
+                "kind": { "type": "string", "enum": ["worker", "manager", "qa"], "description": "Loại nhân sự, mặc định worker" },
+                "team": { "type": "string", "description": "Key đội (từ office_list_teams). Bỏ trống = đội đầu tiên." }
             }, "required": ["name"] }
         },
         {
@@ -154,33 +171,54 @@ fn tools_list() -> Value {
 async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
     let db = &state.db;
     let out = match name {
+        "office_list_teams" => db.list_teams().map(|teams| json!({ "teams": teams })),
+        "office_add_team" => {
+            let name = args["name"].as_str().unwrap_or("").trim().to_string();
+            if name.is_empty() {
+                return error_result("thiếu 'name' của đội".into());
+            }
+            db.add_team(&name, args["description"].as_str().unwrap_or(""))
+                .map(|team| json!({ "team": team }))
+        }
         "office_status" => db.list_agents().and_then(|agents| {
+            let teams = db.list_teams()?;
             let task = db.latest_task()?;
-            Ok(json!({ "agents": agents, "latestTask": task }))
+            Ok(json!({ "teams": teams, "agents": agents, "latestTask": task }))
         }),
         "office_create_task" => {
             let title = args["title"].as_str().unwrap_or("").trim().to_string();
             if title.is_empty() {
                 return error_result("thiếu 'title' — nội dung nhiệm vụ".into());
             }
-            match db.list_agents() {
+            let teams = match db.list_teams() {
+                Ok(t) => t,
+                Err(e) => return error_result(e.to_string()),
+            };
+            let team = args["team"]
+                .as_str()
+                .filter(|t| teams.iter().any(|x| x.key == *t))
+                .map(|s| s.to_string())
+                .or_else(|| teams.first().map(|t| t.key.clone()));
+            let Some(team) = team else {
+                return error_result("chưa có đội nào — tạo bằng office_add_team".into());
+            };
+            match db.list_agents_in(&team) {
                 Ok(agents) if !agents.iter().any(|a| a.kind == "worker" && a.enabled) => {
-                    return error_result(
-                        "không còn nhân sự chuyên môn nào đang hoạt động — bật lại bằng office_update_agent {enabled: true}".into(),
-                    )
+                    return error_result(format!(
+                        "đội '{}' không còn nhân sự chuyên môn đang hoạt động", team
+                    ))
                 }
                 Err(e) => return error_result(e.to_string()),
                 _ => {}
             }
-            // Luôn xếp hàng đợi; nếu phòng đang bận, nhiệm vụ chạy sau khi xong việc hiện tại.
-            let busy = db.has_running_task().unwrap_or(false);
-            db.create_task(&title, "live").map(|task| {
+            let busy = db.has_running_task(&team).unwrap_or(false);
+            db.create_task(&title, "live", &team).map(|task| {
                 let hint = if busy {
-                    "phòng đang bận — nhiệm vụ đã xếp vào hàng đợi, sẽ tự chạy khi xong việc hiện tại"
+                    "đội đang bận — nhiệm vụ đã xếp vào hàng đợi, sẽ tự chạy khi xong việc hiện tại"
                 } else {
                     "theo dõi bằng office_get_task, lấy kết quả bằng office_get_report"
                 };
-                json!({ "task": task, "queued": busy, "hint": hint })
+                json!({ "task": task, "team": team, "queued": busy, "hint": hint })
             })
         }
         "office_list_tasks" => {
@@ -219,7 +257,16 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Err(e) => Err(e),
             }
         }
-        "office_list_agents" => db.list_agents().map(|agents| json!({ "agents": agents })),
+        "office_list_agents" => {
+            let team = args["team"].as_str();
+            db.list_agents().map(|agents| {
+                let agents: Vec<_> = match team {
+                    Some(t) => agents.into_iter().filter(|a| a.team == t).collect(),
+                    None => agents,
+                };
+                json!({ "agents": agents })
+            })
+        }
         "office_update_agent" => {
             let key = args["key"].as_str().unwrap_or("");
             if key.is_empty() {
@@ -232,26 +279,22 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     .collect()
             });
             if args["enabled"].as_bool() == Some(false) {
-                match db.has_running_task() {
-                    Ok(true) => {
-                        return error_result(
-                            "phòng đang xử lý nhiệm vụ — chờ xong rồi tạm dừng nhân sự".into(),
-                        )
-                    }
-                    Err(e) => return error_result(e.to_string()),
-                    _ => {}
-                }
                 match db.list_agents() {
                     Ok(agents) => {
                         if let Some(a) = agents.iter().find(|a| a.key == key) {
+                            if db.has_running_task(&a.team).unwrap_or(false) {
+                                return error_result(
+                                    "đội đang xử lý nhiệm vụ — chờ xong rồi tạm dừng nhân sự".into(),
+                                );
+                            }
                             if a.kind == "manager" {
-                                return error_result("không thể tạm dừng Trưởng phòng".into());
+                                return error_result("không thể tạm dừng Trưởng nhóm".into());
                             }
                             if a.kind == "worker"
-                                && agents.iter().filter(|x| x.kind == "worker" && x.enabled).count() <= 1
+                                && agents.iter().filter(|x| x.team == a.team && x.kind == "worker" && x.enabled).count() <= 1
                             {
                                 return error_result(
-                                    "phòng cần ít nhất một nhân sự chuyên môn đang hoạt động".into(),
+                                    "đội cần ít nhất một nhân sự chuyên môn đang hoạt động".into(),
                                 );
                             }
                         }
@@ -286,9 +329,21 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Some("qa") => "qa",
                 _ => "worker",
             };
+            let teams = match db.list_teams() {
+                Ok(t) => t,
+                Err(e) => return error_result(e.to_string()),
+            };
+            let team = args["team"]
+                .as_str()
+                .filter(|t| teams.iter().any(|x| x.key == *t))
+                .map(|s| s.to_string())
+                .or_else(|| teams.first().map(|t| t.key.clone()));
+            let Some(team) = team else {
+                return error_result("chưa có đội nào — tạo bằng office_add_team".into());
+            };
             match db.list_agents() {
-                Ok(agents) if kind != "worker" && agents.iter().any(|a| a.kind == kind) => {
-                    return error_result(format!("phòng đã có một nhân sự giữ vai trò '{}'", kind))
+                Ok(agents) if kind != "worker" && agents.iter().any(|a| a.team == team && a.kind == kind) => {
+                    return error_result(format!("đội đã có một nhân sự giữ vai trò '{}'", kind))
                 }
                 Err(e) => return error_result(e.to_string()),
                 _ => {}
@@ -298,6 +353,7 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 args["role"].as_str().unwrap_or(""),
                 args["duty"].as_str().unwrap_or(""),
                 kind,
+                &team,
             )
             .map(|agent| json!({ "agent": agent }))
         }
@@ -306,25 +362,21 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             if key.is_empty() {
                 return error_result("thiếu 'key' của nhân sự".into());
             }
-            match db.has_running_task() {
-                Ok(true) => {
-                    return error_result("phòng đang chạy nhiệm vụ — chờ xong rồi thay đổi biên chế".into())
-                }
-                Err(e) => return error_result(e.to_string()),
-                _ => {}
-            }
             match db.list_agents() {
                 Ok(agents) => {
                     let Some(agent) = agents.iter().find(|a| a.key == key) else {
                         return error_result(format!("không có agent '{}'", key));
                     };
+                    if db.has_running_task(&agent.team).unwrap_or(false) {
+                        return error_result("đội đang chạy nhiệm vụ — chờ xong rồi thay đổi biên chế".into());
+                    }
                     if agent.kind == "manager" {
-                        return error_result("không thể xoá Trưởng phòng".into());
+                        return error_result("không thể xoá Trưởng nhóm".into());
                     }
                     if agent.kind == "worker"
-                        && agents.iter().filter(|a| a.kind == "worker").count() <= 1
+                        && agents.iter().filter(|a| a.team == agent.team && a.kind == "worker").count() <= 1
                     {
-                        return error_result("phòng cần ít nhất một nhân sự chuyên môn (worker)".into());
+                        return error_result("đội cần ít nhất một nhân sự chuyên môn (worker)".into());
                     }
                 }
                 Err(e) => return error_result(e.to_string()),

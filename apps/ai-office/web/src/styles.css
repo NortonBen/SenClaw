@@ -121,6 +121,34 @@ button, input, textarea {
 .btn.live { background: var(--ink); color: #ffd43b; }
 .btn.demo { background: var(--panel); }
 
+/* ---------- team tabs ---------- */
+.team-tabs {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 12px; overflow-x: auto;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--panel);
+}
+.team-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: 0 0 auto; /* never compress — overflow scrolls instead of tabs overlapping */
+  padding: 6px 12px; margin-bottom: -1px;
+  border: 1px solid transparent; border-bottom: none;
+  background: transparent; color: var(--faint);
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  cursor: pointer; border-radius: 4px 4px 0 0;
+}
+.team-tab:hover { color: var(--ink); }
+.team-tab.active {
+  color: var(--ink); background: var(--paper);
+  border-color: var(--line-strong); border-bottom: 1px solid var(--paper);
+}
+.team-tab.add { color: var(--faint); font-weight: 500; }
+.team-tab.add:hover { color: var(--accent, var(--ink)); }
+.team-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--working); animation: office-pulse 1s ease-in-out infinite;
+}
+
 /* ---------- body layout ---------- */
 .main { display: flex; flex: 1; min-height: 0; }
 
@@ -156,9 +184,14 @@ button, input, textarea {
   position: absolute; top: 8px; left: 14px;
   font-size: 10px; letter-spacing: 1px; color: var(--faint); text-transform: uppercase;
 }
-.scene-rotate {
+.scene-tools {
   position: absolute; top: 6px; right: 14px; z-index: 5;
-  font-size: 10px; padding: 2px 8px;
+  display: flex; gap: 4px; align-items: center;
+}
+.scene-rotate { font-size: 10px; padding: 2px 8px; }
+.scene-zbtn {
+  font-size: 13px; line-height: 1; padding: 0; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .legend {
   position: absolute; right: 14px; bottom: 8px;
