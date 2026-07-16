@@ -151,8 +151,7 @@ export default function App() {
   const cycleTheme = () =>
     setTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto')
 
-  const toggleLang = () => {
-    const next: Lang = lang === 'vi' ? 'en' : 'vi'
+  const setLangPersist = (next: Lang) => {
     setLangState(next)
     localStorage.setItem('ai-office-lang', next)
   }
@@ -263,13 +262,6 @@ export default function App() {
           AI OFFICE <span>// {tr('công ty một người — v1.0')}</span>
         </h1>
         <div className="spacer" />
-        <button
-          className="btn"
-          title={lang === 'vi' ? 'Switch to English' : 'Chuyển sang Tiếng Việt'}
-          onClick={toggleLang}
-        >
-          {lang === 'vi' ? '🇻🇳 VI' : '🇬🇧 EN'}
-        </button>
         <button
           className="btn"
           title={tr('Giao diện: Auto theo hệ thống / Sáng / Tối')}
@@ -434,6 +426,8 @@ export default function App() {
           llmOk={llmOk}
           rotation={rotation}
           onRotate={rotate}
+          lang={lang}
+          onSetLang={setLangPersist}
           onClose={() => setPanel('none')}
         />
       )}
@@ -989,11 +983,15 @@ function SettingsPanel({
   llmOk,
   rotation,
   onRotate,
+  lang,
+  onSetLang,
   onClose,
 }: {
   llmOk: boolean | null
   rotation: number
   onRotate: (r: number) => void
+  lang: Lang
+  onSetLang: (l: Lang) => void
   onClose: () => void
 }) {
   const [settings, setSettings] = useState<OfficeSettings | null>(null)
@@ -1047,6 +1045,23 @@ function SettingsPanel({
           {tr('Cài đặt')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
         </h2>
         <div className="kv">
+          <div className="k">{tr('Ngôn ngữ')}</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              className="btn"
+              style={lang === 'vi' ? { background: 'var(--ink)', color: 'var(--paper)' } : undefined}
+              onClick={() => onSetLang('vi')}
+            >
+              🇻🇳 Tiếng Việt
+            </button>
+            <button
+              className="btn"
+              style={lang === 'en' ? { background: 'var(--ink)', color: 'var(--paper)' } : undefined}
+              onClick={() => onSetLang('en')}
+            >
+              🇬🇧 English
+            </button>
+          </div>
           <div className="k">{tr('Workspace folder')}</div>
           <div>
             <div style={{ display: 'flex', gap: 6 }}>

@@ -175,6 +175,7 @@ addTranslations({
   '0 ₫ (agent không nhận lương 😜)': "$0 (agents don't get paid 😜)",
   'Đang tải…': 'Loading…',
   // ---- settings ----
+  'Ngôn ngữ': 'Language',
   'Workspace folder': 'Workspace folder',
   '~/Documents/ai-office hoặc đường dẫn tuyệt đối': '~/Documents/ai-office or an absolute path',
   'Chọn…': 'Browse…',
