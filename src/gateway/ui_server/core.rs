@@ -66,7 +66,8 @@ use super::space::{
     space_events_update, space_notes_create, space_notes_delete, space_notes_list,
     space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
     space_schedules_detail, space_schedules_list, space_schedules_run_now, space_schedules_update,
-    space_sync_apple_calendar, space_sync_apple_notes,
+    space_screenshot_extract, space_screenshot_get, space_sync_apple_calendar,
+    space_sync_apple_notes,
     space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
 };
 use super::subagents::{
@@ -156,6 +157,8 @@ pub struct UiState {
     /// full tool-enabled agent via the `agent.run` bridge action.
     pub virtual_worker_pool:
         Option<Arc<crate::agent::virtual_worker_pool::VirtualWorkerPool>>,
+    /// Autonomous background work (no chat session). Backs `/api/background/*`.
+    pub background_scheduler: Option<Arc<crate::background::BackgroundScheduler>>,
     /// Live per-group agent state map (`jid → "processing"/"idle"/…`), shared
     /// with the WebSocket gateway's `last_known_states`. Backs
     /// `GET /api/chat/states` so relay clients can reconcile after a drop.
@@ -559,6 +562,13 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(space_events_set_reminder),
         )
         .route("/api/space/calendar/today", get(space_today_summary))
+        // Tray screen captures (read-only; written by the desktop tray)
+        .route("/api/space/screenshots/:name", get(space_screenshot_get))
+        // AI-fill a captured shot's note fields (vision, or OCR → text LLM)
+        .route(
+            "/api/space/screenshots/extract",
+            post(space_screenshot_extract),
+        )
         // Schedules
         .route(
             "/api/space/schedules",
@@ -574,6 +584,30 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/space/schedules/:id/run-now",
             post(space_schedules_run_now),
         )
+        // Background tasks — autonomous work, no chat session. Distinct from
+        // the schedules above, which run in a chat and reply to a human.
+        .route(
+            "/api/background/tasks",
+            get(super::background::list).post(super::background::create),
+        )
+        .route("/api/background/parse", post(super::background::parse_quick))
+        .route(
+            "/api/background/tasks/:id",
+            get(super::background::detail)
+                .patch(super::background::update)
+                .delete(super::background::delete),
+        )
+        .route(
+            "/api/background/tasks/:id/run-now",
+            post(super::background::run_now),
+        )
+        .route("/api/background/tasks/:id/runs", get(super::background::runs))
+        .route("/api/background/runs/:id", get(super::background::run_detail))
+        .route(
+            "/api/background/runs/:id/cancel",
+            post(super::background::cancel_run),
+        )
+        .route("/api/background/stats", get(super::background::stats))
         // Apps
         .route("/api/space/apps", get(space_apps_list))
         .route("/api/space/apps/register", post(space_apps_register))

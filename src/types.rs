@@ -379,3 +379,423 @@ pub struct TaskRunLogInsert {
     pub error: Option<String>,
 }
 
+
+// ===== Background tasks =====
+//
+// Autonomous work SenClaw runs by itself: no chat session, no reply, no user
+// waiting. Deliberately kept apart from [`ScheduledTask`] above, which is the
+// *user's* schedule and assumes a human on the other end (see
+// `docs/background-tasks-design.md` §1).
+
+/// Who declared a background task. Decides what may edit it: an App's tasks
+/// live in its manifest and a native job's body is Rust, so neither is
+/// editable through the API — only pausable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundOwnerKind {
+    /// Core upkeep (`owner_id` = `core.cognitive`, …).
+    System,
+    /// A Space App (`owner_id` = the app id).
+    App,
+    /// A chat or the UI (`owner_id` = the agent folder).
+    User,
+}
+
+impl BackgroundOwnerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::App => "app",
+            Self::User => "user",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "system" => Self::System,
+            "app" => Self::App,
+            _ => Self::User,
+        }
+    }
+    /// True when the API may edit or delete the task. App-owned tasks are
+    /// reverted by a reinstall; native jobs have no prompt to edit.
+    pub fn is_editable(self) -> bool {
+        matches!(self, Self::User)
+    }
+}
+
+/// A task body is either a prompt run through the agent, or a Rust closure
+/// registered in the native registry (existing upkeep loops, brought under the
+/// same run history / statistics / pause surface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundJobKind {
+    Prompt,
+    Native,
+}
+
+impl BackgroundJobKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Native => "native",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "native" => Self::Native,
+            _ => Self::Prompt,
+        }
+    }
+}
+
+/// How the prompt for a run is produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundPromptKind {
+    /// `prompt` verbatim.
+    Static,
+    /// GET `context_url` → JSON, substitute `{{var}}` into `prompt`. Empty
+    /// context skips the run, so a task with nothing to do costs no tokens.
+    Template,
+    /// One `llm.request` with `prompt` as the instruction; its output becomes
+    /// the real prompt. Doubles token cost — prefer `Template`.
+    Generator,
+}
+
+impl BackgroundPromptKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Template => "template",
+            Self::Generator => "generator",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "template" => Self::Template,
+            "generator" => Self::Generator,
+            _ => Self::Static,
+        }
+    }
+}
+
+/// When a task fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTrigger {
+    /// `trigger_value` is a cron expression (5- or 6-field), local timezone.
+    Cron,
+    /// `trigger_value` is milliseconds.
+    Interval,
+    /// `trigger_value` is an RFC3339 timestamp.
+    Once,
+    /// Fires once when the owning App is installed, then never again.
+    OnInstall,
+    /// Never fires on its own; `run_now` only.
+    Manual,
+}
+
+impl BackgroundTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cron => "cron",
+            Self::Interval => "interval",
+            Self::Once => "once",
+            Self::OnInstall => "on_install",
+            Self::Manual => "manual",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "interval" => Self::Interval,
+            "once" => Self::Once,
+            "on_install" | "on-install" | "oninstall" => Self::OnInstall,
+            "manual" => Self::Manual,
+            _ => Self::Cron,
+        }
+    }
+    /// True for triggers that never produce a subsequent `next_run`.
+    pub fn is_one_shot(self) -> bool {
+        matches!(self, Self::Once | Self::OnInstall | Self::Manual)
+    }
+}
+
+/// What to do when a task is still running as its next window arrives. A
+/// 5-minute task on a 1-minute interval is a real configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlapPolicy {
+    /// Record a `skipped` run and move on.
+    Skip,
+    /// Wait for the in-flight run to finish.
+    Queue,
+    /// Cancel the in-flight run and start fresh.
+    CancelPrevious,
+}
+
+impl OverlapPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Skip => "skip",
+            Self::Queue => "queue",
+            Self::CancelPrevious => "cancel_previous",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "queue" => Self::Queue,
+            "cancel_previous" | "cancel-previous" => Self::CancelPrevious,
+            _ => Self::Skip,
+        }
+    }
+}
+
+/// How a task remembers across runs. It has no chat history to accumulate, so
+/// this is the only continuity it gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundContinuity {
+    /// Every run starts clean.
+    Fresh,
+    /// Recent run summaries are injected as context. Required for anything
+    /// touching people — a follow-up task that forgets yesterday contacts the
+    /// same customer twice.
+    Thread,
+}
+
+impl BackgroundContinuity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Thread => "thread",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "thread" => Self::Thread,
+            _ => Self::Fresh,
+        }
+    }
+}
+
+/// Whether a task shows in the default UI list. Native core upkeep is
+/// `Internal` so it doesn't bury the user's own tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundVisibility {
+    Normal,
+    Internal,
+}
+
+impl BackgroundVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Internal => "internal",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "internal" => Self::Internal,
+            _ => Self::Normal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundTaskStatus {
+    Active,
+    Paused,
+    /// A one-shot trigger that has fired.
+    Completed,
+    /// Auto-quarantined after `max_failures` consecutive failures. Nobody is
+    /// watching a background task, so it has to stop itself.
+    Failed,
+    Cancelled,
+}
+
+impl BackgroundTaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "paused" => Self::Paused,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Active,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundRunStatus {
+    Running,
+    Success,
+    Error,
+    Timeout,
+    Cancelled,
+    /// Nothing to do (empty `template` context) or an overlap `Skip`. Counted
+    /// apart from success in statistics: a skip is healthy, but a task that
+    /// only ever skips is one to delete.
+    Skipped,
+}
+
+impl BackgroundRunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Success => "success",
+            Self::Error => "error",
+            Self::Timeout => "timeout",
+            Self::Cancelled => "cancelled",
+            Self::Skipped => "skipped",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "running" => Self::Running,
+            "error" => Self::Error,
+            "timeout" => Self::Timeout,
+            "cancelled" => Self::Cancelled,
+            "skipped" => Self::Skipped,
+            _ => Self::Success,
+        }
+    }
+    /// True for statuses that count against `consecutive_failures`. A skip or
+    /// a deliberate cancel is not the task's fault.
+    pub fn is_failure(self) -> bool {
+        matches!(self, Self::Error | Self::Timeout)
+    }
+}
+
+/// What caused a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTriggerKind {
+    Schedule,
+    Manual,
+    Install,
+    CatchUp,
+}
+
+impl BackgroundTriggerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Schedule => "schedule",
+            Self::Manual => "manual",
+            Self::Install => "install",
+            Self::CatchUp => "catch_up",
+        }
+    }
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "manual" => Self::Manual,
+            "install" => Self::Install,
+            "catch_up" | "catch-up" => Self::CatchUp,
+            _ => Self::Schedule,
+        }
+    }
+}
+
+/// A registered unit of autonomous background work.
+///
+/// `(owner_id, owner_key)` is the idempotency key: re-installing an App upserts
+/// its tasks rather than duplicating them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackgroundTask {
+    pub id: String,
+
+    pub owner_kind: BackgroundOwnerKind,
+    pub owner_id: String,
+    pub owner_key: String,
+    pub title: String,
+    pub description: Option<String>,
+
+    pub job_kind: BackgroundJobKind,
+    /// Native registry key when `job_kind = Native`.
+    pub native_job: Option<String>,
+    pub prompt_kind: BackgroundPromptKind,
+    pub prompt: Option<String>,
+    /// `prompt_kind = Template`: GET here for `{{var}}` values.
+    pub context_url: Option<String>,
+
+    pub persona: Option<String>,
+    pub agent_folder: Option<String>,
+    pub workspace_dir: Option<String>,
+    /// Tool allowlist. Empty = the persona's own list, or all.
+    pub use_tools: Vec<String>,
+    /// JSON array of MCP server specs, injected per run.
+    pub mcp_json: Option<String>,
+    pub model_id: Option<String>,
+    pub max_turns: Option<i64>,
+    pub timeout_secs: Option<i64>,
+    pub continuity: BackgroundContinuity,
+    pub memory_folder: Option<String>,
+
+    pub trigger_type: BackgroundTrigger,
+    pub trigger_value: Option<String>,
+    pub next_run: Option<String>,
+    pub last_run: Option<String>,
+
+    pub overlap_policy: OverlapPolicy,
+    /// Run once for a window missed while the daemon was down.
+    pub catch_up: bool,
+    /// Consecutive failures before auto-pause. 0 = never.
+    pub max_failures: i64,
+    pub consecutive_failures: i64,
+    pub visibility: BackgroundVisibility,
+    /// Deliver an OS notification instead of running an agent. For "nhắc tôi /
+    /// thông báo X" tasks: the runner pushes `title`/`prompt` straight to the
+    /// desktop's notification system — fast, reliable, zero tokens — rather than
+    /// spinning up an agent that has no notification tool and just flails.
+    pub notify: bool,
+
+    pub status: BackgroundTaskStatus,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// One execution of a [`BackgroundTask`] — i.e. one background session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackgroundRun {
+    pub id: String,
+    pub task_id: String,
+    /// `bg:<run_id>`. Passed as the engine's `instance_id`. Deliberately not a
+    /// `GroupBinding` jid — no `groups` row is ever created for a background
+    /// run, which is also why `is_dynamic_system_jid` needs no new prefix.
+    pub session_id: String,
+    pub trigger_kind: BackgroundTriggerKind,
+    pub status: BackgroundRunStatus,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub turn_count: Option<i64>,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
+    /// The prompt actually sent, after template/generator resolution.
+    pub prompt: Option<String>,
+    pub result: Option<String>,
+    pub error: Option<String>,
+}
+
+/// One line of a background session's transcript, fed by the runner's
+/// `on_activity` stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackgroundActivity {
+    pub id: i64,
+    pub run_id: String,
+    pub ts: String,
+    /// `think` | `text` | `tool` | `tool_error` | `message`
+    pub kind: String,
+    pub detail: Option<String>,
+}

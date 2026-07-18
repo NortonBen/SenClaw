@@ -44,7 +44,7 @@ jobs:
   # job already validated, and re-running it would both duplicate the work and
   # serialize the (long) daemon+desktop matrix behind it.
   check:
-    name: Cargo check + Flutter analyze
+    name: Cargo test + Flutter analyze/test
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-22.04
     steps:
@@ -74,11 +74,12 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
 
-      - name: Flutter analyze
+      - name: Flutter analyze + test
         working-directory: desktop_app
         run: |
           flutter pub get
           flutter analyze
+          flutter test
 
   # ── Full desktop bundle — only on tags or workflow_dispatch ─────────────────
   # Daemon (cargo, release) builds FIRST inside each matrix job, then the
@@ -152,11 +153,37 @@ jobs:
             cargo build --release --bin senclaw --target ${{ matrix.target }}
           fi
 
+      - name: Resolve release version
+        id: ver
+        shell: bash
+        run: |
+          # The git tag is the single source of version identity:
+          #   tag v0.3.0 → Cargo version 0.3.0 → SENCLAW_VERSION 0.3.0
+          # A workflow_dispatch build has no tag, so it stays 'dev', which
+          # disables the in-app updater (app_config.dart::kIsDevBuild) — a
+          # non-release build must never offer to overwrite itself.
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="dev"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          # --build-name feeds CFBundleShortVersionString / the Windows file
+          # version and must be a bare x.y.z: 'dev' is rejected, and so is a
+          # prerelease suffix (0.3.0-beta.1 → 0.3.0). SENCLAW_VERSION above
+          # keeps the full string — that is what the updater compares.
+          case "$VER" in
+            dev) echo "build_name=0.0.0" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "build_name=${VER%%-*}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Build Flutter desktop app
         working-directory: desktop_app
         run: |
           flutter pub get
-          flutter build ${{ matrix.platform }} --release
+          # Single line on purpose: this step has no `shell:`, so Windows runs
+          # it under pwsh, where a trailing `\` is not a line continuation.
+          flutter build ${{ matrix.platform }} --release --build-name="${{ steps.ver.outputs.build_name }}" --dart-define=SENCLAW_VERSION="${{ steps.ver.outputs.version }}" --dart-define=SENCLAW_TARGET="${{ matrix.target }}"
 
       - name: Bundle daemon + collect artifacts
         shell: bash
@@ -241,6 +268,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags: the manifest step derives its changelog from
+          # `git log <prev-tag>..<tag>`, which needs more than a shallow clone.
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -250,6 +281,61 @@ jobs:
 
       - name: List artifacts
         run: ls -lh release-artifacts/
+
+      # Update manifest consumed by the desktop app's updater. It is fetched as
+      # a release ASSET (releases/latest/download/latest.json) rather than via
+      # the GitHub API, which rate-limits at 60 req/h per IP — every machine
+      # behind one office NAT shares that budget. `latest/download/` redirects
+      # to the newest NON-prerelease, so the stable channel falls out for free
+      # and `v*-beta.*` manifests are simply never resolved.
+      - name: Generate update manifest
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+
+          # In-app changelog. `generate_release_notes` below fills the web page;
+          # this feeds the app's Updates panel, which cannot call the API.
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            NOTES=$(git log --pretty=format:'- %s' "${PREV}..${TAG}")
+          else
+            NOTES="- Initial release"
+          fi
+
+          # Derive the asset map from what actually built — never hard-code the
+          # target list, or re-enabling a matrix entry (e.g. Intel macOS) would
+          # strand those users on an old version with no update ever offered.
+          # Suffix strip order matters: .app.zip before .zip.
+          ASSETS='{}'
+          for f in release-artifacts/SenClaw-*; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            triple="${base#SenClaw-}"
+            triple="${triple%.app.zip}"
+            triple="${triple%.tar.gz}"
+            triple="${triple%.zip}"
+            ASSETS=$(jq --arg t "$triple" --arg n "$base" \
+                        --argjson s "$(stat -c%s "$f")" \
+                        --arg h "$(sha256sum "$f" | cut -d' ' -f1)" \
+                        '.[$t] = {name: $n, size: $s, sha256: $h}' <<<"$ASSETS")
+          done
+
+          if [ "$(jq 'length' <<<"$ASSETS")" -eq 0 ]; then
+            echo "::error::no SenClaw-* bundles in release-artifacts/ — refusing to publish an empty manifest"
+            exit 1
+          fi
+
+          # jq builds the JSON so arbitrary commit subjects in $NOTES cannot
+          # break escaping.
+          jq -n --arg v "$VER" \
+                --arg p "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --arg n "$NOTES" \
+                --arg m "0.0.0" \
+                --argjson a "$ASSETS" \
+                '{version: $v, publishedAt: $p, notes: $n, minVersion: $m, assets: $a}' \
+                > release-artifacts/latest.json
+          cat release-artifacts/latest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

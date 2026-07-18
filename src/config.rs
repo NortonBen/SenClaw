@@ -91,6 +91,11 @@ pub struct PathsConfig {
     /// other model trees. Default: `~/.senclaw/ocr-models`. Override with
     /// `SENCLAW_OCR_MODELS_DIR`.
     pub ocr_models_dir: PathBuf,
+    /// Screen captures taken from the desktop tray. Served read-only over
+    /// `/api/space/screenshots/*`, so notes/events can reference a shot by URL.
+    /// Default: `~/.senclaw/screenshots`. Override with
+    /// `SENCLAW_SCREENSHOTS_DIR`.
+    pub screenshots_dir: PathBuf,
     /// Workflow definitions (`<name>.md` with YAML frontmatter).
     /// Default: `~/senclaw/workflows`. Override with `SENCLAW_WORKFLOWS_DIR`.
     pub workflows_dir: PathBuf,
@@ -276,6 +281,7 @@ pub struct Config {
     pub ui_server: UiServerConfig,
     pub mcp: McpConfig,
     pub dispatch: DispatchConfig,
+    pub background: BackgroundConfig,
     /// Space-App health supervisor interval in seconds (`SENCLAW_SPACE_SUPERVISE_SECS`).
     /// 0 disables the supervisor. Default 20.
     pub space_supervise_secs: u64,
@@ -283,6 +289,36 @@ pub struct Config {
     /// POSIX shell override for workflow script steps
     /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
     pub workflow_shell: Option<String>,
+}
+
+/// BackgroundScheduler — autonomous work SenClaw runs by itself: periodic
+/// upkeep, an App's standing duties, unattended follow-up. No chat session, no
+/// reply. See `docs/background-tasks-design.md`.
+#[derive(Debug, Clone)]
+pub struct BackgroundConfig {
+    /// Master switch (`SENCLAW_BACKGROUND_ENABLED`). On by default — core
+    /// upkeep tasks live here, and the per-task `status` is the real switch.
+    pub enabled: bool,
+    /// Poll cadence in seconds (`SENCLAW_BACKGROUND_INTERVAL_SECS`), floored
+    /// at 5.
+    pub interval_secs: u64,
+    /// Max background sessions at once (`SENCLAW_BACKGROUND_MAX_CONCURRENT`).
+    pub max_concurrent: usize,
+    /// Max concurrent runs for one owner (`SENCLAW_BACKGROUND_PER_OWNER`), so
+    /// one App can't starve the rest. Matches `dispatch.per_assignee`'s intent.
+    pub per_owner: usize,
+    /// Default per-run timeout (`SENCLAW_BACKGROUND_TIMEOUT_SECS`).
+    pub default_timeout_secs: u64,
+    /// Default turn budget (`SENCLAW_BACKGROUND_MAX_TURNS`).
+    pub max_agent_turns: usize,
+    /// Run history retention in days (`SENCLAW_BACKGROUND_RETENTION_DAYS`).
+    pub retention_days: i64,
+    /// Max tasks one owner may register (`SENCLAW_BACKGROUND_MAX_TASKS_PER_OWNER`).
+    pub max_tasks_per_owner: i64,
+    /// Max *active* tasks per owner (`SENCLAW_BACKGROUND_MAX_ACTIVE_PER_OWNER`).
+    pub max_active_per_owner: i64,
+    /// Backoff ceiling in seconds (`SENCLAW_BACKGROUND_BACKOFF_MAX_SECS`).
+    pub backoff_max_secs: i64,
 }
 
 /// MCPDispatcher — autonomously runs ready tasks from dispatch sources (e.g. the
@@ -440,6 +476,10 @@ impl Config {
                 ),
                 tts_models_dir: env_path("SENCLAW_TTS_MODELS_DIR", senclaw_home.join("tts-models")),
                 ocr_models_dir: env_path("SENCLAW_OCR_MODELS_DIR", senclaw_home.join("ocr-models")),
+                screenshots_dir: env_path(
+                    "SENCLAW_SCREENSHOTS_DIR",
+                    senclaw_home.join("screenshots"),
+                ),
                 workflows_dir: env_path("SENCLAW_WORKFLOWS_DIR", senclaw_data.join("workflows")),
                 workflow_data_dir: env_path(
                     "SENCLAW_WORKFLOW_DATA_DIR",
@@ -519,6 +559,18 @@ impl Config {
                 kanban_url: env_or("SENCLAW_DISPATCH_KANBAN_URL", "http://127.0.0.1:4400"),
                 max_agent_turns: env_int("SENCLAW_DISPATCH_MAX_TURNS", 40),
                 default_timeout_secs: env_int("SENCLAW_DISPATCH_TIMEOUT_SECS", 600),
+            },
+            background: BackgroundConfig {
+                enabled: env_bool("SENCLAW_BACKGROUND_ENABLED", true),
+                interval_secs: env_int("SENCLAW_BACKGROUND_INTERVAL_SECS", 20),
+                max_concurrent: env_int("SENCLAW_BACKGROUND_MAX_CONCURRENT", 3),
+                per_owner: env_int("SENCLAW_BACKGROUND_PER_OWNER", 1),
+                default_timeout_secs: env_int("SENCLAW_BACKGROUND_TIMEOUT_SECS", 300),
+                max_agent_turns: env_int("SENCLAW_BACKGROUND_MAX_TURNS", 40),
+                retention_days: env_int("SENCLAW_BACKGROUND_RETENTION_DAYS", 30),
+                max_tasks_per_owner: env_int("SENCLAW_BACKGROUND_MAX_TASKS_PER_OWNER", 20),
+                max_active_per_owner: env_int("SENCLAW_BACKGROUND_MAX_ACTIVE_PER_OWNER", 10),
+                backoff_max_secs: env_int("SENCLAW_BACKGROUND_BACKOFF_MAX_SECS", 3600),
             },
             space_supervise_secs: env_int("SENCLAW_SPACE_SUPERVISE_SECS", 20),
             ws_port: env_int("SENCLAW_WS_PORT", 18789),

@@ -4,9 +4,22 @@
 #![recursion_limit = "512"]
 
 mod api;
+mod api_dashboard;
+mod api_inbox;
+mod api_org;
+mod api_sale;
+mod channels;
 mod db;
+mod db_dashboard;
+mod db_inbox;
+mod db_org;
+mod db_sale;
+mod guardrail;
 mod llm;
 mod mcp;
+mod mcp_ext;
+mod sale;
+mod senclaw;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;

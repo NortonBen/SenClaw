@@ -275,6 +275,25 @@ impl McpManager {
                 ],
             },
             BuiltInServerInfo {
+                name: "senclaw-background".into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "Built-in background tasks — autonomous work the agent schedules for itself, \
+                     with no chat reply."
+                        .into(),
+                ),
+                tools: vec![
+                    t("background_create", "Create an autonomous background task"),
+                    t("background_list", "List background tasks"),
+                    t("background_get", "Get a background task + its recent runs"),
+                    t("background_pause", "Pause a background task"),
+                    t("background_resume", "Resume a paused background task"),
+                    t("background_delete", "Delete a background task"),
+                    t("background_run_now", "Run a background task now"),
+                    t("background_stats", "Background task statistics"),
+                ],
+            },
+            BuiltInServerInfo {
                 name: "senclaw-workspace".into(),
                 transport: "stdio".into(),
                 description: Some(

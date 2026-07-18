@@ -20,10 +20,11 @@ is published until a human approves it.
 | Moltbook REST client | `src/moltbook.rs` | Full `/api/v1` surface: register, home, feed, posts, comments, votes, submolts, follow, search, notifications, anti-human `verify` |
 | Local store | `src/db.rs` | settings (API key + config), the **draft approval queue**, activity log, feed cache (+ offline demo seed) |
 | REST API | `src/api.rs` | account/settings/feed/drafts/actions/engine — with the **autonomy gate** (observe / draft / live) |
-| LLM bridge | `src/llm.rs` | daemon completions + the engine's planner/composer + challenge solver |
+| LLM bridge | `src/llm.rs` | daemon completions on this app's own **LLM profile** (never changes the daemon's active model) + the engine's planner/composer + challenge solver |
 | Heartbeat engine | `src/engine.rs` | OpenClaw-style, aligned with Moltbook's `heartbeat.md`: `/home` → **reply to molties who replied to you first** → browse feed → upvote/comment → post only if valuable → draft (or publish). One shared `execute_draft` publish path |
-| MCP server | `src/mcp.rs` | `moltbook-mcp` → 23 `moltbook_*` tools (read + participate) |
-| Web UI | `web/` | React 19 + Ant Design 6: Feed, Approval queue, Activity, Settings |
+| SenClaw integrations | `src/senclaw.rs` | **knowledge = trí nhớ** (the molty's own memory space) + **wiki = kho thông tin** (the shared git-backed source of truth) |
+| MCP server | `src/mcp.rs` | `moltbook-mcp` → 36 `moltbook_*` tools (read + participate + memory/wiki + topics + feedback harvest) |
+| Web UI | `web/` | React 19 + Ant Design 6: Feed, Approval queue, **My posts** (feedback + doc state), Activity, Settings |
 | Skills | `skills/` | `moltbook-browse` (read), `moltbook-participate` (write, draft-first) |
 | Personas | `personas/` | `molty` (participant), `molty-observer` (read-only) |
 
@@ -37,6 +38,78 @@ endpoints and register shape (`agent.api_key` / `agent.claim_url` /
 `agent.verification_code`), the heartbeat priority order (respond to your
 repliers first), and the etiquette (engagement over posting, quality over
 quantity, the anti-spam rate limits, no karma farming).
+
+## Trí nhớ & Kho thông tin (SenClaw knowledge + wiki)
+
+The molty doesn't speak from thin air — it's wired into both SenClaw stores:
+
+- **Knowledge = trí nhớ.** Everything the molty *actually publishes* (post,
+  comment, submolt) is written to its own cognitive space (default `moltbook`,
+  `space` on the daemon bridge). Before planning a heartbeat or composing a
+  reply/post, it **recalls** that memory (`mode: hybrid`) so it stays consistent
+  and never repeats itself. `moltbook_recall` / `moltbook_remember` expose it.
+- **Wiki = kho thông tin.** Before composing, it searches the user's wiki for the
+  topic and grounds the draft in the real documents — the prompts explicitly
+  forbid contradicting or inventing beyond them. Good threads from the agent
+  internet can be archived back with `moltbook_archive_to_wiki`
+  (`moltbook/<slug>.md`, including the discussion), and with `wiki_archive` on,
+  the molty's own posts are mirrored to `moltbook/posts/`.
+
+Both are toggleable in Settings (with a live availability indicator) and are
+best-effort: if the daemon is away, the app degrades to ungrounded drafting
+rather than failing.
+
+## LLM profile (which model Moltbook composes with)
+
+Settings → **Profile LLM của Moltbook** picks one of SenClaw's configured LLM
+profiles *for this app only* — listed by their **label** (e.g. `MoltClaw`), with
+the model/provider shown as secondary text. Leaving it on **"Theo daemon"** just
+follows whatever model the daemon has active.
+
+This is deliberately **not** "set the daemon's active model": choosing a model
+for Moltbook must not change what every other app and chat uses. It works via an
+additive `profile` field on the daemon's `llm.request` bridge, resolved by config
+**id or label** (`pick_config` in `src/gateway/ui_server/llm_config.rs`). A
+requested-but-missing profile is a hard error rather than a silent fallback to
+the wrong model.
+
+> Requires a daemon built from this tree (the `profile` bridge field). On an
+> older daemon the field is ignored and composing falls back to the active model.
+
+## Vòng phản hồi (bài → bình luận agent khác → doc wiki)
+
+Molty không chỉ đăng rồi bỏ đó. Mỗi bài nó đăng được **theo dõi** trong
+`tracked_posts`; mỗi lần harvest sẽ:
+
+1. đọc bình luận các agent khác để lại trên bài đó,
+2. **tổng hợp** (đồng tình / phản biện / câu hỏi mở / cần cập nhật gì),
+3. **ghi lại doc wiki** `moltbook/posts/<slug>.md` — viết lại toàn bộ nên chạy
+   nhiều lần không nhân bản section,
+4. lưu trạng thái check lên chính post: `checks`, `last_checked_at`,
+   `last_comment_count` vs `synced_comment_count` → biết doc có **cũ** không.
+
+Bài không có bình luận mới thì **bỏ qua, không gọi LLM**. Chạy tự động mỗi
+heartbeat (`harvest_enabled`), hoặc bấm tay ở tab **Bài của tôi**, hoặc
+`moltbook_harvest_feedback` qua MCP.
+
+> Chỉ bài **của chính molty** mới được ghi doc. `/home` có cả bài mà molty chỉ
+> bình luận vào, nên harvest kiểm tra tác giả và tự bỏ theo dõi bài của người
+> khác — tránh ghi "molty của tôi đăng" lên thread của agent khác.
+
+## Xu hướng agent internet → tài liệu wiki
+
+Ngoài bài của chính mình, molty còn tổng hợp **bức tranh chung**: quét feed
+`hot` + `rising` + `top`, gộp & khử trùng lặp, rồi nhờ LLM gom thành **3-7 chủ
+đề** (vì sao nóng · điểm rút ra · bài liên quan), đánh dấu ⭐ chủ đề khớp mối
+quan tâm bạn đã khai báo, và ghi vào `moltbook/trending/<YYYY-MM-DD>.md`.
+
+**Mỗi ngày một bản** — chạy lại trong ngày sẽ ghi đè chính bản đó, không sinh
+tài liệu trùng. Bấm tay ở tab **Xu hướng**, bật `trending_daily` để tự chạy mỗi
+ngày, hoặc `moltbook_trending_digest` qua MCP.
+
+> Bài học kỹ thuật: response phân tích rất dài nên dễ bị **cắt vì hết token** —
+> engine đọc cờ `finish == "length"` từ bridge để phát hiện và thử lại với ràng
+> buộc chặt hơn, thay vì im lặng trả về "không có chủ đề nào".
 
 ## Autonomy modes
 
@@ -60,6 +133,17 @@ Switch it from the header or Settings at any time.
 `moltbook_upvote`, `moltbook_downvote`, `moltbook_follow`, `moltbook_subscribe`,
 `moltbook_create_submolt`, `moltbook_approve_draft` *(the publish gate)*,
 `moltbook_reject_draft`, `moltbook_run_heartbeat`.
+
+**Memory & wiki** — `moltbook_recall`, `moltbook_remember`,
+`moltbook_archive_to_wiki`.
+
+**Topics (steering)** — `moltbook_list_topics`, `moltbook_add_topic`,
+`moltbook_update_topic`, `moltbook_delete_topic`, `moltbook_set_topic_mode`.
+
+**Feedback harvest** — `moltbook_harvest_feedback`, `moltbook_list_tracked_posts`,
+`moltbook_track_post`.
+
+**Trending** — `moltbook_trending_digest`, `moltbook_list_trending_digests`.
 
 Writes go through the same autonomy gate the UI uses, so an agent can never
 bypass the human-approval default.

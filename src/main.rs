@@ -64,10 +64,36 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
     },
+    /// Internal: finish a desktop self-update once the app has exited.
+    ///
+    /// Hidden because it is not a thing to run by hand — the desktop app copies
+    /// this binary out of its own bundle, spawns it detached, and quits so that
+    /// the bundle can be replaced. See docs/desktop-app-auto-update.md.
+    #[command(hide = true)]
+    ApplyUpdate {
+        /// Downloaded release archive to install.
+        #[arg(long)]
+        staged: std::path::PathBuf,
+        /// Bundle to replace — the one the app is running from, NOT a probed
+        /// default (the app may live outside the standard location).
+        #[arg(long)]
+        target: std::path::PathBuf,
+        /// Wait for this pid to exit before swapping.
+        #[arg(long)]
+        pid: u32,
+        /// Expected SHA-256 of `--staged`, from latest.json.
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Start the app again once installed.
+        #[arg(long)]
+        relaunch: bool,
+    },
 
     // ===== MCP servers (spawned as subprocesses by sema-core) =====
     /// Start the schedule MCP server (stdio JSON-RPC)
     ScheduleServer,
+    /// Start the background-tasks MCP server (stdio JSON-RPC)
+    BackgroundServer,
     /// Start the workspace MCP server (stdio JSON-RPC)
     WorkspaceServer,
     /// Start the memory MCP server (stdio JSON-RPC)
@@ -138,6 +164,7 @@ async fn main() -> Result<()> {
         cli.command,
         Some(
             Command::ScheduleServer
+                | Command::BackgroundServer
                 | Command::WorkspaceServer
                 | Command::MemoryServer
                 | Command::SendServer
@@ -189,9 +216,19 @@ async fn main() -> Result<()> {
             senclaw::cli::commands::distrib::run_web(force, version).await
         }
         Command::Update { version } => senclaw::cli::commands::distrib::run_update(version).await,
+        Command::ApplyUpdate {
+            staged,
+            target,
+            pid,
+            sha256,
+            relaunch,
+        } => senclaw::cli::commands::distrib::run_apply_update(
+            staged, target, pid, sha256, relaunch,
+        ),
 
         // MCP servers
         Command::ScheduleServer => senclaw::mcp::schedule_server::run_stdio_server().await,
+        Command::BackgroundServer => senclaw::mcp::background_server::run_stdio_server().await,
         Command::WorkspaceServer => senclaw::mcp::workspace_server::run_stdio_server().await,
         Command::MemoryServer => senclaw::mcp::memory_server::run_stdio_server().await,
         Command::SendServer => senclaw::mcp::send_server::run_stdio_server().await,

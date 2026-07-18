@@ -94,13 +94,20 @@ pub fn sync_groups_from_config(
     let mut removed = 0usize;
 
     for entry in &config_groups {
-        // Prevent folder UNIQUE conflicts
+        // Prevent folder conflicts among config-managed groups. Delete the
+        // conflicting rows by jid — never by folder: dynamic system sessions
+        // (schedule:/cowork:/web:/virtual:) legitimately share a config
+        // folder, since a schedule bound to an agent profile IS that folder.
+        // The old delete_group_by_folder sweep wiped those sessions on boot,
+        // which orphaned the schedule's chat and made later profile edits
+        // silently update zero rows.
         if let Ok(all) = db.list_groups() {
-            if let Some(_conflict) = all
-                .iter()
-                .find(|g| g.folder == entry.folder && g.jid != entry.jid)
-            {
-                let _ = db.delete_group_by_folder(&entry.folder);
+            for conflict in all.iter().filter(|g| {
+                g.folder == entry.folder
+                    && g.jid != entry.jid
+                    && !is_dynamic_system_jid(&g.jid)
+            }) {
+                let _ = db.delete_group(&conflict.jid);
             }
         }
 
@@ -176,6 +183,54 @@ pub fn get_agent_allowed_work_dirs(
 #[cfg(test)]
 mod tests {
     use super::is_dynamic_system_jid;
+
+    #[test]
+    fn conflict_sweep_spares_dynamic_sessions_sharing_a_profile_folder() {
+        use crate::db::Db;
+        use crate::types::GroupBinding;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::from_env();
+        config.paths.global_config_path = tmp.path().join("config.json");
+        config.paths.agents_dir = tmp.path().join("agents");
+        config.paths.workspace_dir = tmp.path().join("workspace");
+        std::fs::write(
+            &config.paths.global_config_path,
+            r#"{"groups":[{"jid":"web:ssh","folder":"ssh","name":"SSH"}]}"#,
+        )
+        .unwrap();
+
+        let db = Db::open_in_memory(&config).unwrap();
+        let mk = |jid: &str, folder: &str| GroupBinding {
+            jid: jid.into(),
+            folder: folder.into(),
+            name: String::new(),
+            channel: String::new(),
+            group_type: "chat".into(),
+            requires_trigger: false,
+            allowed_tools: None,
+            allowed_paths: None,
+            allowed_work_dirs: None,
+            bot_token: None,
+            max_messages: None,
+            llm_config_id: None,
+            last_active: None,
+            added_at: "2026-07-18T00:00:00Z".into(),
+        };
+        // A schedule session bound to the "ssh" profile folder, plus a stale
+        // config-managed channel row that genuinely conflicts.
+        db.upsert_group(&mk("schedule:abc", "ssh")).unwrap();
+        db.upsert_group(&mk("tg:group:9", "ssh")).unwrap();
+
+        let gm = super::GroupManager::new();
+        super::sync_groups_from_config(&db, &gm, &config);
+
+        // The schedule's chat session survives reconciliation; the stale
+        // channel row is swept; the config-managed profile is (re)created.
+        assert!(db.get_group("schedule:abc").unwrap().is_some());
+        assert!(db.get_group("tg:group:9").unwrap().is_none());
+        assert!(db.get_group("web:ssh").unwrap().is_some());
+    }
 
     #[test]
     fn dynamic_system_jids_are_protected_from_reconciliation() {

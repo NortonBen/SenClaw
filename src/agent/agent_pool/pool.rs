@@ -31,7 +31,8 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
     browser_mcp_config, dispatch_mcp_config, js_mcp_config, litho_mcp_config, memory_mcp_config,
-    ocr_mcp_config, schedule_mcp_config, send_mcp_config, space_mcp_config, wiki_mcp_config,
+    background_mcp_config, ocr_mcp_config, schedule_mcp_config, send_mcp_config,
+    space_mcp_config, wiki_mcp_config,
     workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
@@ -1045,6 +1046,17 @@ impl AgentPool {
 
             let mut mcp_servers: Vec<McpServerConfig> = Vec::new();
             mcp_servers.push(schedule_mcp_config(
+                &db_path_s,
+                &binding.folder,
+                &binding.jid,
+            ));
+            // Background-tasks MCP — a chat can create/manage autonomous
+            // background work. Guard 2 (no self-replication) holds by
+            // construction: this is only injected into real chat sessions, and
+            // the background runner builds its own tool + MCP set per task, so a
+            // background run never receives this server unless a task explicitly
+            // requests it (and background_create exposes no raw MCP injection).
+            mcp_servers.push(background_mcp_config(
                 &db_path_s,
                 &binding.folder,
                 &binding.jid,

@@ -282,24 +282,30 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
             child: ConstrainedBox(
               constraints:
                   const BoxConstraints(maxWidth: 640, maxHeight: 620),
-              child: Container(
-                margin: const EdgeInsets.all(AppTokens.s24),
-                decoration: BoxDecoration(
-                  color: c.surface,
-                  border: Border.all(color: c.border),
-                  borderRadius: BorderRadius.circular(AppTokens.rXl),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _header(c, t, isLate),
-                    Divider(height: 1, color: c.border),
-                    Flexible(child: _conversation(c)),
-                    _quickActions(c),
-                    Divider(height: 1, color: c.border),
-                    _composer(c),
-                  ],
+              // Material ancestor: without one, raw Text renders with Flutter's
+              // debug double-yellow underline (this overlay mounts via
+              // MaterialApp.builder, above the Navigator's Material).
+              child: Material(
+                type: MaterialType.transparency,
+                child: Container(
+                  margin: const EdgeInsets.all(AppTokens.s24),
+                  decoration: BoxDecoration(
+                    color: c.surface,
+                    border: Border.all(color: c.border),
+                    borderRadius: BorderRadius.circular(AppTokens.rXl),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _header(c, t, isLate),
+                      Divider(height: 1, color: c.border),
+                      Flexible(child: _conversation(c)),
+                      _quickActions(c),
+                      Divider(height: 1, color: c.border),
+                      _composer(c),
+                    ],
+                  ),
                 ),
               ),
             ),

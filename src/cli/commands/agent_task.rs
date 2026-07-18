@@ -139,6 +139,7 @@ pub async fn run(cmd: AgentTaskCmd) -> Result<()> {
         skip_permissions: SkipPermissions::default(),
         cancel: None,
         max_agent_turns: None,
+        model_config_id: None,
         on_activity: None,
     };
 

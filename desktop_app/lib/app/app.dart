@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
+import 'package:appflowy_editor/appflowy_editor.dart'
+    show AppFlowyEditorLocalizations;
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,14 +10,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+import '../core/daemon/app_shutdown.dart';
 import '../core/daemon/daemon_provider.dart';
-import '../core/daemon/port_tools.dart';
 import '../core/daemon/startup_gate.dart';
 import '../core/notifications/system_notifier.dart';
 import '../core/transport/connection.dart';
+import '../core/update/update_provider.dart';
+import '../features/capture/capture_hotkey.dart';
+import '../features/capture/capture_review.dart';
+import '../features/capture/screen_capture.dart';
 import '../features/chat/mini_chat_screen.dart' show miniExpandRequestProvider;
 import '../features/chat/reminder_interaction.dart';
 import '../features/chat/widgets/plan_exit_dialog.dart';
+import '../features/settings/settings_screen.dart' show settingsSectionProvider;
 import '../theme/app_theme.dart';
 import '../theme/theme_mode_provider.dart';
 import 'router.dart';
@@ -39,6 +46,9 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
   /// shows the window on launch).
   bool _mainShown = true;
 
+  /// Hourly nudge for the background update check (which debounces to daily).
+  Timer? _updateTimer;
+
   bool get _isDesktop =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.macOS ||
@@ -57,7 +67,47 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
       _initTray();
       windowManager.setPreventClose(true); // hide to tray instead of quitting
       ref.read(systemNotifierProvider).start(); // OS notifications when hidden
+      _startUpdateChecks();
+      _listenToNativeMenu();
+      // Same action as the tray's "Capture Screen…", on a global shortcut.
+      if (isCaptureSupported) {
+        ref.read(captureHotkeyProvider.notifier).bind((_) => _captureAndReview());
+      }
     }
+  }
+
+  /// Background update checks. Delayed at launch so the check does not compete
+  /// with the daemon boot for I/O, then hourly — [UpdateNotifier.maybeCheck]
+  /// debounces to once a day, and it has to be re-asked because this app lives
+  /// in the tray for days at a time and rarely restarts.
+  void _startUpdateChecks() {
+    Future.delayed(const Duration(seconds: 10), () {
+      if (mounted) ref.read(updateProvider.notifier).maybeCheck();
+    });
+    _updateTimer = Timer.periodic(const Duration(hours: 1), (_) {
+      if (mounted) ref.read(updateProvider.notifier).maybeCheck();
+    });
+  }
+
+  /// The macOS app menu ("Check for Updates…", "Settings…") calls in here —
+  /// see AppDelegate.swift. The same `senclaw/app` channel already carries
+  /// Dart → native "activate"; this is the reverse direction.
+  ///
+  /// macOS only: Windows/Linux have no app menu, and reaching these actions
+  /// there is what the nav rail and Settings sidebar are for.
+  void _listenToNativeMenu() {
+    if (defaultTargetPlatform != TargetPlatform.macOS) return;
+    const MethodChannel('senclaw/app').setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'checkForUpdates':
+          appRouter.go('/settings');
+          ref.read(settingsSectionProvider.notifier).state = 'updates';
+          await ref.read(updateProvider.notifier).check();
+        case 'showSettings':
+          appRouter.go('/settings');
+      }
+      return null;
+    });
   }
 
   /// Handles method calls sent FROM a sub-window (the mini-chat) TO the main
@@ -80,10 +130,35 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
     );
     await trayManager.setContextMenu(Menu(items: [
       MenuItem(key: 'open', label: 'Open SenClaw'),
+      // Only macOS has a native capture bridge — omitted rather than shown
+      // disabled, so the menu doesn't advertise what it can't do.
+      if (isCaptureSupported)
+        MenuItem(key: 'capture', label: 'Capture Screen…'),
       MenuItem(key: 'diagnostics', label: 'Diagnostics…'),
       MenuItem.separator(),
       MenuItem(key: 'quit', label: 'Quit'),
     ]));
+  }
+
+  /// Tray → capture a region → open the review sheet, where the shot becomes a
+  /// note plus a reminder. The window is deliberately NOT raised first: the
+  /// point is to capture what's on screen behind us.
+  Future<void> _captureAndReview() async {
+    try {
+      final shot = await captureScreen(
+        dir: ref.read(appConfigProvider).screenshotsDir,
+      );
+      if (shot == null) return; // ESC — say nothing.
+      ref.read(pendingCaptureProvider.notifier).state = shot;
+      // The review sheet lives over the main window, so it has to be up.
+      await _showWindow();
+    } on ScreenCapturePermissionDenied {
+      await _showWindow();
+      ref.read(capturePermissionNeededProvider.notifier).state = true;
+    } on ScreenCaptureFailed catch (e) {
+      await _showWindow();
+      ref.read(captureErrorProvider.notifier).state = e.message;
+    }
   }
 
   Future<void> _showWindow() async {
@@ -152,6 +227,8 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
     switch (item.key) {
       case 'open':
         await _showWindow();
+      case 'capture':
+        await _captureAndReview();
       case 'diagnostics':
         await _showWindow();
         appRouter.go('/diagnostics');
@@ -160,31 +237,11 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
     }
   }
 
-  /// Full shutdown: close every open window (main + mini-chat sub-windows),
-  /// stop the SenClaw daemon (the process we spawned AND, for an adopted one,
-  /// whatever still listens on the UI port), then terminate the app.
-  Future<void> _quitApp() async {
-    // 1. Close mini-chat / any sub-windows (separate Flutter engines).
-    try {
-      for (final id in await DesktopMultiWindow.getAllSubWindowIds()) {
-        await WindowController.fromWindowId(id).close();
-      }
-    } catch (_) {}
-    // 2. Stop the daemon. supervisor.stop() kills a process we spawned;
-    //    killPort also covers an adopted daemon (kill by listening port).
-    try {
-      await ref.read(daemonSupervisorProvider).stop();
-    } catch (_) {}
-    try {
-      await PortTools.killPort(ref.read(appConfigProvider).uiPort);
-    } catch (_) {}
-    // 3. Tear down the main window and exit for real.
-    try {
-      await windowManager.setPreventClose(false);
-      await windowManager.destroy();
-    } catch (_) {}
-    exit(0);
-  }
+  /// Full shutdown — see [shutdownApp], which the updater shares.
+  Future<void> _quitApp() => shutdownApp(
+        supervisor: ref.read(daemonSupervisorProvider),
+        uiPort: ref.read(appConfigProvider).uiPort,
+      );
 
   @override
   void onWindowClose() async {
@@ -200,6 +257,7 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
 
   @override
   void dispose() {
+    _updateTimer?.cancel();
     if (_isDesktop) {
       trayManager.removeListener(this);
       windowManager.removeListener(this);
@@ -223,6 +281,11 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ref.watch(themeModeProvider),
+      // Required by the inline AppFlowyEditor in the Notes screen — it reads
+      // AppFlowyEditorLocalizations.current and throws without this delegate.
+      localizationsDelegates: const [
+        AppFlowyEditorLocalizations.delegate,
+      ],
       routerConfig: appRouter,
       // StartupGate holds a splash until the daemon answers HTTP, so no route
       // (and none of its data providers) runs against a dead daemon. The
@@ -233,6 +296,7 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
             child ?? const SizedBox.shrink(),
             const PlanExitOverlay(),
             const ReminderInteractionOverlay(),
+            const CaptureReviewOverlay(),
           ],
         ),
       ),

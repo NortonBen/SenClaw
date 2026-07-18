@@ -98,6 +98,14 @@ pub struct OneShotOptions {
     /// Agent-loop turn budget override. `None` = engine default (30). Raise
     /// for browser-driven research sessions (~2 turns per page).
     pub max_agent_turns: Option<usize>,
+    /// LLM config to run against. `None` = the globally active model.
+    ///
+    /// The chat path picks a model per session via `GroupBinding.llm_config_id`
+    /// → `CoreApi::set_model_override`. One-shot runs had no equivalent, so
+    /// every caller was pinned to whatever model happened to be active — fine
+    /// for a CLI invocation, not for a background task that wants a cheap model
+    /// for routine upkeep and a strong one for customer-facing work.
+    pub model_config_id: Option<String>,
     /// Live-activity stream (thinking deltas, tool calls, messages).
     pub on_activity: Option<OnActivity>,
 }
@@ -119,6 +127,7 @@ impl Default for OneShotOptions {
             skip_permissions: SkipPermissions::default(),
             cancel: None,
             max_agent_turns: None,
+            model_config_id: None,
             on_activity: None,
         }
     }
@@ -183,6 +192,7 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
         custom_rules: opts.custom_rules.clone().unwrap_or_default(),
         agent_mode: opts.agent_mode,
         max_agent_turns: opts.max_agent_turns,
+        model_config_id: opts.model_config_id.clone(),
         ..Default::default()
     };
 

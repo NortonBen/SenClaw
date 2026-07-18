@@ -185,78 +185,338 @@ fn is_desktop_installed() -> bool {
 // ===== Desktop install / uninstall =====
 
 async fn install_desktop(version: Option<String>) -> Result<()> {
-    let target = desktop_target()?;
-    let tmp = tmp_dir()?;
+    let triple = desktop_target()?;
+    let asset = bundle_asset_name(triple);
+    let staged = tmp_dir()?.join(&asset);
+    download(&asset_url(&asset, version.as_deref()), &staged).await?;
 
-    #[cfg(target_os = "macos")]
-    {
-        let asset = format!("SenClaw-{target}.app.zip");
-        let zip_path = tmp.join(&asset);
-        download(&asset_url(&asset, version.as_deref()), &zip_path).await?;
-
-        // `ditto` preserves symlinks, permissions, and code signatures — the
-        // zip crate does not, which breaks .app bundles.
-        let extract_dir = tmp.join("desktop-extract");
-        let _ = std::fs::remove_dir_all(&extract_dir);
-        std::fs::create_dir_all(&extract_dir)?;
-        run_tool(
-            "ditto",
-            &["-xk", &zip_path.to_string_lossy(), &extract_dir.to_string_lossy()],
-        )?;
-        let app_src = extract_dir.join("SenClaw Desktop.app");
-        if !app_src.exists() {
-            bail!("archive did not contain 'SenClaw Desktop.app'");
-        }
-
-        let app_dst = macos_app_dir().join("SenClaw Desktop.app");
-        let _ = std::fs::remove_dir_all(&app_dst);
-        std::fs::create_dir_all(app_dst.parent().unwrap())?;
-        run_tool(
-            "mv",
-            &[&app_src.to_string_lossy(), &app_dst.to_string_lossy()],
-        )?;
-        let _ = std::fs::remove_file(&zip_path);
-        let _ = std::fs::remove_dir_all(&extract_dir);
-        println!("Installed {}", app_dst.display());
-        println!("Launch it from Finder, Spotlight, or: open \"{}\"", app_dst.display());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let asset = format!("SenClaw-{target}.zip");
-        let zip_path = tmp.join(&asset);
-        download(&asset_url(&asset, version.as_deref()), &zip_path).await?;
-
-        let dest = windows_desktop_dir();
-        let _ = std::fs::remove_dir_all(&dest);
-        std::fs::create_dir_all(&dest)?;
-        let file = std::fs::File::open(&zip_path)
-            .with_context(|| format!("open {}", zip_path.display()))?;
-        zip::ZipArchive::new(file)?.extract(&dest)?;
-        let _ = std::fs::remove_file(&zip_path);
-        println!("Installed {}", dest.display());
-        println!("Launch: {}", dest.join("senclaw_desktop.exe").display());
-    }
+    let target = default_install_target();
+    swap_bundle(&staged, &target)?;
+    let _ = std::fs::remove_file(&staged);
 
     #[cfg(target_os = "linux")]
-    {
-        let asset = format!("SenClaw-{target}.tar.gz");
-        let tar_path = tmp.join(&asset);
-        download(&asset_url(&asset, version.as_deref()), &tar_path).await?;
+    write_linux_desktop_entry(&target)?;
 
-        let dest = linux_desktop_dir();
-        let _ = std::fs::remove_dir_all(&dest);
-        std::fs::create_dir_all(&dest)?;
-        run_tool(
-            "tar",
-            &["-xzf", &tar_path.to_string_lossy(), "-C", &dest.to_string_lossy()],
-        )?;
-        let _ = std::fs::remove_file(&tar_path);
-        write_linux_desktop_entry(&dest)?;
-        println!("Installed {}", dest.display());
-        println!("Launch: {}", dest.join("senclaw_desktop").display());
+    println!("Installed {}", target.display());
+    println!("{}", launch_hint(&target));
+    Ok(())
+}
+
+// ===== Bundle swap (shared by `install desktop` and `apply-update`) =====
+
+#[cfg(target_os = "macos")]
+const APP_BUNDLE_NAME: &str = "SenClaw Desktop.app";
+
+/// Release asset holding the desktop bundle for `triple` on this platform.
+/// Must match the `Bundle daemon + collect artifacts` step in desktop.yml.
+fn bundle_asset_name(triple: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("SenClaw-{triple}.app.zip")
+    } else if cfg!(target_os = "windows") {
+        format!("SenClaw-{triple}.zip")
+    } else {
+        format!("SenClaw-{triple}.tar.gz")
+    }
+}
+
+/// Where a fresh `install desktop` puts the bundle. NOTE: `apply-update` does
+/// NOT use this — it replaces the bundle the app is actually running from,
+/// which the app passes in via `--target`. Re-probing there would happily
+/// install a second copy in /Applications while the user runs one from
+/// ~/Downloads.
+fn default_install_target() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        macos_app_dir().join(APP_BUNDLE_NAME)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_desktop_dir()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_desktop_dir()
+    }
+}
+
+fn launch_hint(target: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        format!(
+            "Launch it from Finder, Spotlight, or: open \"{}\"",
+            target.display()
+        )
+    }
+    #[cfg(target_os = "windows")]
+    {
+        format!("Launch: {}", target.join("senclaw_desktop.exe").display())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        format!("Launch: {}", target.join("senclaw_desktop").display())
+    }
+}
+
+/// Append `.<suffix>` to a path without touching its existing extension.
+///
+/// `Path::with_extension` is wrong here: on "SenClaw Desktop.app" it REPLACES
+/// `.app`, yielding "SenClaw Desktop.new" — a sibling that macOS no longer
+/// treats as a bundle.
+fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
+    let mut s = p.as_os_str().to_os_string();
+    s.push(".");
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+fn remove_path(p: &Path) -> std::io::Result<()> {
+    if p.is_dir() {
+        std::fs::remove_dir_all(p)
+    } else if p.exists() {
+        std::fs::remove_file(p)
+    } else {
+        Ok(())
+    }
+}
+
+/// Replace the desktop bundle at `target` with the contents of the downloaded
+/// archive `staged`.
+///
+/// Every mutating step is a rename WITHIN `target`'s own directory, so none of
+/// them can straddle a filesystem boundary or half-finish:
+///
+/// 1. extract → `<target>.new`   — `<target>` still untouched; a bad archive
+///    or a full disk fails here and the installed app is pristine.
+/// 2. `<target>` → `<target>.old`
+/// 3. `<target>.new` → `<target>`
+/// 4. remove `<target>.old`
+///
+/// A failure at (3) puts `.old` back rather than leaving the user with no app.
+pub(crate) fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
+    let parent = target
+        .parent()
+        .with_context(|| format!("{} has no parent directory", target.display()))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("cannot create {}", parent.display()))?;
+
+    let new = with_suffix(target, "new");
+    let old = with_suffix(target, "old");
+    // Leftovers from a previous run that died mid-swap.
+    let _ = remove_path(&new);
+    let _ = remove_path(&old);
+
+    if let Err(e) = extract_bundle(staged, &new, parent) {
+        // Nothing has moved yet, so the install is fine — just don't leave a
+        // half-written `.new` sitting next to it.
+        let _ = remove_path(&new);
+        return Err(e);
     }
 
+    // Past this point the live bundle is in motion — keep the window tight.
+    let had_old = target.exists();
+    if had_old {
+        std::fs::rename(target, &old).with_context(|| {
+            format!(
+                "cannot move {} aside — is the directory writable?",
+                target.display()
+            )
+        })?;
+    }
+
+    if let Err(e) = std::fs::rename(&new, target) {
+        if had_old {
+            let _ = std::fs::rename(&old, target);
+        }
+        let _ = remove_path(&new);
+        return Err(anyhow::Error::new(e).context(format!(
+            "cannot move the new bundle into {} (rolled back)",
+            target.display()
+        )));
+    }
+
+    if had_old {
+        let _ = remove_path(&old);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn extract_bundle(staged: &Path, new: &Path, parent: &Path) -> Result<()> {
+    // Stage inside the TARGET's directory, not ~/.senclaw/tmp: the final move
+    // must be a same-volume rename, and /Applications is often on a different
+    // filesystem than $HOME.
+    let stage = parent.join(".senclaw-update-stage");
+    let _ = std::fs::remove_dir_all(&stage);
+    std::fs::create_dir_all(&stage).with_context(|| {
+        format!(
+            "cannot write to {} — the install location is not writable by this user",
+            parent.display()
+        )
+    })?;
+    let result = extract_app_into(staged, &stage, new);
+    let _ = std::fs::remove_dir_all(&stage);
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn extract_app_into(staged: &Path, stage: &Path, new: &Path) -> Result<()> {
+    // `ditto` preserves symlinks, permissions, and code signatures — the zip
+    // crate does not, which breaks .app bundles.
+    run_tool(
+        "ditto",
+        &[
+            "-xk",
+            &staged.to_string_lossy(),
+            &stage.to_string_lossy(),
+        ],
+    )?;
+    let app = stage.join(APP_BUNDLE_NAME);
+    if !app.exists() {
+        bail!("archive did not contain '{APP_BUNDLE_NAME}'");
+    }
+    std::fs::rename(&app, new).context("cannot stage the new bundle")?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn extract_bundle(staged: &Path, new: &Path, _parent: &Path) -> Result<()> {
+    std::fs::create_dir_all(new)?;
+    let file =
+        std::fs::File::open(staged).with_context(|| format!("open {}", staged.display()))?;
+    zip::ZipArchive::new(file)?.extract(new)?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn extract_bundle(staged: &Path, new: &Path, _parent: &Path) -> Result<()> {
+    std::fs::create_dir_all(new)?;
+    run_tool(
+        "tar",
+        &["-xzf", &staged.to_string_lossy(), "-C", &new.to_string_lossy()],
+    )?;
+    Ok(())
+}
+
+// ===== apply-update (internal: desktop app self-replacement) =====
+
+/// Finish a desktop self-update. Not for humans — see the `ApplyUpdate` docs in
+/// main.rs and docs/desktop-app-auto-update.md.
+///
+/// An app cannot replace the bundle it is executing from, so the desktop app
+/// copies this binary OUT of that bundle into ~/.senclaw/tmp, spawns the copy
+/// detached with its own pid, and quits. Running from outside is what makes the
+/// swap possible at all: on Windows the OS locks a running .exe, and on macOS
+/// the app's own Resources would be yanked out from under it mid-flight.
+///
+/// Synchronous on purpose: this is a one-shot process whose entire job is to
+/// block on another process dying.
+pub fn run_apply_update(
+    staged: PathBuf,
+    target: PathBuf,
+    pid: u32,
+    sha256: Option<String>,
+    relaunch: bool,
+) -> Result<()> {
+    println!("apply-update: waiting for pid {pid} to exit…");
+    wait_for_pid_exit(pid, std::time::Duration::from_secs(60))?;
+
+    // Verify BEFORE touching the install. The bundle is unsigned, so this
+    // checksum is the only thing between a corrupted or tampered download and
+    // the user's app directory.
+    if let Some(expected) = sha256.as_deref() {
+        verify_sha256(&staged, expected)?;
+        println!("apply-update: checksum ok");
+    }
+
+    swap_bundle(&staged, &target)?;
+    let _ = std::fs::remove_file(&staged);
+    println!("apply-update: installed {}", target.display());
+
+    #[cfg(target_os = "linux")]
+    write_linux_desktop_entry(&target)?;
+
+    if relaunch {
+        relaunch_app(&target)?;
+    }
+    Ok(())
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).context("read staged archive")?;
+    let actual = hex::encode(hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected) {
+        bail!(
+            "checksum mismatch for {} — refusing to install\n  expected {expected}\n  actual   {actual}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Block until `pid` is gone, erroring on timeout rather than swapping the
+/// bundle out from under a still-running app.
+fn wait_for_pid_exit(pid: u32, timeout: std::time::Duration) -> Result<()> {
+    let start = std::time::Instant::now();
+    while pid_alive(pid) {
+        if start.elapsed() >= timeout {
+            bail!(
+                "pid {pid} is still running after {}s — aborting before anything is touched",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    // Signal 0 runs the existence/permission check without delivering anything.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+    // EPERM means the process exists but belongs to another user — still alive.
+    // (Errno is read via std rather than libc::__errno_location, which is
+    // glibc-only; macOS spells it __error.)
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    // Asking tasklist avoids a winapi dependency for one call. The spawn cost
+    // is irrelevant in a one-shot updater polling a few times a second.
+    match std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+    {
+        // No match prints "INFO: No tasks are running which match…" (no digits).
+        Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
+        // If we cannot tell, assume gone rather than hang until the timeout.
+        Err(_) => false,
+    }
+}
+
+fn relaunch_app(target: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    run_tool("open", &["-a", &target.to_string_lossy()])?;
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let exe = if cfg!(target_os = "windows") {
+            target.join("senclaw_desktop.exe")
+        } else {
+            target.join("senclaw_desktop")
+        };
+        std::process::Command::new(&exe)
+            .spawn()
+            .with_context(|| format!("relaunch {}", exe.display()))?;
+    }
+
+    println!("apply-update: relaunched");
     Ok(())
 }
 
@@ -484,6 +744,247 @@ fn write_linux_desktop_entry(bundle_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== swap_bundle =====
+
+    /// The `with_extension` trap: on "SenClaw Desktop.app" it would REPLACE
+    /// `.app` and produce "SenClaw Desktop.new", which macOS stops treating as
+    /// a bundle. The staging path must be a plain suffix append.
+    #[test]
+    fn with_suffix_appends_rather_than_replacing_extension() {
+        let p = Path::new("/Applications/SenClaw Desktop.app");
+        assert_eq!(
+            with_suffix(p, "new"),
+            Path::new("/Applications/SenClaw Desktop.app.new")
+        );
+        assert_eq!(
+            with_suffix(p, "old"),
+            Path::new("/Applications/SenClaw Desktop.app.old")
+        );
+        // And the difference from the buggy version is real:
+        assert_eq!(p.with_extension("new"), Path::new("/Applications/SenClaw Desktop.new"));
+    }
+
+    #[test]
+    fn bundle_asset_name_matches_desktop_yml() {
+        let name = bundle_asset_name("aarch64-apple-darwin");
+        if cfg!(target_os = "macos") {
+            assert_eq!(name, "SenClaw-aarch64-apple-darwin.app.zip");
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(name, "SenClaw-aarch64-apple-darwin.zip");
+        } else {
+            assert_eq!(name, "SenClaw-aarch64-apple-darwin.tar.gz");
+        }
+    }
+
+    /// Build a release-shaped archive holding a bundle whose marker file says
+    /// `version`, matching what desktop.yml uploads for this platform.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn fake_archive(dir: &Path, version: &str) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        {
+            let app = dir.join(APP_BUNDLE_NAME);
+            std::fs::create_dir_all(app.join("Contents/Resources")).unwrap();
+            std::fs::write(app.join("Contents/Resources/senclaw"), version).unwrap();
+            let zip = dir.join("bundle.app.zip");
+            run_tool(
+                "ditto",
+                &[
+                    "-c",
+                    "-k",
+                    "--keepParent",
+                    &app.to_string_lossy(),
+                    &zip.to_string_lossy(),
+                ],
+            )
+            .unwrap();
+            std::fs::remove_dir_all(&app).unwrap();
+            zip
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let stage = dir.join("stage");
+            std::fs::create_dir_all(&stage).unwrap();
+            std::fs::write(stage.join("senclaw"), version).unwrap();
+            let tar = dir.join("bundle.tar.gz");
+            run_tool(
+                "tar",
+                &["-czf", &tar.to_string_lossy(), "-C", &stage.to_string_lossy(), "."],
+            )
+            .unwrap();
+            std::fs::remove_dir_all(&stage).unwrap();
+            tar
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn marker(target: &Path) -> String {
+        let p = if cfg!(target_os = "macos") {
+            target.join("Contents/Resources/senclaw")
+        } else {
+            target.join("senclaw")
+        };
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    // Two definitions rather than one `if cfg!(...)`: cfg! is a RUNTIME macro,
+    // so both of its branches must compile — and APP_BUNDLE_NAME only exists on
+    // macOS, which would break the Linux test build.
+    #[cfg(target_os = "macos")]
+    fn install_dir(root: &Path) -> PathBuf {
+        root.join(APP_BUNDLE_NAME)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_dir(root: &Path) -> PathBuf {
+        root.join("desktop")
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_replaces_existing_install_and_leaves_no_debris() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+
+        // Pre-existing install to be replaced.
+        let target = install_dir(tmp.path());
+        std::fs::create_dir_all(target.join(if cfg!(target_os = "macos") {
+            "Contents/Resources"
+        } else {
+            "."
+        }))
+        .unwrap();
+        let old_marker = if cfg!(target_os = "macos") {
+            target.join("Contents/Resources/senclaw")
+        } else {
+            target.join("senclaw")
+        };
+        std::fs::write(&old_marker, "v1").unwrap();
+
+        swap_bundle(&staged, &target).unwrap();
+
+        assert_eq!(marker(&target), "v2", "bundle was not replaced");
+        assert!(!with_suffix(&target, "new").exists(), ".new left behind");
+        assert!(!with_suffix(&target, "old").exists(), ".old left behind");
+        assert!(
+            !tmp.path().join(".senclaw-update-stage").exists(),
+            "staging dir left behind"
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_onto_empty_location_installs_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+        let target = install_dir(tmp.path());
+
+        swap_bundle(&staged, &target).unwrap();
+
+        assert_eq!(marker(&target), "v2");
+    }
+
+    /// The property that matters most: a bad download must never cost the user
+    /// their working install. Extraction happens before anything is moved.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_leaves_install_untouched_when_archive_is_garbage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("garbage.zip");
+        std::fs::write(&staged, b"not an archive at all").unwrap();
+
+        let target = install_dir(tmp.path());
+        std::fs::create_dir_all(target.join(if cfg!(target_os = "macos") {
+            "Contents/Resources"
+        } else {
+            "."
+        }))
+        .unwrap();
+        let m = if cfg!(target_os = "macos") {
+            target.join("Contents/Resources/senclaw")
+        } else {
+            target.join("senclaw")
+        };
+        std::fs::write(&m, "v1").unwrap();
+
+        assert!(swap_bundle(&staged, &target).is_err(), "garbage must not install");
+        assert_eq!(marker(&target), "v1", "install was damaged by a bad archive");
+        assert!(!with_suffix(&target, "old").exists(), "install left half-moved");
+        assert!(!with_suffix(&target, "new").exists(), ".new debris left behind");
+    }
+
+    /// Debris from a previous run that died mid-swap must not block the retry.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_clears_leftovers_from_a_crashed_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+        let target = install_dir(tmp.path());
+
+        std::fs::create_dir_all(with_suffix(&target, "new")).unwrap();
+        std::fs::write(with_suffix(&target, "new").join("junk"), "stale").unwrap();
+        std::fs::create_dir_all(with_suffix(&target, "old")).unwrap();
+
+        swap_bundle(&staged, &target).unwrap();
+
+        assert_eq!(marker(&target), "v2");
+        assert!(!with_suffix(&target, "new").exists());
+        assert!(!with_suffix(&target, "old").exists());
+    }
+
+    // ===== verify_sha256 =====
+
+    #[test]
+    fn verify_sha256_accepts_match_and_is_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("a.bin");
+        std::fs::write(&f, b"hello").unwrap();
+        // sha256("hello")
+        let want = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        verify_sha256(&f, want).unwrap();
+        verify_sha256(&f, &want.to_uppercase()).unwrap();
+    }
+
+    #[test]
+    fn verify_sha256_rejects_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("a.bin");
+        std::fs::write(&f, b"hello world").unwrap();
+        let err = verify_sha256(&f, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("checksum mismatch"), "unexpected error: {err}");
+    }
+
+    // ===== pid_alive =====
+
+    #[test]
+    fn pid_alive_sees_this_process_and_not_a_bogus_one() {
+        assert!(pid_alive(std::process::id()), "our own pid must read as alive");
+        // Above the platform pid_max everywhere we ship; nothing can hold it.
+        assert!(!pid_alive(4_000_000_000), "bogus pid must read as dead");
+    }
+
+    #[test]
+    fn wait_for_pid_exit_times_out_on_a_live_process() {
+        let err = wait_for_pid_exit(std::process::id(), std::time::Duration::from_millis(300))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("still running"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn wait_for_pid_exit_returns_once_the_child_is_gone() {
+        let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
+            .args(if cfg!(windows) { vec!["/C", "exit"] } else { vec![] })
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap(); // reap, so the pid is truly released
+        wait_for_pid_exit(pid, std::time::Duration::from_secs(5)).unwrap();
+    }
+
+    // ===== asset urls =====
 
     #[test]
     fn asset_url_latest() {

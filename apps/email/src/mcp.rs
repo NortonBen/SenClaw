@@ -33,6 +33,15 @@ pub async fn mcp_sse(
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
+/// Truncate to at most `max` characters. Slicing by byte index would panic
+/// mid-codepoint on any non-ASCII body (e.g. Vietnamese mail).
+fn truncate_chars(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
+    }
+}
+
 fn text_result(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
@@ -74,9 +83,10 @@ fn tools_list() -> Value {
     json!([
         {
             "name": "email_inbox",
-            "description": "List recent inbox emails (cached). Use account_id to filter a specific account.",
+            "description": "List recent cached emails, newest first. Use account_id to filter a specific account, and folder to switch between received mail ('INBOX', the default) and mail sent from this app ('Sent').",
             "inputSchema": { "type": "object", "properties": {
                 "account_id": { "type": "string" },
+                "folder": { "type": "string", "enum": ["INBOX", "Sent"] },
                 "limit": { "type": "number" }
             }}
         },
@@ -120,8 +130,14 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
     match name {
         "email_inbox" => {
             let account_id = args["account_id"].as_str().map(|s| s.to_string());
+            let folder = args["folder"].as_str().map(|s| s.to_string());
             let limit = args["limit"].as_u64().unwrap_or(20) as u32;
-            match store::inbox(&state.db, account_id.as_deref(), limit) {
+            match store::inbox(
+                &state.db,
+                account_id.as_deref(),
+                folder.as_deref(),
+                limit,
+            ) {
                 Ok(rows) => text_result(serde_json::to_string_pretty(&rows).unwrap_or_default()),
                 Err(e) => error_result(format!("Inbox failed: {e}")),
             }
@@ -147,7 +163,7 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             match store::read_msg(&state.db, id) {
                 Ok(v) => {
                     let body = v["body_text"].as_str().unwrap_or("(no body)");
-                    let preview = &body[..body.len().min(2000)];
+                    let preview = truncate_chars(body, 2000);
                     text_result(
                         json!({
                             "subject": v["subject"],

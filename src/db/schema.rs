@@ -253,6 +253,82 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_run_task_id
           ON task_run_logs(task_id, run_at);
 
+        -- Background tasks: autonomous work SenClaw runs by itself. Kept apart
+        -- from scheduled_tasks above, which is the *user's* schedule and runs
+        -- in a chat session. See docs/background-tasks-design.md.
+        CREATE TABLE IF NOT EXISTS background_tasks (
+          id                   TEXT PRIMARY KEY,
+          owner_kind           TEXT NOT NULL,
+          owner_id             TEXT NOT NULL,
+          owner_key            TEXT NOT NULL,
+          title                TEXT NOT NULL,
+          description          TEXT,
+          job_kind             TEXT NOT NULL DEFAULT 'prompt',
+          native_job           TEXT,
+          prompt_kind          TEXT NOT NULL DEFAULT 'static',
+          prompt               TEXT,
+          context_url          TEXT,
+          persona              TEXT,
+          agent_folder         TEXT,
+          workspace_dir        TEXT,
+          use_tools            TEXT,
+          mcp                  TEXT,
+          model_id             TEXT,
+          max_turns            INTEGER,
+          timeout_secs         INTEGER,
+          continuity           TEXT NOT NULL DEFAULT 'fresh',
+          memory_folder        TEXT,
+          trigger_type         TEXT NOT NULL,
+          trigger_value        TEXT,
+          next_run             TEXT,
+          last_run             TEXT,
+          overlap_policy       TEXT NOT NULL DEFAULT 'skip',
+          catch_up             INTEGER NOT NULL DEFAULT 0,
+          max_failures         INTEGER NOT NULL DEFAULT 5,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          visibility           TEXT NOT NULL DEFAULT 'normal',
+          notify               INTEGER NOT NULL DEFAULT 0,
+          status               TEXT NOT NULL DEFAULT 'active',
+          created_at           TEXT NOT NULL,
+          updated_at           TEXT NOT NULL,
+          UNIQUE(owner_id, owner_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_bg_due
+          ON background_tasks(next_run, status);
+        CREATE INDEX IF NOT EXISTS idx_bg_owner
+          ON background_tasks(owner_kind, owner_id);
+
+        CREATE TABLE IF NOT EXISTS background_runs (
+          id           TEXT PRIMARY KEY,
+          task_id      TEXT NOT NULL,
+          session_id   TEXT NOT NULL,
+          trigger_kind TEXT NOT NULL,
+          status       TEXT NOT NULL,
+          started_at   TEXT NOT NULL,
+          finished_at  TEXT,
+          duration_ms  INTEGER,
+          turn_count   INTEGER,
+          tokens_in    INTEGER,
+          tokens_out   INTEGER,
+          prompt       TEXT,
+          result       TEXT,
+          error        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_bg_runs_task
+          ON background_runs(task_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_bg_runs_status
+          ON background_runs(status, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS background_activity (
+          id     INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT NOT NULL,
+          ts     TEXT NOT NULL,
+          kind   TEXT NOT NULL,
+          detail TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_bg_activity_run
+          ON background_activity(run_id, id);
+
         CREATE TABLE IF NOT EXISTS router_state (
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
@@ -416,6 +492,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if !task_cols.iter().any(|c| c == "agent_mode") {
         conn.execute(
             "ALTER TABLE scheduled_tasks ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'agent'",
+            [],
+        )?;
+    }
+    let bg_cols = column_names(conn, "background_tasks")?;
+    if !bg_cols.is_empty() && !bg_cols.iter().any(|c| c == "notify") {
+        conn.execute(
+            "ALTER TABLE background_tasks ADD COLUMN notify INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }

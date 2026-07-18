@@ -325,6 +325,16 @@ class SpaceApi {
     _bump();
   }
 
+  /// Partial pin update — sends only `pinned` (the backend PUT is a partial
+  /// update). Safe to call while the inline editor has unsaved body edits,
+  /// since it never re-sends the (possibly stale) body.
+  Future<void> setPinned(String id, bool pinned) async {
+    await _ref
+        .read(apiClientProvider)
+        .put('/api/space/notes/$id', body: {'pinned': pinned});
+    _bump();
+  }
+
   Future<void> createEvent({
     required String title,
     required int startAt,

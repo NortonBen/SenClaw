@@ -1,18 +1,21 @@
 # SenClaw Mini Browser 🕶️
 
-A real, **stealth** web browser packaged as a SenClaw **App Space** — Rust +
+A real web browser packaged as a SenClaw **App Space** — Rust +
 axum + `chromiumoxide` (CDP) driving a live Chromium, with **deep AI** (MCP,
 skills, persona) and a live view the user and the AI **share**.
 
 - **Real rendering** — drives an actual Chromium via the Chrome DevTools Protocol
   (not HTML scraping). The user watches a live JPEG stream and can click, scroll,
   type, and manage tabs.
-- **Stealth / anti-bot** — drops Chrome's automation tells (`--enable-automation`,
-  `AutomationControlled`, `IdleDetection`) and injects JS before every page to
-  neutralize `navigator.webdriver`, fix `languages`/`plugins`/`permissions`, add a
-  real `window.chrome`, and make the patches un-introspectable. Human-like mouse
-  motion and per-key typing. See [`src/stealth.rs`](src/stealth.rs),
-  [`src/input.rs`](src/input.rs).
+- **Coherent identity** — drops Chrome's automation tells (`--enable-automation`,
+  `AutomationControlled`) and otherwise lets the real browser be itself. It reads
+  Chrome's genuine user-agent and client-hint metadata and republishes them
+  unchanged, correcting only the `HeadlessChrome` branding when running without a
+  window. There is deliberately **no** JS spoofing payload — a probe of a bare
+  browser showed every property the old layer patched was already correct, and
+  the patches contradicted each other. See [`src/stealth.rs`](src/stealth.rs) for
+  the full reasoning, and [`src/input.rs`](src/input.rs) for the human-like mouse
+  motion and per-key typing.
 - **User ≡ AI** — both the live-view input and the AI's MCP actions flow into the
   **same page / same CDP session** via `Input.*` events, so a site cannot tell an
   AI action from a person's.
@@ -32,10 +35,10 @@ skills, persona) and a live view the user and the AI **share**.
 web (React live view + AI panel)  ─┐
 MCP (mini-browser-mcp, /api/mcp/sse)─┤→ BrowserSession (one shared page)
 REST (/api/*) + live-view WebSocket ─┘   ├ chromiumoxide (CDP)
-                                         ├ stealth injector (stealth.rs)
+                                         ├ identity / UA override (stealth.rs)
                                          └ human-like input (input.rs)
                                                    │
-                                            Chromium (headless=new / headful)
+                                            Chrome (headful by default)
 ```
 
 Modules: [`main.rs`](src/main.rs) (launch + serve), [`session.rs`](src/session.rs)
@@ -59,9 +62,16 @@ Modules: [`main.rs`](src/main.rs) (launch + serve), [`session.rs`](src/session.r
   executable with `MB_CHROME=/path/to/chrome`.
 - Environment:
   - `PORT` — HTTP port (default `4360`).
-  - `MB_HEADFUL=1` — run a headful window (least detectable; needs a display).
-    Default is the new headless mode.
-  - `MB_USER_AGENT` — override the spoofed user-agent.
+  - `MB_HEADLESS=1` — force headless. The default is now a real window wherever
+    the platform has a display, because headless is the only thing left that we
+    have to misrepresent (Chrome brands itself `HeadlessChrome`). The UI streams
+    screenshots either way, so a window costs nothing on a desktop.
+  - `MB_HEADFUL=1` — force a window even without a detected display.
+  - `MB_USER_AGENT` — override the user-agent. Rarely a good idea: the default is
+    the browser's *real* UA, and a value that disagrees with the client-hint
+    metadata is exactly the sort of contradiction that gets a browser flagged.
+  - `MB_ACCEPT_LANGUAGE` — locale list (default `vi-VN,vi,en-US,en`). Plain
+    locales only; Chrome appends the `q=` weights itself.
   - `SENCLAW_BASE_URL` / `SENCLAW_SPACE_APP_ID` — injected by the daemon for LLM calls.
 
 ## Develop
@@ -78,8 +88,12 @@ cd apps/mini-browser/web && npm install && npm run dev
 
 ```bash
 cargo test -p mini-browser                                  # pure-logic unit tests
-cargo test -p mini-browser -- --ignored stealth_smoke       # live: launches Chrome,
-                                                            # asserts bot signals are gone
+
+# Live tests launch Chrome against the shared profile, so run them serially:
+cargo test -p mini-browser -- --ignored --test-threads=1
+#   identity_smoke           — asserts the browser presents one coherent identity
+#   google_serves_signin_form — asserts Google serves the sign-in form, not the
+#                               "browser may not be secure" rejection
 ```
 
 For a manual anti-bot check, navigate to `bot.sannysoft.com`,
@@ -100,7 +114,8 @@ auto-registers the MCP server at `/api/mcp/sse`.
 
 - Depends on a Chromium binary (Rust has no native web engine) — not pure-Rust for
   rendering.
-- Stealth greatly reduces detection but does not defeat advanced anti-bot systems
-  (Cloudflare Turnstile, DataDome).
+- Presenting a coherent identity is not a bypass: advanced anti-bot systems
+  (Cloudflare Turnstile, DataDome) and Google's sign-in can still refuse a
+  CDP-driven browser, and no amount of fingerprint tidying changes that.
 - Use responsibly: the `web-operator` persona confirms before sensitive actions and
   respects site terms / rate limits.

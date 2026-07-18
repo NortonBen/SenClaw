@@ -40,8 +40,22 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
   late String _status = widget.existing?.status.isNotEmpty == true
       ? widget.existing!.status
       : 'active';
-  String? _agentFolder;
-  String? _modelId;
+  late String? _agentFolder = widget.existing?.agentFolder;
+  // Seed from the schedule too, not null: an uninitialised field made the Model
+  // dropdown read "Active default" on every edit regardless of the real value.
+  late String? _modelId = widget.existing?.modelId;
+
+  @override
+  void initState() {
+    super.initState();
+    // Force a fresh agents fetch when the editor opens. `agentsProvider` is a
+    // global StateNotifier that only (re)fetches on socket-connect transitions,
+    // so if it was first created while disconnected — or the editor is the very
+    // first screen to need it — the Profile dropdown would sit empty (only
+    // "Default", nothing else to pick). Re-requesting here guarantees the list
+    // fills in; the dropdown rebuilds when the `agents` event lands.
+    ref.read(agentsProvider.notifier).refresh();
+  }
 
   static const _freqs = [
     'daily',
@@ -168,15 +182,42 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
     super.dispose();
   }
 
+  /// Items for the Profile dropdown.
+  ///
+  /// Always carries an explicit Default (a profile could otherwise be picked
+  /// but never un-picked), and always carries the schedule's own saved profile
+  /// even when it isn't in [agents] — the agent list arrives over the WS and
+  /// may be empty on first build, and Flutter asserts unless the selected
+  /// value has exactly one matching item once the list is non-empty. Keeping it
+  /// also means a schedule bound to a since-deleted profile shows what it is
+  /// bound to instead of quietly reading "Default".
+  List<DropdownMenuItem<String>> _profileItems(Iterable<AgentInfo> agents) {
+    final list = agents.toList();
+    return [
+      const DropdownMenuItem(value: null, child: Text('Default')),
+      for (final a in list)
+        DropdownMenuItem(value: a.folder, child: Text(a.name)),
+      if (_agentFolder != null &&
+          _agentFolder!.isNotEmpty &&
+          !list.any((a) => a.folder == _agentFolder))
+        DropdownMenuItem(
+            value: _agentFolder,
+            child: Text(_agentFolder!, overflow: TextOverflow.ellipsis)),
+    ];
+  }
+
   Future<void> _save() async {
     final body = <String, dynamic>{
       'prompt': _prompt.text.trim(),
       'label': _prompt.text.trim().split('\n').first,
       'agent_mode': _mode,
       if (widget.showStatus) 'status': _status,
-      if (_agentFolder != null && _agentFolder!.isNotEmpty)
-        'agent_folder': _agentFolder,
-      if (_modelId != null && _modelId!.isNotEmpty) 'model_id': _modelId,
+      // Always send both, empty string for "Default". Omitting them on null
+      // meant the server saw "no change", so a profile or model could be set
+      // but never removed. The editor always knows the intended value, so
+      // there is no ambiguity to preserve here.
+      'agent_folder': _agentFolder ?? '',
+      'model_id': _modelId ?? '',
     };
     if (_freq == 'advanced') {
       body['cron_advanced'] = _cron.text.trim();
@@ -256,6 +297,7 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: _freq,
+                      isExpanded: true,
                       decoration: const InputDecoration(
                           labelText: 'Frequency',
                           border: OutlineInputBorder()),
@@ -357,6 +399,7 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: _mode,
+                      isExpanded: true,
                       decoration: const InputDecoration(
                           labelText: 'Agent mode',
                           border: OutlineInputBorder()),
@@ -379,13 +422,8 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                           labelText: 'Profile (agent)',
                           border: OutlineInputBorder()),
                       hint: const Text('Default'),
-                      items: [
-                        for (final a in ref
-                            .watch(agentsProvider)
-                            .where((a) => !a.isSchedule))
-                          DropdownMenuItem(
-                              value: a.folder, child: Text(a.name)),
-                      ],
+                      items: _profileItems(
+                          ref.watch(agentsProvider).where((a) => !a.isSchedule)),
                       onChanged: (v) =>
                           setState(() => _agentFolder = v),
                     ),

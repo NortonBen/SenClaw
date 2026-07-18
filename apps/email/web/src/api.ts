@@ -1,16 +1,28 @@
 // Typed fetch client for the Email App's own backend (/api/*).
 
+/** Cache folders the UI can list. `Sent` holds mail sent from this app. */
+export type Folder = 'INBOX' | 'Sent';
+
 export interface Email {
   id: string;
   account_id: string;
   subject: string | null;
   from: string | null;
+  to: string | null;
   date: number | null;
   flags: string;
+  folder: Folder | string;
+  /** Single-line body preview built server-side. */
+  snippet: string | null;
+}
+
+export interface FolderCounts {
+  inbox: number;
+  unread: number;
+  sent: number;
 }
 
 export interface EmailDetail extends Email {
-  to: string | null;
   body_text: string | null;
   body_html: string | null;
 }
@@ -68,13 +80,24 @@ export const api = {
   deleteAccount: (id: string) =>
     apiFetch<{ success: boolean }>(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  inbox: (accountId?: string, limit = 50) => {
+  inbox: (accountId?: string, folder: Folder = 'INBOX', limit = 50) => {
     const qs = new URLSearchParams();
     if (accountId) qs.set('account_id', accountId);
+    qs.set('folder', folder);
     qs.set('limit', String(limit));
     return apiFetch<Email[]>(`/api/inbox?${qs.toString()}`);
   },
+  folders: (accountId?: string) => {
+    const qs = new URLSearchParams();
+    if (accountId) qs.set('account_id', accountId);
+    return apiFetch<FolderCounts>(`/api/folders?${qs.toString()}`);
+  },
   read: (id: string) => apiFetch<EmailDetail>(`/api/messages/${encodeURIComponent(id)}`),
+  markRead: (id: string, seen = true) =>
+    apiFetch<{ success: boolean; id: string; flags: string }>(
+      `/api/messages/${encodeURIComponent(id)}/read`,
+      { method: 'POST', body: JSON.stringify({ seen }) },
+    ),
   search: (q: string, accountId?: string) => {
     const qs = new URLSearchParams({ q });
     if (accountId) qs.set('account_id', accountId);

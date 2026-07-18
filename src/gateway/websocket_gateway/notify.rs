@@ -303,6 +303,92 @@ impl WebSocketGateway {
         self.broadcast_to_admins(&msg).await;
     }
 
+    // ===== Background tasks =====
+    //
+    // The user-facing scheduler pushes nothing when a task fires — its WS
+    // messages are strictly request/response. Background runs are unattended,
+    // so live push is the only way anyone sees them happen.
+
+    pub async fn notify_background_run_started(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        title: &str,
+        trigger: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "bg:run:started",
+            "taskId": task_id,
+            "runId": run_id,
+            "title": title,
+            "triggerKind": trigger,
+        });
+        self.broadcast_to_admins(&msg).await;
+    }
+
+    pub async fn notify_background_run_activity(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        kind: &str,
+        detail: &str,
+    ) {
+        let msg = serde_json::json!({
+            "type": "bg:run:activity",
+            "taskId": task_id,
+            "runId": run_id,
+            "kind": kind,
+            "detail": detail,
+        });
+        self.broadcast_to_admins(&msg).await;
+    }
+
+    pub async fn notify_background_run_finished(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        status: &str,
+        duration_ms: i64,
+        error: Option<&str>,
+    ) {
+        let msg = serde_json::json!({
+            "type": "bg:run:finished",
+            "taskId": task_id,
+            "runId": run_id,
+            "status": status,
+            "durationMs": duration_ms,
+            "error": error,
+        });
+        self.broadcast_to_admins(&msg).await;
+    }
+
+    /// Push a generic notification (OS notification when the app is
+    /// backgrounded, plus the in-app bell). Reuses the `notification` frame the
+    /// desktop already handles — same shape as calendar reminders, minus the
+    /// event target.
+    pub async fn notify_notification(&self, id: &str, title: &str, message: &str, kind: &str) {
+        let msg = serde_json::json!({
+            "type": "notification",
+            "id": id,
+            "title": title,
+            "message": message,
+            "kind": kind,
+        });
+        self.broadcast_to_admins(&msg).await;
+    }
+
+    pub async fn notify_background_task_changed(&self, task: &crate::types::BackgroundTask) {
+        let msg = serde_json::json!({
+            "type": "bg:task:changed",
+            "taskId": task.id,
+            "title": task.title,
+            "status": task.status.as_str(),
+            "nextRun": task.next_run,
+            "consecutiveFailures": task.consecutive_failures,
+        });
+        self.broadcast_to_admins(&msg).await;
+    }
+
     pub async fn notify_dispatch_update(&self, parents: &serde_json::Value) {
         let msg = serde_json::json!({
             "type": "dispatch:update",

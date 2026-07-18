@@ -7,8 +7,11 @@
 //!   * `bindings`          — N:N join: agent ↔ channel + per-chat JID
 //!   * `channel_messages`  — raw platform messages (incoming from Telegram/Feishu/etc.)
 //!   * `group_messages`    — conversation history (user messages + bot responses)
-//!   * `scheduled_tasks`   — scheduler entries
+//!   * `scheduled_tasks`   — scheduler entries (the *user's* schedule)
 //!   * `task_run_logs`     — task execution log
+//!   * `background_tasks`  — autonomous work SenClaw runs by itself (no chat)
+//!   * `background_runs`   — one row per background session
+//!   * `background_activity` — background-session transcripts
 //!   * `router_state`      — KV cursor (e.g. lastAgentTimestamp)
 //!
 //! Memory tables live in [`crate::memory::schema`] and are applied during
@@ -32,6 +35,7 @@ mod schema;
 
 mod agent_todos;
 mod agents;
+pub mod background;
 mod chat_widgets;
 mod bindings;
 mod channels;

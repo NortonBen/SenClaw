@@ -8,6 +8,7 @@
 //! `sema-code-core` model manager which hasn't been ported yet.
 
 mod agent_behavior_config;
+mod background;
 pub mod bash_sandbox;
 mod chat;
 mod code;

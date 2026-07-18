@@ -16,8 +16,16 @@ use super::types::AdminPermissionsConfig;
 pub(crate) async fn config_handler(State(s): State<Arc<UiState>>) -> Json<serde_json::Value> {
     let admin_perms = get_admin_permissions_config(&s.config.paths.global_config_path);
     Json(serde_json::json!({
+        // Daemon release version — same identity as the git tag / Cargo version.
+        // The desktop app compares this against its own build to detect a
+        // daemon left over from an older bundle.
+        "version": env!("CARGO_PKG_VERSION"),
         "wsPort": s.ws_port,
         "token": s.ws_token,
+        // Where the desktop tray must write screen captures. Sent rather than
+        // assumed client-side: `SENCLAW_SCREENSHOTS_DIR` can move it, and a
+        // tray writing elsewhere would 404 on every shot it serves back.
+        "screenshotsDir": s.config.paths.screenshots_dir.to_string_lossy(),
         "thinkingEnabled": get_thinking_enabled(&s.config.paths.global_config_path),
         "skipMainAgentPermissions": admin_perms.skip_main_agent_permissions,
         "skipAllAgentsPermissions": admin_perms.skip_all_agents_permissions,

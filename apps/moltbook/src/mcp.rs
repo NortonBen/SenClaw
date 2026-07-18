@@ -252,6 +252,102 @@ fn tools_list() -> Value {
                 "id": { "type": "number" }
             }, "required": ["id"] }
         },
+        // ---- trending: what the agent internet is talking about ----
+        {
+            "name": "moltbook_trending_digest",
+            "description": "Scan what's TRENDING on Moltbook right now (samples the hot + rising + top feeds, merged and de-duplicated), cluster the posts into 3-7 real THEMES with why each is getting traction and the concrete takeaway, and write it up as a dated briefing in the wiki at moltbook/trending/<YYYY-MM-DD>.md. Idempotent per day — re-running refreshes that day's doc instead of duplicating. Themes matching the user's configured topics are flagged. Use for 'moltbook đang nóng chủ đề gì', 'tổng hợp xu hướng', 'agent internet đang bàn gì', 'what's trending'.",
+            "inputSchema": { "type": "object", "properties": {
+                "write_wiki": { "type": "boolean", "description": "Write the wiki doc too. Default true; pass false to just read the analysis." }
+            } }
+        },
+        {
+            "name": "moltbook_list_trending_digests",
+            "description": "List past trending digests (day, topic names, post count, wiki path, summary, how many times regenerated). Read-only — use moltbook_trending_digest to produce a new one.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        // ---- feedback harvest: agent comments → synthesis → wiki doc ----
+        {
+            "name": "moltbook_harvest_feedback",
+            "description": "Collect what OTHER agents commented on YOUR Moltbook posts, synthesise the discussion (agreements, counter-points, open questions, what needs correcting), and REWRITE the wiki doc for each post with that synthesis + the raw thread + a check trail. Skips posts with no new comments (no LLM call). Pass post_id to force-refresh one post. Auto-discovers your posts that have activity but aren't tracked yet. Use for 'tổng hợp phản hồi về bài của tôi', 'cập nhật doc theo comment', 'các agent nói gì về bài tôi đăng'.",
+            "inputSchema": { "type": "object", "properties": {
+                "post_id": { "type": "string", "description": "Optional — only this post, and refresh its doc even with no new comments." }
+            } }
+        },
+        {
+            "name": "moltbook_list_tracked_posts",
+            "description": "List YOUR published posts with their feedback-check state: comment count and score last seen, how many times checked, when last checked, when the wiki doc was last regenerated, whether the doc is STALE (new agent comments not yet absorbed), the wiki path, the latest synthesis, and any last error. Use for 'bài của tôi thế nào', 'doc nào cần cập nhật', 'đã kiểm tra phản hồi chưa'.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "moltbook_track_post",
+            "description": "Start tracking a Moltbook post of yours for feedback harvesting (posts published through this app are tracked automatically; use this to backfill an older post by id).",
+            "inputSchema": { "type": "object", "properties": {
+                "post_id": { "type": "string" },
+                "title":   { "type": "string", "description": "Optional." },
+                "submolt": { "type": "string", "description": "Optional." }
+            }, "required": ["post_id"] }
+        },
+        // ---- topics: steer what the molty engages with / posts about ----
+        {
+            "name": "moltbook_list_topics",
+            "description": "List the steering topics: which subjects the molty engages with on Moltbook, and what the human wants it to post/ask about. Also returns topic_mode ('all' = engage with the whole feed, 'focus' = only these subjects). Use for 'moltbook đang quan tâm chủ đề gì', 'danh sách chủ đề'.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "moltbook_add_topic",
+            "description": "Add a steering topic. kind='engage' → a subject to look for and react to in the feed; kind='post' → something the human wants the molty to POST or ASK about on Moltbook; kind='both' (default) → either. Use for 'cho molty quan tâm chủ đề X', 'muốn AI hỏi trên moltbook về Y', 'thêm chủ đề'.",
+            "inputSchema": { "type": "object", "properties": {
+                "text": { "type": "string", "description": "The subject, or the question/idea to post." },
+                "kind": { "type": "string", "enum": ["engage", "post", "both"], "description": "Default 'both'." }
+            }, "required": ["text"] }
+        },
+        {
+            "name": "moltbook_update_topic",
+            "description": "Patch a steering topic by id — change its text, its kind (engage/post/both), or enable/disable it without deleting. Omitted fields stay as-is.",
+            "inputSchema": { "type": "object", "properties": {
+                "id":      { "type": "number" },
+                "text":    { "type": "string" },
+                "kind":    { "type": "string", "enum": ["engage", "post", "both"] },
+                "enabled": { "type": "boolean" }
+            }, "required": ["id"] }
+        },
+        {
+            "name": "moltbook_delete_topic",
+            "description": "Delete a steering topic by id. Use moltbook_update_topic with enabled=false to just pause it instead.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "number" }
+            }, "required": ["id"] }
+        },
+        {
+            "name": "moltbook_set_topic_mode",
+            "description": "Set how broadly the molty engages: 'all' = the whole feed (topics only bias it), 'focus' = ONLY posts related to the listed engage-topics, ignoring everything else. Use for 'chỉ tương tác chủ đề đã chọn' / 'tương tác toàn bộ feed'.",
+            "inputSchema": { "type": "object", "properties": {
+                "mode": { "type": "string", "enum": ["all", "focus"] }
+            }, "required": ["mode"] }
+        },
+        // ---- SenClaw integrations: knowledge (trí nhớ) + wiki (kho thông tin) ----
+        {
+            "name": "moltbook_recall",
+            "description": "Ask the molty's MEMORY (its SenClaw knowledge space — 'trí nhớ') what it already knows: what it posted/said on Moltbook before, who it talked to, what it learned or archived. Returns a synthesized answer plus the raw hits. Use for 'tôi đã nói gì về X trên moltbook', 'molty nhớ gì về Y', 'đã đăng bài nào về Z chưa'. Read-only.",
+            "inputSchema": { "type": "object", "properties": {
+                "query": { "type": "string", "description": "What to recall." }
+            }, "required": ["query"] }
+        },
+        {
+            "name": "moltbook_remember",
+            "description": "Write something into the molty's MEMORY (knowledge space) by hand — a fact, a lesson, a note about another molty — so future heartbeats and drafts stay consistent with it. The molty already auto-remembers everything it actually publishes; use this for anything extra worth keeping.",
+            "inputSchema": { "type": "object", "properties": {
+                "text": { "type": "string", "description": "The memory to store." },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional extra tags." }
+            }, "required": ["text"] }
+        },
+        {
+            "name": "moltbook_archive_to_wiki",
+            "description": "Save a Moltbook post AND its discussion thread into the WIKI (the user's 'kho thông tin' — the shared git-backed knowledge base) at moltbook/<slug>.md. Use when a thread on the agent internet is genuinely worth keeping: 'lưu bài này vào wiki', 'archive this thread', 'giữ lại thảo luận này'. Also records the archive in the molty's memory.",
+            "inputSchema": { "type": "object", "properties": {
+                "post_id": { "type": "string", "description": "Moltbook post id (from moltbook_feed / moltbook_get_post)." }
+            }, "required": ["post_id"] }
+        },
         {
             "name": "moltbook_run_heartbeat",
             "description": "Run ONE OpenClaw-style heartbeat tick now: read the feed, and (per autonomy mode) draft or publish a small set of genuine engagements. Returns a summary. Use for 'cho agent tham gia moltbook một vòng', 'run the moltbook heartbeat'.",
@@ -486,7 +582,8 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 }
             }
             let instruction = args["instruction"].as_str().unwrap_or("");
-            match llm::compose_reply(&voice(db), &title, &content, instruction).await {
+            let g = crate::api::grounding_for(db, &format!("{title} {instruction}")).await;
+            match llm::compose_reply(&voice(db), &title, &content, instruction, &g).await {
                 Ok((text, model)) => {
                     let dc = DraftCreate {
                         kind: "comment".into(),
@@ -584,6 +681,173 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             match db.set_draft_result(id, "rejected", "", "", now_ts()) {
                 Ok(()) => json_result(json!({ "ok": true, "id": id, "status": "rejected" })),
                 Err(e) => error_result(e.to_string()),
+            }
+        }
+        // ---- trending ----
+        "moltbook_trending_digest" => {
+            let write_wiki = args["write_wiki"].as_bool().unwrap_or(true);
+            json_result(engine::trending_digest(state, write_wiki).await)
+        }
+        "moltbook_list_trending_digests" => match db.list_digests(60) {
+            Ok(list) => json_result(json!({ "count": list.len(), "digests": list })),
+            Err(e) => error_result(e.to_string()),
+        },
+
+        // ---- feedback harvest ----
+        "moltbook_harvest_feedback" => {
+            let pid = args["post_id"].as_str().map(str::trim).filter(|p| !p.is_empty());
+            json_result(engine::harvest(state, pid).await)
+        }
+        "moltbook_list_tracked_posts" => match db.list_tracked(200) {
+            Ok(list) => {
+                let items: Vec<Value> = list
+                    .iter()
+                    .map(|t| {
+                        let mut v = serde_json::to_value(t).unwrap_or(json!({}));
+                        v["doc_is_stale"] = json!(t.doc_is_stale());
+                        v
+                    })
+                    .collect();
+                json_result(json!({
+                    "count": items.len(),
+                    "posts": items,
+                    "note": "doc_is_stale = có bình luận mới chưa đưa vào doc wiki (chạy moltbook_harvest_feedback để cập nhật).",
+                }))
+            }
+            Err(e) => error_result(e.to_string()),
+        },
+        "moltbook_track_post" => {
+            let pid = args["post_id"].as_str().unwrap_or("").trim();
+            if pid.is_empty() {
+                return error_result("post_id là bắt buộc".into());
+            }
+            let title = args["title"].as_str().unwrap_or("");
+            let submolt = args["submolt"].as_str().unwrap_or("");
+            match db.track_post(pid, title, submolt, "", now_ts()) {
+                Ok(()) => json_result(json!({ "ok": true, "post": db.get_tracked(pid).ok().flatten() })),
+                Err(e) => error_result(e.to_string()),
+            }
+        }
+
+        // ---- topics ----
+        "moltbook_list_topics" => match db.list_topics(false) {
+            Ok(list) => json_result(json!({
+                "topic_mode": db.topic_mode(),
+                "count": list.len(),
+                "topics": list,
+                "note": "kind: engage = chủ đề để tương tác · post = điều muốn molty đăng/hỏi · both = cả hai",
+            })),
+            Err(e) => error_result(e.to_string()),
+        },
+        "moltbook_add_topic" => {
+            let text = args["text"].as_str().unwrap_or("").trim();
+            if text.is_empty() {
+                return error_result("text là bắt buộc".into());
+            }
+            let kind = args["kind"].as_str().unwrap_or("both");
+            match db.add_topic(text, kind, now_ts()) {
+                Ok(id) => {
+                    db.log("topic", &format!("thêm chủ đề ({kind}): {}", llm::truncate(text, 80)), &id.to_string(), now_ts()).ok();
+                    let t = db.list_topics(false).unwrap_or_default().into_iter().find(|t| t.id == id);
+                    json_result(json!({ "ok": true, "topic": t }))
+                }
+                Err(e) => error_result(e.to_string()),
+            }
+        }
+        "moltbook_update_topic" => {
+            let Some(id) = args["id"].as_i64() else {
+                return error_result("id là bắt buộc".into());
+            };
+            let text = args["text"].as_str();
+            let kind = args["kind"].as_str();
+            let enabled = args["enabled"].as_bool();
+            match db.update_topic(id, text, kind, enabled) {
+                Ok(()) => {
+                    let t = db.list_topics(false).unwrap_or_default().into_iter().find(|t| t.id == id);
+                    match t {
+                        Some(t) => json_result(json!({ "ok": true, "topic": t })),
+                        None => error_result(format!("topic {id} không tồn tại")),
+                    }
+                }
+                Err(e) => error_result(e.to_string()),
+            }
+        }
+        "moltbook_delete_topic" => {
+            let Some(id) = args["id"].as_i64() else {
+                return error_result("id là bắt buộc".into());
+            };
+            match db.delete_topic(id) {
+                Ok(()) => json_result(json!({ "ok": true, "id": id })),
+                Err(e) => error_result(e.to_string()),
+            }
+        }
+        "moltbook_set_topic_mode" => {
+            let mode = args["mode"].as_str().unwrap_or("").trim();
+            if !matches!(mode, "all" | "focus") {
+                return error_result("mode phải là 'all' hoặc 'focus'".into());
+            }
+            match db.set_str("topic_mode", mode) {
+                Ok(()) => json_result(json!({
+                    "ok": true,
+                    "topic_mode": mode,
+                    "note": if mode == "focus" {
+                        "Chỉ tương tác với bài liên quan các chủ đề 'engage' trong danh sách."
+                    } else {
+                        "Tương tác toàn bộ feed; chủ đề chỉ dùng để ưu tiên."
+                    },
+                })),
+                Err(e) => error_result(e.to_string()),
+            }
+        }
+
+        // ---- knowledge (trí nhớ) + wiki (kho thông tin) ----
+        "moltbook_recall" => {
+            let q = args["query"].as_str().unwrap_or("").trim();
+            if q.is_empty() {
+                return error_result("query là bắt buộc".into());
+            }
+            let space = crate::api::memory_space(db);
+            match crate::senclaw::knowledge_recall(&space, q).await {
+                Ok(answer) => {
+                    let hits = crate::senclaw::knowledge_search(&space, q, 6).await.unwrap_or_default();
+                    json_result(json!({
+                        "space": space,
+                        "answer": answer,
+                        "grounded": !answer.trim().is_empty(),
+                        "hits": hits.iter().map(|(n, s, sc)| json!({ "name": n, "summary": s, "score": sc })).collect::<Vec<_>>(),
+                    }))
+                }
+                Err(e) => error_result(format!("recall thất bại: {e}")),
+            }
+        }
+        "moltbook_remember" => {
+            let text = args["text"].as_str().unwrap_or("").trim();
+            if text.is_empty() {
+                return error_result("text là bắt buộc".into());
+            }
+            let extra: Vec<String> = args["tags"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let mut tags: Vec<&str> = vec!["moltbook"];
+            tags.extend(extra.iter().map(String::as_str));
+            let space = crate::api::memory_space(db);
+            match crate::senclaw::knowledge_save(&space, text, &tags, "moltbook:agent").await {
+                Ok(()) => {
+                    db.log("memory", &format!("agent ghi trí nhớ vào {space}"), "", now_ts()).ok();
+                    json_result(json!({ "ok": true, "space": space }))
+                }
+                Err(e) => error_result(format!("ghi trí nhớ thất bại: {e}")),
+            }
+        }
+        "moltbook_archive_to_wiki" => {
+            let pid = args["post_id"].as_str().unwrap_or("").trim();
+            if pid.is_empty() {
+                return error_result("post_id là bắt buộc".into());
+            }
+            match engine::archive_post_to_wiki(state, pid).await {
+                Ok(path) => json_result(json!({ "ok": true, "path": path, "note": "Đã lưu vào wiki (kho thông tin)." })),
+                Err(e) => error_result(e),
             }
         }
         "moltbook_run_heartbeat" => json_result(engine::run_once(state, "mcp").await),

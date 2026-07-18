@@ -1,13 +1,7 @@
 import { useEffect, useState } from 'react';
-import { App as AntApp, ConfigProvider, Layout, Segmented, Typography, theme } from 'antd';
-import { InboxOutlined, MailOutlined, SettingOutlined } from '@ant-design/icons';
-import { InboxView } from './components/InboxView';
-import { AccountsView } from './components/AccountsView';
+import { App as AntApp, ConfigProvider, theme } from 'antd';
+import { MailboxView } from './components/MailboxView';
 
-const { Header, Content } = Layout;
-const { Title } = Typography;
-
-type Tab = 'inbox' | 'accounts';
 type Mode = 'dark' | 'light';
 
 /** Resolve an initial theme before any host message arrives. */
@@ -52,6 +46,11 @@ export default function App() {
       theme={{
         algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: { colorPrimary: '#2563eb', borderRadius: 8 },
+        components: {
+          // The list rows carry their own selected state; keep AntD from
+          // double-painting a background behind them.
+          Segmented: { itemSelectedBg: 'transparent' },
+        },
       }}
     >
       <AntApp>
@@ -63,54 +62,17 @@ export default function App() {
 
 function Shell() {
   const { token } = theme.useToken();
-  const [tab, setTab] = useState<Tab>('inbox');
 
-  // Keep the page background in sync with the theme (avoids a flash behind the Layout).
+  // Bridge the tokens that only CSS can use — :hover on the hand-rolled nav
+  // rows, and the scrollbar colours — and keep the page background in sync so
+  // there's no flash behind the panes on load or theme switch.
   useEffect(() => {
-    document.body.style.background = token.colorBgLayout;
-  }, [token.colorBgLayout]);
+    const root = document.documentElement;
+    document.body.style.background = token.colorBgContainer;
+    root.style.setProperty('--email-hover', token.colorFillTertiary);
+    root.style.setProperty('--email-scrollbar', token.colorFill);
+    root.style.setProperty('--email-scrollbar-hover', token.colorFillSecondary);
+  }, [token]);
 
-  return (
-    <Layout style={{ height: '100vh', background: token.colorBgLayout }}>
-      <Header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          background: token.colorBgContainer,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          paddingInline: 20,
-          height: 58,
-          lineHeight: '58px',
-        }}
-      >
-        <Title level={5} style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <MailOutlined style={{ color: token.colorPrimary }} /> Email
-        </Title>
-        <Segmented<Tab>
-          value={tab}
-          onChange={setTab}
-          options={[
-            { label: 'Hộp thư', value: 'inbox', icon: <InboxOutlined /> },
-            { label: 'Tài khoản', value: 'accounts', icon: <SettingOutlined /> },
-          ]}
-        />
-      </Header>
-      <Content style={{ minHeight: 0, padding: 24, background: token.colorBgLayout }}>
-        <div
-          style={{
-            height: '100%',
-            minHeight: 0,
-            overflow: 'auto',
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: token.borderRadiusLG,
-            boxShadow: token.boxShadowTertiary,
-          }}
-        >
-          {tab === 'inbox' ? <InboxView onConfigure={() => setTab('accounts')} /> : <AccountsView />}
-        </div>
-      </Content>
-    </Layout>
-  );
+  return <MailboxView />;
 }

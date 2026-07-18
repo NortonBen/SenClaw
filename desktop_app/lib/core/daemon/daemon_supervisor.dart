@@ -65,7 +65,7 @@ class DaemonSupervisor extends ChangeNotifier {
       return;
     }
 
-    final bin = await _resolveBinary();
+    final bin = await resolveBinary();
     if (bin == null) {
       _lastError =
           'senclaw binary not found (set SENCLAW_BIN or bundle it next to the app)';
@@ -156,7 +156,11 @@ class DaemonSupervisor extends ChangeNotifier {
   // ── Binary resolution ──────────────────────────────────────────────────
   /// Search order: env override → next to the app executable / inside the
   /// macOS app bundle → dev tree (target/release, src-tauri/binaries).
-  Future<File?> _resolveBinary() async {
+  ///
+  /// Public because the updater needs the same binary: it copies it out of the
+  /// bundle and runs `apply-update` from there. Two answers to "where is
+  /// senclaw" would be one too many.
+  Future<File?> resolveBinary() async {
     final name = Platform.isWindows ? 'senclaw.exe' : 'senclaw';
 
     final fromEnv = Platform.environment['SENCLAW_BIN'];

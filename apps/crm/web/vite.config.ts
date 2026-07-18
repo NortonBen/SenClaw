@@ -18,7 +18,12 @@ export default defineConfig({
   server: {
     proxy: {
       // `npm run dev` → proxy API + SSE to the running crm backend.
-      '/api': { target: 'http://127.0.0.1:4390', changeOrigin: true, ws: true },
+      // Override the port with CRM_API_PORT when running a second instance.
+      '/api': {
+        target: `http://127.0.0.1:${process.env.CRM_API_PORT ?? 4390}`,
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 })

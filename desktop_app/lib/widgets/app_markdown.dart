@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HardwareKeyboard;
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../features/chat/widgets/widget_card.dart';
 import '../theme/tokens.dart';
 
@@ -15,9 +17,29 @@ import '../theme/tokens.dart';
 /// with no backend tool wired. Incomplete/invalid JSON (e.g. while streaming)
 /// falls back to normal code rendering.
 class AppMarkdown extends StatelessWidget {
-  const AppMarkdown(this.data, {super.key, this.style});
+  const AppMarkdown(this.data, {super.key, this.style, this.onLinkTap});
   final String data;
   final TextStyle? style;
+
+  /// Optional handler for a plain click on a link. Shift+click always opens
+  /// the link in the system browser regardless of this handler.
+  final void Function(String url, String title)? onLinkTap;
+
+  /// Open [url] in the system browser. Scheme-less links ("www.example.com")
+  /// get https:// prepended; only web/mail links are launched.
+  static Future<void> openExternal(String url) async {
+    var uri = Uri.tryParse(url.trim());
+    if (uri == null) return;
+    if (!uri.hasScheme) uri = Uri.tryParse('https://${url.trim()}');
+    if (uri == null) return;
+    if (!const {'http', 'https', 'mailto'}.contains(uri.scheme)) return;
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      // Swallow launcher errors (e.g. no handler registered) — a failed
+      // shift+click should never crash the app.
+    }
+  }
 
   static const _widgetLangs = {'widget', 'chart', 'weather', 'clock'};
 
@@ -54,6 +76,13 @@ class AppMarkdown extends StatelessWidget {
     return GptMarkdown(
       data,
       style: style,
+      onLinkTap: (url, title) {
+        if (HardwareKeyboard.instance.isShiftPressed) {
+          openExternal(url);
+        } else {
+          onLinkTap?.call(url, title);
+        }
+      },
       codeBuilder: (ctx, name, code, closed) {
         // Widget fenced block → native WidgetCard (only once the block has
         // closed and its JSON parses; otherwise fall through to code view).

@@ -20,6 +20,15 @@ async fn bridge(system: &str, user: &str, max_tokens: u32) -> Result<(String, St
         .map_err(|e| e.to_string())
 }
 
+/// One-shot completion on the daemon's active model. Returns `(text, model)`.
+///
+/// Every prompt in this file is a fixed CRM task with its own system prompt;
+/// this is the escape hatch for callers that compose their own — the sales
+/// engine, whose system prompt is assembled from the brand-voice setting.
+pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+    bridge(system, user, max_tokens).await
+}
+
 pub async fn list_models() -> Result<Value, String> {
     let (active, configs) = client().list_models().await.map_err(|e| e.to_string())?;
     let configs: Vec<Value> = configs

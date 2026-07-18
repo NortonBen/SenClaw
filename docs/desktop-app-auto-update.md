@@ -1,0 +1,291 @@
+# Check update & Auto-update cho `desktop_app` — Thiết kế
+
+> Trạng thái: **Đề xuất (chưa code)** · Ngày: 2026-07-17
+> Phạm vi: thêm luồng "kiểm tra bản mới → tải → cài → khởi động lại" vào Flutter `desktop_app/` (macOS / Windows / Linux).
+
+## 1. Mục tiêu & phi mục tiêu
+
+**Mục tiêu**
+- App tự kiểm tra bản mới (lúc khởi động + định kỳ 24h), báo bằng UI **không chặn** người dùng.
+- Người dùng bấm 1 nút → tải → cài → app tự khởi động lại ở bản mới.
+- Tái dùng logic tải/giải nén đã có ở [`src/cli/commands/distrib.rs`](../src/cli/commands/distrib.rs), **không** viết lại bằng Dart.
+- Update **cả app lẫn daemon trong một lần** (xem §4.1 — chúng nằm chung một bundle).
+- Có đường lùi: cài hỏng thì rollback về bản cũ, không để user mắc kẹt với app không mở được.
+
+**Phi mục tiêu (v1)**
+- KHÔNG tự động cài ngầm. Chỉ tự động *kiểm tra*; tải và cài luôn cần user bấm.
+- KHÔNG delta/patch update. Tải nguyên bundle (~vài chục MB) — đơn giản, đủ dùng.
+- KHÔNG code signing / notarization. Đây là món riêng, xem §10.
+- KHÔNG đụng `channel_app` (mobile) — nó update qua store/relay, khác đường hoàn toàn.
+
+## 2. Hiện trạng
+
+| Thành phần | Hiện trạng |
+|---|---|
+| CLI update | **Đã có**: `senclaw update [--version]` → [`run_update`](../src/cli/commands/distrib.rs) cập nhật binary + web dist + desktop app. Chưa có UI nào gọi tới. |
+| Cài desktop | **Đã có**: `install_desktop()` tải `SenClaw-<triple>.app.zip|.zip|.tar.gz` từ `releases/latest/download/`, giải nén (`ditto`/`zip`/`tar`), đặt vào thư mục app của OS. |
+| Release assets | [`desktop.yml`](../.github/workflows/desktop.yml) job `release` đẩy toàn bộ `release-artifacts/*` lên GitHub Release theo tag `v*`. Tag có `-` ⇒ đánh dấu prerelease. |
+| Version hiển thị | [`app_config.dart:2`](../desktop_app/lib/core/config/app_config.dart) — `const kAppVersion = '1.0.0'` **hard-code**, hiện ở nav rail [`shell.dart:111`](../desktop_app/lib/app/shell.dart). |
+| Version thật | `Cargo.toml` = `0.2.0`; git tag mới nhất = `v0.2.0`; `pubspec.yaml` = `1.0.0+1`. |
+| API version của daemon | **Chưa có**. `/api/config` ([`config_handler.rs:17`](../src/gateway/ui_server/config_handler.rs)) trả `wsPort`/`token`/… nhưng không trả version. |
+| Thoát app | [`_quitApp()`](../desktop_app/lib/app/app.dart) đã đóng sub-window, `supervisor.stop()`, `PortTools.killPort(uiPort)` (giết cả daemon adopted), rồi `exit(0)`. |
+
+## 3. Blocker #0 — version identity đang sai
+
+Đây là **điều kiện tiên quyết**, phải sửa trước khi viết bất cứ dòng update nào:
+
+```
+Cargo.toml     0.2.0   ← khớp git tag v0.2.0 (đây là version thật của release)
+pubspec.yaml   1.0.0+1 ← số vô nghĩa, không ai bump
+kAppVersion    '1.0.0' ← hard-code, nav rail đang HIỂN THỊ SAI cho user
+```
+
+Hệ quả nếu cứ thế làm update: so sánh `1.0.0` (local) với `0.2.0` (latest) → semver bảo "local mới hơn" → **app sẽ báo up-to-date vĩnh viễn**. Bug này im lặng và rất khó thấy.
+
+**Quyết định: `Cargo.toml version` == git tag == danh tính duy nhất của một release.** Mọi thứ khác phải dẫn xuất từ nó.
+
+- `desktop.yml` truyền version vào build Flutter:
+  ```yaml
+  - name: Build Flutter desktop app
+    working-directory: desktop_app
+    run: |
+      VER="${GITHUB_REF_NAME#v}"          # workflow_dispatch (không có tag) → "dev"
+      [ "${GITHUB_REF_TYPE}" = "tag" ] || VER="dev"
+      flutter build ${{ matrix.platform }} --release \
+        --build-name="${VER:-0.0.0}" \
+        --dart-define=SENCLAW_VERSION="$VER"
+  ```
+- `app_config.dart`:
+  ```dart
+  /// Bơm từ CI (`--dart-define=SENCLAW_VERSION`). Build local → 'dev'.
+  const String kAppVersion = String.fromEnvironment(
+    'SENCLAW_VERSION',
+    defaultValue: 'dev',
+  );
+  bool get kIsDevBuild => kAppVersion == 'dev';
+  ```
+  `kIsDevBuild` ⇒ **tắt toàn bộ tính năng update** (không check, section Updates hiện "bản dev"). Tránh cảnh đang `flutter run` thì app đòi tự ghi đè chính nó.
+- `pubspec.yaml` giữ `version: 0.0.0+1` như một placeholder có chú thích "CI ghi đè bằng `--build-name`" — không ai phải nhớ bump nữa.
+- Thêm `"version": env!("CARGO_PKG_VERSION")` vào response `/api/config` (rẻ, app đã fetch sẵn lúc khởi động). Dùng để phát hiện lệch app↔daemon (§8.3).
+
+## 4. Kiến trúc
+
+### 4.1 Đơn vị update = **cả bundle**, không phải từng file
+
+Nhìn lại bước bundle trong [`desktop.yml`](../.github/workflows/desktop.yml):
+
+```
+SenClaw Desktop.app/
+  Contents/MacOS/senclaw_desktop     ← Flutter app
+  Contents/Resources/senclaw         ← daemon Rust (app spawn nó làm child process)
+  Contents/Resources/mlx.metallib    ← MLX cần file này NẰM CẠNH binary
+```
+
+Ba thứ này bị ghim với nhau: daemon nằm *trong* app, `mlx.metallib` phải nằm cạnh daemon (xem `MLX metallib bundling` — thiếu nó thì mọi lệnh TTS/STT/local-LLM abort). Windows/Linux cũng vậy: `senclaw(.exe)` nằm chung thư mục bundle.
+
+⇒ **Thay nguyên bundle. Không bao giờ vá lẻ từng binary.** Đổi lại được một lợi ích lớn: app và daemon không thể lệch version.
+
+### 4.2 Sơ đồ
+
+```
+┌──────────────────┐  1. GET latest.json     ┌──────────────────────────┐
+│  desktop_app     │────────────────────────▶│  GitHub Releases         │
+│  UpdateService   │◀────────────────────────│  /latest/download/       │
+│                  │  {version, assets[]}    │    latest.json           │
+│                  │                         │    SenClaw-<triple>.zip  │
+│                  │  2. tải asset + sha256  │                          │
+│                  │◀────────────────────────│                          │
+└────────┬─────────┘                         └──────────────────────────┘
+         │ 3. copy senclaw → ~/.senclaw/tmp/senclaw-updater
+         │ 4. spawn DETACHED: senclaw-updater apply-update
+         │      --staged <zip> --target <path/tới/bundle> --pid <mypid> --relaunch
+         │ 5. _quitApp()  (dừng daemon, exit 0)
+         ▼
+┌────────────────────────────────────────────┐
+│  senclaw-updater (ngoài bundle, sống sót)  │
+│   a. đợi pid chết (poll, timeout 30s)      │
+│   b. verify sha256                         │
+│   c. giải nén → <bundle>.new               │
+│   d. rename <bundle> → <bundle>.old        │
+│      rename <bundle>.new → <bundle>        │   ← hỏng ở đây thì rollback .old
+│   e. xoá .old, relaunch app, tự thoát      │
+└────────────────────────────────────────────┘
+```
+
+Mấu chốt: **updater phải nằm ngoài bundle mà nó sắp thay**. Trên macOS process vẫn chạy được sau khi file bị xoá (inode còn giữ), nhưng Windows **khoá** file exe đang chạy — copy ra `~/.senclaw/tmp/` trước là cách duy nhất chạy đúng trên cả ba OS.
+
+### 4.3 Vì sao không dùng GitHub API
+
+`api.github.com/repos/.../releases/latest` cho sẵn `tag_name` + release notes, nhưng **rate-limit 60 req/giờ/IP** khi không auth — nhiều máy sau cùng một NAT văn phòng sẽ đụng trần. `distrib.rs` đã cố ý tránh chuyện này bằng URL `releases/latest/download/` (redirect, CDN, không giới hạn). Giữ nguyên quy ước đó.
+
+## 5. Manifest `latest.json`
+
+Job `release` trong `desktop.yml` sinh thêm một asset:
+
+```json
+{
+  "version": "0.3.0",
+  "publishedAt": "2026-07-17T10:00:00Z",
+  "notes": "…markdown release notes…",
+  "minVersion": "0.1.0",
+  "assets": {
+    "aarch64-apple-darwin":  { "name": "SenClaw-aarch64-apple-darwin.app.zip", "size": 84213760, "sha256": "…" },
+    "x86_64-pc-windows-msvc":{ "name": "SenClaw-x86_64-pc-windows-msvc.zip",   "size": 61234567, "sha256": "…" },
+    "x86_64-unknown-linux-gnu":{"name": "SenClaw-x86_64-unknown-linux-gnu.tar.gz","size": 59123456, "sha256": "…" }
+  }
+}
+```
+
+- `sha256` là **bắt buộc**, không phải trang trí: bundle chưa ký, checksum là lớp bảo vệ toàn vẹn duy nhất giữa GitHub và ổ đĩa user. Verify trước khi giải nén, sai thì huỷ.
+- `minVersion`: bản cũ hơn mức này không update thẳng được (ví dụ đổi schema DB) → UI bảo user cài tay. Hiện chưa dùng nhưng để sẵn field còn hơn phải thêm sau.
+- `releases/latest/download/` chỉ trỏ tới release **không phải prerelease** ⇒ kênh stable có sẵn, không cần code thêm. Tag `v0.3.0-beta.1` tự động vô hình với người dùng thường.
+- **Bẫy đã biết** (giống `senclaw web`): `latest.json` chỉ tồn tại từ tag ≥ lần đổi workflow này. Check gặp 404 ⇒ coi như "không có thông tin", im lặng, **không** hiện lỗi đỏ.
+
+Sinh manifest bằng bash trong job `release` (đã có sẵn toàn bộ artifact + `github.ref_name`), dùng `sha256sum` + `jq`.
+
+## 6. Phía Rust — `senclaw apply-update`
+
+Subcommand ẩn (`#[command(hide = true)]` — công cụ nội bộ, không phải API cho người dùng gõ tay):
+
+```rust
+/// Nội bộ: desktop_app spawn lệnh này detached để tự thay chính nó.
+#[command(hide = true)]
+ApplyUpdate {
+    #[arg(long)] staged: PathBuf,   // file đã tải & verify
+    #[arg(long)] target: PathBuf,   // bundle CẦN thay (app tự khai, xem dưới)
+    #[arg(long)] pid: u32,          // đợi pid này chết
+    #[arg(long)] sha256: String,
+    #[arg(long)] relaunch: bool,
+},
+```
+
+**`--target` do app truyền vào, không dò lại.** `install_desktop()` hiện dò thư mục cài bằng `macos_app_dir()` (probe /Applications, fallback ~/Applications). Với *update* thì sai: phải thay đúng cái bundle **đang chạy**, kể cả khi user đã kéo nó đi đâu đó. App biết chính xác vị trí:
+
+```dart
+// …/SenClaw Desktop.app/Contents/MacOS/<exe>
+//   dirname → …/Contents/MacOS  →  '..' → …/Contents  →  '..' → …/SenClaw Desktop.app
+String bundlePath() => Platform.isMacOS
+    ? p.normalize(p.join(p.dirname(Platform.resolvedExecutable), '..', '..'))
+    : p.dirname(Platform.resolvedExecutable); // win/linux: thư mục bundle
+```
+
+Đếm sai số `..` ở đây trỏ updater vào **thư mục cha của bundle** (tức `/Applications`) — nên `bundlePathFrom()` tách riêng để test được.
+
+Refactor `distrib.rs`: tách phần giải-nén-và-đặt-chỗ của `install_desktop()` ra thành `swap_bundle(staged, target)` để cả `install desktop` lẫn `apply-update` dùng chung. `install desktop` = `download` + `swap_bundle(_, dò_thư_mục())`; `apply-update` = `wait_pid` + `verify` + `swap_bundle(_, target)` + `relaunch`.
+
+Đổi tên tại chỗ, cùng thư mục cha (đảm bảo cùng volume ⇒ rename là atomic):
+
+```
+<target>.new   ← giải nén vào đây; hỏng ở bước này thì bundle gốc CHƯA hề bị đụng
+<target>       → <target>.old
+<target>.new   → <target>
+xoá <target>.old
+```
+Nếu rename cuối thất bại → `<target>.old` → `<target>` trở lại, báo lỗi, thoát khác 0.
+
+Relaunch: `open -a <target>` (macOS) / `Start-Process` (Windows) / `exec <target>/senclaw_desktop` (Linux).
+
+## 7. Phía Dart
+
+### 7.1 `lib/core/update/` (module mới)
+
+| File | Trách nhiệm |
+|---|---|
+| `version.dart` | Class `Version` — parse `0.3.0-beta.1`, so sánh **theo semver**. `0.10.0 > 0.9.0` (so sánh chuỗi sẽ sai). Có unit test. |
+| `update_manifest.dart` | Model của `latest.json` + parse chịu lỗi (field lạ/thiếu ⇒ không crash). |
+| `update_service.dart` | `check()`, `download(onProgress)`, `applyAndRestart()`. Không đụng UI. |
+| `update_provider.dart` | Riverpod: `UpdateState { idle, checking, available(m), downloading(pct), ready(path), applying, upToDate, error(e) }`. |
+
+Trạng thái lưu trong `SharedPreferences` qua `Prefs` sẵn có: `update.lastCheckAt`, `update.skippedVersion`, `update.autoCheck` (mặc định `true`).
+
+### 7.2 Chính sách check
+
+- Chạy lúc app khởi động (hoãn ~10s, đừng tranh I/O với lúc boot daemon) và mỗi 24h.
+- Bỏ qua hoàn toàn nếu `kIsDevBuild`.
+- Debounce bằng `update.lastCheckAt` — app hay bị mở/đóng liên tục (sống ở tray), không được check mỗi lần hiện cửa sổ.
+- Lỗi mạng ⇒ nuốt im lặng, chỉ log. Không toast. Máy offline không đáng bị làm phiền.
+- "Skip version này" ⇒ ghi `update.skippedVersion`, im cho tới bản kế.
+
+### 7.3 UI (4 điểm chạm)
+
+1. **Badge ở nav rail** — chấm nhỏ trên `v$kAppVersion` ([`shell.dart:111`](../desktop_app/lib/app/shell.dart)) khi có bản mới; bấm → Settings → Updates. Đây là chỗ user vốn đã liếc để biết mình đang chạy bản nào.
+2. **Settings → mục "Updates"** (thêm key `'updates'` vào `_sections` + `_UpdatesSection` trong [`settings_screen.dart`](../desktop_app/lib/features/settings/settings_screen.dart)): version hiện tại, "Kiểm tra ngay", lần check cuối, release notes (render bằng `gpt_markdown` đã có sẵn), nút "Tải & Cài" + progress, toggle auto-check.
+3. **Snackbar** một lần mỗi version khi phát hiện bản mới — có nút "Xem" và "Bỏ qua". Không dùng dialog: app khởi động cùng máy, chặn màn hình lúc boot là thô lỗ.
+4. **Menu macOS → "Check for Updates…"** — đúng chỗ trong ảnh chụp màn hình. Thêm item vào `macos/Runner/Base.lproj/MainMenu.xib`, gửi qua MethodChannel `senclaw/app` (channel này đã tồn tại cho `activate`) một method mới `checkForUpdates` → Dart điều hướng tới Settings → Updates và trigger check.
+   > Tiện thể: item **"Settings…"** trong ảnh đang xám vì xib template Flutter nối nó vào hư không. Nối nốt vào `/settings` — sửa 1 dòng, hết một món khó chịu.
+
+### 7.4 Luồng cài
+
+```dart
+Future<void> applyAndRestart(File staged, String sha256) async {
+  final updater = await _copyUpdaterOutsideBundle();   // ~/.senclaw/tmp/senclaw-updater
+  await Process.start(
+    updater.path,
+    ['apply-update',
+     '--staged', staged.path,
+     '--target', bundlePath(),
+     '--pid', '$pid',
+     '--sha256', sha256,
+     '--relaunch'],
+    mode: ProcessStartMode.detached,                   // sống sót qua exit(0)
+  );
+  await ref.read(appProvider).quitApp();               // tái dùng _quitApp() sẵn có
+}
+```
+
+`_quitApp()` dùng lại được nguyên vẹn và giải quyết luôn ca daemon **adopted**: nó đã gọi `PortTools.killPort(uiPort)` nên daemon do `cargo run` khởi động cũng bị dọn. Relaunch xong app spawn daemon mới từ bundle mới — không còn daemon cũ lảng vảng.
+
+## 8. Ca biên & rủi ro
+
+| Ca | Xử lý |
+|---|---|
+| **Bundle không ghi được** (`/Applications` do admin khác cài) | Thử `File(target/.probe).create()` **trước khi tải**. Hỏng ⇒ báo "cần quyền admin, chạy `senclaw update` trong terminal", đừng tải xong mới chết. |
+| **Daemon adopted / dev** (`phase == adopted`) | `_quitApp()` giết theo port ⇒ vẫn đúng. Nhưng nếu `kIsDevBuild` thì đã tắt update từ đầu. |
+| **Đang có agent chạy dở** | Hỏi xác nhận trước khi cài: "Đang có N phiên hoạt động, cài đặt sẽ dừng chúng." Lấy số từ `agentStatesProvider`. |
+| **Updater chết giữa chừng** | Lần khởi động sau, app thấy `<bundle>.old` còn sót ⇒ dọn. Thấy `<bundle>` mất mà `.old` còn ⇒ rollback. |
+| **App bị xoá lúc updater đang chạy (macOS)** | An toàn: updater đã được copy ra `~/.senclaw/tmp/`. |
+| **Gatekeeper / quarantine** | Tải bằng `reqwest` **không** gắn cờ quarantine (chỉ trình duyệt gắn) ⇒ không có prompt "app tải từ Internet". App vẫn chưa ký — y hệt tình trạng `senclaw install desktop` hiện tại, không tệ đi. |
+| **Downgrade** | Chỉ khi `latest > local`. `latest < local` (build local nhảy cóc) ⇒ coi như up-to-date. |
+| **Tải giữa chừng mất mạng** | Xoá file tạm, `error(e)`, cho retry. Không resume ở v1. |
+| **`latest.json` 404** (release cũ) | Coi như không có thông tin. Im lặng. |
+
+## 9. Kế hoạch triển khai
+
+| Phase | Việc | Ghi chú |
+|---|---|---|
+| **0** ✅ | Version identity: `--build-name`/`--dart-define` trong CI, `kAppVersion` từ env, `"version"` vào `/api/config` | **Xong** 2026-07-17. Chặn mọi thứ khác. |
+| **1** ✅ | Sinh `latest.json` + sha256 trong job `release` của `desktop.yml` | **Xong** 2026-07-17. |
+| **2** ✅ | Rust: tách `swap_bundle()`, thêm `apply-update` ẩn, `wait_pid`, verify sha256, rollback | **Xong** 2026-07-17. 13 test; e2e qua CLI thật đã verify. |
+| **3** ✅ | Dart: `core/update/`, provider, Settings → Updates, badge nav rail, snackbar | **Xong** 2026-07-17. 40 test Dart (unit + widget). |
+| **4** ✅ | Menu macOS "Check for Updates…" + nối "Settings…" | **Xong** 2026-07-17. xib + MethodChannel (chiều native→Dart). |
+| **5** | *(sau)* auto-download ngầm, kênh beta, code signing + notarization | Xem §10. **Tiếp theo.** |
+
+Phase 0–1 có thể merge độc lập và tự nó đã có giá trị (nav rail hết nói dối version).
+
+## 10. Phương án thay thế đã cân nhắc
+
+**`auto_updater` (Sparkle/WinSparkle)** — cùng tác giả với `window_manager`/`tray_manager` mà repo đang dùng, nên tích hợp sẽ quen tay. Đã loại vì:
+- Cần **code signing + khoá EdDSA** để hoạt động tin cậy trên macOS ≥ 13. Chưa ký thì thành đường vòng vô ích.
+- **Không hỗ trợ Linux**, mà CI đang build cả ba nền.
+- Không biết gì về daemon nằm trong bundle, cũng chẳng tái dùng được `distrib.rs`.
+- Sparkle muốn appcast.xml + kênh phân phối riêng — trùng lặp với GitHub Releases đang xài.
+
+Khi nào ký được app thì đánh giá lại: Sparkle cho delta update và luồng background chín hơn nhiều so với tự viết.
+
+## 11. Test
+
+- **Unit (Dart)**: `Version` compare — `0.10.0 > 0.9.0`, `1.0.0 > 1.0.0-beta.1`, chuỗi rác không crash. Manifest parse thiếu/thừa field.
+- **Unit (Rust)**: `swap_bundle` với target giả (thư mục tạm) — thành công, giải nén hỏng (bundle gốc còn nguyên), rename cuối hỏng (rollback về `.old`).
+- **Tay, mỗi OS**: cài `v0.2.0` → publish `v0.3.0` → check → cài → xác nhận app relaunch ở `0.3.0`, daemon `/api/config` cũng trả `0.3.0`, và **MLX/TTS còn chạy** (bằng chứng `mlx.metallib` đi theo bundle).
+- **Ca hỏng, tay**: `chmod -w` thư mục target → phải chặn *trước khi tải*.
+
+### Bẫy khi verify bằng tay (đã dính)
+
+- **`flutter build macos` KHÔNG tự build lại code Dart** khi chỉ đổi `--dart-define`/`--build-name`: nó in `✓ Built` nhưng giữ nguyên `App.framework` cũ và `Flutter-Generated.xcconfig` vẫn mang giá trị mặc định. Phải `rm -rf build/macos/Build/Products/Release/App.framework` (hoặc `flutter clean`) rồi build lại. Kiểm chứng nhanh:
+  ```bash
+  grep FLUTTER_BUILD_NAME macos/Flutter/ephemeral/Flutter-Generated.xcconfig   # phải = version bạn truyền
+  strings -a "…/App.framework/Versions/A/App" | grep -c "Install & Restart"    # phải > 0
+  ```
+  CI không dính vì mỗi lần build là một checkout sạch.
+- **`open <đường/dẫn>.app` bỏ qua đường dẫn** nếu đã có app cùng bundle ID được LaunchServices biết tới — nó bật bản trong `/Applications`. Muốn chạy đúng bản vừa build thì exec thẳng `…/Contents/MacOS/SenClaw Desktop`.
+- `App.framework/App` là **symlink** tới `Versions/A/App`; đọc mtime của symlink sẽ ra ngày sai lệch cả tháng.

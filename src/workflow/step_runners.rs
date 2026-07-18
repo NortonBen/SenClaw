@@ -145,6 +145,7 @@ pub async fn run_agent_step(
         skip_permissions: SkipPermissions::default(),
         cancel: Some(cancel),
         max_agent_turns: Some(workflow_agent_max_turns()),
+        model_config_id: None,
         on_activity,
     };
 
