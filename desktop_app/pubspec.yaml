@@ -1,7 +1,10 @@
 name: senclaw_desktop
 description: "SenClaw desktop & web console — Flutter replacement for the React/Tauri UI."
 publish_to: 'none'
-version: 1.0.0+1
+# Placeholder only — nobody bumps this by hand. Release builds get the real
+# number from the git tag via `flutter build --build-name` (see
+# .github/workflows/desktop.yml); that is what lands in CFBundleShortVersionString.
+version: 0.0.0+1
 
 environment:
   sdk: ^3.11.4
@@ -35,6 +38,7 @@ dependencies:
 
   # System tray / menu-bar icon (replaces Tauri tray)
   tray_manager: ^0.2.4
+  hotkey_manager: ^0.2.3
 
   # Native OS notifications (event reminders, schedule runs, messages)
   local_notifier: ^0.1.6
@@ -46,11 +50,17 @@ dependencies:
   path: ^1.9.0
   path_provider: ^2.1.5
 
-  # Native file/folder picker (replaces Tauri dialog.open)
-  file_picker: ^8.1.4
+  # Native file/folder picker (replaces Tauri dialog.open).
+  # Bumped to ^10 so appflowy_editor ^6.2 can resolve (it requires file_picker
+  # ^10). Call sites only use pickFiles/getDirectoryPath — stable across 8→10.
+  file_picker: ^10.2.0
 
   # Markdown + math + code highlighting (replaces react-markdown/remark/rehype/katex)
   gpt_markdown: ^1.0.19
+
+  # Inline WYSIWYG block editor (Notion-style) for Space notes. Notes stay
+  # Markdown on disk; we round-trip via markdownToDocument/documentToMarkdown.
+  appflowy_editor: ^6.2.0
 
   # Date/time formatting (replaces dayjs)
   intl: ^0.20.1

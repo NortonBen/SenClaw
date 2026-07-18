@@ -105,12 +105,16 @@ async fn launch_session() -> anyhow::Result<BrowserSession> {
             has_touch: false,
         }));
 
-    // Headful is the least detectable, but needs a display; default to the new
-    // headless mode (much stealthier than old headless). MB_HEADFUL=1 → headful.
-    if std::env::var("MB_HEADFUL").ok().as_deref() == Some("1") {
-        builder = builder.with_head();
-    } else {
+    // Headless is the one remaining thing we have to rewrite about the browser
+    // (its `HeadlessChrome` branding), so prefer a real window when the platform
+    // can show one — it costs nothing, since the UI streams screenshots either
+    // way. `MB_HEADLESS=1` opts back out on a server. Google's sign-in accepts
+    // both modes as of Chrome 150; headful simply leaves nothing to correct.
+    let headless = want_headless();
+    if headless {
         builder = builder.new_headless_mode();
+    } else {
+        builder = builder.with_head();
     }
 
     // Point at an installed Chrome if we can find one.
@@ -132,6 +136,25 @@ async fn launch_session() -> anyhow::Result<BrowserSession> {
     BrowserSession::new(browser, page).await
 }
 
+/// `MB_HEADLESS=1` forces headless; `MB_HEADFUL=1` forces a window. Otherwise a
+/// window whenever the platform can show one.
+fn want_headless() -> bool {
+    if let Ok(v) = std::env::var("MB_HEADLESS") {
+        return v == "1";
+    }
+    if std::env::var("MB_HEADFUL").ok().as_deref() == Some("1") {
+        return false;
+    }
+    !has_display()
+}
+
+fn has_display() -> bool {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        return true;
+    }
+    std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok()
+}
+
 /// Resolve a Chrome/Chromium executable: MB_CHROME env, then common macOS/Linux paths.
 fn chrome_path() -> Option<String> {
     if let Ok(p) = std::env::var("MB_CHROME") {
@@ -149,34 +172,96 @@ fn chrome_path() -> Option<String> {
     candidates.iter().find(|p| std::path::Path::new(p).exists()).map(|s| s.to_string())
 }
 
+/// Live tests each launch a browser against the shared profile directory, so
+/// they must not run concurrently:
+///   cargo test -p mini-browser -- --ignored --test-threads=1
+/// Running them in parallel makes Chrome fail the profile lock, surfacing as a
+/// bare "oneshot canceled".
 #[cfg(test)]
 mod tests {
     use super::launch_session;
 
-    /// Live stealth check — launches Chromium and asserts the key bot-detection
-    /// signals are neutralized. Ignored by default (needs a Chrome binary):
-    ///   cargo test -p mini-browser -- --ignored stealth_smoke
+    /// Live identity check — launches Chrome and asserts it presents itself as a
+    /// coherent, real browser. Needs a Chrome binary, so ignored by default:
+    ///   cargo test -p mini-browser -- --ignored identity_smoke
     #[tokio::test]
     #[ignore]
-    async fn stealth_smoke() {
+    async fn identity_smoke() {
         let session = launch_session().await.expect("launch");
-        session.navigate("about:blank").await.expect("navigate");
+        // navigator.userAgentData needs a secure context; about:blank is not one.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let app = axum::Router::new().route(
+                "/",
+                axum::routing::get(|| async { axum::response::Html("<html><body>x</body></html>") }),
+            );
+            axum::serve(listener, app).await.ok();
+        });
+        session.navigate(&format!("http://127.0.0.1:{}/", addr.port())).await.expect("navigate");
+
         let checks = session
             .execute_js(
-                "return { webdriver: navigator.webdriver, langs: navigator.languages, \
-                 chrome: !!window.chrome, plugins: navigator.plugins.length, \
-                 native: navigator.permissions.query.toString() };",
+                "const d = navigator.userAgentData; \
+                 const gl = document.createElement('canvas').getContext('webgl'); \
+                 const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info'); \
+                 return { ua: navigator.userAgent, webdriver: navigator.webdriver, \
+                          langs: navigator.languages, chrome: !!window.chrome, \
+                          plugins: navigator.plugins.length, \
+                          brands: d ? d.brands.map(b => b.brand) : [], \
+                          uaPlatform: d ? d.platform : '', \
+                          renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '' };",
             )
             .await
             .expect("execute");
-        // navigator.webdriver must not be true.
-        assert_ne!(checks["webdriver"], serde_json::json!(true), "webdriver leaked");
-        assert_eq!(checks["langs"][0], "vi-VN");
+
+        let ua = checks["ua"].as_str().unwrap_or_default();
+        let brands: Vec<&str> = checks["brands"].as_array().unwrap().iter().filter_map(|b| b.as_str()).collect();
+
+        assert_eq!(checks["webdriver"], serde_json::json!(false), "real Chrome reports false, not undefined");
         assert_eq!(checks["chrome"], serde_json::json!(true));
-        assert!(checks["plugins"].as_i64().unwrap_or(0) > 0, "plugins empty (headless tell)");
+        assert!(checks["plugins"].as_i64().unwrap_or(0) > 0, "plugins empty");
+        assert_eq!(checks["langs"][0], "vi-VN");
+
+        // Nothing may still claim to be headless…
+        assert!(!ua.contains("Headless"), "UA leaks headless: {ua}");
+        assert!(!brands.iter().any(|b| b.contains("Headless")), "brands leak headless: {brands:?}");
+
+        // …and the client hints must exist and agree with the UA. Empty brands
+        // means the override dropped Sec-CH-UA — the original sign-in bug.
+        assert!(!brands.is_empty(), "no client-hint brands ⇒ Sec-CH-UA suppressed");
+        assert_eq!(checks["uaPlatform"], "macOS");
+        assert!(ua.contains("Mac OS X"), "UA/platform disagree: {ua}");
+
+        // The GPU must belong to the platform the UA claims.
+        let renderer = checks["renderer"].as_str().unwrap_or_default();
+        assert!(!renderer.contains("Direct3D"), "macOS UA with a Direct3D GPU: {renderer}");
+    }
+
+    /// The regression test for the bug this layer exists to fix: Google used to
+    /// bounce us to `/v3/signin/rejected` ("Không thể đăng nhập cho bạn"), which
+    /// is how a fabricated identity gets treated. Asserts the sign-in form is
+    /// actually served — no credentials involved, only the landing URL.
+    /// Needs network + a Chrome binary:
+    ///   cargo test -p mini-browser -- --ignored google_serves_signin_form
+    #[tokio::test]
+    #[ignore]
+    async fn google_serves_signin_form() {
+        let session = launch_session().await.expect("launch");
+        session
+            .navigate("https://accounts.google.com/ServiceLogin?hl=vi")
+            .await
+            .expect("navigate");
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+
+        let url = session.info().await.expect("info")["url"].as_str().unwrap_or_default().to_string();
+        let body = session.extract_text(None).await.unwrap_or_default();
+        let text = body["text"].as_str().unwrap_or_default();
+
         assert!(
-            checks["native"].as_str().unwrap_or("").contains("[native code]"),
-            "patched fn is introspectable"
+            !url.contains("/signin/rejected") && !text.contains("Không thể đăng nhập"),
+            "Google rejected the browser as insecure — landed at {url}"
         );
+        assert!(url.contains("/signin/identifier"), "expected the sign-in form, got {url}");
     }
 }

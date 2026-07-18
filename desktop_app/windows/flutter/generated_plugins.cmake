@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
   desktop_multi_window
   flutter_inappwebview_windows
+  hotkey_manager_windows
   local_notifier
   record_windows
   screen_retriever_windows

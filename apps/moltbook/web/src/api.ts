@@ -18,6 +18,96 @@ export interface Account {
   last_post_at: number
   profile: Record<string, unknown> | null
   pending_drafts: number
+  /** SenClaw integrations: knowledge = trí nhớ, wiki = kho thông tin. */
+  memory_enabled: boolean
+  wiki_enabled: boolean
+  wiki_archive: boolean
+  knowledge_space: string
+  /** LLM profile this app composes with; "" = follow the daemon's active model. */
+  llm_profile: string
+  /** "all" = engage with the whole feed; "focus" = only the listed subjects. */
+  topic_mode: 'all' | 'focus'
+  /** Each heartbeat also harvests feedback and refreshes the wiki docs. */
+  harvest_enabled: boolean
+  /** Write a trending briefing into the wiki once a day. */
+  trending_daily: boolean
+}
+
+/** A day's trending briefing written into the wiki. */
+export interface TrendingDigest {
+  day: string
+  wiki_path: string
+  post_count: number
+  topic_count: number
+  summary: string
+  topics: string[]
+  runs: number
+  created_at: number
+  updated_at: number
+}
+
+export interface TrendingRun {
+  ok: boolean
+  day?: string
+  posts?: number
+  topics?: number
+  wiki_path?: string
+  summary?: string
+  note?: string
+  reason?: string
+  topic_list?: Array<{ name: string; why: string; takeaway: string; relevant: boolean; post_count: number }>
+}
+
+/** One of our published posts + the state of every feedback check on it. */
+export interface TrackedPost {
+  post_id: string
+  title: string
+  submolt: string
+  wiki_path: string
+  posted_at: number
+  last_checked_at: number | null
+  checks: number
+  last_comment_count: number
+  last_score: number
+  last_synced_at: number | null
+  synced_comment_count: number
+  synthesis: string
+  last_error: string
+  /** New agent comments the wiki doc hasn't absorbed yet. */
+  doc_is_stale: boolean
+}
+
+export interface HarvestResult {
+  ok: boolean
+  checked?: number
+  updated?: number
+  discovered?: number
+  errors?: number
+  note?: string
+  reason?: string
+}
+
+/** A steering entry: a subject to engage with, and/or something to post/ask about. */
+export interface Topic {
+  id: number
+  text: string
+  kind: 'engage' | 'post' | 'both'
+  enabled: boolean
+  used_at: number | null
+  created_at: number
+}
+
+export interface Integrations {
+  daemon: string
+  wiki: { available: boolean }
+  knowledge: { available: boolean; space: string; error: string | null }
+}
+
+export interface RecallResult {
+  space: string
+  answer: string
+  grounded: boolean
+  hits: Array<{ name: string; summary: string; score: number }>
 }
 
 export interface CachedPost {
@@ -85,8 +175,10 @@ export interface HeartbeatResult {
   model?: string
 }
 
+/** One LLM profile configured in SenClaw. `label` is the profile name (e.g. "MoltClaw"). */
 export interface ModelConfig {
   id: string
+  label?: string
   modelName?: string
   provider?: string
   adapt?: string
@@ -183,11 +275,37 @@ export const api = {
   subscribe: (name: string) =>
     req<Record<string, unknown>>('/actions/subscribe', { method: 'POST', body: JSON.stringify({ name }) }),
 
+  digests: () => req<{ digests: TrendingDigest[]; count: number }>('/trending').then((r) => r.digests),
+  runTrending: (write_wiki = true) =>
+    req<TrendingRun>('/trending', { method: 'POST', body: JSON.stringify({ write_wiki }) }),
+
+  tracked: () => req<{ posts: TrackedPost[]; count: number }>('/tracked').then((r) => r.posts),
+  trackPost: (post_id: string, title = '', submolt = '') =>
+    req<{ ok: boolean; post: TrackedPost }>('/tracked', { method: 'POST', body: JSON.stringify({ post_id, title, submolt }) }),
+  untrackPost: (post_id: string) => req<{ ok: boolean }>(`/tracked/${encodeURIComponent(post_id)}`, { method: 'DELETE' }),
+  harvest: (post_id?: string) =>
+    req<HarvestResult>('/harvest', { method: 'POST', body: JSON.stringify(post_id ? { post_id } : {}) }),
+
+  topics: () => req<{ topics: Topic[]; topic_mode: string; count: number }>('/topics').then((r) => r.topics),
+  addTopic: (text: string, kind: Topic['kind'] = 'both') =>
+    req<{ ok: boolean; topic: Topic }>('/topics', { method: 'POST', body: JSON.stringify({ text, kind }) }),
+  patchTopic: (id: number, patch: Partial<Pick<Topic, 'text' | 'kind' | 'enabled'>>) =>
+    req<{ ok: boolean; topic: Topic }>(`/topics/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteTopic: (id: number) => req<{ ok: boolean }>(`/topics/${id}`, { method: 'DELETE' }),
+
+  integrations: () => req<Integrations>('/integrations'),
+  memoryRecall: (query: string) => req<RecallResult>('/memory/recall', { method: 'POST', body: JSON.stringify({ query }) }),
+  memorySave: (text: string, tags: string[] = []) =>
+    req<{ ok: boolean; space: string }>('/memory/save', { method: 'POST', body: JSON.stringify({ text, tags }) }),
+  wikiArchive: (post_id: string) =>
+    req<{ ok: boolean; path: string }>('/wiki/archive', { method: 'POST', body: JSON.stringify({ post_id }) }),
+
   runHeartbeat: () => req<HeartbeatResult>('/engine/run', { method: 'POST' }),
   seedDemo: () => req<{ ok: boolean; seeded: number }>('/demo/seed', { method: 'POST' }),
 
+  // Read-only: the app never changes the daemon's active model. Picking a
+  // profile for Moltbook is a local setting (putSettings({ llm_profile })).
   models: () => req<ModelsResponse>('/models'),
-  setModel: (id: string) => req<{ ok: boolean; id: string }>('/models', { method: 'POST', body: JSON.stringify({ id }) }),
 }
 
 export function fmtDateTime(secs: number | null | undefined): string {

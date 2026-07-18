@@ -49,6 +49,20 @@ pub fn schedule_mcp_config(db_path: &str, group_folder: &str, chat_jid: &str) ->
     cfg
 }
 
+// ===== BackgroundTool =====
+
+/// MCP config for `senclaw-background` — lets a chat create/manage autonomous
+/// background tasks. Owner is pinned from `group_folder`, never a tool param.
+pub fn background_mcp_config(db_path: &str, group_folder: &str, chat_jid: &str) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-background", "background-server");
+    cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
+    cfg.env
+        .insert("SENCLAW_GROUP_FOLDER".into(), group_folder.to_owned());
+    cfg.env
+        .insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
+    cfg
+}
+
 // ===== WorkspaceTool =====
 
 pub fn workspace_mcp_config(

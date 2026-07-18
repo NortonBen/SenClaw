@@ -7,27 +7,27 @@
   --border: #e4e6ee;
   --text: #1c1f27;
   --muted: #6b7080;
-  --accent: #4f46e5;
-  --accent-2: #6366f1;
-  --danger: #dc2626;
-  --good: #059669;
-  --warn: #b45309;
+  --accent: #5e4ae3;
+  --accent-2: #5e4ae3;
+  --danger: #ff3b30;
+  --good: #34c759;
+  --warn: #ff9500;
   --shadow: 0 1px 2px rgba(20, 22, 40, 0.05), 0 8px 24px rgba(20, 22, 40, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1117;
-    --panel: #171a22;
-    --panel-2: #1e222c;
-    --border: #262b38;
+    --bg: #0a0b0f;
+    --panel: #14161d;
+    --panel-2: #1b1e28;
+    --border: #23272f;
     --text: #e6e8ee;
     --muted: #9199a8;
-    --accent: #818cf8;
-    --accent-2: #6366f1;
-    --danger: #f87171;
-    --good: #34d399;
-    --warn: #fbbf24;
+    --accent: #7c6cf0;
+    --accent-2: #5e4ae3;
+    --danger: #ff453a;
+    --good: #32d74b;
+    --warn: #ff9f0a;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 }
@@ -41,26 +41,26 @@
   --border: #e4e6ee;
   --text: #1c1f27;
   --muted: #6b7080;
-  --accent: #4f46e5;
-  --accent-2: #6366f1;
-  --danger: #dc2626;
-  --good: #059669;
-  --warn: #b45309;
+  --accent: #5e4ae3;
+  --accent-2: #5e4ae3;
+  --danger: #ff3b30;
+  --good: #34c759;
+  --warn: #ff9500;
   --shadow: 0 1px 2px rgba(20, 22, 40, 0.05), 0 8px 24px rgba(20, 22, 40, 0.06);
   color-scheme: light;
 }
 :root[data-theme='dark'] {
-  --bg: #0f1117;
-  --panel: #171a22;
-  --panel-2: #1e222c;
-  --border: #262b38;
+  --bg: #0a0b0f;
+  --panel: #14161d;
+  --panel-2: #1b1e28;
+  --border: #23272f;
   --text: #e6e8ee;
   --muted: #9199a8;
-  --accent: #818cf8;
-  --accent-2: #6366f1;
-  --danger: #f87171;
-  --good: #34d399;
-  --warn: #fbbf24;
+  --accent: #7c6cf0;
+  --accent-2: #5e4ae3;
+  --danger: #ff453a;
+  --good: #32d74b;
+  --warn: #ff9f0a;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   color-scheme: dark;
 }
@@ -75,7 +75,7 @@ body,
   margin: 0;
 }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
@@ -211,7 +211,7 @@ a:hover {
 .layout {
   display: grid;
   grid-template-columns: 340px 1fr;
-  min-height: calc(100vh - 62px);
+  min-height: calc(100vh - 54px);
 }
 @media (max-width: 780px) {
   .layout {
@@ -223,12 +223,12 @@ a:hover {
   background: var(--panel);
   padding: 14px;
   overflow-y: auto;
-  max-height: calc(100vh - 62px);
+  max-height: calc(100vh - 54px);
 }
 .detail {
   padding: 20px 26px;
   overflow-y: auto;
-  max-height: calc(100vh - 62px);
+  max-height: calc(100vh - 54px);
 }
 
 /* ---- sidebar ---- */
@@ -1654,4 +1654,1076 @@ a:hover {
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel-2);
+}
+
+/* ============================================================
+   Reference-CRM shell: dark rail + per-page top bar.
+   Everything below is additive — the older rules above still
+   drive the contact detail, kanban and network internals.
+   ============================================================ */
+
+.app-shell {
+  display: flex;
+  min-height: 100%;
+}
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app-content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- left rail ---- */
+.nav-rail {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #14161d;
+  border-right: 1px solid #23272f;
+  color: #e6e8ee;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  transition: width 0.14s ease;
+}
+:root[data-theme='light'] .nav-rail {
+  /* The rail stays dark in both themes — it is the app's spine. */
+  background: #14161d;
+  border-right-color: #23272f;
+}
+.nav-rail.collapsed {
+  width: 68px;
+}
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid #23272f;
+  min-height: 62px;
+}
+.nav-logo {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.nav-brand-text {
+  min-width: 0;
+}
+.nav-brand-name {
+  font-weight: 650;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-brand-sub {
+  font-size: 11px;
+  color: #7e8798;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-sections {
+  flex: 1;
+  padding: 10px 10px 20px;
+}
+.nav-section + .nav-section {
+  margin-top: 14px;
+}
+.nav-caption {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7484;
+  padding: 6px 10px 4px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #b8c0cf;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13.5px;
+  line-height: 1.3;
+  transition: background 0.1s, color 0.1s;
+}
+.nav-item:hover {
+  background: #1e222c;
+  color: #e6e8ee;
+}
+.nav-item.active {
+  background: color-mix(in srgb, #5e4ae3 26%, transparent);
+  color: #fff;
+  font-weight: 550;
+  box-shadow: inset 2px 0 0 #5e4ae3;
+}
+.nav-item-icon {
+  width: 18px;
+  display: inline-flex;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 15px;
+}
+.nav-item-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-rail.collapsed .nav-item {
+  justify-content: center;
+}
+.nav-badge {
+  margin-left: auto;
+}
+/* Collapsed: the count would not fit, so it degrades to a corner dot. */
+.nav-rail.collapsed .nav-badge-dot {
+  position: absolute;
+  right: 12px;
+  transform: scale(0.72);
+}
+.nav-rail.collapsed .nav-item {
+  position: relative;
+}
+.nav-collapse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 12px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #7e8798;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.nav-collapse:hover {
+  background: #1e222c;
+  color: #e6e8ee;
+}
+.nav-rail.collapsed .nav-collapse {
+  justify-content: center;
+}
+
+/* ---- top bar (global search + toggles) ---- */
+.app-main > .topbar.slim {
+  gap: 12px;
+  min-height: 54px;
+}
+.topbar-spacer {
+  flex: 1;
+}
+
+/* ---- per-page shell ---- */
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 54px);
+}
+/* A page whose body manages its own scroll must not grow the document — pin it
+   to the viewport and let the body take whatever the header leaves. */
+.page:has(> .page-body.bare) {
+  height: calc(100vh - 54px);
+  min-height: 0;
+  overflow: hidden;
+}
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px 12px;
+  flex-wrap: wrap;
+}
+.page-head-title h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.page-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.page-body {
+  padding: 0 22px 24px;
+  flex: 1;
+  min-width: 0;
+}
+.page-body.bare {
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- chips ---- */
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-chip.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+/* ---- data table ---- */
+.card.flush {
+  padding: 0;
+  overflow: hidden;
+}
+.data-table .ant-table-thead > tr > th {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.data-table .ant-table-tbody > tr > td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.cell-strong {
+  font-weight: 550;
+}
+.cell-org {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- avatar group ---- */
+.avatar-group {
+  display: inline-flex;
+  align-items: center;
+}
+.avatar-group-item + .avatar-group-item,
+.avatar-group-more {
+  margin-left: -8px;
+}
+.avatar-group-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* ---- bar list (dashboard breakdowns) ---- */
+.barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.barlist-row {
+  display: grid;
+  grid-template-columns: 34% 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+.barlist-label {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.barlist-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.barlist-fill {
+  height: 100%;
+  border-radius: 999px;
+  min-width: 2px;
+  transition: width 0.2s ease;
+}
+.barlist-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* Flex so a mirrored bar (reverseX) can anchor to the right-hand end. */
+.barlist-track {
+  display: flex;
+}
+.barlist-fill {
+  flex: none;
+}
+
+/* ---- dynamic chart grid ---- */
+.chartgrid-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+.chartgrid-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11.5px;
+}
+/* The shared rule floats this, which a flex container ignores. */
+.chartgrid-head .right {
+  float: none;
+  margin-left: auto;
+}
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.chart-cell {
+  min-width: 0;
+}
+.chart-cell.small {
+  grid-column: span 1;
+}
+.chart-cell.medium {
+  grid-column: span 2;
+}
+.chart-cell.large {
+  grid-column: span 3;
+}
+.chart-cell > .card {
+  margin: 0;
+  height: 100%;
+}
+.chart-cell.dragging {
+  opacity: 0.4;
+}
+.chart-cell.dragover > .card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* One step down per breakpoint: a "large" chart stays the widest thing on the
+   page without ever overflowing a narrower grid. */
+@media (max-width: 1100px) {
+  .chart-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .chart-cell.large {
+    grid-column: span 2;
+  }
+}
+@media (max-width: 780px) {
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+  .chart-cell.medium,
+  .chart-cell.large {
+    grid-column: span 1;
+  }
+}
+
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  cursor: grab;
+}
+.chart-card:active {
+  cursor: grabbing;
+}
+.chart-card.has-error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+.chart-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.chart-head-main {
+  flex: 1;
+  min-width: 0;
+}
+.chart-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.chart-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-drag {
+  color: var(--muted);
+  opacity: 0.45;
+  flex: none;
+}
+.chart-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  flex: none;
+}
+.chart-sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+/* A truncated chart's total is not the grand total — mark it, don't hide it. */
+.chart-trunc {
+  color: var(--warn);
+  font-weight: 600;
+  border-bottom: 1px dotted var(--warn);
+  cursor: help;
+}
+.chart-filter-sum {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 3px;
+  font-style: italic;
+}
+.chart-actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+/* focus-within keeps the actions reachable by keyboard, where :hover never fires. */
+.chart-card:hover .chart-actions,
+.chart-card:focus-within .chart-actions {
+  opacity: 1;
+}
+.chart-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 150px;
+}
+.chart-bignum {
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+  padding: 18px 0;
+}
+.chart-err {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.chart-err-title {
+  font-weight: 600;
+  color: var(--danger);
+  font-size: 12.5px;
+  margin-bottom: 4px;
+}
+.chart-err-msg {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+
+/* ---- vertical bars ---- */
+.vbars {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  height: 190px;
+  padding-top: 4px;
+}
+.vbar-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vbar-track {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+}
+.vbars.flip .vbar-track {
+  align-items: flex-start;
+}
+.vbar-fill {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 6px 6px 0 0;
+  transition: height 0.2s ease;
+}
+.vbars.flip .vbar-fill {
+  border-radius: 0 0 6px 6px;
+}
+.vbar-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+}
+.vbar-label {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- doughnut ---- */
+.donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.donut {
+  width: 150px;
+  height: 150px;
+  flex: none;
+}
+.donut-track {
+  stroke: var(--panel-2);
+}
+.donut-total {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--text);
+}
+.donut-sub {
+  font-size: 9px;
+  fill: var(--muted);
+}
+.donut-legend {
+  flex: 1;
+  min-width: 130px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  min-width: 0;
+}
+.donut-legend .legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.donut-legend .legend-count {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+/* ---- radar ---- */
+.radar-wrap {
+  display: flex;
+  justify-content: center;
+}
+/* Wider than tall: the viewBox carries side gutters for the axis labels. */
+.radar {
+  width: 100%;
+  max-width: 290px;
+  height: auto;
+}
+.radar-grid {
+  fill: none;
+  stroke: var(--border);
+}
+.radar-axis {
+  stroke: var(--border);
+}
+.radar-poly {
+  stroke-width: 2;
+}
+.radar-label {
+  font-size: 8.5px;
+  fill: var(--muted);
+}
+
+/* ---- chart builder modal ---- */
+.builder-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 820px) {
+  .builder-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.builder-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.builder-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.builder-field.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.builder-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.req {
+  color: var(--danger);
+}
+.builder-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.builder-colors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.builder-preview-card {
+  margin: 0;
+}
+.filter-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.filter-value {
+  min-width: 0;
+}
+.filter-days,
+.filter-between {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 820px) {
+  .filter-row {
+    grid-template-columns: 1fr 1fr auto;
+  }
+  .filter-value {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---- contact detail: two columns ---- */
+.detail-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .detail-cols {
+    grid-template-columns: 1fr;
+  }
+}
+.detail-col-left,
+.detail-col-right {
+  min-width: 0;
+}
+.field-stack {
+  display: flex;
+  flex-direction: column;
+}
+.field-stack-row {
+  display: grid;
+  grid-template-columns: 148px 1fr;
+  gap: 10px;
+  padding: 7px 0;
+  align-items: start;
+  border-bottom: 1px solid var(--border);
+}
+.field-stack-row:last-child {
+  border-bottom: 0;
+}
+.fs-label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.fs-value {
+  min-width: 0;
+  font-size: 13.5px;
+  word-break: break-word;
+}
+.org-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.org-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.org-chip-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.org-chip-btn:hover {
+  color: var(--accent);
+}
+
+/* Native inputs restyled to sit next to AntD ones without clashing. */
+.plain-input {
+  width: 100%;
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+}
+.plain-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---- deal line items ---- */
+.line-items {
+  margin-top: 10px;
+}
+.line-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.line-item.total-row {
+  border-bottom: 0;
+  border-top: 2px solid var(--border);
+  margin-top: 4px;
+}
+.line-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.line-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.line-item-total {
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.line-item-total.strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ---- inbox ---- */
+.inbox {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .inbox {
+    grid-template-columns: 1fr;
+  }
+}
+.inbox-list {
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+}
+.inbox-thread {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.conv-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.conv-row:hover {
+  background: var(--panel-2);
+}
+.conv-row.sel {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.conv-body {
+  flex: 1;
+  min-width: 0;
+}
+.conv-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.conv-name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-chan {
+  font-size: 13px;
+}
+.conv-when {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.conv-line2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.conv-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.conv-line3 {
+  margin-top: 3px;
+}
+.thread {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.thread-head-main {
+  flex: 1;
+  min-width: 0;
+}
+.thread-name {
+  font-weight: 600;
+}
+.thread-link-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.thread-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bubble-row {
+  display: flex;
+}
+.bubble-row.in {
+  justify-content: flex-start;
+}
+.bubble-row.out {
+  justify-content: flex-end;
+}
+.bubble {
+  max-width: 74%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+}
+.bubble.in {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 3px;
+}
+.bubble.out {
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 3px;
+}
+/* An agent-authored outbound reads differently from one a human typed. */
+.bubble.out.role-agent {
+  background: color-mix(in srgb, var(--accent) 72%, #000);
+}
+.bubble-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bubble-meta {
+  margin-top: 3px;
+  font-size: 10.5px;
+  opacity: 0.7;
+}
+.thread-composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  align-items: flex-end;
+}
+.mini-thread {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---- review / escalation cards ---- */
+.review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 12px;
+}
+.review-card .ant-card-body {
+  padding: 12px 14px;
+}
+.review-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+.esc-block {
+  margin-bottom: 8px;
+}
+
+/* ---- sales pipeline ---- */
+/* Seven sale stages, not the deal board's five — without its own track count
+   the 7th column wrapped onto a second row instead of scrolling. */
+.sale-pipeline {
+  grid-template-columns: repeat(7, minmax(190px, 1fr));
+}
+.sale-pipeline .kanban-col {
+  min-width: 190px;
+}
+/* The page shell already pads the body; the board must not pad it again. */
+.page-body .pipeline {
+  padding-left: 0;
+  padding-right: 0;
+}
+.kanban-head {
+  border-top: 3px solid transparent;
+  padding-top: 6px;
+}
+.lead-card {
+  cursor: pointer;
+}
+.lead-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lead-card-meta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 5px 0 3px;
+}
+.kc-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* ---- settings ---- */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ---- split panel sits beside the rail ---- */
+.split-side-panel {
+  z-index: 20;
 }

@@ -15,19 +15,19 @@ Use this skill when the user asks you to "check the system status", "report on t
 ## Instructions
 
 1. **Find and Connect to the Target Host**:
-   - Call the `ssh_list_hosts` MCP tool to get the list of available hosts managed by SSH Manager.
+   - Call the `mcp__ssh-manager-mcp__ssh_list_hosts` MCP tool to get the list of available hosts managed by SSH Manager.
    - Find the host that matches the user's request (by IP, name, or tags).
-   - Use `ssh_start_connect` with the `host_id` to start a stateful SSH session. This will return a `connection_id`.
+   - Use `mcp__ssh-manager-mcp__ssh_start_connect_id` with `host_id` = the exact `id` from `ssh_list_hosts` to start a stateful SSH session. This will return a `connection_id`. (Only if the server is NOT in the saved list, use `mcp__ssh-manager-mcp__ssh_start_connect` with explicit `host` + `user` instead.)
 
 2. **Execute Diagnostic Commands**:
-   Use the `ssh_execute_command` MCP tool, passing the returned `connection_id`, to run the following commands on the target host:
+   Use the `mcp__ssh-manager-mcp__ssh_execute_command` MCP tool, passing the returned `connection_id`, to run the following commands on the target host:
    
    - **Disk Usage**: `df -sh /` or `df -h`
    - **Memory (RAM)**: `free -m`
    - **CPU & Load**: `uptime` and `top -bn1 | head -n 5`
    - **Network**: `ip a` or `ping -c 3 google.com`
    
-   *Note: Remember to use `ssh_close_connect` with the `connection_id` when finished to free up resources.*
+   *Note: Remember to use `mcp__ssh-manager-mcp__ssh_close_connect` with the `connection_id` when finished to free up resources.*
 
 3. **Generate the Report**:
    Compile the results into a professional Markdown report.

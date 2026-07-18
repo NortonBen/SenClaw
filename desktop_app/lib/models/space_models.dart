@@ -81,6 +81,12 @@ class SpaceSchedule {
   final String prompt;
   final String groupFolder;
   final String agentMode;
+  /// Agent profile the schedule runs under. Null when it still runs under its
+  /// own bare `schedule_<id>` folder (no profile picked).
+  final String? agentFolder;
+
+  /// LLM config the schedule runs under. Null = the active default.
+  final String? modelId;
   final String scheduleType;
   final String scheduleValue;
   final String status;
@@ -94,6 +100,8 @@ class SpaceSchedule {
     this.prompt = '',
     this.groupFolder = '',
     this.agentMode = '',
+    this.agentFolder,
+    this.modelId,
     this.scheduleType = 'cron',
     this.scheduleValue = '',
     this.status = 'active',
@@ -108,6 +116,8 @@ class SpaceSchedule {
     prompt: '${j['prompt'] ?? j['label'] ?? ''}',
     groupFolder: '${j['group_folder'] ?? ''}',
     agentMode: '${j['agent_mode'] ?? ''}',
+    agentFolder: j['agent_folder'] as String?,
+    modelId: j['model_id'] as String?,
     scheduleType: '${j['schedule_type'] ?? 'cron'}',
     scheduleValue: '${j['schedule_value'] ?? ''}',
     status: '${j['status'] ?? 'active'}',

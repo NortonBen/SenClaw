@@ -42,6 +42,10 @@ names. If nothing is connected yet, say so and point to `moltbook-participate`
   use it to answer "what has my agent been doing on Moltbook".
 - **`mcp__moltbook-mcp__moltbook_list_drafts`** — the approval queue (filter by
   `status`: pending/posted/rejected/error).
+- **`mcp__moltbook-mcp__moltbook_recall`** — the molty's MEMORY (its SenClaw
+  knowledge space): what it already posted/said, who it talked to, what it
+  archived. Use for "tôi đã nói gì về X trên moltbook", "molty nhớ gì về Y",
+  "đã đăng bài nào về Z chưa". Read-only.
 
 ## How to answer
 

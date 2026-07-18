@@ -67,6 +67,16 @@ app-build:
 	    cp "$$lib" "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/mlx.metallib"; \
 	    echo "[app-build] bundled $$lib"
 	@echo "[app-build] bundled daemon into 'SenClaw Desktop.app/Contents/Resources/senclaw'"
+	@# Re-sign the modified bundle. With the stable "SenClaw Dev" identity
+	@# (create once via `make signing-cert`) the signature stays constant, so
+	@# TCC grants (Screen Recording…) survive reinstalls instead of silently
+	@# breaking every `make app-install`.
+	scripts/macos_sign_app.sh "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app"
+
+# One-time: create + trust the stable self-signed "SenClaw Dev" codesigning
+# certificate so app-build stops using ad-hoc signatures.
+signing-cert:
+	scripts/macos_make_signing_cert.sh
 
 # Install the freshly-built .app into /Applications and launch it.
 app-install:

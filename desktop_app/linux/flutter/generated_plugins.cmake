@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_linux
   desktop_multi_window
+  hotkey_manager_linux
   local_notifier
   record_linux
   screen_retriever_linux

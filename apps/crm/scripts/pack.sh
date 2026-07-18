@@ -4,10 +4,16 @@
 #   release/                 <- staged, flat install layout
 #     crm                    (release binary; manifest runtime.start = ./crm)
 #     senclaw-manifest.json
-#     skills/                (crm-quick-lookup, crm-log-interaction)
-#     personas/              (crm-assistant)
+#     skills/                (whole dir: crm-quick-lookup, crm-log-interaction,
+#                             crm-organizations, crm-inbox, crm-sale-followup,
+#                             crm-sale-inbox — every path the manifest lists)
+#     personas/              (whole dir: crm-assistant, sale-closer, sale-manager)
 #     web_dist/              (built React UI — main.rs serves web_dist next to the binary)
 #   crm-app.zip              <- the artifact you install in SenClaw
+#
+# skills/ and personas/ are copied wholesale, so adding one needs no change
+# here — only a manifest entry. `docs/` is deliberately NOT staged: it is
+# developer reference, and nothing at runtime reads it.
 #
 # Usage: apps/crm/scripts/pack.sh [--skip-build]
 set -euo pipefail

@@ -6,6 +6,11 @@
 	     ports, ~/.senclaw, MCP subprocesses). Matches the old Tauri shell. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+	<!-- file_picker >=10 hard-requires a user-selected-file entitlement on
+	     macOS (SecTaskCopyValueForEntitlement) even for un-sandboxed apps;
+	     without it every pickFiles/saveFile call fails before the panel opens. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.network.server</key>

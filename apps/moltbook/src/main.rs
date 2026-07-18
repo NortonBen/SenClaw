@@ -9,6 +9,7 @@ mod engine;
 mod llm;
 mod mcp;
 mod moltbook;
+mod senclaw;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;

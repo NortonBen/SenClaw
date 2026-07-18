@@ -28,7 +28,7 @@ pub struct JsonRpcResponse {
     pub error: Option<Value>,
 }
 
-/// Actionable error for `ssh_start_connect` / `ssh_execute_command` when the
+/// Actionable error for the connect tools / `ssh_execute_command` when the
 /// connection parameters can't be resolved. The old message ("Missing host,
 /// port, or user") gave the model nothing to correct, so it would blindly
 /// re-issue the same failing call and spin. This spells out exactly what to
@@ -59,13 +59,16 @@ fn missing_connection_params_error(args: &Value, state: &AppState) -> String {
     }
 
     if known.is_empty() {
-        "Missing connection parameters. Pass either a saved `host_id`, or all of `host`, `port` and \
-         `user`. No hosts are currently saved — add one with ssh_add_host first."
+        "Missing connection parameters. For a saved host use ssh_start_connect_id with `host_id`; \
+         otherwise pass `host` and `user` (optional `port`, default 22) to ssh_start_connect. \
+         No hosts are currently saved — add one with ssh_add_host first."
             .to_string()
     } else {
         format!(
-            "Missing connection parameters. Pass either `host_id` (from ssh_list_hosts) OR all three of \
-             `host`, `port`, `user` — not an empty call. Saved hosts:\n{}",
+            "Missing connection parameters. For a saved host call ssh_start_connect_id with `host_id` \
+             (the exact `id` from ssh_list_hosts). For an unsaved server call ssh_start_connect with \
+             `host` and `user` (optional `port`, default 22, and `password`) — not an empty call. \
+             Saved hosts:\n{}",
             known.join("\n")
         )
     }
@@ -153,9 +156,14 @@ pub async fn mcp_message(
                     "inputSchema": { "type": "object", "properties": { "id": {"type": "string"} }, "required": ["id"] }
                 },
                 {
+                    "name": "ssh_start_connect_id",
+                    "description": "Open a stateful SSH connection to a SAVED host. Pass `host_id` = the exact `id` field returned by ssh_list_hosts (NOT the host name or IP). Credentials come from the saved host entry. Returns a `connection_id` to use with ssh_execute_command / sftp_* tools. Prefer this tool whenever the server already exists in ssh_list_hosts.",
+                    "inputSchema": { "type": "object", "properties": { "host_id": {"type": "string", "description": "Exact `id` of a saved host from ssh_list_hosts"} }, "required": ["host_id"] }
+                },
+                {
                     "name": "ssh_start_connect",
-                    "description": "Start a stateful SSH connection using a saved Host ID, or explicit params. Returns a connection_id.",
-                    "inputSchema": { "type": "object", "properties": { "host_id": {"type": "string"}, "host": {"type": "string"}, "port": {"type": "number"}, "user": {"type": "string"}, "password": {"type": "string"} } }
+                    "description": "Open a stateful SSH connection using EXPLICIT connection details: `host` (IP or hostname) and `user` are required; `port` defaults to 22; `password` is optional. Use this ONLY for servers that are not saved in ssh_list_hosts — for saved hosts use ssh_start_connect_id instead. Returns a `connection_id` to use with ssh_execute_command / sftp_* tools.",
+                    "inputSchema": { "type": "object", "properties": { "host": {"type": "string", "description": "Server IP address or hostname"}, "port": {"type": "number", "description": "SSH port, default 22"}, "user": {"type": "string", "description": "SSH username, e.g. root"}, "password": {"type": "string", "description": "Password (omit to use key/agent auth)"} }, "required": ["host", "user"] }
                 },
                 {
                     "name": "ssh_close_connect",
@@ -282,7 +290,8 @@ pub async fn mcp_message(
                 let cmd = args["command"].as_str().unwrap_or("");
                 format!("exec: {}", cmd)
             }
-            "ssh_start_connect" => "open connection".to_string(),
+            "ssh_start_connect" => "open connection (explicit params)".to_string(),
+            "ssh_start_connect_id" => format!("open connection (host_id={})", args["host_id"].as_str().unwrap_or("?")),
             "ssh_close_connect" => {
                 let cid = args["connection_id"].as_str().unwrap_or("?");
                 format!("close connection_id={}", cid)
@@ -404,13 +413,15 @@ pub async fn mcp_message(
             }
         }
 
-        if name == "ssh_start_connect" {
+        if name == "ssh_start_connect" || name == "ssh_start_connect_id" {
             let args = &params["arguments"];
             let mut host = args["host"].as_str().map(|s| s.to_string());
             let mut port = args["port"].as_u64().map(|n| n as u16);
             let mut user = args["user"].as_str().map(|s| s.to_string());
             let mut password = args["password"].as_str().map(|s| s.to_string());
-            
+
+            // `ssh_start_connect_id` requires a saved host; `ssh_start_connect`
+            // still resolves `host_id` if one is passed (legacy callers).
             if let Some(host_id) = args["host_id"].as_str() {
                 if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id) {
                     if host.is_none() { host = Some(saved.host.clone()); }
@@ -418,6 +429,11 @@ pub async fn mcp_message(
                     if user.is_none() { user = Some(saved.user.clone()); }
                     if password.is_none() { password = saved.password.clone(); }
                 }
+            }
+
+            // Explicit-params path: port is optional, default 22.
+            if port.is_none() && host.is_some() && user.is_some() {
+                port = Some(22);
             }
 
             if host.is_none() || user.is_none() || port.is_none() {

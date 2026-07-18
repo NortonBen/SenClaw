@@ -618,6 +618,12 @@ pub(crate) struct ScheduleUpdateBody {
     day_of_month: Option<u32>,
     cron_advanced: Option<String>,
     agent_mode: Option<String>,
+    /// Empty string = back to Default (no profile).
+    #[serde(default)]
+    agent_folder: Option<String>,
+    /// Empty string = back to the active default model.
+    #[serde(default)]
+    model_id: Option<String>,
 }
 
 fn space_server(s: &UiState) -> Result<crate::mcp::space_server::SpaceServer, AppError> {
@@ -693,6 +699,8 @@ pub(crate) async fn space_schedules_update(
         b.day_of_month,
         b.cron_advanced,
         b.agent_mode,
+        b.agent_folder,
+        b.model_id,
     );
     tool_result_to_response(r, StatusCode::BAD_REQUEST)
 }
@@ -1174,6 +1182,215 @@ pub(crate) async fn space_apps_static(
         .unwrap())
 }
 
+/// Serve a tray screen capture by filename. Notes and events reference shots as
+/// `![](http://127.0.0.1:<ui_port>/api/space/screenshots/<name>)` — a plain HTTP
+/// URL, so both the Flutter (`NetworkImage`) and React markdown renderers show
+/// it without a local-file codepath.
+///
+/// Read-only and flat by design: the tray writes here, nothing else does.
+pub(crate) async fn space_screenshot_get(
+    State(s): State<Arc<UiState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Response, AppError> {
+    // Flat directory — a name with any separator or `..` can only be traversal.
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid name".into()));
+    }
+    let root = &s.config.paths.screenshots_dir;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "No screenshots yet".into()))?;
+    let canonical_path = root
+        .join(&name)
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()))?;
+    // Belt-and-braces after the name check: canonicalize resolves symlinks, so a
+    // planted link inside the dir can't escape it either.
+    if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
+        return Err(AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()));
+    }
+    let bytes = tokio::fs::read(&canonical_path).await.map_err(internal)?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type_for(&canonical_path))
+        .body(Body::from(bytes))
+        .unwrap())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ScreenshotExtractBody {
+    /// Bare filename of a shot already written to the screenshots dir.
+    name: String,
+}
+
+/// AI-fill a screenshot's title + notes. Prefers vision (best for Vietnamese
+/// text and on-screen context); falls back to OCR → text LLM when the active
+/// model can't see. Returns `{ title, notes, via }`.
+///
+/// The image is read and base64'd server-side — the file already lives here, and
+/// a localhost screenshot URL is unreachable by a cloud LLM anyway.
+pub(crate) async fn space_screenshot_extract(
+    State(s): State<Arc<UiState>>,
+    Json(b): Json<ScreenshotExtractBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if b.name.contains("..") || b.name.contains('/') || b.name.contains('\\') {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid name".into()));
+    }
+    let root = s
+        .config
+        .paths
+        .screenshots_dir
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "No screenshots yet".into()))?;
+    let path = s
+        .config
+        .paths
+        .screenshots_dir
+        .join(&b.name)
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()))?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return Err(AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()));
+    }
+    let bytes = tokio::fs::read(&path).await.map_err(internal)?;
+
+    let cfg_path = &s.config.paths.global_config_path;
+    let system = "Bạn trích thông tin từ ảnh chụp màn hình để tạo một ghi chú. \
+Chỉ trả về JSON đúng dạng: {\"title\": string, \"notes\": string}. \
+title: tiếng Việt, ngắn gọn (tối đa 60 ký tự), mô tả nội dung/việc cần nhớ. \
+notes: chi tiết hỗ trợ ngắn, hoặc chuỗi rỗng. Không thêm chữ nào ngoài JSON.";
+
+    // Vision first when the active model supports it.
+    let model = super::llm_config::active_model_name(cfg_path, None)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e))?;
+    let (raw, via) = if crate::zen_core::vision::infer_vision(&model) {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let (answer, _m, _f) = super::llm_config::chat_completion_vision(
+            cfg_path,
+            None,
+            system,
+            "Đây là ảnh chụp màn hình. Trích tiêu đề và ghi chú.",
+            &b64,
+            "image/png",
+            400,
+        )
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
+        (answer, "vision")
+    } else {
+        // No vision — OCR the image, feed the text to a plain completion.
+        let text = super::ocr::ocr_text_from_bytes(&s, bytes)
+            .await
+            .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
+        let Some(text) = text.filter(|t| !t.trim().is_empty()) else {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                "Model hiện tại không đọc được ảnh (không có vision) và OCR chưa \
+sẵn sàng. Chọn model có vision trong Settings → Models, hoặc cài OCR."
+                    .into(),
+            ));
+        };
+        let user = format!(
+            "Văn bản trích từ ảnh chụp màn hình:\n\n{text}\n\nTrích tiêu đề và ghi chú."
+        );
+        let (answer, _m, _f) =
+            super::llm_config::chat_completion(cfg_path, None, system, &user, 400)
+                .await
+                .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
+        (answer, "ocr")
+    };
+
+    let (title, notes) = parse_title_notes(&raw);
+    Ok(Json(serde_json::json!({
+        "title": title, "notes": notes, "via": via,
+    })))
+}
+
+/// Pull `title`/`notes` out of a model reply.
+///
+/// Models wrap the JSON in ```json fences and add prose, and — the failure this
+/// guards against — get cut off at `max_tokens` mid-string, so the closing
+/// brace never arrives. The previous version fell back to "first line" on any
+/// parse failure, which is why a truncated reply surfaced the literal "```json"
+/// fence as the note title (the reported bug).
+fn parse_title_notes(raw: &str) -> (String, String) {
+    // Anchor at the JSON object if there is one; a leading ```json fence and any
+    // prose before `{` are then ignored by both the strict parse and the
+    // salvage scan below.
+    let obj = match raw.find('{') {
+        Some(a) => &raw[a..],
+        None => raw,
+    };
+
+    // Happy path — a complete object.
+    if let Some(b) = obj.rfind('}') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&obj[..=b]) {
+            let title = v["title"].as_str().unwrap_or("").trim().to_string();
+            let notes = v["notes"].as_str().unwrap_or("").trim().to_string();
+            if !title.is_empty() {
+                return (clamp_title(&title), notes);
+            }
+        }
+    }
+
+    // Salvage path — truncated or malformed JSON. `title` comes first and is
+    // short, so it almost always survived even when `notes` got cut off; read
+    // the field values directly rather than giving up.
+    if let Some(title) = json_string_field(obj, "title") {
+        let title = title.trim();
+        if !title.is_empty() {
+            let notes = json_string_field(obj, "notes").unwrap_or_default();
+            return (clamp_title(title), notes.trim().to_string());
+        }
+    }
+
+    // Last resort — the first line that is neither a fence nor a bare brace, so
+    // the user still gets *something*, never the literal "```json".
+    let first = raw
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("```") && *l != "{" && *l != "}")
+        .unwrap_or("");
+    (clamp_title(first), String::new())
+}
+
+fn clamp_title(s: &str) -> String {
+    s.chars().take(60).collect()
+}
+
+/// Read a JSON string field by key, tolerating truncation: returns the text up
+/// to the closing unescaped quote, or to end-of-input if the reply was cut off
+/// mid-value. Scans within the object slice so a `"title"` in surrounding prose
+/// isn't mistaken for the field.
+fn json_string_field(obj: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\"");
+    let after_key = &obj[obj.find(&pat)? + pat.len()..];
+    let after_colon = &after_key[after_key.find(':')? + 1..];
+    let mut chars = after_colon.trim_start().chars();
+    if chars.next()? != '"' {
+        return None; // not a string value
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for c in chars {
+        if escaped {
+            out.push(match c {
+                'n' => '\n',
+                't' => '\t',
+                other => other, // \" \\ \/ and the rest, literally
+            });
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return Some(out); // closed cleanly
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out) // truncated before the closing quote — return what we have
+}
+
 #[derive(Deserialize)]
 pub(crate) struct SpaceAppBridgeBody {
     action: String,
@@ -1230,11 +1447,33 @@ pub(crate) async fn space_apps_bridge(
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("space-app-{id}"));
+            // Optional per-call tool allowlist: when present & non-empty, the
+            // agent receives EXACTLY these tools (minus the always-excluded
+            // set) instead of the full pool — this is how a Space App enforces
+            // a per-bot MCP/skill security policy. Absent → all tools (the
+            // historical behavior, so ai-office and others are unaffected).
+            let tools = payload
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| t.as_str().map(str::trim).filter(|s| !s.is_empty()))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty());
+            // Optional per-call model hint (persona.model).
+            let model = payload
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             let persona = crate::agent::persona_registry::PersonaConfig {
                 name: format!("space-app-{id}"),
                 description: "Space App headless agent".into(),
-                tools: None,
-                model: None,
+                tools,
+                model,
                 max_concurrent: 4,
                 system_prompt: system,
                 file_path: std::path::PathBuf::new(),
@@ -1280,8 +1519,18 @@ pub(crate) async fn space_apps_bridge(
                 .get("maxTokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32;
+            // Optional: run this completion on a specific LLM profile (config id
+            // or label) instead of the daemon's global active model, so an app
+            // can have its own model without changing everyone else's.
+            let profile = payload
+                .get("profile")
+                .or_else(|| payload.get("llmProfile"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             match super::llm_config::chat_completion(
                 &s.config.paths.global_config_path,
+                profile,
                 system,
                 &prompt,
                 max_tokens,
@@ -2193,4 +2442,79 @@ pub(crate) async fn space_apps_proxy_root(
     req: axum::extract::Request<Body>,
 ) -> Result<Response, AppError> {
     space_apps_proxy(State(s), AxumPath((id, "".to_string())), req).await
+}
+
+#[cfg(test)]
+mod parse_title_notes_tests {
+    use super::{json_string_field, parse_title_notes};
+
+    #[test]
+    fn clean_json() {
+        let (t, n) = parse_title_notes(r#"{"title": "Tạo giftcode", "notes": "cân chơi 1 ngày"}"#);
+        assert_eq!(t, "Tạo giftcode");
+        assert_eq!(n, "cân chơi 1 ngày");
+    }
+
+    #[test]
+    fn fenced_json() {
+        let raw = "```json\n{\"title\": \"Giftcode 15k\", \"notes\": \"mốc cược 150k\"}\n```";
+        let (t, n) = parse_title_notes(raw);
+        assert_eq!(t, "Giftcode 15k");
+        assert_eq!(n, "mốc cược 150k");
+    }
+
+    #[test]
+    fn prose_around_json() {
+        let raw = "Đây là kết quả:\n{\"title\": \"Cấu hình giftcode\", \"notes\": \"\"}\nHy vọng giúp được.";
+        let (t, _) = parse_title_notes(raw);
+        assert_eq!(t, "Cấu hình giftcode");
+    }
+
+    /// The reported bug: a long chat image, the model opens ```json and gets cut
+    /// off at max_tokens before closing the brace. The old code surfaced the
+    /// literal "```json" as the title.
+    #[test]
+    fn truncated_after_fence_salvages_the_title_not_the_fence() {
+        let raw = "```json\n{\"title\": \"Tạo giftcode 15k mốc cược 150k\", \"notes\": \"Khách yêu cầu tạo loại 15k cho mốc cược 150k, thêm code vip mốc 10m, mỗi đợt tạo là dùng đượ";
+        let (t, n) = parse_title_notes(raw);
+        assert_eq!(t, "Tạo giftcode 15k mốc cược 150k");
+        assert!(n.starts_with("Khách yêu cầu"), "notes salvaged partial: {n:?}");
+        assert!(!t.starts_with("```"), "must never surface the fence");
+    }
+
+    #[test]
+    fn truncated_mid_title_still_avoids_the_fence() {
+        let raw = "```json\n{\"title\": \"Tạo giftco";
+        let (t, _) = parse_title_notes(raw);
+        assert_eq!(t, "Tạo giftco");
+        assert!(!t.contains("```"));
+    }
+
+    #[test]
+    fn title_over_sixty_chars_is_clamped_on_a_char_boundary() {
+        let long = "á".repeat(80);
+        let (t, _) = parse_title_notes(&format!("{{\"title\": \"{long}\", \"notes\": \"\"}}"));
+        assert_eq!(t.chars().count(), 60);
+    }
+
+    #[test]
+    fn escaped_quotes_in_value_are_handled() {
+        let raw = r#"{"title": "Anh nói \"chuẩn\" rồi", "notes": ""}"#;
+        let (t, _) = parse_title_notes(raw);
+        assert_eq!(t, r#"Anh nói "chuẩn" rồi"#);
+    }
+
+    #[test]
+    fn total_garbage_falls_back_to_a_sane_line_never_the_fence() {
+        let (t, n) = parse_title_notes("```json\n\nkhông đọc được ảnh");
+        assert_eq!(t, "không đọc được ảnh");
+        assert_eq!(n, "");
+    }
+
+    #[test]
+    fn field_scanner_ignores_a_title_word_in_prose() {
+        // "title" mentioned in prose before the object must not be picked up.
+        let obj = r#"{"title": "Real one", "notes": "x"}"#;
+        assert_eq!(json_string_field(obj, "title").as_deref(), Some("Real one"));
+    }
 }

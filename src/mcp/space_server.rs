@@ -271,6 +271,11 @@ struct RecurringUpdateParams {
     cron_advanced: Option<String>,
     /// "agent" | "dag" | "plan"
     agent_mode: Option<String>,
+    /// Folder của agent profile chạy lịch này (vd "ssh"). Quyết định persona,
+    /// skills và MCP servers mà agent có khi lịch chạy. Chuỗi rỗng = về Default.
+    agent_folder: Option<String>,
+    /// LLM config id chạy lịch này. Chuỗi rỗng = dùng model đang active.
+    model_id: Option<String>,
 }
 
 // ─── MCP server struct ────────────────────────────────────────────────────────
@@ -756,7 +761,7 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
     }
 
     #[rmcp::tool(
-        description = "Cập nhật lịch định kỳ. Có thể đổi prompt, label, lịch (time_local+frequency hoặc cron_advanced), và status (active/paused/completed)."
+        description = "Cập nhật lịch định kỳ. Có thể đổi prompt, label, lịch (time_local+frequency hoặc cron_advanced), status (active/paused/completed), và agent_folder (profile chạy lịch)."
     )]
     fn space_recurring_update(
         &self,
@@ -777,6 +782,8 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
                 p.day_of_month,
                 p.cron_advanced,
                 p.agent_mode,
+                p.agent_folder,
+                p.model_id,
             )
             .content
     }
@@ -1604,6 +1611,8 @@ impl SpaceServer {
         day_of_month: Option<u32>,
         cron_advanced: Option<String>,
         agent_mode: Option<String>,
+        agent_folder: Option<String>,
+        model_id: Option<String>,
     ) -> ToolResult {
         let tasks = match self.db.list_all_tasks() {
             Ok(t) => t,
@@ -1623,6 +1632,41 @@ impl SpaceServer {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
         };
+        // The lookup above accepts either the task id or the JID-derived folder
+        // id. Every write below must use the id we actually resolved, not the
+        // raw path param — otherwise the folder form matches no row and the
+        // update silently does nothing.
+        let task_id = task.id.clone();
+
+        // Self-heal: config reconciliation used to wipe a schedule's chat
+        // session when its folder collided with a config-managed profile
+        // folder. Without the `groups` row every UPDATE below matches zero
+        // rows and the edit silently does nothing — recreate it first.
+        match self.db.get_group(&task.chat_jid) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let now = Utc::now().to_rfc3339();
+                if let Err(e) = self.db.upsert_group(&crate::types::GroupBinding {
+                    jid: task.chat_jid.clone(),
+                    folder: task.group_folder.clone(),
+                    name: truncate_label(&task.prompt, 60),
+                    channel: String::new(),
+                    group_type: "chat".into(),
+                    requires_trigger: false,
+                    allowed_tools: None,
+                    allowed_paths: None,
+                    allowed_work_dirs: None,
+                    bot_token: None,
+                    max_messages: None,
+                    llm_config_id: None,
+                    last_active: Some(now.clone()),
+                    added_at: now,
+                }) {
+                    return ToolResult::err(format!("recreate chat session: {e}"));
+                }
+            }
+            Err(e) => return ToolResult::err(format!("lookup chat session: {e}")),
+        }
 
         let touches_schedule = cron_advanced.is_some()
             || time_local.is_some()
@@ -1654,7 +1698,7 @@ impl SpaceServer {
             if let Err(e) = self.db.with_conn(|c| {
                 c.execute(
                     "UPDATE scheduled_tasks SET prompt = ?1 WHERE id = ?2",
-                    rusqlite::params![p, id],
+                    rusqlite::params![p, task_id],
                 )?;
                 Ok(())
             }) {
@@ -1689,7 +1733,7 @@ impl SpaceServer {
             if let Err(e) = self.db.with_conn(|c| {
                 c.execute(
                     "UPDATE scheduled_tasks SET schedule_type=?1, schedule_value=?2, next_run=?3 WHERE id=?4",
-                    rusqlite::params![sched_type.as_str(), sched_value, next_run, id],
+                    rusqlite::params![sched_type.as_str(), sched_value, next_run, task_id],
                 )?;
                 Ok(())
             }) {
@@ -1705,7 +1749,7 @@ impl SpaceServer {
                 other => return ToolResult::err(format!("unknown status: {other}")),
             };
             if let Some(st) = parsed {
-                if let Err(e) = self.db.update_task_status(id, st) {
+                if let Err(e) = self.db.update_task_status(&task_id, st) {
                     return ToolResult::err(format!("update status: {e}"));
                 }
             }
@@ -1720,7 +1764,7 @@ impl SpaceServer {
             if let Err(e) = self.db.with_conn(|c| {
                 c.execute(
                     "UPDATE scheduled_tasks SET agent_mode = ?1 WHERE id = ?2",
-                    rusqlite::params![parsed.as_str(), id],
+                    rusqlite::params![parsed.as_str(), task_id],
                 )?;
                 Ok(())
             }) {
@@ -1744,12 +1788,64 @@ impl SpaceServer {
             }
         }
 
+        // The agent profile a schedule runs under IS its chat session's folder
+        // (recurring_create's `binding_folder`) — that folder is what the
+        // executor resolves persona/skills/MCP from. Without this, editing a
+        // schedule could never move it off the bare `schedule_<id>` folder,
+        // which has no persona and no MCP servers, so the agent ran with only
+        // built-in tools.
+        //
+        // `None` = the caller didn't mention the profile (e.g. a pause toggle),
+        // `Some("")` = "back to Default". They must stay distinct: treating ""
+        // as "no change" is what made a profile permanent once set — the
+        // dropdown had no way to say "none".
+        if let Some(raw) = agent_folder.as_deref() {
+            let trimmed = raw.trim();
+            // Default = the schedule's own bare `schedule_<id>` folder, which
+            // serialize_schedule filters back out to null.
+            let new_folder = if trimmed.is_empty() {
+                task.group_folder.clone()
+            } else {
+                trimmed.to_owned()
+            };
+            if let Err(e) = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE groups SET folder = ?1 WHERE jid = ?2",
+                    rusqlite::params![new_folder, task.chat_jid],
+                )?;
+                Ok(())
+            }) {
+                return ToolResult::err(format!("update agent profile: {e}"));
+            }
+        }
+
+        // Same shape for the model: `Some("")` clears back to the active
+        // default. Until now update dropped model_id entirely, so the editor's
+        // Model dropdown was dead UI — it changed nothing and said nothing.
+        if let Some(raw) = model_id.as_deref() {
+            let trimmed = raw.trim();
+            let value: Option<&str> = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+            if let Err(e) = self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE groups SET llm_config_id = ?1 WHERE jid = ?2",
+                    rusqlite::params![value, task.chat_jid],
+                )?;
+                Ok(())
+            }) {
+                return ToolResult::err(format!("update model: {e}"));
+            }
+        }
+
         // Re-fetch and return.
         let tasks = match self.db.list_all_tasks() {
             Ok(t) => t,
             Err(e) => return ToolResult::err(format!("list tasks: {e}")),
         };
-        let task = match tasks.into_iter().find(|t| t.id == id) {
+        let task = match tasks.into_iter().find(|t| t.id == task_id) {
             Some(t) => t,
             None => return ToolResult::err("schedule disappeared after update".into()),
         };
@@ -1775,7 +1871,9 @@ impl SpaceServer {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
         };
-        if let Err(e) = self.db.delete_task(id) {
+        // Delete by the resolved task id — the raw param may be the
+        // JID-derived id, which matches no scheduled_tasks row.
+        if let Err(e) = self.db.delete_task(&task.id) {
             return ToolResult::err(format!("delete task: {e}"));
         }
         let _ = self.db.delete_group(&task.chat_jid);
@@ -1784,13 +1882,18 @@ impl SpaceServer {
     }
 
     fn serialize_schedule(&self, task: &crate::types::ScheduledTask) -> serde_json::Value {
-        let label = self
-            .db
-            .get_group(&task.chat_jid)
-            .ok()
-            .flatten()
-            .map(|g| g.name)
+        let group = self.db.get_group(&task.chat_jid).ok().flatten();
+        let label = group
+            .as_ref()
+            .map(|g| g.name.clone())
             .unwrap_or_else(|| truncate_label(&task.prompt, 40));
+        // The chat session's folder doubles as the agent profile. A folder still
+        // equal to the schedule's own `schedule_<id>` means "no profile chosen",
+        // so report null rather than a folder the profile dropdown can't match.
+        let agent_folder = group
+            .as_ref()
+            .map(|g| g.folder.clone())
+            .filter(|f| !f.starts_with(SCHEDULE_FOLDER_PREFIX));
         let logs = self.db.get_task_run_logs(&task.id, 1).unwrap_or_default();
         let last_status = logs.first().map(|l| l.status.as_str().to_owned());
         serde_json::json!({
@@ -1802,6 +1905,11 @@ impl SpaceServer {
             "schedule_type":   task.schedule_type.as_str(),
             "schedule_value":  task.schedule_value,
             "agent_mode":      task.agent_mode.as_str(),
+            "agent_folder":    agent_folder,
+            // The model the schedule runs under, so the editor can round-trip
+            // it. Without this the Model dropdown had nothing to restore from
+            // and silently reset to "Active default" on every edit.
+            "model_id":        group.as_ref().and_then(|g| g.llm_config_id.clone()),
             "status":          task.status.as_str(),
             "next_run":        task.next_run,
             "last_run":        task.last_run,

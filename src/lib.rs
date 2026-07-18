@@ -15,6 +15,7 @@ pub mod safe_log;
 
 pub mod agent;
 pub mod apps;
+pub mod background;
 pub mod browser;
 pub mod channels;
 pub mod clawhub;
@@ -496,6 +497,94 @@ fn persist_chat_event(
             error = %e, chat_jid = %chat_jid, event = %event_type,
             "[WsAgentEventSink] failed to persist chat event; live broadcast continues"
         );
+    }
+}
+
+// ===== WsBackgroundEventSink: forwards background runs → WebSocket gateway =====
+
+/// Bridges the sync [`background::BackgroundEventSink`] trait onto the async
+/// gateway, same shape as [`WsAgentEventSink`].
+struct WsBackgroundEventSink {
+    gateway: Arc<gateway::websocket_gateway::WebSocketGateway>,
+}
+
+impl background::BackgroundEventSink for WsBackgroundEventSink {
+    fn run_started(
+        &self,
+        task: &types::BackgroundTask,
+        run_id: &str,
+        trigger: types::BackgroundTriggerKind,
+    ) {
+        let gw = Arc::clone(&self.gateway);
+        let (task_id, run_id, title, trigger) = (
+            task.id.clone(),
+            run_id.to_string(),
+            task.title.clone(),
+            trigger.as_str().to_string(),
+        );
+        tokio::spawn(async move {
+            gw.notify_background_run_started(&task_id, &run_id, &title, &trigger)
+                .await;
+        });
+    }
+
+    fn run_activity(&self, task_id: &str, run_id: &str, kind: &str, detail: &str) {
+        let gw = Arc::clone(&self.gateway);
+        let (task_id, run_id, kind, detail) = (
+            task_id.to_string(),
+            run_id.to_string(),
+            kind.to_string(),
+            detail.to_string(),
+        );
+        tokio::spawn(async move {
+            gw.notify_background_run_activity(&task_id, &run_id, &kind, &detail)
+                .await;
+        });
+    }
+
+    fn run_finished(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        status: types::BackgroundRunStatus,
+        duration_ms: i64,
+        error: Option<&str>,
+    ) {
+        let gw = Arc::clone(&self.gateway);
+        let (task_id, run_id, status, error) = (
+            task_id.to_string(),
+            run_id.to_string(),
+            status.as_str().to_string(),
+            error.map(str::to_string),
+        );
+        tokio::spawn(async move {
+            gw.notify_background_run_finished(
+                &task_id,
+                &run_id,
+                &status,
+                duration_ms,
+                error.as_deref(),
+            )
+            .await;
+        });
+    }
+
+    fn task_changed(&self, task: &types::BackgroundTask) {
+        let gw = Arc::clone(&self.gateway);
+        let task = task.clone();
+        tokio::spawn(async move {
+            gw.notify_background_task_changed(&task).await;
+        });
+    }
+
+    fn notify(&self, title: &str, message: &str) {
+        let gw = Arc::clone(&self.gateway);
+        let (title, message) = (title.to_string(), message.to_string());
+        let id = uuid::Uuid::new_v4().to_string();
+        tokio::spawn(async move {
+            gw.notify_notification(&id, &title, &message, "background")
+                .await;
+        });
     }
 }
 
@@ -2563,6 +2652,29 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         gw
     };
 
+    // ===== 5b2. BackgroundScheduler =====
+    // Autonomous work SenClaw runs by itself: periodic upkeep, an App's standing
+    // duties, unattended follow-up. Unlike TaskScheduler above, a run here is
+    // *not* a chat session — no GroupBinding, no reply. Constructed after
+    // ws_gateway so runs are visible live; nothing else pushes when one fires.
+    //
+    // See docs/background-tasks-design.md.
+    let background_native = Arc::new(background::NativeRegistry::new());
+    let background_scheduler = background::BackgroundScheduler::new(
+        Arc::clone(&db),
+        cfg.background.clone(),
+        Some(Arc::clone(&persona_registry)),
+        Arc::clone(&background_native),
+        Some(Arc::new(WsBackgroundEventSink {
+            gateway: Arc::clone(&ws_gateway),
+        })),
+        cfg.paths.workspace_dir.to_string_lossy().to_string(),
+    );
+    // Hold the handle. `_task_scheduler` and `_event_notifier` below are bound
+    // to `_` locals and dropped immediately, leaving them with no abort path on
+    // shutdown — don't repeat that here.
+    let background_handle = background_scheduler.start();
+
     // 5c. EventNotifier — polls space_events for reminders and status transitions.
     //     Wired after ws_gateway so it can push events to connected clients.
     {
@@ -2752,6 +2864,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             // Share the gateway's live state map so GET /api/chat/states serves
             // the same snapshot the web WS replays on reconnect.
             agent_states: Some(Arc::clone(&ws_gateway.last_known_states)),
+            background_scheduler: Some(Arc::clone(&background_scheduler)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });

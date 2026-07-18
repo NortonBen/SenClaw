@@ -18,7 +18,12 @@ const PROVIDERS: Record<string, { imap: string; smtp: string }> = {
   'icloud.com': { imap: 'imap.mail.me.com', smtp: 'smtp.mail.me.com' },
 };
 
-export function AccountsView() {
+interface Props {
+  /** Notify the shell so sidebar accounts and counts refresh after a change. */
+  onChanged?: () => void;
+}
+
+export function AccountsView({ onChanged }: Props = {}) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const [form] = Form.useForm<AccountCreate>();
@@ -52,6 +57,7 @@ export function AccountsView() {
       form.resetFields();
       setShowForm(false);
       await loadAccounts();
+      onChanged?.();
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Lưu tài khoản thất bại');
     } finally {
@@ -92,6 +98,7 @@ export function AccountsView() {
       await api.deleteAccount(id);
       message.success('Đã xóa tài khoản');
       setAccounts(prev => prev.filter(a => a.id !== id));
+      onChanged?.();
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Xóa tài khoản thất bại');
     }

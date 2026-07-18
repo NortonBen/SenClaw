@@ -40,10 +40,10 @@ pub async fn mcp_sse(
 fn text_result(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
-fn json_result(v: Value) -> Value {
+pub(crate) fn json_result(v: Value) -> Value {
     text_result(serde_json::to_string_pretty(&v).unwrap_or_default())
 }
-fn error_result(text: String) -> Value {
+pub(crate) fn error_result(text: String) -> Value {
     json!({ "isError": true, "content": [{ "type": "text", "text": text }] })
 }
 
@@ -77,6 +77,19 @@ pub async fn mcp_message(
 }
 
 fn tools_list() -> Value {
+    // The core-CRM catalogue, plus the merged-in surfaces from `mcp_ext`. They
+    // are two arrays rather than one because this `json!` literal already needs
+    // `#![recursion_limit = "512"]` to expand, and another twenty entries pushes
+    // it over.
+    let mut tools = match core_tools() {
+        Value::Array(v) => v,
+        _ => Vec::new(),
+    };
+    tools.extend(crate::mcp_ext::tools_ext());
+    Value::Array(tools)
+}
+
+fn core_tools() -> Value {
     json!([
         {
             "name": "crm_list_customers",
@@ -114,10 +127,11 @@ fn tools_list() -> Value {
                 "avatar_url": { "type": "string" },
                 "notes":      { "type": "string" },
                 "tags":       { "type": "array", "items": { "type": "string" } },
-                "status":     { "type": "string", "description": "Pipeline status. Default 'lead'." },
+                "role":       { "type": "string", "enum": ["lead","prospect","customer","vip","contact","partner","referrer","supplier","investor","employee","former","paused","lost"], "description": "Relationship role. Default 'lead'. (Accepted under the legacy name 'status' too.)" },
                 "source":     { "type": "string", "description": "Where they came from (referral, website, event...)." },
                 "address":    { "type": "string" },
-                "birthday":   { "type": "string", "description": "YYYY-MM-DD or a free-form label." }
+                "birthday":   { "type": "string", "description": "YYYY-MM-DD or a free-form label." },
+                "organization_name": { "type": "string", "description": "Resolve-or-create this organization and link the contact to it as primary." }
             }, "required": ["name"] }
         },
         {
@@ -133,7 +147,7 @@ fn tools_list() -> Value {
                 "avatar_url": { "type": "string" },
                 "notes":      { "type": "string" },
                 "tags":       { "type": "array", "items": { "type": "string" } },
-                "status":     { "type": "string" },
+                "role":       { "type": "string", "enum": ["lead","prospect","customer","vip","contact","partner","referrer","supplier","investor","employee","former","paused","lost"], "description": "Relationship role. (Accepted under the legacy name 'status' too.)" },
                 "source":     { "type": "string" },
                 "address":    { "type": "string" },
                 "birthday":   { "type": "string" }
@@ -423,6 +437,12 @@ fn tools_list() -> Value {
 }
 
 async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
+    // Organizations / services / inbox / sale live in `mcp_ext`; it returns None
+    // for anything that isn't one of its own, so we fall through to the core
+    // catalogue below.
+    if let Some(v) = crate::mcp_ext::call_tool_ext(state, name, args).await {
+        return v;
+    }
     match name {
         "crm_list_customers" => {
             let q = args["q"].as_str().map(str::to_string);
@@ -463,11 +483,40 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Ok(v) => v,
                 Err(e) => return error_result(format!("bad arguments: {e}")),
             };
-            match state.db.create_customer(&create, now_ts()) {
-                Ok(id) => match state.db.get_customer(id) {
-                    Ok(Some(c)) => json_result(json!({ "customer": c })),
-                    _ => error_result("created but could not read back".into()),
-                },
+            let now = now_ts();
+            match state.db.create_customer(&create, now) {
+                Ok(id) => {
+                    // Link the named organization in the same call, resolving
+                    // before creating so "Bayer" twice doesn't become two accounts.
+                    if let Some(name) =
+                        args["organization_name"].as_str().map(str::trim).filter(|s| !s.is_empty())
+                    {
+                        let org = match state.db.find_organization_by_name(name) {
+                            Ok(Some(oid)) => Ok(oid),
+                            Ok(None) => state.db.create_organization(
+                                &crate::db_org::OrganizationInput {
+                                    name: name.to_string(),
+                                    ..Default::default()
+                                },
+                                now,
+                            ),
+                            Err(e) => Err(e),
+                        };
+                        if let Ok(oid) = org {
+                            let _ = state.db.link_customer_org(id, oid, "", true, now);
+                        }
+                    }
+                    if create.role == "lead" {
+                        crate::sale::enroll_welcome(&state.db, &state.events, id).await;
+                    }
+                    match state.db.get_customer(id) {
+                        Ok(Some(c)) => json_result(json!({
+                            "customer": c,
+                            "organizations": state.db.orgs_of_customer(id).unwrap_or_default(),
+                        })),
+                        _ => error_result("created but could not read back".into()),
+                    }
+                }
                 Err(e) => error_result(e.to_string()),
             }
         }

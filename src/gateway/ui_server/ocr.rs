@@ -628,6 +628,54 @@ fn drop_engine(dir: &PathBuf) {
 fn drop_engine(_dir: &PathBuf) {}
 
 #[cfg(feature = "ocr-paddle")]
+/// Recognize text from image bytes for INTERNAL callers (the screenshot-extract
+/// endpoint), skipping the multipart layer.
+///
+/// Returns `Ok(None)` when OCR simply isn't available — feature not built, or no
+/// model installed — so callers can fall back to vision instead of treating a
+/// non-setup as an error. `Ok(Some(""))` means OCR ran but found no text.
+#[cfg(feature = "ocr-paddle")]
+pub(crate) async fn ocr_text_from_bytes(
+    state: &UiState,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    let settings = load_ocr_settings(&state.config.paths.global_config_path);
+    let model_id = settings.model_id.clone().or_else(|| {
+        CATALOG
+            .iter()
+            .map(|e| e.id.to_string())
+            .find(|id| is_installed(&model_dir(state, id)))
+    });
+    let Some(model_id) = model_id else {
+        return Ok(None); // nothing installed
+    };
+    let dir = model_dir(state, &model_id);
+    if !is_installed(&dir) {
+        return Ok(None);
+    }
+    let lang = settings.language.unwrap_or_else(|| "vi".into());
+    let engine = get_or_create_engine(&dir, &lang);
+    let text = tokio::task::spawn_blocking(move || {
+        let res = engine.recognize_bytes(&bytes);
+        engine.unload();
+        res
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?
+    .text;
+    Ok(Some(text))
+}
+
+#[cfg(not(feature = "ocr-paddle"))]
+pub(crate) async fn ocr_text_from_bytes(
+    _state: &UiState,
+    _bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    Ok(None) // OCR not built into this binary
+}
+
+#[cfg(feature = "ocr-paddle")]
 async fn recognize_impl(
     dir: PathBuf,
     bytes: Vec<u8>,

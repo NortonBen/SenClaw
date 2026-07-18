@@ -45,7 +45,9 @@ pub fn api_router() -> Router {
         .route("/accounts/test", post(test_account))
         .route("/accounts/:id", delete(delete_account))
         .route("/inbox", get(inbox))
+        .route("/folders", get(folders))
         .route("/messages/:id", get(read_message))
+        .route("/messages/:id/read", post(mark_read))
         .route("/search", get(search))
         .route("/send", post(send))
         .route("/draft", post(draft))
@@ -111,6 +113,8 @@ async fn delete_account(
 #[derive(Deserialize)]
 pub struct InboxQuery {
     account_id: Option<String>,
+    /// Cache folder to list; defaults to `INBOX`. `Sent` holds outgoing mail.
+    folder: Option<String>,
     #[serde(default = "default_limit")]
     limit: u32,
 }
@@ -122,8 +126,23 @@ async fn inbox(
     State(s): State<Arc<AppState>>,
     Query(q): Query<InboxQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let rows = store::inbox(&s.db, q.account_id.as_deref(), q.limit).map_err(server)?;
+    let rows = store::inbox(&s.db, q.account_id.as_deref(), q.folder.as_deref(), q.limit)
+        .map_err(server)?;
     Ok(Json(json!(rows)))
+}
+
+#[derive(Deserialize)]
+pub struct FoldersQuery {
+    account_id: Option<String>,
+}
+
+/// Message counts per folder, used for the sidebar badges.
+async fn folders(
+    State(s): State<Arc<AppState>>,
+    Query(q): Query<FoldersQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let counts = store::folder_counts(&s.db, q.account_id.as_deref()).map_err(server)?;
+    Ok(Json(counts))
 }
 
 async fn read_message(
@@ -131,6 +150,23 @@ async fn read_message(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let v = store::read_msg(&s.db, &id).map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+pub struct MarkReadBody {
+    #[serde(default = "crate::models::default_true")]
+    seen: bool,
+}
+
+/// Toggle the local `\Seen` flag when the user opens (or un-reads) a message.
+async fn mark_read(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(b): Json<MarkReadBody>,
+) -> Result<Json<Value>, ApiError> {
+    let v = store::mark_read(&s.db, &id, b.seen)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?;
     Ok(Json(v))
 }
 

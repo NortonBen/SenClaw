@@ -12,8 +12,8 @@
 # Usage: apps/mini-browser/scripts/pack.sh [--skip-build]
 #
 # NOTE: at runtime the app needs Google Chrome / Chromium on the host (driven via
-# CDP). Set MB_CHROME to override the executable path; MB_HEADFUL=1 for a headful
-# window (least detectable, needs a display).
+# CDP). Set MB_CHROME to override the executable path. The browser now runs
+# headful by default wherever a display exists; MB_HEADLESS=1 forces headless.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"

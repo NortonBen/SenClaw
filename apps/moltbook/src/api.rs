@@ -34,6 +34,8 @@ pub fn make_state() -> Arc<AppState> {
     if db.list_cached(1).map(|c| c.is_empty()).unwrap_or(true) {
         let _ = db.seed_demo(now_ts());
     }
+    // Seed the process-wide LLM profile from stored settings.
+    llm::set_profile(&db.get_str("llm_profile", ""));
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
     Arc::new(AppState { db, mcp_tx })
 }
@@ -48,6 +50,34 @@ pub fn client(db: &Db) -> Moltbook {
     let base = db.get_str("base_url", DEFAULT_BASE);
     let key = db.get_str("api_key", "");
     Moltbook::new(Some(&base), if key.is_empty() { None } else { Some(&key) })
+}
+
+/// The molty's knowledge space — its **trí nhớ**. Defaults to the app id, which
+/// is also what the daemon falls back to, so memory works with zero config.
+pub fn memory_space(db: &Db) -> String {
+    let s = db.get_str("knowledge_space", "");
+    if s.trim().is_empty() {
+        crate::senclaw::DEFAULT_SPACE.to_string()
+    } else {
+        s
+    }
+}
+
+/// Build the molty's grounding for a topic: recall its own memory (trí nhớ) and
+/// pull relevant wiki docs (kho thông tin). Each half is independently
+/// toggleable and best-effort — a missing daemon just yields empty grounding.
+pub async fn grounding_for(db: &Db, topic: &str) -> llm::Grounding {
+    let mut g = llm::Grounding::default();
+    if topic.trim().is_empty() {
+        return g;
+    }
+    if db.get_bool("memory_enabled", true) {
+        g.memory = crate::senclaw::knowledge_recall(&memory_space(db), topic).await.unwrap_or_default();
+    }
+    if db.get_bool("wiki_enabled", true) {
+        g.wiki = crate::senclaw::wiki_context(topic, 2000).await;
+    }
+    g
 }
 
 /// The persona voice injected into planner/composer prompts.
@@ -116,9 +146,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/actions/follow", post(action_follow))
         .route("/actions/subscribe", post(action_subscribe))
         .route("/actions/submolt", post(action_submolt))
+        .route("/trending", get(list_digests).post(run_trending))
+        .route("/tracked", get(list_tracked).post(track_post))
+        .route("/tracked/:post_id", delete(untrack_post))
+        .route("/harvest", post(harvest))
+        .route("/topics", get(list_topics).post(add_topic))
+        .route("/topics/:id", axum::routing::patch(patch_topic).delete(delete_topic))
         .route("/engine/run", post(engine_run))
+        .route("/integrations", get(integrations))
+        .route("/memory/recall", post(memory_recall))
+        .route("/memory/save", post(memory_save))
+        .route("/wiki/archive", post(wiki_archive))
         .route("/demo/seed", post(demo_seed))
-        .route("/models", get(get_models).post(set_model))
+        .route("/models", get(get_models))
         .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
@@ -145,6 +185,19 @@ pub fn account_summary(db: &Db) -> Value {
         "default_submolt": db.get_str("default_submolt", "general"),
         "persona": db.get_str("persona", "molty"),
         "persona_voice": db.get_str("persona_voice", ""),
+        // SenClaw integrations: knowledge = trí nhớ, wiki = kho thông tin.
+        "memory_enabled": db.get_bool("memory_enabled", true),
+        "wiki_enabled": db.get_bool("wiki_enabled", true),
+        "wiki_archive": db.get_bool("wiki_archive", false),
+        "knowledge_space": memory_space(db),
+        // Which LLM profile this app composes with ("" = theo model active của daemon).
+        "llm_profile": db.get_str("llm_profile", ""),
+        // "all" = tương tác toàn bộ feed; "focus" = chỉ các chủ đề trong danh sách.
+        "topic_mode": db.topic_mode(),
+        // Mỗi heartbeat có tự thu thập phản hồi & cập nhật doc wiki không.
+        "harvest_enabled": db.get_bool("harvest_enabled", true),
+        // Mỗi ngày tự tổng hợp xu hướng agent internet vào wiki (mặc định tắt).
+        "trending_daily": db.get_bool("trending_daily", false),
         "last_heartbeat_at": db.get_i64("last_heartbeat_at", 0),
         "last_post_at": db.get_i64("last_post_at", 0),
         "profile": db.get_json("profile"),
@@ -313,6 +366,14 @@ struct SettingsPatch {
     persona: Option<String>,
     persona_voice: Option<String>,
     base_url: Option<String>,
+    memory_enabled: Option<bool>,
+    wiki_enabled: Option<bool>,
+    wiki_archive: Option<bool>,
+    knowledge_space: Option<String>,
+    llm_profile: Option<String>,
+    topic_mode: Option<String>,
+    harvest_enabled: Option<bool>,
+    trending_daily: Option<bool>,
 }
 
 async fn put_settings(
@@ -350,7 +411,251 @@ async fn put_settings(
             s.db.set_str("base_url", v).ok();
         }
     }
+    if let Some(v) = p.memory_enabled {
+        s.db.set_bool("memory_enabled", v).ok();
+    }
+    if let Some(v) = p.wiki_enabled {
+        s.db.set_bool("wiki_enabled", v).ok();
+    }
+    if let Some(v) = p.wiki_archive {
+        s.db.set_bool("wiki_archive", v).ok();
+    }
+    if let Some(v) = p.knowledge_space {
+        s.db.set_str("knowledge_space", v.trim()).ok();
+    }
+    if let Some(v) = p.llm_profile {
+        let v = v.trim();
+        s.db.set_str("llm_profile", v).ok();
+        // Apply immediately — no restart needed.
+        llm::set_profile(v);
+    }
+    if let Some(v) = p.topic_mode {
+        let v = v.trim();
+        if !matches!(v, "all" | "focus") {
+            return Err(bad("topic_mode phải là all | focus"));
+        }
+        s.db.set_str("topic_mode", v).ok();
+    }
+    if let Some(v) = p.harvest_enabled {
+        s.db.set_bool("harvest_enabled", v).ok();
+    }
+    if let Some(v) = p.trending_daily {
+        s.db.set_bool("trending_daily", v).ok();
+    }
     Ok(Json(account_summary(&s.db)))
+}
+
+// ---- trending: what the agent internet is talking about → wiki ----
+
+async fn list_digests(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let digests = s.db.list_digests(60).map_err(server)?;
+    Ok(Json(json!({ "digests": digests, "count": digests.len() })))
+}
+
+#[derive(Deserialize)]
+struct TrendingBody {
+    /// Also write the wiki doc (default true).
+    #[serde(default = "yes")]
+    write_wiki: bool,
+}
+fn yes() -> bool {
+    true
+}
+
+async fn run_trending(State(s): State<Arc<AppState>>, Json(b): Json<TrendingBody>) -> Json<Value> {
+    Json(engine::trending_digest(&s, b.write_wiki).await)
+}
+
+// ---- tracked posts: feedback harvest → wiki doc ----
+
+/// Our published posts + the state of every feedback check on them.
+async fn list_tracked(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let posts = s.db.list_tracked(200).map_err(server)?;
+    let items: Vec<Value> = posts
+        .iter()
+        .map(|t| {
+            let mut v = serde_json::to_value(t).unwrap_or(json!({}));
+            // Derived: are there agent comments the doc hasn't absorbed yet?
+            v["doc_is_stale"] = json!(t.doc_is_stale());
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "posts": items, "count": items.len() })))
+}
+
+#[derive(Deserialize)]
+struct TrackBody {
+    post_id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    submolt: String,
+}
+
+async fn track_post(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<TrackBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.post_id.trim().is_empty() {
+        return Err(bad("post_id là bắt buộc"));
+    }
+    s.db.track_post(b.post_id.trim(), &b.title, &b.submolt, "", now_ts()).map_err(bad)?;
+    let t = s.db.get_tracked(b.post_id.trim()).map_err(server)?;
+    Ok(Json(json!({ "ok": true, "post": t })))
+}
+
+async fn untrack_post(
+    State(s): State<Arc<AppState>>,
+    Path(post_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    s.db.untrack(&post_id).map_err(server)?;
+    Ok(Json(json!({ "ok": true, "post_id": post_id })))
+}
+
+#[derive(Deserialize)]
+struct HarvestBody {
+    /// Harvest just this post (forces a doc refresh even with no new comments).
+    #[serde(default)]
+    post_id: Option<String>,
+}
+
+/// Collect other agents' comments on our posts, synthesise them, and refresh the
+/// wiki docs.
+async fn harvest(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<HarvestBody>,
+) -> Json<Value> {
+    let pid = b.post_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    Json(engine::harvest(&s, pid).await)
+}
+
+// ---- topics: steering what the molty engages with / posts about ----
+
+async fn list_topics(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let topics = s.db.list_topics(false).map_err(server)?;
+    Ok(Json(json!({ "topics": topics, "topic_mode": s.db.topic_mode(), "count": topics.len() })))
+}
+
+#[derive(Deserialize)]
+struct AddTopicBody {
+    text: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+async fn add_topic(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<AddTopicBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.text.trim().is_empty() {
+        return Err(bad("text là bắt buộc"));
+    }
+    let id = s
+        .db
+        .add_topic(&b.text, b.kind.as_deref().unwrap_or("both"), now_ts())
+        .map_err(bad)?;
+    let t = s.db.list_topics(false).map_err(server)?.into_iter().find(|t| t.id == id);
+    Ok(Json(json!({ "ok": true, "topic": t })))
+}
+
+#[derive(Deserialize)]
+struct PatchTopicBody {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+async fn patch_topic(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(b): Json<PatchTopicBody>,
+) -> Result<Json<Value>, ApiError> {
+    s.db.update_topic(id, b.text.as_deref(), b.kind.as_deref(), b.enabled).map_err(bad)?;
+    let t = s.db.list_topics(false).map_err(server)?.into_iter().find(|t| t.id == id);
+    Ok(Json(json!({ "ok": true, "topic": t })))
+}
+
+async fn delete_topic(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    s.db.delete_topic(id).map_err(server)?;
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+// ---- SenClaw integrations: knowledge (trí nhớ) + wiki (kho thông tin) ----
+
+/// Are the daemon's wiki + knowledge actually reachable right now?
+async fn integrations(State(s): State<Arc<AppState>>) -> Json<Value> {
+    Json(crate::senclaw::integrations_status(&memory_space(&s.db)).await)
+}
+
+#[derive(Deserialize)]
+struct RecallBody {
+    query: String,
+}
+
+/// Ask the molty's memory a question (synthesized answer over its space).
+async fn memory_recall(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<RecallBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.query.trim().is_empty() {
+        return Err(bad("query là bắt buộc"));
+    }
+    let space = memory_space(&s.db);
+    let answer = crate::senclaw::knowledge_recall(&space, b.query.trim()).await.map_err(upstream)?;
+    let hits = crate::senclaw::knowledge_search(&space, b.query.trim(), 6).await.unwrap_or_default();
+    Ok(Json(json!({
+        "space": space,
+        "answer": answer,
+        "grounded": !answer.trim().is_empty(),
+        "hits": hits.iter().map(|(n, s, sc)| json!({ "name": n, "summary": s, "score": sc })).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct RememberBody {
+    text: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// Write something into the molty's memory by hand.
+async fn memory_save(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<RememberBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.text.trim().is_empty() {
+        return Err(bad("text là bắt buộc"));
+    }
+    let space = memory_space(&s.db);
+    let tags: Vec<&str> = std::iter::once("moltbook").chain(b.tags.iter().map(String::as_str)).collect();
+    crate::senclaw::knowledge_save(&space, b.text.trim(), &tags, "moltbook:manual")
+        .await
+        .map_err(upstream)?;
+    s.db.log("memory", &format!("ghi trí nhớ thủ công vào {space}"), "", now_ts()).ok();
+    Ok(Json(json!({ "ok": true, "space": space })))
+}
+
+#[derive(Deserialize)]
+struct ArchiveBody {
+    post_id: String,
+}
+
+/// Archive a Moltbook post + its discussion into the wiki (kho thông tin).
+async fn wiki_archive(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<ArchiveBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.post_id.trim().is_empty() {
+        return Err(bad("post_id là bắt buộc"));
+    }
+    let path = engine::archive_post_to_wiki(&s, b.post_id.trim()).await.map_err(upstream)?;
+    Ok(Json(json!({ "ok": true, "path": path })))
 }
 
 // ---- feed / reads ----
@@ -608,7 +913,9 @@ async fn compose_reply_draft(
     } else {
         (b.post_title.clone(), b.post_content.clone())
     };
-    let (text, model) = llm::compose_reply(&voice, &title, &content, &b.instruction).await.map_err(upstream)?;
+    // Ground the reply in the molty's memory + the wiki for this post's topic.
+    let g = grounding_for(&s.db, &format!("{title} {}", b.instruction)).await;
+    let (text, model) = llm::compose_reply(&voice, &title, &content, &b.instruction, &g).await.map_err(upstream)?;
     let dc = DraftCreate {
         kind: "comment".into(),
         target_post_id: b.target_post_id.clone(),
@@ -638,7 +945,10 @@ async fn compose_post_draft(
 ) -> Result<Json<Value>, ApiError> {
     let voice = voice(&s.db);
     let submolt = if b.submolt.trim().is_empty() { s.db.get_str("default_submolt", "general") } else { b.submolt.trim().trim_start_matches("m/").to_string() };
-    let (post, model) = llm::compose_post(&voice, &submolt, &b.topic).await.map_err(upstream)?;
+    // A new post should come from the user's real knowledge, not thin air.
+    let topic = if b.topic.trim().is_empty() { submolt.clone() } else { b.topic.clone() };
+    let g = grounding_for(&s.db, &topic).await;
+    let (post, model) = llm::compose_post(&voice, &submolt, &b.topic, &g).await.map_err(upstream)?;
     let dc = DraftCreate {
         kind: "post".into(),
         submolt,
@@ -851,15 +1161,9 @@ async fn demo_seed(State(s): State<Arc<AppState>>) -> Json<Value> {
 
 // ---- models ----
 
+/// The daemon's LLM profiles (configs with their `label`) + which one is active.
+/// The app only READS this — choosing a profile for Moltbook is a local setting
+/// (`llm_profile`), never a change to the daemon's active model.
 async fn get_models() -> Result<Json<Value>, ApiError> {
     llm::list_models().await.map(Json).map_err(upstream)
-}
-
-#[derive(Deserialize)]
-struct SetModelBody {
-    id: String,
-}
-async fn set_model(Json(b): Json<SetModelBody>) -> Result<Json<Value>, ApiError> {
-    llm::set_active_model(&b.id).await.map_err(upstream)?;
-    Ok(Json(json!({ "ok": true, "id": b.id })))
 }

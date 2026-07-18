@@ -167,21 +167,48 @@ fn compose_details(diff: &str, user_note: Option<&str>) -> String {
 }
 
 pub struct AppState {
-    pub db: Db,
+    /// `Arc` because the channel pollers and the sales scheduler hold the same
+    /// handle from background tasks; `Db` itself is a mutex-guarded connection.
+    pub db: Arc<Db>,
     /// Broadcasts raw JSON-RPC responses to any connected MCP SSE clients.
     pub mcp_tx: tokio::sync::broadcast::Sender<String>,
+    /// Live UI events (new message, review queued, escalation opened) fanned out
+    /// over `GET /api/events`. Bigger buffer than `mcp_tx`: a busy inbox can
+    /// burst, and a slow browser tab shouldn't drop frames it could still catch up on.
+    pub events: tokio::sync::broadcast::Sender<String>,
+    pub channels: Arc<crate::channels::ChannelManager>,
 }
 
 pub fn make_state() -> Arc<AppState> {
     let data_dir = default_data_dir("crm");
-    let db = Db::open(&data_dir.join("crm.db")).expect("failed to open CRM database");
+    let db = Arc::new(Db::open(&data_dir.join("crm.db")).expect("failed to open CRM database"));
     // Lazy backfill: if search_index is empty (fresh DB or first upgrade),
-    // rebuild it from customers + interactions + mentions.
+    // rebuild it from customers + interactions + mentions + catalogue.
     if db.search_index_empty().unwrap_or(true) {
         let _ = db.reindex_all();
     }
+    // A job left `running` by a crash is otherwise stranded forever — nothing
+    // else ever revisits that state.
+    if let Ok(n) = db.requeue_stuck_jobs() {
+        if n > 0 {
+            eprintln!("crm: requeued {n} follow-up job(s) stuck in `running`");
+        }
+    }
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
-    Arc::new(AppState { db, mcp_tx })
+    let (events, _) = tokio::sync::broadcast::channel(500);
+    let channels = crate::channels::ChannelManager::new(db.clone(), events.clone());
+    channels.spawn();
+    // The sales engine reaches for the channel manager from inside the inbound
+    // path, where it has no state handle to thread it through.
+    crate::sale::set_channels(channels.clone());
+    crate::sale::spawn_scheduler(db.clone(), events.clone(), channels.clone());
+    Arc::new(AppState { db, mcp_tx, events, channels })
+}
+
+/// Publish a UI event. Fire-and-forget: `send` errors only when nobody is
+/// listening, which is the normal state of a headless daemon.
+pub fn emit(events: &tokio::sync::broadcast::Sender<String>, kind: &str, payload: Value) {
+    let _ = events.send(json!({ "type": kind, "data": payload }).to_string());
 }
 
 pub struct ApiError(pub StatusCode, pub String);
@@ -190,13 +217,13 @@ impl IntoResponse for ApiError {
         (self.0, Json(json!({ "error": self.1 }))).into_response()
     }
 }
-fn bad(e: impl std::fmt::Display) -> ApiError {
+pub fn bad(e: impl std::fmt::Display) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, e.to_string())
 }
-fn not_found(e: impl std::fmt::Display) -> ApiError {
+pub fn not_found(e: impl std::fmt::Display) -> ApiError {
     ApiError(StatusCode::NOT_FOUND, e.to_string())
 }
-fn server(e: impl std::fmt::Display) -> ApiError {
+pub fn server(e: impl std::fmt::Display) -> ApiError {
     ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
@@ -246,6 +273,12 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/models", get(get_models).post(post_active_model))
         .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
         .route("/mcp/message", post(crate::mcp::mcp_message))
+        // Merged-in surfaces, each kept in its own module so this file stays the
+        // core-CRM router rather than a dumping ground.
+        .merge(crate::api_org::routes())
+        .merge(crate::api_dashboard::routes())
+        .merge(crate::api_inbox::routes())
+        .merge(crate::api_sale::routes())
         .with_state(state)
 }
 
@@ -291,6 +324,12 @@ async fn create_customer(
 ) -> Result<Json<Customer>, ApiError> {
     let id = s.db.create_customer(&body, now_ts()).map_err(bad)?;
     let c = s.db.get_customer(id).map_err(server)?.ok_or_else(|| server("just-inserted customer vanished"))?;
+    // Kick off the welcome sequence, but only for an actual lead and only when
+    // the operator has opted in (`auto_welcome`, off by default). Adding a
+    // contact to a CRM is a filing action; it must not message them by itself.
+    if c.role == "lead" {
+        crate::sale::enroll_welcome(&s.db, &s.events, id).await;
+    }
     Ok(Json(c))
 }
 
@@ -450,6 +489,13 @@ struct DealBody {
     expected_close_at: Option<i64>,
     #[serde(default)]
     notes: String,
+    /// Omit to inherit the contact's primary organization.
+    #[serde(default)]
+    organization_id: Option<i64>,
+    #[serde(default)]
+    period_start: Option<i64>,
+    #[serde(default)]
+    period_end: Option<i64>,
 }
 
 async fn create_deal(
@@ -466,6 +512,9 @@ async fn create_deal(
         probability: b.probability,
         expected_close_at: b.expected_close_at,
         notes: b.notes,
+        organization_id: b.organization_id,
+        period_start: b.period_start,
+        period_end: b.period_end,
     };
     let id = s.db.create_deal(&create, now_ts()).map_err(bad)?;
     let deal = s

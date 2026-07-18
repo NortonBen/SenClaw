@@ -40,6 +40,16 @@ pub(crate) async fn handle_connect(
     let mut guard = clients.lock().await;
     if let Some(client) = guard.get_mut(client_idx) {
         client.authenticated = true;
+        // Every WS gateway client is a trusted local UI (web/desktop), and the
+        // per-chat admin distinction was removed — every chat is admin. Grant
+        // admin here, at connect, rather than lazily on the first subscribe to
+        // an already-registered group. Otherwise a fresh client whose very
+        // first action is "New Session" (register:group) is rejected with
+        // "Admin subscription required": register:group needs admin, but the
+        // only way to gain admin was subscribing to a group that already
+        // exists — a chicken-and-egg that silently dropped the new session's
+        // first message ("Group not found") and left the agent never running.
+        client.is_admin = true;
     }
     send_json(sender, &serde_json::json!({"type": "auth:ok"}));
     replay_event_notification_snapshot(sender, &state.db).await;

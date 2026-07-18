@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../features/dashboard/dashboard_screen.dart';
 import '../features/chat/chat_screen.dart';
+import '../features/background/background_screen.dart';
 import '../features/chat/mini_chat_screen.dart';
 import '../features/cognitive/cognitive_screen.dart';
 import '../features/cowork/cowork_screen.dart';
@@ -61,6 +62,11 @@ final appRouter = GoRouter(
           path: '/calendar',
           pageBuilder: (context, state) =>
               _noTransition(const CalendarScreen()),
+        ),
+        GoRoute(
+          path: '/background',
+          pageBuilder: (context, state) =>
+              _noTransition(const BackgroundScreen()),
         ),
         GoRoute(
           path: '/wiki',

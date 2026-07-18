@@ -195,29 +195,155 @@ pub fn delete_account(db: &Db, id: &str) -> Result<()> {
     })
 }
 
-pub fn inbox(db: &Db, account_id: Option<&str>, limit: u32) -> Result<Vec<Value>> {
+/// Body text collapsed to a single-line preview for the message list.
+fn snippet(body: Option<&str>) -> Option<String> {
+    let body = body?;
+    let mut out = String::new();
+    let mut last_space = false;
+    for c in body.chars() {
+        if c.is_whitespace() {
+            if !out.is_empty() && !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+        } else {
+            out.push(c);
+            last_space = false;
+            if out.chars().count() >= 140 {
+                break;
+            }
+        }
+    }
+    let trimmed = out.trim_end().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// List cached messages in a folder, newest first.
+///
+/// `folder` is matched case-insensitively so callers can pass `inbox` or
+/// `INBOX`; an unknown folder simply yields no rows.
+pub fn inbox(
+    db: &Db,
+    account_id: Option<&str>,
+    folder: Option<&str>,
+    limit: u32,
+) -> Result<Vec<Value>> {
+    let folder = folder.unwrap_or("INBOX").to_string();
     db.with_conn(|conn| {
-        let (sql, has_acct) = match account_id {
-            Some(_) => ("SELECT id, account_id, subject, from_addr, date, flags FROM space_email_cache WHERE account_id=?1 AND folder='INBOX' ORDER BY date DESC LIMIT ?2", true),
-            None => ("SELECT id, account_id, subject, from_addr, date, flags FROM space_email_cache WHERE folder='INBOX' ORDER BY date DESC LIMIT ?1", false),
-        };
-        let mut stmt = conn.prepare(sql)?;
+        let cols = "id, account_id, subject, from_addr, to_addrs, date, flags, folder, body_text";
         let map = |row: &rusqlite::Row| {
             Ok(json!({
                 "id": row.get::<_,String>(0)?,
                 "account_id": row.get::<_,String>(1)?,
                 "subject": row.get::<_,Option<String>>(2)?,
                 "from": row.get::<_,Option<String>>(3)?,
-                "date": row.get::<_,Option<i64>>(4)?,
-                "flags": row.get::<_,String>(5)?,
+                "to": row.get::<_,Option<String>>(4)?,
+                "date": row.get::<_,Option<i64>>(5)?,
+                "flags": row.get::<_,String>(6)?,
+                "folder": row.get::<_,String>(7)?,
+                "snippet": snippet(row.get::<_,Option<String>>(8)?.as_deref()),
             }))
         };
-        let rows: Vec<Value> = if has_acct {
-            stmt.query_map(params![account_id.unwrap(), limit], map)?.filter_map(|r| r.ok()).collect()
-        } else {
-            stmt.query_map(params![limit], map)?.filter_map(|r| r.ok()).collect()
+        let rows: Vec<Value> = match account_id {
+            Some(aid) => {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {cols} FROM space_email_cache
+                     WHERE account_id=?1 AND folder=?2 COLLATE NOCASE
+                     ORDER BY date DESC LIMIT ?3"
+                ))?;
+                stmt.query_map(params![aid, folder, limit], map)?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            }
+            None => {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {cols} FROM space_email_cache
+                     WHERE folder=?1 COLLATE NOCASE
+                     ORDER BY date DESC LIMIT ?2"
+                ))?;
+                stmt.query_map(params![folder, limit], map)?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            }
         };
         Ok(rows)
+    })
+}
+
+/// Per-folder totals plus the inbox unread count, for the sidebar badges.
+///
+/// Unread is derived the same way the UI does it: a message is unread when its
+/// flags array has no `\Seen` entry.
+pub fn folder_counts(db: &Db, account_id: Option<&str>) -> Result<Value> {
+    db.with_conn(|conn| {
+        let map = |row: &rusqlite::Row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?));
+        let rows: Vec<(String, String)> = match account_id {
+            Some(aid) => {
+                let mut stmt = conn.prepare(
+                    "SELECT folder, flags FROM space_email_cache WHERE account_id=?1",
+                )?;
+                stmt.query_map(params![aid], map)?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            }
+            None => {
+                let mut stmt = conn.prepare("SELECT folder, flags FROM space_email_cache")?;
+                stmt.query_map([], map)?.filter_map(|r| r.ok()).collect()
+            }
+        };
+
+        let (mut inbox, mut unread, mut sent) = (0_u32, 0_u32, 0_u32);
+        for (folder, flags) in rows {
+            if folder.eq_ignore_ascii_case("INBOX") {
+                inbox += 1;
+                if !flags_seen(&flags) {
+                    unread += 1;
+                }
+            } else if folder.eq_ignore_ascii_case("Sent") {
+                sent += 1;
+            }
+        }
+        Ok(json!({ "inbox": inbox, "unread": unread, "sent": sent }))
+    })
+}
+
+/// True when a stored flags array contains the IMAP `\Seen` flag.
+fn flags_seen(flags: &str) -> bool {
+    serde_json::from_str::<Vec<String>>(flags)
+        .map(|f| f.iter().any(|x| x == "\\Seen"))
+        .unwrap_or(false)
+}
+
+/// Add or remove `\Seen` on a cached message. Local-only: this does not push
+/// the flag back to the IMAP server, so a re-sync from the server wins.
+pub fn mark_read(db: &Db, id: &str, seen: bool) -> Result<Value> {
+    db.with_conn(|conn| {
+        let current: String = conn
+            .query_row(
+                "SELECT flags FROM space_email_cache WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .map_err(|e| anyhow!("Email not found: {e}"))?;
+
+        let mut flags: Vec<String> = serde_json::from_str(&current).unwrap_or_default();
+        let has = flags.iter().any(|f| f == "\\Seen");
+        if seen && !has {
+            flags.push("\\Seen".to_string());
+        } else if !seen && has {
+            flags.retain(|f| f != "\\Seen");
+        }
+
+        let encoded = serde_json::to_string(&flags)?;
+        conn.execute(
+            "UPDATE space_email_cache SET flags=?2 WHERE id=?1",
+            params![id, encoded],
+        )?;
+        Ok(json!({ "success": true, "id": id, "flags": encoded }))
     })
 }
 
@@ -245,26 +371,55 @@ pub fn read_msg(db: &Db, id: &str) -> Result<Value> {
     })
 }
 
+/// Keyword search over subject and body. Returns the same row shape as
+/// [`inbox`] so the UI can render either list with one component.
+///
+/// `%` and `_` in the query are escaped so a literal underscore does not act as
+/// a wildcard.
 pub fn search(db: &Db, query: &str, account_id: Option<&str>, limit: u32) -> Result<Vec<Value>> {
     db.with_conn(|conn| {
-        let pattern = format!("%{query}%");
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let cols = "id, account_id, subject, from_addr, to_addrs, date, flags, folder, body_text";
         let map = |row: &rusqlite::Row| {
             Ok(json!({
                 "id": row.get::<_,String>(0)?,
                 "account_id": row.get::<_,String>(1)?,
                 "subject": row.get::<_,Option<String>>(2)?,
                 "from": row.get::<_,Option<String>>(3)?,
-                "date": row.get::<_,Option<i64>>(4)?,
+                "to": row.get::<_,Option<String>>(4)?,
+                "date": row.get::<_,Option<i64>>(5)?,
+                "flags": row.get::<_,String>(6)?,
+                "folder": row.get::<_,String>(7)?,
+                "snippet": snippet(row.get::<_,Option<String>>(8)?.as_deref()),
             }))
         };
         let rows: Vec<Value> = match account_id {
             Some(aid) => {
-                let mut stmt = conn.prepare("SELECT id, account_id, subject, from_addr, date FROM space_email_cache WHERE account_id=?1 AND (subject LIKE ?3 OR body_text LIKE ?3) ORDER BY date DESC LIMIT ?2")?;
-                stmt.query_map(params![aid, limit, pattern], map)?.filter_map(|r| r.ok()).collect()
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {cols} FROM space_email_cache
+                     WHERE account_id=?1
+                       AND (subject LIKE ?3 ESCAPE '\\' OR body_text LIKE ?3 ESCAPE '\\'
+                            OR from_addr LIKE ?3 ESCAPE '\\')
+                     ORDER BY date DESC LIMIT ?2"
+                ))?;
+                stmt.query_map(params![aid, limit, pattern], map)?
+                    .filter_map(|r| r.ok())
+                    .collect()
             }
             None => {
-                let mut stmt = conn.prepare("SELECT id, account_id, subject, from_addr, date FROM space_email_cache WHERE (subject LIKE ?2 OR body_text LIKE ?2) ORDER BY date DESC LIMIT ?1")?;
-                stmt.query_map(params![limit, pattern], map)?.filter_map(|r| r.ok()).collect()
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {cols} FROM space_email_cache
+                     WHERE (subject LIKE ?2 ESCAPE '\\' OR body_text LIKE ?2 ESCAPE '\\'
+                            OR from_addr LIKE ?2 ESCAPE '\\')
+                     ORDER BY date DESC LIMIT ?1"
+                ))?;
+                stmt.query_map(params![limit, pattern], map)?
+                    .filter_map(|r| r.ok())
+                    .collect()
             }
         };
         Ok(rows)
@@ -337,6 +492,30 @@ mod tests {
         assert_eq!(normalize_app_password("my real pass"), "my real pass");
         assert_eq!(normalize_app_password("secret-with-no-spaces"), "secret-with-no-spaces");
         assert_eq!(normalize_app_password("abcdefghijklmnop"), "abcdefghijklmnop");
+    }
+
+    #[test]
+    fn flags_seen_detects_the_imap_seen_flag() {
+        assert!(flags_seen(r#"["\\Seen"]"#));
+        assert!(flags_seen(r#"["\\Flagged","\\Seen"]"#));
+        assert!(!flags_seen("[]"));
+        assert!(!flags_seen(r#"["\\Flagged"]"#));
+        // A substring match would wrongly call this seen.
+        assert!(!flags_seen(r#"["\\SeenLater"]"#));
+        // Malformed flags must not panic; treat as unread.
+        assert!(!flags_seen("not json"));
+    }
+
+    #[test]
+    fn snippet_collapses_whitespace_and_caps_length() {
+        assert_eq!(snippet(Some("  hello \n\n  world  ")).unwrap(), "hello world");
+        assert_eq!(snippet(Some("   ")), None);
+        assert_eq!(snippet(None), None);
+
+        // Multibyte text must be capped by chars, not bytes, and never panic.
+        let long = "á".repeat(500);
+        let s = snippet(Some(&long)).unwrap();
+        assert_eq!(s.chars().count(), 140);
     }
 
     #[test]

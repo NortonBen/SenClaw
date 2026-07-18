@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
@@ -14,8 +15,12 @@ import 'package:http/http.dart' as http;
 import '../chat/audio_service.dart' show audioServiceProvider;
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../core/transport/connection.dart';
+import '../../core/update/update_provider.dart';
 import '../../theme/theme_mode_provider.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/app_markdown.dart';
+import '../capture/capture_hotkey.dart';
+import '../capture/screen_capture.dart' show isCaptureSupported;
 import '../chat/agents_provider.dart';
 import '../chat/new_chat_dialog.dart' show llmConfigsProvider, LlmConfig;
 import 'entity_providers.dart';
@@ -34,9 +39,12 @@ const _sections = [
   ('whisper', 'Speech-to-Text', Icons.mic_none_outlined),
   ('tts', 'Text-to-Speech', Icons.volume_up_outlined),
   ('ocr', 'OCR', Icons.document_scanner_outlined),
+  ('updates', 'Updates', Icons.system_update_alt),
 ];
 
-final _settingsSectionProvider = StateProvider<String>((ref) => 'general');
+/// Which settings section is showing. Public so the macOS app menu's
+/// "Check for Updates…" can land the user directly on Updates.
+final settingsSectionProvider = StateProvider<String>((ref) => 'general');
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -44,7 +52,7 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
-    final section = ref.watch(_settingsSectionProvider);
+    final section = ref.watch(settingsSectionProvider);
 
     return Row(
       children: [
@@ -70,7 +78,7 @@ class SettingsScreen extends ConsumerWidget {
                     label: label,
                     active: section == key,
                     onTap: () =>
-                        ref.read(_settingsSectionProvider.notifier).state = key,
+                        ref.read(settingsSectionProvider.notifier).state = key,
                   ),
               ],
             ),
@@ -92,6 +100,7 @@ class SettingsScreen extends ConsumerWidget {
             'tts' =>
               const _MediaModelsSection(domain: 'tts', title: 'Text-to-Speech'),
             'ocr' => const _MediaModelsSection(domain: 'ocr', title: 'OCR'),
+            'updates' => const UpdatesSection(),
             _ => const _GeneralSection(),
           },
         ),
@@ -242,6 +251,215 @@ class _ToggleRow extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// ── Updates ───────────────────────────────────────────────────────────────
+
+/// Public (unlike its sibling sections) so a widget test can render it without
+/// standing up the whole settings screen and its API-backed providers.
+class UpdatesSection extends ConsumerWidget {
+  const UpdatesSection({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final s = ref.watch(updateProvider);
+    final n = ref.read(updateProvider.notifier);
+    final svc = ref.watch(updateServiceProvider);
+    // The web console has no bundle to replace and no process to restart.
+    final canUpdate = !kIsWeb && !svc.isDevBuild;
+
+    return _Body(
+      title: 'Updates',
+      children: [
+        Container(
+          padding: const EdgeInsets.all(AppTokens.s16),
+          decoration: BoxDecoration(
+            color: c.surface,
+            border: Border.all(color: c.border),
+            borderRadius: BorderRadius.circular(AppTokens.rMd),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('SenClaw Desktop',
+                            style: TextStyle(
+                                color: c.textPrimary, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text(
+                          svc.isDevBuild
+                              ? 'Development build'
+                              : 'Version ${svc.currentVersion}'
+                                  '${svc.buildTarget.isEmpty ? '' : ' · ${svc.buildTarget}'}',
+                          style: TextStyle(
+                            color: c.textMuted,
+                            fontSize: 12,
+                            fontFamily: AppTokens.fontMono,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (canUpdate) _UpdateActionButton(state: s),
+                ],
+              ),
+              const SizedBox(height: AppTokens.s12),
+              _UpdateStatusLine(state: s),
+              if (s.phase == UpdatePhase.downloading) ...[
+                const SizedBox(height: AppTokens.s8),
+                LinearProgressIndicator(value: s.progress),
+                const SizedBox(height: AppTokens.s4),
+                Row(
+                  children: [
+                    Text('${(s.progress * 100).toStringAsFixed(0)}%',
+                        style: TextStyle(color: c.textMuted, fontSize: 12)),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: n.cancelDownload,
+                      child: const Text('Cancel'),
+                    ),
+                  ],
+                ),
+              ],
+              if (s.error != null) ...[
+                const SizedBox(height: AppTokens.s8),
+                Text(s.error!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: AppTokens.s16),
+
+        if (!canUpdate)
+          Text(
+            kIsWeb
+                ? 'The web console is served by the daemon and updates with it. '
+                  'Update the daemon on the host machine: senclaw update'
+                : 'This build has no release version, so it cannot be updated in place. '
+                  'Rebuild from source, or install a release with: senclaw install desktop',
+            style: TextStyle(color: c.textMuted, fontSize: 12),
+          )
+        else ...[
+          _ToggleRow(
+            label: 'Check for updates automatically',
+            desc: 'Once a day, in the background. Nothing installs without your say-so.',
+            value: s.autoCheck,
+            onChanged: (v) => n.setAutoCheck(v),
+          ),
+          if (s.manifest != null && s.hasUpdate && (s.manifest!.notes?.isNotEmpty ?? false)) ...[
+            const SizedBox(height: AppTokens.s8),
+            Text("What's new in ${s.manifest!.version}",
+                style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w600)),
+            const SizedBox(height: AppTokens.s8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppTokens.s16),
+              decoration: BoxDecoration(
+                color: c.surface,
+                border: Border.all(color: c.border),
+                borderRadius: BorderRadius.circular(AppTokens.rMd),
+              ),
+              child: AppMarkdown(s.manifest!.notes!),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+class _UpdateStatusLine extends StatelessWidget {
+  const _UpdateStatusLine({required this.state});
+  final UpdateState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final v = state.manifest?.version;
+    final text = switch (state.phase) {
+      UpdatePhase.checking => 'Checking…',
+      UpdatePhase.upToDate => 'You are on the latest version.',
+      UpdatePhase.available => 'Version $v is available.',
+      UpdatePhase.downloading => 'Downloading $v…',
+      UpdatePhase.ready => 'Version $v is ready to install.',
+      UpdatePhase.applying => 'Installing — SenClaw will restart…',
+      UpdatePhase.error => state.error ?? 'Something went wrong.',
+      UpdatePhase.idle => state.lastCheck == null
+          ? 'Not checked yet.'
+          : 'Last checked ${_ago(state.lastCheck!)}.',
+    };
+    return Text(text, style: TextStyle(color: c.textSecondary, fontSize: 13));
+  }
+
+  static String _ago(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inHours < 1) return '${d.inMinutes}m ago';
+    if (d.inDays < 1) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+}
+
+class _UpdateActionButton extends ConsumerWidget {
+  const _UpdateActionButton({required this.state});
+  final UpdateState state;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final n = ref.read(updateProvider.notifier);
+    return switch (state.phase) {
+      UpdatePhase.checking || UpdatePhase.downloading || UpdatePhase.applying =>
+        const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      UpdatePhase.available => FilledButton.icon(
+          onPressed: n.download,
+          icon: const Icon(Icons.download, size: 16),
+          label: const Text('Download'),
+        ),
+      UpdatePhase.ready => FilledButton.icon(
+          onPressed: () => _confirmAndApply(context, ref),
+          icon: const Icon(Icons.restart_alt, size: 16),
+          label: const Text('Install & Restart'),
+        ),
+      _ => OutlinedButton(
+          onPressed: () => n.check(),
+          child: const Text('Check now'),
+        ),
+    };
+  }
+
+  /// Installing kills the daemon and every running agent, so say so first —
+  /// the user may be mid-conversation and have no idea a restart is coming.
+  Future<void> _confirmAndApply(BuildContext context, WidgetRef ref) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Install update?'),
+        content: const Text(
+          'SenClaw will quit, install the update, and reopen. '
+          'Running agents and background tasks will be stopped.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Not now')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Install & Restart')),
+        ],
+      ),
+    );
+    if (ok == true) await ref.read(updateProvider.notifier).applyAndRestart();
   }
 }
 
@@ -433,6 +651,119 @@ class _GeneralSection extends ConsumerWidget {
                     '/api/dispatch-config', {'enabled': v}, dispatchConfigProvider),
               ),
             ),
+        if (isCaptureSupported) ...[
+          const SizedBox(height: AppTokens.s16),
+          Text('Screen capture',
+              style: TextStyle(
+                  color: context.colors.textSecondary,
+                  fontWeight: FontWeight.w700)),
+          const SizedBox(height: AppTokens.s8),
+          const _CaptureHotkeyRow(),
+        ],
+      ],
+    );
+  }
+}
+
+/// Global shortcut for tray screen capture. Not Cmd+Shift+4: macOS owns that
+/// combo and won't hand it over, so the default sits one modifier away.
+class _CaptureHotkeyRow extends ConsumerStatefulWidget {
+  const _CaptureHotkeyRow();
+  @override
+  ConsumerState<_CaptureHotkeyRow> createState() => _CaptureHotkeyRowState();
+}
+
+class _CaptureHotkeyRowState extends ConsumerState<_CaptureHotkeyRow> {
+  bool _recording = false;
+
+  void _start() {
+    // Suspend the live hotkey first: while it's registered, macOS eats the
+    // combo and the recorder would never see it.
+    ref.read(captureHotkeyProvider.notifier).suspend();
+    setState(() => _recording = true);
+  }
+
+  void _cancel() {
+    ref.read(captureHotkeyProvider.notifier).resume();
+    setState(() => _recording = false);
+  }
+
+  /// `HotKeyRecorder` calls this on EVERY key down — including the bare `Ctrl`
+  /// at the start of a combo. Committing on the first callback would record
+  /// `Ctrl` alone and close before the user finished typing the shortcut, so
+  /// wait for a combo that's actually usable.
+  void _onRecorded(HotKey hk) {
+    if (hk.key == PhysicalKeyboardKey.escape) {
+      _cancel();
+      return;
+    }
+    if (!isUsableHotKey(hk)) return; // still mid-combo
+    ref.read(captureHotkeyProvider.notifier).update(hk);
+    setState(() => _recording = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final st = ref.watch(captureHotkeyProvider);
+    final n = ref.read(captureHotkeyProvider.notifier);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Capture shortcut',
+                      style: TextStyle(
+                          color: c.textPrimary, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Press this anywhere to grab a region — the same selector as '
+                    'macOS Cmd+Shift+4. Needs at least one modifier.',
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppTokens.s12),
+            if (_recording) ...[
+              Text('Bấm tổ hợp…',
+                  style: TextStyle(color: c.accent, fontSize: 12)),
+              const SizedBox(width: AppTokens.s8),
+              // The recorder swallows keystrokes while mounted, so it replaces
+              // the chip rather than sitting alongside it.
+              HotKeyRecorder(
+                initalHotKey: st.hotKey,
+                onHotKeyRecorded: _onRecorded,
+              ),
+              const SizedBox(width: AppTokens.s4),
+              TextButton(onPressed: _cancel, child: const Text('Huỷ')),
+            ] else ...[
+              OutlinedButton(
+                onPressed: _start,
+                child: Text(hotKeyLabel(st.hotKey),
+                    style: const TextStyle(
+                        fontFeatures: [FontFeature.tabularFigures()])),
+              ),
+              const SizedBox(width: AppTokens.s4),
+              IconButton(
+                tooltip: 'Về mặc định (⌃ ⇧ 4)',
+                icon: const Icon(Icons.restart_alt, size: 18),
+                onPressed: n.resetToDefault,
+              ),
+            ],
+          ],
+        ),
+        if (st.error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: AppTokens.s8),
+            child: Text(st.error!,
+                style: const TextStyle(color: AppTokens.danger, fontSize: 12)),
+          ),
       ],
     );
   }
@@ -3499,8 +3830,19 @@ class SpaceAppsSection extends ConsumerWidget {
   }
 
   Future<void> _installZip(BuildContext context, WidgetRef ref) async {
-    final res = await FilePicker.platform.pickFiles(
-        type: FileType.custom, allowedExtensions: ['zip'], withData: kIsWeb);
+    final FilePickerResult? res;
+    try {
+      res = await FilePicker.platform.pickFiles(
+          type: FileType.custom, allowedExtensions: ['zip'], withData: kIsWeb);
+    } catch (e) {
+      // file_picker errors before showing the panel (e.g. macOS entitlement
+      // check) — surface it instead of failing silently.
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('File picker error: $e')));
+      }
+      return;
+    }
     final f = res?.files.firstOrNull;
     if (f == null) return;
     final cfg = ref.read(appConfigProvider);

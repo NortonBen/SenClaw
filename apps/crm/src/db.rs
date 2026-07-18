@@ -14,6 +14,17 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
+/// Wall clock in Unix seconds — the unit every timestamp column in this schema
+/// stores. Handlers normally thread `now` down from the request so one request
+/// stamps one time; this is for the paths that have no request to inherit from
+/// (startup seeding, background loops).
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS customers (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,6 +169,243 @@ CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_due      ON tasks(due_at) WHERE done = 0;
 "#;
 
+/// Accounts (organizations) + the sellable catalogue, modelled on the shape the
+/// reference CRM uses: a contact belongs to zero-or-more organizations, and a
+/// deal is priced as a bag of catalogue line items rather than one flat number.
+const SCHEMA_ORG: &str = r#"
+CREATE TABLE IF NOT EXISTS organizations (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'direct_customer',
+  website     TEXT NOT NULL DEFAULT '',
+  domain      TEXT NOT NULL DEFAULT '',
+  industry    TEXT NOT NULL DEFAULT '',
+  size        TEXT NOT NULL DEFAULT '',
+  address     TEXT NOT NULL DEFAULT '',
+  logo_url    TEXT NOT NULL DEFAULT '',
+  notes       TEXT NOT NULL DEFAULT '',
+  tags_json   TEXT NOT NULL DEFAULT '[]',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orgs_kind    ON organizations(kind);
+CREATE INDEX IF NOT EXISTS idx_orgs_domain  ON organizations(domain);
+CREATE INDEX IF NOT EXISTS idx_orgs_updated ON organizations(updated_at DESC);
+
+-- A person can sit in several organizations (advisor, ex-employee, dual role),
+-- which is why this is a join table and not a column on `customers`.
+CREATE TABLE IF NOT EXISTS customer_organizations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id     INTEGER NOT NULL,
+  organization_id INTEGER NOT NULL,
+  role_title      TEXT NOT NULL DEFAULT '',
+  is_primary      INTEGER NOT NULL DEFAULT 0,
+  created_at      INTEGER NOT NULL,
+  UNIQUE(customer_id, organization_id)
+);
+CREATE INDEX IF NOT EXISTS idx_custorg_customer ON customer_organizations(customer_id);
+CREATE INDEX IF NOT EXISTS idx_custorg_org      ON customer_organizations(organization_id);
+
+CREATE TABLE IF NOT EXISTS services (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT NOT NULL,
+  kind          TEXT NOT NULL DEFAULT 'service',
+  amount        REAL NOT NULL DEFAULT 0,
+  currency      TEXT NOT NULL DEFAULT 'VND',
+  pricing_model TEXT NOT NULL DEFAULT 'fixed',
+  unit          TEXT NOT NULL DEFAULT '',
+  sku           TEXT NOT NULL DEFAULT '',
+  description   TEXT NOT NULL DEFAULT '',
+  active        INTEGER NOT NULL DEFAULT 1,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_services_kind    ON services(kind);
+CREATE INDEX IF NOT EXISTS idx_services_active  ON services(active);
+CREATE INDEX IF NOT EXISTS idx_services_updated ON services(updated_at DESC);
+
+-- Line items. `unit_amount` is snapshotted from the catalogue at attach time so
+-- re-pricing a service later never silently rewrites the value of closed deals.
+CREATE TABLE IF NOT EXISTS deal_services (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  deal_id     INTEGER NOT NULL,
+  service_id  INTEGER NOT NULL,
+  quantity    REAL NOT NULL DEFAULT 1,
+  unit_amount REAL NOT NULL DEFAULT 0,
+  note        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  UNIQUE(deal_id, service_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dealsvc_deal ON deal_services(deal_id);
+CREATE INDEX IF NOT EXISTS idx_dealsvc_svc  ON deal_services(service_id);
+"#;
+
+/// The inbox: `channels` are OUR connected accounts (a Telegram bot, a Zalo OA),
+/// `conversations` are threads with one counterpart, `conv_messages` the traffic.
+/// Distinct from `customer_channels`, which stores THEIR identities (an email
+/// address, a phone number) — the two meet in `resolve_customer`, which maps an
+/// inbound `external_id` onto a customer.
+const SCHEMA_INBOX: &str = r#"
+CREATE TABLE IF NOT EXISTS channels (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind         TEXT NOT NULL,
+  name         TEXT NOT NULL DEFAULT '',
+  config       TEXT NOT NULL DEFAULT '{}',
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  cursor       TEXT NOT NULL DEFAULT '',
+  last_sync_at INTEGER,
+  last_status  TEXT NOT NULL DEFAULT '',
+  last_error   TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chan_kind    ON channels(kind);
+CREATE INDEX IF NOT EXISTS idx_chan_enabled ON channels(enabled);
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id      INTEGER NOT NULL DEFAULT 0,
+  channel_kind    TEXT NOT NULL,
+  external_id     TEXT NOT NULL DEFAULT '',
+  customer_id     INTEGER NOT NULL DEFAULT 0,
+  display_name    TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'open',
+  handoff_state   TEXT NOT NULL DEFAULT 'bot',
+  assignee        TEXT NOT NULL DEFAULT '',
+  unread          INTEGER NOT NULL DEFAULT 0,
+  last_message_at INTEGER,
+  created_at      INTEGER NOT NULL,
+  UNIQUE(channel_kind, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_customer ON conversations(customer_id);
+CREATE INDEX IF NOT EXISTS idx_conv_status   ON conversations(status);
+CREATE INDEX IF NOT EXISTS idx_conv_last     ON conversations(last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS conv_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL,
+  customer_id     INTEGER NOT NULL DEFAULT 0,
+  direction       TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'user',
+  content         TEXT NOT NULL,
+  channel         TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'sent',
+  external_id     TEXT NOT NULL DEFAULT '',
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_convmsg_conv ON conv_messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_convmsg_cust ON conv_messages(customer_id, created_at DESC);
+"#;
+
+/// Proactive-selling state, absorbed from the standalone AI Sale app. Keyed on
+/// `customer_id` throughout: the old app carried a `leads` overlay because it
+/// lived in a separate process and could only reference the CRM by id over HTTP.
+/// In-process that indirection buys nothing, so sales state lives on `customers`
+/// (see MIGRATIONS) and these tables hang off the customer directly.
+const SCHEMA_SALE: &str = r#"
+CREATE TABLE IF NOT EXISTS sale_reviews (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  draft       TEXT NOT NULL,
+  channel     TEXT NOT NULL DEFAULT 'web',
+  subject     TEXT NOT NULL DEFAULT '',
+  risk_reason TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending',
+  edited      TEXT NOT NULL DEFAULT '',
+  approved_by TEXT NOT NULL DEFAULT '',
+  approved_at INTEGER,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sreviews_status ON sale_reviews(status);
+CREATE INDEX IF NOT EXISTS idx_sreviews_cust   ON sale_reviews(customer_id);
+
+CREATE TABLE IF NOT EXISTS sale_escalations (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  reason      TEXT NOT NULL,
+  context     TEXT NOT NULL DEFAULT '{}',
+  draft       TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'open',
+  resolved_by TEXT NOT NULL DEFAULT '',
+  resolved_at INTEGER,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sesc_status ON sale_escalations(status);
+CREATE INDEX IF NOT EXISTS idx_sesc_cust   ON sale_escalations(customer_id);
+
+CREATE TABLE IF NOT EXISTS sale_actions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id  INTEGER,
+  action_type  TEXT NOT NULL,
+  reasoning    TEXT NOT NULL DEFAULT '',
+  tool_calls   TEXT NOT NULL DEFAULT '[]',
+  tokens       INTEGER NOT NULL DEFAULT 0,
+  cost         REAL NOT NULL DEFAULT 0,
+  needs_review INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sactions_cust ON sale_actions(customer_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sequences (
+  key         TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  steps_json  TEXT NOT NULL DEFAULT '[]',
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sequence_runs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id  INTEGER NOT NULL,
+  sequence_key TEXT NOT NULL,
+  current_step INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL DEFAULT 'active',
+  started_at   INTEGER NOT NULL,
+  completed_at INTEGER,
+  last_sent_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_seqrun_cust   ON sequence_runs(customer_id);
+CREATE INDEX IF NOT EXISTS idx_seqrun_status ON sequence_runs(status);
+
+CREATE TABLE IF NOT EXISTS followup_jobs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL,
+  job_type    TEXT NOT NULL,
+  run_at      INTEGER NOT NULL,
+  payload     TEXT NOT NULL DEFAULT '{}',
+  status      TEXT NOT NULL DEFAULT 'pending',
+  executed_at INTEGER,
+  error       TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_runat ON followup_jobs(run_at) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_jobs_cust  ON followup_jobs(customer_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- User-defined dashboard charts. A row is a query spec, not a result: the
+-- numbers are computed on read by db_dashboard::run_chart, so a chart saved
+-- today keeps telling the truth tomorrow.
+CREATE TABLE IF NOT EXISTS dashboard_charts (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT NOT NULL,
+  element      TEXT NOT NULL,
+  metric       TEXT NOT NULL DEFAULT 'count',
+  grouping     TEXT NOT NULL DEFAULT '',
+  filters_json TEXT NOT NULL DEFAULT '[]',
+  display_json TEXT NOT NULL DEFAULT '{}',
+  size         TEXT NOT NULL DEFAULT 'medium',
+  sort         INTEGER NOT NULL DEFAULT 0,
+  is_template  INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_charts_sort ON dashboard_charts(sort);
+"#;
+
 /// Row shape returned by the list + get APIs. `tags` is materialized from
 /// `tags_json` so the wire format stays a first-class array.
 #[derive(Serialize, Clone)]
@@ -197,6 +445,13 @@ pub struct Deal {
     pub expected_close_at: Option<i64>,
     pub closed_at: Option<i64>,
     pub notes: String,
+    /// The account the deal is booked at. 0 = unlinked. Defaults to the
+    /// contact's primary organization at create time.
+    pub organization_id: i64,
+    pub organization_name: String,
+    /// Delivery window — the reference CRM shows this as "Project Period".
+    pub period_start: Option<i64>,
+    pub period_end: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -332,6 +587,15 @@ pub struct DealCreate {
     pub expected_close_at: Option<i64>,
     #[serde(default)]
     pub notes: String,
+    /// Omit to inherit the contact's primary organization — a deal is almost
+    /// always won at the account the contact belongs to, and making every caller
+    /// pass it would just mean it's usually 0.
+    #[serde(default)]
+    pub organization_id: Option<i64>,
+    #[serde(default)]
+    pub period_start: Option<i64>,
+    #[serde(default)]
+    pub period_end: Option<i64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -341,10 +605,34 @@ pub struct DealPatch {
     pub currency: Option<String>,
     pub stage: Option<String>,
     pub probability: Option<i64>,
-    /// `Some(None)` clears the field, `Some(Some(x))` sets it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Absent = leave alone, `null` = clear, a value = set.
+    ///
+    /// `deserialize_with` is load-bearing: serde's stock impl for `Option<T>`
+    /// maps JSON `null` onto `None`, so a plain `Option<Option<i64>>` collapses
+    /// "clear it" and "don't touch it" into the same `None` and the clear path
+    /// silently no-ops. `double_option` keeps them distinct.
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     pub expected_close_at: Option<Option<i64>>,
     pub notes: Option<String>,
+    pub organization_id: Option<i64>,
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    pub period_start: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    pub period_end: Option<Option<i64>>,
+}
+
+/// Distinguish an absent JSON key from an explicit `null`.
+///
+/// Serde only calls this when the key is present, so reaching it at all means
+/// the caller said something: `null` → `Some(None)` (clear), a value →
+/// `Some(Some(v))` (set). An absent key never gets here and falls to
+/// `#[serde(default)]` → `None` (leave alone).
+fn double_option<'de, T, D>(de: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
 }
 
 #[derive(Deserialize, Default)]
@@ -370,6 +658,8 @@ pub struct CustomerPatch {
     pub avatar_url: Option<String>,
     pub notes: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// See `CustomerCreate::role` — `status` is accepted as a legacy alias.
+    #[serde(alias = "status")]
     pub role: Option<String>,
     pub source: Option<String>,
     pub address: Option<String>,
@@ -394,7 +684,10 @@ pub struct CustomerCreate {
     pub notes: String,
     #[serde(default)]
     pub tags: Vec<String>,
-    #[serde(default)]
+    /// `status` is the historic name this field shipped under, and the MCP tool
+    /// schema advertised it long after the column was renamed — so callers that
+    /// send `status` are real and their value must not be silently dropped.
+    #[serde(default, alias = "status")]
     pub role: String,
     #[serde(default)]
     pub source: String,
@@ -412,7 +705,63 @@ const MIGRATIONS: &[&str] = &[
     // it alone. We do NOT drop the column (SQLite ALTER DROP COLUMN needs 3.35+
     // and this is a one-shot copy, not a hot-path perf concern).
     "UPDATE customers SET role = status WHERE role = 'lead' AND status <> '' AND status IS NOT NULL",
+    // Sales state, absorbed from AI Sale's `leads` overlay. One person = one row.
+    "ALTER TABLE customers ADD COLUMN sale_stage TEXT NOT NULL DEFAULT 'new_lead'",
+    "ALTER TABLE customers ADD COLUMN temperature TEXT NOT NULL DEFAULT 'cold'",
+    "ALTER TABLE customers ADD COLUMN lead_score INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE customers ADD COLUMN intent_signals TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE customers ADD COLUMN utm TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE customers ADD COLUMN owner TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE customers ADD COLUMN unsubscribed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE customers ADD COLUMN unsubscribed_at INTEGER",
+    // `last_inbound_at` is the silence clock (last CUSTOMER reply) and drives
+    // re-engagement; it is deliberately NOT the same as last_interaction_at,
+    // which any touch — including our own outbound — moves.
+    "ALTER TABLE customers ADD COLUMN last_inbound_at INTEGER",
+    "ALTER TABLE customers ADD COLUMN checkin_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE customers ADD COLUMN last_checkin_at INTEGER",
+    // Deals gain an owning organization and a delivery window.
+    "ALTER TABLE deals ADD COLUMN organization_id INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE deals ADD COLUMN period_start INTEGER",
+    "ALTER TABLE deals ADD COLUMN period_end INTEGER",
+    // Backfill organizations from the free-text company field, then link each
+    // contact to the org that its company string named. Both are idempotent:
+    // the INSERT is guarded by NOT EXISTS and the link table is UNIQUE.
+    "INSERT INTO organizations(name, kind, created_at, updated_at)
+       SELECT DISTINCT TRIM(company), 'direct_customer', strftime('%s','now'), strftime('%s','now')
+       FROM customers c
+       WHERE TRIM(c.company) <> ''
+         AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.name = TRIM(c.company))",
+    "INSERT OR IGNORE INTO customer_organizations(customer_id, organization_id, is_primary, created_at)
+       SELECT c.id, o.id, 1, strftime('%s','now')
+       FROM customers c JOIN organizations o ON o.name = TRIM(c.company)
+       WHERE TRIM(c.company) <> ''",
 ];
+
+/// Stage vocabulary for the person-level nurture pipeline (`customers.sale_stage`).
+/// Distinct from `deals.stage`, which tracks one opportunity — a contact can sit
+/// at `qualified` while carrying both a won and a lost deal.
+pub const SALE_STAGES: &[&str] = &[
+    "new_lead",
+    "engaged",
+    "qualified",
+    "consult_scheduled",
+    "consult_done",
+    "closed_won",
+    "churned",
+];
+
+pub const TEMPERATURES: &[&str] = &["cold", "warm", "hot", "churned"];
+
+/// Connected-account kinds the channel layer knows how to drive.
+pub const CHANNEL_KINDS: &[&str] = &["telegram", "zalo", "facebook", "tiktok", "websocket"];
+
+pub const ORG_KINDS: &[&str] =
+    &["direct_customer", "affiliated_company", "partner", "supplier", "prospect"];
+
+pub const SERVICE_KINDS: &[&str] = &["service", "hardware"];
+
+pub const PRICING_MODELS: &[&str] = &["fixed", "hourly", "daily", "monthly", "yearly"];
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
@@ -421,14 +770,22 @@ impl Db {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Order matters: every table must exist before MIGRATIONS runs, because
+        // the tail of that list backfills `organizations` from `customers`.
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(SCHEMA_ORG)?;
+        conn.execute_batch(SCHEMA_INBOX)?;
+        conn.execute_batch(SCHEMA_SALE)?;
         for m in MIGRATIONS {
             let _ = conn.execute(m, []); // ignore "duplicate column" / column missing
         }
-        Ok(Self { conn: Mutex::new(conn) })
+        let db = Self { conn: Mutex::new(conn) };
+        db.seed_sales()?;
+        db.seed_charts(now_secs())?;
+        Ok(db)
     }
 
-    fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         let conn = self.conn.lock().unwrap();
         f(&conn)
     }
@@ -623,12 +980,33 @@ impl Db {
         Ok(())
     }
 
+    /// Hand-rolled cascade: the schema declares no foreign keys, so every child
+    /// table has to be listed here or it orphans. Deal line items go first —
+    /// they hang off `deals`, not off the customer, so deleting deals by
+    /// customer would strand them.
     pub fn delete_customer(&self, id: i64) -> Result<()> {
         self.with(|c| {
+            c.execute(
+                "DELETE FROM deal_services WHERE deal_id IN (SELECT id FROM deals WHERE customer_id=?1)",
+                params![id],
+            )?;
+            c.execute("DELETE FROM deals WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM tasks WHERE customer_id=?1", params![id])?;
             c.execute("DELETE FROM interactions WHERE customer_id=?1", params![id])?;
             c.execute("DELETE FROM relationships WHERE from_id=?1 OR to_id=?1", params![id])?;
             c.execute("DELETE FROM extracted_mentions WHERE source_customer_id=?1 OR resolved_customer_id=?1", params![id])?;
             c.execute("DELETE FROM customer_channels WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM customer_organizations WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM sale_reviews WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM sale_escalations WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM sale_actions WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM sequence_runs WHERE customer_id=?1", params![id])?;
+            c.execute("DELETE FROM followup_jobs WHERE customer_id=?1", params![id])?;
+            // Conversations survive as unlinked threads (customer_id=0) rather
+            // than vanishing: the transcript is still a record of what was said,
+            // and the channel may keep delivering to that external_id.
+            c.execute("UPDATE conversations SET customer_id=0 WHERE customer_id=?1", params![id])?;
+            c.execute("UPDATE conv_messages SET customer_id=0 WHERE customer_id=?1", params![id])?;
             c.execute("DELETE FROM search_index WHERE customer_id=?1", params![id])?;
             let n = c.execute("DELETE FROM customers WHERE id=?1", params![id])?;
             if n == 0 {
@@ -802,7 +1180,7 @@ impl Db {
 
     // ---- deals ----
 
-    fn row_to_deal(r: &rusqlite::Row) -> rusqlite::Result<Deal> {
+    pub(crate) fn row_to_deal(r: &rusqlite::Row) -> rusqlite::Result<Deal> {
         Ok(Deal {
             id: r.get("id")?,
             customer_id: r.get("customer_id")?,
@@ -815,6 +1193,11 @@ impl Db {
             expected_close_at: r.get("expected_close_at")?,
             closed_at: r.get("closed_at")?,
             notes: r.get("notes")?,
+            organization_id: r.get("organization_id").unwrap_or(0),
+            // Only the queries that JOIN organizations select this; the rest get "".
+            organization_name: r.get::<_, String>("organization_name").unwrap_or_default(),
+            period_start: r.get("period_start").unwrap_or(None),
+            period_end: r.get("period_end").unwrap_or(None),
             created_at: r.get("created_at")?,
             updated_at: r.get("updated_at")?,
         })
@@ -835,12 +1218,28 @@ impl Db {
                 return Err(anyhow!("customer {} not found", d.customer_id));
             }
             let closed_at = if stage == "won" || stage == "lost" { Some(now) } else { None };
+            // Inherit the contact's primary organization when the caller didn't
+            // name one, so revenue-by-account works without every create site
+            // having to know about orgs.
+            let org_id = match d.organization_id {
+                Some(v) => v,
+                None => c
+                    .query_row(
+                        "SELECT organization_id FROM customer_organizations
+                         WHERE customer_id=?1 ORDER BY is_primary DESC, created_at LIMIT 1",
+                        params![d.customer_id],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0),
+            };
             c.execute(
-                "INSERT INTO deals(customer_id, title, amount, currency, stage, probability, expected_close_at, closed_at, notes, created_at, updated_at)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+                "INSERT INTO deals(customer_id, title, amount, currency, stage, probability, expected_close_at, closed_at, notes, organization_id, period_start, period_end, created_at, updated_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)",
                 params![
                     d.customer_id, d.title.trim(), d.amount, currency, stage, prob,
-                    d.expected_close_at, closed_at, d.notes, now,
+                    d.expected_close_at, closed_at, d.notes, org_id,
+                    d.period_start, d.period_end, now,
                 ],
             )?;
             c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![d.customer_id, now])?;
@@ -886,6 +1285,22 @@ impl Db {
             if let Some(v) = patch.notes.as_deref() {
                 c.execute("UPDATE deals SET notes=?2 WHERE id=?1", params![id, v])?;
             }
+            if let Some(v) = patch.organization_id {
+                if v != 0
+                    && c.query_row("SELECT 1 FROM organizations WHERE id=?1", params![v], |_| Ok(()))
+                        .optional()?
+                        .is_none()
+                {
+                    return Err(anyhow!("organization {v} not found"));
+                }
+                c.execute("UPDATE deals SET organization_id=?2 WHERE id=?1", params![id, v])?;
+            }
+            if let Some(v) = patch.period_start {
+                c.execute("UPDATE deals SET period_start=?2 WHERE id=?1", params![id, v])?;
+            }
+            if let Some(v) = patch.period_end {
+                c.execute("UPDATE deals SET period_end=?2 WHERE id=?1", params![id, v])?;
+            }
             c.execute("UPDATE deals SET updated_at=?2 WHERE id=?1", params![id, now])?;
             c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![cid, now])?;
             Ok(())
@@ -906,8 +1321,9 @@ impl Db {
     pub fn deals_of_customer(&self, customer_id: i64) -> Result<Vec<Deal>> {
         self.with(|c| {
             let mut stmt = c.prepare(
-                "SELECT d.*, c.name AS customer_name FROM deals d
+                "SELECT d.*, c.name AS customer_name, COALESCE(o.name, '') AS organization_name FROM deals d
                  JOIN customers c ON c.id = d.customer_id
+                 LEFT JOIN organizations o ON o.id = d.organization_id
                  WHERE d.customer_id = ?1
                  ORDER BY d.updated_at DESC",
             )?;
@@ -924,15 +1340,17 @@ impl Db {
         self.with(|c| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) = match stage {
                 Some(s) if !s.is_empty() => (
-                    "SELECT d.*, c.name AS customer_name FROM deals d
+                    "SELECT d.*, c.name AS customer_name, COALESCE(o.name, '') AS organization_name FROM deals d
                      JOIN customers c ON c.id = d.customer_id
+                     LEFT JOIN organizations o ON o.id = d.organization_id
                      WHERE d.stage = ?1 ORDER BY d.updated_at DESC"
                         .into(),
                     vec![Box::new(s.to_string())],
                 ),
                 _ => (
-                    "SELECT d.*, c.name AS customer_name FROM deals d
+                    "SELECT d.*, c.name AS customer_name, COALESCE(o.name, '') AS organization_name FROM deals d
                      JOIN customers c ON c.id = d.customer_id
+                     LEFT JOIN organizations o ON o.id = d.organization_id
                      ORDER BY d.updated_at DESC"
                         .into(),
                     vec![],
@@ -1191,8 +1609,9 @@ impl Db {
     pub fn top_open_deals(&self, limit: i64) -> Result<Vec<Deal>> {
         self.with(|c| {
             let mut stmt = c.prepare(
-                "SELECT d.*, c.name AS customer_name FROM deals d
+                "SELECT d.*, c.name AS customer_name, COALESCE(o.name, '') AS organization_name FROM deals d
                  JOIN customers c ON c.id = d.customer_id
+                 LEFT JOIN organizations o ON o.id = d.organization_id
                  WHERE d.stage NOT IN ('won','lost')
                  ORDER BY d.amount DESC LIMIT ?1",
             )?;
@@ -1347,7 +1766,7 @@ impl Db {
 
     /// Rebuild every FTS row for one customer. Idempotent — deletes previous
     /// entries for the customer first. Called on customer/interaction writes.
-    fn reindex_customer(&self, customer_id: i64) -> Result<()> {
+    pub(crate) fn reindex_customer(&self, customer_id: i64) -> Result<()> {
         self.with(|c| {
             // Wipe every row keyed to this customer (customer + interactions +
             // relationships + mentions). `customer_id` is UNINDEXED so we filter
@@ -1464,7 +1883,88 @@ impl Db {
         for id in ids {
             self.reindex_customer(id)?;
         }
-        Ok(n)
+        Ok(n + self.reindex_catalog()?)
+    }
+
+    /// Bootstrap the follow-up sequences and guardrail defaults on first open.
+    /// Every statement is INSERT OR IGNORE, so an operator who edits a keyword
+    /// list or deletes a sequence they don't want keeps their change across
+    /// restarts — this seeds, it does not reset.
+    fn seed_sales(&self) -> Result<()> {
+        let now = now_secs();
+        self.with(|c| {
+            let seq = |key: &str, name: &str, desc: &str, steps: &str| -> (String, String, String, String) {
+                (key.into(), name.into(), desc.into(), steps.into())
+            };
+            let sequences = [
+                seq(
+                    "welcome",
+                    "Chào mừng",
+                    "Chạm đầu tiên với lead mới: chào, trao giá trị, rồi mời tư vấn.",
+                    r#"[{"delay_hours":0,"intent":"welcome_and_value"},
+                       {"delay_hours":24,"intent":"share_value_content"},
+                       {"delay_hours":72,"intent":"soft_offer_consultation"}]"#,
+                ),
+                seq(
+                    "nurture",
+                    "Nuôi tệp",
+                    "Gia tăng giá trị và niềm tin cho khách đang có. Nhịp chậm, không chào bán.",
+                    r#"[{"delay_hours":0,"intent":"share_value_content"},
+                       {"delay_hours":168,"intent":"check_in_value"}]"#,
+                ),
+                seq(
+                    "re_engage",
+                    "Kéo lại khách im lặng",
+                    "Một chạm nhẹ khi khách im lặng quá lâu.",
+                    r#"[{"delay_hours":0,"intent":"re_engage_soft"}]"#,
+                ),
+                seq(
+                    "winback",
+                    "Winback",
+                    "Chạm cuối với khách đã nguội hẳn.",
+                    r#"[{"delay_hours":0,"intent":"winback_offer"}]"#,
+                ),
+            ];
+            for (key, name, desc, steps) in sequences {
+                c.execute(
+                    "INSERT OR IGNORE INTO sequences(key, name, description, steps_json, enabled, created_at)
+                     VALUES(?1,?2,?3,?4,1,?5)",
+                    params![key, name, desc, steps, now],
+                )?;
+            }
+            // Guardrail defaults. Vietnamese keyword lists, diacritics folded at
+            // match time — see guardrail::fold.
+            //
+            // Keep these lists NON-OVERLAPPING. The broadcast rule needs two
+            // distinct keywords before it holds a message, and matches are
+            // counted per keyword, not per span — so listing both "giá" and
+            // "báo giá" would make the single phrase "báo giá" count twice and
+            // trip a bar meant to require two separate concerns. "giá" already
+            // matches inside "báo giá" and "giảm giá" as a whole word, so the
+            // longer forms are redundant as well as harmful.
+            let settings = [
+                ("risky_keywords", "giá, chiết khấu, discount, hợp đồng, thanh toán, đặt cọc, cam kết"),
+                ("complaint_keywords", "khiếu nại, lừa đảo, hoàn tiền, refund, kiện, tệ, huỷ, cancel, thất vọng"),
+                ("max_messages_per_customer_24h", "3"),
+                ("brand_voice", ""),
+                // OFF by default, unlike the standalone AI Sale app it came from.
+                // There, enrolment hung off `sale_capture_lead` — an explicit
+                // sales act. Here the equivalent is `create_customer`, which is
+                // the everyday record-keeping call: the CRM assistant makes it
+                // whenever anyone is mentioned. Defaulting this on would mean
+                // adding a contact silently messages them. Operators opt in from
+                // Settings once they actually want the proactive motion.
+                ("auto_welcome", "0"),
+                ("language", "vi"),
+            ];
+            for (k, v) in settings {
+                c.execute(
+                    "INSERT OR IGNORE INTO settings(key, value) VALUES(?1,?2)",
+                    params![k, v],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     /// True if the search index is empty. Used on startup to lazily rebuild.
@@ -2538,5 +3038,62 @@ mod tests {
         let c = db.get_customer(id).unwrap().unwrap();
         assert_eq!(c.interaction_count, 2);
         assert_eq!(c.last_interaction_at, Some(200));
+    }
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+
+    /// Absent / null / value must stay three distinct instructions. Serde's stock
+    /// `Option<T>` impl folds `null` onto `None`, which would make "clear this
+    /// date" indistinguishable from "leave it alone" — and the clear would
+    /// silently no-op.
+    #[test]
+    fn deal_patch_distinguishes_absent_null_and_value() {
+        let absent: DealPatch = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert_eq!(absent.expected_close_at, None, "absent key must mean leave alone");
+
+        let cleared: DealPatch = serde_json::from_str(r#"{"expected_close_at":null}"#).unwrap();
+        assert_eq!(cleared.expected_close_at, Some(None), "explicit null must mean clear");
+
+        let set: DealPatch = serde_json::from_str(r#"{"expected_close_at":123}"#).unwrap();
+        assert_eq!(set.expected_close_at, Some(Some(123)), "a value must mean set");
+
+        // Same three-way contract on the project period.
+        let p: DealPatch =
+            serde_json::from_str(r#"{"period_start":null,"period_end":9}"#).unwrap();
+        assert_eq!(p.period_start, Some(None));
+        assert_eq!(p.period_end, Some(Some(9)));
+    }
+
+    /// End-to-end through the DB: a date that was set can actually be cleared.
+    #[test]
+    fn clearing_a_deal_date_actually_writes_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).unwrap();
+        let cid = db
+            .create_customer(&serde_json::from_value(serde_json::json!({"name":"A"})).unwrap(), 1)
+            .unwrap();
+        let did = db
+            .create_deal(
+                &serde_json::from_value(serde_json::json!({
+                    "customer_id": cid, "title": "D", "expected_close_at": 1_790_000_000i64
+                }))
+                .unwrap(),
+                1,
+            )
+            .unwrap();
+        let close = |d: &Db| d.list_deals(None).unwrap().into_iter().find(|x| x.id == did).unwrap().expected_close_at;
+        assert_eq!(close(&db), Some(1_790_000_000));
+
+        // Absent key leaves it alone.
+        db.update_deal(did, &serde_json::from_str(r#"{"title":"D2"}"#).unwrap(), 2).unwrap();
+        assert_eq!(close(&db), Some(1_790_000_000));
+
+        // Explicit null clears it.
+        db.update_deal(did, &serde_json::from_str(r#"{"expected_close_at":null}"#).unwrap(), 3)
+            .unwrap();
+        assert_eq!(close(&db), None, "explicit null must clear the stored date");
     }
 }

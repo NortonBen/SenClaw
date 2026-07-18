@@ -1,0 +1,68 @@
+{
+  "id": "ai-chat",
+  "name": "AI Chat",
+  "description": "Nền tảng chatbot CSKH nhiều bot: mỗi bot có system prompt, kiến thức riêng (dùng lại knowledge của SenClaw), và CHÍNH SÁCH BẢO MẬT riêng — chỉ được truy cập đúng các MCP/skill cho phép trong cài đặt. Hỗ trợ kênh Telegram (polling) + Web (WebSocket) + Zalo OA + Facebook Messenger (đều polling, không webhook) và TikTok Shop IM (thử nghiệm). Là module chat hỗ trợ của AI Office: hội thoại có thể bàn giao (handoff) cho nhân sự/agent của văn phòng.",
+  "icon": "💬",
+  "runtime": {
+    "kind": "server",
+    "start": "./ai-chat",
+    "healthPath": "/api/status",
+    "port": 4440
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request", "agent.run", "knowledge.save", "knowledge.recall", "knowledge.search"]
+  },
+  "mcp": {
+    "name": "ai-chat-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Điều hành nền tảng AI Chat: liệt kê/tạo/cấu hình bot kèm allowlist MCP+skill (chat_list_bots, chat_create_bot, chat_update_bot), xem hội thoại (chat_list_sessions, chat_get_session), gửi tin cho khách qua đúng kênh (chat_send), bàn giao người thật (chat_handoff) và thống kê (chat_stats). Mỗi bot có knowledge space riêng ai-chat:<key> và chỉ dùng đúng MCP/skill trong allowlist.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "ai-chat-manage",
+      "path": "skills/ai-chat-manage",
+      "triggers": [
+        "tạo chatbot",
+        "cấu hình bot chăm sóc khách hàng",
+        "quản lý bot cskh",
+        "phân quyền mcp cho bot",
+        "giới hạn skill của bot",
+        "create a chatbot",
+        "configure support bot",
+        "set bot tool policy"
+      ]
+    },
+    {
+      "name": "ai-chat-inbox",
+      "path": "skills/ai-chat-inbox",
+      "triggers": [
+        "xem hộp thư hỗ trợ",
+        "hội thoại đang chờ nhân viên",
+        "trả lời khách trong hội thoại",
+        "nhận bàn giao chăm sóc khách hàng",
+        "support inbox",
+        "reply to a customer chat",
+        "take over a handoff"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "chat-support-agent",
+      "path": "personas/chat-support-agent.md",
+      "description": "Trợ lý CSKH — trả lời khách ngắn gọn, chính xác, dựa trên kiến thức của bot; đề nghị bàn giao người thật khi vượt khả năng."
+    },
+    {
+      "name": "chat-supervisor",
+      "path": "personas/chat-supervisor.md",
+      "description": "Giám sát CSKH — theo dõi hộp thư, tiếp nhận hội thoại bàn giao, kiểm soát chất lượng và cấu hình chính sách bot."
+    }
+  ]
+}

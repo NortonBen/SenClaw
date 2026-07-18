@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
@@ -31,6 +32,10 @@ Future<void> main(List<String> args) async {
           defaultTargetPlatform == TargetPlatform.linux)) {
     await windowManager.ensureInitialized();
     await localNotifier.setup(appName: 'SenClaw');
+    // macOS hotkeys are registered with Carbon, which outlives a hot restart —
+    // without this, a stale registration from the previous run keeps the combo
+    // and the fresh one silently fails to bind.
+    await hotKeyManager.unregisterAll();
     const opts = WindowOptions(
       size: Size(1280, 820),
       minimumSize: Size(900, 600),

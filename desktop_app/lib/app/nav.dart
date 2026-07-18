@@ -17,5 +17,16 @@ const navSections = <NavSection>[
   NavSection('/calendar', 'Calendar', Icons.calendar_month_outlined),
   NavSection('/wiki', 'Wiki', Icons.menu_book_outlined),
   NavSection('/plugins', 'Plugins', Icons.extension_outlined),
+  // Autonomous work the daemon runs by itself. Sits with Plugins/Settings at the
+  // bottom rather than up with Calendar: it is something you check on, not
+  // something you work in. It is NOT a Settings sub-section — a background task
+  // is live state, not configuration.
+  //
+  // Not a moon: Settings → Appearance already uses `dark_mode_outlined` (moon)
+  // for the Dark theme, and this item sits right next to the Settings gear, so a
+  // moon here reads as a theme toggle. `brightness_auto_outlined` (the "A"
+  // badge) is taken by the System theme for the same reason — avoid that whole
+  // family.
+  NavSection('/background', 'Background', Icons.pending_actions),
   NavSection('/settings', 'Settings', Icons.settings_outlined),
 ];

@@ -59,6 +59,7 @@ final connectionBootstrapProvider = FutureProvider<void>((ref) async {
       final updated = current.copyWith(
         wsPort: (cfg['wsPort'] as num?)?.toInt(),
         wsToken: cfg['token'] as String?,
+        screenshotsDir: cfg['screenshotsDir'] as String?,
       );
       ref.read(appConfigProvider.notifier).state = updated;
       ref.read(wsClientProvider).updateConfig(updated);

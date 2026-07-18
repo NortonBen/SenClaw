@@ -5,7 +5,6 @@
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
-use chromiumoxide::cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams;
 use chromiumoxide::cdp::browser_protocol::target::CreateTargetParams;
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::{Browser, Page};
@@ -21,34 +20,40 @@ pub struct BrowserSession {
     browser: Browser,
     tabs: Mutex<Vec<Page>>,
     active: AtomicUsize,
-    ua: String,
+    identity: stealth::Identity,
 }
 
 impl BrowserSession {
     /// Wrap an already-launched browser + its first page.
     pub async fn new(browser: Browser, first: Page) -> Result<Self> {
-        let ua = stealth::user_agent();
+        // Read the browser's genuine identity *before* `prepare` installs any
+        // override — afterwards it would only report back what we told it.
+        let raw = stealth::probe(&first).await?;
+        let identity = stealth::correct(&raw);
+        if identity.corrected {
+            println!("mini-browser: headless build detected — presenting as {}", identity.ua);
+        }
+
         let s = Self {
             browser,
             tabs: Mutex::new(vec![first.clone()]),
             active: AtomicUsize::new(0),
-            ua,
+            identity,
         };
         s.prepare(&first).await?;
         Ok(s)
     }
 
-    /// Apply the stealth layer to a page: chromiumoxide's built-in patches +
-    /// our extra JS injected before any page script runs.
+    /// Pin the page's identity: a UA override carrying the browser's real
+    /// client-hint metadata plus a matching `Accept-Language`. That is the whole
+    /// layer — see `stealth.rs` for why there is no injected JS.
+    ///
+    /// The override is what keeps `Sec-CH-UA` alive. Setting a UA string without
+    /// `userAgentMetadata` (what chromiumoxide's `enable_stealth_mode` does)
+    /// silently disables client hints, and a Chrome that sends no `Sec-CH-UA` is
+    /// an instant tell — that alone was enough for Google to reject sign-in.
     async fn prepare(&self, page: &Page) -> Result<()> {
-        page.enable_stealth_mode_with_agent(&self.ua).await.ok();
-        page.execute(AddScriptToEvaluateOnNewDocumentParams {
-            source: stealth::STEALTH_JS.to_string(),
-            world_name: None,
-            include_command_line_api: None,
-            run_immediately: Some(true),
-        })
-        .await?;
+        page.execute(stealth::override_params(&self.identity)?).await?;
         Ok(())
     }
 

@@ -6,6 +6,7 @@ import 'package:window_manager/window_manager.dart';
 import '../core/config/app_config.dart';
 import '../core/transport/connection.dart';
 import '../core/transport/ws_client.dart';
+import '../core/update/update_provider.dart';
 import '../features/chat/notifications.dart' show NotificationsBell;
 import '../features/space/space_providers.dart';
 import '../features/space/space_screen.dart' show RunningAppsLayer;
@@ -28,6 +29,25 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final location = GoRouterState.of(context).uri.path;
+
+    // Announce a new release once per version, as a snackbar rather than a
+    // dialog: the app starts with the machine, and blocking the screen at boot
+    // over an optional update is rude.
+    ref.listen(updateProvider, (prev, next) {
+      if (prev?.manifest?.version == next.manifest?.version) return;
+      final n = ref.read(updateProvider.notifier);
+      if (!n.shouldAnnounce()) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text('SenClaw ${next.manifest!.version} is available.'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () => context.go('/settings'),
+        ),
+      ));
+    });
 
     final frame = Row(
       children: [
@@ -107,16 +127,54 @@ class _NavRail extends ConsumerWidget {
           const SizedBox(height: AppTokens.s4),
           const _ConnectionDot(),
           const SizedBox(height: AppTokens.s4),
-          Text(
-            'v$kAppVersion',
-            style: TextStyle(
-              color: c.textMuted,
-              fontSize: 9,
-              fontFamily: AppTokens.fontMono,
-            ),
-          ),
+          const _VersionLabel(),
           const SizedBox(height: AppTokens.s12),
         ],
+      ),
+    );
+  }
+}
+
+/// Version in the rail's footer, doubling as the update affordance: a dot
+/// appears when a newer release is out, and clicking opens Settings → Updates.
+/// This is the spot users already glance at to see what they are running.
+class _VersionLabel extends ConsumerWidget {
+  const _VersionLabel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final hasUpdate = ref.watch(updateProvider).hasUpdate;
+    final label = Text(
+      kIsDevBuild ? 'dev' : 'v$kAppVersion',
+      style: TextStyle(
+        color: hasUpdate ? c.accent : c.textMuted,
+        fontSize: 9,
+        fontFamily: AppTokens.fontMono,
+      ),
+    );
+
+    if (!hasUpdate) return label;
+
+    return Tooltip(
+      message: 'Update available',
+      child: InkWell(
+        onTap: () => context.go('/settings'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppTokens.s4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 5,
+                height: 5,
+                margin: const EdgeInsets.only(right: 3),
+                decoration: BoxDecoration(color: c.accent, shape: BoxShape.circle),
+              ),
+              label,
+            ],
+          ),
+        ),
       ),
     );
   }

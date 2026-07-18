@@ -27,16 +27,31 @@ import {
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  BookOutlined,
   CommentOutlined,
   DisconnectOutlined,
   EditOutlined,
+  FireOutlined,
   MessageOutlined,
   ReloadOutlined,
   RobotOutlined,
   SendOutlined,
+  SyncOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
-import type { Account, Activity, CachedPost, Draft, ModelConfig } from './api'
+import type {
+  Account,
+  Activity,
+  CachedPost,
+  Draft,
+  Integrations,
+  ModelConfig,
+  RecallResult,
+  Topic,
+  TrackedPost,
+  TrendingDigest,
+  TrendingRun,
+} from './api'
 import { api, fmtDateTime, fmtRelative, hueFromName } from './api'
 
 const { Title, Text, Paragraph } = Typography
@@ -169,6 +184,12 @@ export default function App() {
             ),
             children: <DraftsTab onChanged={reloadAccount} />,
           },
+          { key: 'trending', label: 'Xu hướng', children: <TrendingTab active={tab === 'trending'} account={account} /> },
+          {
+            key: 'myposts',
+            label: 'Bài của tôi',
+            children: <MyPostsTab active={tab === 'myposts'} account={account} onChanged={reloadAccount} />,
+          },
           { key: 'activity', label: 'Nhật ký', children: <ActivityTab active={tab === 'activity'} /> },
           {
             key: 'settings',
@@ -223,6 +244,18 @@ function FeedTab({ account, onChanged }: { account: Account | null; onChanged: (
     try {
       afterAction(await api.vote(p.post_id, dir, p.title))
     } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const archive = async (p: CachedPost) => {
+    const hide = message.loading('Đang lưu vào kho thông tin…', 0)
+    try {
+      const r = await api.wikiArchive(p.post_id)
+      hide()
+      message.success(`Đã lưu vào wiki: ${r.path}`)
+    } catch (e) {
+      hide()
       message.error((e as Error).message)
     }
   }
@@ -306,6 +339,17 @@ function FeedTab({ account, onChanged }: { account: Account | null; onChanged: (
                       <Button size="small" type="text" icon={<MessageOutlined />} onClick={() => setReplyFor(p)}>
                         Trả lời
                       </Button>
+                      <Tooltip title="Lưu bài + thảo luận vào wiki (kho thông tin)">
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<BookOutlined />}
+                          onClick={() => archive(p)}
+                          disabled={!account?.connected}
+                        >
+                          Lưu vào wiki
+                        </Button>
+                      </Tooltip>
                     </Space>
                   </div>
                 </Flex>
@@ -625,6 +669,303 @@ function StatusTag({ status }: { status: string }) {
   return <Tag color={m.color}>{m.label}</Tag>
 }
 
+// ---------------------------------------------------------------- Trending
+
+/// What the whole agent internet is talking about → a dated wiki briefing.
+function TrendingTab({ active, account }: { active: boolean; account: Account | null }) {
+  const [digests, setDigests] = useState<TrendingDigest[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [last, setLast] = useState<TrendingRun | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setDigests(await api.digests())
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    if (active) load()
+  }, [active, load])
+
+  const run = async () => {
+    setBusy(true)
+    const hide = message.loading('Đang quét feed và tổng hợp xu hướng…', 0)
+    try {
+      const r = await api.runTrending(true)
+      hide()
+      setLast(r)
+      if (r.ok) message.success(r.note || 'Đã tổng hợp.')
+      else message.warning(r.reason || 'Không tổng hợp được.')
+      load()
+    } catch (e) {
+      hide()
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <Flex justify="space-between" align="center" wrap gap={8} style={{ marginBottom: 12 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Quét feed hot + rising + top → gom thành chủ đề → ghi tài liệu vào wiki (mỗi ngày một bản)
+        </Text>
+        <Space>
+          <Button type="primary" icon={<FireOutlined />} loading={busy} onClick={run} disabled={!account?.connected}>
+            Tổng hợp xu hướng
+          </Button>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>
+            Làm mới
+          </Button>
+        </Space>
+      </Flex>
+
+      {last?.ok && last.topic_list && last.topic_list.length > 0 && (
+        <Card size="small" style={{ marginBottom: 12 }} title={`Vừa tổng hợp — ${last.day}`}>
+          {last.summary && <Paragraph style={{ marginBottom: 10 }}>{last.summary}</Paragraph>}
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {last.topic_list.map((t, i) => (
+              <div key={i}>
+                <Space size={6} wrap>
+                  <Text strong>{t.name}</Text>
+                  {t.relevant && <Tag color="gold">khớp chủ đề của bạn</Tag>}
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {t.post_count} bài
+                  </Text>
+                </Space>
+                {t.takeaway && (
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      → {t.takeaway}
+                    </Text>
+                  </div>
+                )}
+              </div>
+            ))}
+          </Space>
+          {last.wiki_path && (
+            <div style={{ marginTop: 10 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                📄 {last.wiki_path}
+              </Text>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Spin spinning={loading}>
+        {digests.length === 0 ? (
+          <Empty description="Chưa có bản tổng hợp nào — bấm “Tổng hợp xu hướng”" />
+        ) : (
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {digests.map((d) => (
+              <Card key={d.day} size="small">
+                <Space size={6} wrap style={{ marginBottom: 4 }}>
+                  <Tag color="volcano">{d.day}</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {d.topic_count} chủ đề · {d.post_count} bài
+                  </Text>
+                  {d.runs > 1 && (
+                    <Tooltip title={`Đã tổng hợp lại ${d.runs} lần trong ngày`}>
+                      <Tag style={{ fontSize: 10 }}>×{d.runs}</Tag>
+                    </Tooltip>
+                  )}
+                </Space>
+                {d.summary && (
+                  <Paragraph type="secondary" style={{ marginBottom: 6 }} ellipsis={{ rows: 3, expandable: true, symbol: 'thêm' }}>
+                    {d.summary}
+                  </Paragraph>
+                )}
+                {d.topics.length > 0 && (
+                  <Space size={4} wrap>
+                    {d.topics.map((t, i) => (
+                      <Tag key={i}>{t}</Tag>
+                    ))}
+                  </Space>
+                )}
+                {d.wiki_path && (
+                  <div style={{ marginTop: 6 }}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      📄 {d.wiki_path} · cập nhật {fmtRelative(d.updated_at)}
+                    </Text>
+                  </div>
+                )}
+              </Card>
+            ))}
+          </Space>
+        )}
+      </Spin>
+    </div>
+  )
+}
+
+// ------------------------------------------------------- My posts / feedback
+
+/// The feedback loop: our posts → what other agents said → the wiki doc.
+function MyPostsTab({ active, account, onChanged }: { active: boolean; account: Account | null; onChanged: () => void }) {
+  const [posts, setPosts] = useState<TrackedPost[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setPosts(await api.tracked())
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    if (active) load()
+  }, [active, load])
+
+  const run = async (postId?: string) => {
+    setBusy(postId || 'all')
+    const hide = message.loading(postId ? 'Đang cập nhật doc…' : 'Đang thu thập phản hồi…', 0)
+    try {
+      const r = await api.harvest(postId)
+      hide()
+      if (r.ok) message.success(r.note || 'Xong.')
+      else message.warning(r.reason || 'Không chạy được.')
+      load()
+      onChanged()
+    } catch (e) {
+      hide()
+      message.error((e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const staleCount = posts.filter((p) => p.doc_is_stale).length
+
+  return (
+    <div>
+      <Flex justify="space-between" align="center" wrap gap={8} style={{ marginBottom: 12 }}>
+        <Space wrap>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Bài molty đã đăng · thu thập bình luận của agent khác → tổng hợp → cập nhật doc wiki
+          </Text>
+          {staleCount > 0 && <Tag color="gold">{staleCount} doc cần cập nhật</Tag>}
+        </Space>
+        <Space>
+          <Button
+            type="primary"
+            icon={<SyncOutlined />}
+            loading={busy === 'all'}
+            onClick={() => run()}
+            disabled={!account?.connected}
+          >
+            Thu thập phản hồi
+          </Button>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>
+            Làm mới
+          </Button>
+        </Space>
+      </Flex>
+
+      <Spin spinning={loading}>
+        {posts.length === 0 ? (
+          <Empty description="Chưa có bài nào được theo dõi — bài molty đăng sẽ tự vào đây" />
+        ) : (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {posts.map((p) => (
+              <Card key={p.post_id} size="small">
+                <Flex justify="space-between" align="flex-start" gap={12} wrap>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Space size={6} wrap style={{ marginBottom: 4 }}>
+                      {p.submolt && <Tag color="volcano">m/{p.submolt}</Tag>}
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        ⬆ {p.last_score} · 💬 {p.last_comment_count}
+                      </Text>
+                      {p.doc_is_stale ? (
+                        <Tag color="gold">doc cần cập nhật</Tag>
+                      ) : p.last_synced_at ? (
+                        <Tag color="green">doc đã cập nhật</Tag>
+                      ) : null}
+                    </Space>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{p.title || p.post_id}</div>
+
+                    {p.synthesis ? (
+                      <Paragraph
+                        type="secondary"
+                        style={{ marginBottom: 6, whiteSpace: 'pre-wrap' }}
+                        ellipsis={{ rows: 4, expandable: true, symbol: 'xem thêm' }}
+                      >
+                        {p.synthesis}
+                      </Paragraph>
+                    ) : (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {p.last_comment_count > 0 ? 'Chưa tổng hợp — bấm “Cập nhật doc”.' : 'Chưa có bình luận nào.'}
+                      </Text>
+                    )}
+
+                    {p.last_error && (
+                      <div>
+                        <Text type="danger" style={{ fontSize: 12 }}>
+                          {p.last_error}
+                        </Text>
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: 4 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        đã kiểm tra {p.checks} lần
+                        {p.last_checked_at ? ` · lần cuối ${fmtRelative(p.last_checked_at)}` : ''}
+                        {p.last_synced_at ? ` · doc cập nhật ${fmtRelative(p.last_synced_at)}` : ''}
+                        {p.wiki_path ? ` · ${p.wiki_path}` : ''}
+                      </Text>
+                    </div>
+                  </div>
+
+                  <Space direction="vertical">
+                    <Button
+                      size="small"
+                      type={p.doc_is_stale ? 'primary' : 'default'}
+                      icon={<SyncOutlined />}
+                      loading={busy === p.post_id}
+                      onClick={() => run(p.post_id)}
+                      disabled={!account?.connected}
+                    >
+                      Cập nhật doc
+                    </Button>
+                    <Popconfirm
+                      title="Bỏ theo dõi bài này?"
+                      description="Chỉ ngừng thu thập phản hồi; bài trên Moltbook và doc wiki không bị xoá."
+                      okText="Bỏ theo dõi"
+                      cancelText="Huỷ"
+                      onConfirm={async () => {
+                        try {
+                          await api.untrackPost(p.post_id)
+                          load()
+                        } catch (e) {
+                          message.error((e as Error).message)
+                        }
+                      }}
+                    >
+                      <Button size="small" type="text" danger>
+                        Bỏ theo dõi
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </Flex>
+              </Card>
+            ))}
+          </Space>
+        )}
+      </Spin>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------- Activity
 
 function ActivityTab({ active }: { active: boolean }) {
@@ -688,7 +1029,9 @@ function SettingsTab({ account, onChanged }: { account: Account | null; onChange
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <ConnectionCard account={account} onChanged={onChanged} />
       <ParticipationCard account={account} onChanged={onChanged} />
-      <ModelCard />
+      <TopicsCard account={account} onChanged={onChanged} />
+      <IntegrationsCard account={account} onChanged={onChanged} />
+      <ProfileCard account={account} onChanged={onChanged} />
       <Alert
         type="warning"
         showIcon
@@ -906,6 +1249,8 @@ function ParticipationCard({ account, onChanged }: { account: Account; onChanged
   const [minutes, setMinutes] = useState(account.heartbeat_minutes)
   const [engage, setEngage] = useState(account.engage_limit)
   const [hb, setHb] = useState(account.heartbeat_enabled)
+  const [harvest, setHarvest] = useState(account.harvest_enabled)
+  const [trendingDaily, setTrendingDaily] = useState(account.trending_daily)
   const [busy, setBusy] = useState(false)
 
   const save = async () => {
@@ -917,6 +1262,8 @@ function ParticipationCard({ account, onChanged }: { account: Account; onChanged
         heartbeat_minutes: minutes,
         engage_limit: engage,
         heartbeat_enabled: hb,
+        harvest_enabled: harvest,
+        trending_daily: trendingDaily,
       })
       message.success('Đã lưu cài đặt tham gia.')
       onChanged()
@@ -928,7 +1275,7 @@ function ParticipationCard({ account, onChanged }: { account: Account; onChanged
   }
 
   return (
-    <Card title="Tham gia (kiểu OpenClaw)" size="small">
+    <Card title="Tham gia" size="small">
       <Form layout="vertical">
         <Form.Item label="Heartbeat tự động" help="Định kỳ đọc feed rồi soạn/đăng theo chế độ ở trên (Quan sát/Nháp/Tự động).">
           <Space>
@@ -943,6 +1290,18 @@ function ParticipationCard({ account, onChanged }: { account: Account; onChanged
         <Form.Item label="Submolt mặc định khi đăng bài">
           <Input addonBefore="m/" value={submolt} onChange={(e) => setSubmolt(e.target.value)} />
         </Form.Item>
+        <Form.Item
+          label="Tự thu thập phản hồi & cập nhật doc"
+          help="Mỗi lần heartbeat, đọc bình luận của các agent khác trên bài của bạn, tổng hợp lại và ghi lại doc wiki. Bỏ qua bài không có bình luận mới."
+        >
+          <Switch checked={harvest} onChange={setHarvest} />
+        </Form.Item>
+        <Form.Item
+          label="Tự tổng hợp xu hướng mỗi ngày"
+          help="Mỗi ngày một lần, quét feed và ghi tài liệu xu hướng vào wiki. Tốn thêm một lượt gọi LLM nên mặc định tắt."
+        >
+          <Switch checked={trendingDaily} onChange={setTrendingDaily} />
+        </Form.Item>
         <Form.Item label="Giọng / persona của molty" help="Được đưa vào prompt khi engine quyết định tương tác và soạn nội dung.">
           <Input.TextArea rows={4} value={voice} onChange={(e) => setVoice(e.target.value)} placeholder="Mặc định: một agent tò mò, điềm đạm, tham gia có chọn lọc…" />
         </Form.Item>
@@ -954,9 +1313,306 @@ function ParticipationCard({ account, onChanged }: { account: Account; onChanged
   )
 }
 
-function ModelCard() {
+const TOPIC_KINDS: Array<{ value: Topic['kind']; label: string; hint: string }> = [
+  { value: 'engage', label: 'Tương tác', hint: 'Chủ đề molty tìm & phản hồi trên feed' },
+  { value: 'post', label: 'Đăng / hỏi', hint: 'Điều bạn muốn molty đăng bài hoặc hỏi' },
+  { value: 'both', label: 'Cả hai', hint: 'Dùng cho cả tương tác lẫn đăng bài' },
+]
+
+/// Steer the molty: which subjects it engages with, and what you want it to
+/// post/ask about on Moltbook.
+function TopicsCard({ account, onChanged }: { account: Account; onChanged: () => void }) {
+  const [topics, setTopics] = useState<Topic[]>([])
+  const [loading, setLoading] = useState(false)
+  const [text, setText] = useState('')
+  const [kind, setKind] = useState<Topic['kind']>('both')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setTopics(await api.topics())
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const add = async () => {
+    if (!text.trim()) return
+    try {
+      await api.addTopic(text.trim(), kind)
+      setText('')
+      message.success('Đã thêm chủ đề.')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+  const patch = async (id: number, p: Partial<Pick<Topic, 'text' | 'kind' | 'enabled'>>) => {
+    try {
+      await api.patchTopic(id, p)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+  const remove = async (id: number) => {
+    try {
+      await api.deleteTopic(id)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+  const setMode = async (mode: string) => {
+    try {
+      await api.putSettings({ topic_mode: mode as Account['topic_mode'] })
+      onChanged()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const engageCount = topics.filter((t) => t.enabled && (t.kind === 'engage' || t.kind === 'both')).length
+  const focusBroken = account.topic_mode === 'focus' && engageCount === 0
+
+  return (
+    <Card title="Chủ đề & định hướng" size="small">
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <div>
+          <Text strong>Phạm vi tương tác</Text>
+          <div style={{ marginTop: 6 }}>
+            <Segmented
+              value={account.topic_mode}
+              onChange={(v) => setMode(String(v))}
+              options={[
+                { label: 'Toàn bộ feed', value: 'all' },
+                { label: 'Chỉ chủ đề đã chọn', value: 'focus' },
+              ]}
+            />
+          </div>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {account.topic_mode === 'focus'
+              ? 'Molty chỉ tương tác với bài liên quan các chủ đề “Tương tác” bên dưới, bỏ qua phần còn lại.'
+              : 'Molty đọc cả feed; chủ đề bên dưới chỉ dùng để ưu tiên.'}
+          </Text>
+        </div>
+
+        {focusBroken && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Chưa có chủ đề “Tương tác” nào"
+            description="Đang ở chế độ “Chỉ chủ đề đã chọn” nhưng danh sách trống — molty sẽ KHÔNG tương tác gì. Thêm một chủ đề, hoặc chuyển về “Toàn bộ feed”."
+          />
+        )}
+
+        <div>
+          <Text strong>Danh sách chủ đề</Text>
+          <Space.Compact style={{ width: '100%', marginTop: 6 }}>
+            <Select
+              value={kind}
+              onChange={setKind}
+              style={{ width: 130 }}
+              options={TOPIC_KINDS.map((k) => ({ value: k.value, label: k.label }))}
+            />
+            <Input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onPressEnter={add}
+              placeholder={
+                kind === 'post'
+                  ? 'VD: Hỏi các molty khác cách xử lý rate limit'
+                  : 'VD: trí nhớ của agent, MCP, xây dựng công khai'
+              }
+            />
+            <Button type="primary" onClick={add} disabled={!text.trim()}>
+              Thêm
+            </Button>
+          </Space.Compact>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {TOPIC_KINDS.find((k) => k.value === kind)?.hint}
+          </Text>
+        </div>
+
+        <Spin spinning={loading}>
+          {topics.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="Chưa có chủ đề — molty tự do chọn theo persona"
+            />
+          ) : (
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              {topics.map((t) => (
+                <Flex key={t.id} align="center" gap={8} style={{ opacity: t.enabled ? 1 : 0.45 }}>
+                  <Switch size="small" checked={t.enabled} onChange={(v) => patch(t.id, { enabled: v })} />
+                  <Select
+                    size="small"
+                    value={t.kind}
+                    style={{ width: 110 }}
+                    onChange={(v) => patch(t.id, { kind: v })}
+                    options={TOPIC_KINDS.map((k) => ({ value: k.value, label: k.label }))}
+                  />
+                  <Text style={{ flex: 1, minWidth: 0 }} ellipsis={{ tooltip: t.text }}>
+                    {t.text}
+                  </Text>
+                  {t.used_at ? (
+                    <Tooltip title={`Đã dùng để đăng bài ${fmtRelative(t.used_at)}`}>
+                      <Tag style={{ fontSize: 10 }}>đã dùng</Tag>
+                    </Tooltip>
+                  ) : null}
+                  <Popconfirm title="Xoá chủ đề này?" okText="Xoá" cancelText="Huỷ" onConfirm={() => remove(t.id)}>
+                    <Button size="small" type="text" danger>
+                      Xoá
+                    </Button>
+                  </Popconfirm>
+                </Flex>
+              ))}
+            </Space>
+          )}
+        </Spin>
+
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Cũng thêm/sửa được qua MCP: <Text code>moltbook_add_topic</Text>, <Text code>moltbook_list_topics</Text>,{' '}
+          <Text code>moltbook_set_topic_mode</Text>.
+        </Text>
+      </Space>
+    </Card>
+  )
+}
+
+/// knowledge = trí nhớ của molty · wiki = kho thông tin chung của Sếp.
+function IntegrationsCard({ account, onChanged }: { account: Account; onChanged: () => void }) {
+  const [status, setStatus] = useState<Integrations | null>(null)
+  const [space, setSpace] = useState(account.knowledge_space)
+  const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  const [recall, setRecall] = useState<RecallResult | null>(null)
+
+  const loadStatus = useCallback(async () => {
+    try {
+      setStatus(await api.integrations())
+    } catch {
+      setStatus(null)
+    }
+  }, [])
+  useEffect(() => {
+    loadStatus()
+  }, [loadStatus])
+
+  const patch = async (p: Partial<Account>) => {
+    try {
+      await api.putSettings(p)
+      onChanged()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const doRecall = async () => {
+    if (!q.trim()) return
+    setBusy(true)
+    try {
+      setRecall(await api.memoryRecall(q.trim()))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card
+      title="Kết nối SenClaw — Trí nhớ & Kho thông tin"
+      size="small"
+      extra={
+        <Space size={4}>
+          <Tag color={status?.knowledge.available ? 'green' : 'default'}>
+            trí nhớ {status?.knowledge.available ? 'ok' : 'chưa sẵn sàng'}
+          </Tag>
+          <Tag color={status?.wiki.available ? 'green' : 'default'}>
+            wiki {status?.wiki.available ? 'ok' : 'chưa sẵn sàng'}
+          </Tag>
+          <Button size="small" type="text" icon={<ReloadOutlined />} onClick={loadStatus} />
+        </Space>
+      }
+    >
+      <Form layout="vertical">
+        <Form.Item
+          label="Trí nhớ (knowledge space)"
+          help="Molty tự nhớ mọi thứ nó ĐÃ ĐĂNG, và nhớ lại trước khi soạn — để không lặp lại và giữ nhất quán giữa các lần heartbeat."
+        >
+          <Space wrap>
+            <Switch checked={account.memory_enabled} onChange={(v) => patch({ memory_enabled: v })} />
+            <Input
+              addonBefore="space"
+              style={{ width: 240 }}
+              value={space}
+              onChange={(e) => setSpace(e.target.value)}
+              onBlur={() => space.trim() !== account.knowledge_space && patch({ knowledge_space: space.trim() })}
+            />
+          </Space>
+        </Form.Item>
+
+        <Form.Item
+          label="Kho thông tin (wiki)"
+          help="Trước khi soạn bài/trả lời, molty tra wiki của Sếp và nói DỰA TRÊN tài liệu thật thay vì bịa."
+        >
+          <Switch checked={account.wiki_enabled} onChange={(v) => patch({ wiki_enabled: v })} />
+        </Form.Item>
+
+        <Form.Item label="Tự lưu bài đã đăng vào wiki" help="Mỗi bài molty đăng lên Moltbook sẽ được lưu một bản vào moltbook/posts/ trong wiki.">
+          <Switch
+            checked={account.wiki_archive}
+            disabled={!account.wiki_enabled}
+            onChange={(v) => patch({ wiki_archive: v })}
+          />
+        </Form.Item>
+
+        <Form.Item label="Thử trí nhớ" help="Hỏi xem molty còn nhớ gì (ví dụ: 'tôi đã nói gì về submolt existential').">
+          <Space.Compact style={{ width: '100%' }}>
+            <Input value={q} onChange={(e) => setQ(e.target.value)} onPressEnter={doRecall} placeholder="molty nhớ gì về…" />
+            <Button loading={busy} onClick={doRecall} disabled={!q.trim()}>
+              Nhớ lại
+            </Button>
+          </Space.Compact>
+        </Form.Item>
+      </Form>
+
+      {recall && (
+        <Alert
+          type={recall.grounded ? 'success' : 'info'}
+          message={recall.grounded ? `Trí nhớ (${recall.space})` : 'Chưa có gì trong trí nhớ về việc này'}
+          description={
+            recall.grounded ? (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Text>{recall.answer}</Text>
+                {recall.hits.length > 0 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {recall.hits.length} mẩu ký ức: {recall.hits.map((h) => h.name).filter(Boolean).join(' · ')}
+                  </Text>
+                )}
+              </Space>
+            ) : (
+              'Molty sẽ nhớ dần sau mỗi bài/bình luận được duyệt đăng.'
+            )
+          }
+        />
+      )}
+    </Card>
+  )
+}
+
+/// Pick WHICH SenClaw LLM profile this app composes with. Local to Moltbook —
+/// it never changes the daemon's active model (that would hijack every other
+/// app/chat). "" = follow whatever the daemon has active.
+function ProfileCard({ account, onChanged }: { account: Account; onChanged: () => void }) {
   const [models, setModels] = useState<ModelConfig[]>([])
-  const [active, setActive] = useState<string | undefined>(undefined)
+  const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
@@ -964,7 +1620,7 @@ function ModelCard() {
     try {
       const r = await api.models()
       setModels(r.configs || [])
-      setActive(r.activeId || undefined)
+      setActiveId(r.activeId || undefined)
     } catch {
       /* daemon may be offline — non-fatal */
     } finally {
@@ -975,32 +1631,87 @@ function ModelCard() {
     load()
   }, [load])
 
+  const nameOf = (m: ModelConfig) => m.label?.trim() || m.modelName || m.id
+  const activeLabel = useMemo(() => {
+    const m = models.find((x) => x.id === activeId)
+    return m ? nameOf(m) : null
+  }, [models, activeId])
+
   const options = useMemo(
-    () => models.map((m) => ({ value: m.id, label: `${m.modelName || m.id}${m.provider || m.adapt ? ` · ${m.provider || m.adapt}` : ''}` })),
-    [models],
+    () => [
+      {
+        value: '',
+        label: `Theo daemon${activeLabel ? ` — hiện tại: ${activeLabel}` : ''}`,
+      },
+      ...models.map((m) => ({
+        value: m.id,
+        label: (
+          <span>
+            {nameOf(m)}
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {' '}
+              · {m.modelName || m.id}
+              {m.provider || m.adapt ? ` · ${m.provider || m.adapt}` : ''}
+            </Text>
+            {m.id === activeId ? (
+              <Tag color="blue" style={{ marginLeft: 6, fontSize: 10 }}>
+                active
+              </Tag>
+            ) : null}
+          </span>
+        ),
+      })),
+    ],
+    [models, activeId, activeLabel],
   )
 
+  // The stored value may be an id OR a label (both resolve daemon-side); map a
+  // stored label back onto its id so the Select highlights the right row.
+  const selected = useMemo(() => {
+    const v = account.llm_profile || ''
+    if (!v) return ''
+    if (models.some((m) => m.id === v)) return v
+    const byLabel = models.find((m) => (m.label || '').toLowerCase() === v.toLowerCase())
+    return byLabel ? byLabel.id : v
+  }, [account.llm_profile, models])
+
+  const choose = async (id: string) => {
+    try {
+      await api.putSettings({ llm_profile: id })
+      message.success(id ? `Moltbook sẽ soạn bằng profile: ${nameOf(models.find((m) => m.id === id) || { id })}` : 'Đã chuyển về model active của daemon.')
+      onChanged()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   return (
-    <Card title="Mô hình LLM (dùng để soạn nội dung)" size="small">
-      <Space>
-        <Select
-          style={{ minWidth: 280 }}
-          loading={loading}
-          value={active}
-          options={options}
-          placeholder="Chọn model của daemon"
-          onChange={async (id) => {
-            try {
-              await api.setModel(id)
-              setActive(id)
-              message.success('Đã đổi model.')
-            } catch (e) {
-              message.error((e as Error).message)
-            }
-          }}
-          notFoundContent={loading ? <Spin size="small" /> : 'Daemon chưa cấu hình model'}
-        />
-        <Button icon={<ReloadOutlined />} onClick={load} />
+    <Card title="Profile LLM của Moltbook (dùng để soạn nội dung)" size="small">
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Space wrap>
+          <Select
+            style={{ minWidth: 340 }}
+            loading={loading}
+            value={selected}
+            options={options}
+            placeholder="Chọn profile"
+            onChange={choose}
+            notFoundContent={loading ? <Spin size="small" /> : 'Daemon chưa cấu hình profile nào'}
+          />
+          <Button icon={<ReloadOutlined />} onClick={load} />
+        </Space>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Chỉ áp dụng cho Moltbook — <b>không</b> đổi model active của daemon. Profile lấy từ SenClaw
+          Settings → Models (tên profile là nhãn, ví dụ <Text code>MoltClaw</Text>).
+        </Text>
+        {account.llm_profile && !models.some((m) => m.id === selected) && (
+          <Alert
+            type="warning"
+            showIcon
+            message={`Không tìm thấy profile "${account.llm_profile}"`}
+            description="Profile có thể đã bị đổi tên hoặc xoá. Chọn lại một profile bên dưới, nếu không việc soạn nội dung sẽ báo lỗi."
+          />
+        )}
       </Space>
     </Card>
   )

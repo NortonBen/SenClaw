@@ -221,19 +221,44 @@ pub(crate) async fn llm_config_fetch_models(
 /// Returns `(text, model, finish_reason)`. `finish_reason` is `"length"`
 /// when the provider cut the output at the token cap (callers can continue),
 /// `"stop"` on natural completion, `""` when the provider didn't say.
+/// Resolve which LLM profile a completion should run on.
+///
+/// An explicit `profile` (config **id** or its human **label**, e.g. "MoltClaw")
+/// wins — this is how a Space App uses its own model *without* hijacking the
+/// daemon's global active model. With no profile we fall back to the active
+/// config, then to the first one configured.
+///
+/// An explicitly-requested-but-missing profile is an error rather than a silent
+/// fallback: quietly answering on the wrong model is worse than saying so.
+fn pick_config<'a>(
+    configs: &'a [LlmConfig],
+    active_id: Option<&str>,
+    profile: Option<&str>,
+) -> Result<&'a LlmConfig, String> {
+    if let Some(want) = profile.map(str::trim).filter(|s| !s.is_empty()) {
+        return configs
+            .iter()
+            .find(|c| c.id == want)
+            .or_else(|| configs.iter().find(|c| c.label.eq_ignore_ascii_case(want)))
+            .ok_or_else(|| format!("LLM profile '{want}' not found in SenClaw (Settings → Models)"));
+    }
+    active_id
+        .and_then(|id| configs.iter().find(|c| c.id == id))
+        .or_else(|| configs.first())
+        .ok_or_else(|| "No LLM configured in SenClaw (Settings → Models)".to_string())
+}
+
+/// One-shot completion. `profile` selects a specific LLM config by id or label;
+/// `None` uses the daemon's active model.
 pub(crate) async fn chat_completion(
     config_path: &std::path::Path,
+    profile: Option<&str>,
     system: &str,
     user: &str,
     max_tokens: u32,
 ) -> Result<(String, String, String), String> {
     let stored = load_llm_configs(config_path);
-    let cfg = stored
-        .active_id
-        .as_ref()
-        .and_then(|id| stored.configs.iter().find(|c| &c.id == id))
-        .or_else(|| stored.configs.first())
-        .ok_or_else(|| "No LLM configured in SenClaw (Settings → Models)".to_string())?;
+    let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
 
     let client = reqwest::Client::new();
     let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
@@ -317,6 +342,117 @@ pub(crate) async fn chat_completion(
     Ok((answer, cfg.model_name.clone(), finish))
 }
 
+/// Model name of the config a completion would run on, for capability checks
+/// (e.g. does the active model support vision?). Same resolution as
+/// [`chat_completion`], so the answer matches what a completion would actually
+/// use.
+pub(crate) fn active_model_name(
+    config_path: &std::path::Path,
+    profile: Option<&str>,
+) -> Result<String, String> {
+    let stored = load_llm_configs(config_path);
+    let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
+    Ok(cfg.model_name.clone())
+}
+
+/// One-shot completion WITH an image, for vision models. Mirrors
+/// [`chat_completion`] but the user turn carries an image part beside the text.
+///
+/// The image travels as base64, never a URL: our screenshots are served from
+/// localhost, which a cloud LLM can't reach. `media_type` is a MIME like
+/// `image/png`.
+pub(crate) async fn chat_completion_vision(
+    config_path: &std::path::Path,
+    profile: Option<&str>,
+    system: &str,
+    user: &str,
+    image_b64: &str,
+    media_type: &str,
+    max_tokens: u32,
+) -> Result<(String, String, String), String> {
+    let stored = load_llm_configs(config_path);
+    let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
+
+    let client = reqwest::Client::new();
+    let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
+    let cap = if max_tokens == 0 { cfg.max_tokens.max(256) } else { max_tokens };
+
+    let (url, body, req) = if is_anthropic {
+        let base = cfg.base_url.trim_end_matches('/').trim_end_matches("/v1");
+        let url = format!("{base}/v1/messages");
+        let body = serde_json::json!({
+            "model": cfg.model_name,
+            "max_tokens": cap,
+            "system": system,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": user },
+                    { "type": "image", "source": {
+                        "type": "base64", "media_type": media_type, "data": image_b64,
+                    }},
+                ],
+            }],
+        });
+        let req = client
+            .post(&url)
+            .header("x-api-key", &cfg.api_key)
+            .header("anthropic-version", "2023-06-01");
+        (url, body, req)
+    } else {
+        let base = cfg
+            .base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions");
+        let url = format!("{base}/chat/completions");
+        let data_url = format!("data:{media_type};base64,{image_b64}");
+        let body = serde_json::json!({
+            "model": cfg.model_name,
+            "max_tokens": cap,
+            "temperature": 0.2,
+            "stream": false,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": [
+                    { "type": "text", "text": user },
+                    { "type": "image_url", "image_url": { "url": data_url } },
+                ]},
+            ],
+        });
+        let req = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", cfg.api_key));
+        (url, body, req)
+    };
+
+    let resp = req
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("LLM request to {url} failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("Read error: {e}"))?;
+    if !status.is_success() {
+        let preview: String = text.chars().take(300).collect();
+        return Err(format!("LLM HTTP {status}: {preview}"));
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Invalid JSON: {e}"))?;
+    let answer = if is_anthropic {
+        json["content"][0]["text"].as_str().unwrap_or("").to_string()
+    } else {
+        json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    if answer.trim().is_empty() {
+        return Err("LLM returned an empty response".into());
+    }
+    Ok((answer, cfg.model_name.clone(), String::new()))
+}
+
 /// Fetch model list from a provider's /models endpoint.
 async fn fetch_models(base_url: &str, api_key: &str, adapt: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();
@@ -369,4 +505,61 @@ async fn fetch_models(base_url: &str, api_key: &str, adapt: &str) -> Result<Vec<
         .unwrap_or_default();
 
     Ok(list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(id: &str, label: &str) -> LlmConfig {
+        LlmConfig {
+            id: id.into(),
+            label: label.into(),
+            provider: "custom".into(),
+            base_url: "https://example.test/v1".into(),
+            api_key: "k".into(),
+            model_name: format!("model-of-{label}"),
+            adapt: "openai".into(),
+            max_tokens: 1024,
+            context_length: 8192,
+            vision: None,
+        }
+    }
+
+    #[test]
+    fn explicit_profile_wins_by_id_or_label() {
+        let configs = vec![cfg("llm_1", "Main"), cfg("llm_2", "MoltClaw")];
+        // by id
+        assert_eq!(pick_config(&configs, Some("llm_1"), Some("llm_2")).unwrap().label, "MoltClaw");
+        // by label, case-insensitive
+        assert_eq!(pick_config(&configs, Some("llm_1"), Some("moltclaw")).unwrap().id, "llm_2");
+    }
+
+    #[test]
+    fn no_profile_falls_back_to_active_then_first() {
+        let configs = vec![cfg("llm_1", "Main"), cfg("llm_2", "MoltClaw")];
+        assert_eq!(pick_config(&configs, Some("llm_2"), None).unwrap().label, "MoltClaw");
+        // unknown active → first
+        assert_eq!(pick_config(&configs, Some("gone"), None).unwrap().id, "llm_1");
+        // no active → first
+        assert_eq!(pick_config(&configs, None, None).unwrap().id, "llm_1");
+    }
+
+    #[test]
+    fn blank_profile_is_treated_as_unset() {
+        let configs = vec![cfg("llm_1", "Main"), cfg("llm_2", "MoltClaw")];
+        assert_eq!(pick_config(&configs, Some("llm_2"), Some("   ")).unwrap().label, "MoltClaw");
+    }
+
+    #[test]
+    fn missing_profile_errors_rather_than_silently_using_the_wrong_model() {
+        let configs = vec![cfg("llm_1", "Main")];
+        let err = pick_config(&configs, Some("llm_1"), Some("MoltClaw")).unwrap_err();
+        assert!(err.contains("MoltClaw"), "error should name the missing profile: {err}");
+    }
+
+    #[test]
+    fn empty_config_list_errors() {
+        assert!(pick_config(&[], None, None).is_err());
+    }
 }

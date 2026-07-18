@@ -4,10 +4,12 @@ import 'package:intl/intl.dart';
 import '../../core/transport/connection.dart';
 import '../../models/space_models.dart';
 import '../../theme/tokens.dart';
-import '../../widgets/app_markdown.dart';
+import '../../widgets/note_body.dart';
 import '../../widgets/embedded_web.dart';
 import '../../widgets/schedule_editor.dart';
 import '../../widgets/section_scaffold.dart';
+import 'note_inline_editor.dart';
+import 'note_tags.dart';
 import 'space_providers.dart';
 
 /// The host theme as the Space-app bridge string ('dark' | 'light'). Passed to
@@ -55,11 +57,21 @@ class _NotesTab extends ConsumerStatefulWidget {
 class _NotesTabState extends ConsumerState<_NotesTab> {
   String? _selectedId;
   String _query = '';
+  String? _tagFilter;
+
+  bool _matches(SpaceNote n) {
+    if (_tagFilter != null && !n.tags.contains(_tagFilter)) return false;
+    if (_query.isEmpty) return true;
+    return n.title.toLowerCase().contains(_query) ||
+        n.body.toLowerCase().contains(_query) ||
+        n.tags.any((t) => t.toLowerCase().contains(_query));
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final notesAsync = ref.watch(notesProvider);
+    final allNotes = notesAsync.valueOrNull ?? const <SpaceNote>[];
 
     return Row(
       children: [
@@ -91,23 +103,21 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
                     ],
                   ),
                 ),
+                _tagFilterBar(allNotes),
                 Expanded(
                   child: notesAsync.when(
                     loading: () => const Center(child: CircularProgressIndicator()),
                     error: (e, _) => Center(child: Text('$e')),
                     data: (notes) {
-                      final filtered = (_query.isEmpty
-                          ? [...notes]
-                          : notes
-                              .where((n) =>
-                                  n.title.toLowerCase().contains(_query) ||
-                                  n.body.toLowerCase().contains(_query))
-                              .toList())
+                      final filtered = notes.where(_matches).toList()
                         ..sort((a, b) =>
                             (b.pinned ? 1 : 0).compareTo(a.pinned ? 1 : 0));
                       if (filtered.isEmpty) {
                         return Center(
-                          child: Text('No notes',
+                          child: Text(
+                              _tagFilter != null
+                                  ? 'No notes tagged #$_tagFilter'
+                                  : 'No notes',
                               style: TextStyle(color: c.textMuted)),
                         );
                       }
@@ -173,18 +183,56 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
               }
               return _NoteView(
                 note: note,
-                onPin: () => ref.read(spaceApiProvider).togglePin(note),
-                onEdit: () => _editNote(context, ref, note),
+                onPin: () =>
+                    ref.read(spaceApiProvider).setPinned(note.id, !note.pinned),
                 onDelete: () async {
                   await ref.read(spaceApiProvider).deleteNote(note.id);
                   setState(() => _selectedId = null);
                 },
+                onSave: (title, body, tags) => ref
+                    .read(spaceApiProvider)
+                    .updateNote(note.id, title, body, tags),
+                onTagTap: (t) => setState(
+                    () => _tagFilter = _tagFilter == t ? null : t),
               );
             },
             orElse: () => const SizedBox.shrink(),
           ),
         ),
       ],
+    );
+  }
+
+  /// Horizontal, scrollable "All / #tag" chips derived from every note's tags.
+  /// Clicking one filters the list; clicking the active one clears it.
+  Widget _tagFilterBar(List<SpaceNote> notes) {
+    final tags = <String>{};
+    for (final n in notes) {
+      tags.addAll(n.tags);
+    }
+    if (tags.isEmpty) return const SizedBox.shrink();
+    final sorted = tags.toList()..sort();
+    return SizedBox(
+      height: 34,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(
+            AppTokens.s12, 0, AppTokens.s12, AppTokens.s4),
+        children: [
+          _FilterChip(
+              label: 'All',
+              active: _tagFilter == null,
+              onTap: () => setState(() => _tagFilter = null)),
+          for (final t in sorted) ...[
+            const SizedBox(width: 6),
+            _FilterChip(
+                label: '#$t',
+                active: _tagFilter == t,
+                onTap: () =>
+                    setState(() => _tagFilter = _tagFilter == t ? null : t)),
+          ],
+        ],
+      ),
     );
   }
 
@@ -196,12 +244,18 @@ class _NoteView extends StatelessWidget {
   const _NoteView(
       {required this.note,
       required this.onPin,
-      required this.onEdit,
-      required this.onDelete});
+      required this.onDelete,
+      required this.onSave,
+      this.onTagTap});
   final SpaceNote note;
   final VoidCallback onPin;
-  final VoidCallback onEdit;
   final VoidCallback onDelete;
+
+  /// Debounced autosave from the inline editor: `(title, bodyMarkdown, tags)`.
+  final void Function(String title, String body, List<String> tags) onSave;
+
+  /// Tapping one of the note's tag chips (filters the list by that tag).
+  final ValueChanged<String>? onTagTap;
 
   @override
   Widget build(BuildContext context) {
@@ -209,21 +263,16 @@ class _NoteView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Slim action bar — the title + tags now live inside the editor.
         Container(
-          padding: const EdgeInsets.all(AppTokens.s16),
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: AppTokens.s8),
           decoration: BoxDecoration(
             border: Border(bottom: BorderSide(color: c.border)),
           ),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              Expanded(
-                child: Text(note.title,
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    )),
-              ),
               IconButton(
                   tooltip: note.pinned ? 'Unpin' : 'Pin',
                   onPressed: onPin,
@@ -232,8 +281,7 @@ class _NoteView extends StatelessWidget {
                       size: 18,
                       color: note.pinned ? AppTokens.brand : null)),
               IconButton(
-                  onPressed: onEdit, icon: const Icon(Icons.edit_outlined, size: 18)),
-              IconButton(
+                  tooltip: 'Delete',
                   onPressed: onDelete,
                   icon: const Icon(Icons.delete_outline,
                       size: 18, color: AppTokens.danger)),
@@ -241,12 +289,13 @@ class _NoteView extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: SelectionArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(AppTokens.s24),
-              child: AppMarkdown(note.body,
-                  style: TextStyle(color: c.textSecondary, height: 1.6)),
-            ),
+          // Key by note id so switching notes rebuilds the editor state
+          // (document + autosave guards) cleanly — edits never bleed across.
+          child: NoteInlineEditor(
+            key: ValueKey(note.id),
+            note: note,
+            onSave: onSave,
+            onTagTap: onTagTap,
           ),
         ),
       ],
@@ -266,24 +315,31 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
       TextEditingController(text: widget.note?.title ?? '');
   late final TextEditingController _body =
       TextEditingController(text: widget.note?.body ?? '');
-  late final TextEditingController _tags =
-      TextEditingController(text: widget.note?.tags.join(', ') ?? '');
+  final TextEditingController _tagInput = TextEditingController();
+  late List<String> _tagList = normaliseTags(widget.note?.tags ?? const []);
   bool _preview = false;
 
   @override
   void dispose() {
     _title.dispose();
     _body.dispose();
-    _tags.dispose();
+    _tagInput.dispose();
     super.dispose();
   }
 
+  /// Commit whatever is typed in the tag input (comma/space separated) as chips.
+  void _commitTags() {
+    final added = normaliseTags(_tagInput.text.split(RegExp(r'[,\s]+')));
+    if (added.isNotEmpty) {
+      setState(() => _tagList = normaliseTags([..._tagList, ...added]));
+    }
+    _tagInput.clear();
+  }
+
   Future<void> _save() async {
-    final tags = _tags.text
-        .split(',')
-        .map((t) => t.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
+    _commitTags(); // fold any half-typed tag into the list first
+    // Explicit chips + `#hashtags` written in the body, normalised & deduped.
+    final tags = normaliseTags([..._tagList, ...extractBodyTags(_body.text)]);
     final api = ref.read(spaceApiProvider);
     if (widget.note == null) {
       await api.createNote(_title.text, _body.text, tags);
@@ -291,6 +347,69 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
       await api.updateNote(widget.note!.id, _title.text, _body.text, tags);
     }
     if (mounted) Navigator.of(context).pop();
+  }
+
+  void _setBody(String text, TextSelection selection) {
+    _body.value = TextEditingValue(text: text, selection: selection);
+    setState(() {}); // keep the live preview / toolbar state in sync
+  }
+
+  /// Wrap the current selection (or a `text` placeholder) with [token], e.g.
+  /// `**bold**`. Used for bold / italic.
+  void _wrap(String token) {
+    final text = _body.text;
+    final sel = _body.selection;
+    final start = sel.isValid ? sel.start : text.length;
+    final end = sel.isValid ? sel.end : text.length;
+    final selected = text.substring(start, end);
+    final inner = selected.isEmpty ? 'text' : selected;
+    final next = text.replaceRange(start, end, '$token$inner$token');
+    _setBody(
+      next,
+      TextSelection(
+          baseOffset: start + token.length,
+          extentOffset: start + token.length + inner.length),
+    );
+  }
+
+  /// Toggle a line-level [prefix] (`- [ ] `, `- `, `## `) on the caret's line.
+  void _linePrefix(String prefix) {
+    final text = _body.text;
+    final sel = _body.selection;
+    final caret = sel.isValid ? sel.start : text.length;
+    final lineStart = caret <= 0 ? 0 : text.lastIndexOf('\n', caret - 1) + 1;
+    var lineEnd = text.indexOf('\n', lineStart);
+    if (lineEnd == -1) lineEnd = text.length;
+    final line = text.substring(lineStart, lineEnd);
+    final String newLine;
+    final int delta;
+    if (line.startsWith(prefix)) {
+      newLine = line.substring(prefix.length);
+      delta = -prefix.length;
+    } else {
+      newLine = '$prefix$line';
+      delta = prefix.length;
+    }
+    final next = text.replaceRange(lineStart, lineEnd, newLine);
+    final newCaret =
+        (caret + delta).clamp(lineStart, lineStart + newLine.length);
+    _setBody(next, TextSelection.collapsed(offset: newCaret));
+  }
+
+  Widget _toolBtn(IconData icon, String tip, VoidCallback onTap) {
+    final c = context.colors;
+    return Tooltip(
+      message: tip,
+      waitDuration: const Duration(milliseconds: 500),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppTokens.rSm),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, size: 17, color: c.textSecondary),
+        ),
+      ),
+    );
   }
 
   @override
@@ -336,6 +455,33 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                 ),
               ),
               const SizedBox(height: AppTokens.s8),
+              // Keep-style quick-format toolbar (edit mode only).
+              if (!_preview)
+                Container(
+                  margin: const EdgeInsets.only(bottom: AppTokens.s8),
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  decoration: BoxDecoration(
+                    color: c.sidebar,
+                    borderRadius: BorderRadius.circular(AppTokens.rSm),
+                    border: Border.all(color: c.border),
+                  ),
+                  child: Row(
+                    children: [
+                      _toolBtn(Icons.check_box_outlined, 'Checklist item',
+                          () => _linePrefix('- [ ] ')),
+                      _toolBtn(Icons.format_list_bulleted, 'Bullet list',
+                          () => _linePrefix('- ')),
+                      _toolBtn(Icons.title, 'Heading',
+                          () => _linePrefix('## ')),
+                      const SizedBox(width: 2),
+                      Container(width: 1, height: 18, color: c.border),
+                      const SizedBox(width: 2),
+                      _toolBtn(Icons.format_bold, 'Bold', () => _wrap('**')),
+                      _toolBtn(
+                          Icons.format_italic, 'Italic', () => _wrap('_')),
+                    ],
+                  ),
+                ),
               Expanded(
                 child: _preview
                     ? Container(
@@ -347,11 +493,20 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                           border: Border.all(color: c.border),
                         ),
                         child: SingleChildScrollView(
-                          child: AppMarkdown(
-                            _body.text.isEmpty ? '_(empty)_' : _body.text,
-                            style: TextStyle(
-                                color: c.textPrimary, height: 1.5),
-                          ),
+                          child: _body.text.trim().isEmpty
+                              ? Text('(empty)',
+                                  style: TextStyle(
+                                      color: c.textMuted,
+                                      fontStyle: FontStyle.italic))
+                              // Interactive preview: ticking a box here edits
+                              // the body being saved.
+                              : NoteBody(
+                                  _body.text,
+                                  style: TextStyle(
+                                      color: c.textPrimary, height: 1.5),
+                                  onChanged: (nb) => _setBody(nb,
+                                      TextSelection.collapsed(offset: nb.length)),
+                                ),
                         ),
                       )
                     : TextField(
@@ -359,15 +514,22 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                         expands: true,
                         maxLines: null,
                         textAlignVertical: TextAlignVertical.top,
-                        decoration:
-                            const InputDecoration(hintText: 'Body (markdown)…'),
+                        decoration: const InputDecoration(
+                            hintText:
+                                'Body — Markdown, or “- [ ] task” for a checklist…'),
                       ),
               ),
               const SizedBox(height: AppTokens.s8),
-              TextField(
-                  controller: _tags,
-                  decoration:
-                      const InputDecoration(hintText: 'tags, comma, separated')),
+              _TagEditor(
+                tags: _tagList,
+                controller: _tagInput,
+                onSubmit: _commitTags,
+                onRemove: (t) =>
+                    setState(() => _tagList = _tagList.where((x) => x != t).toList()),
+              ),
+              const SizedBox(height: 4),
+              Text('#hashtags trong nội dung sẽ tự thành nhãn khi lưu.',
+                  style: TextStyle(color: c.textMuted, fontSize: 11)),
               const SizedBox(height: AppTokens.s16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -382,6 +544,121 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// A selectable pill in the sidebar tag-filter bar.
+class _FilterChip extends StatelessWidget {
+  const _FilterChip(
+      {required this.label, required this.active, required this.onTap});
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Center(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppTokens.rFull),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppTokens.s12, vertical: 5),
+          decoration: BoxDecoration(
+            color: active ? c.accent : c.surfaceAlt,
+            borderRadius: BorderRadius.circular(AppTokens.rFull),
+            border: Border.all(color: active ? c.accent : c.border),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                color: active ? Colors.white : c.textSecondary,
+                fontSize: 12,
+                fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+              )),
+        ),
+      ),
+    );
+  }
+}
+
+/// Keep-style tag editor: existing tags as removable chips + an inline field
+/// that commits on Enter (or comma / space). Sits in the note editor dialog.
+class _TagEditor extends StatelessWidget {
+  const _TagEditor(
+      {required this.tags,
+      required this.controller,
+      required this.onSubmit,
+      required this.onRemove});
+  final List<String> tags;
+  final TextEditingController controller;
+  final VoidCallback onSubmit;
+  final ValueChanged<String> onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      padding:
+          const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+        border: Border.all(color: c.border),
+      ),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Icon(Icons.label_outline, size: 16, color: c.textMuted),
+          for (final t in tags)
+            Container(
+              padding: const EdgeInsets.only(left: AppTokens.s8, right: 2),
+              decoration: BoxDecoration(
+                color: c.accentSoft,
+                borderRadius: BorderRadius.circular(AppTokens.rFull),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('#$t',
+                      style: TextStyle(
+                          color: c.accent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500)),
+                  InkWell(
+                    onTap: () => onRemove(t),
+                    borderRadius: BorderRadius.circular(AppTokens.rFull),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(Icons.close, size: 13, color: c.accent),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 90, maxWidth: 160),
+            child: TextField(
+              controller: controller,
+              style: TextStyle(color: c.textPrimary, fontSize: 13),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: tags.isEmpty ? 'Add label…' : 'Add…',
+                hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
+                contentPadding: EdgeInsets.zero,
+              ),
+              onChanged: (v) {
+                // Commit as soon as a separator is typed (Keep behaviour).
+                if (v.endsWith(',') || v.endsWith(' ')) onSubmit();
+              },
+              onSubmitted: (_) => onSubmit(),
+            ),
+          ),
+        ],
       ),
     );
   }
