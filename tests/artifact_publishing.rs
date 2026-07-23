@@ -26,7 +26,9 @@ fn temp_state() -> Arc<UiState> {
         workbench_bridge: None,
         space_mcp_launcher: None,
         workflow_service: None,
+        virtual_worker_pool: None,
         agent_states: None,
+        background_scheduler: None,
         ws_port: 0,
         ws_token: String::new(),
     })

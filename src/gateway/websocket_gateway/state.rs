@@ -36,4 +36,9 @@ pub struct WsState {
     pub api: Arc<dyn super::gateway::WsGatewayApi>,
     pub agent_api: Option<Arc<dyn AgentApi>>,
     pub browser_relay: Arc<BrowserRelay>,
+    /// Shared with `UiState` and `MessageRouter` so `/plugin` chat commands and
+    /// the marketplace panel operate on one manager. `None` disables the
+    /// commands (they fall through to normal chat).
+    pub marketplace_manager:
+        Option<Arc<std::sync::Mutex<crate::marketplace::manager::MarketplaceManager>>>,
 }

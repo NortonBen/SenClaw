@@ -47,11 +47,19 @@ impl Default for DecayConfig {
     }
 }
 
+/// Grace period before an edge-less entity is considered orphaned. Covers
+/// the window inside a concurrent cognify run between `add_node` and the
+/// first `upsert_edge` touching that entity.
+const ORPHAN_GRACE_SECS: i64 = 3_600;
+
 #[derive(Debug, Default, Clone)]
 pub struct DecayReport {
     pub edges_scanned: usize,
     pub edges_pruned: usize,
     pub edges_promoted: usize,
+    /// Entity / entity_type nodes deleted because edge pruning left them
+    /// with no incident edges.
+    pub orphans_removed: usize,
     pub duration_ms: i64,
 }
 
@@ -106,6 +114,11 @@ pub fn run_decay(graph: &dyn GraphStore, cfg: &DecayConfig) -> Result<DecayRepor
         }
     }
 
+    // Edge pruning orphans nodes; sweep them in the same pass instead of
+    // leaving disconnected entities on screen until the daily maintenance
+    // run (which may never fire on frequently-restarted daemons).
+    let orphans_removed = graph.remove_orphan_entities(now - ORPHAN_GRACE_SECS)?;
+
     let duration_ms = started.elapsed().as_millis() as i64;
     graph.record_decay_run(now, scanned, pruned, promoted, duration_ms)?;
 
@@ -113,6 +126,7 @@ pub fn run_decay(graph: &dyn GraphStore, cfg: &DecayConfig) -> Result<DecayRepor
         edges_scanned: scanned,
         edges_pruned: pruned,
         edges_promoted: promoted,
+        orphans_removed,
         duration_ms,
     })
 }
@@ -139,6 +153,7 @@ pub fn start_decay_ticker(graph: Arc<dyn GraphStore>, cfg: DecayConfig) -> JoinH
                     scanned = rep.edges_scanned,
                     pruned = rep.edges_pruned,
                     promoted = rep.edges_promoted,
+                    orphans = rep.orphans_removed,
                     duration_ms = rep.duration_ms,
                     "[cognitive] decay sweep complete"
                 ),
@@ -187,6 +202,39 @@ mod tests {
         assert_eq!(report.edges_scanned, 1);
         assert_eq!(report.edges_pruned, 1);
         assert_eq!(g.count_edges().unwrap(), 0);
+    }
+
+    #[test]
+    fn pruned_edges_take_orphaned_entities_with_them() {
+        let (_db, g) = store();
+        let now = Utc::now().timestamp();
+        let stale = now - 10 * 86_400;
+
+        // A—B connected by a doomed edge; C is a brand-new edge-less entity
+        // still inside the grace window (mid-cognify simulation).
+        let a = DataPoint::entity("A", stale);
+        let b = DataPoint::entity("B", stale);
+        let fresh = DataPoint::entity("FreshMidCognify", now);
+        for n in [&a, &b, &fresh] {
+            g.upsert_node(n).unwrap();
+        }
+        let mut edge = RelationshipEdge::new(a.id, b.id, "rel", stale);
+        edge.strength = 0.04;
+        edge.last_activated = stale;
+        g.upsert_edge(&edge).unwrap();
+
+        let report = run_decay(&*g, &DecayConfig::default()).unwrap();
+        assert_eq!(report.edges_pruned, 1);
+        assert_eq!(
+            report.orphans_removed, 2,
+            "A and B lost their only edge and must go; fresh entity is grace-protected"
+        );
+        assert!(g.get_node(a.id).unwrap().is_none());
+        assert!(g.get_node(b.id).unwrap().is_none());
+        assert!(
+            g.get_node(fresh.id).unwrap().is_some(),
+            "entity created moments ago must survive the sweep"
+        );
     }
 
     #[test]

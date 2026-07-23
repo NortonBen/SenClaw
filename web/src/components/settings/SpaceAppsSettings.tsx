@@ -14,7 +14,8 @@ import {
   theme,
 } from 'antd';
 import {
-  AppstoreOutlined, DeleteOutlined, InfoCircleOutlined, LinkOutlined, UploadOutlined,
+  AppstoreOutlined, CloudDownloadOutlined, DeleteOutlined, InfoCircleOutlined,
+  LinkOutlined, SyncOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
 
@@ -27,6 +28,17 @@ interface SpaceAppRow {
   installed_at: number;
 }
 
+interface UpdateStatus {
+  id: string;
+  slug: string;
+  installed?: string | null;
+  latest?: string | null;
+  hasUpdate: boolean;
+  yanked?: boolean;
+  deprecated?: string | null;
+  error?: string | null;
+}
+
 export const SpaceAppsSettings: React.FC = () => {
   const { token } = theme.useToken();
   const [apps, setApps] = useState<SpaceAppRow[]>([]);
@@ -34,6 +46,9 @@ export const SpaceAppsSettings: React.FC = () => {
   const [installing, setInstalling] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [detailApp, setDetailApp] = useState<DetailApp | null>(null);
+  const [updates, setUpdates] = useState<Record<string, UpdateStatus>>({});
+  const [checking, setChecking] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const loadApps = async () => {
@@ -48,8 +63,48 @@ export const SpaceAppsSettings: React.FC = () => {
     }
   };
 
+  // Ask the hub which installed apps have a newer version. Non-fatal: a hub
+  // that is unreachable just leaves the badges absent.
+  const checkUpdates = async (announce = false) => {
+    setChecking(true);
+    try {
+      const data: UpdateStatus[] = await fetch('/api/space/apps/updates')
+        .then(r => (r.ok ? r.json() : []));
+      const map: Record<string, UpdateStatus> = {};
+      for (const u of Array.isArray(data) ? data : []) map[u.id] = u;
+      setUpdates(map);
+      if (announce) {
+        const n = Object.values(map).filter(u => u.hasUpdate).length;
+        message[n > 0 ? 'info' : 'success'](
+          n > 0 ? `${n} app có bản mới` : 'Mọi app đã ở phiên bản mới nhất',
+        );
+      }
+    } catch {
+      /* leave badges absent */
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const updateApp = async (id: string) => {
+    setUpdatingId(id);
+    try {
+      const res = await fetch(`/api/space/apps/${encodeURIComponent(id)}/update`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || 'Update failed');
+      if (body?.updated) message.success(`${id} → ${body.latest}`);
+      else message.info(`${id} đã ở bản mới nhất`);
+      await loadApps();
+      await checkUpdates();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Update failed');
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   useEffect(() => {
-    loadApps();
+    loadApps().then(() => checkUpdates());
   }, []);
 
   const installZip = async (file: File) => {
@@ -106,18 +161,27 @@ export const SpaceAppsSettings: React.FC = () => {
           <Title level={4} style={{ margin: 0 }}>Space Apps</Title>
           <Text type="secondary">Install, register, and remove embedded Space Apps.</Text>
         </div>
-        <Upload
-          accept=".zip"
-          showUploadList={false}
-          beforeUpload={file => {
-            installZip(file);
-            return false;
-          }}
-        >
-          <Button type="primary" icon={<UploadOutlined />} loading={installing}>
-            Install ZIP
+        <Space>
+          <Button
+            icon={<SyncOutlined spin={checking} />}
+            loading={checking}
+            onClick={() => checkUpdates(true)}
+          >
+            Check updates
           </Button>
-        </Upload>
+          <Upload
+            accept=".zip"
+            showUploadList={false}
+            beforeUpload={file => {
+              installZip(file);
+              return false;
+            }}
+          >
+            <Button type="primary" icon={<UploadOutlined />} loading={installing}>
+              Install ZIP
+            </Button>
+          </Upload>
+        </Space>
       </Space>
 
       <Alert
@@ -147,6 +211,7 @@ export const SpaceAppsSettings: React.FC = () => {
         {apps.map(app => {
           const manifest = app.manifest ?? {};
           const integration = manifest.integration ?? {};
+          const upd = updates[app.id];
           const detail: DetailApp = {
             id: app.id,
             name: manifest.name ?? app.id,
@@ -169,18 +234,36 @@ export const SpaceAppsSettings: React.FC = () => {
                   <span>{manifest.name ?? app.id}</span>
                   <Tag>{app.id}</Tag>
                   {manifest.install?.type === 'zip' && <Tag color="green">ZIP</Tag>}
+                  {upd?.hasUpdate && (
+                    <Tag color="orange">
+                      {(upd.installed ?? '?')} → {upd.latest}
+                    </Tag>
+                  )}
                 </Space>
               }
               extra={
-                <Popconfirm
-                  title="Uninstall this Space App?"
-                  description="Local files installed from ZIP will be removed."
-                  okText="Uninstall"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => uninstall(app.id)}
-                >
-                  <Button danger type="text" icon={<DeleteOutlined />} />
-                </Popconfirm>
+                <Space>
+                  {upd?.hasUpdate && (
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<CloudDownloadOutlined />}
+                      loading={updatingId === app.id}
+                      onClick={() => updateApp(app.id)}
+                    >
+                      Update
+                    </Button>
+                  )}
+                  <Popconfirm
+                    title="Uninstall this Space App?"
+                    description="Local files installed from ZIP will be removed."
+                    okText="Uninstall"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => uninstall(app.id)}
+                  >
+                    <Button danger type="text" icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                </Space>
               }
             >
               <Paragraph type="secondary" style={{ marginBottom: 8 }}>

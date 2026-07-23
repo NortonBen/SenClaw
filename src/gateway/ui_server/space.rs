@@ -912,21 +912,29 @@ pub(crate) async fn space_apps_install_zip(
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mut zip_bytes: Option<Vec<u8>> = None;
+    // Optional text fields carrying install provenance (slug/version/…) so a
+    // later update-check can resolve the source package. The file may arrive
+    // before or after them, so every field is read rather than breaking early.
+    let mut fields: HashMap<String, String> = HashMap::new();
     while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("Invalid upload: {e}")))?
     {
+        let name = field.name().map(str::to_string);
         let is_zip = field
             .file_name()
-            .map(|name| name.to_ascii_lowercase().ends_with(".zip"))
+            .map(|n| n.to_ascii_lowercase().ends_with(".zip"))
             .unwrap_or(false);
-        if field.name() == Some("file") || is_zip {
+        if name.as_deref() == Some("file") || is_zip {
             let bytes = field.bytes().await.map_err(|e| {
                 AppError(StatusCode::BAD_REQUEST, format!("Read upload failed: {e}"))
             })?;
             zip_bytes = Some(bytes.to_vec());
-            break;
+        } else if let Some(n) = name {
+            if let Ok(text) = field.text().await {
+                fields.insert(n, text);
+            }
         }
     }
 
@@ -936,6 +944,33 @@ pub(crate) async fn space_apps_install_zip(
             "Upload a zip file in multipart field `file`".into(),
         )
     })?;
+
+    let origin = fields.get("slug").and_then(|slug| {
+        crate::marketplace::registry::parse_slug(slug)
+            .ok()
+            .map(|(scope, name)| crate::marketplace::app_update::HubOrigin {
+                scope,
+                name,
+                version: fields.get("version").cloned(),
+                hub: fields.get("hub").cloned(),
+                integrity: fields.get("integrity").cloned(),
+                installed_at: Some(now_ms()),
+            })
+    });
+
+    let out = install_app_from_zip(s.clone(), zip_bytes, origin).await?;
+    Ok(Json(out))
+}
+
+/// Extract a Space App zip, register it (skills / MCP / launch) and persist it —
+/// the shared core of first-time install and update. When `origin` is given it
+/// is stamped into the stored manifest as `hub` provenance, so a later
+/// update-check can resolve the source package and installed version.
+pub(crate) async fn install_app_from_zip(
+    s: Arc<UiState>,
+    zip_bytes: Vec<u8>,
+    origin: Option<crate::marketplace::app_update::HubOrigin>,
+) -> Result<serde_json::Value, AppError> {
     if zip_bytes.len() > 50 * 1024 * 1024 {
         return Err(AppError(
             StatusCode::BAD_REQUEST,
@@ -1015,6 +1050,14 @@ pub(crate) async fn space_apps_install_zip(
         });
     }
 
+    // Stamp hub provenance (source slug + version) so a later update-check can
+    // resolve the source package. Absent for hand-uploaded zips.
+    if let Some(origin) = &origin {
+        if let Ok(v) = serde_json::to_value(origin) {
+            manifest["hub"] = v;
+        }
+    }
+
     let now = now_ms();
     let manifest_str = serde_json::to_string(&manifest).unwrap_or_default();
     let db = db(&s)?;
@@ -1031,11 +1074,107 @@ pub(crate) async fn space_apps_install_zip(
     // Auto-register the app's declared MCP server (launch + register) if any.
     try_autoregister_app_mcp(&s, &app_id, &manifest).await;
 
-    Ok(Json(serde_json::json!({
+    Ok(serde_json::json!({
         "id": app_id,
         "manifest": manifest,
         "enabled": true,
         "installed_at": now,
+    }))
+}
+
+/// GET `/api/space/apps/updates` — check every hub-installed app against the
+/// registry and report which have a newer version available.
+pub(crate) async fn space_apps_updates(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    let apps: Vec<(String, serde_json::Value)> = db
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let id: String = row.get(0)?;
+                    let m: String = row.get(1)?;
+                    Ok((id, serde_json::from_str(&m).unwrap_or_default()))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .map_err(internal)?;
+
+    let hub = s.config.marketplace_hub_url.clone();
+    let statuses = crate::marketplace::app_update::check_updates(&apps, &hub).await;
+    Ok(Json(serde_json::to_value(statuses).unwrap_or_default()))
+}
+
+/// POST `/api/space/apps/:id/update` — download and install the hub's latest
+/// version of an installed app, in place. No-op (200) when already current.
+pub(crate) async fn space_apps_update(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::marketplace::{app_update, publish, registry};
+
+    let db = db(&s)?;
+    let manifest: serde_json::Value = db
+        .with_conn(|conn| {
+            let raw: Result<String, rusqlite::Error> = conn.query_row(
+                "SELECT manifest FROM space_apps WHERE id=?1",
+                params![&id],
+                |row| row.get(0),
+            );
+            Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+        })
+        .map_err(internal)?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, format!("app `{id}` không tồn tại")))?;
+
+    let origin = app_update::origin_from_manifest(&manifest, &id).ok_or_else(|| {
+        AppError(
+            StatusCode::BAD_REQUEST,
+            "app này không cài từ hub — không có nguồn để cập nhật".into(),
+        )
+    })?;
+
+    let hub = s.config.marketplace_hub_url.clone();
+    let pkg = registry::fetch_package(&hub, &origin.scope, &origin.name)
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let ver = registry::resolve_version(&pkg, None)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    if !app_update::is_newer(&ver.version, origin.version.as_deref()) {
+        return Ok(Json(serde_json::json!({
+            "id": id,
+            "updated": false,
+            "installed": origin.version,
+            "latest": ver.version,
+        })));
+    }
+
+    let host = publish::host_platform();
+    let dist = registry::select_dist(ver, &host)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let bytes = registry::download_verified(dist)
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let new_origin = app_update::HubOrigin {
+        scope: origin.scope.clone(),
+        name: origin.name.clone(),
+        version: Some(ver.version.clone()),
+        hub: Some(hub.clone()),
+        integrity: dist.integrity.clone(),
+        installed_at: Some(now_ms()),
+    };
+    let app = install_app_from_zip(s.clone(), bytes, Some(new_origin)).await?;
+
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "updated": true,
+        "from": origin.version,
+        "latest": ver.version,
+        "app": app,
     })))
 }
 

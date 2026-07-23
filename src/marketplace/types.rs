@@ -2,13 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A marketplace source (git repository or local directory)
+/// A marketplace source (hub catalog, git repository, or local directory)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceSource {
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub source_type: SourceType,
+    /// Git remote for `git` sources; catalog URL for `hub` sources.
     pub url: Option<String>,
     pub branch: Option<String>,
     #[serde(rename = "localPath")]
@@ -21,11 +22,13 @@ pub struct MarketplaceSource {
     pub sync_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceType {
     Git,
     Local,
+    /// A remote `marketplace.json` catalog; plugins are installed one by one.
+    Hub,
 }
 
 /// Plugin-level toggle state: plugins[name] = true → enabled; absent = disabled (default-off)
@@ -95,6 +98,16 @@ pub struct MarketplacePlugin {
     pub source_name: String,
     pub priority: i32,
     pub enabled: bool,
+    /// Hub plugins start out listed-but-absent; git/local plugins are always
+    /// installed by virtue of being on disk.
+    pub installed: bool,
+    /// Catalog metadata, only ever set for hub sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     #[serde(rename = "skillCount")]
     pub skill_count: usize,
     #[serde(rename = "subagentCount")]

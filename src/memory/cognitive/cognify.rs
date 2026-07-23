@@ -31,6 +31,7 @@ use super::data_point::DataPoint;
 use super::embed::CognitiveEmbedder;
 use super::llm::{parse_triplets, LlmClient, RawTriplet};
 use super::node_set::NodeSet;
+use super::tiers::EdgeTier;
 use super::triplet::RelationshipEdge;
 
 // System prompt for the triplet-extraction LLM call.
@@ -458,7 +459,8 @@ impl CognifyPipeline {
 
         // chunk -[MENTIONS]→ subject / object (provenance edges).
         for ent in [&subj, &obj] {
-            let mention = RelationshipEdge::new(chunk_node.id, ent.id, "MENTIONS", now);
+            let mention = RelationshipEdge::new(chunk_node.id, ent.id, "MENTIONS", now)
+                .with_tier(EdgeTier::L2Episodic);
             let existed = self
                 .embedder
                 .graph
@@ -494,7 +496,8 @@ impl CognifyPipeline {
                 report.edges_strengthened += 1;
             }
             None => {
-                let mut e = RelationshipEdge::new(subj.id, obj.id, raw.predicate.clone(), now);
+                let mut e = RelationshipEdge::new(subj.id, obj.id, raw.predicate.clone(), now)
+                    .with_tier(EdgeTier::L2Episodic);
                 e.context = chunk_node.id.to_string();
                 e.source_episode_id = Some(chunk_node.id);
                 e.strengthen(opts.importance, now);
@@ -590,7 +593,8 @@ impl CognifyPipeline {
                 report.edges_strengthened += 1;
             }
             None => {
-                let mut e = RelationshipEdge::new(entity.id, type_node.id, "is_a", now);
+                let mut e = RelationshipEdge::new(entity.id, type_node.id, "is_a", now)
+                    .with_tier(EdgeTier::L2Episodic);
                 e.strengthen(opts.importance, now);
                 self.embedder.graph.upsert_edge(&e)?;
                 report.edges_added += 1;
@@ -761,6 +765,29 @@ mod tests {
         assert_eq!(report.entities_added, 2);
         // 1 semantic edge + 2 MENTIONS provenance edges
         assert_eq!(report.edges_added, 3);
+    }
+
+    #[tokio::test]
+    async fn cognify_edges_start_in_episodic_tier() {
+        // Extracted facts must NOT start in L1Working — its 2.9%/hour decay
+        // + 1-day max age deletes a once-mentioned fact within hours, which
+        // is how the graph degenerated into thousands of edge-less entities.
+        let canned = r#"{"triplets":[{"subject":"Sen","subject_type":"person","predicate":"lives_in","object":"Hà Nội","object_type":"city"}]}"#.to_string();
+        let pipe = build_pipeline(vec![canned]);
+        pipe.cognify("Sen sống ở Hà Nội.", "doc", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        let edges = pipe.embedder.graph.scan_edges(100, 0).unwrap();
+        assert!(!edges.is_empty());
+        for e in &edges {
+            assert_eq!(
+                e.tier,
+                EdgeTier::L2Episodic,
+                "edge {} should start episodic",
+                e.predicate
+            );
+        }
     }
 
     #[tokio::test]

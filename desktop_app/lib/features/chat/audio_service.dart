@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -45,6 +46,21 @@ class AudioService {
     return res.body.trim();
   }
 
+  /// The live incremental session, if any (see [startSpeechStream]). Kept so
+  /// stop()/speak() can wake its (possibly idle-waiting) loop to let it exit.
+  SpeechStreamSession? _session;
+
+  /// Begin an incremental TTS session for a **streaming** reply: chunks are
+  /// enqueued with [SpeechStreamSession.add] as the response streams in and
+  /// played strictly in order — the first sentence plays while the rest of the
+  /// reply is still being generated. Supersedes any current utterance/session.
+  SpeechStreamSession startSpeechStream() {
+    final gen = ++_gen;
+    _session?._kick();
+    unawaited(_player.stop());
+    return _session = SpeechStreamSession._(this, gen);
+  }
+
   /// Synthesize [text] to speech and play it. Supersedes any utterance that is
   /// still synthesizing or playing. Call [stop] to interrupt.
   ///
@@ -53,6 +69,7 @@ class AudioService {
   /// next one synthesizes in the background during playback.
   Future<void> speak(String text) async {
     final gen = ++_gen;
+    _session?._kick();
     await _player.stop();
     speaking.value = text;
     var spoke = false;
@@ -148,11 +165,171 @@ class AudioService {
   /// Stop playback (or cancel an in-flight synthesis before it plays).
   Future<void> stop() async {
     _gen++;
+    _session?._kick();
     speaking.value = null;
     await _player.stop();
   }
 
-  void dispose() => _player.dispose();
+  void dispose() {
+    _gen++;
+    _session?._kick();
+    _player.dispose();
+  }
+}
+
+/// A live TTS pipeline for a streaming reply: text chunks are enqueued as they
+/// arrive off the response stream and spoken strictly in order, each one
+/// synthesized while the previous plays — no waiting for the full reply.
+///
+/// Obtain via [AudioService.startSpeechStream]. Shares the service's
+/// generation counter, so any later speak()/startSpeechStream()/stop() cleanly
+/// supersedes this session (its loop exits and [done] completes).
+class SpeechStreamSession {
+  SpeechStreamSession._(this._svc, this._gen) {
+    _run();
+  }
+
+  final AudioService _svc;
+  final int _gen;
+  final List<String> _queue = [];
+  final Completer<void> _done = Completer();
+  Completer<void> _wake = Completer();
+  bool _finished = false;
+  bool _busy = false;
+
+  /// Completes when every queued chunk has played after [finish], or as soon
+  /// as the session is stopped/superseded. Never throws.
+  Future<void> get done => _done.future;
+
+  /// True when nothing is queued, synthesizing, or playing — the feeder uses
+  /// this to justify an early cut before the first sentence boundary.
+  bool get idle => _queue.isEmpty && !_busy;
+
+  /// Queue [text] for speech. Markdown is stripped and the text is split into
+  /// sentence-sized clips exactly like [AudioService.speak]; unspeakable
+  /// fragments are dropped. No-op after [finish] or once superseded.
+  void add(String text) {
+    if (_finished || _done.isCompleted) return;
+    _queue.addAll(
+        splitSentences(stripMarkdownForSpeech(text)).where(hasSpeakableContent));
+    _kick();
+  }
+
+  /// No more chunks are coming: [done] completes once the queue drains.
+  void finish() {
+    _finished = true;
+    _kick();
+  }
+
+  void _kick() {
+    if (!_wake.isCompleted) _wake.complete();
+  }
+
+  Future<void> _run() async {
+    try {
+      Future<Uint8List?>? prefetch;
+      String? prefetchFor;
+      while (true) {
+        if (_svc._gen != _gen) return; // superseded / stopped
+        if (_queue.isEmpty) {
+          if (_finished) return;
+          _busy = false;
+          _wake = Completer();
+          await _wake.future;
+          continue;
+        }
+        _busy = true;
+        final text = _queue.removeAt(0);
+        final bytes =
+            await (prefetchFor == text ? prefetch! : _svc._synthesize(text));
+        if (_svc._gen != _gen) return;
+        // Prefetch the new head while this clip plays.
+        if (_queue.isNotEmpty) {
+          prefetchFor = _queue.first;
+          prefetch = _svc._synthesize(prefetchFor);
+        } else {
+          prefetchFor = null;
+          prefetch = null;
+        }
+        if (bytes != null) {
+          await _svc._playClip(bytes, _gen);
+        }
+      }
+    } finally {
+      _busy = false;
+      if (identical(_svc._session, this)) _svc._session = null;
+      if (!_done.isCompleted) _done.complete();
+    }
+  }
+}
+
+/// Incrementally carves speakable chunks out of a growing streamed reply.
+///
+/// Feed the cumulative text to [update] after every delta; it returns the
+/// chunks that just became ready — everything up to the last sentence
+/// boundary (same rules as [splitSentences]: `.!?…;` and newline cut, a
+/// decimal/version dot does not). When no boundary has streamed in yet but at
+/// least [minWordsEarly] whole words are pending and the pipeline is idle, it
+/// cuts early at the last space so speech starts immediately instead of
+/// waiting for the first full stop. [flush] returns the tail once the stream
+/// ends. A cumulative text that is not an extension of what was already
+/// consumed (a brand-new stream) resets consumption.
+class StreamingSentenceFeeder {
+  StreamingSentenceFeeder({this.minWordsEarly = 10});
+
+  final int minWordsEarly;
+  String _seen = '';
+  int _consumed = 0;
+
+  static bool _isDigit(String s, int i) {
+    if (i < 0 || i >= s.length) return false;
+    final c = s.codeUnitAt(i);
+    return c >= 0x30 && c <= 0x39;
+  }
+
+  List<String> update(String full, {bool pipelineIdle = false}) {
+    final spoken = _seen.substring(0, _consumed.clamp(0, _seen.length));
+    if (!full.startsWith(spoken)) _consumed = 0;
+    _seen = full;
+
+    final out = <String>[];
+    var cut = _consumed;
+    for (var i = _consumed; i < _seen.length; i++) {
+      final ch = _seen[i];
+      if (!'.!?…;\n'.contains(ch)) continue;
+      if (ch == '.' && _isDigit(_seen, i - 1) && _isDigit(_seen, i + 1)) {
+        continue; // decimal/version separator — not a sentence end
+      }
+      final piece = _seen.substring(cut, i + 1).trim();
+      if (piece.isNotEmpty) out.add(piece);
+      cut = i + 1;
+    }
+    _consumed = cut;
+
+    // Early cut: nothing is playing and a long boundary-less head is pending
+    // → speak it now, up to the last *complete* word (the final word may
+    // still be mid-stream).
+    if (out.isEmpty && pipelineIdle) {
+      final pending = _seen.substring(_consumed);
+      if (pending.trim().split(RegExp(r'\s+')).length > minWordsEarly) {
+        final sp = pending.lastIndexOf(' ');
+        if (sp > 0) {
+          final piece = pending.substring(0, sp).trim();
+          if (piece.isNotEmpty) out.add(piece);
+          _consumed += sp + 1;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// The stream is over — return whatever is still pending.
+  List<String> flush() {
+    final tail =
+        _consumed < _seen.length ? _seen.substring(_consumed).trim() : '';
+    _consumed = _seen.length;
+    return tail.isEmpty ? const [] : [tail];
+  }
 }
 
 final audioServiceProvider = Provider<AudioService>((ref) {

@@ -68,6 +68,32 @@ pub trait GraphStore: Send + Sync {
         duration_ms: i64,
     ) -> Result<()>;
 
+    /// Reset `extraction_state` back to `Pending` for chunks that were
+    /// extracted (`Done`) but have since lost every outgoing edge — i.e.
+    /// their MENTIONS/semantic edges decayed away, so the facts are gone
+    /// while the dedupe gate still says "already processed". A backfill
+    /// pass (POST /api/cognitive/re-extract-pending) then picks them up
+    /// like never-extracted chunks. Returns the number of chunks reset.
+    fn reset_orphan_done_chunks(&self) -> Result<usize>;
+
+    /// Every NodeSet the given node is tagged into — reverse of
+    /// [`Self::tag_node`]. Lets re-extraction tag recovered entities into
+    /// the chunk's original knowledge spaces instead of leaving them
+    /// unscoped.
+    fn sets_of_node(&self, node: Uuid) -> Result<Vec<NodeSet>>;
+
+    /// Delete `entity` / `entity_type` nodes with zero incident edges,
+    /// restricted to nodes created before `created_before`. Called by the
+    /// decay sweep right after edge pruning so entities whose last edge
+    /// just decayed don't linger as disconnected dots until the (much
+    /// rarer) maintenance sweep. The age gate keeps a concurrent cognify
+    /// run safe: a freshly inserted entity is edge-less for a moment
+    /// between `add_node` and its first `upsert_edge`.
+    /// Chunks are never touched — an edge-less chunk is legitimate
+    /// (extraction pending / no facts) and holds provenance text.
+    /// Returns the number of nodes removed.
+    fn remove_orphan_entities(&self, created_before: i64) -> Result<usize>;
+
     fn tag_node(&self, node: Uuid, set: &NodeSet) -> Result<()>;
     fn nodes_in_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<DataPoint>>;
 
@@ -912,6 +938,57 @@ impl GraphStore for SqliteGraphStore {
         })
     }
 
+    fn reset_orphan_done_chunks(&self) -> Result<usize> {
+        self.db.with_cog_conn(|conn| {
+            let n = conn.execute(
+                "UPDATE cog_nodes
+                 SET extraction_state = 0
+                 WHERE kind = 'chunk'
+                   AND extraction_state = 1
+                   AND id NOT IN (SELECT src FROM cog_edges)",
+                [],
+            )?;
+            Ok(n)
+        })
+    }
+
+    fn sets_of_node(&self, node: Uuid) -> Result<Vec<NodeSet>> {
+        let node_blob = uuid_bytes(node).to_vec();
+        self.db.with_cog_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT s.scope_kind, s.scope_id, s.tag
+                 FROM cog_node_tags t
+                 JOIN cog_node_sets s ON s.id = t.node_set_id
+                 WHERE t.node_id = ?1",
+            )?;
+            let rows: Vec<NodeSet> = stmt
+                .query_map(params![node_blob], |r| {
+                    Ok(NodeSet {
+                        scope_kind: super::node_set::ScopeKind::from_str(
+                            &r.get::<_, String>(0)?,
+                        ),
+                        scope_id: r.get(1)?,
+                        tag: r.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    fn remove_orphan_entities(&self, created_before: i64) -> Result<usize> {
+        self.db.with_cog_conn(|conn| {
+            let removed = conn.execute(
+                "DELETE FROM cog_nodes
+                 WHERE kind IN ('entity', 'entity_type')
+                   AND created_at < ?1
+                   AND id NOT IN (SELECT src FROM cog_edges UNION SELECT dst FROM cog_edges)",
+                params![created_before],
+            )?;
+            Ok(removed)
+        })
+    }
+
     fn cleanup_junk(&self) -> Result<CleanupReport> {
         self.db.with_cog_conn(|conn| {
             // Envelope-wrapped chunks. The patterns mirror what the
@@ -1525,6 +1602,68 @@ mod tests {
         let nodes = store.nodes_in_set(&set, 10).unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].id, chunk.id);
+    }
+
+    #[test]
+    fn sets_of_node_reverses_tagging() {
+        let store = SqliteGraphStore::new(test_db());
+        let chunk = DataPoint::chunk("hello", Some("h".into()), 10);
+        store.upsert_node(&chunk).unwrap();
+
+        let g = NodeSet::group("jid-1", "default_memory");
+        let space = NodeSet::space("ai-chat:support");
+        store.tag_node(chunk.id, &g).unwrap();
+        store.tag_node(chunk.id, &space).unwrap();
+
+        let sets = store.sets_of_node(chunk.id).unwrap();
+        assert_eq!(sets.len(), 2);
+        assert!(sets.contains(&g));
+        assert!(sets.contains(&space));
+
+        // Untagged node → empty, not an error.
+        let bare = DataPoint::chunk("bare", Some("h2".into()), 10);
+        store.upsert_node(&bare).unwrap();
+        assert!(store.sets_of_node(bare.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reset_orphan_done_chunks_targets_only_edgeless_done() {
+        use crate::memory::cognitive::ExtractionState as S;
+        let store = SqliteGraphStore::new(test_db());
+
+        // Done + edge-less → reset to Pending (its facts decayed away).
+        let lost = DataPoint::chunk("facts long gone", Some("h1".into()), 1);
+        store.upsert_node(&lost).unwrap();
+        store.set_extraction_state(lost.id, S::Done, 2).unwrap();
+
+        // Done + still has a MENTIONS edge → untouched.
+        let kept = DataPoint::chunk("facts intact", Some("h2".into()), 1);
+        let ent = DataPoint::entity("Ada", 1);
+        store.upsert_node(&kept).unwrap();
+        store.upsert_node(&ent).unwrap();
+        store.set_extraction_state(kept.id, S::Done, 2).unwrap();
+        store
+            .upsert_edge(&RelationshipEdge::new(kept.id, ent.id, "MENTIONS", 2))
+            .unwrap();
+
+        // SkippedNoFacts + edge-less → untouched (LLM said "nothing here";
+        // decay didn't destroy anything).
+        let nofacts = DataPoint::chunk("small talk only", Some("h3".into()), 1);
+        store.upsert_node(&nofacts).unwrap();
+        store
+            .set_extraction_state(nofacts.id, S::SkippedNoFacts, 2)
+            .unwrap();
+
+        let reset = store.reset_orphan_done_chunks().unwrap();
+        assert_eq!(reset, 1, "only the Done-but-edgeless chunk resets");
+
+        let states: Vec<S> = [lost.id, kept.id, nofacts.id]
+            .iter()
+            .map(|id| store.get_node(*id).unwrap().unwrap().extraction_state)
+            .collect();
+        assert_eq!(states[0], S::Pending);
+        assert_eq!(states[1], S::Done);
+        assert_eq!(states[2], S::SkippedNoFacts);
     }
 
     #[test]

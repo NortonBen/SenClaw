@@ -68,6 +68,16 @@ impl RelationshipEdge {
         }
     }
 
+    /// Builder: override the starting tier. Extracted facts (cognify
+    /// triplets, MENTIONS provenance, is_a typing) start in L2Episodic —
+    /// L1Working's 2.9%/hour decay + 1-day max age is calibrated for
+    /// transient working-set edges (e.g. inferred ASSOCIATED_WITH), and
+    /// kills a once-mentioned fact within hours of extraction.
+    pub fn with_tier(mut self, tier: EdgeTier) -> Self {
+        self.tier = tier;
+        self
+    }
+
     /// Read-only decay calculation — what the strength *would* be at `now`
     /// without mutating the edge. Used by retrievers to rank without
     /// triggering write traffic.

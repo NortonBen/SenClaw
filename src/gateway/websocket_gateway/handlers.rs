@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::gateway::command_dispatcher::dispatch_command;
+use crate::gateway::plugin_command::dispatch_plugin_command;
 use crate::gateway::group_manager::{
     delete_feishu_app, delete_qq_app, delete_telegram_bot, get_feishu_apps, save_feishu_app,
     save_qq_app, save_telegram_bot, GroupBindingUpdate,
@@ -1042,6 +1043,38 @@ pub(crate) async fn handle_message_send(
         guard.get(client_idx).map(|c| c.is_admin).unwrap_or(false)
     };
     if is_admin {
+        // `/plugin ...` marketplace commands (async: git/HTTP under the hood).
+        if let Some(manager) = state.marketplace_manager.clone() {
+            if let Some(output) = dispatch_plugin_command(manager, &text).await {
+                send_json(
+                    sender,
+                    &serde_json::json!({
+                        "type": "agent:reply",
+                        "groupJid": group_jid,
+                        "text": output,
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                    }),
+                );
+                return;
+            }
+        }
+
+        // `/app ...` Space App update commands (self-HTTP to the daemon).
+        if let Some(output) =
+            crate::gateway::plugin_command::dispatch_app_command(&text).await
+        {
+            send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "agent:reply",
+                    "groupJid": group_jid,
+                    "text": output,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                }),
+            );
+            return;
+        }
+
         let is_reset = text.trim() == "/reset"
             || text.trim() == "reset"
             || text.trim().starts_with("/reset ")

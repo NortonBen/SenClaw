@@ -289,6 +289,10 @@ pub struct Config {
     /// POSIX shell override for workflow script steps
     /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
     pub workflow_shell: Option<String>,
+    /// Plugin hub seeded as the default marketplace source on first run
+    /// (`SENCLAW_HUB_URL`). Either the site root or the catalog document; a
+    /// bare host gets `/marketplace.json` appended. Empty disables seeding.
+    pub marketplace_hub_url: String,
 }
 
 /// BackgroundScheduler — autonomous work SenClaw runs by itself: periodic
@@ -577,6 +581,9 @@ impl Config {
             workflow_shell: env::var("SENCLAW_WORKFLOW_SHELL")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            marketplace_hub_url: env::var("SENCLAW_HUB_URL")
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| crate::marketplace::DEFAULT_HUB_URL.to_string()),
         }
     }
 

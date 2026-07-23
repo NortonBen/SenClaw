@@ -60,11 +60,49 @@ impl SpaceClient {
         prompt: &str,
         max_tokens: u32,
     ) -> Result<(String, String)> {
+        self.llm_request_on(system, prompt, max_tokens, None).await
+    }
+
+    /// Same, but pinned to a specific LLM **profile** — a config id or its
+    /// human label from Settings → Models.
+    ///
+    /// This is how an app runs on its own model *without* hijacking the
+    /// daemon's global active model, which every other app and the agent share.
+    /// A profile that does not exist is an error rather than a silent fallback:
+    /// quietly answering on the wrong model is worse than saying so.
+    pub async fn llm_request_on(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: u32,
+        profile: Option<&str>,
+    ) -> Result<(String, String)> {
+        self.llm_request_full(system, prompt, max_tokens, profile)
+            .await
+            .map(|(text, model, _finish)| (text, model))
+    }
+
+    /// Full form, returning `(text, model, finish_reason)`.
+    ///
+    /// `finish_reason` is `"length"` when the provider cut the reply at the
+    /// token cap, `"stop"` on natural completion, `""` when unreported. Callers
+    /// that expect structured output **must** check it: a reasoning model
+    /// spends the same budget on its hidden trace first, so a cap that looks
+    /// generous can still return JSON chopped mid-string — which is otherwise
+    /// indistinguishable from the model simply answering badly.
+    pub async fn llm_request_full(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: u32,
+        profile: Option<&str>,
+    ) -> Result<(String, String, String)> {
         let url = format!("{}/api/space/apps/{}/bridge", self.base_url, self.app_id);
-        let body = json!({
-            "action": "llm.request",
-            "payload": { "system": system, "prompt": prompt, "maxTokens": max_tokens },
-        });
+        let mut payload = json!({ "system": system, "prompt": prompt, "maxTokens": max_tokens });
+        if let Some(p) = profile.map(str::trim).filter(|p| !p.is_empty()) {
+            payload["profile"] = json!(p);
+        }
+        let body = json!({ "action": "llm.request", "payload": payload });
         let v: Value = self
             .http
             .post(&url)
@@ -80,6 +118,7 @@ impl SpaceClient {
             Some("ok") => Ok((
                 v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             )),
             Some("pending") => Err(anyhow!("bridge LLM not enabled in this daemon")),
             _ => Err(anyhow!(v

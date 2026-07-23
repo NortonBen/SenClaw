@@ -22,6 +22,16 @@ enum Command {
         #[command(subcommand)]
         cmd: senclaw::cli::commands::clawhub::ClawhubCmd,
     },
+    /// Publish Space Apps to the senclaw hub
+    Hub {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::hub::HubCmd,
+    },
+    /// Manage plugin marketplace sources and the hub store
+    Marketplace {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::marketplace::MarketplaceCmd,
+    },
     /// Manage Feishu wiki
     Wiki {
         #[command(subcommand)]
@@ -206,6 +216,8 @@ async fn main() -> Result<()> {
         }
         Command::Skills { cmd } => senclaw::cli::commands::skills::run(cmd).await,
         Command::Clawhub { cmd } => senclaw::cli::commands::clawhub::run(cmd).await,
+        Command::Hub { cmd } => senclaw::cli::commands::hub::run(cmd).await,
+        Command::Marketplace { cmd } => senclaw::cli::commands::marketplace::run(cmd).await,
         Command::Wiki { cmd } => senclaw::cli::commands::wiki::run(cmd).await,
         Command::Channel { cmd } => senclaw::cli::commands::channel::run(cmd).await,
         Command::AgentTask(cmd) => senclaw::cli::commands::agent_task::run(cmd).await,

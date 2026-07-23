@@ -105,6 +105,16 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
   /// "a NEW reply arrived" so we never re-speak an existing bubble.
   String? _spokenMsgId;
 
+  /// Streaming-TTS state for the current turn: [_feeder] carves the growing
+  /// `agent:delta` text into sentences, [_speech] plays them in order — so the
+  /// assistant starts talking on the first sentence, not on the full reply.
+  StreamingSentenceFeeder? _feeder;
+  SpeechStreamSession? _speech;
+
+  /// Set once the turn's final reply was queued (or the turn was interrupted);
+  /// stops any late deltas from being fed to TTS.
+  bool _turnFinalized = false;
+
   String _lastUserText = '';
   String _lastAgentText = '';
 
@@ -123,15 +133,30 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
       duration: const Duration(milliseconds: 1600),
     )..repeat(reverse: true);
 
-    // Watch for the agent's reply so we can speak it back.
+    // Watch the agent's reply so we can speak it back — incrementally: the
+    // streaming deltas are spoken sentence-by-sentence as they arrive, and the
+    // completed reply just flushes whatever tail hasn't been spoken yet.
     _convoSub = ref.listenManual(conversationProvider(widget.jid), (_, next) {
-      if (_closing || _phase != _VoicePhase.thinking) return;
+      if (_closing ||
+          (_phase != _VoicePhase.thinking && _phase != _VoicePhase.speaking)) {
+        return;
+      }
+      // Completed reply → queue the remainder and close out the turn.
       final reply = _lastCompletedAgent(next);
       if (reply != null &&
           reply.id != _spokenMsgId &&
           (reply.text ?? '').trim().isNotEmpty) {
         _spokenMsgId = reply.id;
-        _speakReply(reply.text!.trim());
+        _finishTurn(reply.text!.trim());
+        return;
+      }
+      // Still streaming → feed the accumulated text to the TTS pipeline.
+      if (_turnFinalized) return;
+      for (final m in next.messages.reversed) {
+        if (m.kind == MessageKind.agent && m.streaming) {
+          if ((m.text ?? '').trim().isNotEmpty) _feedStream(m.text!);
+          break;
+        }
       }
     });
 
@@ -265,9 +290,13 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
         _startListening(); // heard nothing usable — listen again
         return;
       }
-      // Anchor reply detection to the current tail BEFORE sending.
+      // Anchor reply detection to the current tail BEFORE sending, and reset
+      // the per-turn streaming-TTS state.
       _spokenMsgId =
           _lastCompletedAgent(ref.read(conversationProvider(widget.jid)))?.id;
+      _feeder = null;
+      _speech = null;
+      _turnFinalized = false;
       setState(() {
         _lastUserText = text;
         _phase = _VoicePhase.thinking;
@@ -280,17 +309,40 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
     }
   }
 
-  // ── Speaking the reply ─────────────────────────────────────────────────────
-  Future<void> _speakReply(String text) async {
-    if (_closing) return;
+  // ── Speaking the reply (incrementally, off the stream) ────────────────────
+
+  /// Feed the accumulated streaming text: each newly completed sentence — or a
+  /// ≥10-word head when nothing is playing yet — goes straight to TTS, so
+  /// speech starts on the first sentence instead of the full reply.
+  void _feedStream(String cumulative) {
+    _speech ??= _audio.startSpeechStream();
+    _feeder ??= StreamingSentenceFeeder();
+    final chunks = _feeder!.update(cumulative, pipelineIdle: _speech!.idle);
+    chunks.forEach(_speech!.add);
+    if (!mounted) return;
     setState(() {
-      _lastAgentText = text;
+      _lastAgentText = cumulative.trim();
+      if (chunks.isNotEmpty) _phase = _VoicePhase.speaking;
+    });
+  }
+
+  /// The reply is complete: queue whatever the stream hasn't spoken yet, close
+  /// the pipeline, and re-arm the mic once playback drains.
+  Future<void> _finishTurn(String finalText) async {
+    if (_closing) return;
+    _turnFinalized = true;
+    final speech = _speech ??= _audio.startSpeechStream();
+    final feeder = _feeder ??= StreamingSentenceFeeder();
+    for (final c in [...feeder.update(finalText), ...feeder.flush()]) {
+      speech.add(c);
+    }
+    speech.finish();
+    setState(() {
+      _lastAgentText = finalText;
       _phase = _VoicePhase.speaking;
     });
     final gen = _gen;
-    try {
-      await _audio.speak(text);
-    } catch (_) {/* TTS is best-effort */}
+    await speech.done; // never throws — TTS is best-effort
     if (gen != _gen || _closing || !_active) return;
     _startListening(); // reply spoken → hand the turn back to the user
   }
@@ -303,11 +355,15 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
         _finishListening(); // send now, don't wait for silence
       case _VoicePhase.speaking:
         _gen++; // barge-in: cut the TTS off and listen again
+        if (!_turnFinalized) _convo.stop(); // reply was still streaming
+        _turnFinalized = true;
         unawaited(_audio.stop());
         _startListening();
       case _VoicePhase.thinking:
         _gen++; // cancel this turn, take the mic back
+        _turnFinalized = true;
         _convo.stop();
+        unawaited(_audio.stop()); // a stream session may already be live
         _startListening();
       case _VoicePhase.idle:
       case _VoicePhase.transcribing:

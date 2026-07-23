@@ -3,6 +3,8 @@ pub mod channel;
 pub mod clawhub;
 pub mod cognitive;
 pub mod distrib;
+pub mod hub;
+pub mod marketplace;
 pub mod skills;
 pub mod wiki;
 pub mod workflow;

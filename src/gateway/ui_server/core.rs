@@ -35,7 +35,8 @@ use super::local_models::{
     local_models_unload_all, local_models_use_as_llm,
 };
 use super::marketplace::{
-    marketplace_mcp_status, marketplace_mcp_use_tools, marketplace_plugin_toggle,
+    marketplace_mcp_status, marketplace_mcp_use_tools, marketplace_plugin_install,
+    marketplace_plugin_toggle, marketplace_plugin_uninstall, marketplace_source_catalog,
     marketplace_source_disable_all, marketplace_source_enable_all, marketplace_source_get,
     marketplace_sources_add, marketplace_sources_delete, marketplace_sources_list,
     marketplace_sources_reorder, marketplace_sources_sync,
@@ -61,6 +62,7 @@ use super::space::{
     space_app_mcp_register, space_app_sqlite_query, space_apps_bridge, space_apps_delete,
     space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
     space_apps_register, space_apps_register_local, space_apps_restart, space_apps_static,
+    space_apps_update, space_apps_updates,
     space_events_create,
     space_events_delete, space_events_list, space_events_search, space_events_set_reminder,
     space_events_update, space_notes_create, space_notes_delete, space_notes_list,
@@ -258,6 +260,18 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/marketplace/sources/:id/plugins/:name/toggle",
             post(marketplace_plugin_toggle),
+        )
+        .route(
+            "/api/marketplace/sources/:id/catalog",
+            get(marketplace_source_catalog),
+        )
+        .route(
+            "/api/marketplace/sources/:id/plugins/:name/install",
+            post(marketplace_plugin_install),
+        )
+        .route(
+            "/api/marketplace/sources/:id/plugins/:name",
+            delete(marketplace_plugin_uninstall),
         )
         .route(
             "/api/marketplace/sources/:id/plugins/:name/mcp/:server/use-tools",
@@ -610,6 +624,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/background/stats", get(super::background::stats))
         // Apps
         .route("/api/space/apps", get(space_apps_list))
+        .route("/api/space/apps/updates", get(space_apps_updates))
         .route("/api/space/apps/register", post(space_apps_register))
         .route(
             "/api/space/apps/register-local",
@@ -657,6 +672,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             axum::routing::any(space_apps_proxy_root),
         )
         .route("/api/space/apps/:id", delete(space_apps_delete))
+        .route("/api/space/apps/:id/update", post(space_apps_update))
         .route("/api/space/apps/:id/restart", post(space_apps_restart))
         // External sync
         .route(

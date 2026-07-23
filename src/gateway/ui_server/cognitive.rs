@@ -779,9 +779,23 @@ pub(crate) async fn cognitive_re_extract(
         ));
     }
 
+    // Reset the state machine first: a chunk marked `Done` short-circuits
+    // at cognify's dedupe gate, so without this an explicit re-extract on
+    // an already-processed chunk (e.g. one whose edges have since decayed
+    // away) is a silent no-op.
+    let _ = sys.graph.set_extraction_state(
+        uuid,
+        crate::memory::cognitive::ExtractionState::Pending,
+        chrono::Utc::now().timestamp(),
+    );
+
     // Forward into the same cognify pipeline used by CogAdd. Content-hash
     // dedupe will reuse the existing chunk node — we only get new edges.
-    let opts = crate::memory::cognitive::CognifyOptions::default();
+    // Recovered entities inherit the chunk's own knowledge spaces.
+    let opts = crate::memory::cognitive::CognifyOptions {
+        node_sets: sys.graph.sets_of_node(uuid).unwrap_or_default(),
+        ..Default::default()
+    };
     let report = sys
         .cognify(&node.summary, "re-extract", &opts)
         .await
@@ -803,10 +817,14 @@ pub(crate) async fn cognitive_re_extract(
 //
 // Bulk backfill: re-run triplet extraction on every chunk still marked
 // `Pending` / `SkippedNoLlm` — the rows accumulated while the cognitive
-// LLM was dormant or misconfigured (e.g. an SSE-only gateway). Runs in a
-// background task (one chunk at a time through the cognify semaphore) and
-// returns the queued count immediately so the UI doesn't block on N LLM
-// calls; progress shows up as the node/edge stats grow.
+// LLM was dormant or misconfigured (e.g. an SSE-only gateway). Also
+// rescues `Done` chunks whose extracted edges have all decayed away
+// (pre-L2-tier era): those get their state reset to `Pending` first so
+// the same scan picks them up and the stored text yields its facts
+// again. Runs in a background task (one chunk at a time through the
+// cognify semaphore) and returns the queued count immediately so the UI
+// doesn't block on N LLM calls; progress shows up as the node/edge
+// stats grow.
 
 pub(crate) async fn cognitive_re_extract_pending(
     State(_s): State<Arc<UiState>>,
@@ -818,6 +836,19 @@ pub(crate) async fn cognitive_re_extract_pending(
         .and_then(|b| b.get("limit"))
         .and_then(|v| v.as_u64())
         .unwrap_or(500) as usize;
+
+    // Rescue pass: `Done` chunks that lost every outgoing edge go back to
+    // `Pending` so the scan below treats them like never-extracted rows.
+    let reset = sys
+        .graph
+        .reset_orphan_done_chunks()
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if reset > 0 {
+        tracing::info!(
+            reset,
+            "[cognitive] backfill: reset Done-but-edgeless chunks to Pending"
+        );
+    }
 
     // Page through all chunks and keep the never-extracted ones.
     use crate::memory::cognitive::ExtractionState as S;
@@ -836,7 +867,10 @@ pub(crate) async fn cognitive_re_extract_pending(
             if matches!(n.extraction_state, S::Pending | S::SkippedNoLlm)
                 && !n.summary.trim().is_empty()
             {
-                pending.push(n.summary);
+                // Recovered entities must land in the chunk's own knowledge
+                // spaces, not the unscoped default.
+                let sets = sys.graph.sets_of_node(n.id).unwrap_or_default();
+                pending.push((n.summary, sets));
                 if pending.len() >= limit {
                     break 'scan;
                 }
@@ -852,8 +886,11 @@ pub(crate) async fn cognitive_re_extract_pending(
         let mut entities = 0usize;
         let mut edges = 0usize;
         let mut skipped = 0usize;
-        for text in pending {
-            let opts = crate::memory::cognitive::CognifyOptions::default();
+        for (text, sets) in pending {
+            let opts = crate::memory::cognitive::CognifyOptions {
+                node_sets: sets,
+                ..Default::default()
+            };
             match sys.cognify(&text, "re-extract", &opts).await {
                 Ok(r) => {
                     entities += r.entities_added;
@@ -874,7 +911,7 @@ pub(crate) async fn cognitive_re_extract_pending(
         );
     });
 
-    Ok(Json(serde_json::json!({ "queued": queued })))
+    Ok(Json(serde_json::json!({ "queued": queued, "reset": reset })))
 }
 
 // =====================================================================

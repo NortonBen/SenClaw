@@ -19,6 +19,7 @@ pub const COMMANDS_HELP: &str = "\
   del_task <taskId>         — delete task (remove permanently)
   history                   — show conversation history stats
   reset                     — reset session (clear chat history)
+  plugin help               — marketplace / plugin commands
   help                      — show this help";
 
 /// Try parsing text as an admin command and execute it.

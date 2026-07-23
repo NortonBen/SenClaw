@@ -1750,23 +1750,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let _ = app_agent_pool_cell.set(agent_pool.clone());
 
     // Initialize marketplace manager for loading MCP servers from plugins
-    let marketplace_manager = Arc::new(
-        marketplace::manager::MarketplaceManager::new().unwrap_or_else(|_| {
-            marketplace::manager::MarketplaceManager::with_paths(
-                cfg.paths.marketplace_config_path.clone(),
-                cfg.paths.marketplace_state_path.clone(),
-                cfg.paths.marketplace_clones_dir.clone(),
-            )
-            .unwrap_or_else(|_| {
-                marketplace::manager::MarketplaceManager::with_paths(
-                    std::path::PathBuf::from("/tmp/senclaw-marketplace-config.json"),
-                    std::path::PathBuf::from("/tmp/senclaw-marketplace-state.json"),
-                    std::path::PathBuf::from("/tmp/senclaw-marketplace"),
-                )
-                .unwrap_or_else(|_| panic!("Failed to create marketplace manager"))
-            })
-        }),
-    );
+    let marketplace_manager = Arc::new(marketplace::manager::MarketplaceManager::from_config(&cfg));
     agent_pool.set_marketplace_manager(Arc::clone(&marketplace_manager));
     tracing::info!("[SenClaw] MarketplaceManager initialized and wired to AgentPool");
 
@@ -1951,6 +1935,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     };
 
     // ===== 4b. MessageRouter =====
+    // One marketplace manager shared across the chat command path (router + WS)
+    // and the REST/UI panel (UiState), so `/plugin` commands and the panel
+    // mutate the same on-disk sources/state.
+    let marketplace_shared = Arc::new(std::sync::Mutex::new(
+        marketplace::manager::MarketplaceManager::from_config(&cfg),
+    ));
+
     let message_router = Arc::new(gateway::message_router::MessageRouter::new(
         Arc::clone(&gm),
         Arc::clone(&bm),
@@ -1959,6 +1950,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         Arc::clone(&db),
         Arc::new(cfg.clone()),
     ));
+    message_router
+        .set_marketplace_manager(Arc::clone(&marketplace_shared))
+        .await;
     // Wire incoming messages from all channels → MessageRouter
     {
         let chs = channels.lock().await;
@@ -2087,6 +2081,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             api: ws_api,
             agent_api: Some(agent_pool.clone() as Arc<dyn types::AgentApi>),
             browser_relay,
+            marketplace_manager: Some(Arc::clone(&marketplace_shared)),
         });
 
         let gw = Arc::new(gateway::websocket_gateway::WebSocketGateway::new(
@@ -2836,27 +2831,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 agent_pool: agent_pool.clone(),
             })),
             mcp_manager: Some(Arc::clone(&mcp_manager)),
-            marketplace_manager: Some(Arc::new(std::sync::Mutex::new(
-                marketplace::manager::MarketplaceManager::new()
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("[SenClaw] Failed to initialize marketplace manager: {e}");
-                        marketplace::manager::MarketplaceManager::with_paths(
-                            cfg.paths.marketplace_config_path.clone(),
-                            cfg.paths.marketplace_state_path.clone(),
-                            cfg.paths.marketplace_clones_dir.clone(),
-                        ).unwrap_or_else(|e2| {
-                            tracing::error!("[SenClaw] Failed to create marketplace manager with custom paths: {e2}");
-                            // Create a dummy manager that will fail gracefully
-                            marketplace::manager::MarketplaceManager::with_paths(
-                                std::path::PathBuf::from("/tmp/senclaw-marketplace-config.json"),
-                                std::path::PathBuf::from("/tmp/senclaw-marketplace-state.json"),
-                                std::path::PathBuf::from("/tmp/senclaw-marketplace"),
-                            ).unwrap_or_else(|_| {
-                                panic!("Failed to create even a dummy marketplace manager")
-                            })
-                        })
-                    })
-            ))),
+            marketplace_manager: Some(Arc::clone(&marketplace_shared)),
             workbench_bridge: Some(Arc::clone(&workbench_bridge)),
             space_mcp_launcher: Some(Arc::clone(&space_mcp_launcher)),
             workflow_service: Some(Arc::clone(&workflow_service)),

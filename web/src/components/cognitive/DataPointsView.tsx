@@ -149,6 +149,37 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
     }
   }, [fetchPage, onMutated]);
 
+  /**
+   * Bulk rescue: scans every chunk whose triplet extraction never ran
+   * (Pending / no-LLM) OR ran but whose edges have since decayed away
+   * (Done-but-edgeless), and queues them all through cognify again. The
+   * backend answers immediately with the queued count; extraction happens
+   * in the background one chunk at a time.
+   */
+  const reExtractLost = useCallback(async () => {
+    try {
+      const r = await fetch('/api/cognitive/re-extract-pending', {
+        method: 'POST',
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const body = await r.json();
+      if ((body.queued ?? 0) === 0) {
+        message.success('Nothing to recover — every chunk has extracted knowledge.');
+      } else {
+        message.success(
+          `Queued ${body.queued} chunk(s) for re-extraction` +
+            ((body.reset ?? 0) > 0
+              ? ` (${body.reset} had lost their extracted knowledge)`
+              : '') +
+            '. Entities and edges will appear as the LLM works through them.',
+        );
+      }
+      onMutated?.();
+    } catch (e: any) {
+      message.error(`Recover failed: ${e?.message ?? e}`);
+    }
+  }, [onMutated]);
+
   const reExtract = useCallback(
     async (id: string) => {
       try {
@@ -292,6 +323,17 @@ export function DataPointsView({ onMutated, onOpenInGraph }: Props) {
           >
             Refresh
           </Button>
+          <Popconfirm
+            title="Recover lost knowledge?"
+            description="Re-runs triplet extraction on chunks whose knowledge was never extracted or has decayed away. One LLM call per chunk, running in the background."
+            onConfirm={reExtractLost}
+            okText="Recover"
+            overlayStyle={{ maxWidth: 380 }}
+          >
+            <Button size="small" icon={<ExperimentOutlined />}>
+              Recover
+            </Button>
+          </Popconfirm>
           <Popconfirm
             title="Clean up junk?"
             description="Removes envelope-wrapped chunks and orphan entities. The good data stays. This cannot be undone."

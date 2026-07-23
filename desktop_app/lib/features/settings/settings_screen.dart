@@ -3785,6 +3785,37 @@ final spaceAppsProvider = FutureProvider<List<SpaceApp>>((ref) async {
       .toList();
 });
 
+/// Result of checking one installed app against the hub package registry.
+class SpaceAppUpdate {
+  final String id;
+  final String? installed;
+  final String? latest;
+  final bool hasUpdate;
+  const SpaceAppUpdate(this.id, this.installed, this.latest, this.hasUpdate);
+  factory SpaceAppUpdate.fromJson(Map<String, dynamic> j) => SpaceAppUpdate(
+        '${j['id'] ?? ''}',
+        j['installed'] as String?,
+        j['latest'] as String?,
+        j['hasUpdate'] == true,
+      );
+}
+
+/// Available updates keyed by app id. Non-fatal: an unreachable hub yields an
+/// empty map (no badges), never an error surface.
+final spaceAppUpdatesProvider =
+    FutureProvider<Map<String, SpaceAppUpdate>>((ref) async {
+  try {
+    final r = await ref.read(apiClientProvider).get('/api/space/apps/updates');
+    final list = r is List ? r : const [];
+    return {
+      for (final e in list.whereType<Map>())
+        '${e['id']}': SpaceAppUpdate.fromJson(e.cast<String, dynamic>()),
+    };
+  } catch (_) {
+    return const {};
+  }
+});
+
 class SpaceAppsSection extends ConsumerWidget {
   const SpaceAppsSection({super.key});
 
@@ -3876,13 +3907,56 @@ class SpaceAppsSection extends ConsumerWidget {
     }
   }
 
+  Future<void> _checkUpdates(BuildContext context, WidgetRef ref) async {
+    ref.invalidate(spaceAppUpdatesProvider);
+    try {
+      final map = await ref.read(spaceAppUpdatesProvider.future);
+      final n = map.values.where((u) => u.hasUpdate).length;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(n > 0
+                ? '$n app có bản mới'
+                : 'Mọi app đã ở phiên bản mới nhất')));
+      }
+    } catch (_) {/* non-fatal */}
+  }
+
+  Future<void> _updateApp(
+      BuildContext context, WidgetRef ref, String id) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(
+        content: Text('Đang cập nhật…'), duration: Duration(seconds: 60)));
+    try {
+      final r = await ref
+          .read(apiClientProvider)
+          .post('/api/space/apps/$id/update');
+      messenger.hideCurrentSnackBar();
+      final updated = (r is Map && r['updated'] == true);
+      messenger.showSnackBar(SnackBar(
+          content: Text(updated
+              ? 'Đã cập nhật $id → ${r['latest']}'
+              : '$id đã ở bản mới nhất')));
+      ref.invalidate(spaceAppsProvider);
+      ref.invalidate(spaceAppUpdatesProvider);
+    } catch (e) {
+      messenger.hideCurrentSnackBar();
+      messenger
+          .showSnackBar(SnackBar(content: Text('Cập nhật thất bại: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final apps = ref.watch(spaceAppsProvider);
+    final updates =
+        ref.watch(spaceAppUpdatesProvider).valueOrNull ?? const {};
     return _Body(
       title: 'Space Apps',
-      onRefresh: () => ref.invalidate(spaceAppsProvider),
+      onRefresh: () {
+        ref.invalidate(spaceAppsProvider);
+        ref.invalidate(spaceAppUpdatesProvider);
+      },
       children: [
         Text('Install, register, and remove embedded Space Apps.',
             style: TextStyle(color: c.textMuted, fontSize: 12)),
@@ -3900,11 +3974,20 @@ class SpaceAppsSection extends ConsumerWidget {
               icon: const Icon(Icons.link, size: 16),
               label: const Text('Register URL'),
             ),
+            const SizedBox(width: AppTokens.s8),
+            OutlinedButton.icon(
+              onPressed: () => _checkUpdates(context, ref),
+              icon: const Icon(Icons.cloud_download_outlined, size: 16),
+              label: const Text('Check updates'),
+            ),
             const Spacer(),
             IconButton(
               tooltip: 'Refresh',
               icon: const Icon(Icons.refresh, size: 18),
-              onPressed: () => ref.invalidate(spaceAppsProvider),
+              onPressed: () {
+                ref.invalidate(spaceAppsProvider);
+                ref.invalidate(spaceAppUpdatesProvider);
+              },
             ),
           ],
         ),
@@ -3949,6 +4032,27 @@ class SpaceAppsSection extends ConsumerWidget {
                                     Text(a.id,
                                         style: TextStyle(
                                             color: c.textMuted, fontSize: 11)),
+                                    if (updates[a.id]?.hasUpdate == true) ...[
+                                      const SizedBox(width: AppTokens.s8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: AppTokens.s6,
+                                            vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: AppTokens.warning
+                                              .withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(
+                                              AppTokens.rSm),
+                                        ),
+                                        child: Text(
+                                          '${updates[a.id]!.installed ?? '?'} → ${updates[a.id]!.latest}',
+                                          style: const TextStyle(
+                                              color: AppTokens.warning,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w600),
+                                        ),
+                                      ),
+                                    ],
                                   ]),
                                   if (a.description != null)
                                     Text(a.description!,
@@ -3966,6 +4070,12 @@ class SpaceAppsSection extends ConsumerWidget {
                                   context: context,
                                   builder: (_) => _SpaceAppDetailDialog(app: a)),
                             ),
+                            if (updates[a.id]?.hasUpdate == true)
+                              FilledButton(
+                                onPressed: () =>
+                                    _updateApp(context, ref, a.id),
+                                child: const Text('Update'),
+                              ),
                             TextButton(
                               onPressed: () async {
                                 final messenger =

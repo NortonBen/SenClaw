@@ -1,34 +1,51 @@
 import { useState, useEffect } from 'react';
-import { Typography, Card, Button, Table, Space, Tag, message, Modal, Form, Input, Select, Spin } from 'antd';
-import { PlusOutlined, CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SettingOutlined, SearchOutlined } from '@ant-design/icons';
+import { Typography, Card, Button, Table, Space, Tag, message, Modal, Form, Input, Select, Spin, Switch, Empty, Tooltip } from 'antd';
+import { PlusOutlined, CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined, DownloadOutlined, ShopOutlined } from '@ant-design/icons';
 import { ClawHubSearchDialog } from './ClawHubSearchDialog';
 
 const { Title, Text } = Typography;
 
+type SourceType = 'hub' | 'git' | 'local';
+
 interface MarketplaceSource {
   id: string;
   name: string;
-  type: 'git' | 'local';
+  type: SourceType;
   url?: string;
   branch?: string;
-  local_path: string;
+  localPath: string;
   priority: number;
   enabled: boolean;
-  last_synced?: string;
+  lastSynced?: string;
+  syncError?: string;
 }
 
 interface MarketplacePlugin {
   name: string;
-  source_id: string;
+  description: string;
+  version?: string;
+  author?: string;
+  category?: string;
+  license?: string;
+  repository?: string;
+  sourceId: string;
   enabled: boolean;
-  type: 'skill' | 'subagent' | 'mcp';
+  /** Hub plugins are catalog entries until installed; git/local are always true. */
+  installed: boolean;
+  skillCount: number;
+  subagentCount: number;
+  mcpServerCount: number;
+  hasHooks: boolean;
 }
+
+const TYPE_COLOR: Record<SourceType, string> = { hub: 'purple', git: 'blue', local: 'green' };
 
 export default function MarketplacePanel() {
   const [sources, setSources] = useState<MarketplaceSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [clawhubOpen, setClawhubOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -58,49 +75,47 @@ export default function MarketplacePanel() {
         body: JSON.stringify({
           name: values.name,
           type: values.type,
-          url: values.url,
-          branch: values.branch,
-          local_path: values.local_path,
-          priority: values.priority,
+          url: values.type === 'local' ? undefined : values.url,
+          branch: values.type === 'git' ? values.branch : undefined,
+          localPath: values.type === 'local' ? values.localPath : undefined,
+          priority: values.priority ? Number(values.priority) : undefined,
           enabled: values.enabled,
         }),
       });
-      if (!res.ok) throw new Error('Failed to add source');
-      message.success('Source added successfully');
+      if (!res.ok) throw new Error(await res.text());
+      message.success('Source added');
       setAddModalVisible(false);
       form.resetFields();
       fetchSources();
-    } catch (error) {
-      message.error('Failed to add source');
+    } catch (error: any) {
+      message.error(`Failed to add source: ${error?.message ?? error}`);
       console.error(error);
     }
   };
 
   const handleSync = async (id: string) => {
     try {
-      const res = await fetch(`/api/marketplace/sources/${id}/sync`, {
-        method: 'POST',
-      });
-      if (!res.ok) throw new Error('Failed to sync source');
-      message.success('Source synced successfully');
+      setBusy(id);
+      const res = await fetch(`/api/marketplace/sources/${id}/sync`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      message.success('Source synced');
       fetchSources();
-    } catch (error) {
-      message.error('Failed to sync source');
-      console.error(error);
+    } catch (error: any) {
+      message.error(`Sync failed: ${error?.message ?? error}`);
+    } finally {
+      setBusy(null);
     }
   };
 
   const handleDelete = async (id: string) => {
     Modal.confirm({
       title: 'Delete Source',
-      content: 'Are you sure you want to delete this source?',
+      content: 'Remove this source and everything installed from it?',
       onOk: async () => {
         try {
-          const res = await fetch(`/api/marketplace/sources/${id}`, {
-            method: 'DELETE',
-          });
+          const res = await fetch(`/api/marketplace/sources/${id}`, { method: 'DELETE' });
           if (!res.ok) throw new Error('Failed to delete source');
-          message.success('Source deleted successfully');
+          message.success('Source deleted');
           fetchSources();
         } catch (error) {
           message.error('Failed to delete source');
@@ -115,20 +130,27 @@ export default function MarketplacePanel() {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      render: (name: string, record: MarketplaceSource) => (
+        <Space>
+          {record.type === 'hub' && <ShopOutlined />}
+          <span>{name}</span>
+        </Space>
+      ),
     },
     {
       title: 'Type',
       dataIndex: 'type',
       key: 'type',
-      render: (type: string) => (
-        <Tag color={type === 'git' ? 'blue' : 'green'}>{type.toUpperCase()}</Tag>
-      ),
+      width: 90,
+      render: (type: SourceType) => <Tag color={TYPE_COLOR[type]}>{type.toUpperCase()}</Tag>,
     },
     {
       title: 'URL/Path',
-      dataIndex: 'local_path',
-      key: 'local_path',
+      key: 'origin',
       ellipsis: true,
+      render: (_: any, record: MarketplaceSource) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>{record.url || record.localPath}</Text>
+      ),
     },
     {
       title: 'Priority',
@@ -147,24 +169,34 @@ export default function MarketplacePanel() {
     },
     {
       title: 'Last Synced',
-      dataIndex: 'last_synced',
-      key: 'last_synced',
-      width: 150,
-      render: (date: string) => (date ? new Date(date).toLocaleString() : 'Never'),
+      dataIndex: 'lastSynced',
+      key: 'lastSynced',
+      width: 170,
+      render: (date: string, record: MarketplaceSource) =>
+        record.syncError ? (
+          <Tooltip title={record.syncError}>
+            <Tag color="red">sync error</Tag>
+          </Tooltip>
+        ) : (
+          date ? new Date(date).toLocaleString() : 'Never'
+        ),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 150,
+      width: 110,
       render: (_: any, record: MarketplaceSource) => (
         <Space size="small">
-          {record.type === 'git' && (
-            <Button
-              type="text"
-              icon={<CloudDownloadOutlined />}
-              onClick={() => handleSync(record.id)}
-              size="small"
-            />
+          {record.type !== 'local' && (
+            <Tooltip title={record.type === 'hub' ? 'Refresh catalog' : 'Pull latest'}>
+              <Button
+                type="text"
+                icon={<CloudDownloadOutlined />}
+                loading={busy === record.id}
+                onClick={() => handleSync(record.id)}
+                size="small"
+              />
+            </Tooltip>
           )}
           <Button
             type="text"
@@ -208,6 +240,10 @@ export default function MarketplacePanel() {
             rowKey="id"
             pagination={false}
             size="small"
+            expandable={{
+              expandedRowRender: (record: MarketplaceSource) => <SourcePlugins source={record} />,
+              rowExpandable: () => true,
+            }}
           />
         </Spin>
       </Card>
@@ -220,54 +256,67 @@ export default function MarketplacePanel() {
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={handleAddSource}>
-          <Form.Item
-            label="Name"
-            name="name"
-            rules={[{ required: true, message: 'Please enter a name' }]}
-          >
+          <Form.Item label="Name" name="name" extra="Optional — defaults to the host or repo">
             <Input placeholder="My Skills Repository" />
           </Form.Item>
           <Form.Item
             label="Type"
             name="type"
-            initialValue="git"
+            initialValue="hub"
             rules={[{ required: true }]}
           >
             <Select>
+              <Select.Option value="hub">Hub store (marketplace.json)</Select.Option>
               <Select.Option value="git">Git Repository</Select.Option>
               <Select.Option value="local">Local Directory</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item noStyle shouldUpdate={(prev, curr) => prev.type !== curr.type}>
-            {({ getFieldValue }) =>
-              getFieldValue('type') === 'git' ? (
-                <>
+            {({ getFieldValue }) => {
+              const type = getFieldValue('type');
+              if (type === 'local') {
+                return (
                   <Form.Item
-                    label="Git URL"
-                    name="url"
-                    rules={[{ required: true, message: 'Please enter a Git URL' }]}
+                    label="Local Path"
+                    name="localPath"
+                    rules={[{ required: true, message: 'Please enter a local path' }]}
                   >
-                    <Input placeholder="https://github.com/user/repo" />
+                    <Input placeholder="/path/to/local/directory" />
                   </Form.Item>
-                  <Form.Item label="Branch" name="branch" initialValue="main">
-                    <Input placeholder="main" />
-                  </Form.Item>
-                </>
-              ) : (
+                );
+              }
+              if (type === 'git') {
+                return (
+                  <>
+                    <Form.Item
+                      label="Git URL"
+                      name="url"
+                      rules={[{ required: true, message: 'Please enter a Git URL' }]}
+                    >
+                      <Input placeholder="https://github.com/user/repo" />
+                    </Form.Item>
+                    <Form.Item label="Branch" name="branch" initialValue="main">
+                      <Input placeholder="main" />
+                    </Form.Item>
+                  </>
+                );
+              }
+              return (
                 <Form.Item
-                  label="Local Path"
-                  name="local_path"
-                  rules={[{ required: true, message: 'Please enter a local path' }]}
+                  label="Hub URL"
+                  name="url"
+                  rules={[{ required: true, message: 'Please enter a hub URL' }]}
+                  extra="A site root gets /marketplace.json appended automatically"
                 >
-                  <Input placeholder="/path/to/local/directory" />
+                  <Input placeholder="https://hub-store.bacnd.com" />
                 </Form.Item>
-              )
-            }
+              );
+            }}
           </Form.Item>
           <Form.Item label="Priority" name="priority" initialValue={10}>
             <Input type="number" />
           </Form.Item>
-          <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
+          <Form.Item label="Enabled" name="enabled" initialValue={true}>
             <Select>
               <Select.Option value={true}>Yes</Select.Option>
               <Select.Option value={false}>No</Select.Option>
@@ -282,5 +331,119 @@ export default function MarketplacePanel() {
         onInstalled={() => fetchSources()}
       />
     </div>
+  );
+}
+
+/** Plugins of one source. For a hub these are catalog entries, installable one by one. */
+function SourcePlugins({ source }: { source: MarketplaceSource }) {
+  const [plugins, setPlugins] = useState<MarketplacePlugin[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/marketplace/sources/${source.id}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setPlugins(data.plugins || []);
+    } catch (error: any) {
+      message.error(`Failed to load plugins: ${error?.message ?? error}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source.id]);
+
+  const call = async (name: string, path: string, method: string) => {
+    try {
+      setBusy(name);
+      const res = await fetch(path, { method });
+      if (!res.ok) throw new Error(await res.text());
+      await load();
+    } catch (error: any) {
+      message.error(`${method} ${path} failed: ${error?.message ?? error}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const install = (p: MarketplacePlugin) =>
+    call(p.name, `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}/install`, 'POST');
+  const uninstall = (p: MarketplacePlugin) =>
+    call(p.name, `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}`, 'DELETE');
+  const toggle = (p: MarketplacePlugin) =>
+    call(p.name, `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}/toggle`, 'POST');
+
+  if (loading) return <Spin size="small" />;
+  if (!plugins.length) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={source.type === 'hub' ? 'Catalog is empty — try syncing the hub' : 'No plugins found in this source'}
+      />
+    );
+  }
+
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={4}>
+      {plugins.map((p) => (
+        <div
+          key={p.name}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Space size={6} wrap>
+              <Text strong>{p.name}</Text>
+              {p.version && <Tag>{p.version}</Tag>}
+              {p.category && <Tag color="geekblue">{p.category}</Tag>}
+              {!p.installed && <Tag color="default">not installed</Tag>}
+            </Space>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {p.description}
+              </Text>
+            </div>
+            {p.installed && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {p.skillCount} skills · {p.subagentCount} subagents · {p.mcpServerCount} MCP
+                {p.hasHooks ? ' · hooks' : ''}
+              </Text>
+            )}
+          </div>
+          <Space size="small">
+            {p.installed ? (
+              <>
+                <Switch
+                  size="small"
+                  checked={p.enabled}
+                  loading={busy === p.name}
+                  onChange={() => toggle(p)}
+                />
+                {source.type === 'hub' && (
+                  <Button size="small" danger type="text" loading={busy === p.name} onClick={() => uninstall(p)}>
+                    Remove
+                  </Button>
+                )}
+              </>
+            ) : (
+              <Button
+                size="small"
+                type="primary"
+                icon={<DownloadOutlined />}
+                loading={busy === p.name}
+                onClick={() => install(p)}
+              >
+                Install
+              </Button>
+            )}
+          </Space>
+        </div>
+      ))}
+    </Space>
   );
 }

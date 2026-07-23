@@ -142,16 +142,24 @@ class MarketplaceSource {
   final String url;
   final bool enabled;
   final String? lastSynced;
-  const MarketplaceSource(
-      this.id, this.name, this.url, this.enabled, this.lastSynced);
+
+  /// 'hub' (remote marketplace.json catalog), 'git' or 'local'.
+  final String type;
+  final String? syncError;
+  const MarketplaceSource(this.id, this.name, this.url, this.enabled,
+      this.lastSynced, this.type, this.syncError);
   factory MarketplaceSource.fromJson(Map<String, dynamic> j) =>
       MarketplaceSource(
         '${j['id'] ?? ''}',
         '${j['name'] ?? j['id'] ?? ''}',
-        '${j['url'] ?? j['source'] ?? ''}',
+        '${j['url'] ?? j['localPath'] ?? j['source'] ?? ''}',
         j['enabled'] != false,
-        j['last_synced'] as String?,
+        (j['lastSynced'] ?? j['last_synced']) as String?,
+        '${j['type'] ?? 'git'}',
+        (j['syncError'] ?? j['sync_error']) as String?,
       );
+
+  bool get isHub => type == 'hub';
 }
 
 // ── Providers ───────────────────────────────────────────────────────────────
@@ -183,6 +191,27 @@ final marketplaceSourcePluginsProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, id) async {
   final r = await ref.read(apiClientProvider).get('/api/marketplace/sources/$id');
   return _list(r, 'plugins');
+});
+
+/// Aggregated catalog: every plugin of every enabled source, paired with its
+/// source. Watches the per-source providers so any install/toggle/sync
+/// invalidation refreshes the merged list too.
+final marketplaceCatalogProvider = FutureProvider<
+    List<(MarketplaceSource, Map<String, dynamic>)>>((ref) async {
+  final sources = await ref.watch(marketplaceSourcesProvider.future);
+  final all = <(MarketplaceSource, Map<String, dynamic>)>[];
+  for (final s in sources.where((s) => s.enabled)) {
+    try {
+      final plugins =
+          await ref.watch(marketplaceSourcePluginsProvider(s.id).future);
+      for (final p in plugins) {
+        all.add((s, p));
+      }
+    } catch (_) {
+      // One broken source must not blank the whole catalog.
+    }
+  }
+  return all;
 });
 
 final subagentsProvider = FutureProvider<List<SubagentInfo>>((ref) async =>
@@ -2408,72 +2437,393 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
 }
 
 // ── Marketplace ─────────────────────────────────────────────────────────────
-class _MarketplaceTab extends ConsumerWidget {
+/// Store-style marketplace: search + kind filters over the merged catalog of
+/// every enabled source; source management lives behind the "Sources" dialog.
+class _MarketplaceTab extends ConsumerStatefulWidget {
   const _MarketplaceTab();
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MarketplaceTab> createState() => _MarketplaceTabState();
+}
+
+class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
+  String _query = '';
+  String _kind = 'all';
+  String? _author;
+  int _page = 0;
+  static const _pageSize = 20;
+
+  static const _kinds = [
+    ('all', 'All'),
+    ('skills', 'Skills'),
+    ('subagents', 'Subagents'),
+    ('mcp', 'MCP'),
+    ('installed', 'Installed'),
+  ];
+
+  bool _matches(Map<String, dynamic> p) {
+    switch (_kind) {
+      case 'skills':
+        if ((p['skillCount'] as num? ?? 0) == 0) return false;
+      case 'subagents':
+        if ((p['subagentCount'] as num? ?? 0) == 0) return false;
+      case 'mcp':
+        if ((p['mcpServerCount'] as num? ?? 0) == 0) return false;
+      case 'installed':
+        if (p['installed'] == false) return false;
+    }
+    if (_author != null && '${p['author'] ?? ''}' != _author) return false;
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final haystack = [
+      '${p['name'] ?? ''}',
+      '${p['description'] ?? ''}',
+      '${p['category'] ?? ''}',
+      '${p['author'] ?? ''}',
+      ...((p['keywords'] as List?) ?? const []).map((e) => '$e'),
+      ...((p['skills'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((s) => '${s['name'] ?? ''}'),
+      ...((p['subagents'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((s) => '${s['name'] ?? ''}'),
+    ].join(' ').toLowerCase();
+    return q.split(RegExp(r'\s+')).every(haystack.contains);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final c = context.colors;
     final sources = ref.watch(marketplaceSourcesProvider);
+    final catalog = ref.watch(marketplaceCatalogProvider);
+    final sourceCount = sources.valueOrNull?.length ?? 0;
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(
               AppTokens.s16, AppTokens.s12, AppTokens.s16, 0),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              onPressed: () => _addSource(context, ref),
-              icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add source'),
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 36,
+                  child: TextField(
+                    onChanged: (v) => setState(() {
+                      _query = v;
+                      _page = 0;
+                    }),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      hintText: 'Search skills, subagents, MCP servers…',
+                      hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
+                      contentPadding:
+                          const EdgeInsets.symmetric(vertical: AppTokens.s8),
+                    ),
+                    style:
+                        TextStyle(color: c.textPrimary, fontSize: 13),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppTokens.s8),
+              OutlinedButton.icon(
+                onPressed: () => _showSourcesDialog(context),
+                icon: const Icon(Icons.settings_outlined, size: 16),
+                label: Text('Sources ($sourceCount)'),
+              ),
+              const SizedBox(width: AppTokens.s8),
+              FilledButton.icon(
+                onPressed: () => _addSource(context, ref),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add source'),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppTokens.s16, AppTokens.s8, AppTokens.s16, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: AppTokens.s6,
+                  children: [
+                    for (final (id, label) in _kinds)
+                      ChoiceChip(
+                        label:
+                            Text(label, style: const TextStyle(fontSize: 12)),
+                        selected: _kind == id,
+                        showCheckmark: false,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) => setState(() {
+                          _kind = id;
+                          _page = 0;
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppTokens.s8),
+              _authorFilter(catalog.valueOrNull ?? const []),
+            ],
           ),
         ),
         Expanded(
-          child: sources.when(
+          child: catalog.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('$e')),
-            data: (list) => list.isEmpty
-                ? Center(
-                    child: Text('No marketplace sources',
-                        style: TextStyle(color: c.textMuted)))
-                : ListView.builder(
-                    padding: const EdgeInsets.all(AppTokens.s16),
-                    itemCount: list.length,
-                    itemBuilder: (_, i) =>
-                        _MarketplaceSourceCard(source: list[i]),
+            data: (all) {
+              if (sourceCount == 0) {
+                return Center(
+                    child: Text('No marketplace sources — add one to browse',
+                        style: TextStyle(color: c.textMuted)));
+              }
+              final list = all.where((e) => _matches(e.$2)).toList()
+                ..sort((a, b) =>
+                    '${a.$2['name']}'.compareTo('${b.$2['name']}'));
+              if (list.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                          all.isEmpty
+                              ? 'Catalog is empty'
+                              : 'Nothing matches your filter',
+                          style: TextStyle(color: c.textMuted)),
+                      if (all.isEmpty) ...[
+                        const SizedBox(height: AppTokens.s8),
+                        TextButton.icon(
+                          onPressed: () => _syncAll(),
+                          icon: const Icon(Icons.sync, size: 16),
+                          label: const Text('Sync all sources'),
+                        ),
+                      ],
+                    ],
                   ),
+                );
+              }
+              final pageCount = (list.length + _pageSize - 1) ~/ _pageSize;
+              final page = _page.clamp(0, pageCount - 1);
+              final start = page * _pageSize;
+              final pageItems = list.sublist(
+                  start, (start + _pageSize).clamp(0, list.length));
+              return Column(
+                children: [
+                  Expanded(
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(AppTokens.s16),
+                      itemCount: pageItems.length,
+                      itemBuilder: (_, i) => _MarketplaceCatalogCard(
+                          key: ValueKey(
+                              '${pageItems[i].$1.id}/${pageItems[i].$2['name']}'),
+                          source: pageItems[i].$1,
+                          plugin: pageItems[i].$2),
+                    ),
+                  ),
+                  if (pageCount > 1)
+                    Padding(
+                      padding:
+                          const EdgeInsets.only(bottom: AppTokens.s12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            tooltip: 'Previous page',
+                            iconSize: 18,
+                            icon: const Icon(Icons.chevron_left),
+                            onPressed: page > 0
+                                ? () => setState(() => _page = page - 1)
+                                : null,
+                          ),
+                          Text(
+                              '${start + 1}–${start + pageItems.length} of ${list.length}   ·   page ${page + 1}/$pageCount',
+                              style: TextStyle(
+                                  color: c.textSecondary, fontSize: 12)),
+                          IconButton(
+                            tooltip: 'Next page',
+                            iconSize: 18,
+                            icon: const Icon(Icons.chevron_right),
+                            onPressed: page < pageCount - 1
+                                ? () => setState(() => _page = page + 1)
+                                : null,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
         ),
       ],
     );
   }
 
-  Future<void> _addSource(BuildContext context, WidgetRef ref) async {
-    final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
+  /// Author filter dropdown built from the distinct authors in the catalog.
+  Widget _authorFilter(
+      List<(MarketplaceSource, Map<String, dynamic>)> all) {
+    final c = context.colors;
+    final authors = all
+        .map((e) => '${e.$2['author'] ?? ''}')
+        .where((a) => a.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    // A previously selected author may vanish after a re-sync; drop it so the
+    // dropdown never holds a value that is not among its items.
+    final value = authors.contains(_author) ? _author : null;
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String?>(
+        value: value,
+        hint: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.person_outline, size: 15, color: c.textMuted),
+            const SizedBox(width: AppTokens.s4),
+            Text('Author',
+                style: TextStyle(color: c.textMuted, fontSize: 12)),
+          ],
+        ),
+        style: TextStyle(color: c.textPrimary, fontSize: 12),
+        isDense: true,
+        items: [
+          const DropdownMenuItem<String?>(
+              value: null, child: Text('All authors')),
+          for (final a in authors)
+            DropdownMenuItem<String?>(value: a, child: Text(a)),
+        ],
+        onChanged: (v) => setState(() {
+          _author = v;
+          _page = 0;
+        }),
+      ),
+    );
+  }
+
+  Future<void> _syncAll() async {
+    final list = ref.read(marketplaceSourcesProvider).valueOrNull ?? const [];
+    for (final s in list.where((s) => s.enabled)) {
+      try {
+        await ref
+            .read(apiClientProvider)
+            .post('/api/marketplace/sources/${s.id}/sync');
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('${s.name}: $e')));
+        }
+      }
+      ref.invalidate(marketplaceSourcePluginsProvider(s.id));
+    }
+    ref.invalidate(marketplaceSourcesProvider);
+  }
+
+  void _showSourcesDialog(BuildContext context) {
+    showDialog<void>(
       context: context,
       builder: (dctx) => AlertDialog(
         backgroundColor: dctx.colors.surface,
-        title: const Text('Add marketplace source'),
-        content: TextField(
-            controller: ctrl,
-            autofocus: true,
-            decoration: const InputDecoration(
-                labelText: 'Source URL (git repo or index)')),
+        title: Row(
+          children: [
+            const Expanded(child: Text('Marketplace sources')),
+            TextButton.icon(
+              onPressed: () => _addSource(dctx, ref),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add'),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 560,
+          child: Consumer(builder: (_, ref, _) {
+            final sources = ref.watch(marketplaceSourcesProvider);
+            return sources.when(
+              loading: () =>
+                  const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Text('$e'),
+              data: (list) => list.isEmpty
+                  ? Text('No sources yet',
+                      style: TextStyle(color: dctx.colors.textMuted))
+                  : ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final s in list) _SourceSettingsRow(source: s),
+                      ],
+                    ),
+            );
+          }),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(dctx).pop(false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(dctx).pop(true),
-              child: const Text('Add')),
+              onPressed: () => Navigator.of(dctx).pop(),
+              child: const Text('Close')),
         ],
       ),
     );
+  }
+
+  Future<void> _addSource(BuildContext context, WidgetRef ref) async {
+    final ctrl = TextEditingController();
+    var type = 'hub';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(
+        builder: (dctx, setLocal) => AlertDialog(
+          backgroundColor: dctx.colors.surface,
+          title: const Text('Add marketplace source'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: type,
+                decoration: const InputDecoration(labelText: 'Type'),
+                items: const [
+                  DropdownMenuItem(
+                      value: 'hub', child: Text('Hub store (marketplace.json)')),
+                  DropdownMenuItem(value: 'git', child: Text('Git repository')),
+                  DropdownMenuItem(
+                      value: 'local', child: Text('Local directory')),
+                ],
+                onChanged: (v) => setLocal(() => type = v ?? 'hub'),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: switch (type) {
+                    'local' => 'Directory path',
+                    'git' => 'Git URL',
+                    _ => 'Hub URL',
+                  },
+                  hintText: switch (type) {
+                    'local' => '/path/to/plugins',
+                    'git' => 'https://github.com/user/repo',
+                    _ => 'https://hub-store.bacnd.com',
+                  },
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(dctx).pop(false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.of(dctx).pop(true),
+                child: const Text('Add')),
+          ],
+        ),
+      ),
+    );
     if (ok == true && ctrl.text.trim().isNotEmpty) {
-      await ref
-          .read(apiClientProvider)
-          .post('/api/marketplace/sources', body: {'url': ctrl.text.trim()});
+      final value = ctrl.text.trim();
+      await ref.read(apiClientProvider).post('/api/marketplace/sources', body: {
+        'type': type,
+        if (type == 'local') 'localPath': value else 'url': value,
+      });
       ref.invalidate(marketplaceSourcesProvider);
     }
   }
@@ -3170,14 +3520,304 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
   }
 }
 
-/// A marketplace source as an expandable card: header (name/enabled/sync/delete)
-/// + its plugins with per-plugin enable toggles (web MarketplacePanel).
-class _MarketplaceSourceCard extends ConsumerWidget {
-  const _MarketplaceSourceCard({required this.source});
+/// One plugin inside a source. Hub plugins start as catalog entries — install
+/// pulls them down; git/local plugins are on disk already and only toggle.
+/// One catalog entry as an expandable store card: header (name, version,
+/// category, source, install/enable controls) + the skills / subagents / MCP
+/// servers it contains.
+class _MarketplaceCatalogCard extends ConsumerStatefulWidget {
+  const _MarketplaceCatalogCard(
+      {required this.source, required this.plugin, required Key key})
+      : super(key: key);
+  final MarketplaceSource source;
+  final Map<String, dynamic> plugin;
+
+  @override
+  ConsumerState<_MarketplaceCatalogCard> createState() =>
+      _MarketplaceCatalogCardState();
+}
+
+class _MarketplaceCatalogCardState
+    extends ConsumerState<_MarketplaceCatalogCard> {
+  bool _busy = false;
+
+  String get _pluginPath =>
+      '/api/marketplace/sources/${widget.source.id}/plugins/${Uri.encodeComponent('${widget.plugin['name']}')}';
+
+  Future<void> _run(Future<void> Function() action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      ref.invalidate(marketplaceSourcePluginsProvider(widget.source.id));
+      ref.invalidate(marketplaceSourcesProvider);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final p = widget.plugin;
+    final api = ref.read(apiClientProvider);
+    final installed = p['installed'] != false;
+    final enabled = p['enabled'] == true;
+    final skills = ((p['skills'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList();
+    final subagents = ((p['subagents'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList();
+    final mcpServers = ((p['mcpServers'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList();
+    final author = '${p['author'] ?? ''}';
+    final counts = [
+      if (author.isNotEmpty) 'by $author',
+      if (skills.isNotEmpty) '${skills.length} skills',
+      if (subagents.isNotEmpty) '${subagents.length} subagents',
+      if (mcpServers.isNotEmpty) '${mcpServers.length} MCP',
+      if (p['hasHooks'] == true) 'hooks',
+    ].join(' · ');
+
+    return _Card(
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding:
+              const EdgeInsets.only(top: AppTokens.s8, left: AppTokens.s8),
+          leading: Icon(Icons.extension_outlined, size: 18, color: c.accent),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text('${p['name'] ?? ''}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: c.textPrimary, fontWeight: FontWeight.w600)),
+              ),
+              if (p['version'] != null) ...[
+                const SizedBox(width: AppTokens.s6),
+                _MiniTag('${p['version']}', c.accent),
+              ],
+              if (p['category'] != null) ...[
+                const SizedBox(width: AppTokens.s6),
+                _MiniTag('${p['category']}', AppTokens.cyan),
+              ],
+              const SizedBox(width: AppTokens.s6),
+              _MiniTag(widget.source.name,
+                  widget.source.isHub ? AppTokens.brand : c.accent),
+              if (!installed) ...[
+                const SizedBox(width: AppTokens.s6),
+                const _MiniTag('not installed', Color(0xFF8A8A99)),
+              ],
+            ],
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if ('${p['description'] ?? ''}'.isNotEmpty)
+                Text('${p['description']}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textMuted, fontSize: 12)),
+              if (counts.isNotEmpty)
+                Text(counts,
+                    style: TextStyle(color: c.textSecondary, fontSize: 11)),
+            ],
+          ),
+          trailing: _busy
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (installed) ...[
+                      Transform.scale(
+                        scale: 0.8,
+                        child: Switch(
+                          value: enabled,
+                          onChanged: (_) => _run(() => api.post(
+                              '$_pluginPath/toggle',
+                              body: {'enabled': !enabled})),
+                        ),
+                      ),
+                      if (widget.source.isHub)
+                        IconButton(
+                          tooltip: 'Uninstall',
+                          icon: const Icon(Icons.delete_outline,
+                              size: 16, color: AppTokens.danger),
+                          onPressed: () =>
+                              _run(() => api.delete(_pluginPath)),
+                        ),
+                    ] else
+                      TextButton.icon(
+                        onPressed: () =>
+                            _run(() => api.post('$_pluginPath/install')),
+                        icon: const Icon(Icons.download_outlined, size: 14),
+                        label: const Text('Install'),
+                      ),
+                  ],
+                ),
+          children: [
+            if (author.isNotEmpty ||
+                p['license'] != null ||
+                p['repository'] != null)
+              _CatalogMetaGroup(plugin: p),
+            if (skills.isNotEmpty)
+              _CatalogItemGroup(
+                  icon: Icons.bolt_outlined, label: 'Skills', items: skills),
+            if (subagents.isNotEmpty)
+              _CatalogItemGroup(
+                  icon: Icons.smart_toy_outlined,
+                  label: 'Subagents',
+                  items: subagents),
+            if (mcpServers.isNotEmpty)
+              _CatalogItemGroup(
+                  icon: Icons.dns_outlined,
+                  label: 'MCP servers',
+                  items: mcpServers),
+            if (skills.isEmpty && subagents.isEmpty && mcpServers.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppTokens.s8),
+                child: Text('No item details in the catalog',
+                    style: TextStyle(color: c.textMuted, fontSize: 12)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Author / license / repository details shown inside an expanded catalog card.
+class _CatalogMetaGroup extends StatelessWidget {
+  const _CatalogMetaGroup({required this.plugin});
+  final Map<String, dynamic> plugin;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final rows = <(String, String)>[
+      if ('${plugin['author'] ?? ''}'.isNotEmpty)
+        ('Author', '${plugin['author']}'),
+      if (plugin['license'] != null) ('License', '${plugin['license']}'),
+      if (plugin['repository'] != null)
+        ('Repository', '${plugin['repository']}'),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppTokens.s8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (label, value) in rows)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 80,
+                    child: Text(label,
+                        style: TextStyle(
+                            color: c.textSecondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                  Expanded(
+                    child: SelectableText(value,
+                        style: TextStyle(color: c.textMuted, fontSize: 11)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A titled sub-list inside a catalog card (skills / subagents / MCP servers).
+class _CatalogItemGroup extends StatelessWidget {
+  const _CatalogItemGroup(
+      {required this.icon, required this.label, required this.items});
+  final IconData icon;
+  final String label;
+  final List<Map<String, dynamic>> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: AppTokens.s4),
+          child: Row(
+            children: [
+              Icon(icon, size: 14, color: c.accent),
+              const SizedBox(width: AppTokens.s6),
+              Text(label,
+                  style: TextStyle(
+                      color: c.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+        for (final it in items)
+          Padding(
+            padding: const EdgeInsets.only(
+                left: AppTokens.s20, bottom: AppTokens.s4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${it['name'] ?? ''}',
+                    style: TextStyle(color: c.textSecondary, fontSize: 12)),
+                const SizedBox(width: AppTokens.s8),
+                Expanded(
+                  child: Text(
+                      '${it['description'] ?? it['transport'] ?? ''}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textMuted, fontSize: 11)),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: AppTokens.s6),
+      ],
+    );
+  }
+}
+
+/// One source inside the "Sources" management dialog: identity + sync state,
+/// with Sync / Enable all / Disable all / Remove actions.
+class _SourceSettingsRow extends ConsumerWidget {
+  const _SourceSettingsRow({required this.source});
   final MarketplaceSource source;
 
-  Future<void> _post(WidgetRef ref, String path) async {
-    await ref.read(apiClientProvider).post(path);
+  Future<void> _post(BuildContext context, WidgetRef ref, String path) async {
+    try {
+      await ref.read(apiClientProvider).post(path);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
     ref.invalidate(marketplaceSourcePluginsProvider(source.id));
     ref.invalidate(marketplaceSourcesProvider);
   }
@@ -3186,128 +3826,87 @@ class _MarketplaceSourceCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final s = source;
-    return _Card(
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(top: AppTokens.s8),
-          leading: Icon(Icons.store_outlined, size: 18, color: c.accent),
-          title: Row(
-            children: [
-              Flexible(
-                child: Text(s.name,
+    final base = '/api/marketplace/sources/${s.id}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppTokens.s6),
+      child: Row(
+        children: [
+          Icon(Icons.store_outlined, size: 18, color: c.accent),
+          const SizedBox(width: AppTokens.s8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(s.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: c.textPrimary,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                    const SizedBox(width: AppTokens.s6),
+                    _MiniTag(s.type, s.isHub ? AppTokens.brand : c.accent),
+                    const SizedBox(width: AppTokens.s4),
+                    _MiniTag(s.enabled ? 'enabled' : 'off',
+                        s.enabled ? AppTokens.success : const Color(0xFF8A8A99)),
+                    if (s.syncError != null) ...[
+                      const SizedBox(width: AppTokens.s4),
+                      Tooltip(
+                          message: '${s.syncError}',
+                          child: const _MiniTag('sync error', AppTokens.danger)),
+                    ],
+                  ],
+                ),
+                Text(s.url,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        color: c.textPrimary, fontWeight: FontWeight.w600)),
-              ),
-              const SizedBox(width: AppTokens.s8),
-              _MiniTag(s.enabled ? 'enabled' : 'off',
-                  s.enabled ? AppTokens.success : const Color(0xFF8A8A99)),
-            ],
-          ),
-          subtitle: Text(s.url,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: c.textMuted, fontSize: 12)),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextButton(
-                onPressed: () => _post(
-                    ref, '/api/marketplace/sources/${s.id}/sync'),
-                child: const Text('Sync'),
-              ),
-              IconButton(
-                tooltip: 'Remove',
-                icon: const Icon(Icons.delete_outline,
-                    size: 16, color: AppTokens.danger),
-                onPressed: () async {
-                  await ref
-                      .read(apiClientProvider)
-                      .delete('/api/marketplace/sources/${s.id}');
-                  ref.invalidate(marketplaceSourcesProvider);
-                },
-              ),
-            ],
-          ),
-          children: [
-            Row(
-              children: [
+                    style: TextStyle(color: c.textMuted, fontSize: 11)),
                 if (s.lastSynced != null)
                   Text('Synced: ${s.lastSynced}',
-                      style: TextStyle(color: c.textMuted, fontSize: 11)),
-                const Spacer(),
-                TextButton(
-                    onPressed: () => _post(ref,
-                        '/api/marketplace/sources/${s.id}/enable-all'),
-                    child: const Text('Enable all')),
-                TextButton(
-                    onPressed: () => _post(ref,
-                        '/api/marketplace/sources/${s.id}/disable-all'),
-                    child: const Text('Disable all')),
+                      style: TextStyle(color: c.textMuted, fontSize: 10)),
               ],
             ),
-            Consumer(builder: (_, ref, _) {
-              final plugins =
-                  ref.watch(marketplaceSourcePluginsProvider(s.id));
-              return plugins.when(
-                loading: () => const Padding(
-                    padding: EdgeInsets.all(AppTokens.s12),
-                    child: Center(child: CircularProgressIndicator())),
-                error: (e, _) => Text('$e',
-                    style: const TextStyle(color: AppTokens.danger)),
-                data: (list) => list.isEmpty
-                    ? Padding(
-                        padding: const EdgeInsets.all(AppTokens.s8),
-                        child: Text('No plugins (sync the source)',
-                            style: TextStyle(color: c.textMuted, fontSize: 12)),
-                      )
-                    : Column(
-                        children: [
-                          for (final p in list)
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 2),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text('${p['name'] ?? ''}',
-                                            style: TextStyle(
-                                                color: c.textSecondary,
-                                                fontSize: 13)),
-                                        if (p['description'] != null)
-                                          Text('${p['description']}',
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                  color: c.textMuted,
-                                                  fontSize: 11)),
-                                      ],
-                                    ),
-                                  ),
-                                  Transform.scale(
-                                    scale: 0.8,
-                                    child: Switch(
-                                      value: p['enabled'] == true,
-                                      onChanged: (_) => _post(ref,
-                                          '/api/marketplace/sources/${s.id}/plugins/${p['name']}/toggle'),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
-              );
-            }),
-          ],
-        ),
+          ),
+          TextButton(
+            onPressed: () => _post(context, ref, '$base/sync'),
+            child: const Text('Sync'),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            iconSize: 18,
+            onSelected: (v) async {
+              switch (v) {
+                case 'enable-all':
+                  await _post(context, ref, '$base/enable-all');
+                case 'disable-all':
+                  await _post(context, ref, '$base/disable-all');
+                case 'remove':
+                  try {
+                    await ref.read(apiClientProvider).delete(base);
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text('$e')));
+                    }
+                  }
+                  ref.invalidate(marketplaceSourcesProvider);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                  value: 'enable-all', child: Text('Enable all plugins')),
+              PopupMenuItem(
+                  value: 'disable-all', child: Text('Disable all plugins')),
+              PopupMenuItem(
+                  value: 'remove',
+                  child: Text('Remove source',
+                      style: TextStyle(color: AppTokens.danger))),
+            ],
+          ),
+        ],
       ),
     );
   }

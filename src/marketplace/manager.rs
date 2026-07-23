@@ -7,30 +7,39 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::git_sync::clone_or_pull;
+use super::hub;
 use super::types::{
     MarketplaceConfig, MarketplacePlugin, MarketplacePluginMCPServer, MarketplacePluginSkill,
     MarketplacePluginSubagent, MarketplaceSource, MarketplaceSourceInfo,
     MarketplaceSourceItemState, MarketplaceStateFile, SourceType,
 };
 
-/// Marketplace manager for git/local plugin sources
+/// Marker written next to the config the first time the default hub is seeded,
+/// so removing the hub source keeps it removed.
+const HUB_SEED_MARKER: &str = ".hub-seeded";
+
+/// Marketplace manager for hub/git/local plugin sources
 pub struct MarketplaceManager {
     config: MarketplaceConfig,
     state: MarketplaceStateFile,
     config_path: PathBuf,
     state_path: PathBuf,
     clones_dir: PathBuf,
+    hub_url: String,
 }
 
 /// Plugin definition for discovery
 #[derive(Debug, Clone)]
 struct PluginDef {
     dir: String,
-    plugin_json_path: String,
+    plugin_json_path: Option<String>,
+    /// Hub-installed plugins carry their catalog name, which outranks whatever
+    /// the checked-out plugin.json calls itself.
+    name_hint: Option<String>,
 }
 
 /// Plugin JSON metadata
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 struct PluginJson {
     name: Option<String>,
     description: Option<String>,
@@ -40,8 +49,14 @@ struct PluginJson {
 }
 
 impl MarketplaceManager {
-    /// Create a new marketplace manager with default paths
+    /// Create a new marketplace manager with default paths and the built-in hub
     pub fn new() -> Result<Self> {
+        Self::new_with_hub(hub::DEFAULT_HUB_URL)
+    }
+
+    /// Create a marketplace manager with default paths, seeding `hub_url` as the
+    /// default store on first run.
+    pub fn new_with_hub(hub_url: &str) -> Result<Self> {
         let home =
             dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Failed to get home directory"))?;
         let senclaw_home = home.join(".senclaw");
@@ -50,18 +65,40 @@ impl MarketplaceManager {
         let state_path = senclaw_home.join("marketplace-state.json");
         let clones_dir = senclaw_home.join("marketplace");
 
-        let mut manager = Self {
-            config: MarketplaceConfig::default(),
-            state: MarketplaceStateFile::default(),
-            config_path,
-            state_path,
-            clones_dir,
-        };
-
-        manager.load_config()?;
-        manager.load_state()?;
-
+        let mut manager = Self::with_paths_and_hub(config_path, state_path, clones_dir, hub_url)?;
+        if let Err(e) = manager.ensure_default_hub() {
+            tracing::warn!("[Marketplace] Failed to seed default hub source: {e}");
+        }
         Ok(manager)
+    }
+
+    /// Production constructor: configured paths and hub, falling back through
+    /// the home directory to a temp directory so a broken environment degrades
+    /// to an empty marketplace instead of stopping the daemon.
+    pub fn from_config(cfg: &crate::config::Config) -> Self {
+        let hub = cfg.marketplace_hub_url.as_str();
+        let mut manager = Self::with_paths_and_hub(
+            cfg.paths.marketplace_config_path.clone(),
+            cfg.paths.marketplace_state_path.clone(),
+            cfg.paths.marketplace_clones_dir.clone(),
+            hub,
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("[Marketplace] Falling back to a temporary marketplace: {e}");
+            let tmp = std::env::temp_dir();
+            Self::with_paths_and_hub(
+                tmp.join("senclaw-marketplace-config.json"),
+                tmp.join("senclaw-marketplace-state.json"),
+                tmp.join("senclaw-marketplace"),
+                hub,
+            )
+            .unwrap_or_else(|e2| panic!("Failed to create marketplace manager: {e2}"))
+        });
+
+        if let Err(e) = manager.ensure_default_hub() {
+            tracing::warn!("[Marketplace] Failed to seed default hub source: {e}");
+        }
+        manager
     }
 
     /// Create a marketplace manager with custom paths (for testing)
@@ -70,18 +107,90 @@ impl MarketplaceManager {
         state_path: PathBuf,
         clones_dir: PathBuf,
     ) -> Result<Self> {
+        Self::with_paths_and_hub(config_path, state_path, clones_dir, hub::DEFAULT_HUB_URL)
+    }
+
+    /// Create a marketplace manager with custom paths and hub URL. Does not seed
+    /// the default hub — call [`Self::ensure_default_hub`] for that.
+    pub fn with_paths_and_hub(
+        config_path: PathBuf,
+        state_path: PathBuf,
+        clones_dir: PathBuf,
+        hub_url: &str,
+    ) -> Result<Self> {
         let mut manager = Self {
             config: MarketplaceConfig::default(),
             state: MarketplaceStateFile::default(),
             config_path,
             state_path,
             clones_dir,
+            hub_url: hub_url.trim().to_string(),
         };
 
         manager.load_config()?;
         manager.load_state()?;
 
         Ok(manager)
+    }
+
+    /// The configured hub catalog URL.
+    pub fn hub_url(&self) -> &str {
+        &self.hub_url
+    }
+
+    /// Add the configured hub as a source the first time this install runs.
+    /// Returns whether a source was created. Seeding happens once: the marker
+    /// file next to the config means a user who removes the hub keeps it gone.
+    pub fn ensure_default_hub(&mut self) -> Result<bool> {
+        if self.hub_url.is_empty() {
+            return Ok(false);
+        }
+        let marker = self
+            .config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(HUB_SEED_MARKER);
+        if marker.exists() {
+            return Ok(false);
+        }
+
+        let catalog_url = hub::normalize_catalog_url(&self.hub_url);
+        let already = self.config.sources.iter().any(|s| {
+            s.source_type == SourceType::Hub
+                && s.url
+                    .as_deref()
+                    .map(|u| hub::normalize_catalog_url(u) == catalog_url)
+                    .unwrap_or(false)
+        });
+
+        let created = if already {
+            false
+        } else {
+            let name = hub::catalog_home(&catalog_url)
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .to_string();
+            self.add_source(
+                if name.is_empty() {
+                    "SenClaw Hub".to_string()
+                } else {
+                    name
+                },
+                SourceType::Hub,
+                Some(catalog_url),
+                None,
+                None,
+                Some(0),
+                Some(true),
+            )?;
+            true
+        };
+
+        if let Some(parent) = marker.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        fs::write(&marker, "").ok();
+        Ok(created)
     }
 
     // ── Config/State persistence ─────────────────────────────────────────────────────
@@ -163,7 +272,9 @@ impl MarketplaceManager {
             .unwrap_or(0);
 
         let local_path = match source_type {
-            SourceType::Git => self.clones_dir.join(&id).to_string_lossy().to_string(),
+            SourceType::Git | SourceType::Hub => {
+                self.clones_dir.join(&id).to_string_lossy().to_string()
+            }
             SourceType::Local => {
                 let path = local_path.unwrap_or_else(|| ".".to_string());
                 PathBuf::from(&path)
@@ -172,6 +283,13 @@ impl MarketplaceManager {
                     .to_string_lossy()
                     .to_string()
             }
+        };
+
+        let url = match source_type {
+            // Store hubs as the catalog document URL, so every later read is a
+            // straight GET with no guessing.
+            SourceType::Hub => url.as_deref().map(hub::normalize_catalog_url),
+            _ => url,
         };
 
         let source = MarketplaceSource {
@@ -257,8 +375,8 @@ impl MarketplaceManager {
         self.save_config()?;
         self.save_state()?;
 
-        // Clean up git clone directory
-        if source.source_type == SourceType::Git {
+        // Clean up the managed directory (git clone, or a hub's cache + clones)
+        if matches!(source.source_type, SourceType::Git | SourceType::Hub) {
             let clone_dir = self.clones_dir.join(&source.id);
             if clone_dir.exists() {
                 let _ = fs::remove_dir_all(&clone_dir);
@@ -268,33 +386,71 @@ impl MarketplaceManager {
         Ok(true)
     }
 
-    /// Sync a git source (clone or pull)
+    /// Sync a source: pull a git clone, or refresh a hub catalog (and every
+    /// plugin already installed from it).
     pub fn sync_source(&mut self, id: &str) -> Result<()> {
         let source = self
             .get_source(id)
             .ok_or_else(|| anyhow::anyhow!("Source not found: {}", id))?;
 
-        if source.source_type == SourceType::Git {
-            let url = source
-                .url
-                .ok_or_else(|| anyhow::anyhow!("Git source missing URL"))?;
-            let branch = source.branch.as_deref().unwrap_or("main");
-            let local_path = Path::new(&source.local_path);
+        if source.source_type == SourceType::Local {
+            return Ok(());
+        }
 
-            clone_or_pull(&url, branch, local_path)?;
+        let result = match source.source_type {
+            SourceType::Git => self.sync_git_source(&source),
+            SourceType::Hub => self.sync_hub_source(&source),
+            SourceType::Local => Ok(()),
+        };
 
-            let now = chrono::Utc::now().to_rfc3339();
-            self.update_source(
-                id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(Some(now)),
-                Some(None),
-            )?;
+        // Record the outcome either way — a stale "last synced" with no error is
+        // worse than no sync at all.
+        let now = chrono::Utc::now().to_rfc3339();
+        let sync_error = result.as_ref().err().map(|e| e.to_string());
+        self.update_source(
+            id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some(now)),
+            Some(sync_error),
+        )?;
+
+        result
+    }
+
+    fn sync_git_source(&self, source: &MarketplaceSource) -> Result<()> {
+        let url = source
+            .url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Git source missing URL"))?;
+        let branch = source.branch.as_deref().unwrap_or("main");
+        clone_or_pull(url, branch, Path::new(&source.local_path))
+    }
+
+    fn sync_hub_source(&self, source: &MarketplaceSource) -> Result<()> {
+        let url = source
+            .url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Hub source missing catalog URL"))?;
+        let local_path = Path::new(&source.local_path);
+
+        let catalog = hub::fetch_catalog(url)?;
+        hub::write_catalog_cache(local_path, &catalog)?;
+
+        // Refresh the clones behind installed plugins; one bad repo must not
+        // abort the whole sync.
+        for installed in hub::read_installed(local_path).plugins.values() {
+            let repo = hub::repo_path(local_path, &installed.name);
+            if let Err(e) = clone_or_pull(&installed.repo_url, &installed.branch, &repo) {
+                tracing::warn!(
+                    "[Marketplace] Failed to update hub plugin {}: {e}",
+                    installed.name
+                );
+            }
         }
 
         Ok(())
@@ -332,6 +488,16 @@ impl MarketplaceManager {
         self.state.sources.get_mut(source_id).unwrap()
     }
 
+    /// Whether a plugin is currently enabled (absent = off)
+    pub fn is_plugin_enabled(&self, source_id: &str, plugin_name: &str) -> bool {
+        self.state
+            .sources
+            .get(source_id)
+            .and_then(|st| st.plugins.get(plugin_name))
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Set plugin enabled/disabled state
     pub fn set_plugin_enabled(
         &mut self,
@@ -356,12 +522,10 @@ impl MarketplaceManager {
             .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
 
         // Collect plugin names first
-        let plugins = self.find_plugins(&source.local_path)?;
         let mut plugin_names = Vec::new();
-        for plugin in plugins {
-            let meta = self.read_plugin_json(&plugin.plugin_json_path)?;
-            let name = self.plugin_name(&meta, &plugin.dir);
-            plugin_names.push(name);
+        for def in self.find_plugins(&source)? {
+            let meta = self.read_plugin_json(&def);
+            plugin_names.push(self.plugin_name(&meta, &def));
         }
 
         // Then enable them
@@ -401,8 +565,34 @@ impl MarketplaceManager {
 
     // ── Plugin discovery ──────────────────────────────────────────────────────────────
 
-    /// Find all plugins in a directory
-    fn find_plugins(&self, base_path: &str) -> Result<Vec<PluginDef>> {
+    /// Plugins a source currently has on disk. Git/local sources are scanned;
+    /// a hub source only has what the user installed from its catalog.
+    fn find_plugins(&self, source: &MarketplaceSource) -> Result<Vec<PluginDef>> {
+        if source.source_type == SourceType::Hub {
+            return Ok(self.installed_hub_plugins(source));
+        }
+        self.scan_plugin_dirs(&source.local_path)
+    }
+
+    fn installed_hub_plugins(&self, source: &MarketplaceSource) -> Vec<PluginDef> {
+        let local_path = Path::new(&source.local_path);
+        let mut defs: Vec<PluginDef> = hub::read_installed(local_path)
+            .plugins
+            .into_values()
+            .filter(|p| Path::new(&p.dir).is_dir())
+            .map(|p| PluginDef {
+                plugin_json_path: hub::plugin_json_path(Path::new(&p.dir))
+                    .map(|p| p.to_string_lossy().to_string()),
+                dir: p.dir,
+                name_hint: Some(p.name),
+            })
+            .collect();
+        defs.sort_by(|a, b| a.name_hint.cmp(&b.name_hint));
+        defs
+    }
+
+    /// Find all plugin directories directly under a directory
+    fn scan_plugin_dirs(&self, base_path: &str) -> Result<Vec<PluginDef>> {
         let base = Path::new(base_path);
         if !base.exists() {
             return Ok(Vec::new());
@@ -422,11 +612,11 @@ impl MarketplaceManager {
                 continue;
             }
 
-            let plugin_json = path.join("plugin.json");
-            if plugin_json.exists() {
+            if let Some(plugin_json) = hub::plugin_json_path(&path) {
                 plugins.push(PluginDef {
                     dir: path.to_string_lossy().to_string(),
-                    plugin_json_path: plugin_json.to_string_lossy().to_string(),
+                    plugin_json_path: Some(plugin_json.to_string_lossy().to_string()),
+                    name_hint: None,
                 });
             }
         }
@@ -434,23 +624,37 @@ impl MarketplaceManager {
         Ok(plugins)
     }
 
-    /// Read plugin.json metadata
-    fn read_plugin_json(&self, path: &str) -> Result<PluginJson> {
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read plugin.json from {:?}", path))?;
-        let meta: PluginJson = serde_json::from_str(&raw)
-            .with_context(|| format!("Failed to parse plugin.json from {:?}", path))?;
-        Ok(meta)
+    /// Read plugin.json metadata. A missing or malformed manifest degrades to
+    /// empty metadata — one broken plugin must not hide the rest of the source.
+    fn read_plugin_json(&self, def: &PluginDef) -> PluginJson {
+        let Some(path) = def.plugin_json_path.as_deref() else {
+            return PluginJson::default();
+        };
+        match fs::read_to_string(path).map(|raw| serde_json::from_str::<PluginJson>(&raw)) {
+            Ok(Ok(meta)) => meta,
+            Ok(Err(e)) => {
+                tracing::warn!("[Marketplace] Invalid plugin.json at {path}: {e}");
+                PluginJson::default()
+            }
+            Err(e) => {
+                tracing::warn!("[Marketplace] Unreadable plugin.json at {path}: {e}");
+                PluginJson::default()
+            }
+        }
     }
 
     /// Get plugin name from metadata and directory
-    fn plugin_name(&self, meta: &PluginJson, dir: &str) -> String {
+    fn plugin_name(&self, meta: &PluginJson, def: &PluginDef) -> String {
+        // The catalog name is authoritative for hub plugins: it is the key the
+        // manifest, the enable-state and the install/uninstall API all use.
+        if let Some(hint) = &def.name_hint {
+            return hint.clone();
+        }
         meta.name.clone().unwrap_or_else(|| {
-            Path::new(dir)
+            Path::new(&def.dir)
                 .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
         })
     }
 
@@ -475,31 +679,47 @@ impl MarketplaceManager {
         };
 
         let st = self.get_source_state(source_id);
-        let plugins = self.find_plugins(&source.local_path)?;
+        let catalog = if source.source_type == SourceType::Hub {
+            self.load_catalog(&source).ok()
+        } else {
+            None
+        };
 
         let mut plugin_list = Vec::new();
-        for plugin in plugins {
-            let meta = self.read_plugin_json(&plugin.plugin_json_path)?;
-            let name = self.plugin_name(&meta, &plugin.dir);
+        for def in self.find_plugins(&source)? {
+            let meta = self.read_plugin_json(&def);
+            let name = self.plugin_name(&meta, &def);
+            let entry = catalog.as_ref().and_then(|c| c.find(&name));
             let enabled = st.plugins.get(&name).copied().unwrap_or(false);
 
             // Discover skills, subagents, MCP servers (simplified for now)
-            let skills = self.discover_skills(&plugin.dir)?;
-            let subagents = self.discover_subagents(&plugin.dir)?;
-            let mcp_servers = self.discover_mcp_servers(&plugin.dir)?;
-            let has_hooks = Path::new(&plugin.dir).join("hooks").exists();
+            let skills = self.discover_skills(&def.dir)?;
+            let subagents = self.discover_subagents(&def.dir)?;
+            let mcp_servers = self.discover_mcp_servers(&def.dir)?;
+            let has_hooks = Path::new(&def.dir).join("hooks").exists();
 
             plugin_list.push(MarketplacePlugin {
                 name: name.clone(),
-                description: meta.description.unwrap_or_default(),
-                version: meta.version,
-                author: self.parse_author(&meta.author),
-                keywords: meta.keywords,
-                dir: plugin.dir,
+                description: meta
+                    .description
+                    .or_else(|| entry.and_then(|e| e.description.clone()))
+                    .unwrap_or_default(),
+                version: meta.version.or_else(|| entry.and_then(|e| e.version.clone())),
+                author: self
+                    .parse_author(&meta.author)
+                    .or_else(|| entry.and_then(|e| self.parse_author(&e.author))),
+                keywords: meta
+                    .keywords
+                    .or_else(|| entry.and_then(|e| e.keywords.clone())),
+                dir: def.dir,
                 source_id: source.id.clone(),
                 source_name: source.name.clone(),
                 priority: source.priority,
                 enabled,
+                installed: true,
+                category: entry.and_then(|e| e.category.clone()),
+                license: entry.and_then(|e| e.license.clone()),
+                repository: entry.and_then(|e| e.repository.clone()),
                 skill_count: skills.len(),
                 subagent_count: subagents.len(),
                 has_hooks,
@@ -510,10 +730,169 @@ impl MarketplaceManager {
             });
         }
 
+        // Everything else the hub offers, listed as available to install.
+        if let Some(catalog) = &catalog {
+            for entry in &catalog.plugins {
+                if plugin_list.iter().any(|p| p.name == entry.name) {
+                    continue;
+                }
+                plugin_list.push(MarketplacePlugin {
+                    name: entry.name.clone(),
+                    description: entry.description.clone().unwrap_or_default(),
+                    version: entry.version.clone(),
+                    author: self.parse_author(&entry.author),
+                    keywords: entry.keywords.clone(),
+                    dir: String::new(),
+                    source_id: source.id.clone(),
+                    source_name: source.name.clone(),
+                    priority: source.priority,
+                    enabled: false,
+                    installed: false,
+                    category: entry.category.clone(),
+                    license: entry.license.clone(),
+                    repository: entry
+                        .repository
+                        .clone()
+                        .or_else(|| entry.source.git_target().ok().map(|t| t.url)),
+                    skill_count: 0,
+                    subagent_count: 0,
+                    has_hooks: false,
+                    mcp_server_count: 0,
+                    skills: Vec::new(),
+                    subagents: Vec::new(),
+                    mcp_servers: Vec::new(),
+                });
+            }
+        }
+
         Ok(Some(MarketplaceSourceInfo {
             source,
             plugins: plugin_list,
         }))
+    }
+
+    // ── Hub catalog & install ─────────────────────────────────────────────────────────
+
+    /// Catalog for a hub source: cached copy if present, otherwise fetched (and
+    /// cached) on the spot so a freshly added hub lists its plugins right away.
+    fn load_catalog(&self, source: &MarketplaceSource) -> Result<hub::HubCatalog> {
+        let local_path = Path::new(&source.local_path);
+        if let Some(cached) = hub::read_catalog_cache(local_path) {
+            return Ok(cached);
+        }
+        let url = source
+            .url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Hub source missing catalog URL"))?;
+        let catalog = hub::fetch_catalog(url)?;
+        if let Err(e) = hub::write_catalog_cache(local_path, &catalog) {
+            tracing::warn!("[Marketplace] Failed to cache hub catalog: {e}");
+        }
+        Ok(catalog)
+    }
+
+    /// Fetch (and cache) a hub source's catalog, bypassing the cached copy.
+    pub fn refresh_catalog(&self, source_id: &str) -> Result<hub::HubCatalog> {
+        let source = self
+            .get_source(source_id)
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        if source.source_type != SourceType::Hub {
+            anyhow::bail!("Source {} is not a hub", source.name);
+        }
+        let url = source
+            .url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Hub source missing catalog URL"))?;
+        let catalog = hub::fetch_catalog(url)?;
+        hub::write_catalog_cache(Path::new(&source.local_path), &catalog)?;
+        Ok(catalog)
+    }
+
+    /// The catalog of a hub source (cached copy, fetched once if absent).
+    pub fn get_catalog(&self, source_id: &str) -> Result<hub::HubCatalog> {
+        let source = self
+            .get_source(source_id)
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        if source.source_type != SourceType::Hub {
+            anyhow::bail!("Source {} is not a hub", source.name);
+        }
+        self.load_catalog(&source)
+    }
+
+    /// Install one plugin from a hub catalog: clone its repo, resolve the plugin
+    /// directory inside it, record it, and enable it.
+    pub fn install_hub_plugin(&mut self, source_id: &str, plugin_name: &str) -> Result<PathBuf> {
+        let source = self
+            .get_source(source_id)
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        if source.source_type != SourceType::Hub {
+            anyhow::bail!("Source {} is not a hub", source.name);
+        }
+
+        let catalog = self.load_catalog(&source)?;
+        let entry = catalog
+            .find(plugin_name)
+            .ok_or_else(|| anyhow::anyhow!("Plugin not in catalog: {}", plugin_name))?;
+        let target = entry.source.git_target()?;
+
+        let local_path = PathBuf::from(&source.local_path);
+        let repo = hub::repo_path(&local_path, plugin_name);
+        clone_or_pull(&target.url, &target.branch, &repo).with_context(|| {
+            format!("Failed to clone {} for plugin {}", target.url, plugin_name)
+        })?;
+
+        let dir = hub::resolve_plugin_dir(&repo, plugin_name, target.subdir.as_deref())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cloned {} but found no plugin directory for {} — the catalog entry may need a `path`",
+                    target.url,
+                    plugin_name
+                )
+            })?;
+
+        let mut installed = hub::read_installed(&local_path);
+        installed.plugins.insert(
+            plugin_name.to_string(),
+            hub::InstalledPlugin {
+                name: plugin_name.to_string(),
+                dir: dir.to_string_lossy().to_string(),
+                repo_url: target.url,
+                branch: target.branch,
+                version: entry.version.clone(),
+                installed_at: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+        hub::write_installed(&local_path, &installed)?;
+
+        // Installing is the act of opting in — leaving it off would just make
+        // every install a two-step.
+        self.set_plugin_enabled(source_id, plugin_name, true)?;
+
+        Ok(dir)
+    }
+
+    /// Remove a hub-installed plugin: drop its clone, manifest entry and state.
+    pub fn uninstall_hub_plugin(&mut self, source_id: &str, plugin_name: &str) -> Result<bool> {
+        let source = self
+            .get_source(source_id)
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        if source.source_type != SourceType::Hub {
+            anyhow::bail!("Source {} is not a hub", source.name);
+        }
+
+        let local_path = PathBuf::from(&source.local_path);
+        let mut installed = hub::read_installed(&local_path);
+        let removed = installed.plugins.remove(plugin_name).is_some();
+        hub::write_installed(&local_path, &installed)?;
+
+        let repo = hub::repo_path(&local_path, plugin_name);
+        if repo.exists() {
+            fs::remove_dir_all(&repo)
+                .with_context(|| format!("Failed to remove {:?}", repo))?;
+        }
+
+        self.set_plugin_enabled(source_id, plugin_name, false)?;
+        Ok(removed)
     }
 
     /// Discover skills in a plugin directory
@@ -595,13 +974,10 @@ impl MarketplaceManager {
             }
 
             let st = self.get_source_state(&source.id);
-            if let Ok(plugins) = self.find_plugins(&source.local_path) {
-                for plugin in plugins {
-                    let meta = match self.read_plugin_json(&plugin.plugin_json_path) {
-                        Ok(m) => m,
-                        Err(_) => continue,
-                    };
-                    let name = self.plugin_name(&meta, &plugin.dir);
+            if let Ok(plugins) = self.find_plugins(source) {
+                for def in plugins {
+                    let meta = self.read_plugin_json(&def);
+                    let name = self.plugin_name(&meta, &def);
 
                     // Only include if plugin is enabled
                     if !st.plugins.get(&name).copied().unwrap_or(false) {
@@ -609,7 +985,7 @@ impl MarketplaceManager {
                     }
 
                     // Get MCP servers for this plugin
-                    if let Ok(servers) = self.discover_mcp_servers(&plugin.dir) {
+                    if let Ok(servers) = self.discover_mcp_servers(&def.dir) {
                         for mut server in servers {
                             // Prefix with plugin name to avoid conflicts
                             server.name = format!("mkt__{}__{}", name, server.name);
@@ -689,5 +1065,102 @@ mod tests {
         let result = manager.remove_source(&source.id).unwrap();
         assert!(result);
         assert!(manager.get_sources().is_empty());
+    }
+
+    /// Manager over a temp dir with the given hub, nothing seeded yet.
+    fn hub_manager(temp: &TempDir, hub_url: &str) -> MarketplaceManager {
+        MarketplaceManager::with_paths_and_hub(
+            temp.path().join("config.json"),
+            temp.path().join("state.json"),
+            temp.path().join("clones"),
+            hub_url,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn seeds_the_default_hub_exactly_once() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = hub_manager(&temp, "https://hub.example.com");
+
+        assert!(manager.ensure_default_hub().unwrap());
+        let sources = manager.get_sources();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source_type, SourceType::Hub);
+        assert_eq!(
+            sources[0].url.as_deref(),
+            Some("https://hub.example.com/marketplace.json")
+        );
+
+        // Re-seeding is a no-op, and a removed hub stays removed.
+        assert!(!manager.ensure_default_hub().unwrap());
+        manager.remove_source(&sources[0].id).unwrap();
+        assert!(!manager.ensure_default_hub().unwrap());
+        assert!(manager.get_sources().is_empty());
+    }
+
+    #[test]
+    fn lists_catalog_plugins_as_available_until_installed() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = hub_manager(&temp, "https://hub.example.com");
+        let source = manager
+            .add_source(
+                "hub".into(),
+                SourceType::Hub,
+                Some("https://hub.example.com".into()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Seed the cache directly: get_source_info must not need the network.
+        let local_path = PathBuf::from(&source.local_path);
+        let catalog: hub::HubCatalog = serde_json::from_str(
+            r#"{"plugins":[{"name":"demo","source":{"source":"github","repo":"acme/demo"},
+                 "description":"Demo","version":"1.0.0","category":"development"}]}"#,
+        )
+        .unwrap();
+        hub::write_catalog_cache(&local_path, &catalog).unwrap();
+
+        let info = manager.get_source_info(&source.id).unwrap().unwrap();
+        assert_eq!(info.plugins.len(), 1);
+        let plugin = &info.plugins[0];
+        assert_eq!(plugin.name, "demo");
+        assert!(!plugin.installed);
+        assert!(!plugin.enabled);
+        assert_eq!(plugin.category.as_deref(), Some("development"));
+
+        // Fake an install (no clone), then the same entry reads back installed.
+        let dir = local_path.join("repos").join("demo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("plugin.json"), r#"{"name":"demo"}"#).unwrap();
+        let mut installed = hub::read_installed(&local_path);
+        installed.plugins.insert(
+            "demo".into(),
+            hub::InstalledPlugin {
+                name: "demo".into(),
+                dir: dir.to_string_lossy().to_string(),
+                repo_url: "https://github.com/acme/demo".into(),
+                branch: "main".into(),
+                version: Some("1.0.0".into()),
+                installed_at: "2026-07-20T00:00:00Z".into(),
+            },
+        );
+        hub::write_installed(&local_path, &installed).unwrap();
+        manager.set_plugin_enabled(&source.id, "demo", true).unwrap();
+
+        let info = manager.get_source_info(&source.id).unwrap().unwrap();
+        assert_eq!(info.plugins.len(), 1, "installed plugin must not be listed twice");
+        assert!(info.plugins[0].installed);
+        assert!(info.plugins[0].enabled);
+
+        // Uninstall clears the clone, the manifest entry and the enable state.
+        assert!(manager.uninstall_hub_plugin(&source.id, "demo").unwrap());
+        assert!(!dir.exists());
+        let info = manager.get_source_info(&source.id).unwrap().unwrap();
+        assert!(!info.plugins[0].installed);
+        assert!(!info.plugins[0].enabled);
     }
 }

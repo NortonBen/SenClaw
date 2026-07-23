@@ -13,8 +13,10 @@ use crate::db::Db;
 use crate::gateway::binding_manager::BindingManager;
 use crate::gateway::command_dispatcher::dispatch_command;
 use crate::gateway::group_manager::{ensure_app_group, ensure_wechat_admin_group, GroupManager};
+use crate::gateway::plugin_command::dispatch_plugin_command;
 use crate::gateway::trigger_checker::should_trigger;
 use crate::gateway::websocket_gateway::WebSocketGateway;
+use crate::marketplace::manager::MarketplaceManager;
 use crate::types::{AgentApi, BindingWithRelations, GroupBinding, IncomingMessage, StoredMessage};
 
 // ===== JID migration callback =====
@@ -34,6 +36,10 @@ pub struct MessageRouter {
     notified_jids: Mutex<HashSet<String>>,
     on_jid_migrated: Mutex<Option<OnJidMigrated>>,
     ws_gateway: Mutex<Option<Arc<WebSocketGateway>>>,
+    /// Shared with the UI server so `/plugin` chat commands and the marketplace
+    /// panel mutate the same state. Wired post-construction via
+    /// [`Self::set_marketplace_manager`]; plugin commands are inert until then.
+    marketplace_manager: Mutex<Option<Arc<std::sync::Mutex<MarketplaceManager>>>>,
 }
 
 impl MessageRouter {
@@ -56,11 +62,20 @@ impl MessageRouter {
             notified_jids: Mutex::new(HashSet::new()),
             on_jid_migrated: Mutex::new(None),
             ws_gateway: Mutex::new(None),
+            marketplace_manager: Mutex::new(None),
         }
     }
 
     pub async fn set_ws_gateway(&self, gw: Arc<WebSocketGateway>) {
         *self.ws_gateway.lock().await = Some(gw);
+    }
+
+    /// Wire the shared marketplace manager so `/plugin` chat commands work.
+    pub async fn set_marketplace_manager(
+        &self,
+        manager: Arc<std::sync::Mutex<MarketplaceManager>>,
+    ) {
+        *self.marketplace_manager.lock().await = Some(manager);
     }
 
     pub async fn set_on_jid_migrated(&self, cb: OnJidMigrated) {
@@ -157,6 +172,29 @@ impl MessageRouter {
 
         // 4. Command interception — every chat has full (admin) privileges now,
         // so slash-commands are honored in all groups, not just a "main" one.
+
+        // 4a. `/plugin ...` marketplace commands (async: git/HTTP under the hood).
+        if let Some(manager) = self.marketplace_manager.lock().await.clone() {
+            if let Some(result) = dispatch_plugin_command(manager, &msg.content).await {
+                tracing::info!("[MessageRouter] Plugin command handled for {}", msg.chat_jid);
+                self.agent_api
+                    .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())
+                    .await;
+                return;
+            }
+        }
+
+        // 4a-bis. `/app ...` Space App update commands (self-HTTP to the daemon).
+        if let Some(result) =
+            crate::gateway::plugin_command::dispatch_app_command(&msg.content).await
+        {
+            tracing::info!("[MessageRouter] App command handled for {}", msg.chat_jid);
+            self.agent_api
+                .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())
+                .await;
+            return;
+        }
+
         if let Some(result) = dispatch_command(&self.db, &msg.content, Some(&msg.chat_jid)) {
             tracing::info!("[MessageRouter] Command handled for {}", msg.chat_jid);
             self.agent_api

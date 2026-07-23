@@ -89,10 +89,17 @@ pub fn start_maintenance_ticker(
         "[cognitive] maintenance ticker started"
     );
     Some(tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(cfg.interval);
+        // First sweep shortly after boot (not immediately — boot stays
+        // snappy), then every `cfg.interval`. The old "skip the first
+        // tick" pattern meant a daemon restarted more often than the
+        // interval NEVER ran maintenance, so orphans/duplicates piled up
+        // indefinitely on dev machines.
+        let boot_delay = Duration::from_secs(120).min(cfg.interval);
+        let mut ticker = tokio::time::interval_at(
+            tokio::time::Instant::now() + boot_delay,
+            cfg.interval,
+        );
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // Skip the immediate tick so daemon boot stays snappy.
-        ticker.tick().await;
         loop {
             ticker.tick().await;
             let graph_ref = Arc::clone(&graph);
