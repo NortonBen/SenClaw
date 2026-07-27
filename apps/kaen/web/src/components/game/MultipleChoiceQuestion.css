@@ -1,0 +1,237 @@
+.multiple-choice-question {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.question-card {
+  background: var(--bg-card);
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.question-header {
+  margin-bottom: 24px;
+}
+
+.question-label {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.question-result {
+  margin-bottom: 24px;
+  padding: 16px;
+  border-radius: 12px;
+  animation: slideIn 0.3s ease-out;
+}
+
+.question-result.correct {
+  background: var(--success-bg);
+  border: 2px solid var(--success-border);
+}
+
+.question-result.incorrect {
+  background: var(--error-bg);
+  border: 2px solid var(--error-border);
+}
+
+.result-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.result-icon-wrapper {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.correct-icon {
+  background: #22c55e;
+  color: white;
+}
+
+.incorrect-icon {
+  background: #ef4444;
+  color: white;
+}
+
+.result-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.result-text {
+  flex: 1;
+}
+
+.result-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.result-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.question-content {
+  margin-bottom: 32px;
+  overflow: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.question-word-section {
+  text-align: center;
+}
+
+.question-word-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.question-word {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.question-ipa {
+  font-size: 18px;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin: 0;
+}
+
+.question-explain {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--selection-bg);
+  border-radius: 0.4rem;
+  border-left: 3px solid var(--selection-border);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+  hyphens: auto;
+}
+
+.btn-pronunciation {
+  background: var(--bg-secondary);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  transition: all 0.2s;
+}
+
+.btn-pronunciation:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.btn-pronunciation:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.question-example {
+  font-size: 16px;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.question-meaning-section {
+  text-align: center;
+}
+
+.question-meaning {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.question-options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.option-button {
+  padding: 16px 24px;
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-card);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.option-button:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--bg-secondary);
+}
+
+.option-button:disabled {
+  cursor: not-allowed;
+}
+
+.option-button.correct {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: #10b981;
+  color: #34d399;
+}
+
+.option-button.incorrect {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #f87171;
+}
+
+[data-theme="dark"] .option-button:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: #3b82f6;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

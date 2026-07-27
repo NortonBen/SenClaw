@@ -1,0 +1,25 @@
+/* globals.css — minimal reset on top of Ant Design. The UI is theme-driven by
+ * antd's ConfigProvider; this only handles page height, the mono editor font,
+ * and a border token that adapts to light/dark. */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  --jt-border: rgba(5, 5, 5, 0.1);
+}
+
+/* Fallback so the border token is sensible even before antd's first paint. */
+@media (prefers-color-scheme: dark) {
+  body {
+    --jt-border: rgba(255, 255, 255, 0.12);
+  }
+}
+
+textarea {
+  tab-size: 2;
+}

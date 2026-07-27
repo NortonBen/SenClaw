@@ -1,0 +1,20 @@
+{
+  "version": "1.0.0",
+  "permissions": {
+    "exec": ["./tiktok-activity"],
+    "network": ["127.0.0.1", "api.deepseek.com", "www.tiktok.com"]
+  },
+  "updater": "none",
+  "platform": "darwin-arm64",
+  "category": "automation",
+  "keywords": [
+    "tiktok",
+    "automation",
+    "flow",
+    "browser",
+    "playwright",
+    "chromiumoxide",
+    "scheduler",
+    "mcp"
+  ]
+}

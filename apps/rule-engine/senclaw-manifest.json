@@ -1,0 +1,73 @@
+{
+  "id": "rule-engine",
+  "name": "Rule Engine",
+  "description": "Luồng xử lý dữ liệu dạng đồ thị: kéo-thả node, nối cổng vào/ra, chạy realtime. Nguồn (webhook, lịch cron, kích hoạt tay) bơm sự kiện vào chuỗi node lọc — rẽ nhánh — biến đổi — gọi HTTP/AI/thông báo. Mỗi node khai báo nhiều cổng ra (true/false, success/failed, N nhánh switch) và nhiều cổng vào có thể gộp (join/merge). Có debug trace từng bước.",
+  "icon": "🕸️",
+  "runtime": {
+    "kind": "server",
+    "start": "./rule-engine",
+    "healthPath": "/api/status",
+    "port": 4550
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request",
+      "agent.run",
+      "knowledge.save",
+      "knowledge.search",
+      "knowledge.recall"
+    ]
+  },
+  "mcp": {
+    "name": "rule-engine-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Tạo và điều khiển các rule chain (luồng xử lý dữ liệu dạng đồ thị): liệt kê/sửa đồ thị, kích hoạt, bơm sự kiện thử, xem trace từng bước, và sinh chain từ mô tả bằng lời.",
+    "autoRegister": true
+  },
+  "widgets": [],
+  "skills": [
+    {
+      "name": "rule-engine-author",
+      "path": "skills/rule-engine-author",
+      "triggers": [
+        "tạo rule chain",
+        "tạo luồng xử lý",
+        "rule engine",
+        "luồng tự động",
+        "create rule chain",
+        "build a flow",
+        "automation flow",
+        "nối node",
+        "sửa luồng",
+        "thêm điều kiện vào luồng"
+      ]
+    },
+    {
+      "name": "rule-engine-debug",
+      "path": "skills/rule-engine-debug",
+      "triggers": [
+        "debug rule chain",
+        "luồng không chạy",
+        "trace luồng",
+        "xem log rule engine",
+        "why did my flow not run",
+        "rule chain trace",
+        "kiểm tra luồng"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "flow-architect",
+      "path": "personas/flow-architect.md",
+      "description": "Kiến trúc sư luồng dữ liệu — thiết kế rule chain từ yêu cầu nghiệp vụ, chọn node và cách nối cổng."
+    }
+  ]
+}

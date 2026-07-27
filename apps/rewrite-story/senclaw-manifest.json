@@ -1,0 +1,99 @@
+{
+  "id": "rewrite-story",
+  "name": "Rewrite Story",
+  "description": "Xưởng viết lại truyện bằng AI (port từ re-write-story): nhập truyện gốc dài hàng triệu ký tự, cắt chunk bằng bộ chia hybrid hiểu tiếng Việt (bảo vệ tiêu đề Chương/Hồi và khối [Hệ thống: …], ngắt theo chuyển cảnh dựa trên TF/cosine), rồi viết lại từng chunk qua LLM chung của SenClaw. Mỗi chunk viết xong được lưu ngay, nên tiến trình hỏng hay bị hủy đều chạy tiếp được từ chỗ dở thay vì làm lại từ đầu. Mỗi lần viết lại tạo một phiên bản mới của truyện, giữ nguyên bản gốc. Theo dõi tiến độ realtime qua WebSocket. MCP mở toàn bộ pipeline cho mọi agent SenClaw.",
+  "icon": "✍️",
+  "runtime": {
+    "kind": "server",
+    "start": "./rewrite-story",
+    "healthPath": "/api/status",
+    "port": 4470
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "rewrite-story-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Rewrite Story MCP: nhập và quản lý kho truyện, xem trước cách cắt chunk, chạy viết lại nền theo từng chunk (queued → processing → completed), theo dõi tiến độ, hủy và chạy tiếp từ chunk dở dang, đọc kết quả theo từng khoảng ký tự, và chỉnh cấu hình chia chunk / mức sáng tạo.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "rewrite-story-run",
+      "path": "skills/rewrite-story-run",
+      "triggers": [
+        "viết lại truyện",
+        "viết lại bộ truyện",
+        "làm bản mới của truyện",
+        "rewrite truyện",
+        "đổi văn phong truyện",
+        "chuyển thể truyện",
+        "viết lại theo phong cách",
+        "tạo phiên bản mới của truyện",
+        "rewrite story",
+        "rewrite a novel",
+        "rewrite in the style of",
+        "new version of the story",
+        "chạy tiếp tiến trình viết lại",
+        "resume rewrite",
+        "retry rewrite"
+      ]
+    },
+    {
+      "name": "rewrite-story-to-video",
+      "path": "skills/rewrite-story-to-video",
+      "triggers": [
+        "làm video từ truyện",
+        "chuyển truyện sang video",
+        "truyện này dựng thành video",
+        "dựng phim từ truyện",
+        "xuất kịch bản",
+        "xuất sang video flow",
+        "kịch bản từ truyện",
+        "truyện sang kịch bản",
+        "story to video",
+        "export screenplay",
+        "story to script"
+      ]
+    },
+    {
+      "name": "rewrite-story-manage",
+      "path": "skills/rewrite-story-manage",
+      "triggers": [
+        "kho truyện",
+        "danh sách truyện",
+        "nhập truyện",
+        "thêm truyện",
+        "import truyện",
+        "xoá truyện",
+        "các bản viết lại",
+        "phiên bản truyện",
+        "so sánh bản viết lại",
+        "tiến trình viết lại",
+        "trạng thái viết lại",
+        "cấu hình chia chunk",
+        "chunk truyện",
+        "list stories",
+        "story versions",
+        "rewrite status"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "story-editor",
+      "path": "personas/story-editor.md",
+      "description": "Story Editor — biên tập viên viết lại truyện: nhận truyện gốc và yêu cầu phong cách, ước lượng khối lượng theo số chunk, chạy tiến trình viết lại nền, theo dõi tiến độ trung thực, xử lý lỗi bằng cách chạy tiếp thay vì làm lại, và bàn giao bản mới."
+    }
+  ]
+}

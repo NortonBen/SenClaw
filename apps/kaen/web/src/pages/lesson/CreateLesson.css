@@ -1,0 +1,306 @@
+/* Tạo bài học — các khối biểu mẫu là thẻ .k-card phẳng, đúng một nút hành động
+   chính (Tạo bài học). Khung ngoài (max-width, padding) do .main-content lo. */
+
+.create-lesson {
+  display: flex;
+  flex-direction: column;
+}
+
+.create-lesson-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* ---------------- Biểu mẫu dùng chung ---------------- */
+
+.lesson-info-section,
+.import-section,
+.card-form-section,
+.cards-list-section {
+  padding: 1.25rem 1.3rem;
+}
+
+.card-form-section h2,
+.cards-list-section h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 1.1rem;
+}
+
+.form-group {
+  margin-bottom: 1.15rem;
+}
+
+.form-group:last-child {
+  margin-bottom: 0;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.form-group label span {
+  color: var(--danger);
+}
+
+.form-hint {
+  font-size: 0.83rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  margin-bottom: 0.5rem;
+}
+
+.form-input,
+.form-textarea,
+.form-select {
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: 0.95rem;
+  font-family: inherit;
+  background: var(--input-bg);
+  color: var(--text);
+  transition: border-color 0.15s var(--ease);
+}
+
+.form-input:focus,
+.form-textarea:focus,
+.form-select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.form-row-inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.card-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+}
+
+/* ---------------- Nhập từ text ---------------- */
+
+.import-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  text-align: center;
+}
+
+.import-hint {
+  width: 100%;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* ---------------- Ví dụ ---------------- */
+
+.examples-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.example-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-remove-example {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-tertiary);
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-remove-example:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-add-example {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
+  padding: 0.35rem 0;
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 0.87rem;
+  font-weight: 600;
+}
+
+.btn-add-example:hover {
+  text-decoration: underline;
+}
+
+/* ---------------- Nghĩa đa ngôn ngữ ---------------- */
+
+.other-meanings-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.other-meaning-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.other-meaning-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.country-flag-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.btn-remove-meaning {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-remove-meaning:hover {
+  background: var(--surface);
+  color: var(--danger);
+}
+
+.add-other-meaning {
+  margin-top: 0.15rem;
+}
+
+.add-other-meaning select {
+  width: 100%;
+}
+
+/* ---------------- Danh sách thẻ ---------------- */
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.85rem;
+}
+
+/* ---------------- Lỗi + nút gửi ---------------- */
+
+.error-message {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-md);
+  color: var(--danger);
+  background: transparent;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.submit-section {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem 0 1.5rem;
+}
+
+.submit-section .k-btn {
+  padding: 0.85rem 1.6rem;
+  font-size: 1rem;
+}
+
+.submit-section .k-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ---------------- Responsive ---------------- */
+
+@media (max-width: 780px) {
+  .form-row,
+  .form-row-inline {
+    grid-template-columns: 1fr;
+  }
+
+  .cards-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-actions {
+    flex-direction: column-reverse;
+  }
+
+  .form-actions .k-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .lesson-info-section,
+  .import-section,
+  .card-form-section,
+  .cards-list-section {
+    padding: 1rem;
+  }
+
+  .submit-section .k-btn {
+    width: 100%;
+  }
+}

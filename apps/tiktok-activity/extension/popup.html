@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      body { font-family: -apple-system, system-ui, sans-serif; width: 340px; padding: 12px; margin: 0; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; flex: 0 0 auto; }
+      .dot.on { background: #22c55e; }
+      button { padding: 6px 10px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font-size: 12px; cursor: pointer; }
+      button.ghost { background: #eef2ff; color: #3730a3; }
+      .muted { color: #666; font-size: 11px; margin: 6px 0; line-height: 1.4; }
+      .loghead { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+      .loghead b { font-size: 12px; }
+      #log { margin-top: 6px; height: 240px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px; background: #fafafa; }
+      .e { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 4px; border-bottom: 1px solid #f0f0f0; display: flex; gap: 6px; }
+      .e:last-child { border-bottom: 0; }
+      .e .ts { color: #9ca3af; flex: 0 0 auto; }
+      .e .m { font-weight: 600; flex: 0 0 auto; }
+      .e .i { color: #374151; word-break: break-all; }
+      .e.err { background: #fef2f2; }
+      .e.err .m { color: #dc2626; }
+      .e.conn .m { color: #2563eb; }
+      .e .ms { color: #9ca3af; margin-left: auto; flex: 0 0 auto; }
+      .empty { color: #9ca3af; font-size: 12px; text-align: center; padding: 20px 0; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0b0f19; color: #e5e7eb; }
+        #log { background: #111827; border-color: #1f2937; }
+        .e { border-color: #1f2937; }
+        .e .i { color: #d1d5db; }
+        .e.err { background: #2a1416; }
+        button.ghost { background: #1e293b; color: #c7d2fe; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>TikTok Activity Controller</h1>
+    <div class="row"><span id="dot" class="dot"></span><span id="status">Đang kiểm tra…</span></div>
+    <div class="row">Tab điều khiển: <span id="tab">—</span></div>
+    <div class="row">
+      <button id="ctrl">Điều khiển tab này</button>
+      <button id="openPanel" class="ghost">Mở bảng điều khiển</button>
+    </div>
+
+    <div class="loghead">
+      <b>Nhật ký điều khiển</b>
+      <button id="clear" class="ghost">Xóa</button>
+    </div>
+    <div id="log"><div class="empty">Chưa có hoạt động</div></div>
+
+    <p class="muted">Log cập nhật realtime mỗi lệnh app gửi (navigate / click / type / eval…). Cuộn lên để xem lịch sử (200 dòng gần nhất).</p>
+    <script src="popup.js"></script>
+  </body>
+</html>

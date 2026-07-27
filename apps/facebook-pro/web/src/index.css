@@ -1,0 +1,17 @@
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+/* Theme-neutral code/JSON block — a translucent gray that reads on light or dark. */
+.jsonbox {
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+  margin: 0;
+}

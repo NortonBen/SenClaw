@@ -1,0 +1,298 @@
+/* Từ đã thuộc — trang danh sách, cùng khuôn với "Bài học của tôi".
+   Khung ngoài (max-width, padding) do .main-content của shell lo. */
+
+.learned-page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- Thanh công cụ trên đầu ---------------- */
+
+.learned-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.learned-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 210px;
+}
+
+.learned-search__icon {
+  position: absolute;
+  left: 0.7rem;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.learned-search input {
+  width: 100%;
+  padding: 0.66rem 2.1rem 0.66rem 2.3rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  transition: border-color 0.15s var(--ease);
+}
+
+.learned-search input:focus {
+  border-color: var(--primary);
+}
+
+.learned-search__clear {
+  position: absolute;
+  right: 0.45rem;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.learned-search__clear:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.learned-pagesize {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.learned-pagesize select {
+  padding: 0.6rem 0.65rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.learned-pagesize select:focus {
+  border-color: var(--primary);
+}
+
+.learned-tools .k-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------------- Lưới thẻ từ ---------------- */
+
+.learned-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.85rem;
+}
+
+.learned-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.1rem 1.15rem;
+  transition: border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.learned-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.learned-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.learned-card__word {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.learned-card__ipa {
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+.learned-card__explain {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.learned-card__meanings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--accent-learned);
+  font-size: 0.87rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.learned-card__lang {
+  color: var(--text-tertiary);
+  margin-right: 0.35rem;
+}
+
+.learned-card__examples {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.learned-card__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.learned-card__examples ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-left: 1rem;
+  list-style: disc;
+  font-style: italic;
+}
+
+.learned-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
+}
+
+.learned-card__level {
+  color: var(--text-primary);
+}
+
+.learned-card__date {
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+
+/* ---------------- Trạng thái rỗng / đang tải ---------------- */
+
+.learned-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.learned-empty svg {
+  color: var(--text-tertiary);
+}
+
+.learned-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 3.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.learned-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--primary);
+  animation: spin 0.8s linear infinite;
+}
+
+/* ---------------- Phân trang ---------------- */
+
+.learned-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.learned-pager .k-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.learned-pager__info {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Spinner dùng chung cho các trang khác đang import class .spin toàn cục */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------- Responsive ---------------- */
+
+@media (max-width: 780px) {
+  .learned-tools {
+    width: 100%;
+  }
+
+  .learned-search {
+    flex: 1 1 100%;
+  }
+
+  .learned-pagesize,
+  .learned-tools .k-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .learned-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .learned-pager {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+}

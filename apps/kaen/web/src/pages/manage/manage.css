@@ -1,0 +1,302 @@
+/* Admin screens. kaizen ran these in a separate NestJS CMS behind a login;
+   Kaen is single-user and local, so content management is just another page. */
+
+.mng {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.mng__bar {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.mng__bar .spacer {
+  flex: 1;
+}
+
+.mng__note {
+  padding: 0.7rem 0.95rem;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.mng__note.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--error-text, var(--danger));
+}
+
+.mng__note.is-ok {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  color: var(--success-text, var(--success));
+}
+
+/* ---- table ---- */
+
+.mng__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.mng__table th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.mng__table td {
+  padding: 0.72rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.mng__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.mng__table tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+.mng__title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.mng__sub {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--text-tertiary);
+  margin-top: 0.15rem;
+}
+
+.mng__row-actions {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: flex-end;
+}
+
+.mng__empty {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.mng__scroll {
+  overflow-x: auto;
+}
+
+/* ---- dialog ---- */
+
+.dlg {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(3, 6, 15, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.dlg__panel {
+  width: min(760px, 100%);
+  max-height: min(86vh, 900px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lift);
+  overflow: hidden;
+}
+
+.dlg__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.dlg__head h2 {
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.dlg__body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.dlg__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-inset);
+}
+
+/* ---- form ---- */
+
+.fld {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.fld > label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.fld input,
+.fld select,
+.fld textarea {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.fld textarea {
+  resize: vertical;
+  min-height: 8rem;
+  line-height: 1.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.fld input:focus,
+.fld select:focus,
+.fld textarea:focus {
+  border-color: var(--primary);
+}
+
+.fld__hint {
+  font-size: 0.76rem;
+  color: var(--text-tertiary);
+}
+
+.fld-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+/* ---- segment editor ---- */
+
+.seg {
+  display: grid;
+  grid-template-columns: 2.2rem minmax(0, 1fr) 5.5rem 5.5rem 2.2rem;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.seg + .seg {
+  margin-top: 0.4rem;
+}
+
+.seg__idx {
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg input {
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.seg input[type='number'] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg__del {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.seg__del:hover {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .seg {
+    grid-template-columns: 1.6rem minmax(0, 1fr) 2rem;
+  }
+
+  .seg input[type='number'] {
+    grid-column: 2;
+  }
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Decimal seconds entered as text (locale-proof); keep the numeric look. */
+.seg__time {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow screens: drop the low-signal columns instead of squashing every
+   cell into a two-word-per-line column. */
+@media (max-width: 780px) {
+  .mng__table .col-opt,
+  .mng__table .mng__sub {
+    display: none;
+  }
+
+  .mng__table {
+    min-width: 420px;
+  }
+
+  .mng__table th,
+  .mng__table td {
+    padding: 0.65rem 0.6rem;
+  }
+}

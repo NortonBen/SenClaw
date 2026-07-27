@@ -1,0 +1,73 @@
+{
+  "id": "hub",
+  "name": "Thiết bị · Device Hub",
+  "description": "Dashboard HMI kết nối Dipper IoT Hub: theo dõi thiết bị, xem dữ liệu telemetry thời gian thực và điều khiển thiết bị (bật/tắt, gửi lệnh) ngay trong SenClaw.",
+  "icon": "🎛️",
+  "runtime": {
+    "kind": "server",
+    "start": "./hub",
+    "healthPath": "/api/status",
+    "port": 4490
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "mcp": {
+    "name": "hub-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Device Hub MCP: kết nối Dipper IoT Hub — liệt kê thiết bị (hub_list_devices), trạng thái online/offline (hub_device_status), đọc telemetry (hub_telemetry), gửi lệnh điều khiển thiết bị (hub_send_command), xem cảnh báo (hub_alerts).",
+    "autoRegister": true
+  },
+  "widgets": [],
+  "skills": [
+    {
+      "name": "hub-devices",
+      "path": "skills/hub-devices",
+      "triggers": [
+        "thiết bị",
+        "danh sách thiết bị",
+        "thiết bị online",
+        "trạng thái thiết bị",
+        "dữ liệu cảm biến",
+        "telemetry",
+        "nhiệt độ cảm biến",
+        "device hub",
+        "iot hub",
+        "list devices",
+        "device status",
+        "sensor data"
+      ]
+    },
+    {
+      "name": "hub-control",
+      "path": "skills/hub-control",
+      "triggers": [
+        "bật thiết bị",
+        "tắt thiết bị",
+        "điều khiển thiết bị",
+        "gửi lệnh thiết bị",
+        "bật đèn",
+        "tắt đèn",
+        "bật máy bơm",
+        "tắt máy bơm",
+        "turn on device",
+        "turn off device",
+        "control device",
+        "send command"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "hub-operator",
+      "path": "personas/hub-operator.md",
+      "description": "Kỹ thuật viên vận hành HMI: theo dõi thiết bị IoT, đọc telemetry và điều khiển thiết bị qua Dipper Hub một cách an toàn, xác nhận trước khi gửi lệnh"
+    }
+  ]
+}

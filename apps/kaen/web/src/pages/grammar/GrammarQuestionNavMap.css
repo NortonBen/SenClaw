@@ -1,0 +1,118 @@
+/* Lưới số câu — trạng thái thể hiện bằng viền + màu chữ, không tô khối màu đặc. */
+
+.grammar-qnav {
+    margin-bottom: 1rem;
+}
+
+.grammar-qnav-label {
+    margin: 0 0 0.45rem;
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-tertiary);
+}
+
+.grammar-qnav-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.grammar-qnav-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.2rem;
+    height: 2.2rem;
+    padding: 0;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-tertiary);
+    font-size: 0.84rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s var(--ease), color 0.15s var(--ease),
+        box-shadow 0.15s var(--ease);
+}
+
+.grammar-qnav-cell:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.grammar-qnav-cell:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.grammar-qnav-cell--empty:not(.grammar-qnav-cell--current):hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+/* Đã chọn đáp án */
+.grammar-qnav-cell--answered {
+    border-color: var(--primary);
+    color: var(--primary);
+    font-weight: 700;
+}
+
+/* Câu đang làm — vòng viền nổi, số đậm */
+.grammar-qnav-cell--current {
+    border-color: var(--primary);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--primary);
+}
+
+.grammar-qnav-cell--current .grammar-qnav-num {
+    font-weight: 750;
+}
+
+.grammar-qnav-cell--current.grammar-qnav-cell--answered {
+    color: var(--primary);
+}
+
+.grammar-qnav-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    margin-top: 0.6rem;
+    font-size: 0.76rem;
+    color: var(--text-tertiary);
+}
+
+.grammar-qnav-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.grammar-qnav-dot {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+}
+
+.grammar-qnav-dot--empty {
+    border-color: var(--border-strong);
+}
+
+.grammar-qnav-dot--current {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px var(--primary);
+}
+
+.grammar-qnav-dot--answered {
+    border-color: var(--primary);
+    background: var(--primary-soft);
+}

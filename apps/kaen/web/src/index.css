@@ -1,0 +1,372 @@
+@import "tailwindcss";
+
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* Common colors */
+  --primary: #6366f1;
+  --primary-dark: #4f46e5;
+  --primary-light: #818cf8;
+  --secondary: #8b5cf6;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+
+  /* --- Kaen accents: one hue per learning activity, used as small icon chips
+     and thin accent rules — never as full pastel card fills. --- */
+  --accent-due: #f43f5e;      /* cần ôn ngay */
+  --accent-streak: #f59e0b;   /* chuỗi ngày */
+  --accent-learned: #10b981;  /* đã thuộc */
+  --accent-review: #38bdf8;   /* ôn tập */
+  --accent-ai: #a78bfa;       /* nội dung AI: truyện, đề test */
+
+  /* Geometry + motion */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-full: 999px;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Light Theme (Default) */
+  --bg: #f6f7fb;
+  --bg-secondary: #eef0f6;
+  --bg-card: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f3f4f8;
+  --surface-inset: #f6f7fb;
+  --text: #1f2937;
+  --text-primary: #111827;
+  --text-secondary: #5b6478;
+  --text-tertiary: #9ca3af;
+  --border: #e4e7ee;
+  --border-color: #e4e7ee;
+  --border-strong: #d3d8e3;
+  --input-bg: #ffffff;
+  --primary-soft: rgba(99, 102, 241, 0.1);
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lift: 0 10px 30px -12px rgb(15 23 42 / 0.25);
+
+  /* Semantic colors for adaptive states */
+  --success-bg: #d1fae5;
+  --success-text: #065f46;
+  --success-border: #10b981;
+  --error-bg: #fee2e2;
+  --error-text: #991b1b;
+  --error-border: #ef4444;
+  --selection-bg: rgba(59, 130, 246, 0.05);
+  --selection-border: #3b82f6;
+}
+
+[data-theme="dark"] {
+  /* Dark Theme — the default look inside the SenClaw Space App iframe.
+     Deep navy canvas with hairline borders instead of slate blocks, so cards
+     read as surfaces rather than stacked grey rectangles. */
+  --bg: #0a0e1a;
+  --bg-secondary: #121829;
+  --bg-card: #121829;
+  --surface: #121829;
+  --surface-2: #182034;
+  --surface-inset: #0d1322;
+  --text: #e8ecf5;
+  --text-primary: #f4f7fc;
+  --text-secondary: #9aa6bf;
+  --text-tertiary: #64708c;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-color: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --input-bg: #0d1322;
+  --primary-soft: rgba(99, 102, 241, 0.16);
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lift: 0 16px 40px -20px rgb(0 0 0 / 0.8);
+
+  /* Semantic colors for adaptive states */
+  --success-bg: rgba(16, 185, 129, 0.15);
+  --success-text: #34d399;
+  --success-border: rgba(16, 185, 129, 0.5);
+  --error-bg: rgba(239, 68, 68, 0.15);
+  --error-text: #f87171;
+  --error-border: rgba(239, 68, 68, 0.5);
+  --selection-bg: rgba(59, 130, 246, 0.15);
+  --selection-border: #60a5fa;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  font-family: inherit;
+}
+
+/* Custom Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* For Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  outline: none;
+  background-color: var(--input-bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+/* Force dark mode styles for form elements */
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select {
+  /* background-color: var(--input-bg) !important; */
+  color: var(--text) !important;
+  color-scheme: dark;
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: var(--text-tertiary) !important;
+}
+
+/* Dictation Player Feedback Styles */
+.player-input.incorrect {
+  border-color: var(--warning) !important;
+  background-color: rgba(245, 158, 11, 0.05);
+}
+
+.feedback-area {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.95rem;
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+.feedback-status.incorrect {
+  color: var(--warning);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feedback-status.correct {
+  color: var(--success);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feedback-suggestions {
+  color: var(--text-secondary);
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.hint-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  /* Space between words */
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.word-correct {
+  color: var(--success);
+}
+
+.word-neutral {
+  color: var(--danger);
+  text-decoration: underline;
+}
+
+.word-masked {
+  color: var(--text-tertiary);
+  letter-spacing: 2px;
+}
+
+.suggestion-label {
+  color: var(--text-tertiary);
+  font-size: 0.9rem;
+}
+
+.suggestion-text {
+  color: var(--success);
+  font-weight: 500;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* ============================================================
+   Kaen primitives — shared surface/button/chip vocabulary so
+   every screen reads as one app instead of a folder of pages.
+   ============================================================ */
+
+.k-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Page header used across list screens */
+.k-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+.k-page-head h1 {
+  font-size: clamp(1.5rem, 1.2rem + 1vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.k-page-head p {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  margin-top: 0.25rem;
+}
+
+/* Buttons */
+.k-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.15rem;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  font-size: 0.94rem;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.15s var(--ease), background 0.15s var(--ease),
+    border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.k-btn:active {
+  transform: translateY(1px);
+}
+
+.k-btn--primary {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  color: #fff;
+  box-shadow: 0 8px 20px -10px rgba(99, 102, 241, 0.9);
+}
+
+.k-btn--primary:hover {
+  box-shadow: 0 12px 26px -10px rgba(99, 102, 241, 1);
+}
+
+.k-btn--ghost {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.k-btn--ghost:hover {
+  border-color: var(--border-strong);
+}
+
+.k-btn--quiet {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.5rem 0.7rem;
+}
+
+.k-btn--quiet:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/* Small labelled chip, e.g. counts and states */
+.k-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Numbers should never jitter as they tick up */
+.k-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

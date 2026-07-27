@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 249 39" width="249" height="39">
+  <style>
+    .brace { fill: #ffffff; font-weight: bold; }
+    .json { fill: #ffffff; font-weight: bold; }
+    .tools { fill: #18bc9c; font-weight: bold; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 26px; }
+  </style>
+  <text x="10" y="29">
+    <tspan class="brace">{</tspan>
+    <tspan class="json">JSON</tspan>
+    <tspan class="tools">Tools</tspan>
+    <tspan class="brace">}</tspan>
+  </text>
+</svg>

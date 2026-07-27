@@ -1,0 +1,89 @@
+{
+  "id": "facebook-pro",
+  "name": "Facebook Pro",
+  "description": "Vận hành các Trang (Fanpage) Facebook của bạn qua Facebook Graph API CHÍNH THỨC — bạn tạo một Facebook Developer App (App ID + App Secret), đăng nhập OAuth để cấp quyền, app lấy Page Access Token và lưu cục bộ trong SQLite. Hỗ trợ: đăng bài (chữ/link/ảnh), sửa & xoá bài, đọc & trả lời bình luận, thả cảm xúc, phân tích bài viết bằng AI, xem thống kê Trang/bài (Insights), tự động soạn trả lời bình luận, và trigger theo luật (từ khoá/câu hỏi) để chạy luồng auto-reply/thông báo. QUẢNG CÁO (Marketing API): xem chỉ số CTR/CPC/CPM/chi tiêu/kết quả/ROAS theo chiến dịch/nhóm/quảng cáo, để AI đánh giá quảng cáo có hiệu quả hay đang ĐỐT TIỀN và có nên tắt, và tắt/bật quảng cáo. An toàn theo kiểu draft-first: mọi bài & trả lời được SOẠN vào hàng chờ, chỉ đăng khi bạn bấm Duyệt (hoặc bật chế độ live). Chỉ dùng Graph API chính thức trên các Trang & tài khoản quảng cáo bạn quản trị — KHÔNG scraping, KHÔNG trộm session/cookie, KHÔNG né anti-bot, KHÔNG nhắn/đăng hàng loạt.",
+  "icon": "📘",
+  "runtime": {
+    "kind": "server",
+    "start": "./facebook-pro",
+    "healthPath": "/api/status",
+    "port": 4590
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "facebook-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Quản lý Fanpage Facebook qua Graph API chính thức: xem trạng thái kết nối & danh sách Trang, tổng quan tương tác (fb_overview), đăng bài (chữ/link/ảnh URL hoặc ảnh tải từ máy), sửa/xoá bài, liệt kê bài, đọc & trả lời bình luận, thả like, TIN NHẮN Messenger (fb_conversations/fb_conversation_messages/fb_message_reply, draft-first), phân tích bài viết bằng AI, xem Insights Trang/bài, trigger theo luật, và phân tích QUẢNG CÁO (Marketing API): fb_ads_insights (CTR/CPC/CPM/chi tiêu/kết quả/ROAS), fb_ads_analyze (AI đánh giá hiệu quả/đốt tiền/nên tắt), fb_ad_status (tắt/bật QC). Mọi thao tác ĐĂNG/TRẢ LỜI đi qua chế độ tự chủ (mặc định tạo NHÁP chờ duyệt: fb_drafts/fb_approve/fb_reject) — không có đăng/nhắn hàng loạt.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "facebook-manage",
+      "path": "skills/facebook-manage",
+      "triggers": [
+        "kết nối facebook",
+        "kết nối fanpage",
+        "connect facebook page",
+        "facebook developer app",
+        "trạng thái facebook",
+        "danh sách trang facebook",
+        "chọn trang facebook",
+        "chế độ tự chủ facebook",
+        "trigger facebook",
+        "luật trả lời facebook",
+        "facebook autonomy",
+        "cài đặt facebook pro"
+      ]
+    },
+    {
+      "name": "facebook-engage",
+      "path": "skills/facebook-engage",
+      "triggers": [
+        "đăng bài facebook",
+        "đăng bài lên fanpage",
+        "đăng ảnh facebook",
+        "sửa bài facebook",
+        "xoá bài facebook",
+        "trả lời bình luận facebook",
+        "bình luận facebook",
+        "tin nhắn facebook",
+        "hộp thư facebook",
+        "trả lời tin nhắn fanpage",
+        "tổng quan facebook",
+        "thống kê tương tác facebook",
+        "phân tích bài viết facebook",
+        "thống kê facebook",
+        "insights facebook",
+        "phân tích quảng cáo facebook",
+        "chỉ số ads facebook",
+        "ctr cpc cpm",
+        "quảng cáo đốt tiền",
+        "quảng cáo có hiệu quả không",
+        "có nên tắt quảng cáo",
+        "phân tích ads",
+        "tắt quảng cáo facebook",
+        "duyệt nháp facebook",
+        "post to facebook page",
+        "reply facebook comment"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "facebook-manager",
+      "path": "personas/facebook-manager.md",
+      "description": "Quản trị Fanpage Facebook — soạn bài, đọc & trả lời bình luận, phân tích tương tác và thống kê, mặc định chờ Sếp duyệt trước khi đăng/gửi."
+    }
+  ]
+}

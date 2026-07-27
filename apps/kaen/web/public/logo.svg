@@ -1,0 +1,37 @@
+<svg width="320" height="320" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer Wrapper (centered) -->
+  <g transform="translate(200, 200)">
+    
+    <!-- Card 2 (Behind/Bottom) -->
+    <g transform="translate(45, 30) rotate(12)">
+      <rect 
+        x="-90" y="-115" width="180" height="230" 
+        rx="32" ry="32" 
+        fill="white" 
+        stroke="#5E5CE6" 
+        stroke-width="24" 
+      />
+    </g>
+
+    <!-- Card 1 (Front/Top) -->
+    <g transform="translate(-35, -20) rotate(-10)">
+      <rect 
+        x="-90" y="-115" width="180" height="230" 
+        rx="32" ry="32" 
+        fill="white" 
+        stroke="#5E5CE6" 
+        stroke-width="24" 
+      />
+      <!-- Logo "K" Symbol -->
+      <path 
+        d="M -42,-55 L -42,55 M -42,-4 L 30,-55 M -4, -13 L 34, 55" 
+        fill="none" 
+        stroke="#5E5CE6" 
+        stroke-width="36" 
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </g>
+
+  </g>
+</svg>

@@ -1,0 +1,65 @@
+{
+    "manifest_version": 3,
+    "name": "Kaen Vocabulary Helper",
+    "version": "2.0.0",
+    "description": "Look up vocabulary with Cambridge Dictionary and Google Translate, save to Kaen study lessons (local SenClaw app)",
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "permissions": [
+        "storage",
+        "activeTab",
+        "contextMenus"
+    ],
+    "host_permissions": [
+        "http://localhost:4500/*",
+        "http://127.0.0.1:4500/*",
+        "https://dictionary.cambridge.org/*",
+        "https://translate.googleapis.com/*",
+        "https://api.dictionaryapi.dev/*"
+    ],
+    "background": {
+        "service_worker": "src/background/background.js",
+        "type": "module"
+    },
+    "action": {
+        "default_popup": "src/popup/popup.html",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        },
+        "default_title": "Kaen Vocabulary Helper"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "src/content/content.js"
+            ],
+            "css": [
+                "src/content/content.css"
+            ]
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "icons/*"
+            ],
+            "matches": [
+                "<all_urls>"
+            ]
+        }
+    ],
+    "externally_connectable": {
+        "matches": [
+            "http://localhost:4500/*",
+            "http://127.0.0.1:4500/*"
+        ]
+    }
+}

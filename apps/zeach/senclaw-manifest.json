@@ -1,0 +1,24 @@
+{
+  "id": "zeach",
+  "name": "Zeach",
+  "description": "Trợ lý nghiên cứu tổng hợp: từ một câu hỏi, Zeach tách thành nhiều truy vấn con, gom bằng chứng từ web, tri thức nội bộ (knowledge graph), wiki, mạng xã hội, tài liệu và mọi MCP khác trong cùng một lần chạy, rồi KIỂM CHỨNG CHÉO bằng cách đếm số nguồn độc lập trước khi tổng hợp thành BÁO CÁO Markdown có trích dẫn [n] tra ngược được về từng nguồn. Mỗi báo cáo kèm bảng khẳng định + bằng chứng có xếp hạng độ chứng thực và nhật ký nguồn nào chạy được / lỗi / hết giờ, nên kết quả mỏng không bao giờ bị nhầm thành 'không có thông tin'. MCP `zeach-mcp` mở lại năng lực tìm kiếm liên nguồn (zeach_search) và nghiên cứu (zeach_research) cho mọi agent, app và skill khác dùng chung.",
+  "icon": "🔬",
+  "runtime": {
+    "kind": "server",
+    "start": "./zeach",
+    "healthPath": "/api/status",
+    "port": 4570
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request", "agent.run", "knowledge.save"]
+  },
+  "mcp": {
+    "name": "zeach-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Nghiên cứu & tìm kiếm liên nguồn dùng chung cho toàn hệ thống. zeach_search gom và xếp hạng bằng chứng từ web + knowledge graph + wiki (+ social/tài liệu/MCP khác khi bật) mà KHÔNG cần LLM, kèm provenance từng nguồn — kênh tra cứu chung cho các app/agent khác. zeach_research chạy pipeline sâu (đa truy vấn con → kiểm chứng chéo đếm nguồn độc lập → tổng hợp báo cáo Markdown có trích dẫn); zeach_report đọc lại báo cáo đã lưu; zeach_sources cho biết nguồn nào đang hỏng để phân biệt 'không có gì' với 'không tìm được'.",
+    "autoRegister": true
+  }
+}

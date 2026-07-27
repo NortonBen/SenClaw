@@ -1,0 +1,161 @@
+/* Hộp thoại cài đặt nghe chép — dùng chung bảng màu token, không màu cứng. */
+
+.settings-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(3, 7, 18, 0.55);
+    backdrop-filter: blur(4px);
+}
+
+.settings-modal {
+    width: 100%;
+    max-width: 440px;
+    max-height: 90vh;
+    overflow: hidden auto;
+    box-shadow: var(--shadow-lift);
+}
+
+.settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding: 0.9rem 1.15rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.settings-title {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 1rem;
+    font-weight: 650;
+    color: var(--text-primary);
+}
+
+.settings-title svg {
+    color: var(--text-tertiary);
+}
+
+.settings-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.settings-close:hover {
+    background: var(--surface-2);
+    color: var(--text-primary);
+}
+
+.settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1rem 1.15rem;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+}
+
+.settings-row label {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.settings-row .label-sub {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-tertiary);
+}
+
+.settings-row select {
+    min-width: 132px;
+    padding: 0.5rem 2rem 0.5rem 0.7rem;
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6,9 12,15 18,9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color 0.15s var(--ease);
+}
+
+.settings-row select:hover,
+.settings-row select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+
+.settings-footer {
+    display: flex;
+    justify-content: center;
+    padding: 0.9rem 1.15rem;
+    border-top: 1px solid var(--border);
+}
+
+.settings-footer .btn-reset {
+    padding: 0.55rem 1rem;
+    font-size: 0.87rem;
+}
+
+/* Nút mở hộp thoại cài đặt, đặt ở góc phải header trình phát */
+.btn-settings {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-settings:hover {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+@media (max-width: 480px) {
+    .settings-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.45rem;
+    }
+
+    .settings-row select {
+        width: 100%;
+    }
+}

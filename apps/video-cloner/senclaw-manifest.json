@@ -1,0 +1,70 @@
+{
+  "id": "video-cloner",
+  "name": "Video Cloner",
+  "description": "Phân tích một video có sẵn và sinh ra bộ prompt JSON kỹ thuật để tái tạo lại video đó bằng AI (Veo 3). Video được cắt thành các phân đoạn đúng 8 giây; mỗi phân đoạn là một JSON mô tả nhân vật, bối cảnh, máy quay, âm thanh và lời thoại, với ID nhân vật/giọng nói bị khóa cố định để mọi đoạn đồng nhất tuyệt đối. Cho phép thay nhân vật chính (bằng mô tả hoặc ảnh mẫu), thay bối cảnh, thay lời thoại, đổi phong cách nghệ thuật, và chỉnh độ tương đồng so với video gốc từ trung thực 100% đến sáng tạo hoàn toàn.",
+  "icon": "🎬",
+  "runtime": {
+    "kind": "server",
+    "start": "./video-cloner",
+    "healthPath": "/api/status",
+    "port": 4480
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "mcp": {
+    "name": "video-cloner-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Sao chép video: tạo dự án từ file video, chạy phân tích nền để sinh prompt JSON 8 giây cho Veo 3, phân tích tiếp các đoạn sau, làm lại đoạn cuối, thay tên/giọng nhân vật đồng loạt, xem lịch sử các lượt bóc tách, khôi phục về bản trước khi lỡ tay, xuất kịch bản ra file/wiki, và bàn giao thẳng sang app video-flow để sinh video.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "video-cloner-run",
+      "path": "skills/video-cloner-run",
+      "triggers": [
+        "sao chép video",
+        "clone video",
+        "copy video",
+        "nhái video",
+        "tái tạo video",
+        "làm lại video này",
+        "phân tích video thành prompt",
+        "tạo prompt veo",
+        "veo 3 prompt",
+        "prompt tạo video",
+        "đổi nhân vật trong video",
+        "đổi bối cảnh video",
+        "bàn giao sang video-flow",
+        "sinh video từ kịch bản",
+        "xuất kịch bản video"
+      ]
+    },
+    {
+      "name": "video-cloner-manage",
+      "path": "skills/video-cloner-manage",
+      "triggers": [
+        "kho video cloner",
+        "danh sách dự án video",
+        "list video projects",
+        "xem prompt đã tạo",
+        "xuất prompt video",
+        "lịch sử bóc tách video",
+        "khôi phục prompt video",
+        "hoàn tác video cloner",
+        "cấu hình video cloner",
+        "gemini api key video"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "video-director",
+      "path": "personas/video-director.md",
+      "description": "Video Director — đạo diễn sao chép video: tạo dự án, chạy phân tích theo đoạn 8 giây, giữ nhân vật/giọng nói đồng nhất, và bàn giao bộ prompt Veo 3."
+    }
+  ]
+}

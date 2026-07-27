@@ -1,0 +1,24 @@
+{
+  "id": "tiktok-activity",
+  "name": "TikTok Activity",
+  "description": "Bộ điều phối hoạt động TikTok cho MỘT tài khoản: điều khiển một tab TikTok đã đăng nhập trong Chrome thật qua một extension (WebSocket + chrome.debugger). Dựng các 'flow' kéo-thả (chuỗi hành động search / xem / like / comment / share / follow / login...) rồi chạy thủ công hoặc theo lịch. Engine là một graph-walker (logic ở app, extension chỉ chạy primitive DOM), có nhánh success/error/alt, vòng lặp, template {{param}}/{{prev}}/{{step.id}} và bộ atomic Playwright-style. Kèm hệ AI qua SenClaw bridge: AI Playwright Agent (tool-loop LLM ↔ DOM), sinh comment/trả lời, và AI flow-gen từ catalog. Có chế độ stub (không trình duyệt) để dựng & kiểm thử flow. MCP `tiktok-mcp` mở các năng lực run/list/status/generate flow cho agent & app khác dùng chung.",
+  "icon": "🎵",
+  "runtime": {
+    "kind": "server",
+    "start": "./tiktok-activity",
+    "healthPath": "/api/health",
+    "port": 4580
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request", "agent.run", "knowledge.save"]
+  },
+  "mcp": {
+    "name": "tiktok-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Điều khiển hoạt động TikTok dùng chung: liệt kê account/flow, khởi chạy một flow trên một account (tiktok_run_flow), theo dõi trạng thái run (tiktok_run_status), sinh flow bằng AI từ một mục tiêu (tiktok_generate_flow). Cho phép agent, app và skill khác lên lịch/chạy tương tác TikTok mà không cần biết chi tiết engine.",
+    "autoRegister": true
+  }
+}

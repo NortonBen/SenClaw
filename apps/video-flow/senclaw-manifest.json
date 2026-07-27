@@ -1,0 +1,93 @@
+{
+  "id": "video-flow",
+  "name": "Video Flow",
+  "description": "Xưởng sản xuất video AI (port từ Flow Kit): multi-agent DAG biến ý tưởng / kịch bản thành video hoàn chỉnh, điều khiển Google Flow (Veo3 / Imagen) qua Chrome extension bridge. Quản lý project → video → scene → character, sinh ảnh tham chiếu, ảnh khung hình, video từng cảnh (dọc + ngang độc lập), upscale, lồng tiếng narration bằng TTS của SenClaw (VieNeu-TTS tiếng Việt / MMS-VITS / macOS Speech), ghép cảnh bằng ffmpeg. Toàn bộ LLM chạy qua LLM chung của SenClaw daemon; mỗi sub-agent (đạo diễn, biên kịch, thiết kế cảnh quay, image/video gen, audio TTS, critic…) có prompt riêng trong souls/. MCP mở toàn bộ pipeline cho mọi agent SenClaw.",
+  "icon": "🎬",
+  "runtime": {
+    "kind": "server",
+    "start": "./video-flow",
+    "healthPath": "/api/status",
+    "port": 4460
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request",
+      "agent.run"
+    ]
+  },
+  "mcp": {
+    "name": "video-flow-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Video Flow MCP: full control of the AI video production pipeline. Projects/videos/scenes/characters CRUD, reference-image + scene-image + scene-video generation via the Google Flow extension bridge, upscale, TTS voice-over narration through SenClaw's own TTS subsystem (no extension needed), DAG pipeline create/status (production or full pre-production mode), request queue inspection, souls (sub-agent prompt) read/update, ffmpeg concat/post-process.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "video-flow-produce",
+      "path": "skills/video-flow-produce",
+      "triggers": [
+        "làm video",
+        "sản xuất video",
+        "tạo video từ kịch bản",
+        "tạo video từ ý tưởng",
+        "video flow",
+        "pipeline video",
+        "dựng phim",
+        "làm phim ngắn",
+        "veo3",
+        "google flow",
+        "gen video",
+        "sinh video",
+        "make a video",
+        "produce a video",
+        "video from script",
+        "video pipeline",
+        "run video pipeline",
+        "generate scenes",
+        "lồng tiếng",
+        "thuyết minh",
+        "đọc lời bình",
+        "giọng đọc",
+        "narration",
+        "voice over",
+        "tts video"
+      ]
+    },
+    {
+      "name": "video-flow-manage",
+      "path": "skills/video-flow-manage",
+      "triggers": [
+        "project video",
+        "danh sách video",
+        "cảnh quay",
+        "scene video",
+        "nhân vật video",
+        "ảnh tham chiếu",
+        "reference image",
+        "upscale video",
+        "ghép cảnh",
+        "concat video",
+        "trạng thái pipeline",
+        "pipeline status",
+        "video project",
+        "list scenes",
+        "video characters",
+        "regenerate scene"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "video-producer",
+      "path": "personas/video-producer.md",
+      "description": "Video Producer — nhà sản xuất video AI: nhận ý tưởng hoặc kịch bản, tạo project trong Video Flow, chạy pipeline DAG (director → screenwriter → scene plan → shot design → image → video → lồng tiếng TTS → concat), theo dõi tiến độ và báo cáo kết quả."
+    }
+  ]
+}

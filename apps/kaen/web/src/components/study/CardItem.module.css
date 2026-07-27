@@ -1,0 +1,393 @@
+.cardItem {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    transition: all 0.2s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.cardItem:hover {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    transform: translateY(-2px);
+}
+
+/* Lesson Variant Styles */
+.lessonCard {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+}
+
+.lessonCard:hover {
+    background: var(--bg-secondary);
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md);
+}
+
+.cardItemHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+/* Lesson Header Styles */
+.lessonHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.lessonTitle {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+    line-height: 1.4;
+}
+
+.lessonMetaTop {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.visibilityBadge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: var(--bg-secondary);
+}
+
+.visibilityBadge.public {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.visibilityBadge.private {
+    color: #94a3b8;
+    background: rgba(148, 163, 184, 0.1);
+}
+
+/* Vocabulary Styles */
+.cardNumber {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    background-color: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 0.22rem 0.6rem;
+    border-radius: var(--r-full);
+    display: inline-block;
+    font-variant-numeric: tabular-nums;
+}
+
+.cardActions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.cardItem .cardActions button {
+    padding: 0.5rem;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.cardItem .cardActions button:hover {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.btnEdit:hover {
+    color: var(--primary) !important;
+    background-color: var(--selection-bg) !important;
+}
+
+.btnDelete:hover {
+    color: var(--danger) !important;
+    background-color: var(--error-bg) !important;
+}
+
+.cardItemContent {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.cardImage {
+    width: 100%;
+    max-width: 200px;
+    height: auto;
+    border-radius: 8px;
+    object-fit: cover;
+    margin-bottom: 1rem;
+}
+
+.cardWordSection {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.cardWordWithPronunciation {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+}
+
+.cardWord {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--primary, #3b82f6);
+    margin: 0;
+}
+
+.cardIpa {
+    font-family: monospace;
+    color: var(--primary);
+    background-color: var(--selection-bg);
+    padding: 0.25rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    letter-spacing: 0.05em;
+    font-style: italic;
+    border: 1px solid var(--selection-border);
+}
+
+.cardPos {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: white;
+    background: var(--primary);
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    letter-spacing: 0.05em;
+    height: fit-content;
+}
+
+.cardExplain {
+    font-size: 1rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+.cardMeaning {
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.cardExample {
+    padding-left: 0.75rem;
+    border-left: 2px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+}
+
+.examplesUl {
+    list-style-type: disc;
+    padding-left: 1.5rem;
+    margin: 0.25rem 0 0 0;
+}
+
+.examplesUl li {
+    margin-bottom: 0.25rem;
+    line-height: 1.4;
+}
+
+.exampleText {
+    font-style: italic;
+}
+
+.exampleLabel,
+.otherMeaningsLabel {
+    font-weight: 600;
+    font-style: normal;
+    margin-right: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+.cardOtherMeanings {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.otherMeaningsLabel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    /* Lighter text for label */
+    margin-bottom: 0.75rem;
+}
+
+.iconGlobe {
+    color: #6366f1;
+    /* Indigo color for the globe */
+}
+
+.otherMeaningsGrid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.meaningTag {
+    display: flex;
+    align-items: baseline;
+    /* Align text baselines */
+    gap: 0.75rem;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.langFlag {
+    font-size: 1.1rem;
+    line-height: 1;
+    position: relative;
+    top: 2px;
+    /* Slight adjustment for emoji alignment */
+}
+
+.langCode {
+    font-weight: 600;
+    color: #f1f5f9;
+    /* White-ish for language name */
+    min-width: 80px;
+}
+
+.meaningText {
+    color: #94a3b8;
+    /* Gray for the meaning */
+    flex: 1;
+}
+
+.btnPronunciation {
+    padding: 4px;
+    border-radius: 50%;
+    background-color: transparent;
+    color: var(--primary, #3b82f6);
+    border: 1px solid var(--primary-light, #bfdbfe);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.btnPronunciation:hover:not(:disabled) {
+    background-color: var(--bg-secondary);
+    transform: scale(1.1);
+}
+
+.btnPronunciation:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: grayscale(1);
+}
+
+/* Lesson Stats */
+.lessonStatsRow {
+    display: flex;
+    gap: 16px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.statItem {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+/* Lesson Actions */
+.lessonCardActions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.btnAction {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btnStudy {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    color: #fff;
+}
+
+.btnStudy:hover {
+    box-shadow: 0 12px 26px -10px rgba(99, 102, 241, 1);
+}
+
+.btnReview {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+}
+
+.btnReview:hover {
+    border-color: var(--border-strong);
+}
+
+.lessonCardSecondaryActions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.btnSecondaryAction {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btnSecondaryAction:hover {
+    background: var(--bg-card);
+    border-color: var(--primary);
+}

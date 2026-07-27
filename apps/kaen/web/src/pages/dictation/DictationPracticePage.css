@@ -1,0 +1,583 @@
+/* Nghe chép — màn luyện tập. Chỉ trình bày: bề mặt phẳng, một nút hành động
+   chính (Kiểm tra / Tiếp theo), accent dùng cho icon và viền mảnh.
+   Khung ngoài (max-width, padding) do .main-content của shell lo. */
+
+.dictation-practice-page {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---------------- Thanh điều hướng + tiêu đề ---------------- */
+
+.practice-nav-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+/* Hai nút này dùng chung với màn "Chế độ nghe" (DictationListener) nên phải
+   đứng độc lập, không phụ thuộc .k-btn. Công thức giữ đúng .k-btn--quiet /
+   .k-btn--ghost. */
+.btn-nav-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-nav-back:hover {
+    background: var(--surface-2);
+    color: var(--text-primary);
+}
+
+.btn-nav-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.btn-nav-action:hover {
+    border-color: var(--border-strong);
+}
+
+.practice-header {
+    margin-bottom: 1.25rem;
+    text-align: center;
+}
+
+.practice-title {
+    font-size: clamp(1.35rem, 1.1rem + 1vw, 1.7rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin-bottom: 0.3rem;
+}
+
+.practice-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+}
+
+/* ---------------- Khối trình phát ---------------- */
+
+.dictation-player {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 1.5rem;
+    max-width: 820px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.player-header {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 40px;
+    margin-bottom: 1.25rem;
+}
+
+.player-progress {
+    text-align: center;
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 0.88rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.player-waveform {
+    position: relative;
+    height: 110px;
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 1.25rem;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    overflow: hidden;
+}
+
+.player-waveform #waveform {
+    width: 100%;
+    height: 100%;
+}
+
+/* ---------------- Nút điều khiển phát ---------------- */
+
+.player-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.btn-control {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--r-full);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-control:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.btn-control:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.btn-control-main {
+    width: 66px;
+    height: 66px;
+    border-radius: var(--r-full);
+    border: none;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 20px -10px rgba(99, 102, 241, 0.9);
+    transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+.btn-control-main:hover:not(:disabled) {
+    box-shadow: 0 12px 26px -10px rgba(99, 102, 241, 1);
+}
+
+.btn-control-main:active {
+    transform: translateY(1px);
+}
+
+.btn-control-main:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+/* ---------------- Ô nhập ---------------- */
+
+.player-input-container {
+    position: relative;
+    margin-bottom: 1rem;
+}
+
+.player-input {
+    width: 100%;
+    padding: 0.95rem 1.1rem;
+    font-size: 1.05rem;
+    font-family: inherit;
+    line-height: 1.55;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-inset);
+    color: var(--text);
+    outline: none;
+    resize: none;
+    transition: border-color 0.15s var(--ease);
+}
+
+.player-input:focus {
+    border-color: var(--primary);
+}
+
+.player-input.correct {
+    border-color: var(--success);
+}
+
+.player-input.wrong {
+    border-color: var(--danger);
+}
+
+/* ---------------- Hàng hành động ---------------- */
+
+.player-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.speed-control {
+    display: flex;
+    align-items: center;
+}
+
+.speed-select {
+    padding: 0.55rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    font-size: 0.87rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    text-align: center;
+    transition: border-color 0.15s var(--ease);
+}
+
+.speed-select:hover {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.speed-select option {
+    background: var(--surface);
+    color: var(--text);
+}
+
+.btn-skip {
+    padding: 0.7rem 1.15rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    font-size: 0.94rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-skip:hover {
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+/* Nút hành động chính duy nhất của màn này */
+.btn-check {
+    padding: 0.7rem 1.5rem;
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text-primary);
+    font-size: 0.94rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: transform 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.btn-check:hover {
+    border-color: var(--border-strong);
+}
+
+.btn-check:active {
+    transform: translateY(1px);
+}
+
+.btn-check.correct {
+    background: transparent;
+    border-color: var(--success);
+    color: var(--success);
+}
+
+.btn-check.correct:hover {
+    border-color: var(--success);
+    filter: brightness(1.1);
+}
+
+/* ---------------- Vùng phản hồi (DictationFeedback) ---------------- */
+
+.hint-label {
+    font-size: 0.83rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+}
+
+.settings-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.87rem;
+    cursor: pointer;
+}
+
+/* ---------------- Trạng thái rỗng / đang tải ---------------- */
+
+.dictation-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8rem;
+    padding: 3.5rem 1rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.dictation-loading svg {
+    color: var(--primary);
+}
+
+.dictation-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 3rem 1.5rem;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.dictation-empty svg {
+    color: var(--text-tertiary);
+}
+
+/* ---------------- Gợi ý phím tắt ---------------- */
+
+.shortcut-tips-footer kbd {
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+    margin-right: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+/* ---------------- Bản đồ đoạn (mục lục) ---------------- */
+
+.segment-map-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 1.1rem 1.15rem;
+    margin-bottom: 1.25rem;
+    animation: slideDown 0.25s var(--ease);
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.segment-map-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.85rem;
+}
+
+.segment-map-title {
+    font-weight: 650;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.segment-legend {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-tertiary);
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: var(--r-full);
+}
+
+.segment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+    gap: 0.5rem;
+}
+
+.segment-item {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--r-sm);
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 0.87rem;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: border-color 0.15s var(--ease), transform 0.15s var(--ease);
+    position: relative;
+}
+
+.segment-item:hover {
+    transform: translateY(-1px);
+    border-color: var(--border-strong);
+}
+
+.segment-item.active {
+    border-color: var(--primary);
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.segment-item.learned {
+    color: var(--accent-learned);
+    border-color: color-mix(in srgb, var(--accent-learned) 40%, var(--border));
+}
+
+.segment-item.marked {
+    color: var(--accent-streak);
+    border-color: color-mix(in srgb, var(--accent-streak) 40%, var(--border));
+}
+
+.segment-item.skipped {
+    color: var(--text-tertiary);
+    border-style: dashed;
+}
+
+.segment-item.marked::after {
+    display: none;
+}
+
+/* ---------------- Nút phụ trong header trình phát ---------------- */
+
+.btn-toggle-map {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-toggle-map:hover,
+.btn-toggle-map.active {
+    color: var(--primary);
+    border-color: var(--border-strong);
+}
+
+.btn-mark-segment {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    padding: 8px;
+    border-radius: var(--r-full);
+    transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-mark-segment:hover {
+    background: var(--surface-2);
+    color: var(--accent-streak);
+}
+
+.btn-mark-segment.active {
+    color: var(--accent-streak);
+}
+
+/* ---------------- Responsive ---------------- */
+
+@media (max-width: 780px) {
+    .dictation-player {
+        padding: 1.1rem;
+    }
+
+    .player-input {
+        font-size: 1rem;
+        padding: 0.85rem 0.95rem;
+    }
+
+    .btn-control {
+        width: 40px;
+        height: 40px;
+    }
+
+    .btn-control-main {
+        width: 58px;
+        height: 58px;
+    }
+
+    .player-actions {
+        gap: 0.5rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .practice-nav-header {
+        margin-bottom: 1rem;
+    }
+
+    .btn-nav-action {
+        padding: 0.5rem 0.8rem;
+        font-size: 0.85rem;
+    }
+
+    .segment-grid {
+        grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+        gap: 0.4rem;
+    }
+}

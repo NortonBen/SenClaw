@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://kaizen.bacnd.com/sitemap.xml
+
+Sitemap: https://kaizen.bacnd.com/sitemap.xml

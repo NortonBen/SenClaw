@@ -1,0 +1,43 @@
+{
+  "id": "lakehouse",
+  "name": "Lakehouse",
+  "description": "Data lake + warehouse cá nhân: import file/DB thành dataset Parquet, query SQL (DataFusion), pipeline ETL sources→transforms→exports có lập lịch, incremental sync, backfill, lineage. Dùng lakehouse-mcp để agent tự vận hành.",
+  "icon": "🏞️",
+  "runtime": {
+    "kind": "server",
+    "start": "./lakehouse",
+    "healthPath": "/api/status",
+    "port": 4560
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "lakehouse-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Data lake + warehouse: lake_import_file (CSV/JSON/Excel/Parquet → dataset Parquet), lake_query (SQL SELECT-only trên mọi dataset, LUÔN dùng limit), lake_dataset_* (list/schema/preview/export/delete/compact), lake_connection_* (Postgres/MySQL/SQLite: add/test/introspect), lake_flow_* (pipeline ETL sources→transforms→exports: create/update/generate bằng AI/run/backfill), lake_run_* (status/logs/cancel — async, poll đừng chờ), lake_lineage + lake_stats. Gọi khi cần lưu trữ dữ liệu bảng, query SQL, đồng bộ database, hoặc dựng pipeline ETL.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "lakehouse-analyst",
+      "path": "skills/lakehouse-analyst",
+      "triggers": ["query dữ liệu", "phân tích dataset", "sql lakehouse", "xem dữ liệu parquet", "thống kê bảng", "data warehouse"]
+    },
+    {
+      "name": "lakehouse-operator",
+      "path": "skills/lakehouse-operator",
+      "triggers": ["etl", "đồng bộ database", "tạo pipeline", "import parquet", "backfill", "kết nối postgres", "kết nối mysql", "data lake"]
+    }
+  ],
+  "personas": [
+    {
+      "name": "data-engineer",
+      "path": "personas/data-engineer.md",
+      "description": "Kỹ sư dữ liệu: thiết kế + vận hành pipeline ETL trên lakehouse-mcp, an toàn dữ liệu trên hết"
+    }
+  ]
+}

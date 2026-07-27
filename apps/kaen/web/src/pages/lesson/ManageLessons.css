@@ -1,0 +1,285 @@
+/* Danh sách bài học — thẻ phẳng, đúng một nút hành động chính mỗi thẻ.
+   Khung ngoài (max-width, padding) do .main-content của shell lo. */
+
+.lessons-page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- Thanh công cụ trên đầu ---------------- */
+
+.lessons-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.lessons-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 200px;
+}
+
+.lessons-search__icon {
+  position: absolute;
+  left: 0.7rem;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.lessons-search input {
+  width: 100%;
+  padding: 0.66rem 2.1rem 0.66rem 2.3rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  transition: border-color 0.15s var(--ease);
+}
+
+.lessons-search input:focus {
+  border-color: var(--primary);
+}
+
+.lessons-search input:disabled {
+  opacity: 0.6;
+}
+
+.lessons-search__clear {
+  position: absolute;
+  right: 0.45rem;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.lessons-search__clear:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/* ---------------- Lưới thẻ bài học ---------------- */
+
+.lessons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.85rem;
+}
+
+.lesson-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1.1rem 1.15rem;
+  transition: border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.lesson-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.lesson-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.lesson-card__title {
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lesson-card__menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.lesson-card__menu-btn {
+  padding: 0.35rem;
+  border-radius: var(--r-sm);
+}
+
+.lesson-card__dropdown {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+  padding: 0.3rem;
+  box-shadow: var(--shadow-lift);
+}
+
+.lesson-card__dropdown button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.87rem;
+  text-align: left;
+}
+
+.lesson-card__dropdown button:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.lesson-card__dropdown button.is-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.lesson-card__dropdown button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lesson-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.lesson-card__date {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+}
+
+.lesson-card__desc {
+  font-size: 0.87rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lesson-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 0.35rem;
+}
+
+.lesson-card__foot .k-btn {
+  padding: 0.55rem 0.85rem;
+  font-size: 0.87rem;
+}
+
+.lesson-card__link {
+  margin-left: auto;
+  font-size: 0.83rem;
+}
+
+/* ---------------- Trạng thái rỗng / đang tải ---------------- */
+
+.lessons-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.lessons-empty svg {
+  color: var(--text-tertiary);
+}
+
+.lessons-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 3.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.lessons-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--primary);
+  animation: lessons-spin 0.8s linear infinite;
+}
+
+@keyframes lessons-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------- Phân trang ---------------- */
+
+.lessons-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.lessons-pager .k-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lessons-pager__info {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* ---------------- Responsive ---------------- */
+
+@media (max-width: 780px) {
+  .lessons-tools {
+    width: 100%;
+  }
+
+  .lessons-search {
+    flex: 1 1 100%;
+  }
+
+  .lessons-tools .k-btn {
+    flex: 1;
+  }
+
+  .lessons-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lesson-card__foot {
+    gap: 0.4rem;
+  }
+
+  .lesson-card__link {
+    margin-left: 0;
+  }
+}

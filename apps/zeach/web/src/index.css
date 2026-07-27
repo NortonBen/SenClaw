@@ -1,0 +1,93 @@
+/* AntD provides the reset and component styling. This file only styles the
+   Markdown report body, whose colors come from tokens via CSS variables set in
+   Md.tsx so it tracks light/dark automatically. */
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+}
+
+/* --- research report markdown --- */
+.md {
+  color: var(--md-text);
+  line-height: 1.65;
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md h1 {
+  font-size: 22px;
+  margin: 6px 0 12px;
+  line-height: 1.25;
+}
+.md h2 {
+  font-size: 17px;
+  margin: 22px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--md-border);
+}
+.md h3 {
+  font-size: 15px;
+  margin: 16px 0 6px;
+}
+.md p {
+  margin: 8px 0;
+}
+.md ul,
+.md ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+.md li {
+  margin: 4px 0;
+}
+.md a {
+  color: var(--md-accent);
+  text-decoration: none;
+}
+.md a:hover {
+  text-decoration: underline;
+}
+.md blockquote {
+  margin: 10px 0;
+  padding: 6px 14px;
+  color: var(--md-muted);
+  border-left: 3px solid var(--md-border);
+}
+.md code {
+  background: var(--md-code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.md pre {
+  background: var(--md-code-bg);
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--md-border);
+  margin: 16px 0;
+}
+.md table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+}
+.md th,
+.md td {
+  border: 1px solid var(--md-border);
+  padding: 6px 10px;
+  text-align: left;
+}

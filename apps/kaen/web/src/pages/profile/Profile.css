@@ -1,0 +1,285 @@
+/* Hồ sơ — thẻ phẳng, accent chỉ nằm ở icon nhỏ và thanh level.
+   Khung ngoài (max-width, padding) do .main-content của shell lo. */
+
+.profile {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- Dải số liệu ---------------- */
+
+.profile-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.profile-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1rem 1.1rem;
+  transition: border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.profile-stat:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.profile-stat__icon.is-streak {
+  color: var(--accent-streak);
+}
+
+.profile-stat__icon.is-xp {
+  color: var(--accent-due);
+}
+
+.profile-stat__icon.is-learned {
+  color: var(--accent-learned);
+}
+
+.profile-stat__icon.is-new {
+  color: var(--accent-review);
+}
+
+.profile-stat__value {
+  font-size: 1.55rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.profile-stat__label {
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+}
+
+/* ---------------- Khối nội dung ---------------- */
+
+.profile-section {
+  padding: 1.4rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.profile-section__head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 1.1rem;
+  color: var(--text-tertiary);
+}
+
+.profile-section__head h2 {
+  font-size: 1.1rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+/* ---------------- Tóm tắt từ vựng ---------------- */
+
+.profile-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.profile-summary__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.profile-summary__label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.profile-summary__value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* ---------------- Biểu đồ theo level ---------------- */
+
+.level-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.level-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  position: relative;
+}
+
+.level-bar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.level-label {
+  font-size: 0.87rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.level-value {
+  font-size: 0.87rem;
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.level-bar-container {
+  width: 100%;
+  height: 10px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  overflow: hidden;
+  position: relative;
+}
+
+.level-bar-fill {
+  height: 100%;
+  border-radius: var(--r-full);
+  transition: width 0.5s var(--ease);
+  min-width: 2px;
+}
+
+.level-tooltip {
+  position: absolute;
+  top: -0.6rem;
+  right: 0;
+  transform: translateY(-100%);
+  padding: 0.7rem 0.9rem;
+  width: min(340px, 100%);
+  box-shadow: var(--shadow-lift);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
+  z-index: 2;
+}
+
+.level-tooltip::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  right: 18px;
+  width: 12px;
+  height: 12px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+  border-bottom-left-radius: 2px;
+}
+
+.level-bar-item:hover .level-tooltip {
+  opacity: 1;
+  transform: translateY(calc(-100% - 4px));
+}
+
+.level-tooltip-title {
+  font-weight: 650;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.level-tooltip-interval {
+  display: inline-block;
+  margin: 0.25rem 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.level-tooltip-description {
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.loading-stats {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* ---------------- Thông tin cá nhân ---------------- */
+
+.profile-info-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.info-item:first-child {
+  padding-top: 0;
+}
+
+.info-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.info-item label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.info-value {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ---------------- Responsive ---------------- */
+
+@media (max-width: 780px) {
+  .profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-section {
+    padding: 1.15rem 1.1rem;
+  }
+
+  .profile-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .level-tooltip {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .profile-stat__value {
+    font-size: 1.35rem;
+  }
+}

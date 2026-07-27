@@ -1,0 +1,206 @@
+/* Chi tiết bài làm — thẻ phẳng, chỉ dùng viền/chữ màu để phân biệt đúng/sai.
+   Không nền pastel đặc, không bóng màu. */
+
+.grammar-test-review {
+    margin-top: 1.25rem;
+}
+
+.grammar-test-review--inline {
+    margin-top: 1rem;
+    text-align: left;
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+    padding-right: 0.35rem;
+}
+
+.grammar-test-review-intro {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0 0 1.25rem;
+}
+
+.grammar-test-review-section {
+    margin-bottom: 1.75rem;
+}
+
+.grammar-test-review-section:last-child {
+    margin-bottom: 0;
+}
+
+.grammar-test-review-section-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 0 0 0.85rem;
+    color: var(--text-primary);
+}
+
+.grammar-test-review-section-icon--wrong {
+    color: var(--danger);
+    flex-shrink: 0;
+}
+
+.grammar-test-review-section-icon--ok {
+    color: var(--success);
+    flex-shrink: 0;
+}
+
+.grammar-test-review-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.grammar-test-review-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 1.1rem 1.15rem;
+    border-left: 3px solid var(--border);
+}
+
+.grammar-test-review-card[data-correct='false'] {
+    border-left-color: var(--danger);
+}
+
+.grammar-test-review-card[data-correct='true'] {
+    border-left-color: var(--success);
+}
+
+/* Câu sai được nhấn nhẹ bằng viền, không dùng bóng màu */
+.grammar-test-review-card--emphasize {
+    border-color: var(--border-strong);
+}
+
+.grammar-test-review-qicon--ok {
+    color: var(--success);
+}
+
+.grammar-test-review-qicon--bad {
+    color: var(--danger);
+}
+
+.grammar-test-review-qhead {
+    font-size: 1rem;
+    font-weight: 650;
+    margin: 0 0 0.85rem;
+    color: var(--text-primary);
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    line-height: 1.45;
+}
+
+.grammar-test-review-qicon {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.grammar-test-review-qtext {
+    flex: 1;
+}
+
+.grammar-test-review-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-left: 0;
+}
+
+.grammar-test-review-opt {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    line-height: 1.45;
+}
+
+.grammar-test-review-opt--correct {
+    border-color: var(--success);
+    background: transparent;
+}
+
+.grammar-test-review-opt--chosen-wrong {
+    border-color: var(--danger);
+    background: transparent;
+}
+
+.grammar-test-review-opt--neutral {
+    color: var(--text-secondary);
+}
+
+.grammar-test-review-opt-label {
+    flex: 1;
+    min-width: 0;
+}
+
+.grammar-test-review-opt-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+.grammar-test-review-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 0.22rem 0.5rem;
+    border-radius: var(--r-full);
+    border: 1px solid var(--border);
+    line-height: 1;
+}
+
+.grammar-test-review-badge--ok {
+    color: var(--success);
+    border-color: var(--success);
+}
+
+.grammar-test-review-badge--bad {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.grammar-test-review-explanation {
+    margin-top: 0.5rem;
+    padding: 0.8rem 0.95rem;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-inset);
+}
+
+.grammar-test-review-explanation-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-tertiary);
+    margin: 0 0 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.grammar-test-review-explanation-body {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.grammar-test-review--inline .grammar-test-review-card {
+    padding: 0.95rem 1rem;
+}
+
+.grammar-test-review--inline .grammar-test-review-section-title {
+    font-size: 1rem;
+}

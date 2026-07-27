@@ -1,0 +1,380 @@
+/* Chi tiết bài học (Thư viện + Kho từ) — thẻ phẳng, một nút hành động chính.
+   Khung ngoài (max-width, padding) do .main-content của shell lo. */
+
+.lesson-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.lesson-detail-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  padding: 3.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.lesson-detail-loading .spin {
+  animation: lesson-detail-spin 0.9s linear infinite;
+  color: var(--primary);
+}
+
+@keyframes lesson-detail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lesson-detail-error {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+/* ---------------- Đầu trang ---------------- */
+
+.lesson-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.lesson-detail-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lesson-detail-header .k-btn--quiet {
+  padding-left: 0;
+}
+
+/* ---------------- Thẻ thông tin bài học ---------------- */
+
+.lesson-info-card {
+  padding: 1.4rem 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.lesson-info-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.lesson-info-title-section {
+  flex: 1;
+  min-width: 0;
+}
+
+.lesson-info-card h1 {
+  font-size: clamp(1.4rem, 1.1rem + 1vw, 1.8rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.lesson-info-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.lesson-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+}
+
+.lesson-description {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.lesson-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.lesson-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.stat-label {
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+}
+
+/* ---------------- Cụm hành động ---------------- */
+
+.lesson-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+}
+
+.lesson-detail-actions-primary,
+.lesson-detail-actions-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lesson-detail-actions-secondary {
+  margin-left: auto;
+}
+
+/* ---------------- Danh sách từ vựng ---------------- */
+
+.cards-section {
+  padding: 1.4rem 1.5rem;
+}
+
+.cards-section h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 1.1rem;
+}
+
+.cards-empty {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+}
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 0.85rem;
+}
+
+.card-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 1.1rem 1.15rem;
+  transition: border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+
+.card-item:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.card-item-header {
+  margin-bottom: 0.75rem;
+}
+
+.card-number {
+  display: inline-block;
+  padding: 0.24rem 0.6rem;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.card-image {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  margin-bottom: 0.25rem;
+}
+
+.card-word-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.card-word-with-pronunciation {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.card-word {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.btn-pronunciation {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.btn-pronunciation:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.btn-pronunciation:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card-ipa {
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.card-pos {
+  display: inline-block;
+  padding: 0.16rem 0.5rem;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.card-meaning {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  padding: 0.65rem 0.8rem;
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  border-left: 2px solid var(--accent-learned);
+}
+
+.card-example {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.65rem 0.8rem;
+  background: var(--surface-inset);
+  border-radius: var(--r-md);
+  font-size: 0.88rem;
+}
+
+.example-label {
+  color: var(--text-tertiary);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.example-text {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.card-other-meanings {
+  padding: 0.65rem 0.8rem;
+  background: var(--surface-inset);
+  border-radius: var(--r-md);
+  font-size: 0.88rem;
+}
+
+.other-meanings-label {
+  display: block;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  font-size: 0.8rem;
+  margin-bottom: 0.4rem;
+}
+
+.other-meanings-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-secondary);
+}
+
+.other-meanings-list li {
+  margin-bottom: 0.2rem;
+}
+
+.other-meanings-list strong {
+  color: var(--text-primary);
+}
+
+/* ---------------- Responsive ---------------- */
+
+@media (max-width: 780px) {
+  .lesson-info-card,
+  .cards-section {
+    padding: 1.15rem 1.1rem;
+  }
+
+  .lesson-info-header {
+    flex-direction: column;
+  }
+
+  .lesson-detail-actions-secondary {
+    margin-left: 0;
+  }
+
+  .lesson-detail-actions .k-btn {
+    flex: 1;
+  }
+
+  .cards-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .lesson-info-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+}

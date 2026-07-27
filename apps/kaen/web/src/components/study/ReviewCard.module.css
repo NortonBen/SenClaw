@@ -1,0 +1,365 @@
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 2rem;
+    box-shadow: var(--shadow-sm);
+}
+
+.header {
+    margin-bottom: 1.5rem;
+}
+
+.label {
+    font-size: 1.125rem;
+    color: var(--text-secondary);
+    text-align: center;
+    font-weight: 500;
+}
+
+.result {
+    margin-bottom: 1.5rem;
+    padding: 1.25rem 1.5rem;
+    border-radius: var(--r-md);
+    animation: slideDown 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-15px) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.result.correct {
+    background: var(--success-bg);
+    color: var(--success-text);
+    border: 2px solid var(--success-border);
+}
+
+.result.incorrect {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border: 2px solid var(--error-border);
+}
+
+.resultContent {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.iconWrapper {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    animation: scaleIn 0.3s ease 0.1s both;
+}
+
+@keyframes scaleIn {
+    from {
+        transform: scale(0);
+    }
+
+    to {
+        transform: scale(1);
+    }
+}
+
+.iconWrapper.correct {
+    background: transparent;
+    border: 2px solid var(--success);
+    color: var(--success);
+}
+
+.iconWrapper.incorrect {
+    background: transparent;
+    border: 2px solid var(--danger);
+    color: var(--danger);
+}
+
+.icon {
+    width: 24px;
+    height: 24px;
+    stroke-width: 3;
+}
+
+.resultText {
+    flex: 1;
+    text-align: left;
+}
+
+.resultTitle {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+    line-height: 1.2;
+}
+
+.resultSubtitle {
+    font-size: 0.95rem;
+    font-weight: 500;
+    opacity: 0.9;
+    line-height: 1.4;
+}
+
+.resultSubtitle strong {
+    font-weight: 700;
+    color: inherit;
+}
+
+.display {
+    margin: 1.5rem 0;
+    text-align: center;
+    padding: 2.5rem 2rem;
+    background: var(--surface-inset);
+    border-radius: var(--r-lg);
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    max-width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+.display::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--primary);
+    opacity: 0.5;
+}
+
+.wordWrapper {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.wordContainer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+    flex-direction: row;
+}
+
+.wordContainer h2 {
+    font-size: 1.875rem;
+    color: var(--text-primary);
+    margin: 0;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    line-height: 1.1;
+    background: none;
+    -webkit-background-clip: unset;
+    -webkit-text-fill-color: unset;
+    background-clip: unset;
+}
+
+.partOfSpeech {
+    margin: 0;
+    padding: 0;
+}
+
+.partOfSpeechLabel {
+    display: inline-block;
+    padding: 0.375rem 1rem;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    border-radius: var(--r-full);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+}
+
+.ipa {
+    font-size: 16px;
+    color: var(--text-secondary);
+    margin: 0;
+    font-style: italic;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    opacity: 0.85;
+}
+
+.btnPronunciation {
+    padding: 10px;
+    background: var(--surface-2);
+    color: var(--primary);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+}
+
+.btnPronunciation:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    transform: scale(1.06);
+}
+
+.btnPronunciation:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.btnPronunciation:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.options {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.optionButton {
+    padding: 1.25rem;
+    font-size: 1.125rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+}
+
+.optionButton:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+    transform: translateY(-1px);
+}
+
+.optionButton:disabled {
+    cursor: not-allowed;
+}
+
+.optionButton.correct {
+    border-color: var(--success);
+    background: transparent;
+    color: var(--success);
+}
+
+.optionButton.incorrect {
+    border-color: var(--danger);
+    background: transparent;
+    color: var(--danger);
+}
+
+.optionButton.isSelected {
+    border-color: var(--primary);
+    background: var(--primary-soft);
+}
+
+@media (max-width: 768px) {
+    .card {
+        padding: 1.5rem;
+    }
+
+    .display {
+        padding: 2rem 1.5rem;
+        min-height: 150px;
+        border-radius: 16px;
+    }
+
+    .wordContainer h2 {
+        font-size: 1.5rem;
+    }
+
+    .wordContainer {
+        gap: 0.75rem;
+    }
+
+    .ipa {
+        font-size: 1rem;
+    }
+
+    .partOfSpeechLabel {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.75rem;
+    }
+
+    .btnPronunciation {
+        width: 40px;
+        height: 40px;
+        padding: 0.5rem;
+    }
+
+    .btnPronunciation svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    .options {
+        grid-template-columns: 1fr;
+    }
+
+    .optionButton {
+        padding: 1rem;
+    }
+
+    .result {
+        padding: 1rem 1.25rem;
+    }
+
+    .resultContent {
+        flex-direction: column;
+        text-align: center;
+        gap: 0.75rem;
+    }
+
+    .resultText {
+        text-align: center;
+    }
+
+    .iconWrapper {
+        width: 40px;
+        height: 40px;
+    }
+
+    .icon {
+        width: 20px;
+        height: 20px;
+    }
+
+    .resultTitle {
+        font-size: 1.125rem;
+    }
+
+    .resultSubtitle {
+        font-size: 0.875rem;
+    }
+}

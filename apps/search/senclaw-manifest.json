@@ -1,0 +1,24 @@
+{
+  "id": "search",
+  "name": "Search",
+  "description": "Tìm kiếm tổng hợp: gom kết quả từ web, tri thức nội bộ (knowledge graph), wiki, mạng xã hội, tài liệu và mọi MCP khác trong cùng một lần tìm; khử trùng lặp theo URL chuẩn hoá, xếp hạng bằng Reciprocal Rank Fusion, và ưu tiên những gì được NHIỀU LOẠI NGUỒN ĐỘC LẬP cùng xác nhận. Mỗi lần tìm đều kèm nhật ký nguồn nào chạy được / lỗi / hết giờ, nên kết quả mỏng không bao giờ bị nhầm thành 'không có thông tin'. MCP `search-mcp` mở lại toàn bộ năng lực này cho các agent, app và skill khác dùng chung.",
+  "icon": "🔎",
+  "runtime": {
+    "kind": "server",
+    "start": "./search",
+    "healthPath": "/api/status",
+    "port": 4530
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request", "agent.run", "knowledge.save"]
+  },
+  "mcp": {
+    "name": "search-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Tìm kiếm liên nguồn cho toàn hệ thống: search_query gom và xếp hạng bằng chứng từ web + knowledge graph + wiki (+ social/tài liệu/MCP khác khi bật) mà KHÔNG cần LLM, kèm provenance từng nguồn; search_sources cho biết nguồn nào đang hỏng để phân biệt 'không có gì' với 'không tìm được'; search_run/search_runs đọc lại kết quả cũ mà không phải tìm lại.",
+    "autoRegister": true
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "permissions": {
+    "exec": [
+      "./facebook-pro"
+    ],
+    "network": [
+      "127.0.0.1",
+      "graph.facebook.com",
+      "www.facebook.com"
+    ]
+  },
+  "updater": "none",
+  "platform": "darwin-arm64",
+  "category": "marketing",
+  "keywords": [
+    "facebook",
+    "fanpage",
+    "graph-api",
+    "marketing-api",
+    "ads",
+    "ctr-cpc-cpm",
+    "insights",
+    "auto-reply",
+    "mcp"
+  ],
+  "repo_url": "https://github.com/midea-ai/SenClaw"
+}
