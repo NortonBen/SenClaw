@@ -1,0 +1,82 @@
+{
+  "id": "sandbox",
+  "name": "Sandbox — Chạy lệnh cách ly khỏi máy thật",
+  "description": "Chạy lệnh shell và mã nguồn (Python, JavaScript, Bash, Ruby…) tách khỏi máy thật, theo hai cách. (1) Chạy trực tiếp trên máy này nhưng có rào chắn của hệ điều hành: macOS dùng Seatbelt, Linux dùng bubblewrap — mã chạy được nhưng KHÔNG ghi được ra ngoài thư mục sandbox, và mặc định cũng KHÔNG đọc được phần còn lại của đĩa. Việc đọc có ba mức chọn được: cách ly toàn bộ (chỉ thấy thư mục sandbox và thư mục bạn gắn vào — mặc định), cách ly cộng danh sách thư mục khai sẵn trong cài đặt, hoặc không cách ly đọc. Mạng mặc định tắt. Khởi động tức thì, không cần cài gì. (2) Chạy trong Docker container với giới hạn CPU/RAM/số tiến trình, bỏ toàn bộ capability, mạng tách hẳn — ranh giới chắc hơn, đổi lại cần Docker daemon đang chạy. Windows chỉ có Docker. App tự đo khả năng thật của máy chứ không đoán: có `docker` trên PATH mà daemon chết thì nó nói thẳng daemon chết, kèm cách sửa. Mỗi sandbox là một thư mục riêng giữ được file và gói đã cài giữa các lần chạy, có trình duyệt file, terminal tương tác, theo dõi CPU/RAM theo thời gian thực kèm biểu đồ và danh sách tiến trình (dừng được từng tiến trình hoặc dừng tất cả), gắn được thư mục có thật trên máy vào sandbox ở chế độ chỉ-đọc hoặc đọc-ghi, nhật ký từng lần chạy ghi rõ mức cách ly nào đã thực sự được áp dụng, và tuỳ chọn theo dõi hoạt động khi kiểm thử: ghi lại các sự kiện đọc/ghi file, khởi tạo tiến trình, kết nối mạng tới địa chỉ nào và tra cứu tên miền gì — bằng hook trong tiến trình (Python audit hook, Node preload) cộng so sánh thư mục, nên không cần quyền quản trị; đây là công cụ quan sát cho kiểm thử chứ không phải bằng chứng an ninh. Lệnh luôn được đưa vào shell qua stdin nên dấu nháy trong mã giữ nguyên; môi trường của tiến trình con được dựng mới nên khoá API của daemon không lọt vào sandbox.",
+  "icon": "🧪",
+  "runtime": {
+    "kind": "server",
+    "start": "./sandbox",
+    "healthPath": "/api/status",
+    "port": 4730
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest"
+    ]
+  },
+  "mcp": {
+    "name": "sandbox-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Sandbox MCP: kiểm tra máy chạy được kiểu cách ly nào, chạy nhanh một đoạn mã trong sandbox dùng-một-lần, tạo sandbox tồn tại lâu để làm nhiều bước, chạy lệnh shell hoặc đoạn mã trong sandbox đó, cài gói bằng pip/npm/apt, đọc-ghi-liệt kê file trong sandbox, đổi giới hạn tài nguyên và bật/tắt mạng, xem CPU/RAM và danh sách tiến trình đang chạy, dừng một tiến trình hoặc dừng tất cả, gắn/gỡ thư mục thật trên máy vào sandbox, đổi mức cách ly đọc đĩa của sandbox, xem và đổi cài đặt mặc định của app, bật/tắt theo dõi hoạt động và xem các sự kiện file/tiến trình/mạng đã ghi nhận, xem lịch sử các lần chạy kèm mức cách ly đã áp dụng.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "sandbox-runner",
+      "path": "skills/sandbox-runner",
+      "triggers": [
+        "chạy thử đoạn code",
+        "chạy đoạn python",
+        "chạy code python",
+        "chạy thử lệnh",
+        "chạy lệnh này",
+        "thực thi lệnh",
+        "chạy cách ly",
+        "chạy an toàn",
+        "sandbox",
+        "máy ảo",
+        "chạy trong docker",
+        "test đoạn code",
+        "kiểm tra đoạn code chạy đúng không",
+        "tính toán bằng python",
+        "cài thư viện rồi chạy",
+        "run this code",
+        "run python",
+        "execute command",
+        "run in sandbox",
+        "isolated execution",
+        "code interpreter",
+        "sandbox dùng bao nhiêu ram",
+        "sandbox dùng bao nhiêu cpu",
+        "tiến trình đang chạy trong sandbox",
+        "dừng tiến trình",
+        "kill process",
+        "gắn thư mục vào sandbox",
+        "mount thư mục",
+        "cho sandbox đọc thư mục",
+        "cách ly thư mục",
+        "sandbox đọc được gì",
+        "cài đặt sandbox mặc định",
+        "theo dõi hoạt động",
+        "đoạn mã này đụng vào gì",
+        "script này làm gì",
+        "nó gọi mạng đi đâu",
+        "kiểm thử sandbox",
+        "trace"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "sandbox-runner",
+      "path": "personas/sandbox-runner.md",
+      "description": "Sandbox Runner — chạy lệnh và mã nguồn của người dùng trong môi trường cách ly, chọn đúng backend theo khả năng thật của máy, và nói rõ mức cách ly nào đang bảo vệ họ."
+    }
+  ]
+}

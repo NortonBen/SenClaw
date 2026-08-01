@@ -1,0 +1,55 @@
+:root {
+  /* Replaced at runtime with the resolved theme (see theme.tsx) — this is only
+     the value that applies before React mounts, so the first paint doesn't
+     flash the wrong surface. */
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+  /* Real values come from the antd tokens once mounted; these keep the
+     pre-mount frame from being white inside a dark shell. */
+  background: Canvas;
+  color: CanvasText;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Output and code: monospace, and scrollable on its own so a wide traceback
+   never makes the whole page scroll sideways. */
+.sbx-mono {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.sbx-output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 42vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.sbx-editor {
+  width: 100%;
+  resize: vertical;
+  border-radius: 8px;
+  padding: 10px 12px;
+  tab-size: 4;
+}
+
+/* xterm fills its pane; without an explicit height the fit addon measures a
+   zero-height box and the terminal renders one row tall. */
+.sbx-term {
+  height: 58vh;
+  padding: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+}

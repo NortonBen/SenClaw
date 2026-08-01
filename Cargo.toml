@@ -1,5 +1,5 @@
 [workspace]
-members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar", "apps/skill-builder", "apps/docx-editor", "apps/crm", "apps/clock", "apps/ontology", "apps/ai-office", "apps/moltbook", "apps/ai-chat", "apps/video-flow", "apps/rewrite-story", "apps/video-cloner", "apps/hub", "apps/shopee", "apps/social", "apps/kaen", "apps/youtube", "apps/search", "apps/json", "apps/rule-engine", "apps/lakehouse", "apps/zeach", "apps/tiktok-activity", "apps/facebook-pro"]
+members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar", "apps/skill-builder", "apps/docx-editor", "apps/crm", "apps/clock", "apps/ontology", "apps/ai-office", "apps/moltbook", "apps/ai-chat", "apps/video-flow", "apps/rewrite-story", "apps/video-cloner", "apps/hub", "apps/shopee", "apps/social", "apps/kaen", "apps/youtube", "apps/search", "apps/json", "apps/rule-engine", "apps/lakehouse", "apps/zeach", "apps/tiktok-activity", "apps/facebook-pro", "apps/sandbox"]
 resolver = "2"
 
 [package]

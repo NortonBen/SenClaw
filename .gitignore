@@ -89,3 +89,7 @@ code-old/SemaClaw
 third_party/
 test_tts
 apps/*/web/node_modules/
+
+# Space App packaging artifacts (built by apps/*/scripts/pack.sh)
+apps/*/release/
+apps/*/*.zip
