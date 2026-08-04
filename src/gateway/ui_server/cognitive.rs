@@ -632,6 +632,10 @@ pub struct FullGraphQuery {
     pub include_chunks: bool,
     #[serde(default)]
     pub connected_only: bool,
+    /// Restrict to one knowledge space (custom scope id). None = whole graph.
+    /// Same encoding as /top-nodes and /search: the bare space id string.
+    #[serde(default)]
+    pub space: Option<String>,
 }
 fn default_full_node_limit() -> usize {
     500
@@ -648,17 +652,38 @@ pub(crate) async fn cognitive_full_graph(
     let node_limit = q.node_limit.clamp(10, 5000);
     let edge_limit = q.edge_limit.clamp(10, 10000);
 
-    let (nodes, edges) = sys
-        .graph
-        .full_graph(node_limit, edge_limit, q.include_chunks)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let space = q.space.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let (nodes, edges) = if let Some(space) = space {
+        // Space-scoped view: the induced subgraph of one knowledge space —
+        // members of the space plus only the edges that stay inside it.
+        let set = cognitive::NodeSet::space(space);
+        let mut nodes = sys
+            .graph
+            .nodes_in_set(&set, node_limit)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if !q.include_chunks {
+            nodes.retain(|n| n.kind != cognitive::NodeKind::Chunk);
+        }
+        let member_ids: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
+        let edges: Vec<RelationshipEdge> = sys
+            .graph
+            .edges_within_set(&set, edge_limit)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .into_iter()
+            // Drop edges touching members outside the (possibly truncated /
+            // chunk-filtered) node list so the payload stays self-contained.
+            .filter(|e| member_ids.contains(&e.src) && member_ids.contains(&e.dst))
+            .collect();
+        (nodes, edges)
+    } else {
+        sys.graph
+            .full_graph(node_limit, edge_limit, q.include_chunks)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
 
     let (nodes, edges) = if q.connected_only {
         use std::collections::HashSet;
-        let connected: HashSet<Uuid> = edges
-            .iter()
-            .flat_map(|e| [e.src, e.dst])
-            .collect();
+        let connected: HashSet<Uuid> = edges.iter().flat_map(|e| [e.src, e.dst]).collect();
         let nodes: Vec<_> = nodes
             .into_iter()
             .filter(|n| connected.contains(&n.id))
@@ -724,7 +749,12 @@ pub(crate) async fn cognitive_search(
     q.hops = body.hops.clamp(1, 6);
     q.rerank = body.rerank;
     q.decay_per_hop = 0.6;
-    if let Some(space) = body.space.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(space) = body
+        .space
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         q.node_sets = vec![cognitive::NodeSet::space(space)];
     }
 
@@ -911,7 +941,9 @@ pub(crate) async fn cognitive_re_extract_pending(
         );
     });
 
-    Ok(Json(serde_json::json!({ "queued": queued, "reset": reset })))
+    Ok(Json(
+        serde_json::json!({ "queued": queued, "reset": reset }),
+    ))
 }
 
 // =====================================================================
@@ -1145,7 +1177,8 @@ pub(crate) async fn cognitive_upload(
 // returns the raw matches with `grounded=false` so the UI still shows
 // evidence instead of failing.
 
-pub(crate) const RECALL_SYSTEM: &str = "You are a precise retrieval assistant. Answer the user's question \
+pub(crate) const RECALL_SYSTEM: &str =
+    "You are a precise retrieval assistant. Answer the user's question \
 using ONLY the numbered context provided. Cite the sources you use inline as [n]. If the context \
 does not contain the answer, say so plainly — do not invent facts. Keep the answer concise and \
 in the same language as the question.";
@@ -1189,7 +1222,12 @@ pub(crate) async fn cognitive_recall(
     q.query_type = search_type_from_mode(body.mode.as_deref());
     q.hops = body.hops.unwrap_or(2).clamp(1, 6);
     q.decay_per_hop = 0.6;
-    if let Some(space) = body.space.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(space) = body
+        .space
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         q.node_sets = vec![cognitive::NodeSet::space(space)];
     }
 
@@ -1296,7 +1334,10 @@ mod tests {
         assert_eq!(search_type_from_mode(Some("chunks")), SearchType::Chunks);
         // unknown / missing → graph completion
         assert_eq!(search_type_from_mode(None), SearchType::GraphCompletion);
-        assert_eq!(search_type_from_mode(Some("???")), SearchType::GraphCompletion);
+        assert_eq!(
+            search_type_from_mode(Some("???")),
+            SearchType::GraphCompletion
+        );
     }
 
     #[test]

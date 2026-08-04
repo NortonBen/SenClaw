@@ -4,6 +4,7 @@ import 'package:flutter_graph_view/flutter_graph_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
+import 'cognitive_screen.dart' show cogSpaceProvider;
 
 // ── Models ────────────────────────────────────────────────────────────────
 class GraphNode {
@@ -61,12 +62,16 @@ typedef FullGraphParams = ({bool connectedOnly, bool includeChunks});
 
 final cogFullGraphProvider =
     FutureProvider.family<Subgraph, FullGraphParams>((ref, params) async {
+  // The graph view honors the same knowledge-space switcher as the Data
+  // list — watching here refetches automatically when the space changes.
+  final space = ref.watch(cogSpaceProvider);
   final r = await ref.read(apiClientProvider).get('/api/cognitive/full-graph',
       query: {
         'node_limit': '2000',
         'edge_limit': '5000',
         'include_chunks': params.includeChunks ? 'true' : 'false',
         'connected_only': params.connectedOnly ? 'true' : 'false',
+        if (space != null && space.isNotEmpty) 'space': space,
       });
   final m = r is Map ? r : const {};
   return _parseSubgraph(m);

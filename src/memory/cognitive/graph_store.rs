@@ -53,9 +53,11 @@ pub trait GraphStore: Send + Sync {
     fn delete_edge(&self, src: Uuid, dst: Uuid, predicate: &str) -> Result<()>;
     fn neighbors(&self, node: Uuid, max: usize) -> Result<Vec<RelationshipEdge>>;
 
-    /// Pull a batch of edges ordered by `last_activated ASC` (stalest first).
-    /// `offset` lets the decay tick page through the whole table in chunks
-    /// without holding everything in memory.
+    /// Pull a batch of **active** (non-archived, `valid_to IS NULL`) edges
+    /// ordered by `last_activated ASC` (stalest first). `offset` lets the
+    /// decay tick page through the table in chunks without holding
+    /// everything in memory. Archived edges are frozen — scanning them
+    /// every tick would be pure waste, so they're filtered at the SQL level.
     fn scan_edges(&self, limit: usize, offset: usize) -> Result<Vec<RelationshipEdge>>;
     fn count_edges(&self) -> Result<usize>;
     /// Write the result of a decay sweep into `cog_decay_log`.
@@ -82,20 +84,15 @@ pub trait GraphStore: Send + Sync {
     /// unscoped.
     fn sets_of_node(&self, node: Uuid) -> Result<Vec<NodeSet>>;
 
-    /// Delete `entity` / `entity_type` nodes with zero incident edges,
-    /// restricted to nodes created before `created_before`. Called by the
-    /// decay sweep right after edge pruning so entities whose last edge
-    /// just decayed don't linger as disconnected dots until the (much
-    /// rarer) maintenance sweep. The age gate keeps a concurrent cognify
-    /// run safe: a freshly inserted entity is edge-less for a moment
-    /// between `add_node` and its first `upsert_edge`.
-    /// Chunks are never touched — an edge-less chunk is legitimate
-    /// (extraction pending / no facts) and holds provenance text.
-    /// Returns the number of nodes removed.
-    fn remove_orphan_entities(&self, created_before: i64) -> Result<usize>;
-
     fn tag_node(&self, node: Uuid, set: &NodeSet) -> Result<()>;
     fn nodes_in_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<DataPoint>>;
+
+    /// Edges whose BOTH endpoints are tagged into the given NodeSet —
+    /// the edge set of one knowledge space's induced subgraph. Powers the
+    /// space-scoped Knowledge graph view (`/api/cognitive/full-graph?space=`).
+    /// Ordered by `last_activated DESC` so a truncated result keeps the
+    /// liveliest edges.
+    fn edges_within_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<RelationshipEdge>>;
 
     /// All node ids tagged into ANY of the given sets. Used to restrict
     /// search results to a knowledge space (any-of semantics).
@@ -181,8 +178,11 @@ pub trait GraphStore: Send + Sync {
     /// (O(max_candidates²) dot products, fine for a daily sweep).
     /// Canonical = higher mention_count, tie-broken by oldest. Zero LLM /
     /// embedding calls — vectors were paid for at ingest.
-    fn merge_alias_entities(&self, min_cosine: f32, max_candidates: usize)
-        -> Result<AliasMergeReport>;
+    fn merge_alias_entities(
+        &self,
+        min_cosine: f32,
+        max_candidates: usize,
+    ) -> Result<AliasMergeReport>;
 
     /// Merge duplicate `entity` nodes that share the same case-insensitive
     /// `name`. For each duplicate group:
@@ -326,15 +326,37 @@ fn uuid_bytes(u: Uuid) -> [u8; 16] {
 
 /// Redirect every incident edge from `dup_id` onto `canonical_id`
 /// (INSERT OR IGNORE silently drops PK collisions where the canonical
-/// already holds the same edge), then delete the duplicate node. Returns
-/// the number of redirected edges that survived. Shared by the name-based
-/// and embedding-based entity merges — mention-count rollup stays with the
-/// callers, which batch it differently.
+/// already holds the same edge), consolidate the duplicate's information
+/// onto the canonical (space tags, summary), then delete the duplicate
+/// node. Returns the number of redirected edges that survived. Shared by
+/// the name-based and embedding-based entity merges — mention-count rollup
+/// stays with the callers, which batch it differently.
+///
+/// A merge must never LOSE information: without the tag copy the
+/// duplicate's `cog_node_tags` rows die with it (FK cascade) and every
+/// knowledge space that only knew the duplicate silently drops the entity.
 fn redirect_edges_and_delete(
     conn: &rusqlite::Connection,
     canonical_id: &[u8],
     dup_id: &[u8],
 ) -> rusqlite::Result<usize> {
+    // Union the duplicate's space memberships onto the canonical BEFORE the
+    // delete cascades them away.
+    conn.execute(
+        "INSERT OR IGNORE INTO cog_node_tags (node_id, node_set_id)
+         SELECT ?1, node_set_id FROM cog_node_tags WHERE node_id = ?2",
+        rusqlite::params![canonical_id, dup_id],
+    )?;
+    // Adopt the duplicate's summary when the canonical has none — merged
+    // knowledge is consolidated, not discarded.
+    conn.execute(
+        "UPDATE cog_nodes
+         SET summary = (SELECT summary FROM cog_nodes WHERE id = ?2)
+         WHERE id = ?1
+           AND TRIM(summary) = ''
+           AND (SELECT TRIM(summary) FROM cog_nodes WHERE id = ?2) <> ''",
+        rusqlite::params![canonical_id, dup_id],
+    )?;
     const EDGE_COLS: &str = "predicate, props_json,
          valid_from, valid_to,
          strength, tier, activation_count, last_activated,
@@ -372,6 +394,47 @@ fn redirect_edges_and_delete(
         rusqlite::params![dup_id],
     )?;
     Ok(inserted_src + inserted_dst)
+}
+
+/// Append `alias` to the `aka` string array inside a node's `props_json`
+/// (deduped, case-insensitive). Keeps absorbed surface names queryable
+/// after an alias merge instead of silently dropping them.
+fn record_alias(
+    conn: &rusqlite::Connection,
+    node_id: &[u8],
+    alias: &str,
+) -> rusqlite::Result<()> {
+    let props_str: String = conn.query_row(
+        "SELECT props_json FROM cog_nodes WHERE id = ?1",
+        rusqlite::params![node_id],
+        |r| r.get(0),
+    )?;
+    let mut props: Value =
+        serde_json::from_str(&props_str).unwrap_or(Value::Object(Default::default()));
+    if !props.is_object() {
+        props = Value::Object(Default::default());
+    }
+    let obj = props.as_object_mut().expect("coerced to object above");
+    let aka = obj
+        .entry("aka")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !aka.is_array() {
+        *aka = Value::Array(Vec::new());
+    }
+    let list = aka.as_array_mut().expect("coerced to array above");
+    let exists = list.iter().any(|v| {
+        v.as_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(alias))
+    });
+    if !exists {
+        list.push(Value::String(alias.to_string()));
+        let serialized = serde_json::to_string(&props).unwrap_or_else(|_| "{}".into());
+        conn.execute(
+            "UPDATE cog_nodes SET props_json = ?2 WHERE id = ?1",
+            rusqlite::params![node_id, serialized],
+        )?;
+    }
+    Ok(())
 }
 
 fn bytes_uuid(b: Vec<u8>) -> Result<Uuid> {
@@ -763,6 +826,7 @@ impl GraphStore for SqliteGraphStore {
         self.db.with_cog_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT * FROM cog_edges
+                 WHERE valid_to IS NULL
                  ORDER BY last_activated ASC
                  LIMIT ?1 OFFSET ?2",
             )?;
@@ -964,28 +1028,13 @@ impl GraphStore for SqliteGraphStore {
             let rows: Vec<NodeSet> = stmt
                 .query_map(params![node_blob], |r| {
                     Ok(NodeSet {
-                        scope_kind: super::node_set::ScopeKind::from_str(
-                            &r.get::<_, String>(0)?,
-                        ),
+                        scope_kind: super::node_set::ScopeKind::from_str(&r.get::<_, String>(0)?),
                         scope_id: r.get(1)?,
                         tag: r.get(2)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
-        })
-    }
-
-    fn remove_orphan_entities(&self, created_before: i64) -> Result<usize> {
-        self.db.with_cog_conn(|conn| {
-            let removed = conn.execute(
-                "DELETE FROM cog_nodes
-                 WHERE kind IN ('entity', 'entity_type')
-                   AND created_at < ?1
-                   AND id NOT IN (SELECT src FROM cog_edges UNION SELECT dst FROM cog_edges)",
-                params![created_before],
-            )?;
-            Ok(removed)
         })
     }
 
@@ -1014,7 +1063,9 @@ impl GraphStore for SqliteGraphStore {
             let mut stmt =
                 conn.prepare("SELECT id, summary FROM cog_nodes WHERE kind = 'chunk'")?;
             let chunk_rows: Vec<(Vec<u8>, String)> = stmt
-                .query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?)))?
+                .query_map([], |r| {
+                    Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(stmt);
             let mut markup_chunks_removed = 0usize;
@@ -1032,7 +1083,9 @@ impl GraphStore for SqliteGraphStore {
             // correct Unicode handling across scripts.
             let mut stmt = conn.prepare("SELECT id, name FROM cog_nodes WHERE kind = 'entity'")?;
             let entity_rows: Vec<(Vec<u8>, String)> = stmt
-                .query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?)))?
+                .query_map([], |r| {
+                    Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, String>(1)?))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(stmt);
             let mut junk_entities_removed = 0usize;
@@ -1215,6 +1268,7 @@ impl GraphStore for SqliteGraphStore {
         self.db.with_cog_conn(|conn| {
             struct Cand {
                 id: Vec<u8>,
+                name: String,
                 type_name: String,
                 mentions: i64,
                 emb: Vec<f32>,
@@ -1222,7 +1276,7 @@ impl GraphStore for SqliteGraphStore {
             // Ordered by canonical preference (mentions desc, oldest first)
             // so cands[i] always wins over cands[j] when i < j.
             let mut stmt = conn.prepare(
-                "SELECT id, type_name, mention_count, embedding
+                "SELECT id, name, type_name, mention_count, embedding
                  FROM cog_nodes
                  WHERE kind = 'entity' AND embedding IS NOT NULL
                    AND TRIM(name) <> ''
@@ -1233,9 +1287,10 @@ impl GraphStore for SqliteGraphStore {
                 .query_map(params![max_candidates as i64], |r| {
                     Ok(Cand {
                         id: r.get(0)?,
-                        type_name: r.get::<_, String>(1)?.trim().to_lowercase(),
-                        mentions: r.get(2)?,
-                        emb: blob_to_floats(&r.get::<_, Vec<u8>>(3)?),
+                        name: r.get(1)?,
+                        type_name: r.get::<_, String>(2)?.trim().to_lowercase(),
+                        mentions: r.get(3)?,
+                        emb: blob_to_floats(&r.get::<_, Vec<u8>>(4)?),
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1271,6 +1326,15 @@ impl GraphStore for SqliteGraphStore {
                          WHERE id = ?1",
                         params![cands[i].id, cands[j].mentions, now],
                     )?;
+                    // An alias merge joins two *different* surface names —
+                    // consolidate the absorbed name into the canonical's
+                    // `aka` list so the information isn't lost.
+                    if !cands[j].name.trim().is_empty()
+                        && cands[i].name.trim().to_lowercase()
+                            != cands[j].name.trim().to_lowercase()
+                    {
+                        record_alias(conn, &cands[i].id, cands[j].name.trim())?;
+                    }
                     absorbed[j] = true;
                     report.entities_merged += 1;
                 }
@@ -1368,7 +1432,11 @@ impl GraphStore for SqliteGraphStore {
         include_chunks: bool,
     ) -> Result<(Vec<DataPoint>, Vec<RelationshipEdge>)> {
         self.db.with_cog_conn(|conn| {
-            let kind_filter = if include_chunks { "" } else { "WHERE kind != 'chunk'" };
+            let kind_filter = if include_chunks {
+                ""
+            } else {
+                "WHERE kind != 'chunk'"
+            };
             let node_sql = format!(
                 "SELECT * FROM cog_nodes {kind_filter}
                  ORDER BY last_seen_at DESC LIMIT ?1"
@@ -1377,8 +1445,7 @@ impl GraphStore for SqliteGraphStore {
             let nodes: Vec<DataPoint> = nstmt
                 .query_map(params![node_limit as i64], row_to_node)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            let id_set: std::collections::HashSet<Uuid> =
-                nodes.iter().map(|n| n.id).collect();
+            let id_set: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
             let mut estmt = conn.prepare(
                 "SELECT * FROM cog_edges
                  ORDER BY strength DESC LIMIT ?1",
@@ -1465,6 +1532,29 @@ impl GraphStore for SqliteGraphStore {
                 .query_map(
                     params![set.scope_kind.as_str(), set.scope_id, set.tag, limit as i64],
                     row_to_node,
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    fn edges_within_set(&self, set: &NodeSet, limit: usize) -> Result<Vec<RelationshipEdge>> {
+        self.db.with_cog_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT e.* FROM cog_edges e
+                 JOIN cog_node_tags ts ON ts.node_id = e.src
+                 JOIN cog_node_sets ss ON ss.id = ts.node_set_id
+                 JOIN cog_node_tags td ON td.node_id = e.dst
+                 JOIN cog_node_sets sd ON sd.id = td.node_set_id
+                 WHERE ss.scope_kind = ?1 AND ss.scope_id = ?2 AND ss.tag = ?3
+                   AND sd.scope_kind = ?1 AND sd.scope_id = ?2 AND sd.tag = ?3
+                 ORDER BY e.last_activated DESC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt
+                .query_map(
+                    params![set.scope_kind.as_str(), set.scope_id, set.tag, limit as i64],
+                    row_to_edge,
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
@@ -1734,7 +1824,10 @@ mod tests {
         }
 
         // A genuinely different name does not match.
-        assert!(store.find_entity_by_name("Charles Babbage").unwrap().is_none());
+        assert!(store
+            .find_entity_by_name("Charles Babbage")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1864,12 +1957,20 @@ mod tests {
             e.last_activated = 1;
             e
         };
-        store.upsert_edge(&mk(good.id, grounded.id, "MENTIONS")).unwrap();
+        store
+            .upsert_edge(&mk(good.id, grounded.id, "MENTIONS"))
+            .unwrap();
         // Keep `year` and `symbols` edge-connected so only the name/type
         // passes (not the orphan pass) can be what removes them.
-        store.upsert_edge(&mk(grounded.id, year.id, "deadline")).unwrap();
-        store.upsert_edge(&mk(grounded.id, symbols.id, "rel")).unwrap();
-        store.upsert_edge(&mk(typeonly.id, type_node.id, "is_a")).unwrap();
+        store
+            .upsert_edge(&mk(grounded.id, year.id, "deadline"))
+            .unwrap();
+        store
+            .upsert_edge(&mk(grounded.id, symbols.id, "rel"))
+            .unwrap();
+        store
+            .upsert_edge(&mk(typeonly.id, type_node.id, "is_a"))
+            .unwrap();
 
         let report = store.cleanup_junk().unwrap();
         assert_eq!(report.envelope_chunks_removed, 0);
@@ -1963,7 +2064,9 @@ mod tests {
         vectors.upsert(hanoi.id, &[1.0, 0.0, 0.0], "m").unwrap();
         vectors.upsert(hn.id, &[0.99, 0.05, 0.0], "m").unwrap();
         vectors.upsert(paris.id, &[0.0, 1.0, 0.0], "m").unwrap();
-        vectors.upsert(lookalike.id, &[0.99, 0.05, 0.0], "m").unwrap();
+        vectors
+            .upsert(lookalike.id, &[0.99, 0.05, 0.0], "m")
+            .unwrap();
 
         // Ground the alias with an edge so redirect has work to do.
         let mut chunk = DataPoint::chunk("HN là thủ đô", Some("h1".into()), 1);
@@ -1985,6 +2088,95 @@ mod tests {
         assert!(store.get_node(lookalike.id).unwrap().is_some());
         // Redirected MENTIONS edge now lands on the canonical.
         let nbrs = store.neighbors(chunk.id, 10).unwrap();
-        assert!(nbrs.iter().any(|e| e.dst == hanoi.id && e.predicate == "MENTIONS"));
+        assert!(nbrs
+            .iter()
+            .any(|e| e.dst == hanoi.id && e.predicate == "MENTIONS"));
+        // The absorbed surface name is consolidated into `aka`, not lost.
+        let aka: Vec<String> = canon
+            .props
+            .get("aka")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(aka.iter().any(|s| s == "HN"), "aka must record HN: {aka:?}");
+    }
+
+    /// The space-scoped graph view returns only edges with BOTH endpoints
+    /// inside the space — crossing edges stay out.
+    #[test]
+    fn edges_within_set_returns_only_internal_edges() {
+        let store = SqliteGraphStore::new(test_db());
+        let a = DataPoint::entity("A", 1);
+        let b = DataPoint::entity("B", 1);
+        let outside = DataPoint::entity("Outside", 1);
+        for n in [&a, &b, &outside] {
+            store.upsert_node(n).unwrap();
+        }
+        let space = NodeSet::space("ai-chat:support");
+        store.tag_node(a.id, &space).unwrap();
+        store.tag_node(b.id, &space).unwrap();
+
+        let mk = |src, dst, pred: &str| {
+            let mut e = RelationshipEdge::new(src, dst, pred, 1);
+            e.last_activated = 1;
+            e
+        };
+        store.upsert_edge(&mk(a.id, b.id, "supports")).unwrap();
+        store.upsert_edge(&mk(a.id, outside.id, "crosses")).unwrap();
+
+        let edges = store.edges_within_set(&space, 100).unwrap();
+        assert_eq!(edges.len(), 1, "only the internal edge: {edges:?}");
+        assert_eq!(edges[0].predicate, "supports");
+    }
+
+    /// A merge must consolidate the duplicate's information onto the
+    /// canonical — space tags union, summary adopted — never drop it.
+    #[test]
+    fn merge_preserves_space_tags_and_summary() {
+        let store = SqliteGraphStore::new(test_db());
+
+        let mut canon = DataPoint::entity("Acme", 1);
+        canon.mention_count = 5;
+        let mut dup = DataPoint::entity("acme", 2);
+        dup.mention_count = 1;
+        dup.summary = "công ty phần mềm ở Hà Nội".into();
+        let other = DataPoint::entity("Bob", 1);
+        for n in [&canon, &dup, &other] {
+            store.upsert_node(n).unwrap();
+        }
+
+        // Canonical lives in space A; duplicate lives in space B. After the
+        // merge the canonical must be a member of BOTH.
+        let space_a = NodeSet::group("space-a", "default_memory");
+        let space_b = NodeSet::group("space-b", "default_memory");
+        store.tag_node(canon.id, &space_a).unwrap();
+        store.tag_node(dup.id, &space_b).unwrap();
+
+        // Ground both so cleanup-order concerns don't apply and redirect
+        // has an edge to move.
+        let mut e1 = RelationshipEdge::new(other.id, canon.id, "knows", 1);
+        e1.last_activated = 1;
+        store.upsert_edge(&e1).unwrap();
+        let mut e2 = RelationshipEdge::new(other.id, dup.id, "works_at", 1);
+        e2.last_activated = 1;
+        store.upsert_edge(&e2).unwrap();
+
+        let rep = store.merge_duplicate_entities().unwrap();
+        assert_eq!(rep.entities_merged, 1);
+
+        // Space membership is the union of both.
+        let sets = store.sets_of_node(canon.id).unwrap();
+        assert!(
+            sets.iter().any(|s| s.scope_id == "space-a")
+                && sets.iter().any(|s| s.scope_id == "space-b"),
+            "canonical must belong to both spaces after merge: {sets:?}"
+        );
+        // The duplicate's summary was adopted (canonical had none).
+        let merged = store.get_node(canon.id).unwrap().expect("canonical");
+        assert_eq!(merged.summary, "công ty phần mềm ở Hà Nội");
     }
 }

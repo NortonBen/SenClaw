@@ -16,6 +16,10 @@ const HEBBIAN_LR: f32 = 0.1; // η — base learning rate
 const STRENGTHEN_IMPORTANCE_FLOOR: f32 = 0.1;
 const ACTIVATION_RING_CAP: usize = 32;
 const LTP_PRUNE_FLOOR: f32 = 0.02;
+/// Strength floor an edge keeps when archived. Non-zero so spreading
+/// activation can still traverse dormant knowledge (weakly) instead of
+/// treating it as absent.
+const ARCHIVE_STRENGTH_FLOOR: f32 = 0.05;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipEdge {
@@ -78,10 +82,22 @@ impl RelationshipEdge {
         self
     }
 
+    /// True when the edge has been archived (consolidated to dormant state)
+    /// by the decay sweep — `valid_to` doubles as the archive marker.
+    /// Archived edges keep their row (the knowledge is preserved and still
+    /// retrievable, just down-ranked) and are frozen: no further decay.
+    pub fn is_archived(&self) -> bool {
+        self.valid_to.is_some()
+    }
+
     /// Read-only decay calculation — what the strength *would* be at `now`
     /// without mutating the edge. Used by retrievers to rank without
-    /// triggering write traffic.
+    /// triggering write traffic. Archived edges are frozen at their stored
+    /// strength — time no longer erodes them.
     pub fn effective_strength(&self, now: i64) -> f32 {
+        if self.is_archived() {
+            return self.strength;
+        }
         let elapsed = (now - self.last_activated).max(0) as f32;
         let raw_decay = self.tier.decay_rate() * elapsed;
         let protection = self
@@ -94,6 +110,10 @@ impl RelationshipEdge {
     /// Hebbian strengthen: `w_new = w_old + η·(1 - w_old)·boost·importance_scale`.
     /// Returns `Some((from, to))` if the edge was promoted to a new tier.
     pub fn strengthen(&mut self, importance: f32, now: i64) -> Option<(EdgeTier, EdgeTier)> {
+        // Reactivation revives an archived edge: the knowledge is back in
+        // active circulation, so the dormant marker comes off and decay
+        // applies again from this activation.
+        self.valid_to = None;
         let imp = importance.clamp(STRENGTHEN_IMPORTANCE_FLOOR, 1.0);
         let boost = self.tier.co_access_boost() * imp;
         let delta = HEBBIAN_LR * (1.0 - self.strength).max(0.0) * boost;
@@ -127,8 +147,19 @@ impl RelationshipEdge {
         None
     }
 
-    /// Apply decay; return `true` if the edge should be pruned.
+    /// Apply decay; return `true` if the edge should be **archived**.
+    ///
+    /// Archiving replaced pruning: a faded edge is consolidated to dormant
+    /// state (see [`Self::archive`]) instead of deleted, so extracted
+    /// knowledge is never destroyed by the passage of time — it just stops
+    /// competing at full weight until something reactivates it.
     pub fn decay(&mut self, now: i64) -> bool {
+        // Already dormant — frozen, nothing to do. (The decay scan filters
+        // archived edges out; this is a defensive short-circuit for direct
+        // callers.)
+        if self.is_archived() {
+            return false;
+        }
         let effective = self.effective_strength(now);
         self.strength = effective;
 
@@ -143,21 +174,33 @@ impl RelationshipEdge {
             self.ltp_detected_at = None;
         }
 
-        // Forced prune by max age (unless Full LTP protects it)
+        // Staleness-based archive (unless Full LTP protects it). Measured
+        // from `last_activated`, NOT `created_at` — an old fact that is
+        // still being mentioned/retrieved is live knowledge and must not
+        // fade on a birthday deadline.
         if let Some(max_age) = self.tier.max_age_secs() {
-            let age = now - self.created_at;
-            if age > max_age && !matches!(self.ltp_status, LtpStatus::Full) {
+            let stale_for = now - self.last_activated;
+            if stale_for > max_age && !matches!(self.ltp_status, LtpStatus::Full) {
                 return true;
             }
         }
 
-        // Strength prune (LTP::Full edges survive even when weak — Hebbian
-        // permanence trumps simple threshold).
+        // Strength-based archive (LTP::Full edges stay active even when
+        // weak — Hebbian permanence trumps simple threshold).
         if effective < self.tier.prune_threshold() && !matches!(self.ltp_status, LtpStatus::Full) {
             return true;
         }
 
         false
+    }
+
+    /// Consolidate the edge into dormant/archived state instead of deleting
+    /// it: stamp `valid_to`, floor the strength so spreading retrieval can
+    /// still traverse it weakly, and freeze it (archived edges skip decay).
+    /// [`Self::strengthen`] revives it.
+    pub fn archive(&mut self, now: i64) {
+        self.valid_to = Some(now);
+        self.strength = self.strength.max(ARCHIVE_STRENGTH_FLOOR);
     }
 }
 
@@ -200,6 +243,39 @@ mod tests {
         e.last_activated = 0;
         let should_prune = e.decay(1_000);
         assert!(!should_prune);
+    }
+
+    #[test]
+    fn archive_freezes_strength_and_strengthen_revives() {
+        let mut e = fresh();
+        e.strength = 0.04;
+        e.last_activated = 0;
+        e.archive(100);
+        assert!(e.is_archived());
+        // Floored to the archive minimum, then frozen: effective_strength no
+        // longer erodes with time.
+        assert!(e.strength >= 0.05);
+        let frozen = e.effective_strength(1_000_000);
+        assert_eq!(frozen, e.strength, "archived edge must not keep decaying");
+        // Archived edges short-circuit decay — never re-flagged.
+        assert!(!e.decay(2_000_000));
+
+        // Reactivation revives it.
+        e.strengthen(1.0, 2_000_000);
+        assert!(!e.is_archived(), "strengthen must clear the archive marker");
+        assert!(e.strength > 0.05);
+    }
+
+    #[test]
+    fn recently_activated_old_edge_is_not_age_archived() {
+        let mut e = fresh();
+        // Created long ago (10× the L1 max age) but activated just now:
+        // staleness-based aging must keep it active.
+        e.created_at = 0;
+        let now = 10 * 86_400;
+        e.strength = 0.5;
+        e.last_activated = now - 60;
+        assert!(!e.decay(now), "recently-used old edge must stay active");
     }
 
     #[test]

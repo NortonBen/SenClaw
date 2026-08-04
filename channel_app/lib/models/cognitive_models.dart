@@ -26,6 +26,32 @@ class CogStats {
       );
 }
 
+/// One knowledge space (custom NodeSet scope), e.g. an AI-Office staff
+/// member's private space. From `GET /api/cognitive/spaces` (camelCase).
+class CogSpace {
+  final String scopeKind;
+  final String scopeId;
+  final String tag;
+  final int nodes;
+
+  const CogSpace({
+    this.scopeKind = '',
+    this.scopeId = '',
+    this.tag = '',
+    this.nodes = 0,
+  });
+
+  factory CogSpace.fromJson(Map<String, dynamic> j) => CogSpace(
+        scopeKind: '${j['scopeKind'] ?? ''}',
+        scopeId: '${j['scopeId'] ?? ''}',
+        tag: '${j['tag'] ?? ''}',
+        nodes: (j['nodes'] as num?)?.toInt() ?? 0,
+      );
+
+  /// Display label, e.g. `ai-office:nghien-cuu`.
+  String get label => scopeId.isEmpty ? tag : scopeId;
+}
+
 class CogNode {
   final String id;
   final String kind;

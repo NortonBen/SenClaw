@@ -38,6 +38,24 @@ class _CognitiveScreenState extends State<CognitiveScreen>
   final _api = CognitiveApi();
   late final TabController _tabs = TabController(length: 4, vsync: this);
 
+  /// Selected knowledge space (custom scope id). null = all knowledge.
+  String? _space;
+  List<CogSpace> _spaces = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSpaces();
+  }
+
+  /// Non-fatal: no spaces just hides the picker choices.
+  Future<void> _loadSpaces() async {
+    try {
+      final s = await _api.spaces();
+      if (mounted) setState(() => _spaces = s);
+    } catch (_) {/* picker shows only "All" */}
+  }
+
   @override
   void dispose() {
     _tabs.dispose();
@@ -64,6 +82,36 @@ class _CognitiveScreenState extends State<CognitiveScreen>
             ),
           ],
         ),
+        actions: [
+          // Knowledge-space switch (custom scopes, e.g. per AI-Office staff).
+          PopupMenuButton<String>(
+            tooltip: tr('Không gian tri thức', 'Knowledge space'),
+            color: c.surface,
+            icon: Icon(Icons.workspaces_outlined,
+                color: _space == null ? c.textSecondary : c.accent, size: 20),
+            onSelected: (v) {
+              setState(() => _space = v.isEmpty ? null : v);
+              _loadSpaces();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: '',
+                child: Text(tr('Tất cả tri thức', 'All knowledge'),
+                    style: TextStyle(
+                        color: _space == null ? c.accent : c.textPrimary)),
+              ),
+              for (final s in _spaces)
+                PopupMenuItem(
+                  value: s.scopeId,
+                  child: Text('${s.label} (${s.nodes})',
+                      style: TextStyle(
+                          color: _space == s.scopeId
+                              ? c.accent
+                              : c.textPrimary)),
+                ),
+            ],
+          ),
+        ],
         bottom: TabBar(
           controller: _tabs,
           isScrollable: true,
@@ -90,9 +138,9 @@ class _CognitiveScreenState extends State<CognitiveScreen>
         child: TabBarView(
           controller: _tabs,
           children: [
-            _RecallTab(api: _api),
+            _RecallTab(api: _api, space: _space),
             _GraphTab(api: _api),
-            _AddTab(api: _api),
+            _AddTab(api: _api, space: _space),
             _DataTab(api: _api),
           ],
         ),
@@ -105,7 +153,10 @@ class _CognitiveScreenState extends State<CognitiveScreen>
 
 class _RecallTab extends StatefulWidget {
   final CognitiveApi api;
-  const _RecallTab({required this.api});
+
+  /// Knowledge space to scope recall to; null = all knowledge.
+  final String? space;
+  const _RecallTab({required this.api, this.space});
 
   @override
   State<_RecallTab> createState() => _RecallTabState();
@@ -135,7 +186,7 @@ class _RecallTabState extends State<_RecallTab>
       _error = null;
     });
     try {
-      final r = await widget.api.recall(q);
+      final r = await widget.api.recall(q, space: widget.space);
       if (!mounted) return;
       setState(() {
         _result = r;
@@ -674,7 +725,10 @@ class _GraphPainter extends CustomPainter {
 
 class _AddTab extends StatefulWidget {
   final CognitiveApi api;
-  const _AddTab({required this.api});
+
+  /// Knowledge space new text is tagged into; null = default memory only.
+  final String? space;
+  const _AddTab({required this.api, this.space});
 
   @override
   State<_AddTab> createState() => _AddTabState();
@@ -710,7 +764,8 @@ class _AddTabState extends State<_AddTab> with AutomaticKeepAliveClientMixin {
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
           .toList();
-      final r = await widget.api.add(_text.text, source: 'mobile', tags: tags);
+      final r = await widget.api
+          .add(_text.text, source: 'mobile', tags: tags, space: widget.space);
       if (!mounted) return;
       setState(() {
         _result = r;
@@ -870,6 +925,52 @@ class _DataTabState extends State<_DataTab>
     }
   }
 
+  /// Bulk rescue for chunks whose extracted knowledge never materialized or
+  /// has decayed away. Confirm first — one LLM call per chunk.
+  Future<void> _recoverLost() async {
+    final c = context.colors;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.surface,
+        title: Text(tr('Khôi phục tri thức?', 'Recover lost knowledge?'),
+            style: TextStyle(color: c.textPrimary)),
+        content: Text(
+            tr('Chạy lại trích xuất trên các đoạn chưa có tri thức hoặc tri thức đã suy giảm. Mỗi đoạn tốn một lần gọi LLM, chạy ngầm.',
+                'Re-runs triplet extraction on chunks whose knowledge was never extracted or has decayed away. One LLM call per chunk, running in the background.'),
+            style: TextStyle(color: c.textSecondary, fontSize: 13)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr('Huỷ', 'Cancel'))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr('Khôi phục', 'Recover'),
+                  style: TextStyle(color: c.accent))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final r = await widget.api.reExtractPending();
+      if (!mounted) return;
+      final queued = (r['queued'] as num?)?.toInt() ?? 0;
+      final reset = (r['reset'] as num?)?.toInt() ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(queued == 0
+              ? tr('Không có gì để khôi phục — mọi đoạn đều đã có tri thức.',
+                  'Nothing to recover — every chunk has extracted knowledge.')
+              : tr('Đã xếp hàng $queued đoạn${reset > 0 ? ' ($reset đoạn mất tri thức)' : ''} — kết quả sẽ hiện dần khi LLM xử lý.',
+                  'Queued $queued chunk(s)${reset > 0 ? ' ($reset had lost their knowledge)' : ''} — results appear as the LLM works through them.'))));
+      _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
+      }
+    }
+  }
+
   Future<void> _maintenance() async {
     try {
       final r = await widget.api.maintenance();
@@ -924,6 +1025,12 @@ class _DataTabState extends State<_DataTab>
                     ],
                   ),
                 ),
+              ),
+              IconButton(
+                tooltip: tr('Khôi phục tri thức', 'Recover lost knowledge'),
+                icon: Icon(Icons.auto_fix_high_outlined,
+                    color: c.textSecondary, size: 20),
+                onPressed: _recoverLost,
               ),
               IconButton(
                 tooltip: tr('Dọn dẹp', 'Cleanup'),

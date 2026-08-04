@@ -12,6 +12,17 @@ class CognitiveApi {
     return CogStats.fromJson(obj);
   }
 
+  /// Registry of knowledge spaces. Only named custom scopes are switchable in
+  /// the UI (global/group tags are filtered out, matching the desktop app).
+  Future<List<CogSpace>> spaces() async {
+    final obj = await _api.getObject('/api/cognitive/spaces');
+    return ((obj['spaces'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => CogSpace.fromJson(e.cast<String, dynamic>()))
+        .where((s) => s.scopeKind == 'custom' && s.scopeId.isNotEmpty)
+        .toList();
+  }
+
   Future<({int total, List<CogNode> nodes})> nodes({
     String? kind,
     int limit = 50,
@@ -61,37 +72,51 @@ class CognitiveApi {
     String mode = 'graph',
     int limit = 20,
     bool rerank = false,
+    String? space,
   }) async {
     final obj = await _api.post('/api/cognitive/search', body: {
       'query': query,
       'mode': mode,
       'limit': limit,
       'rerank': rerank,
+      'space': ?space,
     });
     final list = ((obj is Map ? obj['hits'] : null) as List?) ?? const [];
     return list.map((e) => CogHit.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  Future<CogRecall> recall(String query, {String mode = 'graph', int limit = 10}) async {
+  Future<CogRecall> recall(String query,
+      {String mode = 'graph', int limit = 10, String? space}) async {
     final obj = await _api.post('/api/cognitive/recall', body: {
       'query': query,
       'mode': mode,
       'limit': limit,
+      'space': ?space,
     });
     return CogRecall.fromJson((obj as Map).cast<String, dynamic>());
   }
 
-  Future<CogAddResult> add(String text, {String? source, List<String> tags = const []}) async {
+  Future<CogAddResult> add(String text,
+      {String? source, List<String> tags = const [], String? space}) async {
     final obj = await _api.post('/api/cognitive/add', body: {
       'text': text,
       'source': ?source,
       'tags': tags,
+      'space': ?space,
     });
     return CogAddResult.fromJson((obj as Map).cast<String, dynamic>());
   }
 
   Future<void> reExtract(String id) =>
       _api.post('/api/cognitive/node/$id/re-extract');
+
+  /// Bulk rescue: queues every chunk whose triplet extraction never ran OR
+  /// whose edges have since decayed away through cognify again. Returns
+  /// `{queued, reset}`; extraction happens in the background.
+  Future<Map<String, dynamic>> reExtractPending() async {
+    final obj = await _api.post('/api/cognitive/re-extract-pending');
+    return obj is Map ? obj.cast<String, dynamic>() : {};
+  }
 
   Future<Map<String, dynamic>> maintenance() async {
     final obj = await _api.post('/api/cognitive/maintenance');

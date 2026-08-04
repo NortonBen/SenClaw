@@ -366,7 +366,7 @@ export function CognitivePage() {
       render: (ts: number) => new Date(ts * 1000).toLocaleString(),
     },
     { title: 'Scanned', dataIndex: 'edges_scanned', width: 100 },
-    { title: 'Pruned', dataIndex: 'edges_pruned', width: 100 },
+    { title: 'Archived', dataIndex: 'edges_pruned', width: 100 },
     { title: 'Promoted', dataIndex: 'edges_promoted', width: 100 },
     { title: 'ms', dataIndex: 'duration_ms', width: 80 },
   ], []);

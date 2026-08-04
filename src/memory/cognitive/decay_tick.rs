@@ -1,8 +1,15 @@
 //! Periodic decay sweep — the "make this layer alive" piece.
 //!
-//! Ported from shodh-memory: every N seconds, walk all edges, apply decay,
-//! prune the dead ones, advance LTP states for the survivors, and record a
-//! summary row in `cog_decay_log`.
+//! Ported from shodh-memory: every N seconds, walk the **active** edges,
+//! apply decay, **archive** the faded ones (consolidate to dormant state —
+//! never delete; see [`RelationshipEdge::archive`]), advance LTP states for
+//! the survivors, and record a summary row in `cog_decay_log`.
+//!
+//! Deletion was the original shodh behaviour and it destroyed knowledge:
+//! a fact extracted once decayed below threshold in ~8 days, its edge was
+//! pruned, and the orphan-entity sweep then deleted the entities too — the
+//! graph could never accumulate. Archived edges keep their row (and their
+//! entities), stay retrievable at floor weight, and revive on reactivation.
 //!
 //! ## Default cadence
 //!
@@ -47,24 +54,19 @@ impl Default for DecayConfig {
     }
 }
 
-/// Grace period before an edge-less entity is considered orphaned. Covers
-/// the window inside a concurrent cognify run between `add_node` and the
-/// first `upsert_edge` touching that entity.
-const ORPHAN_GRACE_SECS: i64 = 3_600;
-
 #[derive(Debug, Default, Clone)]
 pub struct DecayReport {
     pub edges_scanned: usize,
-    pub edges_pruned: usize,
+    /// Edges consolidated to dormant state this sweep (formerly deleted —
+    /// nothing is deleted anymore; archived rows persist in `cog_edges`
+    /// with `valid_to` set and revive on reactivation).
+    pub edges_archived: usize,
     pub edges_promoted: usize,
-    /// Entity / entity_type nodes deleted because edge pruning left them
-    /// with no incident edges.
-    pub orphans_removed: usize,
     pub duration_ms: i64,
 }
 
 /// Run one decay sweep over the graph. Returns a report; also persists into
-/// `cog_decay_log`.
+/// `cog_decay_log` (the log's `edges_pruned` column now records archives).
 pub fn run_decay(graph: &dyn GraphStore, cfg: &DecayConfig) -> Result<DecayReport> {
     let started = std::time::Instant::now();
     let now = Utc::now().timestamp();
@@ -76,7 +78,7 @@ pub fn run_decay(graph: &dyn GraphStore, cfg: &DecayConfig) -> Result<DecayRepor
     };
 
     let mut scanned = 0usize;
-    let mut pruned = 0usize;
+    let mut archived = 0usize;
     let mut promoted = 0usize;
     let mut offset = 0usize;
 
@@ -86,17 +88,19 @@ pub fn run_decay(graph: &dyn GraphStore, cfg: &DecayConfig) -> Result<DecayRepor
         if batch.is_empty() {
             break;
         }
-        // Stable offset advance: only count *survivors* toward offset so
-        // pruning during the sweep doesn't make us skip rows. Track moves
-        // separately.
+        // Stable offset advance: only count *active survivors* toward the
+        // offset. `scan_edges` filters archived rows out, so an edge that
+        // gets archived here disappears from the next page exactly like a
+        // deletion used to — do not advance past it.
         let mut survivors_this_batch = 0usize;
         for mut edge in batch {
             scanned += 1;
             let prev_tier = edge.tier;
-            let should_prune = edge.decay(now);
-            if should_prune {
-                graph.delete_edge(edge.src, edge.dst, &edge.predicate)?;
-                pruned += 1;
+            let should_archive = edge.decay(now);
+            if should_archive {
+                edge.archive(now);
+                graph.upsert_edge(&edge)?;
+                archived += 1;
             } else {
                 if edge.tier != prev_tier {
                     promoted += 1;
@@ -106,27 +110,20 @@ pub fn run_decay(graph: &dyn GraphStore, cfg: &DecayConfig) -> Result<DecayRepor
             }
         }
         offset += survivors_this_batch;
-        // If a batch returns nothing new (all pruned), we still advance via
-        // the loop condition on `scanned`.
-        if survivors_this_batch == 0 {
-            // Edges were pruned — next scan_edges with the same offset will
-            // return the next "page" because pruned rows are gone.
-        }
     }
 
-    // Edge pruning orphans nodes; sweep them in the same pass instead of
-    // leaving disconnected entities on screen until the daily maintenance
-    // run (which may never fire on frequently-restarted daemons).
-    let orphans_removed = graph.remove_orphan_entities(now - ORPHAN_GRACE_SECS)?;
+    // NOTE: no orphan-entity sweep here anymore. Since edges are archived
+    // in place, decay can no longer orphan an entity — nodes only lose
+    // edges through explicit forget/junk-cleanup, and `cleanup_junk` owns
+    // that path.
 
     let duration_ms = started.elapsed().as_millis() as i64;
-    graph.record_decay_run(now, scanned, pruned, promoted, duration_ms)?;
+    graph.record_decay_run(now, scanned, archived, promoted, duration_ms)?;
 
     Ok(DecayReport {
         edges_scanned: scanned,
-        edges_pruned: pruned,
+        edges_archived: archived,
         edges_promoted: promoted,
-        orphans_removed,
         duration_ms,
     })
 }
@@ -151,9 +148,8 @@ pub fn start_decay_ticker(graph: Arc<dyn GraphStore>, cfg: DecayConfig) -> JoinH
             match res {
                 Ok(Ok(rep)) => tracing::debug!(
                     scanned = rep.edges_scanned,
-                    pruned = rep.edges_pruned,
+                    archived = rep.edges_archived,
                     promoted = rep.edges_promoted,
-                    orphans = rep.orphans_removed,
                     duration_ms = rep.duration_ms,
                     "[cognitive] decay sweep complete"
                 ),
@@ -183,10 +179,10 @@ mod tests {
     }
 
     #[test]
-    fn weak_stale_edges_get_pruned() {
+    fn weak_stale_edges_get_archived_not_deleted() {
         let (_db, g) = store();
         let now = Utc::now().timestamp();
-        let stale = now - 10 * 86_400; // 10 days ago (L1 prune-eligible)
+        let stale = now - 10 * 86_400; // 10 days ago (L1 archive-eligible)
 
         let a = DataPoint::entity("A", stale);
         let b = DataPoint::entity("B", stale);
@@ -194,24 +190,34 @@ mod tests {
         g.upsert_node(&b).unwrap();
 
         let mut edge = RelationshipEdge::new(a.id, b.id, "rel", stale);
-        edge.strength = 0.04; // below L1 prune threshold (0.05) after any decay
+        edge.strength = 0.04; // below L1 archive threshold (0.05) after any decay
         edge.last_activated = stale;
         g.upsert_edge(&edge).unwrap();
 
         let report = run_decay(&*g, &DecayConfig::default()).unwrap();
         assert_eq!(report.edges_scanned, 1);
-        assert_eq!(report.edges_pruned, 1);
-        assert_eq!(g.count_edges().unwrap(), 0);
+        assert_eq!(report.edges_archived, 1);
+        // The row is KEPT — knowledge is consolidated, not destroyed.
+        assert_eq!(g.count_edges().unwrap(), 1);
+        let kept = g.neighbors(a.id, 10).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].is_archived(), "edge must carry the archive marker");
+        assert!(kept[0].strength >= 0.05, "archived strength is floored");
+
+        // A second sweep scans nothing — archived edges are filtered out.
+        let report2 = run_decay(&*g, &DecayConfig::default()).unwrap();
+        assert_eq!(report2.edges_scanned, 0);
+        assert_eq!(report2.edges_archived, 0);
     }
 
     #[test]
-    fn pruned_edges_take_orphaned_entities_with_them() {
+    fn archival_leaves_entities_alone() {
         let (_db, g) = store();
         let now = Utc::now().timestamp();
         let stale = now - 10 * 86_400;
 
-        // A—B connected by a doomed edge; C is a brand-new edge-less entity
-        // still inside the grace window (mid-cognify simulation).
+        // A—B connected by a fading edge; C is a brand-new edge-less entity
+        // (mid-cognify simulation). ALL of them must survive the sweep.
         let a = DataPoint::entity("A", stale);
         let b = DataPoint::entity("B", stale);
         let fresh = DataPoint::entity("FreshMidCognify", now);
@@ -224,26 +230,51 @@ mod tests {
         g.upsert_edge(&edge).unwrap();
 
         let report = run_decay(&*g, &DecayConfig::default()).unwrap();
-        assert_eq!(report.edges_pruned, 1);
-        assert_eq!(
-            report.orphans_removed, 2,
-            "A and B lost their only edge and must go; fresh entity is grace-protected"
-        );
-        assert!(g.get_node(a.id).unwrap().is_none());
-        assert!(g.get_node(b.id).unwrap().is_none());
+        assert_eq!(report.edges_archived, 1);
         assert!(
-            g.get_node(fresh.id).unwrap().is_some(),
-            "entity created moments ago must survive the sweep"
+            g.get_node(a.id).unwrap().is_some() && g.get_node(b.id).unwrap().is_some(),
+            "entities must survive edge archival"
         );
+        assert!(g.get_node(fresh.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn archived_edge_revives_on_strengthen() {
+        let (_db, g) = store();
+        let now = Utc::now().timestamp();
+        let stale = now - 10 * 86_400;
+
+        let a = DataPoint::entity("A", stale);
+        let b = DataPoint::entity("B", stale);
+        g.upsert_node(&a).unwrap();
+        g.upsert_node(&b).unwrap();
+        let mut edge = RelationshipEdge::new(a.id, b.id, "rel", stale);
+        edge.strength = 0.04;
+        edge.last_activated = stale;
+        g.upsert_edge(&edge).unwrap();
+
+        run_decay(&*g, &DecayConfig::default()).unwrap();
+        let mut archived = g.neighbors(a.id, 10).unwrap().remove(0);
+        assert!(archived.is_archived());
+
+        // Re-mention the fact: strengthen + persist → active again.
+        archived.strengthen(1.0, now);
+        g.upsert_edge(&archived).unwrap();
+        let revived = g.neighbors(a.id, 10).unwrap().remove(0);
+        assert!(!revived.is_archived(), "strengthen must revive the edge");
+        // And the decay scan sees it again.
+        let report = run_decay(&*g, &DecayConfig::default()).unwrap();
+        assert_eq!(report.edges_scanned, 1);
+        assert_eq!(report.edges_archived, 0);
     }
 
     #[test]
     fn full_ltp_edges_survive_sweep() {
         let (_db, g) = store();
         let now = Utc::now().timestamp();
-        // L1 max age is 1 day. We want the *age* check to want to prune,
-        // but Full LTP to override it. Strength stays well above zombie
-        // floor so LTP doesn't get auto-stripped.
+        // L1 max staleness is 1 day. We want the *age* check to want to
+        // archive, but Full LTP to override it. Strength stays well above
+        // zombie floor so LTP doesn't get auto-stripped.
         let stale = now - 25 * 3_600; // 25 hours ago
 
         let a = DataPoint::entity("A", stale);
@@ -259,10 +290,11 @@ mod tests {
 
         let report = run_decay(&*g, &DecayConfig::default()).unwrap();
         assert_eq!(
-            report.edges_pruned, 0,
-            "Full LTP edges must survive past max_age"
+            report.edges_archived, 0,
+            "Full LTP edges must stay active past max staleness"
         );
         assert_eq!(g.count_edges().unwrap(), 1);
+        assert!(!g.neighbors(a.id, 10).unwrap()[0].is_archived());
     }
 
     #[test]
