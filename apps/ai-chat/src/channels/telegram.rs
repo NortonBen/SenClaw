@@ -36,7 +36,10 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
         .send()
         .await
         .map_err(|e| format!("telegram getUpdates lỗi: {e}"))?;
-    let v: Value = resp.json().await.map_err(|e| format!("telegram phản hồi lỗi: {e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("telegram phản hồi lỗi: {e}"))?;
     if !v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) {
         return Err(v
             .get("description")
@@ -49,7 +52,9 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
     for u in v["result"].as_array().unwrap_or(&Vec::new()) {
         let uid = u["update_id"].as_i64().unwrap_or(0);
         max_id = max_id.max(uid);
-        let Some(msg) = u.get("message") else { continue };
+        let Some(msg) = u.get("message") else {
+            continue;
+        };
         let Some(text) = msg["text"].as_str().filter(|t| !t.trim().is_empty()) else {
             continue;
         };
@@ -73,7 +78,12 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
 }
 
 /// Send a reply, chunking anything over Telegram's message limit.
-pub async fn send(_db: &Arc<Db>, ch: &Channel, external_id: &str, text: &str) -> Result<(), String> {
+pub async fn send(
+    _db: &Arc<Db>,
+    ch: &Channel,
+    external_id: &str,
+    text: &str,
+) -> Result<(), String> {
     let token = token(ch)?;
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
     for chunk in split_message(text) {
@@ -85,7 +95,10 @@ pub async fn send(_db: &Arc<Db>, ch: &Channel, external_id: &str, text: &str) ->
             .map_err(|e| format!("telegram sendMessage lỗi: {e}"))?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("telegram từ chối gửi: {}", body.chars().take(200).collect::<String>()));
+            return Err(format!(
+                "telegram từ chối gửi: {}",
+                body.chars().take(200).collect::<String>()
+            ));
         }
     }
     Ok(())
@@ -104,9 +117,15 @@ pub async fn health_check(ch: &Channel) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
     if v["ok"].as_bool().unwrap_or(false) {
-        Ok(format!("@{}", v["result"]["username"].as_str().unwrap_or("bot")))
+        Ok(format!(
+            "@{}",
+            v["result"]["username"].as_str().unwrap_or("bot")
+        ))
     } else {
-        Err(v["description"].as_str().unwrap_or("token không hợp lệ").to_string())
+        Err(v["description"]
+            .as_str()
+            .unwrap_or("token không hợp lệ")
+            .to_string())
     }
 }
 

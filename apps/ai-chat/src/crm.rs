@@ -68,7 +68,11 @@ async fn search_customer(base: &str, q: &str) -> Option<i64> {
     if q.is_empty() {
         return None;
     }
-    let url = format!("{}/api/search?q={}&limit=3", base.trim_end_matches('/'), urlencode(q));
+    let url = format!(
+        "{}/api/search?q={}&limit=3",
+        base.trim_end_matches('/'),
+        urlencode(q)
+    );
     let v: Value = http()
         .get(&url)
         .timeout(Duration::from_secs(2))
@@ -159,7 +163,12 @@ pub async fn search_list(base: &str, q: &str) -> Vec<Value> {
     } else {
         format!("{base}/api/search?q={}&limit=20", urlencode(q.trim()))
     };
-    let Ok(resp) = http().get(&url).timeout(Duration::from_secs(3)).send().await else {
+    let Ok(resp) = http()
+        .get(&url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+    else {
         return Vec::new();
     };
     let Ok(v) = resp.json::<Value>().await else {
@@ -180,7 +189,10 @@ pub async fn search_list(base: &str, q: &str) -> Vec<Value> {
             .collect();
     }
     // Customer-list shape: {customers:[..]} or a bare array.
-    let arr = v.get("customers").and_then(|x| x.as_array()).or_else(|| v.as_array());
+    let arr = v
+        .get("customers")
+        .and_then(|x| x.as_array())
+        .or_else(|| v.as_array());
     arr.map(|a| {
         a.iter()
             .map(|c| {
@@ -203,7 +215,11 @@ pub fn value_for_kind(chans: &[(String, String)], kind: &str) -> Option<String> 
     chans
         .iter()
         .find(|(k, _)| *k == kind)
-        .or_else(|| chans.iter().find(|(k, _)| kind == "telegram" && k == "phone"))
+        .or_else(|| {
+            chans
+                .iter()
+                .find(|(k, _)| kind == "telegram" && k == "phone")
+        })
         .map(|(_, v)| v.clone())
 }
 
@@ -228,10 +244,15 @@ pub async fn search_list_for_channel(base: &str, q: &str, channel: Option<&str>)
         async move { (id, customer_channels(&base, id).await) }
     });
     let found: std::collections::HashMap<i64, Vec<(String, String)>> =
-        futures_util::future::join_all(lookups).await.into_iter().collect();
+        futures_util::future::join_all(lookups)
+            .await
+            .into_iter()
+            .collect();
     for c in list.iter_mut() {
         let id = c["id"].as_i64().unwrap_or(0);
-        let val = found.get(&id).and_then(|chans| value_for_kind(chans, &kind));
+        let val = found
+            .get(&id)
+            .and_then(|chans| value_for_kind(chans, &kind));
         c["reachable"] = json!(val.is_some());
         c["channelValue"] = json!(val);
     }
@@ -241,8 +262,17 @@ pub async fn search_list_for_channel(base: &str, q: &str, channel: Option<&str>)
 /// A customer's stored contact identifiers, e.g. `[{kind:"zalo", value:"09…"}]`.
 /// Used to reach a CRM customer on a real platform (Telegram/Zalo/Facebook).
 pub async fn customer_channels(base: &str, id: i64) -> Vec<(String, String)> {
-    let url = format!("{}/api/customers/{}/channels", base.trim_end_matches('/'), id);
-    let Ok(resp) = http().get(&url).timeout(Duration::from_secs(3)).send().await else {
+    let url = format!(
+        "{}/api/customers/{}/channels",
+        base.trim_end_matches('/'),
+        id
+    );
+    let Ok(resp) = http()
+        .get(&url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+    else {
         return Vec::new();
     };
     let Ok(v) = resp.json::<Value>().await else {
@@ -266,7 +296,13 @@ pub async fn customer_channels(base: &str, id: i64) -> Vec<(String, String)> {
 /// customer by what's known about them.
 pub fn profile_block(p: &Value) -> String {
     let mut lines = vec![format!("- Tên: {}", p["name"].as_str().unwrap_or(""))];
-    for (label, key) in [("Công ty", "company"), ("Chức danh", "title"), ("Vai trò", "role"), ("Điện thoại", "phone"), ("Email", "email")] {
+    for (label, key) in [
+        ("Công ty", "company"),
+        ("Chức danh", "title"),
+        ("Vai trò", "role"),
+        ("Điện thoại", "phone"),
+        ("Email", "email"),
+    ] {
         if let Some(v) = p[key].as_str().filter(|s| !s.is_empty()) {
             lines.push(format!("- {label}: {v}"));
         }
@@ -278,7 +314,10 @@ pub fn profile_block(p: &Value) -> String {
         }
     }
     if let Some(notes) = p["notes"].as_str().filter(|s| !s.is_empty()) {
-        lines.push(format!("- Ghi chú: {}", notes.chars().take(300).collect::<String>()));
+        lines.push(format!(
+            "- Ghi chú: {}",
+            notes.chars().take(300).collect::<String>()
+        ));
     }
     format!("## Hồ sơ khách hàng (CRM)\n{}", lines.join("\n"))
 }
@@ -289,10 +328,19 @@ mod tests {
 
     #[test]
     fn identity_guard_rejects_placeholders_and_generated_ids() {
-        assert!(!has_identity("web-abc123", "Khách web"), "anonymous web session");
-        assert!(!has_identity("probe-999", "Khách"), "probe id + placeholder");
+        assert!(
+            !has_identity("web-abc123", "Khách web"),
+            "anonymous web session"
+        );
+        assert!(
+            !has_identity("probe-999", "Khách"),
+            "probe id + placeholder"
+        );
         assert!(has_identity("tg-777", "Phạm Quốc Bảo"), "real name");
-        assert!(has_identity("849012345678", "Khách web"), "real platform id");
+        assert!(
+            has_identity("849012345678", "Khách web"),
+            "real platform id"
+        );
         assert!(!real_name("web"));
         assert!(!real_id("web-xyz"));
     }

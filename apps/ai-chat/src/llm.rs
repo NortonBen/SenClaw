@@ -26,7 +26,11 @@ pub fn http() -> &'static reqwest::Client {
 }
 
 pub fn bridge_url() -> String {
-    format!("{}/api/space/apps/{}/bridge", base_url().trim_end_matches('/'), app_id())
+    format!(
+        "{}/api/space/apps/{}/bridge",
+        base_url().trim_end_matches('/'),
+        app_id()
+    )
 }
 
 /// Walk the error chain so "error sending request" also says why.
@@ -40,9 +44,15 @@ fn describe(e: &reqwest::Error) -> String {
     out
 }
 
-/// One-shot completion (no tools). Returns `(text, model, finish)`.
+/// One-shot completion (no tools). Returns `(text, model, finish, usage)` —
+/// `usage` is the daemon-reported real `(tokens_in, tokens_out)`, `None` on
+/// older daemons or usage-less providers (caller falls back to chars/4).
 /// Transport errors are retried; application errors are returned as-is.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String, String, Option<(i64, i64)>), String> {
     let url = bridge_url();
     let body = json!({
         "action": "llm.request",
@@ -68,11 +78,27 @@ pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(St
             }
         };
         return match v.get("status").and_then(|x| x.as_str()) {
-            Some("ok") => Ok((
-                v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            )),
+            Some("ok") => {
+                let usage = v.get("usage").filter(|u| u.is_object()).map(|u| {
+                    let n = |k: &str| u.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+                    (n("inputTokens"), n("outputTokens"))
+                });
+                Ok((
+                    v.get("text")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    v.get("model")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    v.get("finish")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    usage,
+                ))
+            }
             Some("pending") => Err("bridge LLM chưa được bật trong daemon này".to_string()),
             _ => Err(v
                 .get("message")
@@ -96,7 +122,7 @@ pub async fn agent_run(
     tools: &[String],
     model: Option<&str>,
     timeout_secs: u64,
-) -> Result<String, String> {
+) -> Result<(String, Option<(i64, i64)>), String> {
     let mut payload = json!({
         "system": system,
         "prompt": prompt,
@@ -116,9 +142,25 @@ pub async fn agent_run(
         .send()
         .await
         .map_err(|e| format!("agent.run failed: {}", describe(&e)))?;
-    let v: Value = resp.json().await.map_err(|e| format!("invalid agent.run response: {}", e))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid agent.run response: {}", e))?;
     match v.get("status").and_then(|x| x.as_str()) {
-        Some("ok") => Ok(v.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string()),
+        Some("ok") => {
+            let usage = v.get("usage").filter(|u| u.is_object()).map(|u| {
+                let n = |k: &str| u.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+                (n("inputTokens"), n("outputTokens"))
+            });
+            Ok((
+                v.get("text")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+                usage,
+            ))
+        }
         _ => Err(v
             .get("message")
             .and_then(|x| x.as_str())
@@ -130,7 +172,12 @@ pub async fn agent_run(
 /// Info for the Settings panel: whether a live LLM is reachable + which model.
 pub async fn llm_info() -> Value {
     let url = format!("{}/api/llm-config", base_url().trim_end_matches('/'));
-    match http().get(&url).timeout(Duration::from_secs(4)).send().await {
+    match http()
+        .get(&url)
+        .timeout(Duration::from_secs(4))
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => {
             let v: Value = resp.json().await.unwrap_or_default();
             json!({ "available": true, "config": v })

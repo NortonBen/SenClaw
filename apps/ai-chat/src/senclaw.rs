@@ -14,7 +14,10 @@ async fn bridge(action: &str, payload: Value) -> Result<Value, String> {
         .send()
         .await
         .map_err(|e| format!("bridge {} failed: {}", action, e))?;
-    let v: Value = resp.json().await.map_err(|e| format!("invalid bridge response: {}", e))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid bridge response: {}", e))?;
     match v.get("status").and_then(|x| x.as_str()) {
         Some("ok") => Ok(v),
         _ => Err(v
@@ -29,9 +32,12 @@ async fn bridge(action: &str, payload: Value) -> Result<Value, String> {
 
 /// Save a memory into a knowledge space.
 pub async fn knowledge_save(space: &str, text: &str, source: &str) -> Result<(), String> {
-    bridge("knowledge.save", json!({ "text": text, "space": space, "source": source }))
-        .await
-        .map(|_| ())
+    bridge(
+        "knowledge.save",
+        json!({ "text": text, "space": space, "source": source }),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Upload a file into a knowledge space. Forwards to the daemon's
@@ -68,7 +74,11 @@ pub async fn knowledge_upload(
     if !resp.status().is_success() {
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("daemon upload {}: {}", code, body.chars().take(240).collect::<String>()));
+        return Err(format!(
+            "daemon upload {}: {}",
+            code,
+            body.chars().take(240).collect::<String>()
+        ));
     }
     resp.json().await.map_err(|e| e.to_string())
 }
@@ -83,7 +93,11 @@ pub async fn knowledge_recall(space: &str, query: &str, limit: i64) -> Result<St
         json!({ "query": query, "space": space, "limit": limit, "mode": "hybrid" }),
     )
     .await?;
-    Ok(v.get("answer").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
+    Ok(v.get("answer")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
 
 /// Raw hits for the Knowledge screen (id/name/summary/score).
@@ -100,7 +114,11 @@ pub async fn knowledge_search(space: &str, query: &str, limit: i64) -> Result<Va
 /// scoped-spaces endpoint first so an old daemon can't return the GLOBAL graph.
 pub async fn knowledge_nodes(space: &str, limit: i64) -> Result<Value, String> {
     let base = base_url().trim_end_matches('/').to_string();
-    let supports = match http().get(format!("{}/api/cognitive/spaces", base)).send().await {
+    let supports = match http()
+        .get(format!("{}/api/cognitive/spaces", base))
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => resp
             .json::<Value>()
             .await
@@ -109,9 +127,17 @@ pub async fn knowledge_nodes(space: &str, limit: i64) -> Result<Value, String> {
         _ => false,
     };
     if !supports {
-        return Err("daemon SenClaw chưa hỗ trợ knowledge spaces — cập nhật daemon rồi khởi động lại".into());
+        return Err(
+            "daemon SenClaw chưa hỗ trợ knowledge spaces — cập nhật daemon rồi khởi động lại"
+                .into(),
+        );
     }
-    let url = format!("{}/api/cognitive/top-nodes?space={}&limit={}", base, urlencode(space), limit);
+    let url = format!(
+        "{}/api/cognitive/top-nodes?space={}&limit={}",
+        base,
+        urlencode(space),
+        limit
+    );
     let resp = http().get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("daemon trả về {}", resp.status()));
@@ -214,7 +240,11 @@ pub async fn skills_inventory_grouped() -> Value {
             }
         }
     }
-    if let Ok(resp) = http().get(format!("{}/api/cowork/personas", base)).send().await {
+    if let Ok(resp) = http()
+        .get(format!("{}/api/cowork/personas", base))
+        .send()
+        .await
+    {
         if resp.status().is_success() {
             if let Ok(v) = resp.json::<Value>().await {
                 for p in v.as_array().unwrap_or(&Vec::new()) {
@@ -235,7 +265,10 @@ pub async fn skills_map() -> HashMap<String, String> {
     let inv = skills_inventory_grouped().await;
     for s in inv["skills"].as_array().unwrap_or(&Vec::new()) {
         if let Some(n) = s["name"].as_str() {
-            out.insert(n.to_string(), s["description"].as_str().unwrap_or("").to_string());
+            out.insert(
+                n.to_string(),
+                s["description"].as_str().unwrap_or("").to_string(),
+            );
         }
     }
     out
@@ -280,10 +313,18 @@ pub async fn stt(audio: Vec<u8>, filename: &str, language: Option<&str>) -> Resu
     if !resp.status().is_success() {
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("daemon STT {}: {}", code, body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "daemon STT {}: {}",
+            code,
+            body.chars().take(200).collect::<String>()
+        ));
     }
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(v.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
+    Ok(v.get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
 
 #[allow(dead_code)]
@@ -299,7 +340,11 @@ pub async fn tts(text: &str) -> Result<Vec<u8>, String> {
     if !resp.status().is_success() {
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("daemon TTS {}: {}", code, body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "daemon TTS {}: {}",
+            code,
+            body.chars().take(200).collect::<String>()
+        ));
     }
     Ok(resp.bytes().await.map_err(|e| e.to_string())?.to_vec())
 }
@@ -308,7 +353,9 @@ pub fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.as_bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }

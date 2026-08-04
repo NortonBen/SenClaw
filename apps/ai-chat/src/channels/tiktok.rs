@@ -46,7 +46,9 @@ pub fn sign(app_secret: &str, path: &str, params: &BTreeMap<String, String>) -> 
 }
 
 fn configured(ch: &Channel) -> bool {
-    !cfg(ch, "app_key").is_empty() && !cfg(ch, "app_secret").is_empty() && !cfg(ch, "access_token").is_empty()
+    !cfg(ch, "app_key").is_empty()
+        && !cfg(ch, "app_secret").is_empty()
+        && !cfg(ch, "access_token").is_empty()
 }
 
 fn unconfigured_err() -> String {
@@ -62,10 +64,18 @@ pub async fn poll(_db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
     // Wired shape (GET {HOST}/customer_service/202309/conversations with signed
     // query + x-tts-access-token). Left inert pending a real Partner app so we
     // don't guess at a versioned contract we can't verify.
-    Err("TikTok Shop IM: poll chưa bật (thử nghiệm) — hoàn tất tích hợp Partner rồi mở khoá.".into())
+    Err(
+        "TikTok Shop IM: poll chưa bật (thử nghiệm) — hoàn tất tích hợp Partner rồi mở khoá."
+            .into(),
+    )
 }
 
-pub async fn send(_db: &Arc<Db>, ch: &Channel, _external_id: &str, _text: &str) -> Result<(), String> {
+pub async fn send(
+    _db: &Arc<Db>,
+    ch: &Channel,
+    _external_id: &str,
+    _text: &str,
+) -> Result<(), String> {
     if !configured(ch) {
         return Err(unconfigured_err());
     }

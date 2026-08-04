@@ -32,7 +32,12 @@ pub fn normalize_messages(page_id: &str, list: &[Value], since_ms: i64) -> (Vec<
         newest = newest.max(t);
         let from_id = m["from"]["id"].as_str().unwrap_or("");
         let is_customer = !from_id.is_empty() && from_id != page_id;
-        let text = m.get("message").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let text = m
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if is_customer && t > since_ms && !text.is_empty() {
             out.push(Inbound {
                 external_id: from_id.to_string(),
@@ -50,11 +55,18 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
     if page_id.is_empty() || token.is_empty() {
         return Err("kênh Facebook thiếu page_id/access_token".into());
     }
-    let since: i64 = ch.cursor.parse().unwrap_or_else(|_| crate::db::now_ms() - 7 * 24 * 3600 * 1000);
+    let since: i64 = ch
+        .cursor
+        .parse()
+        .unwrap_or_else(|_| crate::db::now_ms() - 7 * 24 * 3600 * 1000);
 
     let convs: Value = http()
         .get(format!("{GRAPH}/{page_id}/conversations"))
-        .query(&[("fields", "id,updated_time"), ("limit", "25"), ("access_token", token)])
+        .query(&[
+            ("fields", "id,updated_time"),
+            ("limit", "25"),
+            ("access_token", token),
+        ])
         .send()
         .await
         .map_err(|e| format!("facebook conversations lỗi: {e}"))?
@@ -62,13 +74,23 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
         .await
         .map_err(|e| format!("facebook phản hồi lỗi: {e}"))?;
     if let Some(err) = convs.get("error") {
-        return Err(format!("facebook lỗi: {}", err["message"].as_str().unwrap_or("")));
+        return Err(format!(
+            "facebook lỗi: {}",
+            err["message"].as_str().unwrap_or("")
+        ));
     }
 
     let mut out = Vec::new();
     let mut newest = since;
-    for conv in convs["data"].as_array().unwrap_or(&Vec::new()).iter().take(25) {
-        let Some(conv_id) = conv["id"].as_str() else { continue };
+    for conv in convs["data"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .take(25)
+    {
+        let Some(conv_id) = conv["id"].as_str() else {
+            continue;
+        };
         let msgs: Value = http()
             .get(format!("{GRAPH}/{conv_id}/messages"))
             .query(&[
@@ -82,7 +104,11 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
             .json()
             .await
             .map_err(|e| format!("facebook phản hồi lỗi: {e}"))?;
-        let (m, max_ms) = normalize_messages(page_id, msgs["data"].as_array().unwrap_or(&Vec::new()), since);
+        let (m, max_ms) = normalize_messages(
+            page_id,
+            msgs["data"].as_array().unwrap_or(&Vec::new()),
+            since,
+        );
         newest = newest.max(max_ms);
         out.extend(m);
     }
@@ -92,7 +118,12 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
     Ok(out)
 }
 
-pub async fn send(_db: &Arc<Db>, ch: &Channel, external_id: &str, text: &str) -> Result<(), String> {
+pub async fn send(
+    _db: &Arc<Db>,
+    ch: &Channel,
+    external_id: &str,
+    text: &str,
+) -> Result<(), String> {
     let page_id = cfg(ch, "page_id");
     let token = cfg(ch, "access_token");
     if page_id.is_empty() || token.is_empty() {
@@ -109,9 +140,15 @@ pub async fn send(_db: &Arc<Db>, ch: &Channel, external_id: &str, text: &str) ->
         .send()
         .await
         .map_err(|e| format!("facebook gửi lỗi: {e}"))?;
-    let v: Value = resp.json().await.map_err(|e| format!("facebook phản hồi lỗi: {e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("facebook phản hồi lỗi: {e}"))?;
     if let Some(err) = v.get("error") {
-        return Err(format!("facebook từ chối gửi: {}", err["message"].as_str().unwrap_or("")));
+        return Err(format!(
+            "facebook từ chối gửi: {}",
+            err["message"].as_str().unwrap_or("")
+        ));
     }
     Ok(())
 }
@@ -122,7 +159,10 @@ mod tests {
 
     #[test]
     fn parses_rfc3339() {
-        assert!(rfc3339_ms("2026-07-16T09:30:00+0000") > 0 || rfc3339_ms("2026-07-16T09:30:00+00:00") > 0);
+        assert!(
+            rfc3339_ms("2026-07-16T09:30:00+0000") > 0
+                || rfc3339_ms("2026-07-16T09:30:00+00:00") > 0
+        );
         assert_eq!(rfc3339_ms("not-a-date"), 0);
     }
 

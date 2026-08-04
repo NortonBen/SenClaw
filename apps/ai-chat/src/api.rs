@@ -31,7 +31,12 @@ pub fn make_state() -> Arc<AppState> {
     let (events, _) = broadcast::channel(500);
     let channels = ChannelManager::new(db.clone(), events.clone());
     channels.spawn();
-    Arc::new(AppState { db, mcp_tx, events, channels })
+    Arc::new(AppState {
+        db,
+        mcp_tx,
+        events,
+        channels,
+    })
 }
 
 pub fn api_router(state: Arc<AppState>) -> Router {
@@ -43,12 +48,21 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/bots/:key", patch(update_bot).delete(delete_bot))
         .route("/bots/:key/knowledge", get(bot_knowledge))
         .route("/channels", get(list_channels).post(create_channel))
-        .route("/channels/:id", patch(update_channel).delete(delete_channel))
+        .route(
+            "/channels/:id",
+            patch(update_channel).delete(delete_channel),
+        )
         .route("/channels/:id/test", post(test_channel))
         .route("/sessions", get(list_sessions))
-        .route("/sessions/:id", get(get_session_detail).delete(delete_session))
+        .route(
+            "/sessions/:id",
+            get(get_session_detail).delete(delete_session),
+        )
         .route("/sessions/:id/analyze", post(analyze_session))
-        .route("/conversations", get(list_conversations).post(create_conversation))
+        .route(
+            "/conversations",
+            get(list_conversations).post(create_conversation),
+        )
         .route("/conversations/:id/send", post(conversation_send))
         .route("/crm/search", get(crm_search))
         .route("/issues", get(list_issues).post(create_issue))
@@ -65,7 +79,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/skills-inventory", get(skills_inventory))
         .route("/mcp-inventory", get(mcp_inventory))
         .route("/settings", get(get_settings).post(update_settings))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -127,12 +144,12 @@ async fn create_bot(
     State(s): State<Arc<AppState>>,
     Json(b): Json<BotCreate>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .create_bot(&b.name, &b.system_prompt, &b.greeting)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let bot =
+        s.db.create_bot(&b.name, &b.system_prompt, &b.greeting)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     // Every bot gets a web (WebSocket) channel by default.
-    let _ = s.db.create_channel(&bot.key, "websocket", "Web chat", &json!({}));
+    let _ =
+        s.db.create_channel(&bot.key, "websocket", "Web chat", &json!({}));
     Ok(Json(json!({ "bot": bot })))
 }
 
@@ -157,9 +174,8 @@ async fn update_bot(
     Path(key): Path<String>,
     Json(b): Json<BotPatch>,
 ) -> Result<Json<Value>, ApiError> {
-    let found = s
-        .db
-        .update_bot(
+    let found =
+        s.db.update_bot(
             &key,
             b.name.as_deref(),
             b.system_prompt.as_deref(),
@@ -176,9 +192,14 @@ async fn update_bot(
         )
         .map_err(internal)?;
     if !found {
-        return Err(err(StatusCode::NOT_FOUND, format!("không có bot '{}'", key)));
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            format!("không có bot '{}'", key),
+        ));
     }
-    Ok(Json(json!({ "bot": s.db.get_bot(&key).map_err(internal)? })))
+    Ok(Json(
+        json!({ "bot": s.db.get_bot(&key).map_err(internal)? }),
+    ))
 }
 
 async fn delete_bot(
@@ -189,7 +210,10 @@ async fn delete_bot(
         return Err(err(StatusCode::BAD_REQUEST, "cần giữ ít nhất một bot"));
     }
     if !s.db.delete_bot(&key).map_err(internal)? {
-        return Err(err(StatusCode::NOT_FOUND, format!("không có bot '{}'", key)));
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            format!("không có bot '{}'", key),
+        ));
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -198,11 +222,10 @@ async fn bot_knowledge(
     State(s): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .get_bot(&key)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("không có bot '{}'", key)))?;
+    let bot =
+        s.db.get_bot(&key)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("không có bot '{}'", key)))?;
     let space = format!("ai-chat:{}", bot.key);
     match senclaw::knowledge_count(&space).await {
         Ok(count) => Ok(Json(json!({ "space": space, "count": count }))),
@@ -247,11 +270,14 @@ async fn create_channel(
     if s.db.get_bot(&b.bot_key).map_err(internal)?.is_none() {
         return Err(err(StatusCode::BAD_REQUEST, "bot không tồn tại"));
     }
-    let cfg = if b.config.is_object() { b.config } else { json!({}) };
-    let ch = s
-        .db
-        .create_channel(&b.bot_key, &b.kind, &b.name, &cfg)
-        .map_err(internal)?;
+    let cfg = if b.config.is_object() {
+        b.config
+    } else {
+        json!({})
+    };
+    let ch =
+        s.db.create_channel(&b.bot_key, &b.kind, &b.name, &cfg)
+            .map_err(internal)?;
     Ok(Json(json!({ "channel": redact_channel(&ch) })))
 }
 
@@ -270,19 +296,17 @@ async fn update_channel(
     // Merge config so redacted "••••••" placeholders don't wipe stored secrets.
     let merged = match b.config {
         Some(new_cfg) => {
-            let existing = s
-                .db
-                .get_channel(id)
-                .map_err(internal)?
-                .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có kênh"))?;
+            let existing =
+                s.db.get_channel(id)
+                    .map_err(internal)?
+                    .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có kênh"))?;
             Some(merge_config(existing.config, new_cfg))
         }
         None => None,
     };
-    let found = s
-        .db
-        .update_channel(id, b.name.as_deref(), merged.as_ref(), b.enabled)
-        .map_err(internal)?;
+    let found =
+        s.db.update_channel(id, b.name.as_deref(), merged.as_ref(), b.enabled)
+            .map_err(internal)?;
     if !found {
         return Err(err(StatusCode::NOT_FOUND, "không có kênh"));
     }
@@ -319,23 +343,34 @@ async fn test_channel(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let ch = s
-        .db
-        .get_channel(id)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có kênh"))?;
+    let ch =
+        s.db.get_channel(id)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có kênh"))?;
     let result = match ch.kind.as_str() {
         "telegram" => crate::channels::telegram::health_check(&ch).await,
         "websocket" => Ok("Web chat luôn sẵn sàng".to_string()),
         "zalo" => {
-            if ch.config.get("access_token").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            if ch
+                .config
+                .get("access_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+            {
                 Err("thiếu access_token".to_string())
             } else {
                 Ok("đã có access_token (kiểm tra thật khi poll)".to_string())
             }
         }
         "facebook" => {
-            if ch.config.get("page_id").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            if ch
+                .config
+                .get("page_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+            {
                 Err("thiếu page_id/access_token".to_string())
             } else {
                 Ok("đã cấu hình (kiểm tra thật khi poll)".to_string())
@@ -363,23 +398,27 @@ async fn list_sessions(
     Query(q): Query<SessionsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    Ok(Json(json!({ "sessions": s.db.list_sessions(q.bot.as_deref(), limit).map_err(internal)? })))
+    Ok(Json(
+        json!({ "sessions": s.db.list_sessions(q.bot.as_deref(), limit).map_err(internal)? }),
+    ))
 }
 
 async fn get_session_detail(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let session = s
-        .db
-        .get_session(id)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có phiên"))?;
+    let session =
+        s.db.get_session(id)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có phiên"))?;
     let messages = s.db.list_messages(id, 200).map_err(internal)?;
     Ok(Json(json!({ "session": session, "messages": messages })))
 }
 
-async fn delete_session(State(s): State<Arc<AppState>>, Path(id): Path<i64>) -> Result<Json<Value>, ApiError> {
+async fn delete_session(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
     if !s.db.delete_session(id).map_err(internal)? {
         return Err(err(StatusCode::NOT_FOUND, "không có phiên"));
     }
@@ -398,7 +437,9 @@ async fn list_conversations(
     Query(q): Query<ConversationsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let kind = q.kind.as_deref().map(str::trim).filter(|k| !k.is_empty());
-    let convos = s.db.list_conversations(&q.bot, kind, 100).map_err(internal)?;
+    let convos =
+        s.db.list_conversations(&q.bot, kind, 100)
+            .map_err(internal)?;
     Ok(Json(json!({ "conversations": convos })))
 }
 
@@ -424,17 +465,15 @@ async fn create_conversation(
     State(s): State<Arc<AppState>>,
     Json(b): Json<ConversationCreate>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .get_bot(&b.bot)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
-    let ch = s
-        .db
-        .get_channel(b.channel_id)
-        .map_err(internal)?
-        .filter(|c| c.bot_key == bot.key)
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "kênh không thuộc bot này"))?;
+    let bot =
+        s.db.get_bot(&b.bot)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
+    let ch =
+        s.db.get_channel(b.channel_id)
+            .map_err(internal)?
+            .filter(|c| c.bot_key == bot.key)
+            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "kênh không thuộc bot này"))?;
     let web = ch.kind == "websocket";
 
     // Who are we talking to, and at which platform id?
@@ -470,28 +509,51 @@ async fn create_conversation(
                 (true, _) => (format!("web-{}", crate::db::now_ms() % 1000000), n),
                 (false, Some(v)) if !v.trim().is_empty() => (v, n),
                 (false, _) => {
-                    return Err(err(StatusCode::BAD_REQUEST, format!("cần ID của khách trên kênh '{}'", ch.kind)))
+                    return Err(err(
+                        StatusCode::BAD_REQUEST,
+                        format!("cần ID của khách trên kênh '{}'", ch.kind),
+                    ))
                 }
             }
         }
     };
 
-    let session = s
-        .db
-        .get_or_create_session(&bot.key, &ch.kind, ch.id, &external_id, &format!("{}:{external_id}", ch.kind), &name)
+    let session =
+        s.db.get_or_create_session(
+            &bot.key,
+            &ch.kind,
+            ch.id,
+            &external_id,
+            &format!("{}:{external_id}", ch.kind),
+            &name,
+        )
         .map_err(internal)?;
 
     // Greet: persist it, and actually deliver it on real channels (the web
     // client replays it from the transcript when its socket connects).
-    let greeting = if bot.greeting.trim().is_empty() { "Xin chào 👋".to_string() } else { bot.greeting.clone() };
-    if s.db.list_messages(session.id, 1).map_err(internal)?.is_empty() {
+    let greeting = if bot.greeting.trim().is_empty() {
+        "Xin chào 👋".to_string()
+    } else {
+        bot.greeting.clone()
+    };
+    if s.db
+        .list_messages(session.id, 1)
+        .map_err(internal)?
+        .is_empty()
+    {
         if !web {
             if let Err(e) = s.channels.send_raw(&ch, &external_id, &greeting).await {
-                return Err(err(StatusCode::BAD_GATEWAY, format!("không gửi được lời chào: {e}")));
+                return Err(err(
+                    StatusCode::BAD_GATEWAY,
+                    format!("không gửi được lời chào: {e}"),
+                ));
             }
         }
         let _ = s.db.add_message(session.id, "assistant", &greeting);
-        engine::emit(&s.events, json!({ "type": "message", "sessionId": session.id, "role": "assistant", "content": greeting }));
+        engine::emit(
+            &s.events,
+            json!({ "type": "message", "sessionId": session.id, "role": "assistant", "content": greeting }),
+        );
     }
     Ok(Json(json!({
         "sessionId": session.id, "externalId": external_id,
@@ -515,17 +577,19 @@ async fn conversation_send(
     if text.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "nội dung trống"));
     }
-    let session = s
-        .db
-        .get_session(id)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có phiên"))?;
+    let session =
+        s.db.get_session(id)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có phiên"))?;
     s.channels
         .send_to_session(&session, text)
         .await
         .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
     s.db.add_message(id, "operator", text).map_err(internal)?;
-    engine::emit(&s.events, json!({ "type": "message", "sessionId": id, "role": "operator", "content": text }));
+    engine::emit(
+        &s.events,
+        json!({ "type": "message", "sessionId": id, "role": "operator", "content": text }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -542,8 +606,12 @@ async fn crm_search(
     Query(q): Query<CrmSearchQuery>,
 ) -> Json<Value> {
     let base = crate::crm::resolve_base().await;
-    let list =
-        crate::crm::search_list_for_channel(&base, q.q.as_deref().unwrap_or(""), q.channel.as_deref()).await;
+    let list = crate::crm::search_list_for_channel(
+        &base,
+        q.q.as_deref().unwrap_or(""),
+        q.channel.as_deref(),
+    )
+    .await;
     Json(json!({ "customers": list }))
 }
 
@@ -563,9 +631,14 @@ async fn list_issues(
     Query(q): Query<IssueQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let issues = s
-        .db
-        .list_issues(q.status.as_deref(), q.priority.as_deref(), q.bot.as_deref(), q.search.as_deref(), limit)
+    let issues =
+        s.db.list_issues(
+            q.status.as_deref(),
+            q.priority.as_deref(),
+            q.bot.as_deref(),
+            q.search.as_deref(),
+            limit,
+        )
         .map_err(internal)?;
     Ok(Json(json!({ "issues": issues })))
 }
@@ -597,26 +670,35 @@ async fn create_issue(
         return Err(err(StatusCode::BAD_REQUEST, "thiếu tiêu đề"));
     }
     // Resolve bot/external id from the session when given.
-    let (bot_key, external_id) = match b.session_id.and_then(|id| s.db.get_session(id).ok().flatten()) {
+    let (bot_key, external_id) = match b
+        .session_id
+        .and_then(|id| s.db.get_session(id).ok().flatten())
+    {
         Some(sess) => (sess.bot_key, sess.external_id),
         None => (b.bot_key.unwrap_or_default(), String::new()),
     };
-    let issue = s
-        .db
-        .create_issue(
+    let issue =
+        s.db.create_issue(
             b.session_id,
             &bot_key,
             &external_id,
             &b.title,
             &b.description,
-            if b.priority.is_empty() { "medium" } else { &b.priority },
+            if b.priority.is_empty() {
+                "medium"
+            } else {
+                &b.priority
+            },
             &b.category,
             &b.sentiment,
             "",
             &b.tags,
         )
         .map_err(internal)?;
-    engine::emit(&s.events, json!({ "type": "issue", "issueId": issue.id, "title": issue.title, "priority": issue.priority }));
+    engine::emit(
+        &s.events,
+        json!({ "type": "issue", "issueId": issue.id, "title": issue.title, "priority": issue.priority }),
+    );
     Ok(Json(json!({ "issue": issue })))
 }
 
@@ -624,11 +706,10 @@ async fn get_issue(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let issue = s
-        .db
-        .get_issue(id)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có ticket"))?;
+    let issue =
+        s.db.get_issue(id)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có ticket"))?;
     let events = s.db.list_issue_events(id).map_err(internal)?;
     Ok(Json(json!({ "issue": issue, "events": events })))
 }
@@ -656,11 +737,17 @@ async fn update_issue(
         resolution_note: b.resolution_note,
         title: b.title,
     };
-    if !s.db.update_issue(id, &patch, "operator").map_err(internal)? {
+    if !s
+        .db
+        .update_issue(id, &patch, "operator")
+        .map_err(internal)?
+    {
         return Err(err(StatusCode::NOT_FOUND, "không có ticket"));
     }
     engine::emit(&s.events, json!({ "type": "issue-updated", "issueId": id }));
-    Ok(Json(json!({ "issue": s.db.get_issue(id).map_err(internal)? })))
+    Ok(Json(
+        json!({ "issue": s.db.get_issue(id).map_err(internal)? }),
+    ))
 }
 
 async fn analytics(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
@@ -699,17 +786,28 @@ async fn chat(
     State(s): State<Arc<AppState>>,
     Json(b): Json<ChatBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .get_bot(&b.bot)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
-    let external_id = b.external_id.unwrap_or_else(|| format!("web-{}", crate::db::now_ms()));
+    let bot =
+        s.db.get_bot(&b.bot)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
+    let external_id = b
+        .external_id
+        .unwrap_or_else(|| format!("web-{}", crate::db::now_ms()));
     let ch = ensure_ws_channel(&s.db, &bot.key).map_err(internal)?;
-    let cust_name = b.name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or("Khách web");
-    let session = s
-        .db
-        .get_or_create_session(&bot.key, "websocket", ch.id, &external_id, &format!("web:{external_id}"), cust_name)
+    let cust_name = b
+        .name
+        .as_deref()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or("Khách web");
+    let session =
+        s.db.get_or_create_session(
+            &bot.key,
+            "websocket",
+            ch.id,
+            &external_id,
+            &format!("web:{external_id}"),
+            cust_name,
+        )
         .map_err(internal)?;
     let outcome = engine::process_inbound(&s.db, &s.events, &bot, &session, &b.text).await;
     Ok(Json(json!({
@@ -749,7 +847,13 @@ async fn ws_chat(
     ws.on_upgrade(move |socket| ws_chat_loop(s, external_id, bot_key, name, socket))
 }
 
-async fn ws_chat_loop(s: Arc<AppState>, external_id: String, bot_key: String, name: Option<String>, socket: WebSocket) {
+async fn ws_chat_loop(
+    s: Arc<AppState>,
+    external_id: String,
+    bot_key: String,
+    name: Option<String>,
+    socket: WebSocket,
+) {
     let Some(bot) = s.db.get_bot(&bot_key).ok().flatten() else {
         return;
     };
@@ -773,11 +877,26 @@ async fn ws_chat_loop(s: Arc<AppState>, external_id: String, bot_key: String, na
     // (resuming), otherwise greet (a brand-new conversation).
     let past = s.db.list_messages(session_id, 200).unwrap_or_default();
     if past.is_empty() {
-        let greeting = if bot.greeting.trim().is_empty() { "Xin chào 👋".to_string() } else { bot.greeting.clone() };
-        let _ = tx.send(WsMessage::Text(json!({ "type": "chat_response", "text": greeting }).to_string())).await;
+        let greeting = if bot.greeting.trim().is_empty() {
+            "Xin chào 👋".to_string()
+        } else {
+            bot.greeting.clone()
+        };
+        let _ = tx
+            .send(WsMessage::Text(
+                json!({ "type": "chat_response", "text": greeting }).to_string(),
+            ))
+            .await;
     } else {
-        let msgs: Vec<Value> = past.iter().map(|m| json!({ "role": m.role, "content": m.content })).collect();
-        let _ = tx.send(WsMessage::Text(json!({ "type": "history", "messages": msgs }).to_string())).await;
+        let msgs: Vec<Value> = past
+            .iter()
+            .map(|m| json!({ "role": m.role, "content": m.content }))
+            .collect();
+        let _ = tx
+            .send(WsMessage::Text(
+                json!({ "type": "history", "messages": msgs }).to_string(),
+            ))
+            .await;
     }
 
     // One loop owns the socket sender: it both answers inbound frames inline
@@ -844,7 +963,9 @@ async fn ws_chat_loop(s: Arc<AppState>, external_id: String, bot_key: String, na
 
 async fn events_sse(
     State(s): State<Arc<AppState>>,
-) -> axum::response::Sse<impl futures_util::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+) -> axum::response::Sse<
+    impl futures_util::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
     use axum::response::sse::Event;
     let mut rx = s.events.subscribe();
     let stream = async_stream::stream! {
@@ -875,7 +996,10 @@ async fn set_handoff(
         return Err(err(StatusCode::BAD_REQUEST, "state không hợp lệ"));
     }
     s.db.set_handoff(id, &b.state).map_err(internal)?;
-    engine::emit(&s.events, json!({ "type": "handoff", "sessionId": id, "state": b.state }));
+    engine::emit(
+        &s.events,
+        json!({ "type": "handoff", "sessionId": id, "state": b.state }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -895,11 +1019,10 @@ async fn handoff_reply(
     if text.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "nội dung trống"));
     }
-    let session: Session = s
-        .db
-        .get_session(id)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có phiên"))?;
+    let session: Session =
+        s.db.get_session(id)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có phiên"))?;
     if session.handoff_state == HANDOFF_BOT {
         s.db.set_handoff(id, "with_operator").map_err(internal)?;
     }
@@ -926,11 +1049,10 @@ async fn knowledge_search(
     State(s): State<Arc<AppState>>,
     Query(q): Query<KnowledgeQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .get_bot(&q.bot)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
+    let bot =
+        s.db.get_bot(&q.bot)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
     let space = format!("ai-chat:{}", bot.key);
     let query = q.q.unwrap_or_default();
     if query.trim().is_empty() {
@@ -955,11 +1077,10 @@ async fn knowledge_write(
     State(s): State<Arc<AppState>>,
     Json(b): Json<KnowledgeWrite>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .get_bot(&b.bot_key)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
+    let bot =
+        s.db.get_bot(&b.bot_key)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
     if b.text.trim().is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "nội dung trống"));
     }
@@ -1006,7 +1127,9 @@ async fn knowledge_upload(
     let (fname, ctype, bytes) = file.ok_or_else(|| err(StatusCode::BAD_REQUEST, "thiếu file"))?;
     let space = format!("ai-chat:{}", bot.key);
     match senclaw::knowledge_upload(&space, &fname, &ctype, bytes).await {
-        Ok(v) => Ok(Json(json!({ "ok": true, "space": space, "filename": fname, "report": v }))),
+        Ok(v) => Ok(Json(
+            json!({ "ok": true, "space": space, "filename": fname, "report": v }),
+        )),
         Err(e) => Err(err(StatusCode::BAD_GATEWAY, e)),
     }
 }
@@ -1015,11 +1138,10 @@ async fn knowledge_nodes(
     State(s): State<Arc<AppState>>,
     Query(q): Query<KnowledgeQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let bot = s
-        .db
-        .get_bot(&q.bot)
-        .map_err(internal)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
+    let bot =
+        s.db.get_bot(&q.bot)
+            .map_err(internal)?
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "không có bot"))?;
     let space = format!("ai-chat:{}", bot.key);
     match senclaw::knowledge_nodes(&space, 100).await {
         Ok(v) => Ok(Json(v)),
@@ -1062,7 +1184,8 @@ async fn update_settings(
     if let Some(feats) = b.features {
         for (k, v) in feats {
             if ["knowledge", "wiki", "tools"].contains(&k.as_str()) {
-                s.db.set_setting(&format!("feat_{k}"), if v { "1" } else { "0" }).map_err(internal)?;
+                s.db.set_setting(&format!("feat_{k}"), if v { "1" } else { "0" })
+                    .map_err(internal)?;
             }
         }
     }
@@ -1070,7 +1193,8 @@ async fn update_settings(
         s.db.set_setting("language", &lang).map_err(internal)?;
     }
     if let Some(v) = b.crm_enabled {
-        s.db.set_setting("crm_enabled", if v { "1" } else { "0" }).map_err(internal)?;
+        s.db.set_setting("crm_enabled", if v { "1" } else { "0" })
+            .map_err(internal)?;
     }
     get_settings(State(s)).await
 }

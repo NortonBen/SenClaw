@@ -45,7 +45,11 @@ pub struct ChannelManager {
 
 impl ChannelManager {
     pub fn new(db: Arc<Db>, events: broadcast::Sender<String>) -> Arc<Self> {
-        Arc::new(Self { db, events, tg_running: Mutex::new(HashSet::new()) })
+        Arc::new(Self {
+            db,
+            events,
+            tg_running: Mutex::new(HashSet::new()),
+        })
     }
 
     /// Spawn the background pollers.
@@ -74,7 +78,9 @@ impl ChannelManager {
                     Ok(msgs) => {
                         let n = msgs.len();
                         self.ingest(ch, msgs).await;
-                        let _ = self.db.set_channel_sync(ch.id, "ok", &format!("{n} tin mới"), None);
+                        let _ =
+                            self.db
+                                .set_channel_sync(ch.id, "ok", &format!("{n} tin mới"), None);
                     }
                     Err(e) => {
                         let _ = self.db.set_channel_sync(ch.id, "error", &e, None);
@@ -117,7 +123,9 @@ impl ChannelManager {
                 Ok(msgs) => {
                     let n = msgs.len();
                     self.ingest(&ch, msgs).await;
-                    let _ = self.db.set_channel_sync(ch.id, "ok", &format!("{n} tin mới"), None);
+                    let _ = self
+                        .db
+                        .set_channel_sync(ch.id, "ok", &format!("{n} tin mới"), None);
                 }
                 Err(e) => {
                     let _ = self.db.set_channel_sync(ch.id, "error", &e, None);
@@ -149,7 +157,8 @@ impl ChannelManager {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let outcome = engine::process_inbound(&self.db, &self.events, &bot, &session, &m.text).await;
+            let outcome =
+                engine::process_inbound(&self.db, &self.events, &bot, &session, &m.text).await;
             if let Some(reply) = outcome.reply.filter(|r| !r.trim().is_empty()) {
                 let _ = self.send_raw(ch, &m.external_id, &reply).await;
             }
@@ -158,7 +167,12 @@ impl ChannelManager {
 
     /// Deliver text to a customer on `channel` (used for bot replies + operator
     /// handoff replies + the `chat_send` MCP tool).
-    pub async fn send_raw(&self, ch: &Channel, external_id: &str, text: &str) -> Result<(), String> {
+    pub async fn send_raw(
+        &self,
+        ch: &Channel,
+        external_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
         match ch.kind.as_str() {
             "telegram" => telegram::send(&self.db, ch, external_id, text).await,
             "zalo" => zalo::send(&self.db, ch, external_id, text).await,

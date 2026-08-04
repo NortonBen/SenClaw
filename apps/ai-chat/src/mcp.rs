@@ -52,7 +52,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "ai-chat-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -204,7 +206,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             if name.is_empty() {
                 return error_result("thiếu 'name'".into());
             }
-            match db.create_bot(name, args["system_prompt"].as_str().unwrap_or(""), args["greeting"].as_str().unwrap_or("")) {
+            match db.create_bot(
+                name,
+                args["system_prompt"].as_str().unwrap_or(""),
+                args["greeting"].as_str().unwrap_or(""),
+            ) {
                 Ok(bot) => {
                     let _ = db.create_channel(&bot.key, "websocket", "Web chat", &json!({}));
                     json_result(json!({ "bot": bot }))
@@ -219,7 +225,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
             let arr = |k: &str| -> Option<Vec<String>> {
                 args[k].as_array().map(|a| {
-                    a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
                 })
             };
             match db.update_bot(
@@ -274,7 +282,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 return error_result(format!("không có phiên id={id}"));
             };
             let _ = db.add_message(id, "operator", text);
-            engine::emit(&state.events, json!({ "type": "message", "sessionId": id, "role": "operator", "content": text }));
+            engine::emit(
+                &state.events,
+                json!({ "type": "message", "sessionId": id, "role": "operator", "content": text }),
+            );
             match state.channels.send_to_session(&session, text).await {
                 Ok(()) => json_result(json!({ "ok": true })),
                 Err(e) => error_result(e),
@@ -290,7 +301,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
             match db.set_handoff(id, statev) {
                 Ok(()) => {
-                    engine::emit(&state.events, json!({ "type": "handoff", "sessionId": id, "state": statev }));
+                    engine::emit(
+                        &state.events,
+                        json!({ "type": "handoff", "sessionId": id, "state": statev }),
+                    );
                     json_result(json!({ "ok": true }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -306,10 +320,14 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 return error_result("thiếu 'title'".into());
             }
             let session_id = args["sessionId"].as_i64();
-            let (bot_key, external_id) = match session_id.and_then(|id| db.get_session(id).ok().flatten()) {
-                Some(sess) => (sess.bot_key, sess.external_id),
-                None => (args["botKey"].as_str().unwrap_or("").to_string(), String::new()),
-            };
+            let (bot_key, external_id) =
+                match session_id.and_then(|id| db.get_session(id).ok().flatten()) {
+                    Some(sess) => (sess.bot_key, sess.external_id),
+                    None => (
+                        args["botKey"].as_str().unwrap_or("").to_string(),
+                        String::new(),
+                    ),
+                };
             match db.create_issue(
                 session_id,
                 &bot_key,
@@ -323,7 +341,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 &[],
             ) {
                 Ok(issue) => {
-                    engine::emit(&state.events, json!({ "type": "issue", "issueId": issue.id, "title": issue.title }));
+                    engine::emit(
+                        &state.events,
+                        json!({ "type": "issue", "issueId": issue.id, "title": issue.title }),
+                    );
                     json_result(json!({ "issue": issue }))
                 }
                 Err(e) => error_result(e.to_string()),

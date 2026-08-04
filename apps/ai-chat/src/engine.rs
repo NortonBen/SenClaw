@@ -64,7 +64,11 @@ pub fn emit(events: &broadcast::Sender<String>, ev: serde_json::Value) {
 }
 
 fn crm_enabled(db: &Arc<Db>) -> bool {
-    db.get_setting("crm_enabled").ok().flatten().map(|v| v != "0").unwrap_or(true)
+    db.get_setting("crm_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(true)
 }
 
 /// Generic display names a recognized customer should replace.
@@ -80,7 +84,11 @@ fn apply_crm_name(db: &Arc<Db>, session: &Session, crm: &serde_json::Value) {
     if crm.get("none").is_some() {
         return;
     }
-    let Some(name) = crm.get("name").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
+    let Some(name) = crm
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
     else {
         return;
     };
@@ -138,10 +146,16 @@ pub async fn process_inbound(
 ) -> Outcome {
     let text = text.trim();
     if text.is_empty() {
-        return Outcome { reply: None, escalated: false };
+        return Outcome {
+            reply: None,
+            escalated: false,
+        };
     }
     let _ = db.add_message(session.id, "user", text);
-    emit(events, json!({ "type": "message", "sessionId": session.id, "role": "user", "content": text }));
+    emit(
+        events,
+        json!({ "type": "message", "sessionId": session.id, "role": "user", "content": text }),
+    );
 
     // CRM enrichment: recognize the customer and cache their profile + real
     // name on the session. Runs BEFORE the handoff check — an operator handling
@@ -153,13 +167,18 @@ pub async fn process_inbound(
     // A human already owns this conversation — the bot stays silent; the
     // operator sees the message through the live event stream / inbox.
     if session.handoff_state != HANDOFF_BOT {
-        return Outcome { reply: None, escalated: false };
+        return Outcome {
+            reply: None,
+            escalated: false,
+        };
     }
 
     let result = match answer(db, bot, session, text).await {
         Ok(v) => v,
         Err(e) => AnswerResult {
-            text: format!("Xin lỗi, mình đang gặp trục trặc kỹ thuật ({e}). Bạn thử lại giúp mình nhé."),
+            text: format!(
+                "Xin lỗi, mình đang gặp trục trặc kỹ thuật ({e}). Bạn thử lại giúp mình nhé."
+            ),
             escalated: false,
             issue: None,
         },
@@ -167,7 +186,10 @@ pub async fn process_inbound(
 
     if result.escalated {
         let _ = db.set_handoff(session.id, HANDOFF_PENDING);
-        emit(events, json!({ "type": "handoff", "sessionId": session.id, "state": HANDOFF_PENDING }));
+        emit(
+            events,
+            json!({ "type": "handoff", "sessionId": session.id, "state": HANDOFF_PENDING }),
+        );
     }
 
     // The bot logged a support ticket but keeps assisting (unlike handoff).
@@ -184,14 +206,20 @@ pub async fn process_inbound(
             &iss.summary,
             &iss.tags,
         ) {
-            emit(events, json!({ "type": "issue", "sessionId": session.id, "issueId": issue.id, "title": issue.title, "priority": issue.priority }));
+            emit(
+                events,
+                json!({ "type": "issue", "sessionId": session.id, "issueId": issue.id, "title": issue.title, "priority": issue.priority }),
+            );
         }
     }
 
     let reply = result.text.trim().to_string();
     if !reply.is_empty() {
         let _ = db.add_message(session.id, "assistant", &reply);
-        emit(events, json!({ "type": "message", "sessionId": session.id, "role": "assistant", "content": reply }));
+        emit(
+            events,
+            json!({ "type": "message", "sessionId": session.id, "role": "assistant", "content": reply }),
+        );
         if bot.auto_ingest {
             // Fire-and-forget: fold the turn into the bot's knowledge space.
             let space = knowledge_space(bot, session);
@@ -201,11 +229,19 @@ pub async fn process_inbound(
             });
         }
     }
-    Outcome { reply: Some(reply), escalated: result.escalated }
+    Outcome {
+        reply: Some(reply),
+        escalated: result.escalated,
+    }
 }
 
 /// Run the model for one turn.
-async fn answer(db: &Arc<Db>, bot: &Bot, session: &Session, user_text: &str) -> Result<AnswerResult, String> {
+async fn answer(
+    db: &Arc<Db>,
+    bot: &Bot,
+    session: &Session,
+    user_text: &str,
+) -> Result<AnswerResult, String> {
     let space = knowledge_space(bot, session);
 
     // 1. Pre-retrieval: ground the answer in the bot's knowledge (engine-side,
@@ -220,13 +256,21 @@ async fn answer(db: &Arc<Db>, bot: &Bot, session: &Session, user_text: &str) -> 
     }
 
     // 2. Recognized customer profile from the CRM (if any).
-    if let Some(crm) = session.context.get("crm").filter(|c| c.get("none").is_none()) {
+    if let Some(crm) = session
+        .context
+        .get("crm")
+        .filter(|c| c.get("none").is_none())
+    {
         context_block.push_str(&format!("\n\n{}", crm::profile_block(crm)));
     }
 
     // 3. Current-chat context carried by the channel (page/cart/order…),
     //    excluding the reserved `crm` key handled above.
-    if let Some(obj) = session.context.as_object().filter(|o| o.keys().any(|k| k != "crm")) {
+    if let Some(obj) = session
+        .context
+        .as_object()
+        .filter(|o| o.keys().any(|k| k != "crm"))
+    {
         let pairs: Vec<String> = obj
             .iter()
             .filter(|(k, _)| k.as_str() != "crm")
@@ -287,18 +331,26 @@ async fn answer(db: &Arc<Db>, bot: &Bot, session: &Session, user_text: &str) -> 
             tools.push("Skill".to_string());
         }
         if tools.is_empty() {
-            let (t, model, _) = llm::bridge_llm(&system, &prompt, MAX_TOKENS).await?;
-            record_llm(db, &model, &prompt, &t);
+            let (t, model, _, usage) = llm::bridge_llm(&system, &prompt, MAX_TOKENS).await?;
+            record_llm(db, &model, &prompt, &t, usage);
             t
         } else {
             let model = bot.model.as_str();
-            let t = llm::agent_run(&system, &prompt, &space, &tools, Some(model).filter(|m| !m.is_empty()), AGENT_TIMEOUT_SECS).await?;
-            record_llm(db, &bot.model, &prompt, &t);
+            let (t, usage) = llm::agent_run(
+                &system,
+                &prompt,
+                &space,
+                &tools,
+                Some(model).filter(|m| !m.is_empty()),
+                AGENT_TIMEOUT_SECS,
+            )
+            .await?;
+            record_llm(db, &bot.model, &prompt, &t, usage);
             t
         }
     } else {
-        let (t, model, _) = llm::bridge_llm(&system, &prompt, MAX_TOKENS).await?;
-        record_llm(db, &model, &prompt, &t);
+        let (t, model, _, usage) = llm::bridge_llm(&system, &prompt, MAX_TOKENS).await?;
+        record_llm(db, &model, &prompt, &t, usage);
         t
     };
 
@@ -306,7 +358,11 @@ async fn answer(db: &Arc<Db>, bot: &Bot, session: &Session, user_text: &str) -> 
     let (issue, text) = extract_issue(&text);
     let escalated = text.contains(HANDOFF_SENTINEL);
     let clean = text.replace(HANDOFF_SENTINEL, "").trim().to_string();
-    Ok(AnswerResult { text: clean, escalated, issue })
+    Ok(AnswerResult {
+        text: clean,
+        escalated,
+        issue,
+    })
 }
 
 /// Pull an `[ISSUE]{json}` sentinel (expected last in the reply) out of the
@@ -321,16 +377,45 @@ fn extract_issue(text: &str) -> (Option<IssueData>, String) {
     let after = text[pos + ISSUE_SENTINEL.len()..].trim();
     let data = match serde_json::from_str::<serde_json::Value>(after) {
         Ok(v) => IssueData {
-            title: v.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string(),
-            description: v.get("description").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            priority: v.get("priority").and_then(|x| x.as_str()).unwrap_or("medium").to_string(),
-            category: v.get("category").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            sentiment: v.get("sentiment").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            summary: v.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            title: v
+                .get("title")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+            description: v
+                .get("description")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            priority: v
+                .get("priority")
+                .and_then(|x| x.as_str())
+                .unwrap_or("medium")
+                .to_string(),
+            category: v
+                .get("category")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            sentiment: v
+                .get("sentiment")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            summary: v
+                .get("summary")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
             tags: v
                 .get("tags")
                 .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default(),
         },
         Err(_) if !after.is_empty() => IssueData {
@@ -344,7 +429,11 @@ fn extract_issue(text: &str) -> (Option<IssueData>, String) {
         },
         Err(_) => return (None, before),
     };
-    let data = if data.title.trim().is_empty() { None } else { Some(data) };
+    let data = if data.title.trim().is_empty() {
+        None
+    } else {
+        Some(data)
+    };
     (data, before)
 }
 
@@ -352,7 +441,9 @@ fn extract_issue(text: &str) -> (Option<IssueData>, String) {
 /// to produce sentiment + a 1–5 quality score + a summary + suggested category.
 /// Returns the parsed JSON object (best-effort; falls back to a raw wrapper).
 pub async fn analyze_session(db: &Arc<Db>, session_id: i64) -> Result<serde_json::Value, String> {
-    let messages = db.list_messages(session_id, 100).map_err(|e| e.to_string())?;
+    let messages = db
+        .list_messages(session_id, 100)
+        .map_err(|e| e.to_string())?;
     if messages.is_empty() {
         return Err("phiên chưa có tin nhắn".into());
     }
@@ -373,8 +464,8 @@ pub async fn analyze_session(db: &Arc<Db>, session_id: i64) -> Result<serde_json
 Đọc hội thoại và trả về DUY NHẤT một JSON: \
 {\"sentiment\":\"positive|neutral|negative\",\"quality\":<1-5>,\"resolved\":<true|false>,\"summary\":\"tóm tắt ngắn\",\"category\":\"nhãn ngắn\",\"suggestions\":\"gợi ý cải thiện ngắn\"}. \
 Không thêm chữ nào ngoài JSON.";
-    let (text, model, _) = llm::bridge_llm(system, &transcript, 500).await?;
-    record_llm(db, &model, &transcript, &text);
+    let (text, model, _, usage) = llm::bridge_llm(system, &transcript, 500).await?;
+    record_llm(db, &model, &transcript, &text, usage);
     // The model may wrap the JSON in prose — extract the first {...} block.
     let json_str = match (text.find('{'), text.rfind('}')) {
         (Some(a), Some(b)) if b > a => &text[a..=b],
@@ -393,8 +484,14 @@ Không thêm chữ nào ngoài JSON.";
         "category": field_str(&text, "category"),
         "suggestions": field_str(&text, "suggestions"),
     });
-    if lenient.get("sentiment").map(|v| !v.is_null()).unwrap_or(false)
-        || lenient.get("summary").map(|v| !v.is_null()).unwrap_or(false)
+    if lenient
+        .get("sentiment")
+        .map(|v| !v.is_null())
+        .unwrap_or(false)
+        || lenient
+            .get("summary")
+            .map(|v| !v.is_null())
+            .unwrap_or(false)
     {
         Ok(lenient)
     } else {
@@ -421,11 +518,18 @@ fn field_num(text: &str, key: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
-/// Rough token accounting for the stats panel (chars/4 heuristic).
-fn record_llm(db: &Arc<Db>, model: &str, prompt: &str, reply: &str) {
+/// Token accounting for the stats panel: real daemon-reported usage when
+/// available, chars/4 heuristic only as a fallback for older daemons.
+fn record_llm(db: &Arc<Db>, model: &str, prompt: &str, reply: &str, usage: Option<(i64, i64)>) {
+    let (tokens_in, tokens_out) = usage.unwrap_or_else(|| {
+        (
+            (prompt.chars().count() / 4) as i64,
+            (reply.chars().count() / 4) as i64,
+        )
+    });
     let _ = db.bump_metric("llm_calls", 1);
-    let _ = db.bump_metric("tokens_in", (prompt.chars().count() / 4) as i64);
-    let _ = db.bump_metric("tokens_out", (reply.chars().count() / 4) as i64);
+    let _ = db.bump_metric("tokens_in", tokens_in);
+    let _ = db.bump_metric("tokens_out", tokens_out);
     if !model.is_empty() {
         let _ = db.set_setting("last_model", model);
     }

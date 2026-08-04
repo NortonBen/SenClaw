@@ -275,7 +275,9 @@ impl Db {
         for m in MIGRATIONS {
             let _ = conn.execute(m, []);
         }
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self {
+            conn: Mutex::new(conn),
+        };
         db.seed()?;
         Ok(db)
     }
@@ -340,8 +342,12 @@ impl Db {
 
     pub fn get_bot(&self, key: &str) -> Result<Option<Bot>> {
         self.with(|c| {
-            Ok(c.query_row("SELECT * FROM bots WHERE key=?1", params![key], Self::row_to_bot)
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT * FROM bots WHERE key=?1",
+                params![key],
+                Self::row_to_bot,
+            )
+            .optional()?)
         })
     }
 
@@ -395,7 +401,10 @@ impl Db {
             macro_rules! set_str {
                 ($col:literal, $v:expr) => {
                     if let Some(v) = $v {
-                        c.execute(concat!("UPDATE bots SET ", $col, "=?1 WHERE key=?2"), params![v, key])?;
+                        c.execute(
+                            concat!("UPDATE bots SET ", $col, "=?1 WHERE key=?2"),
+                            params![v, key],
+                        )?;
                     }
                 };
             }
@@ -404,15 +413,24 @@ impl Db {
             set_str!("greeting", greeting);
             set_str!("model", model);
             if let Some(v) = knowledge_scope.filter(|v| ["bot", "session", "user"].contains(v)) {
-                c.execute("UPDATE bots SET knowledge_scope=?1 WHERE key=?2", params![v, key])?;
+                c.execute(
+                    "UPDATE bots SET knowledge_scope=?1 WHERE key=?2",
+                    params![v, key],
+                )?;
             }
             if let Some(v) = allowed_mcp {
                 let j = serde_json::to_string(v).unwrap_or_else(|_| "[]".into());
-                c.execute("UPDATE bots SET allowed_mcp=?1 WHERE key=?2", params![j, key])?;
+                c.execute(
+                    "UPDATE bots SET allowed_mcp=?1 WHERE key=?2",
+                    params![j, key],
+                )?;
             }
             if let Some(v) = allowed_skills {
                 let j = serde_json::to_string(v).unwrap_or_else(|_| "[]".into());
-                c.execute("UPDATE bots SET allowed_skills=?1 WHERE key=?2", params![j, key])?;
+                c.execute(
+                    "UPDATE bots SET allowed_skills=?1 WHERE key=?2",
+                    params![j, key],
+                )?;
             }
             for (col, val) in [
                 ("use_tools", use_tools),
@@ -428,8 +446,11 @@ impl Db {
                     )?;
                 }
             }
-            let found: i64 =
-                c.query_row("SELECT COUNT(*) FROM bots WHERE key=?1", params![key], |r| r.get(0))?;
+            let found: i64 = c.query_row(
+                "SELECT COUNT(*) FROM bots WHERE key=?1",
+                params![key],
+                |r| r.get(0),
+            )?;
             Ok(found > 0)
         })
     }
@@ -497,8 +518,12 @@ impl Db {
 
     pub fn get_channel(&self, id: i64) -> Result<Option<Channel>> {
         self.with(|c| {
-            Ok(c.query_row("SELECT * FROM channels WHERE id=?1", params![id], Self::row_to_channel)
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT * FROM channels WHERE id=?1",
+                params![id],
+                Self::row_to_channel,
+            )
+            .optional()?)
         })
     }
 
@@ -530,16 +555,28 @@ impl Db {
     ) -> Result<bool> {
         self.with(|c| {
             if let Some(v) = name {
-                c.execute("UPDATE channels SET name=?1 WHERE id=?2", params![v.trim(), id])?;
+                c.execute(
+                    "UPDATE channels SET name=?1 WHERE id=?2",
+                    params![v.trim(), id],
+                )?;
             }
             if let Some(v) = config {
-                c.execute("UPDATE channels SET config=?1 WHERE id=?2", params![v.to_string(), id])?;
+                c.execute(
+                    "UPDATE channels SET config=?1 WHERE id=?2",
+                    params![v.to_string(), id],
+                )?;
             }
             if let Some(v) = enabled {
-                c.execute("UPDATE channels SET enabled=?1 WHERE id=?2", params![v as i64, id])?;
+                c.execute(
+                    "UPDATE channels SET enabled=?1 WHERE id=?2",
+                    params![v as i64, id],
+                )?;
             }
-            let found: i64 =
-                c.query_row("SELECT COUNT(*) FROM channels WHERE id=?1", params![id], |r| r.get(0))?;
+            let found: i64 = c.query_row(
+                "SELECT COUNT(*) FROM channels WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )?;
             Ok(found > 0)
         })
     }
@@ -549,14 +586,23 @@ impl Db {
     }
 
     /// Record the outcome of a poll/sync cycle for a channel.
-    pub fn set_channel_sync(&self, id: i64, status: &str, error: &str, cursor: Option<&str>) -> Result<()> {
+    pub fn set_channel_sync(
+        &self,
+        id: i64,
+        status: &str,
+        error: &str,
+        cursor: Option<&str>,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "UPDATE channels SET last_sync_at=?1, last_status=?2, last_error=?3 WHERE id=?4",
                 params![now_ms(), status, error, id],
             )?;
             if let Some(cur) = cursor {
-                c.execute("UPDATE channels SET cursor=?1 WHERE id=?2", params![cur, id])?;
+                c.execute(
+                    "UPDATE channels SET cursor=?1 WHERE id=?2",
+                    params![cur, id],
+                )?;
             }
             Ok(())
         })
@@ -615,8 +661,12 @@ impl Db {
 
     pub fn get_session(&self, id: i64) -> Result<Option<Session>> {
         self.with(|c| {
-            Ok(c.query_row("SELECT * FROM sessions WHERE id=?1", params![id], Self::row_to_session)
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT * FROM sessions WHERE id=?1",
+                params![id],
+                Self::row_to_session,
+            )
+            .optional()?)
         })
     }
 
@@ -649,7 +699,10 @@ impl Db {
     #[allow(dead_code)]
     pub fn touch_session(&self, id: i64) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE sessions SET last_activity=?1 WHERE id=?2", params![now_ms(), id])?;
+            c.execute(
+                "UPDATE sessions SET last_activity=?1 WHERE id=?2",
+                params![now_ms(), id],
+            )?;
             Ok(())
         })
     }
@@ -702,21 +755,30 @@ impl Db {
 
     pub fn set_handoff(&self, id: i64, state: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE sessions SET handoff_state=?1 WHERE id=?2", params![state, id])?;
+            c.execute(
+                "UPDATE sessions SET handoff_state=?1 WHERE id=?2",
+                params![state, id],
+            )?;
             Ok(())
         })
     }
 
     pub fn set_session_context(&self, id: i64, ctx: &serde_json::Value) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE sessions SET context=?1 WHERE id=?2", params![ctx.to_string(), id])?;
+            c.execute(
+                "UPDATE sessions SET context=?1 WHERE id=?2",
+                params![ctx.to_string(), id],
+            )?;
             Ok(())
         })
     }
 
     pub fn set_customer_name(&self, id: i64, name: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE sessions SET customer_name=?1 WHERE id=?2", params![name.trim(), id])?;
+            c.execute(
+                "UPDATE sessions SET customer_name=?1 WHERE id=?2",
+                params![name.trim(), id],
+            )?;
             Ok(())
         })
     }
@@ -729,7 +791,10 @@ impl Db {
                 "INSERT INTO messages(session_id,role,content,created_at) VALUES(?1,?2,?3,?4)",
                 params![session_id, role, content, now_ms()],
             )?;
-            c.execute("UPDATE sessions SET last_activity=?1 WHERE id=?2", params![now_ms(), session_id])?;
+            c.execute(
+                "UPDATE sessions SET last_activity=?1 WHERE id=?2",
+                params![now_ms(), session_id],
+            )?;
             Ok(c.last_insert_rowid())
         })
     }
@@ -764,8 +829,12 @@ impl Db {
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.with(|c| {
-            Ok(c.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0))
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()?)
         })
     }
 
@@ -822,7 +891,10 @@ impl Db {
     pub fn stats(&self) -> Result<serde_json::Value> {
         self.with(|c| {
             let bots: i64 = c.query_row("SELECT COUNT(*) FROM bots", [], |r| r.get(0))?;
-            let channels: i64 = c.query_row("SELECT COUNT(*) FROM channels WHERE enabled=1", [], |r| r.get(0))?;
+            let channels: i64 =
+                c.query_row("SELECT COUNT(*) FROM channels WHERE enabled=1", [], |r| {
+                    r.get(0)
+                })?;
             let sessions: i64 = c.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
             let messages: i64 = c.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
             let handoffs: i64 = c.query_row(
@@ -833,7 +905,11 @@ impl Db {
             // NB: read last_model via `c` directly — calling self.get_setting()
             // here would re-lock the (non-reentrant) mutex and deadlock.
             let last_model: String = c
-                .query_row("SELECT value FROM settings WHERE key='last_model'", [], |r| r.get(0))
+                .query_row(
+                    "SELECT value FROM settings WHERE key='last_model'",
+                    [],
+                    |r| r.get(0),
+                )
                 .optional()
                 .ok()
                 .flatten()
@@ -891,7 +967,11 @@ impl Db {
         ai_summary: &str,
         tags: &[String],
     ) -> Result<Issue> {
-        let priority = if ISSUE_PRIORITIES.contains(&priority) { priority } else { "medium" };
+        let priority = if ISSUE_PRIORITIES.contains(&priority) {
+            priority
+        } else {
+            "medium"
+        };
         let id = self.with(|c| {
             let now = now_ms();
             c.execute(
@@ -915,8 +995,12 @@ impl Db {
 
     pub fn get_issue(&self, id: i64) -> Result<Option<Issue>> {
         self.with(|c| {
-            Ok(c.query_row("SELECT * FROM issues WHERE id=?1", params![id], Self::row_to_issue)
-                .optional()?)
+            Ok(c.query_row(
+                "SELECT * FROM issues WHERE id=?1",
+                params![id],
+                Self::row_to_issue,
+            )
+            .optional()?)
         })
     }
 
@@ -954,7 +1038,8 @@ impl Db {
             sql.push_str(" ORDER BY created_at DESC LIMIT ?");
             args.push(Box::new(limit));
             let mut stmt = c.prepare(&sql)?;
-            let params_ref: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                args.iter().map(|b| b.as_ref()).collect();
             let rows = stmt
                 .query_map(params_ref.as_slice(), Self::row_to_issue)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1037,11 +1122,17 @@ impl Db {
     /// Group-by counts over a column, as `{value: count}`.
     fn group_count(&self, c: &Connection, col: &str) -> serde_json::Value {
         let mut out = serde_json::Map::new();
-        if let Ok(mut stmt) = c.prepare(&format!("SELECT {col}, COUNT(*) FROM issues GROUP BY {col}")) {
+        if let Ok(mut stmt) = c.prepare(&format!(
+            "SELECT {col}, COUNT(*) FROM issues GROUP BY {col}"
+        )) {
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)));
             if let Ok(rows) = rows {
                 for row in rows.flatten() {
-                    let key = if row.0.trim().is_empty() { "(none)".to_string() } else { row.0 };
+                    let key = if row.0.trim().is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        row.0
+                    };
                     out.insert(key, serde_json::json!(row.1));
                 }
             }
@@ -1053,19 +1144,29 @@ impl Db {
     pub fn analytics(&self) -> Result<serde_json::Value> {
         self.with(|c| {
             let issues_total: i64 = c.query_row("SELECT COUNT(*) FROM issues", [], |r| r.get(0))?;
-            let issues_open: i64 =
-                c.query_row("SELECT COUNT(*) FROM issues WHERE status IN ('open','in_progress')", [], |r| r.get(0))?;
+            let issues_open: i64 = c.query_row(
+                "SELECT COUNT(*) FROM issues WHERE status IN ('open','in_progress')",
+                [],
+                |r| r.get(0),
+            )?;
             // Sessions by channel (group_count is issues-only, so build inline).
             let mut by_channel = serde_json::Map::new();
-            if let Ok(mut stmt) = c.prepare("SELECT channel_kind, COUNT(*) FROM sessions GROUP BY channel_kind") {
-                if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+            if let Ok(mut stmt) =
+                c.prepare("SELECT channel_kind, COUNT(*) FROM sessions GROUP BY channel_kind")
+            {
+                if let Ok(rows) =
+                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                {
                     for row in rows.flatten() {
                         by_channel.insert(row.0, serde_json::json!(row.1));
                     }
                 }
             }
-            let handoffs: i64 =
-                c.query_row("SELECT COUNT(*) FROM sessions WHERE handoff_state<>'bot'", [], |r| r.get(0))?;
+            let handoffs: i64 = c.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE handoff_state<>'bot'",
+                [],
+                |r| r.get(0),
+            )?;
             let sessions: i64 = c.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
             Ok(serde_json::json!({
                 "issues": {
