@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chart</title>
+<style>
+  :root { color-scheme: light dark;
+    --fg: #1f2430; --muted: #7a8194; --grid: rgba(127,127,127,.22); }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e8eaf0; --muted: #8a90a3; } }
+  html, body { margin: 0; height: 100%; background: transparent;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); }
+  .wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 12px 6px; box-sizing: border-box; }
+  .title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  svg { flex: 1; width: 100%; min-height: 0; }
+  text { fill: var(--muted); font-size: 10px; }
+  .msg { color: var(--muted); font-size: 12px; padding: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title" id="title" hidden></div>
+  <div class="legend" id="legend" hidden></div>
+  <svg id="svg" preserveAspectRatio="none"></svg>
+</div>
+<script>
+  const PALETTE = ['#5B8FF9','#61DDAA','#F6BD16','#F08BB4','#7262FD','#78D3F8','#FF9D4D','#269A99'];
+  const q = new URLSearchParams(location.search);
+  const type = (q.get('type') || 'bar').toLowerCase();
+  const title = q.get('title') || '';
+  if (title) { const t = document.getElementById('title'); t.textContent = title; t.hidden = false; }
+
+  const asNum = (v) => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const s = v.trim(); if (!s) return null;
+      let n = Number(s); if (isFinite(n)) return n;
+      if (s.includes(',') && !s.includes('.')) { n = Number(s.replace(',', '.')); if (isFinite(n)) return n; }
+    }
+    return null;
+  };
+  const X_HINTS = ['x','date','day','time','label','name','ngay','ngày'];
+
+  // `data` param: JSON — rows (array of objects, mỗi cột số = 1 series),
+  // array-of-pairs [[label, value], ...], hoặc {labels:[], values:[]}.
+  function deriveSeries(raw) {
+    let d; try { d = JSON.parse(raw || ''); } catch { return null; }
+    if (Array.isArray(d) && d.every((r) => Array.isArray(r))) {
+      return [{ name: q.get('name') || 'values',
+        points: d.filter((r) => r.length >= 2 && asNum(r[1]) != null)
+                 .map((r) => ({ x: r[0], y: asNum(r[1]) })) }];
+    }
+    if (Array.isArray(d) && d.every((r) => r && typeof r === 'object')) {
+      let xKey = X_HINTS.find((k) => k in d[0]);
+      if (!xKey) xKey = Object.keys(d[0]).find((k) => typeof d[0][k] === 'string' && asNum(d[0][k]) == null);
+      const keys = [];
+      for (const r of d) for (const k of Object.keys(r))
+        if (k !== xKey && !keys.includes(k) && asNum(r[k]) != null) keys.push(k);
+      return keys.map((key) => ({ name: key,
+        points: d.flatMap((r, i) => {
+          const y = asNum(r[key]); if (y == null) return [];
+          return [{ x: xKey ? r[xKey] : i, y }];
+        }) }));
+    }
+    if (d && Array.isArray(d.labels) && Array.isArray(d.values)) {
+      const pts = [];
+      d.labels.forEach((l, i) => { const y = asNum(d.values[i]); if (y != null) pts.push({ x: l, y }); });
+      return [{ name: d.name || 'values', points: pts }];
+    }
+    return null;
+  }
+
+  const series = deriveSeries(q.get('data'));
+  const svg = document.getElementById('svg');
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    (parent || svg).appendChild(e);
+    return e;
+  };
+
+  if (!series || !series.length || series.every((s) => !s.points.length)) {
+    svg.outerHTML = '<div class="msg">Tham số `data` thiếu hoặc không hợp lệ — cần JSON: rows / [[label,value],…] / {labels,values}.</div>';
+  } else {
+    // Legend khi nhiều series.
+    if (series.length > 1) {
+      const lg = document.getElementById('legend');
+      lg.hidden = false;
+      series.forEach((s, i) => {
+        const item = document.createElement('span');
+        item.innerHTML = '<span class="dot" style="background:' + PALETTE[i % PALETTE.length] + '"></span>' + s.name;
+        lg.appendChild(item);
+      });
+    }
+    const W = 640, H = 300, padL = 44, padR = 12, padT = 10, padB = 26;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    if (type === 'pie') {
+      const pts = series[0].points;
+      const total = pts.reduce((a, p) => a + Math.max(p.y, 0), 0) || 1;
+      const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 30;
+      let a0 = -Math.PI / 2;
+      pts.forEach((p, i) => {
+        const frac = Math.max(p.y, 0) / total;
+        const a1 = a0 + frac * Math.PI * 2;
+        const large = a1 - a0 > Math.PI ? 1 : 0;
+        const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0);
+        const x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
+        el('path', { d: 'M' + cx + ',' + cy + ' L' + x0 + ',' + y0 +
+          ' A' + R + ',' + R + ' 0 ' + large + ' 1 ' + x1 + ',' + y1 + ' Z',
+          fill: PALETTE[i % PALETTE.length] });
+        const mid = (a0 + a1) / 2, lx = cx + (R + 16) * Math.cos(mid), ly = cy + (R + 16) * Math.sin(mid);
+        const t = el('text', { x: lx, y: ly, 'text-anchor': Math.cos(mid) < 0 ? 'end' : 'start' });
+        t.textContent = p.x + ' (' + Math.round(frac * 100) + '%)';
+        a0 = a1;
+      });
+    } else {
+      // Trục chung cho bar/line: x theo thứ tự điểm của series đầu, y 0→max.
+      const xs = series[0].points.map((p) => String(p.x));
+      const maxY = Math.max(...series.flatMap((s) => s.points.map((p) => p.y)), 0) * 1.1 || 1;
+      const plotW = W - padL - padR, plotH = H - padT - padB;
+      const yAt = (v) => padT + plotH - (v / maxY) * plotH;
+      // Lưới + nhãn y (4 mức).
+      for (let i = 0; i <= 4; i++) {
+        const v = (maxY / 4) * i, y = yAt(v);
+        el('line', { x1: padL, y1: y, x2: W - padR, y2: y, stroke: 'var(--grid)', 'stroke-width': 1 });
+        const t = el('text', { x: padL - 6, y: y + 3, 'text-anchor': 'end' });
+        t.textContent = Math.round(v).toLocaleString('vi-VN');
+      }
+      const slot = plotW / Math.max(xs.length, 1);
+      // Nhãn x (thưa dần khi đông).
+      const step = Math.ceil(xs.length / 8);
+      xs.forEach((x, i) => {
+        if (i % step) return;
+        const t = el('text', { x: padL + slot * (i + 0.5), y: H - 8, 'text-anchor': 'middle' });
+        t.textContent = x;
+      });
+      if (type === 'line') {
+        series.forEach((s, si) => {
+          const d = s.points.map((p, i) =>
+            (i ? 'L' : 'M') + (padL + slot * (i + 0.5)) + ',' + yAt(p.y)).join(' ');
+          el('path', { d, fill: 'none', stroke: PALETTE[si % PALETTE.length], 'stroke-width': 2.5 });
+          s.points.forEach((p, i) =>
+            el('circle', { cx: padL + slot * (i + 0.5), cy: yAt(p.y), r: 3, fill: PALETTE[si % PALETTE.length] }));
+        });
+      } else {
+        const bw = Math.min(28, (slot * 0.7) / series.length);
+        series.forEach((s, si) => {
+          s.points.forEach((p, i) => {
+            const x = padL + slot * (i + 0.5) - (bw * series.length) / 2 + bw * si;
+            el('rect', { x, y: yAt(p.y), width: bw - 2, height: padT + plotH - yAt(p.y),
+              rx: 3, fill: PALETTE[si % PALETTE.length] });
+          });
+        });
+      }
+    }
+  }
+</script>
+</body>
+</html>

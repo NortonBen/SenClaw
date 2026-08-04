@@ -1,0 +1,153 @@
+{
+  "id": "widget-pack",
+  "name": "Widget Pack",
+  "description": "Bộ widget custom hiển thị trong ô chat: đếm ngược, thanh tiến độ, bảng dữ liệu. Agent chèn qua emit_widget kind \"app\".",
+  "icon": "🧩",
+  "runtime": {
+    "kind": "server",
+    "start": "./widget-pack",
+    "healthPath": "/health",
+    "port": 4750
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "skills": [
+    {
+      "name": "widget-pack",
+      "path": "skills/widget-pack",
+      "triggers": [
+        "đếm ngược",
+        "dem nguoc",
+        "countdown",
+        "tiến độ",
+        "tien do",
+        "progress",
+        "phần trăm hoàn thành",
+        "bảng dữ liệu",
+        "bang du lieu"
+      ]
+    }
+  ],
+  "widgets": [
+    {
+      "id": "countdown",
+      "name": "Đếm ngược",
+      "description": "Đồng hồ đếm ngược sống tới một thời điểm (deadline, sự kiện). Param `to` là ngày YYYY-MM-DD hoặc ISO datetime; `label` là tên sự kiện.",
+      "entryUrl": "/widget/countdown.html",
+      "size": "small",
+      "render": "client",
+      "surfaces": ["chat", "dashboard"],
+      "params": {
+        "type": "object",
+        "properties": {
+          "to": { "type": "string", "description": "Thời điểm đích: \"2026-12-31\" hoặc \"2026-12-31T09:00\"" },
+          "label": { "type": "string", "description": "Tên sự kiện hiển thị phía trên" }
+        },
+        "required": ["to"]
+      },
+      "textFallback": "⏳ Đếm ngược {label} tới {to} — xem trên SenClaw Web/Desktop"
+    },
+    {
+      "id": "progress",
+      "name": "Thanh tiến độ",
+      "description": "Thanh tiến độ trực quan cho một chỉ số (công việc hoàn thành, mục tiêu doanh số…). Param `value` và `max` (mặc định 100), `label` mô tả.",
+      "entryUrl": "/widget/progress.html",
+      "size": "small",
+      "render": "client",
+      "surfaces": ["chat", "dashboard"],
+      "params": {
+        "type": "object",
+        "properties": {
+          "value": { "type": "number", "description": "Giá trị hiện tại" },
+          "max": { "type": "number", "description": "Giá trị tối đa (mặc định 100)" },
+          "label": { "type": "string", "description": "Nhãn mô tả chỉ số" }
+        },
+        "required": ["value"]
+      },
+      "textFallback": "📊 {label}: {value}/{max}"
+    },
+    {
+      "id": "chart",
+      "name": "Biểu đồ (SVG)",
+      "description": "Biểu đồ bar/line/pie render SVG trong iframe. Param `data` là chuỗi JSON: rows (mỗi cột số = 1 series), [[nhãn, giá trị], ...], hoặc {labels, values}; `type` bar|line|pie. LƯU Ý: trong chat thường dùng kind builtin `chart` của emit_widget trực tiếp — bản iframe này chủ yếu cho dashboard.",
+      "entryUrl": "/widget/chart.html",
+      "size": "medium",
+      "render": "client",
+      "surfaces": ["chat", "dashboard"],
+      "params": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "string", "description": "JSON: [{\"date\":\"26/07\",\"cao\":37},...] hoặc [[\"A\",10],[\"B\",20]] hoặc {\"labels\":[...],\"values\":[...]}" },
+          "type": { "type": "string", "description": "bar | line | pie (mặc định bar)" },
+          "title": { "type": "string", "description": "Tiêu đề biểu đồ" }
+        },
+        "required": ["data"]
+      },
+      "textFallback": "📊 {title} — xem biểu đồ trên SenClaw Web/Desktop"
+    },
+    {
+      "id": "image",
+      "name": "Ảnh",
+      "description": "Khung xem ảnh trong iframe (fit-khung, bấm mở bản đầy đủ). Param `url` http(s) hoặc data:image; `caption` chú thích. Trong chat thường dùng kind builtin `image` — bản này cho dashboard hoặc khung cố định.",
+      "entryUrl": "/widget/image.html",
+      "size": "medium",
+      "render": "client",
+      "surfaces": ["chat", "dashboard"],
+      "params": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "URL ảnh http(s) hoặc data:image/..." },
+          "caption": { "type": "string", "description": "Chú thích dưới ảnh" },
+          "alt": { "type": "string", "description": "Mô tả thay thế" }
+        },
+        "required": ["url"]
+      },
+      "textFallback": "🖼 {caption} {url}"
+    },
+    {
+      "id": "video",
+      "name": "Video",
+      "description": "Trình phát video HTML5 trong iframe. Param `url` http(s) bắt buộc; `poster`, `caption`, `autoplay`. Trong chat thường dùng kind builtin `video` — bản này cho dashboard hoặc khung phát cao hơn.",
+      "entryUrl": "/widget/video.html",
+      "size": "large",
+      "render": "client",
+      "surfaces": ["chat", "dashboard"],
+      "params": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "URL video http(s) phát được" },
+          "poster": { "type": "string", "description": "Ảnh poster trước khi phát" },
+          "caption": { "type": "string", "description": "Chú thích" },
+          "autoplay": { "type": "boolean", "description": "Tự phát (muted)" }
+        },
+        "required": ["url"]
+      },
+      "textFallback": "🎬 {caption} {url}"
+    },
+    {
+      "id": "table",
+      "name": "Bảng dữ liệu",
+      "description": "Bảng dữ liệu gọn trong chat. Param `rows` là chuỗi JSON: mảng-của-mảng ([[\"A\",1],[\"B\",2]]) hoặc mảng object; `cols` là tên cột cách nhau dấu phẩy; `title` tuỳ chọn.",
+      "entryUrl": "/widget/table.html",
+      "size": "medium",
+      "render": "client",
+      "surfaces": ["chat"],
+      "params": {
+        "type": "object",
+        "properties": {
+          "rows": { "type": "string", "description": "JSON: [[\"Cà phê\", 25000], ...] hoặc [{\"mon\":\"Cà phê\",\"gia\":25000}, ...]" },
+          "cols": { "type": "string", "description": "Tên cột, cách nhau dấu phẩy: \"Món,Giá\"" },
+          "title": { "type": "string", "description": "Tiêu đề bảng" }
+        },
+        "required": ["rows"]
+      },
+      "textFallback": "📋 Bảng {title} — mở SenClaw Web/Desktop để xem"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bảng dữ liệu</title>
+<style>
+  :root { color-scheme: light dark;
+    --fg: #1f2430; --muted: #7a8194; --border: rgba(127,127,127,.25);
+    --head: rgba(127,127,127,.10); --zebra: rgba(127,127,127,.05); }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e8eaf0; --muted: #8a90a3; } }
+  html, body { margin: 0; height: 100%; background: transparent;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); }
+  .wrap { height: 100%; display: flex; flex-direction: column; padding: 10px 12px; box-sizing: border-box; }
+  .title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .scroll { overflow: auto; flex: 1; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th { position: sticky; top: 0; background: var(--head); backdrop-filter: blur(4px);
+    text-align: left; font-weight: 600; color: var(--muted); }
+  th, td { padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tr:nth-child(even) td { background: var(--zebra); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .msg { color: var(--muted); font-size: 12px; padding: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title" id="title" hidden></div>
+  <div class="scroll"><table id="tbl"></table></div>
+</div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const title = q.get('title') || '';
+  if (title) {
+    const el = document.getElementById('title');
+    el.textContent = title;
+    el.hidden = false;
+  }
+
+  const esc = (s) => { const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; };
+  const isNum = (v) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v)));
+  const fmt = (v) => typeof v === 'number' ? v.toLocaleString('vi-VN') : esc(v);
+
+  let rows = [];
+  try { rows = JSON.parse(q.get('rows') || '[]'); } catch (_) { rows = null; }
+
+  const tbl = document.getElementById('tbl');
+  if (!Array.isArray(rows) || rows.length === 0) {
+    tbl.outerHTML = '<div class="msg">' +
+      (rows === null ? 'Tham số `rows` không phải JSON hợp lệ.' : 'Không có dữ liệu.') + '</div>';
+  } else {
+    // Mảng object → cột từ keys; mảng-của-mảng → cột từ `cols` (hoặc ẩn header).
+    let cols, matrix;
+    if (rows.every((r) => r && typeof r === 'object' && !Array.isArray(r))) {
+      cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+      matrix = rows.map((r) => cols.map((c) => r[c] ?? ''));
+    } else {
+      matrix = rows.map((r) => (Array.isArray(r) ? r : [r]));
+      const colParam = (q.get('cols') || '').trim();
+      cols = colParam ? colParam.split(',').map((s) => s.trim()) : null;
+    }
+    let html = '';
+    if (cols) {
+      html += '<thead><tr>' + cols.map((c) => '<th>' + esc(c) + '</th>').join('') + '</tr></thead>';
+    }
+    html += '<tbody>' + matrix.map((r) =>
+      '<tr>' + r.map((v) =>
+        '<td' + (isNum(v) ? ' class="num"' : '') + '>' + fmt(isNum(v) ? Number(v) : v) + '</td>'
+      ).join('') + '</tr>'
+    ).join('') + '</tbody>';
+    tbl.innerHTML = html;
+  }
+</script>
+</body>
+</html>
