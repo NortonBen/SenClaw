@@ -56,7 +56,8 @@ pub fn apply_legacy_rules(raw: &str) -> Result<()> {
         *LEGACY.write().unwrap() = None;
         return Ok(());
     }
-    let doc: LegacyDoc = serde_json::from_str(raw).map_err(|e| anyhow!("legacy_atomic_rules JSON: {e}"))?;
+    let doc: LegacyDoc =
+        serde_json::from_str(raw).map_err(|e| anyhow!("legacy_atomic_rules JSON: {e}"))?;
     if doc.version < 1 {
         return Err(anyhow!("legacy_atomic_rules: cần version >= 1"));
     }
@@ -68,17 +69,29 @@ pub fn apply_legacy_rules(raw: &str) -> Result<()> {
 }
 
 pub fn legacy_loaded() -> bool {
-    LEGACY.read().unwrap().as_ref().map(|d| !d.rules.is_empty()).unwrap_or(false)
+    LEGACY
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|d| !d.rules.is_empty())
+        .unwrap_or(false)
 }
 
 fn steps_for_legacy(type_: &str, action: &FlowAction) -> Result<Vec<FlowAtomic>> {
     let guard = LEGACY.read().unwrap();
-    let doc = guard
-        .as_ref()
-        .ok_or_else(|| anyhow!("legacy atomic rules chưa import — PUT /api/engine/legacy-atomic-rules"))?;
-    let entry = doc.rules.get(type_).ok_or_else(|| anyhow!("legacy_atomic_rules: không có rule {type_:?}"))?;
+    let doc = guard.as_ref().ok_or_else(|| {
+        anyhow!("legacy atomic rules chưa import — PUT /api/engine/legacy-atomic-rules")
+    })?;
+    let entry = doc
+        .rules
+        .get(type_)
+        .ok_or_else(|| anyhow!("legacy_atomic_rules: không có rule {type_:?}"))?;
     if !entry.methods.is_empty() {
-        let mut method = action.config.get("method").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+        let mut method = action
+            .config
+            .get("method")
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or_default();
         if method.is_empty() {
             method = entry.default_method.trim().to_lowercase();
         }
@@ -92,14 +105,23 @@ fn steps_for_legacy(type_: &str, action: &FlowAction) -> Result<Vec<FlowAtomic>>
             .ok_or_else(|| anyhow!("legacy_atomic_rules: method {method:?} không hỗ trợ và không có fallback wheel"))?;
         let mut steps = me.atomics.clone();
         if steps.is_empty() {
-            return Err(anyhow!("legacy_atomic_rules: method {method:?} không có atomics"));
+            return Err(anyhow!(
+                "legacy_atomic_rules: method {method:?} không có atomics"
+            ));
         }
         let cfg_key = entry.configurable_wait_ms_key.trim();
         if !cfg_key.is_empty() {
-            if let Some(v) = action.config.get(cfg_key).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(v) = action
+                .config
+                .get(cfg_key)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
                 for st in steps.iter_mut().rev() {
                     if st.kind.trim().eq_ignore_ascii_case("wait_ms") {
-                        st.params.get_or_insert_with(StrMap::new).insert("ms".into(), v.to_string());
+                        st.params
+                            .get_or_insert_with(StrMap::new)
+                            .insert("ms".into(), v.to_string());
                         break;
                     }
                 }
@@ -116,7 +138,9 @@ fn steps_for_legacy(type_: &str, action: &FlowAction) -> Result<Vec<FlowAtomic>>
 // ============================ atomic kinds ============================
 
 fn p_int(p: &StrMap, key: &str, def: i64) -> i64 {
-    p.get(key).and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(def)
+    p.get(key)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .unwrap_or(def)
 }
 
 fn split_selector_list(p: &StrMap) -> Vec<String> {
@@ -141,7 +165,10 @@ fn split_selector_list(p: &StrMap) -> Vec<String> {
 }
 
 fn resolve_fill_text(account: &TikTokAccount, action: &FlowAction, p: &StrMap) -> Result<String> {
-    let vs = p.get("value_source").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let vs = p
+        .get("value_source")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default();
     match vs.as_str() {
         "literal" => {
             let t = p.get("text").map(|s| s.trim()).unwrap_or("");
@@ -162,20 +189,30 @@ fn resolve_fill_text(account: &TikTokAccount, action: &FlowAction, p: &StrMap) -
             }
             return Ok(account.password.clone());
         }
-        "action_param" | "step_param" => return action_param(action, p.get("param_key").map(|s| s.as_str()).unwrap_or("")),
+        "action_param" | "step_param" => {
+            return action_param(action, p.get("param_key").map(|s| s.as_str()).unwrap_or(""))
+        }
         "" | "auto" => {}
         other => return Err(anyhow!("value_source không hợp lệ: {other:?}")),
     }
     if let Some(t) = p.get("text").map(|s| s.trim()).filter(|s| !s.is_empty()) {
         return Ok(t.to_string());
     }
-    let tf = p.get("text_from").map(|s| s.trim().to_string()).unwrap_or_default();
+    let tf = p
+        .get("text_from")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     match tf.to_lowercase().as_str() {
         "account_username" | "username" => Ok(account.username.clone()),
         "account_password" | "password" => Ok(account.password.clone()),
-        "action_param" | "step_param" => action_param(action, p.get("param_key").map(|s| s.as_str()).unwrap_or("")),
+        "action_param" | "step_param" => {
+            action_param(action, p.get("param_key").map(|s| s.as_str()).unwrap_or(""))
+        }
         _ => {
-            if let Some(k) = tf.strip_prefix("param:").or_else(|| tf.strip_prefix("PARAM:")) {
+            if let Some(k) = tf
+                .strip_prefix("param:")
+                .or_else(|| tf.strip_prefix("PARAM:"))
+            {
                 action_param(action, k.trim())
             } else {
                 Err(anyhow!("cần value_source/text/text_from"))
@@ -201,44 +238,83 @@ fn resolve_goto_url(action: &FlowAction, p: &StrMap) -> Result<String> {
     if let Some(u) = p.get("url").map(|s| s.trim()).filter(|s| !s.is_empty()) {
         return Ok(u.to_string());
     }
-    let us = p.get("url_source").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let us = p
+        .get("url_source")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default();
     if us == "action_param" || us == "step_param" {
-        return action_param(action, p.get("url_param_key").map(|s| s.as_str()).unwrap_or(""));
+        return action_param(
+            action,
+            p.get("url_param_key").map(|s| s.as_str()).unwrap_or(""),
+        );
     }
-    let uf = p.get("url_from").map(|s| s.trim().to_string()).unwrap_or_default();
-    if let Some(k) = uf.strip_prefix("param:").or_else(|| uf.strip_prefix("PARAM:")) {
+    let uf = p
+        .get("url_from")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if let Some(k) = uf
+        .strip_prefix("param:")
+        .or_else(|| uf.strip_prefix("PARAM:"))
+    {
         return action_param(action, k.trim());
     }
-    Err(anyhow!("goto: cần url hoặc url_source=action_param + url_param_key"))
+    Err(anyhow!(
+        "goto: cần url hoặc url_source=action_param + url_param_key"
+    ))
 }
 
-async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAction, kind: &str, p: &StrMap) -> Result<()> {
+async fn run_atomic(
+    page: &dyn PageOps,
+    account: &TikTokAccount,
+    action: &FlowAction,
+    kind: &str,
+    p: &StrMap,
+) -> Result<()> {
     match kind {
         "click" => {
             let sels = split_selector_list(p);
             if sels.is_empty() {
                 return Err(anyhow!("click: cần selector hoặc selectors"));
             }
-            page.click_selectors(&sels, p_int(p, "timeout_ms", 20000) as u64).await
+            page.click_selectors(&sels, p_int(p, "timeout_ms", 20000) as u64)
+                .await
         }
         "click_unless_contains" => {
             let sels = split_selector_list(p);
             if sels.is_empty() {
                 return Err(anyhow!("click_unless_contains: cần selector"));
             }
-            let raw = p.get("unless_substrings").or_else(|| p.get("skip_if_contains")).map(|s| s.trim()).unwrap_or("");
+            let raw = p
+                .get("unless_substrings")
+                .or_else(|| p.get("skip_if_contains"))
+                .map(|s| s.trim())
+                .unwrap_or("");
             if raw.is_empty() {
                 return Err(anyhow!("click_unless_contains: need unless_substrings"));
             }
-            let needles: Vec<String> = raw.split('\n').map(|l| l.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
-            let txt = page.inner_text(&sels[0]).await.unwrap_or_default().to_lowercase();
+            let needles: Vec<String> = raw
+                .split('\n')
+                .map(|l| l.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let txt = page
+                .inner_text(&sels[0])
+                .await
+                .unwrap_or_default()
+                .to_lowercase();
             if needles.iter().any(|n| !n.is_empty() && txt.contains(n)) {
                 return Ok(());
             }
-            page.click_selectors(&sels, p_int(p, "timeout_ms", 20000) as u64).await
+            page.click_selectors(&sels, p_int(p, "timeout_ms", 20000) as u64)
+                .await
         }
         "click_button_text" => {
-            let text = p.get("text").or_else(|| p.get("name")).or_else(|| p.get("button_text")).map(|s| s.trim()).unwrap_or("");
+            let text = p
+                .get("text")
+                .or_else(|| p.get("name"))
+                .or_else(|| p.get("button_text"))
+                .map(|s| s.trim())
+                .unwrap_or("");
             if text.is_empty() {
                 return Err(anyhow!("click_button_text: cần text/name/button_text"));
             }
@@ -246,8 +322,12 @@ async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
                 .get("base_selector")
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| r#"button, [role="button"], input[type="button"], input[type="submit"], a"#.to_string());
-            page.click_by_text(&base, text, p_int(p, "timeout_ms", 20000) as u64).await
+                .unwrap_or_else(|| {
+                    r#"button, [role="button"], input[type="button"], input[type="submit"], a"#
+                        .to_string()
+                });
+            page.click_by_text(&base, text, p_int(p, "timeout_ms", 20000) as u64)
+                .await
         }
         "fill" => {
             let sel = p
@@ -257,7 +337,8 @@ async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
                 .or_else(|| split_selector_list(p).into_iter().next())
                 .ok_or_else(|| anyhow!("fill: cần selector"))?;
             let text = resolve_fill_text(account, action, p)?;
-            page.fill(&sel, &text, p_int(p, "timeout_ms", 20000) as u64).await
+            page.fill(&sel, &text, p_int(p, "timeout_ms", 20000) as u64)
+                .await
         }
         "press" => {
             let key = p.get("key").map(|s| s.trim()).unwrap_or("");
@@ -266,7 +347,9 @@ async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
             }
             let sels = split_selector_list(p);
             if !sels.is_empty() {
-                page.click_selectors(&sels, p_int(p, "timeout_ms", 15000) as u64).await.ok();
+                page.click_selectors(&sels, p_int(p, "timeout_ms", 15000) as u64)
+                    .await
+                    .ok();
             }
             page.press_key(key).await
         }
@@ -285,7 +368,12 @@ async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
         }
         "goto" => {
             let url = resolve_goto_url(action, p)?;
-            page.goto(&url, p.get("wait_until").map(|s| s.as_str()).unwrap_or(""), p_int(p, "timeout_ms", 45000) as u64).await
+            page.goto(
+                &url,
+                p.get("wait_until").map(|s| s.as_str()).unwrap_or(""),
+                p_int(p, "timeout_ms", 45000) as u64,
+            )
+            .await
         }
         "scroll" => {
             let dx = p_int(p, "delta_x", 0) as f64;
@@ -304,7 +392,9 @@ async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
                     return Ok(());
                 }
             }
-            let js = format!(r#"(() => {{ window.scrollBy({{left:{dx}, top:{dy}, behavior:'instant'}}); return true; }})()"#);
+            let js = format!(
+                r#"(() => {{ window.scrollBy({{left:{dx}, top:{dy}, behavior:'instant'}}); return true; }})()"#
+            );
             page.eval_bool(&js).await;
             Ok(())
         }
@@ -314,7 +404,11 @@ async fn run_atomic(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
 }
 
 async fn eval_assert(page: &dyn PageOps, p: &StrMap) -> Result<()> {
-    let ex = p.get("expect").map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).unwrap_or_else(|| "visible".into());
+    let ex = p
+        .get("expect")
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "visible".into());
     let timeout = p_int(p, "timeout_ms", 10000) as u64;
     match ex.as_str() {
         "visible" => {
@@ -354,19 +448,36 @@ async fn eval_assert(page: &dyn PageOps, p: &StrMap) -> Result<()> {
             poll_url(page, timeout, |u| u.contains(sub)).await
         }
         "url_regex" => {
-            let pat = p.get("pattern").or_else(|| p.get("value")).map(|s| s.trim()).unwrap_or("");
+            let pat = p
+                .get("pattern")
+                .or_else(|| p.get("value"))
+                .map(|s| s.trim())
+                .unwrap_or("");
             let re = regex::Regex::new(pat).map_err(|e| anyhow!("assert url_regex: {e}"))?;
             poll_url(page, timeout, |u| re.is_match(u)).await
         }
         "text_contains" => {
-            let needle = p.get("value").or_else(|| p.get("text")).map(|s| s.trim().to_string()).unwrap_or_default();
+            let needle = p
+                .get("value")
+                .or_else(|| p.get("text"))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
             if needle.is_empty() {
                 return Err(anyhow!("assert text_contains: cần value/text"));
             }
-            let sel = p.get("selector").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "body".into());
+            let sel = p
+                .get("selector")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "body".into());
             let deadline = std::time::Instant::now() + Duration::from_millis(timeout);
             loop {
-                if page.inner_text(&sel).await.unwrap_or_default().contains(&needle) {
+                if page
+                    .inner_text(&sel)
+                    .await
+                    .unwrap_or_default()
+                    .contains(&needle)
+                {
                     return Ok(());
                 }
                 if std::time::Instant::now() >= deadline {
@@ -392,7 +503,12 @@ async fn poll_url(page: &dyn PageOps, timeout_ms: u64, pred: impl Fn(&str) -> bo
     }
 }
 
-async fn run_atomics(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAction, steps: &[FlowAtomic]) -> Result<()> {
+async fn run_atomics(
+    page: &dyn PageOps,
+    account: &TikTokAccount,
+    action: &FlowAction,
+    steps: &[FlowAtomic],
+) -> Result<()> {
     for (i, step) in steps.iter().enumerate() {
         let kind = step.kind.trim();
         if kind.is_empty() {
@@ -462,40 +578,76 @@ async fn dispatch(
 ) -> Result<()> {
     let cfg = &action.config;
     match action.type_.as_str() {
-        "open_home" => page.goto("https://www.tiktok.com/", "domcontentloaded", 60000).await.map_err(|e| anyhow!("open_home: {e}")),
+        "open_home" => page
+            .goto("https://www.tiktok.com/", "domcontentloaded", 60000)
+            .await
+            .map_err(|e| anyhow!("open_home: {e}")),
         "open_url" => {
             let raw = cfg.get("url").map(|s| s.trim()).unwrap_or("");
             if raw.is_empty() {
                 return Err(anyhow!("open_url: thiếu config url"));
             }
-            let u = url::Url::parse(raw).map_err(|_| anyhow!("open_url: url không hợp lệ {raw:?}"))?;
+            let u =
+                url::Url::parse(raw).map_err(|_| anyhow!("open_url: url không hợp lệ {raw:?}"))?;
             if u.scheme() != "http" && u.scheme() != "https" {
                 return Err(anyhow!("open_url: chỉ hỗ trợ http/https"));
             }
-            let to = cfg.get("timeout_ms").and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or(60000);
-            page.goto(raw, cfg.get("wait_until").map(|s| s.as_str()).unwrap_or(""), to).await.map_err(|e| anyhow!("open_url: {e}"))
+            let to = cfg
+                .get("timeout_ms")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(60000);
+            page.goto(
+                raw,
+                cfg.get("wait_until").map(|s| s.as_str()).unwrap_or(""),
+                to,
+            )
+            .await
+            .map_err(|e| anyhow!("open_url: {e}"))
         }
         "search" => {
-            let q = cfg.get("query").or_else(|| cfg.get("keyword")).map(|s| s.trim()).unwrap_or("");
+            let q = cfg
+                .get("query")
+                .or_else(|| cfg.get("keyword"))
+                .map(|s| s.trim())
+                .unwrap_or("");
             if q.is_empty() {
                 return Err(anyhow!("search: thiếu config query hoặc keyword"));
             }
             let u = format!("https://www.tiktok.com/search?q={}", urlencoding(q));
-            page.goto(&u, "domcontentloaded", 60000).await.map_err(|e| anyhow!("search: {e}"))
+            page.goto(&u, "domcontentloaded", 60000)
+                .await
+                .map_err(|e| anyhow!("search: {e}"))
         }
         "wait_page_ready" => {
-            let to = cfg.get("timeout_ms").and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or(30000);
+            let to = cfg
+                .get("timeout_ms")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(30000);
             page.wait_ms(to.min(1500)).await;
             Ok(())
         }
         "watch_video" => {
-            let ms = cfg.get("duration_ms").and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or_else(|| 3000 + rand::thread_rng().gen_range(0..5000));
+            let ms = cfg
+                .get("duration_ms")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or_else(|| 3000 + rand::thread_rng().gen_range(0..5000));
             page.wait_ms(ms).await;
             Ok(())
         }
         "random_delay" => {
-            let min = cfg.get("min_ms").and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or(800);
-            let max = cfg.get("max_ms").and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > min).unwrap_or(2500);
+            let min = cfg
+                .get("min_ms")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(800);
+            let max = cfg
+                .get("max_ms")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > min)
+                .unwrap_or(2500);
             page.human_pause(min, max).await;
             Ok(())
         }
@@ -513,7 +665,10 @@ async fn dispatch(
             }
         }
         "if_condition" => {
-            let ex = cfg.get("expect").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            let ex = cfg
+                .get("expect")
+                .map(|s| s.trim().to_lowercase())
+                .unwrap_or_default();
             match ex.as_str() {
                 "always_true" => {
                     rs.add_step_extra("result", "true");
@@ -526,7 +681,9 @@ async fn dispatch(
                     Err(anyhow!("if_condition: expect=always_false"))
                 }
                 _ => {
-                    eval_assert(page, cfg).await.map_err(|e| anyhow!("if_condition: {e}"))?;
+                    eval_assert(page, cfg)
+                        .await
+                        .map_err(|e| anyhow!("if_condition: {e}"))?;
                     rs.add_step_extra("result", "true");
                     rs.add_step_extra("expect", if ex.is_empty() { "visible" } else { &ex });
                     Ok(())
@@ -547,7 +704,11 @@ async fn dispatch(
         "check_scroll_end" => check_scroll_end(page, rs, cfg).await,
         "like_video" | "follow_user" | "next_video_post" => {
             let steps = steps_for_legacy(&action.type_, action)?;
-            log(&format!("[PWX] legacy {} steps={}", action.type_, steps.len()));
+            log(&format!(
+                "[PWX] legacy {} steps={}",
+                action.type_,
+                steps.len()
+            ));
             run_atomics(page, account, action, &steps).await
         }
         "playwright_atomics" => {
@@ -573,9 +734,15 @@ fn steps_from_action(action: &FlowAction) -> Result<Vec<FlowAtomic>> {
     if !action.atomics.is_empty() {
         return Ok(action.atomics.clone());
     }
-    let raw = action.config.get("atomics_json").map(|s| s.trim()).unwrap_or("");
+    let raw = action
+        .config
+        .get("atomics_json")
+        .map(|s| s.trim())
+        .unwrap_or("");
     if raw.is_empty() {
-        return Err(anyhow!("playwright_atomics: thiếu atomics hoặc config atomics_json"));
+        return Err(anyhow!(
+            "playwright_atomics: thiếu atomics hoặc config atomics_json"
+        ));
     }
     serde_json::from_str(raw).map_err(|e| anyhow!("atomics_json: {e}"))
 }
@@ -597,73 +764,151 @@ fn urlencoding(s: &str) -> String {
 
 async fn open_comment_panel(page: &dyn PageOps) -> Result<()> {
     page.click_selectors(
-        &sv(&[r#"[data-e2e="comment-icon"]"#, r#"[data-e2e="browse-comment"]"#, r#"button[aria-label*="Comment" i]"#]),
+        &sv(&[
+            r#"[data-e2e="comment-icon"]"#,
+            r#"[data-e2e="browse-comment"]"#,
+            r#"button[aria-label*="Comment" i]"#,
+        ]),
         8000,
     )
     .await
 }
 
-async fn social_comment(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAction) -> Result<()> {
+async fn social_comment(
+    page: &dyn PageOps,
+    account: &TikTokAccount,
+    action: &FlowAction,
+) -> Result<()> {
     let text = action.config.get("text").map(|s| s.trim()).unwrap_or("");
     if text.is_empty() {
-        return Err(anyhow!("comment text is empty for account {}", account.username));
+        return Err(anyhow!(
+            "comment text is empty for account {}",
+            account.username
+        ));
     }
-    open_comment_panel(page).await.map_err(|e| anyhow!("comment_video mở panel: {e}"))?;
+    open_comment_panel(page)
+        .await
+        .map_err(|e| anyhow!("comment_video mở panel: {e}"))?;
     page.human_pause(300, 700).await;
     let boxes = sv(COMMENT_BOX_SELECTORS);
     page.click_selectors_optional(&boxes, 5000).await;
     page.human_pause(200, 400).await;
-    page.type_text(text).await.map_err(|e| anyhow!("comment_video gõ nội dung: {e}"))?;
+    page.type_text(text)
+        .await
+        .map_err(|e| anyhow!("comment_video gõ nội dung: {e}"))?;
     page.human_pause(200, 350).await;
     page.press_key("Enter").await.ok();
     Ok(())
 }
 
 async fn social_share(page: &dyn PageOps, action: &FlowAction) -> Result<()> {
-    let mode = action.config.get("share_mode").map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).unwrap_or_else(|| "copy_link".into());
-    page.click_selectors(&sv(&[r#"[data-e2e="share-icon"]"#, r#"[data-e2e="browse-share"]"#, r#"button[aria-label*="Share" i]"#]), 8000)
-        .await
-        .map_err(|e| anyhow!("share_video mở menu: {e}"))?;
+    let mode = action
+        .config
+        .get("share_mode")
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "copy_link".into());
+    page.click_selectors(
+        &sv(&[
+            r#"[data-e2e="share-icon"]"#,
+            r#"[data-e2e="browse-share"]"#,
+            r#"button[aria-label*="Share" i]"#,
+        ]),
+        8000,
+    )
+    .await
+    .map_err(|e| anyhow!("share_video mở menu: {e}"))?;
     page.human_pause(400, 800).await;
     let base = r#"button, div, span, [role="menuitem"]"#;
     match mode.as_str() {
-        "copy_link" | "copy" | "link" => page.click_by_text(base, "Copy link", 6000).await.map_err(|e| anyhow!("share_video copy link: {e}")),
-        "repost" | "re-post" => page.click_by_text(base, "Repost", 6000).await.map_err(|e| anyhow!("share_video repost: {e}")),
-        "messages" | "message" | "dm" => page.click_by_text(base, "Send to friends", 6000).await.or(page.click_by_text(base, "Message", 6000).await).map_err(|e| anyhow!("share_video messages: {e}")),
+        "copy_link" | "copy" | "link" => page
+            .click_by_text(base, "Copy link", 6000)
+            .await
+            .map_err(|e| anyhow!("share_video copy link: {e}")),
+        "repost" | "re-post" => page
+            .click_by_text(base, "Repost", 6000)
+            .await
+            .map_err(|e| anyhow!("share_video repost: {e}")),
+        "messages" | "message" | "dm" => page
+            .click_by_text(base, "Send to friends", 6000)
+            .await
+            .or(page.click_by_text(base, "Message", 6000).await)
+            .map_err(|e| anyhow!("share_video messages: {e}")),
         other => Err(anyhow!("share_video: share_mode không hỗ trợ: {other:?}")),
     }
 }
 
-async fn social_reply(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAction) -> Result<()> {
+async fn social_reply(
+    page: &dyn PageOps,
+    account: &TikTokAccount,
+    action: &FlowAction,
+) -> Result<()> {
     let text = action.config.get("text").map(|s| s.trim()).unwrap_or("");
     if text.is_empty() {
-        return Err(anyhow!("reply_comment: thiếu config text (account {})", account.username));
+        return Err(anyhow!(
+            "reply_comment: thiếu config text (account {})",
+            account.username
+        ));
     }
-    open_comment_panel(page).await.map_err(|e| anyhow!("reply_comment mở panel: {e}"))?;
+    open_comment_panel(page)
+        .await
+        .map_err(|e| anyhow!("reply_comment mở panel: {e}"))?;
     page.human_pause(400, 900).await;
     // Click the Reply button on the target comment row (by index or default first).
-    let idx = action.config.get("comment_index").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
-    let sel = format!(r#"[data-e2e="comment-level-1"]:nth-of-type({}) button"#, idx + 1);
+    let idx = action
+        .config
+        .get("comment_index")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let sel = format!(
+        r#"[data-e2e="comment-level-1"]:nth-of-type({}) button"#,
+        idx + 1
+    );
     if page.click_by_text(&sel, "Reply", 6000).await.is_err() {
-        page.click_by_text(r#"[data-e2e="comment-level-1"] button"#, "Reply", 6000).await.map_err(|e| anyhow!("reply_comment bấm Reply: {e}"))?;
+        page.click_by_text(r#"[data-e2e="comment-level-1"] button"#, "Reply", 6000)
+            .await
+            .map_err(|e| anyhow!("reply_comment bấm Reply: {e}"))?;
     }
     page.human_pause(250, 500).await;
-    page.type_text(text).await.map_err(|e| anyhow!("reply_comment gõ: {e}"))?;
+    page.type_text(text)
+        .await
+        .map_err(|e| anyhow!("reply_comment gõ: {e}"))?;
     page.human_pause(150, 300).await;
     page.press_key("Enter").await.ok();
     Ok(())
 }
 
-async fn auth_login(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAction, log: &LogFn) -> Result<()> {
+async fn auth_login(
+    page: &dyn PageOps,
+    account: &TikTokAccount,
+    action: &FlowAction,
+    log: &LogFn,
+) -> Result<()> {
     if is_logged_in(page).await {
         return Ok(());
     }
-    let user = action.config.get("username").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(account.username.trim());
-    let pass = action.config.get("password").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(account.password.trim());
+    let user = action
+        .config
+        .get("username")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(account.username.trim());
+    let pass = action
+        .config
+        .get("password")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(account.password.trim());
     if user.is_empty() || pass.is_empty() {
         return Err(anyhow!("login: thiếu username/password"));
     }
-    page.goto("https://www.tiktok.com/login/phone-or-email/email", "domcontentloaded", 45000).await.ok();
+    page.goto(
+        "https://www.tiktok.com/login/phone-or-email/email",
+        "domcontentloaded",
+        45000,
+    )
+    .await
+    .ok();
     page.human_pause(500, 1000).await;
     let user_sels = sv(&[
         r#"form input[name="username"]"#,
@@ -677,17 +922,30 @@ async fn auth_login(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAc
         r#"input[type="password"]"#,
         r#"input[placeholder*="Password" i]"#,
     ]);
-    if page.find_first_visible(&user_sels, 20000).await.is_none() || page.find_first_visible(&pass_sels, 5000).await.is_none() {
+    if page.find_first_visible(&user_sels, 20000).await.is_none()
+        || page.find_first_visible(&pass_sels, 5000).await.is_none()
+    {
         return Err(anyhow!("login: không tìm thấy input (có thể QR/captcha/2FA). hãy đăng nhập thủ công 1 lần trong profile"));
     }
     let user_sel = page.find_first_visible(&user_sels, 5000).await.unwrap();
-    page.fill(&user_sel, user, 10000).await.map_err(|e| anyhow!("login: không nhập được username: {e}"))?;
+    page.fill(&user_sel, user, 10000)
+        .await
+        .map_err(|e| anyhow!("login: không nhập được username: {e}"))?;
     page.wait_ms(800).await;
     let pass_sel = page.find_first_visible(&pass_sels, 5000).await.unwrap();
-    page.fill(&pass_sel, pass, 10000).await.map_err(|e| anyhow!("login: không nhập được password: {e}"))?;
+    page.fill(&pass_sel, pass, 10000)
+        .await
+        .map_err(|e| anyhow!("login: không nhập được password: {e}"))?;
     log(&"[PWX] login credentials filled".to_string());
     page.human_pause(600, 1000).await;
-    page.click_selectors_optional(&sv(&[r#"form button[data-e2e="login-button"]"#, r#"form button[type="submit"]"#]), 8000).await;
+    page.click_selectors_optional(
+        &sv(&[
+            r#"form button[data-e2e="login-button"]"#,
+            r#"form button[type="submit"]"#,
+        ]),
+        8000,
+    )
+    .await;
     page.press_key("Enter").await.ok();
 
     // Verify within ~30s.
@@ -706,7 +964,11 @@ async fn check_scroll_end(page: &dyn PageOps, rs: &RunState, cfg: &StrMap) -> Re
     if selector.is_empty() {
         return Err(anyhow!("check_scroll_end: missing selector"));
     }
-    let tol = cfg.get("tolerance_px").and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| *n >= 0.0).unwrap_or(1.0);
+    let tol = cfg
+        .get("tolerance_px")
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|n| *n >= 0.0)
+        .unwrap_or(1.0);
     let sel_j = serde_json::to_string(selector).unwrap();
     let js = format!(
         r#"(() => {{ const el = document.querySelector({sel_j}); if(!el) return {{ok:false}}; const top=Number(el.scrollTop||0), client=Number(el.clientHeight||0), scroll=Number(el.scrollHeight||0); return {{ok:true, at_end:(top+client)>=(scroll-{tol}), top, client, scroll}}; }})()"#
@@ -716,9 +978,21 @@ async fn check_scroll_end(page: &dyn PageOps, rs: &RunState, cfg: &StrMap) -> Re
         return Err(anyhow!("check_scroll_end: element_not_found"));
     }
     let at_end = v.get("at_end").and_then(Value::as_bool).unwrap_or(false);
-    let out_key = cfg.get("output_param_key").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("is_scroll_end");
-    let v_true = cfg.get("value_true").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("true");
-    let v_false = cfg.get("value_false").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("false");
+    let out_key = cfg
+        .get("output_param_key")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("is_scroll_end");
+    let v_true = cfg
+        .get("value_true")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("true");
+    let v_false = cfg
+        .get("value_false")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("false");
     let out_val = if at_end { v_true } else { v_false };
     let mut patch = StrMap::new();
     patch.insert(out_key.to_string(), out_val.to_string());
@@ -739,12 +1013,30 @@ async fn scrape_post_caption(page: &dyn PageOps) -> String {
     }
 }
 
-async fn ai_gent_comment(page: &dyn PageOps, rs: &RunState, action: &FlowAction, bridge: &Bridge, log: &LogFn) -> Result<()> {
+async fn ai_gent_comment(
+    page: &dyn PageOps,
+    rs: &RunState,
+    action: &FlowAction,
+    bridge: &Bridge,
+    log: &LogFn,
+) -> Result<()> {
     let cfg = &action.config;
-    let out_key = cfg.get("output_param_key").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("comment_text");
+    let out_key = cfg
+        .get("output_param_key")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("comment_text");
     // If a candidate list is provided, pick one at random (no LLM needed).
-    if let Some(list) = cfg.get("candidates").map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let items: Vec<&str> = list.split('\n').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if let Some(list) = cfg
+        .get("candidates")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let items: Vec<&str> = list
+            .split('\n')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
         if !items.is_empty() {
             let pick = items[rand::thread_rng().gen_range(0..items.len())].to_string();
             store_comment(rs, out_key, &pick);
@@ -753,13 +1045,22 @@ async fn ai_gent_comment(page: &dyn PageOps, rs: &RunState, action: &FlowAction,
         }
     }
     let caption = scrape_post_caption(page).await;
-    let style = cfg.get("style").or_else(|| cfg.get("instruction")).map(|s| s.trim()).unwrap_or("thân thiện, tự nhiên, ngắn");
+    let style = cfg
+        .get("style")
+        .or_else(|| cfg.get("instruction"))
+        .map(|s| s.trim())
+        .unwrap_or("thân thiện, tự nhiên, ngắn");
     let user = format!(
         "Viết MỘT bình luận TikTok bằng tiếng Việt ({style}). Không hashtag trừ khi tự nhiên. Chỉ trả về nội dung bình luận.\nCaption video: {}",
         if caption.is_empty() { "(không đọc được)" } else { &caption }
     );
     let reply = bridge
-        .llm("Bạn viết bình luận mạng xã hội ngắn, tự nhiên, an toàn.", &user, 120, Duration::from_secs(60))
+        .llm(
+            "Bạn viết bình luận mạng xã hội ngắn, tự nhiên, an toàn.",
+            &user,
+            120,
+            Duration::from_secs(60),
+        )
         .await?;
     let comment = reply.text.trim().trim_matches('"').to_string();
     if comment.is_empty() {
@@ -806,28 +1107,62 @@ async fn get_info_post(page: &dyn PageOps, rs: &RunState) -> Result<()> {
 }
 
 async fn get_comments_in_page(page: &dyn PageOps, rs: &RunState, cfg: &StrMap) -> Result<()> {
-    let limit = cfg.get("limit").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(20).min(100);
+    let limit = cfg
+        .get("limit")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(20)
+        .min(100);
     let js = format!(
         r#"(() => {{ const nodes = document.querySelectorAll('[data-e2e="comment-level-1"] [data-e2e="comment-text"], [data-e2e="comment-text"]'); const out=[]; for (const n of nodes) {{ const t=(n.innerText||n.textContent||'').trim(); if(t) out.push(t); if(out.length>={limit}) break; }} return out; }})()"#
     );
     let v = page.eval(&js).await?;
-    let comments: Vec<String> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let comments: Vec<String> = v
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
     rs.add_step_extra("comment_count", &comments.len().to_string());
-    rs.add_step_extra("comments_json", &serde_json::to_string(&comments).unwrap_or_default());
+    rs.add_step_extra(
+        "comments_json",
+        &serde_json::to_string(&comments).unwrap_or_default(),
+    );
     Ok(())
 }
 
-async fn reply_comment_ai(page: &dyn PageOps, account: &TikTokAccount, action: &FlowAction, bridge: &Bridge, log: &LogFn) -> Result<()> {
+async fn reply_comment_ai(
+    page: &dyn PageOps,
+    account: &TikTokAccount,
+    action: &FlowAction,
+    bridge: &Bridge,
+    log: &LogFn,
+) -> Result<()> {
     open_comment_panel(page).await.ok();
     page.human_pause(400, 900).await;
     // Read the first comment text to reply to.
-    let target = page.inner_text(r#"[data-e2e="comment-level-1"] [data-e2e="comment-text"]"#).await.unwrap_or_default();
-    let style = action.config.get("style").map(|s| s.trim()).unwrap_or("thân thiện, ngắn");
+    let target = page
+        .inner_text(r#"[data-e2e="comment-level-1"] [data-e2e="comment-text"]"#)
+        .await
+        .unwrap_or_default();
+    let style = action
+        .config
+        .get("style")
+        .map(|s| s.trim())
+        .unwrap_or("thân thiện, ngắn");
     let user = format!(
         "Viết MỘT câu trả lời TikTok bằng tiếng Việt ({style}) cho bình luận sau. Chỉ trả về nội dung.\nBình luận: {}",
         if target.is_empty() { "(không đọc được)" } else { &target }
     );
-    let reply = bridge.llm("Bạn trả lời bình luận mạng xã hội ngắn, lịch sự.", &user, 120, Duration::from_secs(60)).await?;
+    let reply = bridge
+        .llm(
+            "Bạn trả lời bình luận mạng xã hội ngắn, lịch sự.",
+            &user,
+            120,
+            Duration::from_secs(60),
+        )
+        .await?;
     let text = reply.text.trim().trim_matches('"').to_string();
     if text.is_empty() {
         return Err(anyhow!("reply_comment_ai: LLM trả rỗng"));
@@ -841,20 +1176,47 @@ async fn reply_comment_ai(page: &dyn PageOps, account: &TikTokAccount, action: &
 /// Reduced LLM tool-loop: the model inspects a compact DOM outline and calls
 /// goto / click_text / fill / done. A faithful-enough port of the AI Playwright
 /// Agent for the common "reach a goal" case.
-async fn ai_playwright_agent(page: &dyn PageOps, action: &FlowAction, bridge: &Bridge, log: &LogFn) -> Result<()> {
-    let goal = action.config.get("goal").or_else(|| action.config.get("instruction")).map(|s| s.trim()).unwrap_or("");
+async fn ai_playwright_agent(
+    page: &dyn PageOps,
+    action: &FlowAction,
+    bridge: &Bridge,
+    log: &LogFn,
+) -> Result<()> {
+    let goal = action
+        .config
+        .get("goal")
+        .or_else(|| action.config.get("instruction"))
+        .map(|s| s.trim())
+        .unwrap_or("");
     if goal.is_empty() {
         return Err(anyhow!("ai_playwright_agent: thiếu goal/instruction"));
     }
-    let max_steps = action.config.get("max_steps").and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(8).min(20);
+    let max_steps = action
+        .config
+        .get("max_steps")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(8)
+        .min(20);
     let system = "Bạn điều khiển trình duyệt để hoàn thành mục tiêu trên TikTok. Mỗi lượt trả về DUY NHẤT một JSON: {\"tool\":\"goto|click_text|fill|done\",\"url\":\"\",\"text\":\"\",\"selector\":\"\",\"reason\":\"\"}. Dùng click_text để bấm nút chứa 'text'. done khi đạt mục tiêu.";
     for step in 0..max_steps {
         let outline = dom_outline(page).await;
-        let user = format!("Mục tiêu: {goal}\nURL hiện tại: {}\nDOM (rút gọn):\n{}\n\nHành động tiếp theo (JSON):", page.url().await, outline);
-        let reply = bridge.llm(system, &user, 300, Duration::from_secs(60)).await?;
-        let obj = crate::ai::extract_json_object(&reply.text).ok_or_else(|| anyhow!("ai_playwright_agent: LLM không trả JSON"))?;
+        let user = format!(
+            "Mục tiêu: {goal}\nURL hiện tại: {}\nDOM (rút gọn):\n{}\n\nHành động tiếp theo (JSON):",
+            page.url().await,
+            outline
+        );
+        let reply = bridge
+            .llm(system, &user, 300, Duration::from_secs(60))
+            .await?;
+        let obj = crate::ai::extract_json_object(&reply.text)
+            .ok_or_else(|| anyhow!("ai_playwright_agent: LLM không trả JSON"))?;
         let tool = obj.get("tool").and_then(Value::as_str).unwrap_or("");
-        log(&format!("[PWX] ai_agent step {}/{} tool={tool}", step + 1, max_steps));
+        log(&format!(
+            "[PWX] ai_agent step {}/{} tool={tool}",
+            step + 1,
+            max_steps
+        ));
         match tool {
             "done" => return Ok(()),
             "goto" => {
@@ -866,7 +1228,9 @@ async fn ai_playwright_agent(page: &dyn PageOps, action: &FlowAction, bridge: &B
             "click_text" => {
                 let t = obj.get("text").and_then(Value::as_str).unwrap_or("");
                 if !t.is_empty() {
-                    page.click_by_text(r#"button, a, [role="button"], div, span"#, t, 6000).await.ok();
+                    page.click_by_text(r#"button, a, [role="button"], div, span"#, t, 6000)
+                        .await
+                        .ok();
                 }
             }
             "fill" => {
@@ -880,7 +1244,9 @@ async fn ai_playwright_agent(page: &dyn PageOps, action: &FlowAction, bridge: &B
         }
         page.human_pause(600, 1200).await;
     }
-    Err(anyhow!("ai_playwright_agent: hết {max_steps} bước mà chưa done"))
+    Err(anyhow!(
+        "ai_playwright_agent: hết {max_steps} bước mà chưa done"
+    ))
 }
 
 async fn dom_outline(page: &dyn PageOps) -> String {

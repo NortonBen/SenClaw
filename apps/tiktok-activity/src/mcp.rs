@@ -23,7 +23,9 @@ pub struct JsonRpcRequest {
     pub params: Option<Value>,
 }
 
-pub async fn mcp_sse(State(state): State<AppState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn mcp_sse(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.mcp_tx.subscribe();
     let stream = async_stream::stream! {
         yield Ok(Event::default().event("endpoint").data("/api/mcp/message".to_string()));
@@ -46,7 +48,10 @@ fn error_result(text: String) -> Value {
     json!({ "isError": true, "content": [{ "type": "text", "text": text }] })
 }
 
-pub async fn mcp_message(State(state): State<AppState>, Json(req): Json<JsonRpcRequest>) -> Json<Value> {
+pub async fn mcp_message(
+    State(state): State<AppState>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Json<Value> {
     let reply = |result: Value| -> Json<Value> {
         let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
         let _ = state.mcp_tx.send(resp.to_string());
@@ -59,7 +64,9 @@ pub async fn mcp_message(State(state): State<AppState>, Json(req): Json<JsonRpcR
             "serverInfo": { "name": SERVER_NAME, "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -176,9 +183,12 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 .get("actions_catalog")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            let page_url = args["page_url"].as_str().unwrap_or("https://www.tiktok.com/");
+            let page_url = args["page_url"]
+                .as_str()
+                .unwrap_or("https://www.tiktok.com/");
             let ctx = format!("Trang mục tiêu: {page_url}\n");
-            match crate::ai::generate_flow_from_catalog(&state.bridge, prompt, &catalog, &ctx).await {
+            match crate::ai::generate_flow_from_catalog(&state.bridge, prompt, &catalog, &ctx).await
+            {
                 Ok(out) => json_result(serde_json::to_value(out).unwrap_or_default()),
                 Err(e) => error_result(e.to_string()),
             }

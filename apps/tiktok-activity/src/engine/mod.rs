@@ -33,7 +33,13 @@ pub type Cancel = Arc<AtomicBool>;
 #[async_trait]
 pub trait BrowserDriver: Send + Sync {
     async fn before_run(&self, account: &TikTokAccount, log: &LogFn) -> Result<()>;
-    async fn execute(&self, rs: &RunState, account: &TikTokAccount, action: &FlowAction, log: &LogFn) -> Result<()>;
+    async fn execute(
+        &self,
+        rs: &RunState,
+        account: &TikTokAccount,
+        action: &FlowAction,
+        log: &LogFn,
+    ) -> Result<()>;
     async fn after_run(&self, account: &TikTokAccount);
 }
 
@@ -49,18 +55,35 @@ impl BrowserDriver for StubDriver {
 
     async fn after_run(&self, _account: &TikTokAccount) {}
 
-    async fn execute(&self, _rs: &RunState, account: &TikTokAccount, action: &FlowAction, _log: &LogFn) -> Result<()> {
+    async fn execute(
+        &self,
+        _rs: &RunState,
+        account: &TikTokAccount,
+        action: &FlowAction,
+        _log: &LogFn,
+    ) -> Result<()> {
         let ms = 250 + rand::thread_rng().gen_range(0..650);
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         match action.type_.as_str() {
             "comment_video" | "reply_comment" => {
                 if action.config_get("text").unwrap_or("").is_empty() {
-                    return Err(anyhow!("comment/reply text is empty for account {}", account.username));
+                    return Err(anyhow!(
+                        "comment/reply text is empty for account {}",
+                        account.username
+                    ));
                 }
             }
             "if_condition" => {
-                match action.config_get("expect").unwrap_or("").trim().to_lowercase().as_str() {
-                    "always_false" => return Err(anyhow!("if_condition: expect=always_false (stub)")),
+                match action
+                    .config_get("expect")
+                    .unwrap_or("")
+                    .trim()
+                    .to_lowercase()
+                    .as_str()
+                {
+                    "always_false" => {
+                        return Err(anyhow!("if_condition: expect=always_false (stub)"))
+                    }
                     _ => return Ok(()),
                 }
             }
@@ -77,10 +100,16 @@ impl BrowserDriver for StubDriver {
                 }
             }
             "run_next_flow" => {
-                if action.config_get("next_flow_id").unwrap_or("").trim().is_empty()
+                if action
+                    .config_get("next_flow_id")
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
                     && action.config_get("flow_id").unwrap_or("").trim().is_empty()
                 {
-                    return Err(anyhow!("run_next_flow: thiếu next_flow_id hoặc flow_id (stub)"));
+                    return Err(anyhow!(
+                        "run_next_flow: thiếu next_flow_id hoặc flow_id (stub)"
+                    ));
                 }
             }
             "ai_playwright_agent" => {
@@ -117,7 +146,11 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(driver: Arc<dyn BrowserDriver>, db: Db) -> Self {
-        Self { driver, db, max_nest: 16 }
+        Self {
+            driver,
+            db,
+            max_nest: 16,
+        }
     }
 
     pub async fn run_flow_with_params(
@@ -130,7 +163,8 @@ impl Runner {
     ) -> Result<()> {
         let rs = RunState::new();
         rs.set_params(run_params);
-        self.run_flow_once(account, flow, &rs, &log, &cancel, false, 0).await
+        self.run_flow_once(account, flow, &rs, &log, &cancel, false, 0)
+            .await
     }
 
     fn run_flow_once<'a>(
@@ -149,13 +183,18 @@ impl Runner {
                     log(&format!("BeforeRun failed: {e}"));
                     return Err(e);
                 }
-                log(&format!("Start run account={} flow={}", account.username, flow.name));
+                log(&format!(
+                    "Start run account={} flow={}",
+                    account.username, flow.name
+                ));
             } else {
                 log(&format!("Nested flow: {} ({})", flow.name, flow.id));
             }
 
             // AfterRun runs once, at the outermost level, regardless of outcome.
-            let result = self.walk(account, flow, rs, log, cancel, nested, nest_depth).await;
+            let result = self
+                .walk(account, flow, rs, log, cancel, nested, nest_depth)
+                .await;
 
             if !nested {
                 self.driver.after_run(account).await;
@@ -180,15 +219,22 @@ impl Runner {
         nest_depth: usize,
     ) -> Result<()> {
         if flow.actions.is_empty() {
-            log(if nested { "Nested flow empty — done" } else { "Run completed" });
+            log(if nested {
+                "Nested flow empty — done"
+            } else {
+                "Run completed"
+            });
             return Ok(());
         }
 
         let groups = group_actions_by_stage(&flow.actions);
         log_stage_plan(&groups, log);
 
-        let actions_by_id: BTreeMap<String, FlowAction> =
-            flow.actions.iter().map(|a| (a.id.clone(), a.clone())).collect();
+        let actions_by_id: BTreeMap<String, FlowAction> = flow
+            .actions
+            .iter()
+            .map(|a| (a.id.clone(), a.clone()))
+            .collect();
 
         let mut stage_first_step: BTreeMap<i32, String> = BTreeMap::new();
         for (i, a) in flow.actions.iter().enumerate() {
@@ -221,7 +267,10 @@ impl Runner {
             let a = rs.resolve_action(raw_action);
             *visit_count.entry(current.clone()).or_insert(0) += 1;
             if visit_count[&current] > max_visits {
-                log(&format!("Flow loop detected(step_id={current}, visits={})", visit_count[&current]));
+                log(&format!(
+                    "Flow loop detected(step_id={current}, visits={})",
+                    visit_count[&current]
+                ));
                 log("Run completed (stopped to avoid loop)");
                 return Ok(());
             }
@@ -283,11 +332,16 @@ impl Runner {
                     let cur = *cnt;
                     if cur <= repeat {
                         let next = branch(&a, true, &actions_by_id, &stage_first_step, stage, log);
-                        log(&format!("[Stage {stage}] LOOP {cur}/{repeat} -> step {next}"));
+                        log(&format!(
+                            "[Stage {stage}] LOOP {cur}/{repeat} -> step {next}"
+                        ));
                         current = next;
                     } else {
                         let next = branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
-                        log(&format!("[Stage {stage}] LOOP done {}/{repeat} -> step {next}", cur - 1));
+                        log(&format!(
+                            "[Stage {stage}] LOOP done {}/{repeat} -> step {next}",
+                            cur - 1
+                        ));
                         current = next;
                     }
                     continue;
@@ -307,35 +361,52 @@ impl Runner {
                     }
                     if should_exit {
                         let next = branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
-                        log(&format!("[Stage {stage}] LOOP_IF exit ({reason}) -> step {next}"));
+                        log(&format!(
+                            "[Stage {stage}] LOOP_IF exit ({reason}) -> step {next}"
+                        ));
                         current = next;
                     } else {
                         let next = branch(&a, true, &actions_by_id, &stage_first_step, stage, log);
-                        log(&format!("[Stage {stage}] LOOP_IF continue ({reason}) -> step {next}"));
+                        log(&format!(
+                            "[Stage {stage}] LOOP_IF continue ({reason}) -> step {next}"
+                        ));
                         current = next;
                     }
                     continue;
                 }
                 "run_next_flow" => {
                     let cfg = rs.resolve_config(&a.config);
-                    let mut next_flow_id = cfg.get("next_flow_id").map(|s| s.trim().to_string()).unwrap_or_default();
+                    let mut next_flow_id = cfg
+                        .get("next_flow_id")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     if next_flow_id.is_empty() {
-                        next_flow_id = cfg.get("flow_id").map(|s| s.trim().to_string()).unwrap_or_default();
+                        next_flow_id = cfg
+                            .get("flow_id")
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
                     }
                     if next_flow_id.is_empty() {
                         return Err(anyhow!("run_next_flow: thiếu next_flow_id hoặc flow_id"));
                     }
                     if next_flow_id == flow.id {
-                        return Err(anyhow!("run_next_flow: không thể gọi chính flow hiện tại ({})", flow.id));
+                        return Err(anyhow!(
+                            "run_next_flow: không thể gọi chính flow hiện tại ({})",
+                            flow.id
+                        ));
                     }
                     if nest_depth >= self.max_nest {
-                        return Err(anyhow!("run_next_flow: vượt quá độ sâu lồng tối đa ({})", self.max_nest));
+                        return Err(anyhow!(
+                            "run_next_flow: vượt quá độ sâu lồng tối đa ({})",
+                            self.max_nest
+                        ));
                     }
                     let child = match self.db.get_flow(&next_flow_id) {
                         Ok(f) => f,
                         Err(e) => {
                             log(&format!("[Stage {stage}] run_next_flow: không tải flow {next_flow_id:?}: {e}"));
-                            let next = branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
+                            let next =
+                                branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
                             if next.is_empty() {
                                 return Err(anyhow!("run_next_flow: {e}"));
                             }
@@ -348,11 +419,20 @@ impl Runner {
                         Arc::new(move |m: &str| l(&format!("[next-flow] {m}")))
                     };
                     let r = self
-                        .run_flow_once(account, &child, rs, &nested_log, cancel, true, nest_depth + 1)
+                        .run_flow_once(
+                            account,
+                            &child,
+                            rs,
+                            &nested_log,
+                            cancel,
+                            true,
+                            nest_depth + 1,
+                        )
                         .await;
                     match r {
                         Ok(()) => {
-                            let next = branch(&a, true, &actions_by_id, &stage_first_step, stage, log);
+                            let next =
+                                branch(&a, true, &actions_by_id, &stage_first_step, stage, log);
                             if !next.is_empty() {
                                 log(&format!("[Stage {stage}] run_next_flow ok -> step {next}"));
                             }
@@ -360,7 +440,8 @@ impl Runner {
                         }
                         Err(e) => {
                             log(&format!("[Stage {stage}] run_next_flow failed: {e}"));
-                            let next = branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
+                            let next =
+                                branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
                             if next.is_empty() {
                                 return Err(e);
                             }
@@ -376,29 +457,48 @@ impl Runner {
                     } else {
                         rs.merge_params(&patch);
                         let keys: Vec<&str> = patch.keys().map(|s| s.as_str()).collect();
-                        log(&format!("[Stage {stage}] set_params updated: {}", keys.join(", ")));
+                        log(&format!(
+                            "[Stage {stage}] set_params updated: {}",
+                            keys.join(", ")
+                        ));
                     }
                     current = branch(&a, true, &actions_by_id, &stage_first_step, stage, log);
                     continue;
                 }
                 "record_post_interaction" => {
                     let cfg = &a.config;
-                    let mut post_key = cfg.get("post_key").map(|s| s.trim().to_string()).unwrap_or_default();
+                    let mut post_key = cfg
+                        .get("post_key")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     if post_key.is_empty() {
-                        post_key = cfg.get("video_id").map(|s| s.trim().to_string()).unwrap_or_default();
+                        post_key = cfg
+                            .get("video_id")
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
                     }
                     if post_key.is_empty() {
-                        return Err(anyhow!("record_post_interaction: thiếu post_key (hoặc video_id)"));
+                        return Err(anyhow!(
+                            "record_post_interaction: thiếu post_key (hoặc video_id)"
+                        ));
                     }
-                    let mut it = cfg.get("interaction").map(|s| s.trim().to_string()).unwrap_or_default();
+                    let mut it = cfg
+                        .get("interaction")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     if it.is_empty() {
-                        it = cfg.get("interaction_type").map(|s| s.trim().to_string()).unwrap_or_default();
+                        it = cfg
+                            .get("interaction_type")
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
                     }
                     if it.is_empty() {
                         it = "interaction".into();
                     }
                     let r = self.db.record_post_interaction(
-                        &account.id, &post_key, &it,
+                        &account.id,
+                        &post_key,
+                        &it,
                         cfg.get("post_url").map(|s| s.as_str()).unwrap_or(""),
                         cfg.get("author_username").map(|s| s.as_str()).unwrap_or(""),
                         cfg.get("extra_json").map(|s| s.as_str()).unwrap_or(""),
@@ -418,19 +518,39 @@ impl Runner {
                 }
                 "record_friend_event" => {
                     let cfg = &a.config;
-                    let ev = normalize_friend_event_type(cfg.get("event").map(|s| s.as_str()).unwrap_or(""));
+                    let ev = normalize_friend_event_type(
+                        cfg.get("event").map(|s| s.as_str()).unwrap_or(""),
+                    );
                     if ev.is_empty() {
                         return Err(anyhow!("record_friend_event: thiếu event (follow|unfollow|friend_add|friend_remove|add|remove)"));
                     }
-                    let mut tu = cfg.get("target_username").map(|s| s.trim().to_string()).unwrap_or_default();
+                    let mut tu = cfg
+                        .get("target_username")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     if tu.is_empty() {
-                        tu = cfg.get("peer_username").map(|s| s.trim().to_string()).unwrap_or_default();
+                        tu = cfg
+                            .get("peer_username")
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
                     }
-                    let mut tid = cfg.get("target_user_id").map(|s| s.trim().to_string()).unwrap_or_default();
+                    let mut tid = cfg
+                        .get("target_user_id")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     if tid.is_empty() {
-                        tid = cfg.get("peer_user_id").map(|s| s.trim().to_string()).unwrap_or_default();
+                        tid = cfg
+                            .get("peer_user_id")
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
                     }
-                    let r = self.db.record_friend_event(&account.id, &tu, &tid, &ev, cfg.get("notes").map(|s| s.as_str()).unwrap_or(""));
+                    let r = self.db.record_friend_event(
+                        &account.id,
+                        &tu,
+                        &tid,
+                        &ev,
+                        cfg.get("notes").map(|s| s.as_str()).unwrap_or(""),
+                    );
                     if let Err(e) = r {
                         log(&format!("[Stage {stage}] record_friend_event lỗi: {e}"));
                         let next = branch(&a, false, &actions_by_id, &stage_first_step, stage, log);
@@ -440,19 +560,34 @@ impl Runner {
                         current = next;
                         continue;
                     }
-                    log(&format!("[Stage {stage}] record_friend_event: account={} event={ev} target={tu}", account.id));
+                    log(&format!(
+                        "[Stage {stage}] record_friend_event: account={} event={ev} target={tu}",
+                        account.id
+                    ));
                     current = branch(&a, true, &actions_by_id, &stage_first_step, stage, log);
                     continue;
                 }
                 "account_meta" => {
                     let cfg = &a.config;
-                    let mut op = cfg.get("operation").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+                    let mut op = cfg
+                        .get("operation")
+                        .map(|s| s.trim().to_lowercase())
+                        .unwrap_or_default();
                     if op.is_empty() {
-                        op = cfg.get("op").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+                        op = cfg
+                            .get("op")
+                            .map(|s| s.trim().to_lowercase())
+                            .unwrap_or_default();
                     }
-                    let mut mk = cfg.get("meta_key").map(|s| s.trim().to_string()).unwrap_or_default();
+                    let mut mk = cfg
+                        .get("meta_key")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     if mk.is_empty() {
-                        mk = cfg.get("key").map(|s| s.trim().to_string()).unwrap_or_default();
+                        mk = cfg
+                            .get("key")
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
                     }
                     if mk.is_empty() {
                         return Err(anyhow!("account_meta: thiếu meta_key (hoặc key)"));
@@ -461,14 +596,25 @@ impl Runner {
                         "delete" | "del" | "remove" | "xoa" => {
                             let r = self.db.delete_account_kv_meta(&account.id, &mk);
                             if r.is_ok() {
-                                log(&format!("[Stage {stage}] account_meta: xóa key {mk:?} cho account {}", account.id));
+                                log(&format!(
+                                    "[Stage {stage}] account_meta: xóa key {mk:?} cho account {}",
+                                    account.id
+                                ));
                             }
                             r
                         }
                         _ => {
-                            let mut mv = cfg.get("meta_value").map(|s| s.as_str()).unwrap_or("").to_string();
+                            let mut mv = cfg
+                                .get("meta_value")
+                                .map(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             if mv.is_empty() {
-                                mv = cfg.get("value").map(|s| s.as_str()).unwrap_or("").to_string();
+                                mv = cfg
+                                    .get("value")
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
                             }
                             let mv = rs.render_for_log(&mv);
                             let r = self.db.upsert_account_kv_meta(&account.id, &mk, &mv);
@@ -580,7 +726,11 @@ fn pick_next_action_id(
 
 fn get_action_stage(a: &FlowAction, fallback: i32) -> i32 {
     match a.config.get("_stage") {
-        Some(raw) if !raw.is_empty() => raw.parse::<i32>().ok().filter(|n| *n > 0).unwrap_or(fallback),
+        Some(raw) if !raw.is_empty() => raw
+            .parse::<i32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(fallback),
         _ => fallback,
     }
 }
@@ -607,10 +757,16 @@ fn group_actions_by_stage(actions: &[FlowAction]) -> Vec<StageGroup> {
     let mut out: Vec<StageGroup> = Vec::new();
     for (k, acts) in stage_map {
         if acts.len() <= max_per_stage {
-            out.push(StageGroup { stage: k, actions: acts });
+            out.push(StageGroup {
+                stage: k,
+                actions: acts,
+            });
         } else {
             for (idx, ch) in acts.chunks(max_per_stage).enumerate() {
-                out.push(StageGroup { stage: k + idx as i32, actions: ch.to_vec() });
+                out.push(StageGroup {
+                    stage: k + idx as i32,
+                    actions: ch.to_vec(),
+                });
             }
         }
     }
@@ -623,8 +779,16 @@ fn log_stage_plan(groups: &[StageGroup], log: &LogFn) {
         return;
     }
     for g in groups {
-        let items: Vec<String> = g.actions.iter().map(|a| format!("{}({})", a.name, a.type_)).collect();
-        log(&format!("[FLOW] Stage {} plan: {}", g.stage, items.join(", ")));
+        let items: Vec<String> = g
+            .actions
+            .iter()
+            .map(|a| format!("{}({})", a.name, a.type_))
+            .collect();
+        log(&format!(
+            "[FLOW] Stage {} plan: {}",
+            g.stage,
+            items.join(", ")
+        ));
     }
     let first = &groups[0];
     let mut has_bootstrap = false;
@@ -632,8 +796,8 @@ fn log_stage_plan(groups: &[StageGroup], log: &LogFn) {
     for a in &first.actions {
         match a.type_.as_str() {
             "open_home" | "open_url" | "search" | "login" => has_bootstrap = true,
-            "watch_video" | "like_video" | "comment_video" | "reply_comment" | "share_video" | "follow_user"
-            | "check_login" => has_risky = true,
+            "watch_video" | "like_video" | "comment_video" | "reply_comment" | "share_video"
+            | "follow_user" | "check_login" => has_risky = true,
             _ => {}
         }
     }
@@ -651,12 +815,25 @@ fn parse_positive_int(raw: &str, def: i32) -> i32 {
 }
 
 fn evaluate_loop_if_exit(rs: &RunState, cfg: &BTreeMap<String, String>) -> (bool, String) {
-    let mut param_key = cfg.get("param_key").map(|s| s.trim().to_string()).unwrap_or_default();
+    let mut param_key = cfg
+        .get("param_key")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     if param_key.is_empty() {
-        param_key = cfg.get("key").map(|s| s.trim().to_string()).unwrap_or_default();
+        param_key = cfg
+            .get("key")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
     }
-    let cur_val = if param_key.is_empty() { String::new() } else { rs.get_param(&param_key).unwrap_or_default() };
-    let mut op = cfg.get("operator").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let cur_val = if param_key.is_empty() {
+        String::new()
+    } else {
+        rs.get_param(&param_key).unwrap_or_default()
+    };
+    let mut op = cfg
+        .get("operator")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default();
     if op.is_empty() {
         op = "equals".into();
     }

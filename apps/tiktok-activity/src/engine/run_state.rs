@@ -123,7 +123,11 @@ impl RunState {
                     return whole.to_string();
                 }
                 if let Some(key) = inner.strip_prefix("prev.") {
-                    return g.last.get(key.trim()).cloned().unwrap_or_else(|| whole.to_string());
+                    return g
+                        .last
+                        .get(key.trim())
+                        .cloned()
+                        .unwrap_or_else(|| whole.to_string());
                 }
                 if let Some(rest) = inner.strip_prefix("step.") {
                     let rest = rest.trim();
@@ -142,10 +146,18 @@ impl RunState {
                     return whole.to_string();
                 }
                 if let Some(key) = inner.strip_prefix("param.") {
-                    return g.params.get(key.trim()).cloned().unwrap_or_else(|| whole.to_string());
+                    return g
+                        .params
+                        .get(key.trim())
+                        .cloned()
+                        .unwrap_or_else(|| whole.to_string());
                 }
                 if let Some(key) = inner.strip_prefix("params.") {
-                    return g.params.get(key.trim()).cloned().unwrap_or_else(|| whole.to_string());
+                    return g
+                        .params
+                        .get(key.trim())
+                        .cloned()
+                        .unwrap_or_else(|| whole.to_string());
                 }
                 whole.to_string()
             })
@@ -153,7 +165,9 @@ impl RunState {
     }
 
     pub fn resolve_config(&self, cfg: &StrMap) -> StrMap {
-        cfg.iter().map(|(k, v)| (k.clone(), self.resolve_value(v))).collect()
+        cfg.iter()
+            .map(|(k, v)| (k.clone(), self.resolve_value(v)))
+            .collect()
     }
 
     pub fn resolve_config_opt(&self, cfg: &Option<StrMap>) -> Option<StrMap> {

@@ -24,11 +24,17 @@ pub struct RunManager {
 
 impl RunManager {
     pub fn new(db: Db, runner: Arc<Runner>) -> Self {
-        Self { db, runner, cancels: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            db,
+            runner,
+            cancels: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn find_account(&self, id: &str) -> Result<TikTokAccount> {
-        self.db.get_account(id).ok_or_else(|| anyhow!("account not found"))
+        self.db
+            .get_account(id)
+            .ok_or_else(|| anyhow!("account not found"))
     }
 
     pub fn start_flow_run(
@@ -92,7 +98,8 @@ impl RunManager {
         let this = self.clone();
         let run_clone = run.clone();
         tokio::spawn(async move {
-            this.execute_run(account, flow, run_clone, StrMap::new()).await;
+            this.execute_run(account, flow, run_clone, StrMap::new())
+                .await;
         });
         Ok(run)
     }
@@ -106,7 +113,13 @@ impl RunManager {
         }
     }
 
-    async fn execute_run(&self, account: TikTokAccount, flow: Flow, mut run: FlowRun, params: StrMap) {
+    async fn execute_run(
+        &self,
+        account: TikTokAccount,
+        flow: Flow,
+        mut run: FlowRun,
+        params: StrMap,
+    ) {
         run.status = RUN_RUNNING.to_string();
         self.db.update_run(&run);
 
@@ -115,7 +128,10 @@ impl RunManager {
         // Shared, mutable run record for the log callback.
         let shared = Arc::new(Mutex::new(run.clone()));
         let cancel: Cancel = Arc::new(AtomicBool::new(false));
-        self.cancels.lock().unwrap().insert(run.id.clone(), cancel.clone());
+        self.cancels
+            .lock()
+            .unwrap()
+            .insert(run.id.clone(), cancel.clone());
 
         let db = self.db.clone();
         let shared_log = shared.clone();
@@ -131,7 +147,10 @@ impl RunManager {
             if let Some(idx) = msg.find("NOTIFY:") {
                 let raw = &msg[idx + "NOTIFY:".len()..];
                 let (title, mut body) = if let Some(sep) = raw.find("||") {
-                    (raw[..sep].trim().to_string(), raw[sep + 2..].trim().to_string())
+                    (
+                        raw[..sep].trim().to_string(),
+                        raw[sep + 2..].trim().to_string(),
+                    )
                 } else {
                     ("Flow Notification".to_string(), raw.trim().to_string())
                 };
@@ -154,8 +173,14 @@ impl RunManager {
         });
 
         // 10-minute wall clock, matching the Go context timeout.
-        let params_opt = if params.is_empty() { None } else { Some(params) };
-        let fut = self.runner.run_flow_with_params(&resolved, &flow, params_opt.as_ref(), log, cancel);
+        let params_opt = if params.is_empty() {
+            None
+        } else {
+            Some(params)
+        };
+        let fut =
+            self.runner
+                .run_flow_with_params(&resolved, &flow, params_opt.as_ref(), log, cancel);
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(600), fut).await;
 
         self.cancels.lock().unwrap().remove(&run.id);
@@ -190,9 +215,16 @@ impl RunManager {
             if !r.account_id.is_empty() && r.account_id != run.account_id {
                 continue;
             }
-            let title = if r.name.is_empty() { event.to_string() } else { r.name.clone() };
+            let title = if r.name.is_empty() {
+                event.to_string()
+            } else {
+                r.name.clone()
+            };
             let body = if r.message_template.trim().is_empty() {
-                format!("Event={event} run={} account={} flow={}", run.id, run.account_id, run.flow_id)
+                format!(
+                    "Event={event} run={} account={} flow={}",
+                    run.id, run.account_id, run.flow_id
+                )
             } else {
                 r.message_template.clone()
             };
@@ -240,7 +272,8 @@ impl RunManager {
         }
         self.db.upsert_schedule(sc.clone());
         for acc in targets {
-            if let Err(e) = self.start_flow_run(acc.clone(), &sc.flow_id, &sc.id, sc.params.clone()) {
+            if let Err(e) = self.start_flow_run(acc.clone(), &sc.flow_id, &sc.id, sc.params.clone())
+            {
                 tracing::warn!("schedule {} account {} start failed: {e}", sc.id, acc.id);
             }
         }
@@ -256,7 +289,10 @@ impl RunManager {
             return Err(anyhow!("schedule has no account targets"));
         }
         let allowed: std::collections::HashSet<&String> = sc.account_ids.iter().collect();
-        let out: Vec<TikTokAccount> = all.into_iter().filter(|a| allowed.contains(&a.id)).collect();
+        let out: Vec<TikTokAccount> = all
+            .into_iter()
+            .filter(|a| allowed.contains(&a.id))
+            .collect();
         if out.is_empty() {
             return Err(anyhow!("no valid account targets"));
         }
@@ -321,7 +357,8 @@ pub fn validate_schedule_input(sc: &Schedule, db: &Db) -> Result<()> {
             if sc.once_at.trim().is_empty() {
                 return Err(anyhow!("onceAt is required"));
             }
-            chrono::DateTime::parse_from_rfc3339(&sc.once_at).map_err(|_| anyhow!("onceAt must be RFC3339"))?;
+            chrono::DateTime::parse_from_rfc3339(&sc.once_at)
+                .map_err(|_| anyhow!("onceAt must be RFC3339"))?;
         }
         _ => return Err(anyhow!("invalid schedule type")),
     }
@@ -333,11 +370,13 @@ pub fn validate_schedule_input(sc: &Schedule, db: &Db) -> Result<()> {
 
 /// Returns (next_run_at RFC3339 or "", keep_enabled).
 pub fn next_run_after(sc: &Schedule, now: chrono::DateTime<chrono::Utc>) -> Result<(String, bool)> {
-    let fmt = |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let fmt =
+        |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     match sc.type_.as_str() {
         SCHEDULE_RUN_NOW => Ok((fmt(now), false)),
         SCHEDULE_ONCE_AT => {
-            let t = chrono::DateTime::parse_from_rfc3339(&sc.once_at).map_err(|_| anyhow!("onceAt must be RFC3339"))?;
+            let t = chrono::DateTime::parse_from_rfc3339(&sc.once_at)
+                .map_err(|_| anyhow!("onceAt must be RFC3339"))?;
             let t = t.with_timezone(&chrono::Utc);
             if t < now {
                 return Err(anyhow!("onceAt must be in the future"));
@@ -349,11 +388,20 @@ pub fn next_run_after(sc: &Schedule, now: chrono::DateTime<chrono::Utc>) -> Resu
             let tz: chrono_tz::Tz = if sc.timezone_id.trim().is_empty() {
                 chrono_tz::UTC
             } else {
-                sc.timezone_id.parse().map_err(|_| anyhow!("invalid timezoneId"))?
+                sc.timezone_id
+                    .parse()
+                    .map_err(|_| anyhow!("invalid timezoneId"))?
             };
             let local_now = now.with_timezone(&tz);
             let mut next = tz
-                .with_ymd_and_hms(local_now.year(), local_now.month(), local_now.day(), h, m, 0)
+                .with_ymd_and_hms(
+                    local_now.year(),
+                    local_now.month(),
+                    local_now.day(),
+                    h,
+                    m,
+                    0,
+                )
                 .single()
                 .ok_or_else(|| anyhow!("invalid local time"))?;
             if next <= local_now {
@@ -370,8 +418,12 @@ fn parse_daily_at(v: &str) -> Result<(u32, u32)> {
     if parts.len() != 2 {
         return Err(anyhow!("dailyAt must be HH:MM"));
     }
-    let h: u32 = parts[0].parse().map_err(|_| anyhow!("dailyAt must be HH:MM"))?;
-    let m: u32 = parts[1].parse().map_err(|_| anyhow!("dailyAt must be HH:MM"))?;
+    let h: u32 = parts[0]
+        .parse()
+        .map_err(|_| anyhow!("dailyAt must be HH:MM"))?;
+    let m: u32 = parts[1]
+        .parse()
+        .map_err(|_| anyhow!("dailyAt must be HH:MM"))?;
     if h > 23 || m > 59 {
         return Err(anyhow!("dailyAt must be HH:MM"));
     }

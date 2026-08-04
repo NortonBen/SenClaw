@@ -71,9 +71,7 @@ impl Db {
         };
         let names = stmt.query_map([], |r| r.get::<_, String>(1));
         match names {
-            Ok(rows) => rows
-                .flatten()
-                .any(|n| n.eq_ignore_ascii_case(col)),
+            Ok(rows) => rows.flatten().any(|n| n.eq_ignore_ascii_case(col)),
             Err(_) => false,
         }
     }
@@ -153,19 +151,34 @@ impl Db {
         // Additive migrations for pre-existing DBs.
         self.with(|c| {
             if !self.column_exists(c, "accounts", "proxy_id") {
-                c.execute("ALTER TABLE accounts ADD COLUMN proxy_id TEXT NOT NULL DEFAULT ''", [])?;
+                c.execute(
+                    "ALTER TABLE accounts ADD COLUMN proxy_id TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             if !self.column_exists(c, "accounts", "browser_profile_id") {
-                c.execute("ALTER TABLE accounts ADD COLUMN browser_profile_id TEXT NOT NULL DEFAULT ''", [])?;
+                c.execute(
+                    "ALTER TABLE accounts ADD COLUMN browser_profile_id TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             if !self.column_exists(c, "flows", "params_json") {
-                c.execute("ALTER TABLE flows ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'", [])?;
+                c.execute(
+                    "ALTER TABLE flows ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'",
+                    [],
+                )?;
             }
             if !self.column_exists(c, "flow_runs", "schedule_id") {
-                c.execute("ALTER TABLE flow_runs ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''", [])?;
+                c.execute(
+                    "ALTER TABLE flow_runs ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             if !self.column_exists(c, "schedules", "params_json") {
-                c.execute("ALTER TABLE schedules ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'", [])?;
+                c.execute(
+                    "ALTER TABLE schedules ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'",
+                    [],
+                )?;
             }
             Ok(())
         })
@@ -235,7 +248,12 @@ impl Db {
         .unwrap_or(None)
     }
 
-    pub fn list_accounts_page(&self, offset: i64, limit: i64, q: &str) -> Result<(Vec<TikTokAccount>, i64)> {
+    pub fn list_accounts_page(
+        &self,
+        offset: i64,
+        limit: i64,
+        q: &str,
+    ) -> Result<(Vec<TikTokAccount>, i64)> {
         let q = q.trim().to_lowercase();
         self.with(|c| {
             let (cond, args) = if q.is_empty() {
@@ -315,7 +333,11 @@ impl Db {
 
     pub fn save_run(&self, run: &FlowRun) {
         let logs = serde_json::to_string(&run.logs).unwrap_or_else(|_| "[]".into());
-        let ended = if run.ended_at.is_empty() { None } else { Some(run.ended_at.clone()) };
+        let ended = if run.ended_at.is_empty() {
+            None
+        } else {
+            Some(run.ended_at.clone())
+        };
         let _ = self.with(|c| {
             c.execute(
                 r#"INSERT INTO flow_runs (id, account_id, flow_id, schedule_id, status, logs_json, started_at, ended_at)
@@ -328,7 +350,11 @@ impl Db {
 
     pub fn update_run(&self, run: &FlowRun) {
         let logs = serde_json::to_string(&run.logs).unwrap_or_else(|_| "[]".into());
-        let ended = if run.ended_at.is_empty() { None } else { Some(run.ended_at.clone()) };
+        let ended = if run.ended_at.is_empty() {
+            None
+        } else {
+            Some(run.ended_at.clone())
+        };
         let _ = self.with(|c| {
             c.execute(
                 r#"UPDATE flow_runs SET account_id=?1, flow_id=?2, schedule_id=?3, status=?4, logs_json=?5, started_at=?6, ended_at=?7 WHERE id=?8"#,
@@ -394,7 +420,11 @@ impl Db {
         let now = chrono::Utc::now();
         let day_keys: Vec<String> = (0..7)
             .rev()
-            .map(|i| (now - chrono::Duration::days(i)).format("%Y-%m-%d").to_string())
+            .map(|i| {
+                (now - chrono::Duration::days(i))
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
             .collect();
         let min_d = day_keys.first().cloned().unwrap_or_default();
         let max_d = day_keys.last().cloned().unwrap_or_default();
@@ -477,7 +507,13 @@ impl Db {
     }
 
     fn map_proxy(r: &rusqlite::Row) -> rusqlite::Result<ManagedProxy> {
-        Ok(ManagedProxy { id: r.get(0)?, name: r.get(1)?, url: r.get(2)?, notes: r.get(3)?, created_at: r.get(4)? })
+        Ok(ManagedProxy {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            url: r.get(2)?,
+            notes: r.get(3)?,
+            created_at: r.get(4)?,
+        })
     }
 
     pub fn list_proxies(&self) -> Vec<ManagedProxy> {
@@ -489,7 +525,12 @@ impl Db {
         .unwrap_or_default()
     }
 
-    pub fn list_proxies_page(&self, offset: i64, limit: i64, q: &str) -> Result<(Vec<ManagedProxy>, i64)> {
+    pub fn list_proxies_page(
+        &self,
+        offset: i64,
+        limit: i64,
+        q: &str,
+    ) -> Result<(Vec<ManagedProxy>, i64)> {
         let q = q.trim().to_lowercase();
         self.with(|c| {
             let (cond, args) = if q.is_empty() {
@@ -508,15 +549,23 @@ impl Db {
 
     pub fn get_proxy(&self, id: &str) -> Result<ManagedProxy> {
         self.with(|c| {
-            c.query_row("SELECT id, name, url, notes, created_at FROM proxies WHERE id = ?1", params![id], Self::map_proxy)
-                .optional()?
-                .ok_or_else(|| anyhow!("proxy not found"))
+            c.query_row(
+                "SELECT id, name, url, notes, created_at FROM proxies WHERE id = ?1",
+                params![id],
+                Self::map_proxy,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("proxy not found"))
         })
     }
 
     pub fn delete_proxy(&self, id: &str) -> Result<()> {
         self.with(|c| {
-            let n: i64 = c.query_row("SELECT COUNT(*) FROM accounts WHERE proxy_id = ?1", params![id], |r| r.get(0))?;
+            let n: i64 = c.query_row(
+                "SELECT COUNT(*) FROM accounts WHERE proxy_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
             if n > 0 {
                 return Err(anyhow!("proxy đang được {n} account sử dụng"));
             }
@@ -572,14 +621,22 @@ impl Db {
 
     pub fn list_browser_profiles(&self) -> Vec<BrowserProfile> {
         self.with(|c| {
-            let mut stmt = c.prepare(&format!("SELECT {} FROM browser_profiles ORDER BY datetime(updated_at) DESC", Self::BP_COLS))?;
+            let mut stmt = c.prepare(&format!(
+                "SELECT {} FROM browser_profiles ORDER BY datetime(updated_at) DESC",
+                Self::BP_COLS
+            ))?;
             let out: Vec<BrowserProfile> = stmt.query_map([], Self::map_bp)?.flatten().collect();
             Ok(out)
         })
         .unwrap_or_default()
     }
 
-    pub fn list_browser_profiles_page(&self, offset: i64, limit: i64, q: &str) -> Result<(Vec<BrowserProfile>, i64)> {
+    pub fn list_browser_profiles_page(
+        &self,
+        offset: i64,
+        limit: i64,
+        q: &str,
+    ) -> Result<(Vec<BrowserProfile>, i64)> {
         let q = q.trim().to_lowercase();
         self.with(|c| {
             let (cond, args) = if q.is_empty() {
@@ -598,15 +655,26 @@ impl Db {
 
     pub fn get_browser_profile(&self, id: &str) -> Result<BrowserProfile> {
         self.with(|c| {
-            c.query_row(&format!("SELECT {} FROM browser_profiles WHERE id = ?1", Self::BP_COLS), params![id], Self::map_bp)
-                .optional()?
-                .ok_or_else(|| anyhow!("browser profile not found"))
+            c.query_row(
+                &format!(
+                    "SELECT {} FROM browser_profiles WHERE id = ?1",
+                    Self::BP_COLS
+                ),
+                params![id],
+                Self::map_bp,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("browser profile not found"))
         })
     }
 
     pub fn delete_browser_profile(&self, id: &str) -> Result<()> {
         self.with(|c| {
-            let n: i64 = c.query_row("SELECT COUNT(*) FROM accounts WHERE browser_profile_id = ?1", params![id], |r| r.get(0))?;
+            let n: i64 = c.query_row(
+                "SELECT COUNT(*) FROM accounts WHERE browser_profile_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
             if n > 0 {
                 return Err(anyhow!("profile đang được {n} account sử dụng"));
             }
@@ -674,14 +742,28 @@ impl Db {
     pub fn get_saved_flow_action(&self, id: &str) -> Result<SavedFlowAction> {
         self.with(|c| {
             let row = c
-                .query_row("SELECT id, name, step_json, updated_at FROM saved_flow_actions WHERE id = ?1", params![id.trim()], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
-                })
+                .query_row(
+                    "SELECT id, name, step_json, updated_at FROM saved_flow_actions WHERE id = ?1",
+                    params![id.trim()],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                        ))
+                    },
+                )
                 .optional()?;
             match row {
                 Some((id, name, step_json, updated)) => {
                     let step = serde_json::from_str::<FlowAction>(&step_json)?;
-                    Ok(SavedFlowAction { id, name, step, updated_at: updated })
+                    Ok(SavedFlowAction {
+                        id,
+                        name,
+                        step,
+                        updated_at: updated,
+                    })
                 }
                 None => Err(anyhow!("saved action not found")),
             }
@@ -721,7 +803,10 @@ impl Db {
 
     pub fn delete_saved_flow_action(&self, id: &str) -> Result<()> {
         self.with(|c| {
-            let n = c.execute("DELETE FROM saved_flow_actions WHERE id = ?1", params![id.trim()])?;
+            let n = c.execute(
+                "DELETE FROM saved_flow_actions WHERE id = ?1",
+                params![id.trim()],
+            )?;
             if n == 0 {
                 return Err(anyhow!("saved action not found"));
             }
@@ -783,7 +868,10 @@ impl Db {
 
     pub fn list_schedules(&self) -> Vec<Schedule> {
         self.with(|c| {
-            let mut stmt = c.prepare(&format!("SELECT {} FROM schedules ORDER BY datetime(updated_at) DESC", Self::SCH_COLS))?;
+            let mut stmt = c.prepare(&format!(
+                "SELECT {} FROM schedules ORDER BY datetime(updated_at) DESC",
+                Self::SCH_COLS
+            ))?;
             let out: Vec<Schedule> = stmt.query_map([], Self::map_schedule)?.flatten().collect();
             Ok(out)
         })
@@ -792,9 +880,13 @@ impl Db {
 
     pub fn get_schedule(&self, id: &str) -> Result<Schedule> {
         self.with(|c| {
-            c.query_row(&format!("SELECT {} FROM schedules WHERE id = ?1", Self::SCH_COLS), params![id], Self::map_schedule)
-                .optional()?
-                .ok_or_else(|| anyhow!("schedule not found"))
+            c.query_row(
+                &format!("SELECT {} FROM schedules WHERE id = ?1", Self::SCH_COLS),
+                params![id],
+                Self::map_schedule,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("schedule not found"))
         })
     }
 
@@ -900,7 +992,11 @@ impl Db {
 
     pub fn list_notifications(&self, unread_only: bool, limit: i64) -> Vec<Notification> {
         let limit = if limit <= 0 { 50 } else { limit };
-        let where_ = if unread_only { "WHERE read_at = ''" } else { "" };
+        let where_ = if unread_only {
+            "WHERE read_at = ''"
+        } else {
+            ""
+        };
         self.with(|c| {
             let sql = format!("SELECT id, rule_id, event, title, body, run_id, account_id, flow_id, read_at, created_at FROM notifications {where_} ORDER BY datetime(created_at) DESC LIMIT ?1");
             let mut stmt = c.prepare(&sql)?;
@@ -925,21 +1021,33 @@ impl Db {
 
     pub fn mark_notification_read(&self, id: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE notifications SET read_at = ?1 WHERE id = ?2 AND read_at = ''", params![now_str(), id])?;
+            c.execute(
+                "UPDATE notifications SET read_at = ?1 WHERE id = ?2 AND read_at = ''",
+                params![now_str(), id],
+            )?;
             Ok(())
         })
     }
 
     pub fn mark_all_notifications_read(&self) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE notifications SET read_at = ?1 WHERE read_at = ''", params![now_str()])?;
+            c.execute(
+                "UPDATE notifications SET read_at = ?1 WHERE read_at = ''",
+                params![now_str()],
+            )?;
             Ok(())
         })
     }
 
     pub fn count_unread_notifications(&self) -> i64 {
-        self.with(|c| Ok(c.query_row("SELECT COUNT(*) FROM notifications WHERE read_at = ''", [], |r| r.get(0))?))
-            .unwrap_or(0)
+        self.with(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM notifications WHERE read_at = ''",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap_or(0)
     }
 
     // ---------------- Agent skills ----------------
@@ -1040,13 +1148,27 @@ impl Db {
 
     // ---------------- Account activity ----------------
 
-    pub fn record_post_interaction(&self, account_id: &str, post_key: &str, interaction_type: &str, post_url: &str, author_username: &str, extra_json: &str) -> Result<()> {
+    pub fn record_post_interaction(
+        &self,
+        account_id: &str,
+        post_key: &str,
+        interaction_type: &str,
+        post_url: &str,
+        author_username: &str,
+        extra_json: &str,
+    ) -> Result<()> {
         let account_id = account_id.trim();
         let post_key = post_key.trim();
         if account_id.is_empty() || post_key.is_empty() {
-            return Err(anyhow!("RecordPostInteraction: thiếu account_id hoặc post_key"));
+            return Err(anyhow!(
+                "RecordPostInteraction: thiếu account_id hoặc post_key"
+            ));
         }
-        let it = if interaction_type.trim().is_empty() { "interaction" } else { interaction_type.trim() };
+        let it = if interaction_type.trim().is_empty() {
+            "interaction"
+        } else {
+            interaction_type.trim()
+        };
         self.with(|c| {
             c.execute(
                 "INSERT INTO account_post_interactions (id, account_id, post_key, interaction_type, post_url, author_username, extra_json, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -1056,11 +1178,20 @@ impl Db {
         })
     }
 
-    pub fn record_friend_event(&self, account_id: &str, target_username: &str, target_user_id: &str, event_type: &str, notes: &str) -> Result<()> {
+    pub fn record_friend_event(
+        &self,
+        account_id: &str,
+        target_username: &str,
+        target_user_id: &str,
+        event_type: &str,
+        notes: &str,
+    ) -> Result<()> {
         let account_id = account_id.trim();
         let event_type = event_type.trim().to_lowercase();
         if account_id.is_empty() || event_type.is_empty() {
-            return Err(anyhow!("RecordFriendEvent: thiếu account_id hoặc event_type"));
+            return Err(anyhow!(
+                "RecordFriendEvent: thiếu account_id hoặc event_type"
+            ));
         }
         self.with(|c| {
             c.execute(
@@ -1075,7 +1206,9 @@ impl Db {
         let account_id = account_id.trim();
         let key = key.trim();
         if account_id.is_empty() || key.is_empty() {
-            return Err(anyhow!("UpsertAccountKVMeta: thiếu account_id hoặc meta_key"));
+            return Err(anyhow!(
+                "UpsertAccountKVMeta: thiếu account_id hoặc meta_key"
+            ));
         }
         self.with(|c| {
             c.execute(
@@ -1090,20 +1223,33 @@ impl Db {
         let account_id = account_id.trim();
         let key = key.trim();
         if account_id.is_empty() || key.is_empty() {
-            return Err(anyhow!("DeleteAccountKVMeta: thiếu account_id hoặc meta_key"));
+            return Err(anyhow!(
+                "DeleteAccountKVMeta: thiếu account_id hoặc meta_key"
+            ));
         }
         self.with(|c| {
-            c.execute("DELETE FROM account_kv_meta WHERE account_id = ?1 AND meta_key = ?2", params![account_id, key])?;
+            c.execute(
+                "DELETE FROM account_kv_meta WHERE account_id = ?1 AND meta_key = ?2",
+                params![account_id, key],
+            )?;
             Ok(())
         })
     }
 
-    pub fn list_post_interactions_by_account(&self, account_id: &str, limit: i64) -> Result<Vec<AccountPostInteractionRow>> {
+    pub fn list_post_interactions_by_account(
+        &self,
+        account_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AccountPostInteractionRow>> {
         let account_id = account_id.trim();
         if account_id.is_empty() {
             return Err(anyhow!("thiếu account_id"));
         }
-        let limit = if limit <= 0 || limit > 2000 { 200 } else { limit };
+        let limit = if limit <= 0 || limit > 2000 {
+            200
+        } else {
+            limit
+        };
         self.with(|c| {
             let mut stmt = c.prepare("SELECT id, account_id, post_key, interaction_type, post_url, author_username, extra_json, created_at FROM account_post_interactions WHERE account_id = ?1 ORDER BY datetime(created_at) DESC LIMIT ?2")?;
             let rows = stmt.query_map(params![account_id, limit], |r| {
@@ -1116,12 +1262,20 @@ impl Db {
         })
     }
 
-    pub fn list_friend_events_by_account(&self, account_id: &str, limit: i64) -> Result<Vec<AccountFriendEventRow>> {
+    pub fn list_friend_events_by_account(
+        &self,
+        account_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AccountFriendEventRow>> {
         let account_id = account_id.trim();
         if account_id.is_empty() {
             return Err(anyhow!("thiếu account_id"));
         }
-        let limit = if limit <= 0 || limit > 2000 { 200 } else { limit };
+        let limit = if limit <= 0 || limit > 2000 {
+            200
+        } else {
+            limit
+        };
         self.with(|c| {
             let mut stmt = c.prepare("SELECT id, account_id, target_username, target_user_id, event_type, notes, created_at FROM account_friend_events WHERE account_id = ?1 ORDER BY datetime(created_at) DESC LIMIT ?2")?;
             let rows = stmt.query_map(params![account_id, limit], |r| {
@@ -1153,7 +1307,11 @@ impl Db {
     pub fn get_app_settings(&self) -> Result<AppSettings> {
         self.with(|c| {
             let raw: Option<String> = c
-                .query_row("SELECT value_json FROM app_settings WHERE key = 'app'", [], |r| r.get(0))
+                .query_row(
+                    "SELECT value_json FROM app_settings WHERE key = 'app'",
+                    [],
+                    |r| r.get(0),
+                )
                 .optional()?;
             match raw {
                 Some(s) => Ok(serde_json::from_str(&s).unwrap_or_default()),
@@ -1178,7 +1336,11 @@ impl Db {
     pub fn get_legacy_atomic_rules_json(&self) -> Result<String> {
         self.with(|c| {
             let v: Option<String> = c
-                .query_row("SELECT value FROM engine_kv WHERE key = 'legacy_atomic_rules'", [], |r| r.get(0))
+                .query_row(
+                    "SELECT value FROM engine_kv WHERE key = 'legacy_atomic_rules'",
+                    [],
+                    |r| r.get(0),
+                )
                 .optional()?;
             Ok(v.unwrap_or_default())
         })

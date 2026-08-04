@@ -40,7 +40,12 @@ impl ExtensionDriver {
 impl BrowserDriver for ExtensionDriver {
     async fn before_run(&self, _account: &TikTokAccount, log: &LogFn) -> Result<()> {
         // Serialize: only one run may drive the single tab at a time.
-        let permit = self.sem.clone().acquire_owned().await.map_err(|_| anyhow!("driver semaphore closed"))?;
+        let permit = self
+            .sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow!("driver semaphore closed"))?;
         *self.permit.lock().await = Some(permit);
         if !self.ext.is_connected() {
             *self.permit.lock().await = None;
@@ -52,7 +57,13 @@ impl BrowserDriver for ExtensionDriver {
         Ok(())
     }
 
-    async fn execute(&self, rs: &RunState, account: &TikTokAccount, action: &FlowAction, log: &LogFn) -> Result<()> {
+    async fn execute(
+        &self,
+        rs: &RunState,
+        account: &TikTokAccount,
+        action: &FlowAction,
+        log: &LogFn,
+    ) -> Result<()> {
         let page = ExtPage::new(self.ext.clone());
         execute_action(&page, rs, account, action, &self.bridge, log).await
     }

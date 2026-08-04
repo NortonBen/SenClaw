@@ -28,7 +28,10 @@ pub struct LlmReply {
 impl Bridge {
     pub fn new(base: &str, app_id: &str) -> Self {
         Self {
-            url: format!("{}/api/space/apps/{app_id}/bridge", base.trim_end_matches('/')),
+            url: format!(
+                "{}/api/space/apps/{app_id}/bridge",
+                base.trim_end_matches('/')
+            ),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(600))
                 .build()
@@ -52,23 +55,36 @@ impl Bridge {
         if !resp.status().is_success() {
             bail!("bridge {action}: HTTP {}", resp.status());
         }
-        let v: Value = resp.json().await.map_err(|e| anyhow!("bridge {action}: bad JSON: {e}"))?;
+        let v: Value = resp
+            .json()
+            .await
+            .map_err(|e| anyhow!("bridge {action}: bad JSON: {e}"))?;
         match v.get("status").and_then(Value::as_str) {
             Some("ok") => Ok(v),
             Some("pending") => bail!(
                 "bridge {action} unavailable: {}",
-                v.get("message").and_then(Value::as_str).unwrap_or("not enabled in this daemon")
+                v.get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("not enabled in this daemon")
             ),
             _ => bail!(
                 "bridge {action} failed: {}",
-                v.get("message").and_then(Value::as_str).unwrap_or(&v.to_string())
+                v.get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&v.to_string())
             ),
         }
     }
 
     /// One-shot LLM call. No `temperature` exists on this surface. A `finish` of
     /// `"length"` means the model was cut off — treated as failure.
-    pub async fn llm(&self, system: &str, prompt: &str, max_tokens: u32, timeout: Duration) -> Result<LlmReply> {
+    pub async fn llm(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: u32,
+        timeout: Duration,
+    ) -> Result<LlmReply> {
         let v = self
             .action(
                 "llm.request",
@@ -76,20 +92,37 @@ impl Bridge {
                 timeout,
             )
             .await?;
-        let finish = v.get("finish").and_then(Value::as_str).unwrap_or_default().to_string();
+        let finish = v
+            .get("finish")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if finish == "length" {
             bail!("llm.request hit the output ceiling (finish=length) — shrink the input");
         }
         Ok(LlmReply {
-            text: v.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
-            model: v.get("model").and_then(Value::as_str).unwrap_or_default().to_string(),
+            text: v
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            model: v
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             finish,
         })
     }
 
     /// Write text into the cognitive graph (used opportunistically by AI-memory
     /// features so extracted facts are visible to the rest of SenClaw).
-    pub async fn knowledge_save(&self, text: &str, source: Option<&str>, timeout: Duration) -> Result<Value> {
+    pub async fn knowledge_save(
+        &self,
+        text: &str,
+        source: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Value> {
         let mut payload = json!({ "text": text });
         if let Some(s) = source {
             payload["source"] = json!(s);

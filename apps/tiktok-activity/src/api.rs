@@ -37,7 +37,11 @@ fn ok_msg(msg: &str, data: Value) -> Response {
 }
 
 fn err(status: StatusCode, msg: impl std::fmt::Display) -> Response {
-    (status, Json(json!({ "success": false, "msg": msg.to_string(), "data": Value::Null }))).into_response()
+    (
+        status,
+        Json(json!({ "success": false, "msg": msg.to_string(), "data": Value::Null })),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -68,16 +72,33 @@ pub fn router() -> Router<AppState> {
         .route("/api/accounts", get(list_accounts).post(create_account))
         .route("/api/proxies", get(list_proxies).post(create_proxy))
         .route("/api/proxies/:id", delete(delete_proxy))
-        .route("/api/browser-profiles", get(list_profiles).post(create_profile))
+        .route(
+            "/api/browser-profiles",
+            get(list_profiles).post(create_profile),
+        )
         .route("/api/browser-profiles/:id", delete(delete_profile))
         .route("/api/flows", get(list_flows).post(create_flow))
         .route("/api/flows/generate-ai", post(flow_generate_ai))
-        .route("/api/saved-flow-actions", get(list_saved).post(create_saved))
-        .route("/api/saved-flow-actions/:id", get(get_saved).delete(delete_saved))
-        .route("/api/saved-flow-actions/analyze-page", post(analyze_page_unavailable))
+        .route(
+            "/api/saved-flow-actions",
+            get(list_saved).post(create_saved),
+        )
+        .route(
+            "/api/saved-flow-actions/:id",
+            get(get_saved).delete(delete_saved),
+        )
+        .route(
+            "/api/saved-flow-actions/analyze-page",
+            post(analyze_page_unavailable),
+        )
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/settings/deepseek-models", post(deepseek_models))
-        .route("/api/engine/legacy-atomic-rules", get(get_legacy_rules).put(put_legacy_rules).delete(delete_legacy_rules))
+        .route(
+            "/api/engine/legacy-atomic-rules",
+            get(get_legacy_rules)
+                .put(put_legacy_rules)
+                .delete(delete_legacy_rules),
+        )
         .route("/api/notification-rules", get(list_rules).post(create_rule))
         .route("/api/notification-rules/:id", delete(delete_rule))
         .route("/api/notifications", get(list_notifications))
@@ -97,8 +118,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/agent/profiles/generate", post(generate_profile))
         .route("/api/agent-skills", get(list_skills).post(create_skill))
         .route("/api/agent-skills/import", post(import_skills))
-        .route("/api/agent-skills/analyze-page", post(analyze_page_unavailable))
-        .route("/api/agent-skills/:id", get(skill_by_id).put(update_skill).delete(delete_skill))
+        .route(
+            "/api/agent-skills/analyze-page",
+            post(analyze_page_unavailable),
+        )
+        .route(
+            "/api/agent-skills/:id",
+            get(skill_by_id).put(update_skill).delete(delete_skill),
+        )
         // AI-memory: stored via bridge knowledge; the standalone panel is disabled here.
         .route("/api/aimemory/status", get(aimemory_status))
         // Browser extension bridge: connection status + RPC-reply callback.
@@ -114,7 +141,10 @@ async fn health() -> Response {
 
 async fn list_accounts(State(s): State<AppState>, Query(pq): Query<PageQuery>) -> Response {
     let (off, lim) = page_offset(&pq, 20, 500);
-    match s.db.list_accounts_page(off, lim, pq.q.as_deref().unwrap_or("")) {
+    match s
+        .db
+        .list_accounts_page(off, lim, pq.q.as_deref().unwrap_or(""))
+    {
         Ok((items, total)) => ok(json!({ "items": items, "total": total })),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -128,7 +158,10 @@ async fn create_account(State(s): State<AppState>, Json(a): Json<TikTokAccount>)
 
 async fn list_proxies(State(s): State<AppState>, Query(pq): Query<PageQuery>) -> Response {
     let (off, lim) = page_offset(&pq, 20, 500);
-    match s.db.list_proxies_page(off, lim, pq.q.as_deref().unwrap_or("")) {
+    match s
+        .db
+        .list_proxies_page(off, lim, pq.q.as_deref().unwrap_or(""))
+    {
         Ok((items, total)) => ok(json!({ "items": items, "total": total })),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -149,7 +182,10 @@ async fn delete_proxy(State(s): State<AppState>, Path(id): Path<String>) -> Resp
 
 async fn list_profiles(State(s): State<AppState>, Query(pq): Query<PageQuery>) -> Response {
     let (off, lim) = page_offset(&pq, 20, 500);
-    match s.db.list_browser_profiles_page(off, lim, pq.q.as_deref().unwrap_or("")) {
+    match s
+        .db
+        .list_browser_profiles_page(off, lim, pq.q.as_deref().unwrap_or(""))
+    {
         Ok((items, total)) => ok(json!({ "items": items, "total": total })),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -209,7 +245,10 @@ async fn flow_generate_ai(State(s): State<AppState>, Json(in_): Json<FlowGenReq>
                     ctx.push_str("- proxy: đã cấu hình\n");
                 }
                 if r.viewport_width > 0 && r.viewport_height > 0 {
-                    ctx.push_str(&format!("- viewport: {}x{}\n", r.viewport_width, r.viewport_height));
+                    ctx.push_str(&format!(
+                        "- viewport: {}x{}\n",
+                        r.viewport_width, r.viewport_height
+                    ));
                 }
                 if !r.locale.trim().is_empty() {
                     ctx.push_str(&format!("- locale: {}\n", r.locale));
@@ -218,7 +257,11 @@ async fn flow_generate_ai(State(s): State<AppState>, Json(in_): Json<FlowGenReq>
             Err(_) => return err(StatusCode::NOT_FOUND, "account not found"),
         }
     }
-    let page_url = if in_.page_url.trim().is_empty() { "https://www.tiktok.com/" } else { in_.page_url.trim() };
+    let page_url = if in_.page_url.trim().is_empty() {
+        "https://www.tiktok.com/"
+    } else {
+        in_.page_url.trim()
+    };
     ctx.push_str(&format!("\nTrang mục tiêu: {page_url}\n"));
 
     match ai::generate_flow_from_catalog(&s.bridge, &in_.prompt, &in_.actions_catalog, &ctx).await {
@@ -313,7 +356,10 @@ async fn save_settings(State(s): State<AppState>, Json(mut in_): Json<AppSetting
     in_.openrouter_api_key = merge_secret(&cur.openrouter_api_key, &in_.openrouter_api_key);
     in_.deepseek_api_key = merge_secret(&cur.deepseek_api_key, &in_.deepseek_api_key);
     in_.lm_studio_api_key = merge_secret(&cur.lm_studio_api_key, &in_.lm_studio_api_key);
-    in_.ai_memory_embedding_api_key = merge_secret(&cur.ai_memory_embedding_api_key, &in_.ai_memory_embedding_api_key);
+    in_.ai_memory_embedding_api_key = merge_secret(
+        &cur.ai_memory_embedding_api_key,
+        &in_.ai_memory_embedding_api_key,
+    );
     match s.db.upsert_app_settings(&in_) {
         Ok(()) => ok_msg("settings updated", Value::Null),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -347,14 +393,26 @@ async fn deepseek_models(State(s): State<AppState>, Json(in_): Json<DeepSeekReq>
     }
     let url = format!("{}/models", base.trim_end_matches('/'));
     let client = reqwest::Client::new();
-    let resp = client.get(&url).header("Accept", "application/json").bearer_auth(&api_key).timeout(std::time::Duration::from_secs(20)).send().await;
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .bearer_auth(&api_key)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await;
     match resp {
         Ok(r) if r.status().is_success() => match r.json::<Value>().await {
             Ok(v) => {
                 let mut models: Vec<String> = v
                     .get("data")
                     .and_then(Value::as_array)
-                    .map(|arr| arr.iter().filter_map(|m| m.get("id").and_then(Value::as_str)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m.get("id").and_then(Value::as_str))
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 models.sort();
                 models.dedup();
@@ -362,7 +420,10 @@ async fn deepseek_models(State(s): State<AppState>, Json(in_): Json<DeepSeekReq>
             }
             Err(_) => err(StatusCode::BAD_GATEWAY, "invalid response from DeepSeek"),
         },
-        Ok(r) => err(StatusCode::BAD_GATEWAY, format!("deepseek models error: {}", r.status())),
+        Ok(r) => err(
+            StatusCode::BAD_GATEWAY,
+            format!("deepseek models error: {}", r.status()),
+        ),
         Err(e) => err(StatusCode::BAD_GATEWAY, e),
     }
 }
@@ -381,7 +442,10 @@ async fn put_legacy_rules(State(s): State<AppState>, body: String) -> Response {
         return err(StatusCode::BAD_REQUEST, e);
     }
     match s.db.set_legacy_atomic_rules_json(&body) {
-        Ok(()) => ok_msg("legacy atomic rules saved", json!({ "loaded": crate::engine::browser::legacy_loaded() })),
+        Ok(()) => ok_msg(
+            "legacy atomic rules saved",
+            json!({ "loaded": crate::engine::browser::legacy_loaded() }),
+        ),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -496,7 +560,10 @@ struct BrowserPreviewReq {
     account_id: String,
 }
 
-async fn browser_preview_run(State(s): State<AppState>, Json(in_): Json<BrowserPreviewReq>) -> Response {
+async fn browser_preview_run(
+    State(s): State<AppState>,
+    Json(in_): Json<BrowserPreviewReq>,
+) -> Response {
     let account = match s.runs.find_account(&in_.account_id) {
         Ok(a) => a,
         Err(_) => return err(StatusCode::NOT_FOUND, "account not found"),
@@ -633,7 +700,11 @@ async fn skill_by_id(State(s): State<AppState>, Path(id): Path<String>) -> Respo
     }
 }
 
-async fn update_skill(State(s): State<AppState>, Path(id): Path<String>, Json(mut in_): Json<AgentSkill>) -> Response {
+async fn update_skill(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(mut in_): Json<AgentSkill>,
+) -> Response {
     in_.id = id;
     match s.db.update_agent_skill(&mut in_) {
         Ok(()) => ok(in_),
@@ -672,7 +743,9 @@ async fn import_skills(State(s): State<AppState>, Json(in_): Json<ImportSkillsRe
 }
 
 async fn aimemory_status() -> Response {
-    ok(json!({ "enabled": false, "note": "AI-memory dùng chung cognitive graph của SenClaw qua bridge knowledge.save" }))
+    ok(
+        json!({ "enabled": false, "note": "AI-memory dùng chung cognitive graph của SenClaw qua bridge knowledge.save" }),
+    )
 }
 
 // ---- browser extension bridge ----
@@ -691,7 +764,11 @@ async fn ext_callback(State(s): State<AppState>, Json(body): Json<Value>) -> Res
     if body.get("secret").and_then(Value::as_str) != Some(&s.ext.secret()) {
         return err(StatusCode::UNAUTHORIZED, "bad callback secret");
     }
-    let id = body.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if id.is_empty() {
         return err(StatusCode::BAD_REQUEST, "missing id");
     }

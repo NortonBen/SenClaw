@@ -20,7 +20,10 @@ use tower_http::cors::CorsLayer;
 async fn main() {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
         .init();
 
     let db = db::Db::open(&config::db_path()).expect("open sqlite");
@@ -50,8 +53,14 @@ async fn main() {
             Arc::new(engine::StubDriver)
         }
         _ => {
-            tracing::info!("engine driver = Extension (điều khiển 1 tab TikTok qua ext-WS :{})", config::ext_ws_port());
-            Arc::new(engine::driver::ExtensionDriver::new(ext.clone(), bridge.clone()))
+            tracing::info!(
+                "engine driver = Extension (điều khiển 1 tab TikTok qua ext-WS :{})",
+                config::ext_ws_port()
+            );
+            Arc::new(engine::driver::ExtensionDriver::new(
+                ext.clone(),
+                bridge.clone(),
+            ))
         }
     };
 
@@ -69,7 +78,9 @@ async fn main() {
     };
 
     // Static SPA (Vite build). Check packaged locations before the repo-root one.
-    let exe_dir = std::env::current_exe().map(|p| p.parent().unwrap().to_path_buf()).unwrap_or_default();
+    let exe_dir = std::env::current_exe()
+        .map(|p| p.parent().unwrap().to_path_buf())
+        .unwrap_or_default();
     let candidates = [
         std::path::PathBuf::from("apps/tiktok-activity/web/dist"),
         std::path::PathBuf::from("web_dist"),
@@ -97,7 +108,12 @@ async fn main() {
         .layer(CorsLayer::permissive());
 
     let port = config::http_port();
-    let addr = format!("0.0.0.0:{port}");
+    // Loopback by default. A Space App authenticates nothing of its own — the
+    // daemon reaches it over 127.0.0.1 and the UI is same-origin — so binding
+    // 0.0.0.0 hands the whole REST + MCP surface to anyone on the LAN. Set
+    // SENCLAW_BIND_HOST=0.0.0.0 to opt in to that explicitly.
+    let host = std::env::var("SENCLAW_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = format!("{host}:{port}");
     tracing::info!("tiktok-activity listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     axum::serve(listener, app).await.expect("serve");

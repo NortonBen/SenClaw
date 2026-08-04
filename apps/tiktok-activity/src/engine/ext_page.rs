@@ -22,7 +22,11 @@ impl ExtPage {
 
     /// Call an extension method, unwrapping `{result}` / `{error}`.
     async fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
-        let v = self.bridge.call(method, params, timeout).await.map_err(|e| anyhow!(e))?;
+        let v = self
+            .bridge
+            .call(method, params, timeout)
+            .await
+            .map_err(|e| anyhow!(e))?;
         if let Some(err) = v.get("error").and_then(Value::as_str) {
             if !err.is_empty() {
                 return Err(anyhow!("ext {method}: {err}"));
@@ -37,7 +41,11 @@ impl PageOps for ExtPage {
     async fn url(&self) -> String {
         match self.call("url", json!({}), Duration::from_secs(10)).await {
             Ok(Value::String(s)) => s,
-            Ok(v) => v.get("url").and_then(Value::as_str).unwrap_or("").to_string(),
+            Ok(v) => v
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             Err(_) => String::new(),
         }
     }
@@ -53,22 +61,43 @@ impl PageOps for ExtPage {
     }
 
     async fn eval(&self, js: &str) -> Result<Value> {
-        self.call("eval", json!({ "js": js }), Duration::from_secs(30)).await
+        self.call("eval", json!({ "js": js }), Duration::from_secs(30))
+            .await
     }
 
     async fn mouse_click(&self, x: f64, y: f64) -> Result<()> {
-        self.call("mouse_click", json!({ "x": x, "y": y }), Duration::from_secs(15)).await.map(|_| ())
+        self.call(
+            "mouse_click",
+            json!({ "x": x, "y": y }),
+            Duration::from_secs(15),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn type_chars(&self, text: &str) -> Result<()> {
-        self.call("type_text", json!({ "text": text }), Duration::from_secs(60)).await.map(|_| ())
+        self.call(
+            "type_text",
+            json!({ "text": text }),
+            Duration::from_secs(60),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn press_named(&self, key: &str) -> Result<()> {
-        self.call("press_key", json!({ "key": key }), Duration::from_secs(15)).await.map(|_| ())
+        self.call("press_key", json!({ "key": key }), Duration::from_secs(15))
+            .await
+            .map(|_| ())
     }
 
     async fn wheel(&self, x: f64, y: f64, dx: f64, dy: f64) -> Result<()> {
-        self.call("wheel", json!({ "x": x, "y": y, "dx": dx, "dy": dy }), Duration::from_secs(15)).await.map(|_| ())
+        self.call(
+            "wheel",
+            json!({ "x": x, "y": y, "dx": dx, "dy": dy }),
+            Duration::from_secs(15),
+        )
+        .await
+        .map(|_| ())
     }
 }

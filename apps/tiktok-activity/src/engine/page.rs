@@ -87,7 +87,11 @@ pub trait PageOps: Send + Sync {
         }
     }
 
-    async fn find_visible_center(&self, selectors: &[String], timeout_ms: u64) -> Option<(f64, f64)> {
+    async fn find_visible_center(
+        &self,
+        selectors: &[String],
+        timeout_ms: u64,
+    ) -> Option<(f64, f64)> {
         let arr = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".into());
         let js = format!(
             r#"(() => {{
@@ -108,7 +112,12 @@ pub trait PageOps: Send + Sync {
         self.poll_center(&js, timeout_ms).await
     }
 
-    async fn find_text_center(&self, base: &str, needle: &str, timeout_ms: u64) -> Option<(f64, f64)> {
+    async fn find_text_center(
+        &self,
+        base: &str,
+        needle: &str,
+        timeout_ms: u64,
+    ) -> Option<(f64, f64)> {
         let base_j = serde_json::to_string(base).unwrap();
         let needle_j = serde_json::to_string(&needle.to_lowercase()).unwrap();
         let js = format!(
@@ -135,7 +144,10 @@ pub trait PageOps: Send + Sync {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(200));
         loop {
             if let Ok(Value::Object(m)) = self.eval(js).await {
-                if let (Some(x), Some(y)) = (m.get("x").and_then(Value::as_f64), m.get("y").and_then(Value::as_f64)) {
+                if let (Some(x), Some(y)) = (
+                    m.get("x").and_then(Value::as_f64),
+                    m.get("y").and_then(Value::as_f64),
+                ) {
                     return Some((x, y));
                 }
             }
