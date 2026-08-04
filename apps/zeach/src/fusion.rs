@@ -29,8 +29,21 @@ const SIMHASH_THRESHOLD: u32 = 3;
 /// Tracking parameters stripped during URL canonicalization.
 const TRACKING_PREFIXES: &[&str] = &["utm_", "ga_", "mc_", "pk_", "hsa_"];
 const TRACKING_KEYS: &[&str] = &[
-    "fbclid", "gclid", "dclid", "msclkid", "igshid", "mkt_tok", "ref", "ref_src", "ref_url",
-    "source", "spm", "yclid", "_ga", "cmpid", "campaign_id",
+    "fbclid",
+    "gclid",
+    "dclid",
+    "msclkid",
+    "igshid",
+    "mkt_tok",
+    "ref",
+    "ref_src",
+    "ref_url",
+    "source",
+    "spm",
+    "yclid",
+    "_ga",
+    "cmpid",
+    "campaign_id",
 ];
 
 /// Two-level public suffixes we care about, so `bbc.co.uk` and `vnexpress.net`
@@ -40,10 +53,10 @@ const TRACKING_KEYS: &[&str] = &[
 /// multi-level suffix will register one label too deep. That over-counts
 /// independence in rare cases; it never under-counts.
 const TWO_LEVEL_SUFFIXES: &[&str] = &[
-    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "or.jp", "ne.jp", "com.au", "net.au",
-    "org.au", "com.br", "com.cn", "net.cn", "org.cn", "gov.cn", "com.vn", "net.vn", "org.vn",
-    "edu.vn", "gov.vn", "com.sg", "com.hk", "com.tw", "co.kr", "co.in", "co.id", "co.th",
-    "com.mx", "com.tr", "co.za", "com.ar",
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "or.jp", "ne.jp", "com.au", "net.au", "org.au",
+    "com.br", "com.cn", "net.cn", "org.cn", "gov.cn", "com.vn", "net.vn", "org.vn", "edu.vn",
+    "gov.vn", "com.sg", "com.hk", "com.tw", "co.kr", "co.in", "co.id", "co.th", "com.mx", "com.tr",
+    "co.za", "com.ar",
 ];
 
 /// Canonicalize a URL for identity comparison, returning `(canonical, domain)`.
@@ -84,7 +97,13 @@ pub fn canonicalize_url(raw: &str) -> (Option<String>, Option<String>) {
     if !pairs.is_empty() {
         let q: Vec<String> = pairs
             .iter()
-            .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
+            .map(|(k, v)| {
+                if v.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{k}={v}")
+                }
+            })
             .collect();
         canonical.push('?');
         canonical.push_str(&q.join("&"));
@@ -195,11 +214,7 @@ fn hamming(a: u64, b: u64) -> u32 {
 fn merge_into(keep: &mut Evidence, other: Evidence) {
     for hit in other.hits {
         // Same source twice (e.g. two sub-queries) — keep the better rank.
-        if let Some(existing) = keep
-            .hits
-            .iter_mut()
-            .find(|h| h.source_id == hit.source_id)
-        {
+        if let Some(existing) = keep.hits.iter_mut().find(|h| h.source_id == hit.source_id) {
             if hit.rank < existing.rank {
                 existing.rank = hit.rank;
                 existing.raw_score = hit.raw_score;
@@ -387,7 +402,8 @@ mod tests {
 
     #[test]
     fn canonicalize_strips_tracking_and_www() {
-        let (c, d) = canonicalize_url("https://WWW.Example.com/a/b/?utm_source=x&q=1&fbclid=z#frag");
+        let (c, d) =
+            canonicalize_url("https://WWW.Example.com/a/b/?utm_source=x&q=1&fbclid=z#frag");
         assert_eq!(c.unwrap(), "https://example.com/a/b?q=1");
         assert_eq!(d.unwrap(), "example.com");
     }

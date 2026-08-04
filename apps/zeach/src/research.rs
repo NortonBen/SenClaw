@@ -12,15 +12,24 @@
 //!   2. **Gather** — run every sub-query through the shared fan-out
 //!      (`pipeline::run`), then merge all their evidence into one fused,
 //!      diversity-capped set and deepen the top web hits.
-//!   3. **Verify** — extract atomic claims and score each by COUNTING
+//!   3. **Screen** — the relevance checkpoint (`review::screen_evidence`). Every
+//!      source is a nearest-neighbour retriever: it answers "closest to the
+//!      query", never "about the query". Anything off topic is set aside HERE,
+//!      before it can be mined for claims — otherwise a run about world
+//!      disasters comes back as a well-cited report about something else.
+//!   4. **Verify** — extract atomic claims and score each by COUNTING
 //!      independent sources (`claims::assess`). This is the cross-source check:
 //!      a claim only reaches `verified`/`supported` when ≥2 independent
 //!      source-families back it; conflicts become `disputed`, never a silent
 //!      pick.
-//!   4. **Follow-up** (deep only) — chase the weak and high-stakes claims with a
+//!   5. **Follow-up** (deep only) — chase the weak and high-stakes claims with a
 //!      second gather round, then re-verify over the enlarged evidence.
-//!   5. **Synthesize** — write a cited Markdown report (`synthesize.rs`), always
+//!   6. **Synthesize** — write a cited Markdown report (`synthesize.rs`), always
 //!      with a deterministic floor so a failed LLM never yields "no report".
+//!   7. **Review** — the second checkpoint (`review::review_report`): an
+//!      independent pass judges the finished report against the ORIGINAL
+//!      question. A report that fails is still returned — hiding it would hide
+//!      its evidence — but it is labelled, and `status` says so.
 //!
 //! Persistence and optional export to wiki/knowledge are done by the caller
 //! (`mcp.rs`), mirroring how `zeach_search` saves its run there — this module
@@ -31,6 +40,7 @@ use crate::extract;
 use crate::fusion;
 use crate::model::{Evidence, SourceOutcome};
 use crate::pipeline::{self, SearchRequest};
+use crate::review::{self, ReportReview};
 use crate::sources::Registry;
 use crate::synthesize;
 use crate::transport::{Bridge, Transports};
@@ -109,10 +119,18 @@ pub struct ResearchOutcome {
     pub depth: Depth,
     pub sub_queries: Vec<String>,
     pub evidence: Vec<Evidence>,
+    /// Retrieved but judged off topic, so never reasoned over. Returned so a
+    /// filtered run is legible instead of mysteriously thin.
+    pub off_topic: Vec<Evidence>,
     pub sources: Vec<SourceOutcome>,
     pub unknown_sources: Vec<String>,
     pub claims: Vec<Claim>,
     pub contradictions: Vec<Contradiction>,
+    /// `ok` | `off_topic` (a report was written but does not answer the
+    /// question) | `insufficient` (nothing on topic was found at all).
+    pub status: String,
+    /// Verdict of the post-synthesis checkpoint, when one ran.
+    pub review: Option<ReportReview>,
     pub report_title: String,
     pub report_markdown: String,
     /// True when the LLM wrote the prose; false when we fell back to the
@@ -158,24 +176,77 @@ pub async fn run(
         .unwrap_or_default();
 
     // 1. Plan.
-    let sub_queries = plan(bridge, &req.query, req.lang.as_deref(), req.depth, &mut warnings).await;
+    let mut sub_queries = plan(
+        bridge,
+        &req.query,
+        req.lang.as_deref(),
+        req.depth,
+        &mut warnings,
+    )
+    .await;
 
-    // 2. Gather (round 1).
-    let (mut evidence, mut sources, mut total_before) =
-        gather(registry, transports, &sub_queries, req).await;
+    // 2–3. Gather + relevance checkpoint (round 1).
+    let mut off_topic = Vec::new();
+    let (mut evidence, mut sources, mut total_before) = gather_screened(
+        registry,
+        transports,
+        &sub_queries,
+        req,
+        &mut off_topic,
+        &mut warnings,
+    )
+    .await;
     let mut deepened = deepen(transports, &mut evidence, req.depth).await;
+    let mut rounds = 1;
 
-    // 3. Verify.
+    // 3.5. Nothing survived the gate. Retrieval, not synthesis, is what failed —
+    // so retry retrieval with keyword-shaped queries instead of writing a report
+    // out of material we just judged off topic.
+    if evidence.is_empty() && !off_topic.is_empty() && req.depth != Depth::Quick {
+        let retry = replan(bridge, &req.query, req.lang.as_deref()).await;
+        if !retry.is_empty() {
+            warnings.push(format!(
+                "Vòng 1 không có tư liệu nào đúng chủ đề — tìm lại với: {}.",
+                retry.join(" · ")
+            ));
+            rounds += 1;
+            let (ev2, src2, tb2) = gather_screened(
+                registry,
+                transports,
+                &retry,
+                req,
+                &mut off_topic,
+                &mut warnings,
+            )
+            .await;
+            evidence = ev2;
+            sources.extend(src2);
+            total_before += tb2;
+            deepened += deepen(transports, &mut evidence, req.depth).await;
+            for q in retry {
+                push_unique(&mut sub_queries, q);
+            }
+        }
+    }
+
+    // 4. Verify.
     let (mut claims, mut contradictions) =
         verify(bridge, &req.query, &evidence, &mut warnings).await;
 
-    // 4. Follow-up round for the weak and high-stakes claims (deep only).
-    let mut rounds = 1;
-    if req.depth.wants_follow_up() {
+    // 5. Follow-up round for the weak and high-stakes claims (deep only).
+    if req.depth.wants_follow_up() && !claims.is_empty() {
         let follow = follow_up_queries(&claims);
         if !follow.is_empty() {
-            rounds = 2;
-            let (ev2, src2, tb2) = gather(registry, transports, &follow, req).await;
+            rounds += 1;
+            let (ev2, src2, tb2) = gather_screened(
+                registry,
+                transports,
+                &follow,
+                req,
+                &mut off_topic,
+                &mut warnings,
+            )
+            .await;
             sources.extend(src2);
             total_before += tb2;
             let mut all = std::mem::take(&mut evidence);
@@ -188,32 +259,76 @@ pub async fn run(
         }
     }
 
-    // 5. Synthesize.
-    let syn = synthesize::synthesize(
-        bridge,
-        &req.query,
-        &claims,
-        &contradictions,
-        &evidence,
-        Duration::from_secs(240),
-    )
-    .await;
-    if let Some(w) = syn.warning.clone() {
-        warnings.push(w);
-    }
+    // 6–7. Synthesize, then check the result before returning it.
+    let (report_title, report_markdown, report_llm, status, reviewed) = if evidence.is_empty() {
+        // Refusing is the honest answer. A model handed nothing on topic writes
+        // a report about whatever it was handed instead.
+        let (t, md) = review::insufficient_report(&req.query, &sub_queries, &sources, &off_topic);
+        warnings.push(
+            "Không có tư liệu nào đúng chủ đề câu hỏi — không tổng hợp báo cáo để tránh trả lời lạc đề."
+                .into(),
+        );
+        (t, md, false, "insufficient".to_string(), None)
+    } else {
+        let syn = synthesize::synthesize(
+            bridge,
+            &req.query,
+            &claims,
+            &contradictions,
+            &evidence,
+            Duration::from_secs(240),
+        )
+        .await;
+        if let Some(w) = syn.warning.clone() {
+            warnings.push(w);
+        }
+        let verdict =
+            review::review_report(bridge, &req.query, &syn.markdown, Duration::from_secs(90)).await;
+        if verdict.answers {
+            (
+                syn.title,
+                syn.markdown,
+                syn.used_llm,
+                "ok".to_string(),
+                Some(verdict),
+            )
+        } else {
+            warnings.push(format!(
+                "Kiểm định: báo cáo không trả lời được câu hỏi ({}/100).{}",
+                verdict.score,
+                if verdict.issues.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", verdict.issues.join("; "))
+                }
+            ));
+            let banner = review::off_topic_banner(&req.query, &verdict);
+            let title = format!("[Chưa trả lời được] {}", req.query.trim());
+            (
+                title,
+                format!("{banner}{}", syn.markdown),
+                syn.used_llm,
+                "off_topic".to_string(),
+                Some(verdict),
+            )
+        }
+    };
 
     ResearchOutcome {
         query: req.query.clone(),
         depth: req.depth,
         sub_queries,
         evidence,
+        off_topic,
         sources,
         unknown_sources,
         claims,
         contradictions,
-        report_title: syn.title,
-        report_markdown: syn.markdown,
-        report_llm: syn.used_llm,
+        status,
+        review: reviewed,
+        report_title,
+        report_markdown,
+        report_llm,
         confidence_note: claims::CONFIDENCE_IS_PROVENANCE.to_string(),
         rounds,
         total_before_dedupe: total_before,
@@ -247,7 +362,9 @@ async fn plan(
         cap - 1
     );
 
-    match bridge.llm(sys, &prompt, 700, Duration::from_secs(60)).await {
+    // 700 came back cut after a couple of queries — the bridge yields a small
+    // fraction of `maxTokens`, so the budget has to be asked for generously.
+    match bridge.llm(sys, &prompt, 3_000, Duration::from_secs(60)).await {
         Ok(reply) => {
             for q in parse_queries(&reply.text) {
                 push_unique(&mut subs, q);
@@ -330,6 +447,63 @@ async fn gather(
     }
     let merged = merge(all, &registry.weights(), req.max_evidence);
     (merged, sources, total_before)
+}
+
+/// `gather` + the relevance checkpoint. Off-topic items are moved to `off_topic`
+/// rather than dropped, so the caller can still show what was found.
+async fn gather_screened(
+    registry: &Registry,
+    transports: &Arc<Transports>,
+    sub_queries: &[String],
+    req: &ResearchRequest,
+    off_topic: &mut Vec<Evidence>,
+    warnings: &mut Vec<String>,
+) -> (Vec<Evidence>, Vec<SourceOutcome>, usize) {
+    let (evidence, sources, total_before) = gather(registry, transports, sub_queries, req).await;
+    let screen = review::screen_evidence(
+        &transports.bridge,
+        &req.query,
+        evidence,
+        Duration::from_secs(90),
+    )
+    .await;
+    if let Some(note) = screen.note {
+        if !warnings.contains(&note) {
+            warnings.push(note);
+        }
+    }
+    off_topic.extend(screen.dropped);
+    (screen.kept, sources, total_before)
+}
+
+/// Re-plan after the gate emptied round 1. The first plan produced queries that
+/// retrieved the wrong topic, so this asks for keyword-shaped queries built from
+/// the concrete nouns of the question instead of a rephrasing of it.
+async fn replan(bridge: &Bridge, query: &str, lang: Option<&str>) -> Vec<String> {
+    let sys = "Bạn là người sửa truy vấn tìm kiếm. Lần tìm trước KHÔNG ra tư liệu đúng chủ đề. \
+        Hãy viết lại thành các truy vấn NGẮN, chỉ gồm từ khoá cụ thể (danh từ riêng, sự kiện, mốc thời gian, địa danh) — \
+        không viết thành câu, không diễn giải. Chỉ trả về JSON.";
+    let prompt = format!(
+        "Câu hỏi gốc: {query}\nNgôn ngữ ưu tiên: {}\n\n\
+         Trả về ĐÚNG JSON: {{\"queries\":[\"...\"]}} — tối đa 3 truy vấn từ khoá, khác nhau rõ rệt. \
+         Nếu chủ đề mang tính quốc tế, có thể thêm một truy vấn bằng tiếng Anh.",
+        lang.unwrap_or("vi")
+    );
+    // Ask big: the bridge yields only a small fraction of `maxTokens`, so a
+    // tight budget comes back cut after a few tokens (see `review.rs`).
+    match bridge.llm(sys, &prompt, 3_000, Duration::from_secs(60)).await {
+        Ok(reply) => {
+            let mut out: Vec<String> = Vec::new();
+            for q in parse_queries(&reply.text) {
+                push_unique(&mut out, q);
+                if out.len() >= 3 {
+                    break;
+                }
+            }
+            out
+        }
+        Err(_) => vec![],
+    }
 }
 
 /// Re-run dedupe → fuse → diversity-cap over a union of evidence sets.
@@ -424,7 +598,10 @@ mod tests {
     fn planner_output_is_parsed_out_of_fenced_noise() {
         let text = "Đây là kế hoạch:\n```json\n{\"queries\":[\"lãi suất 2026\",\" \",\"tác động lạm phát\"]}\n```\nxong.";
         let qs = parse_queries(text);
-        assert_eq!(qs, vec!["lãi suất 2026".to_string(), "tác động lạm phát".to_string()]);
+        assert_eq!(
+            qs,
+            vec!["lãi suất 2026".to_string(), "tác động lạm phát".to_string()]
+        );
     }
 
     #[test]
@@ -437,7 +614,10 @@ mod tests {
         let mut subs = vec!["câu gốc".to_string()];
         push_unique(&mut subs, "CÂU GỐC".into());
         push_unique(&mut subs, "góc nhìn mới".into());
-        assert_eq!(subs, vec!["câu gốc".to_string(), "góc nhìn mới".to_string()]);
+        assert_eq!(
+            subs,
+            vec!["câu gốc".to_string(), "góc nhìn mới".to_string()]
+        );
     }
 
     fn ev(id: &str, url: &str) -> Evidence {
@@ -456,17 +636,33 @@ mod tests {
         let claims = assess_all(
             &[
                 // verified (3 publishers) — must NOT be chased
-                RawClaim { text: "Trời xanh.".into(), supports: vec!["e1".into(), "e2".into(), "e3".into()], refutes: vec![] },
+                RawClaim {
+                    text: "Trời xanh.".into(),
+                    supports: vec!["e1".into(), "e2".into(), "e3".into()],
+                    refutes: vec![],
+                },
                 // single-source — chased
-                RawClaim { text: "Chỉ một nơi nói điều này.".into(), supports: vec!["e1".into()], refutes: vec![] },
+                RawClaim {
+                    text: "Chỉ một nơi nói điều này.".into(),
+                    supports: vec!["e1".into()],
+                    refutes: vec![],
+                },
                 // high-stakes single-source — chased
-                RawClaim { text: "Lãi suất giảm còn 4,5%.".into(), supports: vec!["e2".into()], refutes: vec![] },
+                RawClaim {
+                    text: "Lãi suất giảm còn 4,5%.".into(),
+                    supports: vec!["e2".into()],
+                    refutes: vec![],
+                },
             ],
             &evs,
         );
         assert_eq!(claims[0].tier, Tier::Verified);
         let follow = follow_up_queries(&claims);
-        assert_eq!(follow.len(), 2, "only the two weak claims become follow-ups");
+        assert_eq!(
+            follow.len(),
+            2,
+            "only the two weak claims become follow-ups"
+        );
         assert!(follow.iter().any(|q| q.contains("4,5%")));
         assert!(!follow.iter().any(|q| q.contains("Trời xanh")));
     }

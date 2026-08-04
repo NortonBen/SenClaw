@@ -89,7 +89,13 @@ impl CoreRest {
 
     async fn post_json(&self, path: &str, body: Value, timeout: Duration) -> Result<Value> {
         let url = format!("{}{path}", self.base);
-        let resp = self.http.post(&url).timeout(timeout).json(&body).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             bail!("POST {path}: HTTP {}", resp.status());
         }
@@ -110,10 +116,7 @@ impl CoreRest {
         limit: usize,
         timeout: Duration,
     ) -> Result<Vec<WikiHit>> {
-        let mut path = format!(
-            "/api/wiki/search?q={}&limit={limit}",
-            urlencode(query)
-        );
+        let mut path = format!("/api/wiki/search?q={}&limit={limit}", urlencode(query));
         if let Some(t) = tags.filter(|t| !t.is_empty()) {
             path.push_str(&format!("&tags={}", urlencode(&t.join(","))));
         }
@@ -148,6 +151,17 @@ impl CoreRest {
         Ok(serde_json::from_value(
             v.get("hits").cloned().unwrap_or(Value::Array(vec![])),
         )?)
+    }
+
+    /// One graph node plus its neighbouring edges (`GET /api/cognitive/node/:id`).
+    ///
+    /// The search endpoint returns entity nodes whose `summary` is usually
+    /// empty — the actual sentence lives on the `chunk` node that MENTIONS the
+    /// entity. Without this hop a knowledge citation has no text to show and no
+    /// text to judge.
+    pub async fn cognitive_node(&self, id: &str, timeout: Duration) -> Result<Value> {
+        self.get_json(&format!("/api/cognitive/node/{}", urlencode(id)), timeout)
+            .await
     }
 
     pub async fn cognitive_spaces(&self, timeout: Duration) -> Result<Vec<String>> {

@@ -30,7 +30,14 @@ function reasonOf(s: SourceInfo): string | null {
   return 'reason' in s.health ? s.health.reason : null
 }
 
-const BUILT_IN = ['web', 'knowledge', 'wiki', 'memory', 'corpus']
+/** Nhãn nguồn gốc cho nguồn mở rộng — nguồn nào gỡ được, nguồn nào do quét tự thêm. */
+const ORIGIN_BADGE: Record<SourceInfo['origin'], { text: string; color?: string }> = {
+  builtin: { text: 'có sẵn' },
+  preset: { text: 'preset', color: 'geekblue' },
+  discovered: { text: 'tự phát hiện', color: 'green' },
+  user: { text: 'tự thêm', color: 'purple' },
+}
+
 const QUERY_PARAM = /^(query|q|text|keyword|search|term)$/
 const LIMIT_PARAM = /^(limit|count|num|top_k|max_results|n)$/
 
@@ -149,80 +156,116 @@ export default function Sources({
     })
   }
 
+  const columns = [
+    {
+      title: '',
+      dataIndex: 'enabled',
+      width: 48,
+      render: (enabled: boolean, s: SourceInfo) => (
+        <Switch
+          size="small"
+          checked={enabled}
+          disabled={busy}
+          onChange={(v) => guard(() => api.setSource(s.id, { enabled: v }))}
+        />
+      ),
+    },
+    {
+      title: 'Nguồn',
+      dataIndex: 'label',
+      render: (label: string, s: SourceInfo) => (
+        <Space size={6}>
+          <Badge status={healthStatus(s.health.state)} />
+          <Text>{label}</Text>
+          <Tag color={kindColor(s.kind)} bordered={false}>
+            {s.kind}
+          </Tag>
+        </Space>
+      ),
+    },
+    {
+      title: 'Trọng số',
+      dataIndex: 'weight',
+      width: 96,
+      render: (weight: number, s: SourceInfo) => (
+        <InputNumber
+          size="small"
+          min={0}
+          max={10}
+          step={0.1}
+          value={Number(weight.toFixed(1))}
+          disabled={busy}
+          style={{ width: 72 }}
+          onChange={(v) => v != null && guard(() => api.setSource(s.id, { weight: v }))}
+        />
+      ),
+    },
+    {
+      title: '',
+      key: 'action',
+      width: 104,
+      render: (_: unknown, s: SourceInfo) => {
+        const badge = ORIGIN_BADGE[s.origin] ?? ORIGIN_BADGE.builtin
+        return (
+          <Space size={4}>
+            {s.origin === 'builtin' ? (
+              <Text type="secondary" style={{ fontSize: 12 }} title={reasonOf(s) ?? ''}>
+                {badge.text}
+              </Text>
+            ) : (
+              <Tag color={badge.color} bordered={false} style={{ marginInlineEnd: 0 }}>
+                {badge.text}
+              </Tag>
+            )}
+            {s.origin === 'user' && (
+              <Button
+                size="small"
+                danger
+                type="link"
+                disabled={busy}
+                style={{ paddingInline: 4 }}
+                onClick={() => guard(() => api.removeSource(s.id))}
+              >
+                gỡ
+              </Button>
+            )}
+          </Space>
+        )
+      },
+    },
+  ]
+
+  const coreSources = sources.filter((s) => s.tier === 'core')
+  const optionalSources = sources.filter((s) => s.tier !== 'core')
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card size="small" title="Nguồn tìm kiếm">
+      <Card size="small" title="Nguồn lõi">
+        <Text type="secondary" style={{ fontSize: 12.5, display: 'block', marginBottom: 8 }}>
+          Có sẵn trong Zeach, không gỡ được — chỉ bật/tắt và cân trọng số.
+        </Text>
         <Table<SourceInfo>
           size="small"
           rowKey="id"
-          dataSource={sources}
+          dataSource={coreSources}
           pagination={false}
-          columns={[
-            {
-              title: '',
-              dataIndex: 'enabled',
-              width: 48,
-              render: (enabled: boolean, s) => (
-                <Switch
-                  size="small"
-                  checked={enabled}
-                  disabled={busy}
-                  onChange={(v) => guard(() => api.setSource(s.id, { enabled: v }))}
-                />
-              ),
-            },
-            {
-              title: 'Nguồn',
-              dataIndex: 'label',
-              render: (label: string, s) => (
-                <Space size={6}>
-                  <Badge status={healthStatus(s.health.state)} />
-                  <Text>{label}</Text>
-                  <Tag color={kindColor(s.kind)} bordered={false}>
-                    {s.kind}
-                  </Tag>
-                </Space>
-              ),
-            },
-            {
-              title: 'Trọng số',
-              dataIndex: 'weight',
-              width: 96,
-              render: (weight: number, s) => (
-                <InputNumber
-                  size="small"
-                  min={0}
-                  max={10}
-                  step={0.1}
-                  value={Number(weight.toFixed(1))}
-                  disabled={busy}
-                  style={{ width: 72 }}
-                  onChange={(v) => v != null && guard(() => api.setSource(s.id, { weight: v }))}
-                />
-              ),
-            },
-            {
-              title: '',
-              key: 'action',
-              width: 60,
-              render: (_, s) =>
-                BUILT_IN.includes(s.id) ? (
-                  <Text type="secondary" style={{ fontSize: 12 }} title={reasonOf(s) ?? ''}>
-                    có sẵn
-                  </Text>
-                ) : (
-                  <Button
-                    size="small"
-                    danger
-                    type="link"
-                    disabled={busy}
-                    onClick={() => guard(() => api.removeSource(s.id))}
-                  >
-                    gỡ
-                  </Button>
-                ),
-            },
-          ]}
+          columns={columns}
+        />
+      </Card>
+
+      <Card size="small" title="Nguồn mở rộng — từ app & MCP">
+        <Text type="secondary" style={{ fontSize: 12.5, display: 'block', marginBottom: 8 }}>
+          Preset và nguồn <Tag color="green" bordered={false}>tự phát hiện</Tag> từ app đã cài
+          (rule: công cụ <code>*_search</code> chạy được chỉ với truy vấn). Nguồn tự phát hiện
+          mặc định <b>tắt</b> — bật nguồn bạn muốn tham gia nghiên cứu.
+        </Text>
+        <Table<SourceInfo>
+          size="small"
+          rowKey="id"
+          dataSource={optionalSources}
+          pagination={false}
+          locale={{ emptyText: 'Chưa có — bấm “Quét lại app đã cài” để dò nguồn từ app.' }}
+          columns={columns}
         />
         <Button
           icon={<SyncOutlined />}

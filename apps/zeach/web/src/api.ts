@@ -32,6 +32,9 @@ export interface SourceInfo {
   id: string
   label: string
   kind: string
+  /** core = có sẵn trong app; optional = đến từ app/MCP đã cài. */
+  tier: 'core' | 'optional'
+  origin: 'builtin' | 'preset' | 'discovered' | 'user'
   enabled: boolean
   weight: number
   max_results: number
@@ -126,11 +129,26 @@ export interface SavedRef {
   detail?: string
 }
 
+/** Verdict of the post-synthesis checkpoint (`review::review_report`). */
+export interface ReportReview {
+  answers: boolean
+  score: number
+  issues: string[]
+  missing: string[]
+  /** False when the reviewer itself could not run — `answers` is then a default. */
+  used_llm: boolean
+}
+
 export interface ResearchOutcome {
   query: string
   depth: Depth
   sub_queries: string[]
   evidence: Evidence[]
+  /** Retrieved but judged off topic — never used to derive a claim. */
+  off_topic?: Evidence[]
+  /** ok | off_topic (report does not answer the question) | insufficient. */
+  status?: 'ok' | 'off_topic' | 'insufficient'
+  review?: ReportReview | null
   sources: SourceOutcome[]
   unknown_sources: string[]
   claims: Claim[]

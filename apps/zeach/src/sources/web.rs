@@ -64,9 +64,9 @@ impl SearchSource for WebSource {
 
     async fn health(&self) -> SourceHealth {
         match self.browser.is_connected().await {
-            Ok(_) if self.google_blocked.load(Ordering::Relaxed) => SourceHealth::degraded(
-                "Google đã chặn (CAPTCHA) — đang dùng Bing cho phiên này",
-            ),
+            Ok(_) if self.google_blocked.load(Ordering::Relaxed) => {
+                SourceHealth::degraded("Google đã chặn (CAPTCHA) — đang dùng Bing cho phiên này")
+            }
             Ok(_) => SourceHealth::Ready,
             Err(e) => SourceHealth::unavailable(format!(
                 "không kết nối được browser bridge ({e}) — cần Chrome extension của SenClaw"

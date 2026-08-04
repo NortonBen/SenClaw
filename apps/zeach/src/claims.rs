@@ -140,14 +140,45 @@ fn is_high_stakes(text: &str) -> bool {
 
     const RISKY: &[&str] = &[
         // legal
-        "luật", "nghị định", "thông tư", "toà án", "tòa án", "phạt", "kiện", "hợp đồng",
-        "bản quyền", "law", "court", "lawsuit", "illegal", "liability",
+        "luật",
+        "nghị định",
+        "thông tư",
+        "toà án",
+        "tòa án",
+        "phạt",
+        "kiện",
+        "hợp đồng",
+        "bản quyền",
+        "law",
+        "court",
+        "lawsuit",
+        "illegal",
+        "liability",
         // medical
-        "thuốc", "liều", "bệnh", "điều trị", "chẩn đoán", "tác dụng phụ", "vắc xin",
-        "dose", "treatment", "diagnosis", "symptom", "vaccine",
+        "thuốc",
+        "liều",
+        "bệnh",
+        "điều trị",
+        "chẩn đoán",
+        "tác dụng phụ",
+        "vắc xin",
+        "dose",
+        "treatment",
+        "diagnosis",
+        "symptom",
+        "vaccine",
         // financial
-        "lãi suất", "cổ phiếu", "đầu tư", "lợi nhuận", "thuế", "phá sản",
-        "interest rate", "stock", "invest", "tax", "bankrupt",
+        "lãi suất",
+        "cổ phiếu",
+        "đầu tư",
+        "lợi nhuận",
+        "thuế",
+        "phá sản",
+        "interest rate",
+        "stock",
+        "invest",
+        "tax",
+        "bankrupt",
     ];
     if RISKY.iter().any(|k| lower.contains(k)) {
         return true;
@@ -329,7 +360,12 @@ mod tests {
     /// Three genuinely separate web publishers.
     fn three_publishers() -> Vec<Evidence> {
         vec![
-            ev("e1", "web", SourceKind::Web, Some("https://vnexpress.net/a")),
+            ev(
+                "e1",
+                "web",
+                SourceKind::Web,
+                Some("https://vnexpress.net/a"),
+            ),
             ev("e2", "web", SourceKind::Web, Some("https://tuoitre.vn/b")),
             ev("e3", "web", SourceKind::Web, Some("https://thanhnien.vn/c")),
         ]
@@ -338,7 +374,11 @@ mod tests {
     #[test]
     fn three_independent_publishers_reach_verified() {
         let evs = three_publishers();
-        let c = assess("c1".into(), &raw("Lãi suất giữ nguyên.", &["e1", "e2", "e3"], &[]), &evs);
+        let c = assess(
+            "c1".into(),
+            &raw("Lãi suất giữ nguyên.", &["e1", "e2", "e3"], &[]),
+            &evs,
+        );
         assert_eq!(c.independent_count, 3);
         assert_eq!(c.agreement, 1.0);
         assert_eq!(c.tier, Tier::Verified);
@@ -348,9 +388,24 @@ mod tests {
     fn three_pages_on_one_domain_are_one_independent_source() {
         // The core anti-echo rule: same publisher, three URLs, one voice.
         let evs = vec![
-            ev("e1", "web", SourceKind::Web, Some("https://vnexpress.net/a")),
-            ev("e2", "web", SourceKind::Web, Some("https://vnexpress.net/b")),
-            ev("e3", "web", SourceKind::Web, Some("https://m.vnexpress.net/c")),
+            ev(
+                "e1",
+                "web",
+                SourceKind::Web,
+                Some("https://vnexpress.net/a"),
+            ),
+            ev(
+                "e2",
+                "web",
+                SourceKind::Web,
+                Some("https://vnexpress.net/b"),
+            ),
+            ev(
+                "e3",
+                "web",
+                SourceKind::Web,
+                Some("https://m.vnexpress.net/c"),
+            ),
         ];
         let c = assess("c1".into(), &raw("X.", &["e1", "e2", "e3"], &[]), &evs);
         assert_eq!(c.independent_count, 1, "one publisher is one source");
@@ -364,7 +419,10 @@ mod tests {
         let evs = three_publishers();
         let c = assess("c1".into(), &raw("X.", &["e1", "e999", "nope"], &[]), &evs);
         assert_eq!(c.supports, vec!["e1".to_string()]);
-        assert_eq!(c.dropped_citations, vec!["e999".to_string(), "nope".to_string()]);
+        assert_eq!(
+            c.dropped_citations,
+            vec!["e999".to_string(), "nope".to_string()]
+        );
         assert_eq!(c.independent_count, 1);
     }
 
@@ -406,14 +464,21 @@ mod tests {
         assert_eq!(c.independent_count, 2);
         // 2 supporting units vs 1 refuting unit → 0.667. Still disputed, but
         // by an honest 2-vs-1, not a misleading 2-vs-5.
-        assert!((c.agreement - 2.0 / 3.0).abs() < 0.01, "got {}", c.agreement);
+        assert!(
+            (c.agreement - 2.0 / 3.0).abs() < 0.01,
+            "got {}",
+            c.agreement
+        );
     }
 
     #[test]
     fn the_same_id_cannot_both_support_and_refute() {
         let evs = three_publishers();
         let c = assess("c1".into(), &raw("X.", &["e1", "e2"], &["e2"]), &evs);
-        assert!(c.refutes.is_empty(), "contradictory binding must not double-count");
+        assert!(
+            c.refutes.is_empty(),
+            "contradictory binding must not double-count"
+        );
         assert_eq!(c.independent_count, 2);
     }
 
@@ -430,8 +495,18 @@ mod tests {
         // A YouTube video and a web page on youtube.com are different families
         // of evidence even though the domain matches.
         let evs = vec![
-            ev("e1", "web", SourceKind::Web, Some("https://youtube.com/watch?v=1")),
-            ev("e2", "youtube", SourceKind::Social, Some("https://youtube.com/watch?v=2")),
+            ev(
+                "e1",
+                "web",
+                SourceKind::Web,
+                Some("https://youtube.com/watch?v=1"),
+            ),
+            ev(
+                "e2",
+                "youtube",
+                SourceKind::Social,
+                Some("https://youtube.com/watch?v=2"),
+            ),
         ];
         let c = assess("c1".into(), &raw("X.", &["e1", "e2"], &[]), &evs);
         assert_eq!(c.independent_count, 2);
@@ -486,9 +561,21 @@ mod tests {
         let evs = three_publishers();
         let claims = assess_all(&[raw("A.", &["e1"], &[]), raw("B.", &["e2"], &[])], &evs);
         let raws = vec![
-            RawContradiction { claim_a: 0, claim_b: 1, summary: "trái ngược".into() },
-            RawContradiction { claim_a: 0, claim_b: 99, summary: "ghost".into() },
-            RawContradiction { claim_a: 1, claim_b: 1, summary: "self".into() },
+            RawContradiction {
+                claim_a: 0,
+                claim_b: 1,
+                summary: "trái ngược".into(),
+            },
+            RawContradiction {
+                claim_a: 0,
+                claim_b: 99,
+                summary: "ghost".into(),
+            },
+            RawContradiction {
+                claim_a: 1,
+                claim_b: 1,
+                summary: "self".into(),
+            },
         ];
         let out = validate_contradictions(&raws, &claims);
         assert_eq!(out.len(), 1);
@@ -500,8 +587,16 @@ mod tests {
         let evs = three_publishers();
         let claims = assess_all(&[raw("A.", &["e1"], &[]), raw("B.", &["e2"], &[])], &evs);
         let raws = vec![
-            RawContradiction { claim_a: 0, claim_b: 1, summary: "x".into() },
-            RawContradiction { claim_a: 1, claim_b: 0, summary: "x đảo chiều".into() },
+            RawContradiction {
+                claim_a: 0,
+                claim_b: 1,
+                summary: "x".into(),
+            },
+            RawContradiction {
+                claim_a: 1,
+                claim_b: 0,
+                summary: "x đảo chiều".into(),
+            },
         ];
         assert_eq!(validate_contradictions(&raws, &claims).len(), 1);
     }
@@ -515,11 +610,19 @@ mod tests {
         );
         assert_eq!(claims[0].tier, Tier::Verified);
         let cts = validate_contradictions(
-            &[RawContradiction { claim_a: 0, claim_b: 1, summary: "ngược nhau".into() }],
+            &[RawContradiction {
+                claim_a: 0,
+                claim_b: 1,
+                summary: "ngược nhau".into(),
+            }],
             &claims,
         );
         mark_disputed(&mut claims, &cts);
-        assert_eq!(claims[0].tier, Tier::Disputed, "a disagreement must not read as settled");
+        assert_eq!(
+            claims[0].tier,
+            Tier::Disputed,
+            "a disagreement must not read as settled"
+        );
     }
 
     #[test]

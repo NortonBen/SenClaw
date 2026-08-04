@@ -76,11 +76,13 @@ export default function SearchPage({
   selected,
   onToggle,
   onSourcesChanged,
+  onBusyChange,
 }: {
   sources: SourceInfo[]
   selected: Set<string>
   onToggle: (id: string) => void
   onSourcesChanged: () => void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const { token } = theme.useToken()
   const { message } = AntApp.useApp()
@@ -98,6 +100,7 @@ export default function SearchPage({
   async function run(nextMode: Mode) {
     if (!query.trim() || busy) return
     setBusy(true)
+    onBusyChange?.(true)
     setMode(nextMode)
     try {
       const picked = selected.size ? [...selected] : undefined
@@ -122,6 +125,7 @@ export default function SearchPage({
       message.error((e as Error).message)
     } finally {
       setBusy(false)
+      onBusyChange?.(false)
     }
   }
 

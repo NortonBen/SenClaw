@@ -22,7 +22,9 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 pub fn root_router(state: AppState) -> Router {
-    Router::new().route("/health", get(health)).with_state(state)
+    Router::new()
+        .route("/health", get(health))
+        .with_state(state)
 }
 
 pub fn api_router(state: AppState) -> Router {
@@ -103,14 +105,24 @@ async fn ask(State(state): State<AppState>, Json(body): Json<Value>) -> Response
 /// Deep multi-round research → a cited report. Delegates to the MCP tool so the
 /// web UI and other components run the exact same pipeline.
 async fn research(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
-    if body.get("query").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+    if body
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
         return err(StatusCode::BAD_REQUEST, "query trống");
     }
     via_mcp(&state, "zeach_research", body).await
 }
 
 async fn list_reports(State(state): State<AppState>, Query(q): Query<LimitQuery>) -> Response {
-    match state.core.db.list_reports(q.limit.unwrap_or(30).clamp(1, 200)) {
+    match state
+        .core
+        .db
+        .list_reports(q.limit.unwrap_or(30).clamp(1, 200))
+    {
         Ok(reports) => respond(json!({ "reports": reports })),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -119,7 +131,10 @@ async fn list_reports(State(state): State<AppState>, Query(q): Query<LimitQuery>
 async fn get_report(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.core.db.get_report(&id) {
         Ok(Some(r)) => respond(r),
-        Ok(None) => err(StatusCode::NOT_FOUND, format!("chưa có báo cáo cho run `{id}`")),
+        Ok(None) => err(
+            StatusCode::NOT_FOUND,
+            format!("chưa có báo cáo cho run `{id}`"),
+        ),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -215,7 +230,10 @@ async fn delete_corpus(State(state): State<AppState>, Path(id): Path<String>) ->
 /// Every file is reported individually: a batch where one PDF is a scan must
 /// say which one failed and why, not fail the whole upload or, worse, succeed
 /// silently with one document missing.
-async fn upload_corpus(State(state): State<AppState>, mut mp: axum::extract::Multipart) -> Response {
+async fn upload_corpus(
+    State(state): State<AppState>,
+    mut mp: axum::extract::Multipart,
+) -> Response {
     let mut added = Vec::new();
     let mut failed = Vec::new();
 
@@ -264,7 +282,10 @@ async fn upload_corpus(State(state): State<AppState>, mut mp: axum::extract::Mul
     }
 
     if added.is_empty() && !failed.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "added": [], "failed": failed })))
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "added": [], "failed": failed })),
+        )
             .into_response();
     }
     respond(json!({ "added": added, "failed": failed }))

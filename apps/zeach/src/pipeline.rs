@@ -89,7 +89,9 @@ pub async fn run(
         lang: req.lang.clone(),
     }];
 
-    let sem = Arc::new(tokio::sync::Semaphore::new(crate::config::fanout_concurrency()));
+    let sem = Arc::new(tokio::sync::Semaphore::new(
+        crate::config::fanout_concurrency(),
+    ));
     let mut tasks = Vec::new();
 
     for rs in selected {
@@ -316,7 +318,7 @@ mod tests {
     fn reg(sources: Vec<Fake>) -> Registry {
         let mut r = Registry::new();
         for s in sources {
-            r.register(Arc::new(s));
+            r.register(Arc::new(s), crate::sources::SourceOrigin::Builtin);
         }
         r
     }

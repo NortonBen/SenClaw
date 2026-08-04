@@ -13,6 +13,7 @@
 use crate::model::SourceKind;
 use crate::pipeline::{self, SearchRequest};
 use crate::sources::mcp_source::{FieldMap, McpSource, McpSourceSpec, McpTarget};
+use crate::sources::SourceOrigin;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -79,7 +80,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": SERVER_NAME, "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -154,9 +157,7 @@ fn spec_from_args(args: &Value) -> Result<McpSourceSpec, String> {
     let tool = arg_str(args, "tool").ok_or("thiếu tham số `tool`")?;
 
     let target = match (arg_str(args, "app_id"), arg_str(args, "rpc_url")) {
-        (Some(_), Some(_)) => {
-            return Err("chỉ được dùng MỘT trong `app_id` hoặc `rpc_url`".into())
-        }
+        (Some(_), Some(_)) => return Err("chỉ được dùng MỘT trong `app_id` hoặc `rpc_url`".into()),
         (Some(app_id), None) => McpTarget::App { app_id },
         (None, Some(rpc_url)) => McpTarget::Url { rpc_url },
         (None, None) => return Err("cần `app_id` hoặc `rpc_url`".into()),
@@ -164,13 +165,15 @@ fn spec_from_args(args: &Value) -> Result<McpSourceSpec, String> {
 
     let kind = match arg_str(args, "kind").as_deref() {
         None => SourceKind::Custom,
-        Some(k) => serde_json::from_value(json!(k))
-            .map_err(|_| format!("`kind` không hợp lệ: `{k}` (web|internal|social|docs|code|custom)"))?,
+        Some(k) => serde_json::from_value(json!(k)).map_err(|_| {
+            format!("`kind` không hợp lệ: `{k}` (web|internal|social|docs|code|custom)")
+        })?,
     };
 
     let map: FieldMap = match args.get("map") {
-        Some(v) if !v.is_null() => serde_json::from_value(v.clone())
-            .map_err(|e| format!("`map` không hợp lệ: {e}"))?,
+        Some(v) if !v.is_null() => {
+            serde_json::from_value(v.clone()).map_err(|e| format!("`map` không hợp lệ: {e}"))?
+        }
         _ => FieldMap::default(),
     };
 
@@ -234,7 +237,11 @@ pub fn ingest_text(
 /// surface), so this goes through `agent.run` with a one-tool allowlist — the
 /// documented way to reach an MCP tool that has no HTTP endpoint (`bridge.rs`).
 /// Best-effort: any failure is surfaced to the caller, never fatal to the run.
-async fn save_report_to_wiki(state: &AppState, title: &str, markdown: &str) -> Result<String, String> {
+async fn save_report_to_wiki(
+    state: &AppState,
+    title: &str,
+    markdown: &str,
+) -> Result<String, String> {
     let system = "Bạn là trợ lý lưu trữ. Dùng công cụ wiki_write để lưu ĐÚNG nội dung Markdown được cung cấp, \
         KHÔNG chỉnh sửa hay tóm tắt nội dung. Chọn một đường dẫn hợp lý dưới thư mục 'zeach/'.";
     let prompt = format!(
@@ -292,7 +299,7 @@ pub fn tools_list() -> Vec<Value> {
         }),
         json!({
             "name": "zeach_research",
-            "description": "Nghiên cứu chuyên sâu ĐA NGUỒN rồi trả về một BÁO CÁO có trích dẫn — đây là năng lực chính của Zeach. Khác với zeach_search (chỉ trả danh sách kết quả), công cụ này: (1) tách câu hỏi thành nhiều truy vấn con để bao phủ nhiều khía cạnh; (2) gom bằng chứng từ MỌI nguồn đang bật (web, knowledge graph, wiki, tài liệu, mạng xã hội và bất kỳ MCP nào khác đã đăng ký); (3) rút các khẳng định nguyên tử và KIỂM CHỨNG CHÉO bằng cách ĐẾM số nguồn độc lập — chỉ điều được ≥2 nguồn độc lập xác nhận mới đạt mức 'nhiều nguồn'; khi mâu thuẫn thì nêu CẢ HAI phía chứ không tự chọn; (4) tổng hợp thành báo cáo Markdown có trích dẫn [n] tra ngược được về từng nguồn. depth='deep' chạy thêm một vòng truy chứng cho các khẳng định yếu/nhạy cảm. Chậm và tốn LLM — dùng khi cần câu trả lời tổng hợp đáng tin; tra nhanh thì dùng zeach_search.",
+            "description": "Nghiên cứu chuyên sâu ĐA NGUỒN rồi trả về một BÁO CÁO có trích dẫn — đây là năng lực chính của Zeach. Khác với zeach_search (chỉ trả danh sách kết quả), công cụ này: (1) tách câu hỏi thành nhiều truy vấn con để bao phủ nhiều khía cạnh; (2) gom bằng chứng từ MỌI nguồn đang bật (web, knowledge graph, wiki, tài liệu, mạng xã hội và bất kỳ MCP nào khác đã đăng ký); (3) rút các khẳng định nguyên tử và KIỂM CHỨNG CHÉO bằng cách ĐẾM số nguồn độc lập — chỉ điều được ≥2 nguồn độc lập xác nhận mới đạt mức 'nhiều nguồn'; khi mâu thuẫn thì nêu CẢ HAI phía chứ không tự chọn; (4) tổng hợp thành báo cáo Markdown có trích dẫn [n] tra ngược được về từng nguồn. depth='deep' chạy thêm một vòng truy chứng cho các khẳng định yếu/nhạy cảm. CÓ HAI CHỐT KIỂM ĐỊNH: tư liệu lạc chủ đề bị loại trước khi rút khẳng định (nằm ở `off_topic`), và báo cáo được chấm lại so với câu hỏi trước khi trả (`review`). Đọc trường `status`: 'ok' = trả lời đúng câu hỏi; 'off_topic' = báo cáo KHÔNG trả lời được câu hỏi (đừng dùng làm câu trả lời); 'insufficient' = không có tư liệu nào đúng chủ đề, hệ thống từ chối tổng hợp. Chậm và tốn LLM — dùng khi cần câu trả lời tổng hợp đáng tin; tra nhanh thì dùng zeach_search.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -575,15 +582,20 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let run_id = state.core.db.save_run(&so, &params, "research").ok();
             let mut saved: Vec<Value> = Vec::new();
             if let Some(id) = &run_id {
-                if let Err(e) = state.core.db.save_claims(id, &out.claims, &out.contradictions) {
+                if let Err(e) = state
+                    .core
+                    .db
+                    .save_claims(id, &out.claims, &out.contradictions)
+                {
                     eprintln!("[zeach] không lưu được claims: {e}");
                 }
                 let body_json = json!({ "title": out.report_title, "llm": out.report_llm });
-                match state
-                    .core
-                    .db
-                    .save_report(id, &out.report_title, &out.report_markdown, &body_json)
-                {
+                match state.core.db.save_report(
+                    id,
+                    &out.report_title,
+                    &out.report_markdown,
+                    &body_json,
+                ) {
                     Ok((rep_id, ver)) => {
                         saved.push(json!({ "target": "db", "report_id": rep_id, "version": ver }))
                     }
@@ -592,7 +604,11 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
 
             // Optional export — best-effort, recorded, never fatal to the run.
-            if args.get("save_knowledge").and_then(Value::as_bool).unwrap_or(false) {
+            if args
+                .get("save_knowledge")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
                 let text = format!("{}\n\n{}", out.report_title, out.report_markdown);
                 match state
                     .core
@@ -602,10 +618,16 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     .await
                 {
                     Ok(_) => saved.push(json!({ "target": "knowledge", "status": "ok" })),
-                    Err(e) => out.warnings.push(format!("lưu vào knowledge thất bại: {e}")),
+                    Err(e) => out
+                        .warnings
+                        .push(format!("lưu vào knowledge thất bại: {e}")),
                 }
             }
-            if args.get("save_wiki").and_then(Value::as_bool).unwrap_or(false) {
+            if args
+                .get("save_wiki")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
                 match save_report_to_wiki(state, &out.report_title, &out.report_markdown).await {
                     Ok(detail) => {
                         saved.push(json!({ "target": "wiki", "status": "ok", "detail": detail }))
@@ -623,9 +645,9 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         "zeach_report" => match arg_str(args, "run_id") {
             Some(id) => match state.core.db.get_report(&id) {
                 Ok(Some(r)) => json_result(r),
-                Ok(None) => {
-                    error_result(format!("chưa có báo cáo cho run `{id}` — chạy zeach_research trước"))
-                }
+                Ok(None) => error_result(format!(
+                    "chưa có báo cáo cho run `{id}` — chạy zeach_research trước"
+                )),
                 Err(e) => error_result(e.to_string()),
             },
             None => {
@@ -737,15 +759,10 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 return error_result(format!("lưu nguồn thất bại: {e}"));
             }
             let id = spec.id.clone();
-            state
-                .core
-                .registry
-                .write()
-                .await
-                .register(Arc::new(McpSource::new(
-                    spec,
-                    state.core.transports.apps.clone(),
-                )));
+            state.core.registry.write().await.register(
+                Arc::new(McpSource::new(spec, state.core.transports.apps.clone())),
+                SourceOrigin::User,
+            );
 
             // Probe immediately: a source that was accepted but cannot run is
             // far more useful to know about now than at the next search.
@@ -782,7 +799,7 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
 
         "zeach_source_templates" => {
-            let templates: Vec<Value> = crate::sources::presets::templates()
+            let mut templates: Vec<Value> = crate::sources::presets::templates()
                 .into_iter()
                 .map(|t| {
                     json!({
@@ -794,6 +811,21 @@ pub async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     })
                 })
                 .collect();
+            // Dynamic suggestions from the last rescan: search tools found by
+            // rule that need arguments only the user can supply.
+            for s in state.core.discovered_suggestions.read().await.iter() {
+                if templates.iter().any(|t| t["app_id"] == json!(s.app_id)) {
+                    continue; // curated template already covers this app
+                }
+                templates.push(json!({
+                    "id": s.app_id, "label": s.app_name, "app_id": s.app_id, "tool": s.tool,
+                    "why": "công cụ tìm kiếm của app này cần tham số bắt buộc ngoài truy vấn — \
+                            thêm bằng form MCP bên dưới và điền các giá trị này vào Tham số cố định",
+                    "required_args": s.required_args.iter()
+                        .map(|(k, hint)| json!({ "name": k, "hint": hint }))
+                        .collect::<Vec<_>>(),
+                }));
+            }
             json_result(json!({ "templates": templates }))
         }
 

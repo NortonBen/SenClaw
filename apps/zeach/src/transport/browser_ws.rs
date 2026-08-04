@@ -66,7 +66,10 @@ impl BrowserWs {
     }
 
     pub fn from_config() -> Self {
-        Self::new(crate::config::browser_ws_url(), crate::config::browser_agent_id())
+        Self::new(
+            crate::config::browser_ws_url(),
+            crate::config::browser_agent_id(),
+        )
     }
 
     /// A clone bound to a distinct agent identity, and therefore a distinct tab.

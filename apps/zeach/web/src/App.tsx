@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App as AntApp, Layout, Menu, theme, Typography } from 'antd'
+import { App as AntApp, Layout, Menu, Tag, theme, Typography } from 'antd'
 import {
   ExperimentOutlined,
   HistoryOutlined,
+  LoadingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SettingOutlined,
@@ -18,12 +19,6 @@ const { Title } = Typography
 
 type Page = 'search' | 'history' | 'settings'
 
-const NAV = [
-  { key: 'search', icon: <ExperimentOutlined />, label: 'Nghiên cứu' },
-  { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử' },
-  { key: 'settings', icon: <SettingOutlined />, label: 'Cài đặt' },
-]
-
 export default function App() {
   const { token } = theme.useToken()
   const { message } = AntApp.useApp()
@@ -32,6 +27,17 @@ export default function App() {
   const [page, setPage] = useState<Page>('search')
   const [sources, setSources] = useState<SourceInfo[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [searching, setSearching] = useState(false)
+
+  const nav = [
+    {
+      key: 'search',
+      icon: searching ? <LoadingOutlined spin /> : <ExperimentOutlined />,
+      label: 'Nghiên cứu',
+    },
+    { key: 'history', icon: <HistoryOutlined />, label: 'Lịch sử' },
+    { key: 'settings', icon: <SettingOutlined />, label: 'Cài đặt' },
+  ]
 
   const loadSources = useCallback(
     (resetSelection: boolean) =>
@@ -111,7 +117,7 @@ export default function App() {
           mode="inline"
           selectedKeys={[page]}
           onClick={({ key }) => setPage(key as Page)}
-          items={NAV}
+          items={nav}
           style={{ borderInlineEnd: 0, background: 'transparent', marginTop: 6 }}
         />
       </Sider>
@@ -137,20 +143,33 @@ export default function App() {
             style={{ marginRight: 12 }}
           />
           <Title level={5} style={{ margin: 0 }}>
-            {NAV.find((n) => n.key === page)?.label}
+            {nav.find((n) => n.key === page)?.label}
           </Title>
+          {searching && page !== 'search' && (
+            <Tag
+              icon={<LoadingOutlined spin />}
+              color="processing"
+              style={{ marginLeft: 12, cursor: 'pointer' }}
+              onClick={() => setPage('search')}
+            >
+              đang chạy tìm kiếm…
+            </Tag>
+          )}
         </Header>
 
         <Content style={{ padding: 24 }}>
           <div style={{ maxWidth: 980, margin: '0 auto' }}>
-            {page === 'search' && (
+            {/* SearchPage stays mounted so an in-flight run (spinner, kết quả)
+                survives tab switches; only hidden via CSS. */}
+            <div style={{ display: page === 'search' ? undefined : 'none' }}>
               <SearchPage
                 sources={sources}
                 selected={selected}
                 onToggle={toggle}
                 onSourcesChanged={() => loadSources(false)}
+                onBusyChange={setSearching}
               />
-            )}
+            </div>
             {page === 'history' && <HistoryPage />}
             {page === 'settings' && (
               <SettingsPage sources={sources} onChanged={() => loadSources(false)} />

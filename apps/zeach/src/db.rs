@@ -83,7 +83,12 @@ impl Db {
     ///
     /// One transaction — a half-written run would misreport which sources ran,
     /// which is exactly the thing `run_sources` exists to make trustworthy.
-    pub fn save_run(&self, out: &SearchOutcome, params: &Value, verify_level: &str) -> Result<String> {
+    pub fn save_run(
+        &self,
+        out: &SearchOutcome,
+        params: &Value,
+        verify_level: &str,
+    ) -> Result<String> {
         let run_id = new_id("run");
         let created = now();
         self.with_conn_mut(|conn| {
@@ -283,7 +288,9 @@ impl Db {
 
     // --- source config persistence ---------------------------------------
 
-    pub fn load_source_config(&self) -> Result<Vec<(String, Option<bool>, Option<f32>, Option<i64>, Option<i64>)>> {
+    pub fn load_source_config(
+        &self,
+    ) -> Result<Vec<(String, Option<bool>, Option<f32>, Option<i64>, Option<i64>)>> {
         self.with_conn(|conn| {
             let mut st = conn.prepare(
                 "SELECT source_id, enabled, weight, max_results, timeout_ms FROM source_config",
@@ -418,9 +425,8 @@ impl Db {
                 .filter_map(|r| r.ok())
                 .collect();
 
-            let mut bind = conn.prepare(
-                "SELECT evidence_id, stance FROM claim_evidence WHERE claim_id = ?1",
-            )?;
+            let mut bind =
+                conn.prepare("SELECT evidence_id, stance FROM claim_evidence WHERE claim_id = ?1")?;
             let mut out = Vec::with_capacity(claims.len());
             for (id, mut json) in claims {
                 let mut supports = Vec::new();
@@ -595,8 +601,8 @@ impl Db {
     /// must not take down every other source.
     pub fn list_mcp_sources(&self) -> Result<Vec<(McpSourceSpec, bool)>> {
         self.with_conn(|conn| {
-            let mut st = conn
-                .prepare("SELECT id, spec_json, enabled FROM mcp_sources ORDER BY created_at")?;
+            let mut st =
+                conn.prepare("SELECT id, spec_json, enabled FROM mcp_sources ORDER BY created_at")?;
             let rows = st.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -673,7 +679,15 @@ impl Db {
             conn.execute(
                 "INSERT INTO reports (id, run_id, version, title, body_md, body_json, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![id, run_id, version, title, body_md, body_json.to_string(), created],
+                params![
+                    id,
+                    run_id,
+                    version,
+                    title,
+                    body_md,
+                    body_json.to_string(),
+                    created
+                ],
             )?;
             Ok((id.clone(), version))
         })
@@ -855,7 +869,11 @@ mod tests {
     #[test]
     fn an_indexed_document_is_findable() {
         let db = db();
-        add_doc(&db, "báo cáo.txt", "Lãi suất điều hành giảm còn 4,5% trong quý ba.");
+        add_doc(
+            &db,
+            "báo cáo.txt",
+            "Lãi suất điều hành giảm còn 4,5% trong quý ba.",
+        );
         let hits = find(&db, "lãi suất");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].doc_name, "báo cáo.txt");
@@ -869,7 +887,11 @@ mod tests {
         // was never indexed.
         let db = db();
         add_doc(&db, "d.txt", "Lãi suất điều hành giảm.");
-        assert_eq!(find(&db, "lai suat").len(), 1, "unaccented query must match");
+        assert_eq!(
+            find(&db, "lai suat").len(),
+            1,
+            "unaccented query must match"
+        );
         assert_eq!(find(&db, "LÃI SUẤT").len(), 1, "case must not matter");
     }
 
@@ -885,11 +907,20 @@ mod tests {
         // Raw interpolation of any of these is a SQLite syntax error.
         let db = db();
         add_doc(&db, "d.txt", "Giá vàng SJC hôm nay.");
-        for raw in ["giá \"vàng\"", "vàng - SJC", "vàng AND SJC", "vàng*", "(vàng"] {
+        for raw in [
+            "giá \"vàng\"",
+            "vàng - SJC",
+            "vàng AND SJC",
+            "vàng*",
+            "(vàng",
+        ] {
             let expr = crate::corpus::fts_query(raw).unwrap();
             let hits = db.search_corpus(&expr, 10);
             assert!(hits.is_ok(), "`{raw}` produced a broken MATCH: {hits:?}");
-            assert!(!hits.unwrap().is_empty(), "`{raw}` should still find the doc");
+            assert!(
+                !hits.unwrap().is_empty(),
+                "`{raw}` should still find the doc"
+            );
         }
     }
 
@@ -901,7 +932,10 @@ mod tests {
         let id = add_doc(&db, "d.txt", "Lãi suất điều hành giảm.");
         assert_eq!(find(&db, "lãi suất").len(), 1);
         assert!(db.delete_document(&id).unwrap());
-        assert!(find(&db, "lãi suất").is_empty(), "orphan FTS rows left behind");
+        assert!(
+            find(&db, "lãi suất").is_empty(),
+            "orphan FTS rows left behind"
+        );
         assert!(db.list_documents().unwrap().is_empty());
     }
 
@@ -924,8 +958,14 @@ mod tests {
     fn the_same_content_is_detected_by_hash() {
         let db = db();
         let text = "Nội dung trùng lặp.";
-        db.add_document("a.txt", "text/plain", 10, "hash-abc", &crate::corpus::chunk(text))
-            .unwrap();
+        db.add_document(
+            "a.txt",
+            "text/plain",
+            10,
+            "hash-abc",
+            &crate::corpus::chunk(text),
+        )
+        .unwrap();
         let found = db.document_by_hash("hash-abc").unwrap();
         assert_eq!(found.map(|(_, name)| name), Some("a.txt".to_string()));
         assert_eq!(db.document_by_hash("hash-other").unwrap(), None);
@@ -938,7 +978,9 @@ mod tests {
             label: "Threads".into(),
             kind: SourceKind::Social,
             weight: 1.4,
-            target: McpTarget::App { app_id: "social".into() },
+            target: McpTarget::App {
+                app_id: "social".into(),
+            },
             tool: "social_search".into(),
             query_arg: "query".into(),
             limit_arg: Some("limit".into()),
@@ -955,7 +997,8 @@ mod tests {
         // The spec is stored as one JSON blob; a field lost here would come
         // back as a silently different source after the next restart.
         let db = db();
-        db.save_mcp_source(&mcp_spec("social:threads"), true).unwrap();
+        db.save_mcp_source(&mcp_spec("social:threads"), true)
+            .unwrap();
         let rows = db.list_mcp_sources().unwrap();
         assert_eq!(rows.len(), 1);
         let (spec, enabled) = &rows[0];

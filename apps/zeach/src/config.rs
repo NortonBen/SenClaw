@@ -65,9 +65,7 @@ pub fn db_path() -> String {
 
 /// Max sources × sub-queries running concurrently in one fan-out.
 pub fn fanout_concurrency() -> usize {
-    env_or("ZEACH_FANOUT_CONCURRENCY", "8")
-        .parse()
-        .unwrap_or(8)
+    env_or("ZEACH_FANOUT_CONCURRENCY", "8").parse().unwrap_or(8)
 }
 
 /// Default per-source timeout for one `search()` call.

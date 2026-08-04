@@ -20,6 +20,30 @@ use crate::sources::mcp_source::{FieldMap, McpSourceSpec, McpTarget};
 pub fn auto_specs() -> Vec<McpSourceSpec> {
     vec![
         McpSourceSpec {
+            id: "news".into(),
+            label: "Tin tức (News)".into(),
+            // News articles are public web content re-fetched by the app —
+            // a hit here echoing a web hit is NOT independent confirmation.
+            kind: SourceKind::Web,
+            weight: 1.0,
+            target: McpTarget::App {
+                app_id: "news".into(),
+            },
+            tool: "news_search".into(),
+            query_arg: "q".into(),
+            limit_arg: Some("limit".into()),
+            extra_args: serde_json::json!({}),
+            map: FieldMap {
+                // news_search wraps rows as {"articles":[…]} — "articles" is
+                // not in the auto-detected LIST_KEYS.
+                list_path: Some("articles".into()),
+                // Rows carry `description` (auto-detected) and RFC3339
+                // `published_at`; recency matters for news ranking.
+                published_at: Some("published_at".into()),
+                ..Default::default()
+            },
+        },
+        McpSourceSpec {
             id: "youtube".into(),
             label: "YouTube".into(),
             // Deliberately `Social`, not a kind of its own: independence is
@@ -84,8 +108,14 @@ pub fn templates() -> Vec<SourceTemplate> {
         app_id: "social",
         tool: "social_search",
         required_args: &[
-            ("platform", "nền tảng: facebook | x | threads | instagram | tiktok"),
-            ("handle", "tài khoản đã đăng nhập dùng để tìm, ví dụ @ten_cua_ban"),
+            (
+                "platform",
+                "nền tảng: facebook | x | threads | instagram | tiktok",
+            ),
+            (
+                "handle",
+                "tài khoản đã đăng nhập dùng để tìm, ví dụ @ten_cua_ban",
+            ),
         ],
         why: "social_search tìm bằng phiên đăng nhập THẬT của một tài khoản cụ thể. \
               Không thể đoán tài khoản thay bạn — đoán sai là tìm kiếm dưới danh nghĩa người khác.",
@@ -98,14 +128,25 @@ mod tests {
 
     #[test]
     fn youtube_is_not_sent_a_limit_argument_it_does_not_accept() {
-        let yt = auto_specs().into_iter().find(|s| s.id == "youtube").unwrap();
+        let yt = auto_specs()
+            .into_iter()
+            .find(|s| s.id == "youtube")
+            .unwrap();
         assert_eq!(yt.limit_arg, None);
     }
 
     #[test]
     fn youtube_carries_a_url_template_because_it_returns_no_url() {
-        let yt = auto_specs().into_iter().find(|s| s.id == "youtube").unwrap();
-        assert!(yt.map.url_template.as_deref().unwrap().contains("{videoId}"));
+        let yt = auto_specs()
+            .into_iter()
+            .find(|s| s.id == "youtube")
+            .unwrap();
+        assert!(yt
+            .map
+            .url_template
+            .as_deref()
+            .unwrap()
+            .contains("{videoId}"));
     }
 
     #[test]
@@ -126,5 +167,16 @@ mod tests {
     fn social_is_a_template_not_an_auto_spec() {
         assert!(auto_specs().iter().all(|s| s.id != "social"));
         assert!(templates().iter().any(|t| t.id == "social"));
+    }
+
+    #[test]
+    fn news_reads_the_articles_array_with_its_real_arg_names() {
+        // news_search: query param is `q` (not `query`) and rows live under
+        // {"articles": […]} — both verified against apps/news/src/mcp.rs.
+        let news = auto_specs().into_iter().find(|s| s.id == "news").unwrap();
+        assert_eq!(news.query_arg, "q");
+        assert_eq!(news.limit_arg.as_deref(), Some("limit"));
+        assert_eq!(news.map.list_path.as_deref(), Some("articles"));
+        assert_eq!(news.kind, SourceKind::Web);
     }
 }

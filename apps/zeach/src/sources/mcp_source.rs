@@ -122,9 +122,7 @@ impl McpSourceSpec {
             return Err("`query_arg` không được rỗng".into());
         }
         match &self.target {
-            McpTarget::App { app_id } if app_id.trim().is_empty() => {
-                Err("thiếu `app_id`".into())
-            }
+            McpTarget::App { app_id } if app_id.trim().is_empty() => Err("thiếu `app_id`".into()),
             McpTarget::App { app_id } if app_id.trim() == crate::config::app_id() => {
                 Err(SELF_TARGET_MSG.into())
             }
@@ -133,7 +131,9 @@ impl McpSourceSpec {
                 if !(u.starts_with("http://") || u.starts_with("https://")) {
                     // Anything else (file:, ws:, a bare host) would either fail
                     // confusingly or reach somewhere the user did not mean.
-                    return Err(format!("`rpc_url` phải bắt đầu bằng http:// hoặc https:// (nhận được `{u}`)"));
+                    return Err(format!(
+                        "`rpc_url` phải bắt đầu bằng http:// hoặc https:// (nhận được `{u}`)"
+                    ));
                 }
                 if points_at_self(u) {
                     return Err(SELF_TARGET_MSG.into());
@@ -172,7 +172,10 @@ fn points_at_self(url: &str) -> bool {
         None => (authority, None),
     };
     url_port == Some(port)
-        && matches!(host, "127.0.0.1" | "localhost" | "0.0.0.0" | "::1" | "[::1]")
+        && matches!(
+            host,
+            "127.0.0.1" | "localhost" | "0.0.0.0" | "::1" | "[::1]"
+        )
 }
 
 pub struct McpSource {
@@ -196,9 +199,9 @@ impl McpSource {
             McpTarget::Url { rpc_url } => Ok(rpc_url.clone()),
             McpTarget::App { app_id } => {
                 let apps = self.apps.discover().await?;
-                let peer = apps.get(app_id).ok_or_else(|| {
-                    anyhow::anyhow!("app `{app_id}` chưa được cài trong SenClaw")
-                })?;
+                let peer = apps
+                    .get(app_id)
+                    .ok_or_else(|| anyhow::anyhow!("app `{app_id}` chưa được cài trong SenClaw"))?;
                 if !peer.enabled {
                     anyhow::bail!("app `{app_id}` đang bị tắt");
                 }
@@ -241,8 +244,18 @@ fn get_path<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
 
 /// Keys that commonly hold the item array, most specific first.
 const LIST_KEYS: &[&str] = &[
-    "results", "items", "hits", "rows", "matches", "entries", "data", "videos", "posts", "list",
-    "documents", "records",
+    "results",
+    "items",
+    "hits",
+    "rows",
+    "matches",
+    "entries",
+    "data",
+    "videos",
+    "posts",
+    "list",
+    "documents",
+    "records",
 ];
 
 /// Find the array of results in an arbitrary tool response.
@@ -273,7 +286,13 @@ fn extract_items(result: &Value, list_path: Option<&str>) -> Vec<Value> {
 }
 
 const TITLE_KEYS: &[&str] = &[
-    "title", "name", "headline", "label", "subject", "signature", "text",
+    "title",
+    "name",
+    "headline",
+    "label",
+    "subject",
+    "signature",
+    "text",
 ];
 const URL_KEYS: &[&str] = &["url", "link", "permalink", "href", "web_url", "source_url"];
 const SNIPPET_KEYS: &[&str] = &[
@@ -354,8 +373,11 @@ pub fn map_item(
 
     let title = as_text(pick(item, map.title.as_deref(), TITLE_KEYS));
     let snippet = as_text(pick(item, map.snippet.as_deref(), SNIPPET_KEYS));
-    let url = as_text(pick(item, map.url.as_deref(), URL_KEYS))
-        .or_else(|| map.url_template.as_deref().and_then(|t| render_template(t, item)));
+    let url = as_text(pick(item, map.url.as_deref(), URL_KEYS)).or_else(|| {
+        map.url_template
+            .as_deref()
+            .and_then(|t| render_template(t, item))
+    });
 
     // An item with neither a title nor a body is noise, not evidence.
     if title.is_none() && snippet.is_none() {
@@ -373,8 +395,12 @@ pub fn map_item(
         snippet.unwrap_or_default(),
         url,
     );
-    ev.published_at = pick(item, map.published_at.as_deref(), &["published_at", "published", "date"])
-        .and_then(parse_timestamp);
+    ev.published_at = pick(
+        item,
+        map.published_at.as_deref(),
+        &["published_at", "published", "date"],
+    )
+    .and_then(parse_timestamp);
     // Keep the raw item so downstream stages (and the UI) can show fields the
     // generic mapper had no name for.
     ev.meta = item.clone();
@@ -417,9 +443,9 @@ impl SearchSource for McpSource {
             Ok(tools) => {
                 // A renamed tool is the single most likely way this source rots.
                 // Say so explicitly instead of returning zero results forever.
-                let found = tools
-                    .iter()
-                    .any(|t| t.get("name").and_then(Value::as_str) == Some(self.spec.tool.as_str()));
+                let found = tools.iter().any(|t| {
+                    t.get("name").and_then(Value::as_str) == Some(self.spec.tool.as_str())
+                });
                 if found {
                     SourceHealth::Ready
                 } else {
@@ -455,7 +481,13 @@ impl SearchSource for McpSource {
             .iter()
             .enumerate()
             .filter_map(|(i, item)| {
-                map_item(item, i as u32, &self.spec.id, self.spec.kind, &self.spec.map)
+                map_item(
+                    item,
+                    i as u32,
+                    &self.spec.id,
+                    self.spec.kind,
+                    &self.spec.map,
+                )
             })
             .collect())
     }
@@ -504,7 +536,8 @@ mod tests {
 
     #[test]
     fn deepwiki_rows_map_onto_evidence() {
-        let item = json!({ "name": "Db::open", "doc": "opens the sqlite file", "file": "src/db.rs" });
+        let item =
+            json!({ "name": "Db::open", "doc": "opens the sqlite file", "file": "src/db.rs" });
         let ev = map_item(&item, 0, "deepwiki", SourceKind::Internal, &map()).unwrap();
         assert_eq!(ev.title, "Db::open");
         assert_eq!(ev.snippet, "opens the sqlite file");
@@ -568,15 +601,24 @@ mod tests {
 
     #[test]
     fn arrays_of_plain_strings_still_produce_evidence() {
-        let ev = map_item(&json!("một kết quả dạng chuỗi"), 2, "x", SourceKind::Custom, &map())
-            .unwrap();
+        let ev = map_item(
+            &json!("một kết quả dạng chuỗi"),
+            2,
+            "x",
+            SourceKind::Custom,
+            &map(),
+        )
+        .unwrap();
         assert_eq!(ev.snippet, "một kết quả dạng chuỗi");
         assert_eq!(ev.hits[0].rank, 2);
     }
 
     #[test]
     fn timestamps_accept_seconds_millis_and_rfc3339() {
-        assert_eq!(parse_timestamp(&json!(1_700_000_000)), Some(1_700_000_000_000));
+        assert_eq!(
+            parse_timestamp(&json!(1_700_000_000)),
+            Some(1_700_000_000_000)
+        );
         assert_eq!(
             parse_timestamp(&json!(1_700_000_000_000i64)),
             Some(1_700_000_000_000)
@@ -591,7 +633,9 @@ mod tests {
             label: "Threads".into(),
             kind: SourceKind::Social,
             weight: 1.0,
-            target: McpTarget::App { app_id: "social".into() },
+            target: McpTarget::App {
+                app_id: "social".into(),
+            },
             tool: "social_search".into(),
             query_arg: "query".into(),
             limit_arg: Some("limit".into()),
@@ -608,7 +652,13 @@ mod tests {
             spec(json!({ "platform": "threads", "handle": "@me" })),
             AppMcp::new("http://127.0.0.1:1"),
         );
-        let args = s.arguments(&SubQuery::new("giá vàng"), Budget { max_results: 7, timeout_ms: 1 });
+        let args = s.arguments(
+            &SubQuery::new("giá vàng"),
+            Budget {
+                max_results: 7,
+                timeout_ms: 1,
+            },
+        );
         assert_eq!(args["platform"], "threads");
         assert_eq!(args["handle"], "@me");
         assert_eq!(args["query"], "giá vàng");
@@ -622,7 +672,13 @@ mod tests {
             spec(json!({ "query": "pinned" })),
             AppMcp::new("http://127.0.0.1:1"),
         );
-        let args = s.arguments(&SubQuery::new("thật"), Budget { max_results: 5, timeout_ms: 1 });
+        let args = s.arguments(
+            &SubQuery::new("thật"),
+            Budget {
+                max_results: 5,
+                timeout_ms: 1,
+            },
+        );
         assert_eq!(args["query"], "thật");
     }
 
@@ -636,9 +692,13 @@ mod tests {
     #[test]
     fn a_non_http_rpc_url_is_rejected() {
         let mut sp = spec(json!({}));
-        sp.target = McpTarget::Url { rpc_url: "file:///etc/passwd".into() };
+        sp.target = McpTarget::Url {
+            rpc_url: "file:///etc/passwd".into(),
+        };
         assert!(sp.validate().is_err());
-        sp.target = McpTarget::Url { rpc_url: "https://mcp.example/rpc".into() };
+        sp.target = McpTarget::Url {
+            rpc_url: "https://mcp.example/rpc".into(),
+        };
         assert!(sp.validate().is_ok());
     }
 
@@ -658,7 +718,9 @@ mod tests {
             );
         }
         let mut by_app = spec(json!({}));
-        by_app.target = McpTarget::App { app_id: crate::config::app_id() };
+        by_app.target = McpTarget::App {
+            app_id: crate::config::app_id(),
+        };
         assert!(by_app.validate().is_err());
     }
 
@@ -692,7 +754,8 @@ mod tests {
         // The DB stores the whole spec as JSON; a field that fails to survive
         // the round-trip would silently reset on restart.
         let sp = spec(json!({ "platform": "threads", "handle": "@me" }));
-        let back: McpSourceSpec = serde_json::from_str(&serde_json::to_string(&sp).unwrap()).unwrap();
+        let back: McpSourceSpec =
+            serde_json::from_str(&serde_json::to_string(&sp).unwrap()).unwrap();
         assert_eq!(back.id, sp.id);
         assert_eq!(back.tool, sp.tool);
         assert_eq!(back.target, sp.target);
@@ -705,7 +768,13 @@ mod tests {
         let mut sp = spec(json!({}));
         sp.limit_arg = None;
         let s = McpSource::new(sp, AppMcp::new("http://127.0.0.1:1"));
-        let args = s.arguments(&SubQuery::new("q"), Budget { max_results: 5, timeout_ms: 1 });
+        let args = s.arguments(
+            &SubQuery::new("q"),
+            Budget {
+                max_results: 5,
+                timeout_ms: 1,
+            },
+        );
         assert!(args.get("limit").is_none());
     }
 }

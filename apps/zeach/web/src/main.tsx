@@ -5,7 +5,11 @@ import { App as AntApp, ConfigProvider, theme as antTheme } from 'antd'
 import viVN from 'antd/locale/vi_VN'
 import App from './App'
 import './index.css'
+import { installExternalLinkHook } from './openExternal'
 import { themeToken, useThemeMode } from './theme'
+
+// Link ngoài phải mở trên trình duyệt hệ thống, không điều hướng webview nhúng.
+installExternalLinkHook()
 
 function Root() {
   const mode = useThemeMode()

@@ -6,6 +6,7 @@
 //! never touching the pipeline.
 
 pub mod corpus;
+pub mod discover;
 pub mod knowledge;
 pub mod mcp_source;
 pub mod presets;
@@ -17,6 +18,41 @@ use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Where a registered source came from. Determines its [`SourceTier`] and what
+/// the user may do with it (a builtin can never be removed; an app-derived one
+/// can be re-created by a rescan, so removing it is safe).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceOrigin {
+    /// Compiled into the app: web, knowledge, wiki, corpus.
+    Builtin,
+    /// Curated preset for a peer Space App (`sources/presets.rs`).
+    Preset,
+    /// Auto-detected from an installed app's MCP by rule (`sources/discover.rs`).
+    Discovered,
+    /// Registered by the user (UI form or `zeach_source_add`).
+    User,
+}
+
+/// Core sources ship with the app and always exist; optional sources depend on
+/// which apps/MCPs are installed. The tier is derived from the origin — it is
+/// a classification, not an extra knob to configure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceTier {
+    Core,
+    Optional,
+}
+
+impl SourceOrigin {
+    pub fn tier(self) -> SourceTier {
+        match self {
+            SourceOrigin::Builtin => SourceTier::Core,
+            _ => SourceTier::Optional,
+        }
+    }
+}
 
 #[async_trait]
 pub trait SearchSource: Send + Sync {
@@ -47,6 +83,7 @@ pub trait SearchSource: Send + Sync {
 #[derive(Clone)]
 pub struct RegisteredSource {
     pub source: Arc<dyn SearchSource>,
+    pub origin: SourceOrigin,
     pub enabled: bool,
     pub weight: f32,
     pub max_results: usize,
@@ -58,6 +95,8 @@ pub struct SourceInfo {
     pub id: String,
     pub label: String,
     pub kind: String,
+    pub tier: SourceTier,
+    pub origin: SourceOrigin,
     pub enabled: bool,
     pub weight: f32,
     pub max_results: usize,
@@ -77,7 +116,7 @@ impl Registry {
         Self::default()
     }
 
-    pub fn register(&mut self, source: Arc<dyn SearchSource>) {
+    pub fn register(&mut self, source: Arc<dyn SearchSource>, origin: SourceOrigin) {
         let id = source.id().to_string();
         let weight = source.weight();
         if !self.sources.contains_key(&id) {
@@ -87,6 +126,7 @@ impl Registry {
             id,
             RegisteredSource {
                 source,
+                origin,
                 enabled: true,
                 weight,
                 max_results: 10,
@@ -95,15 +135,22 @@ impl Registry {
         );
     }
 
-    #[allow(dead_code)] // used by the P1 source-detail endpoint
     pub fn get(&self, id: &str) -> Option<&RegisteredSource> {
         self.sources.get(id)
     }
 
-    /// Drop a source. Returns false if it was not registered.
+    /// Drop a source. Returns false if it was not registered — or if it is a
+    /// core (builtin) source: those always exist, the only supported "off"
+    /// for them is `enabled = false`.
     pub fn remove(&mut self, id: &str) -> bool {
-        self.order.retain(|x| x != id);
-        self.sources.remove(id).is_some()
+        match self.sources.get(id) {
+            None => false,
+            Some(rs) if rs.origin.tier() == SourceTier::Core => false,
+            Some(_) => {
+                self.order.retain(|x| x != id);
+                self.sources.remove(id).is_some()
+            }
+        }
     }
 
     /// Sources in registration order, honoring an explicit selection.
@@ -190,6 +237,8 @@ impl Registry {
                 id: rs.source.id().to_string(),
                 label: rs.source.label().to_string(),
                 kind: rs.source.kind().as_str().to_string(),
+                tier: rs.origin.tier(),
+                origin: rs.origin,
                 enabled: rs.enabled,
                 weight: rs.weight,
                 max_results: rs.max_results,
@@ -228,8 +277,11 @@ mod tests {
 
     fn registry() -> Registry {
         let mut r = Registry::new();
-        r.register(Arc::new(Stub("web", SourceKind::Web)));
-        r.register(Arc::new(Stub("wiki", SourceKind::Internal)));
+        r.register(Arc::new(Stub("web", SourceKind::Web)), SourceOrigin::Builtin);
+        r.register(
+            Arc::new(Stub("wiki", SourceKind::Internal)),
+            SourceOrigin::Builtin,
+        );
         r
     }
 
@@ -243,7 +295,11 @@ mod tests {
     fn disabled_sources_drop_out_of_the_default_selection() {
         let mut r = registry();
         assert!(r.set_config("wiki", Some(false), None, None, None));
-        let ids: Vec<_> = r.select(None).iter().map(|s| s.source.id().to_string()).collect();
+        let ids: Vec<_> = r
+            .select(None)
+            .iter()
+            .map(|s| s.source.id().to_string())
+            .collect();
         assert_eq!(ids, vec!["web"]);
     }
 
@@ -270,5 +326,42 @@ mod tests {
         assert_eq!(rs.weight, 10.0);
         assert_eq!(rs.max_results, 100);
         assert_eq!(rs.timeout_ms, 1_000);
+    }
+
+    #[test]
+    fn a_core_source_cannot_be_removed() {
+        // "Core" is the contract that web/knowledge/wiki/corpus always exist;
+        // the only off-switch for them is `enabled = false`.
+        let mut r = registry();
+        assert!(!r.remove("web"), "builtin must survive remove()");
+        assert!(r.get("web").is_some());
+    }
+
+    #[test]
+    fn optional_sources_can_be_removed() {
+        let mut r = registry();
+        r.register(
+            Arc::new(Stub("youtube", SourceKind::Social)),
+            SourceOrigin::Preset,
+        );
+        r.register(
+            Arc::new(Stub("crm", SourceKind::Internal)),
+            SourceOrigin::Discovered,
+        );
+        assert!(r.remove("youtube"));
+        assert!(r.remove("crm"));
+        assert!(r.get("youtube").is_none());
+    }
+
+    #[test]
+    fn tier_derives_from_origin() {
+        assert_eq!(SourceOrigin::Builtin.tier(), SourceTier::Core);
+        for o in [
+            SourceOrigin::Preset,
+            SourceOrigin::Discovered,
+            SourceOrigin::User,
+        ] {
+            assert_eq!(o.tier(), SourceTier::Optional);
+        }
     }
 }

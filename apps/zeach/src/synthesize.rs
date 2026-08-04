@@ -35,6 +35,9 @@ Bạn CHỈ được dùng các KHẲNG ĐỊNH ĐÃ KIỂM CHỨNG và BẰNG C
 Mỗi nhận định trong báo cáo phải dẫn nguồn bằng ký hiệu [n] trỏ tới bằng chứng được đánh số (ví dụ [1], [2][5]). \
 Khi các nguồn mâu thuẫn, nêu CẢ HAI phía và nói rõ đang tranh cãi — không tự chọn một bên. \
 Ưu tiên những khẳng định được nhiều nguồn độc lập xác nhận; với khẳng định chỉ một nguồn hoặc chưa được kiểm chứng, phải nói rõ mức độ chứng thực thay vì khẳng định chắc chắn. \
+QUAN TRỌNG: báo cáo phải trả lời ĐÚNG câu hỏi được giao. Nếu bằng chứng không đủ để trả lời, hãy nói thẳng \
+\"không đủ dữ liệu để trả lời câu hỏi này\" và nêu rõ còn thiếu gì — TUYỆT ĐỐI không chuyển sang tổng hợp một chủ đề khác \
+chỉ vì bằng chứng có sẵn nói về chủ đề đó. Tiêu đề báo cáo phải là chủ đề của câu hỏi, không phải chủ đề của bằng chứng. \
 Viết mạch lạc, có tiêu đề và các mục theo chủ đề. Trả về Markdown thuần, KHÔNG bọc trong khối mã.";
 
 /// Map every evidence id to its 1-based citation number. The report and the UI
@@ -52,7 +55,10 @@ fn cite(ids: &[String], map: &HashMap<String, usize>) -> String {
     let mut nums: Vec<usize> = ids.iter().filter_map(|id| map.get(id).copied()).collect();
     nums.sort_unstable();
     nums.dedup();
-    nums.iter().map(|n| format!("[{n}]")).collect::<Vec<_>>().join("")
+    nums.iter()
+        .map(|n| format!("[{n}]"))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// Grouping order: strongest provenance first, disputes and gaps last.
@@ -168,7 +174,9 @@ pub fn build_prompt(
 ) -> String {
     let mut out = format!("Câu hỏi nghiên cứu: {query}\n\n");
 
-    out.push_str("KHẲNG ĐỊNH ĐÃ KIỂM CHỨNG (đã đếm số nguồn độc lập, không phải mô hình tự chấm):\n");
+    out.push_str(
+        "KHẲNG ĐỊNH ĐÃ KIỂM CHỨNG (đã đếm số nguồn độc lập, không phải mô hình tự chấm):\n",
+    );
     let mut ordered: Vec<&Claim> = claims.iter().take(MAX_CLAIMS).collect();
     ordered.sort_by_key(|c| tier_rank(c.tier));
     for c in &ordered {
@@ -202,7 +210,12 @@ pub fn build_prompt(
     for (e, n) in ev_ordered {
         let body = e.full_text.as_deref().unwrap_or(&e.snippet);
         let body = crate::util::truncate_chars(body, PER_ITEM_CHARS.min(budget));
-        let block = format!("[{n}] ({}) {}\n{}\n\n", source_label(e), e.title.trim(), body);
+        let block = format!(
+            "[{n}] ({}) {}\n{}\n\n",
+            source_label(e),
+            e.title.trim(),
+            body
+        );
         budget = budget.saturating_sub(block.chars().count());
         out.push_str(&block);
         if budget == 0 {
@@ -212,9 +225,11 @@ pub fn build_prompt(
 
     out.push_str(
         "\nHãy viết một BÁO CÁO Markdown mạch lạc trả lời câu hỏi trên:\n\
-         - Mở đầu bằng tiêu đề `# ...` và một đoạn tóm tắt.\n\
+         - Mở đầu bằng tiêu đề `# ...` (đúng chủ đề CÂU HỎI) và một đoạn tóm tắt.\n\
          - Các mục `## ...` theo chủ đề, mỗi nhận định dẫn [n].\n\
          - Một mục cho các điểm còn tranh cãi hoặc chỉ có một nguồn.\n\
+         - Nếu bằng chứng không nói về chủ đề câu hỏi: viết đúng một mục ngắn nói rõ \
+         KHÔNG ĐỦ DỮ LIỆU để trả lời và còn thiếu gì. Không được thay bằng chủ đề khác.\n\
          - KHÔNG bịa số bằng chứng, KHÔNG thêm thông tin ngoài danh sách trên.\n\
          - KHÔNG cần tự liệt kê lại danh sách nguồn ở cuối (hệ thống tự thêm).",
     );
@@ -224,7 +239,10 @@ pub fn build_prompt(
 fn strip_outer_fence(text: &str) -> String {
     let t = text.trim();
     if let Some(rest) = t.strip_prefix("```") {
-        let rest = rest.strip_prefix("markdown").or_else(|| rest.strip_prefix("md")).unwrap_or(rest);
+        let rest = rest
+            .strip_prefix("markdown")
+            .or_else(|| rest.strip_prefix("md"))
+            .unwrap_or(rest);
         if let Some(end) = rest.rfind("```") {
             return rest[..end].trim().to_string();
         }
@@ -312,7 +330,15 @@ mod tests {
     use crate::model::{Evidence, SourceKind};
 
     fn ev(id: &str, kind: SourceKind, url: Option<&str>) -> Evidence {
-        let mut e = Evidence::new("web", kind, 0, 1.0, format!("Tiêu đề {id}"), "đoạn", url.map(String::from));
+        let mut e = Evidence::new(
+            "web",
+            kind,
+            0,
+            1.0,
+            format!("Tiêu đề {id}"),
+            "đoạn",
+            url.map(String::from),
+        );
         e.id = id.to_string();
         e
     }
@@ -377,7 +403,10 @@ mod tests {
 
     #[test]
     fn the_first_heading_becomes_the_title() {
-        assert_eq!(first_heading("# Báo cáo A\n\nnội dung"), Some("Báo cáo A".into()));
+        assert_eq!(
+            first_heading("# Báo cáo A\n\nnội dung"),
+            Some("Báo cáo A".into())
+        );
         assert_eq!(first_heading("không có tiêu đề"), None);
     }
 }

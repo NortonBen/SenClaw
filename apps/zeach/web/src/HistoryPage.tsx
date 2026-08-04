@@ -23,6 +23,7 @@ import {
   type SearchOutcome,
 } from './api'
 import Claims from './Claims'
+import EvidenceModal from './EvidenceModal'
 import Md from './Md'
 import { kindColor } from './theme'
 
@@ -78,6 +79,8 @@ export default function HistoryPage() {
   const [run, setRun] = useState<(SearchOutcome & { id: string }) | null>(null)
   const [open, setOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  /** 1-based citation opened from a saved report's `[n]`. */
+  const [cite, setCite] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -310,7 +313,7 @@ export default function HistoryPage() {
               <Tag>{report.run_id}</Tag>
             </Space>
             <Card size="small">
-              <Md>{report.body_md}</Md>
+              <Md onCite={setCite}>{report.body_md}</Md>
             </Card>
             {report.claims.length > 0 && (
               <Card size="small" title="Khẳng định đã kiểm chứng">
@@ -318,6 +321,7 @@ export default function HistoryPage() {
                   claims={report.claims}
                   contradictions={report.contradictions}
                   evidence={report.run?.evidence ?? []}
+                  onCite={setCite}
                 />
               </Card>
             )}
@@ -339,6 +343,13 @@ export default function HistoryPage() {
             />
           </Space>
         )}
+
+        <EvidenceModal
+          evidence={report?.run?.evidence ?? []}
+          index={cite}
+          onClose={() => setCite(null)}
+          onNavigate={setCite}
+        />
       </Drawer>
     </Space>
   )

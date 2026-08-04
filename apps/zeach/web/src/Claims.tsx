@@ -15,11 +15,14 @@ export default function Claims({
   contradictions,
   evidence,
   note,
+  onCite,
 }: {
   claims: Claim[]
   contradictions: Contradiction[]
   evidence: Evidence[]
   note?: string
+  /** Open the evidence dialog for citation [n]. Without it, `[n]` links out. */
+  onCite?: (n: number) => void
 }) {
   const byId = new Map(evidence.map((e, i) => [e.id, { e, n: i + 1 }]))
   const claimText = (id: string) => claims.find((c) => c.id === id)?.text ?? id
@@ -39,15 +42,37 @@ export default function Claims({
         .map((id) => byId.get(id))
         .filter((x): x is { e: Evidence; n: number } => !!x)
         .map(({ e, n }) => (
-          <Tooltip key={e.id} title={`${e.title}${e.domain ? ` · ${e.domain}` : ''}`}>
-            <a
-              href={e.url ?? undefined}
-              target="_blank"
-              rel="noreferrer"
-              style={{ fontWeight: 600, marginRight: 2 }}
-            >
-              [{n}]
-            </a>
+          <Tooltip
+            key={e.id}
+            title={
+              onCite
+                ? `${e.title}${e.domain ? ` · ${e.domain}` : ''} — bấm để xem dẫn chứng`
+                : `${e.title}${e.domain ? ` · ${e.domain}` : ''}`
+            }
+          >
+            {onCite ? (
+              // A citation must be inspectable without leaving the page: the
+              // dialog shows the retrieved text, and links out from there.
+              <a
+                href={e.url ?? undefined}
+                onClick={(ev) => {
+                  ev.preventDefault()
+                  onCite(n)
+                }}
+                style={{ fontWeight: 600, marginRight: 2 }}
+              >
+                [{n}]
+              </a>
+            ) : (
+              <a
+                href={e.url ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontWeight: 600, marginRight: 2 }}
+              >
+                [{n}]
+              </a>
+            )}
           </Tooltip>
         ))}
     </>

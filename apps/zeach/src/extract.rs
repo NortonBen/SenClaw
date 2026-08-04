@@ -34,9 +34,7 @@ Chỉ trả về JSON, không giải thích, không rào đón, không khối m�
 
 /// Numbered evidence + the JSON contract.
 pub fn build_prompt(query: &str, evidence: &[Evidence]) -> String {
-    let mut out = format!(
-        "Câu hỏi: {query}\n\nBằng chứng (chỉ dùng đúng những đoạn này):\n"
-    );
+    let mut out = format!("Câu hỏi: {query}\n\nBằng chứng (chỉ dùng đúng những đoạn này):\n");
     let mut budget = TOTAL_EVIDENCE_CHARS;
     for (i, e) in evidence.iter().enumerate() {
         // Prefer fetched page text over a SERP snippet when we have it.
@@ -45,10 +43,12 @@ pub fn build_prompt(query: &str, evidence: &[Evidence]) -> String {
         if body.trim().is_empty() && e.title.trim().is_empty() {
             continue;
         }
-        let source = e
-            .domain
-            .clone()
-            .unwrap_or_else(|| e.hits.first().map(|h| h.source_id.clone()).unwrap_or_default());
+        let source = e.domain.clone().unwrap_or_else(|| {
+            e.hits
+                .first()
+                .map(|h| h.source_id.clone())
+                .unwrap_or_default()
+        });
         let block = format!("[E{}] ({}) {}\n{}\n\n", i + 1, source, e.title, body);
         budget = budget.saturating_sub(block.chars().count());
         out.push_str(&block);
@@ -92,7 +92,7 @@ struct ClaimRaw {
 ///
 /// Models wrap JSON in ```json fences, prepend "Đây là kết quả:", or trail a
 /// closing remark, no matter what the prompt says.
-fn isolate_json(text: &str) -> Option<&str> {
+pub(crate) fn isolate_json(text: &str) -> Option<&str> {
     let t = text.trim();
     let t = match t.find("```") {
         Some(start) => {
@@ -112,7 +112,7 @@ fn isolate_json(text: &str) -> Option<&str> {
 /// Scan JSON, tracking the open-bracket stack and string state.
 ///
 /// Returns `(byte offset just past the balanced object, stack, in_string)`.
-fn scan(s: &str) -> (Option<usize>, Vec<char>, bool) {
+pub(crate) fn scan(s: &str) -> (Option<usize>, Vec<char>, bool) {
     let mut stack: Vec<char> = Vec::new();
     let mut in_str = false;
     let mut escaped = false;
@@ -171,7 +171,7 @@ fn close_open(s: &str) -> String {
 /// A cut that lands mid-key (`{"text":"A","sup`) cannot be closed into valid
 /// JSON at all, so the fallbacks progressively discard the trailing partial
 /// element and re-close at an earlier complete boundary.
-fn candidates(body: &str) -> Vec<String> {
+pub(crate) fn candidates(body: &str) -> Vec<String> {
     if let (Some(end), _, _) = scan(body) {
         return vec![body[..end].to_string()];
     }
@@ -190,10 +190,22 @@ fn candidates(body: &str) -> Vec<String> {
     out
 }
 
+/// Parse a JSON object out of a model reply, repairing a response the bridge
+/// cut short. Shared with `review.rs`: the output ceiling truncates every
+/// caller's reply, not just this one ([[space-app-llm-bridge-output-ceiling]]).
+pub(crate) fn parse_lenient_object(text: &str) -> Option<serde_json::Value> {
+    let body = isolate_json(text)?;
+    candidates(body)
+        .into_iter()
+        .find_map(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .filter(|v| v.is_object())
+}
+
 fn as_index(v: &serde_json::Value) -> Option<usize> {
-    v.as_u64()
-        .map(|n| n as usize)
-        .or_else(|| v.as_str().and_then(|s| s.trim().trim_start_matches('E').parse().ok()))
+    v.as_u64().map(|n| n as usize).or_else(|| {
+        v.as_str()
+            .and_then(|s| s.trim().trim_start_matches('E').parse().ok())
+    })
 }
 
 /// Map 1-based evidence indices onto real evidence ids.
@@ -294,7 +306,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0].supports, vec!["ev0".to_string(), "ev2".to_string()]);
+        assert_eq!(
+            claims[0].supports,
+            vec!["ev0".to_string(), "ev2".to_string()]
+        );
     }
 
     #[test]
@@ -365,7 +380,10 @@ mod tests {
         let evs = evidence(3);
         let (claims, _) =
             parse_response(r#"{"claims":[{"text":"A","supports":["2","E3"]}]}"#, &evs).unwrap();
-        assert_eq!(claims[0].supports, vec!["ev1".to_string(), "ev2".to_string()]);
+        assert_eq!(
+            claims[0].supports,
+            vec!["ev1".to_string(), "ev2".to_string()]
+        );
     }
 
     #[test]
