@@ -87,6 +87,47 @@ fn rename_group_jid_atomic() {
 }
 
 #[test]
+fn approved_tools_separate_from_allowed_whitelist() {
+    let db = Db::open_in_memory(&cfg()).unwrap();
+    let g = sample_group();
+    db.upsert_group(&g).unwrap();
+
+    // "Always allow" approvals land in approved_tools only — the configured
+    // allowed_tools whitelist must not grow (that was the tool-roster bug).
+    db.append_group_approved_tool(&g.jid, "Skill").unwrap();
+    db.append_group_approved_tool(&g.jid, "Skill").unwrap(); // dedup
+    db.append_group_approved_tool(&g.jid, "mcp__ssh-manager-mcp__ssh_execute_command")
+        .unwrap();
+    assert_eq!(
+        db.get_group_approved_tools(&g.jid).unwrap(),
+        vec![
+            "Skill".to_string(),
+            "mcp__ssh-manager-mcp__ssh_execute_command".to_string()
+        ]
+    );
+    assert_eq!(
+        db.get_group(&g.jid)
+            .unwrap()
+            .unwrap()
+            .allowed_tools
+            .as_deref(),
+        Some(&["Read".into(), "Grep".into()][..])
+    );
+
+    // Upserting the binding again (config reload) must not wipe approvals.
+    db.upsert_group(&g).unwrap();
+    assert_eq!(db.get_group_approved_tools(&g.jid).unwrap().len(), 2);
+
+    // Renaming the jid carries the approvals across.
+    db.rename_group_jid(&g.jid, "tg:group:2").unwrap().unwrap();
+    assert_eq!(db.get_group_approved_tools("tg:group:2").unwrap().len(), 2);
+    assert!(db.get_group_approved_tools(&g.jid).unwrap().is_empty());
+
+    // Unknown group reads as empty.
+    assert!(db.get_group_approved_tools("nope").unwrap().is_empty());
+}
+
+#[test]
 fn message_fifo_trims() {
     let db = Db::open_in_memory(&cfg()).unwrap();
     for i in 0..5 {
@@ -331,5 +372,49 @@ fn migration_adds_missing_columns_on_existing_db() {
     assert_eq!(
         got.allowed_work_dirs.as_deref(),
         Some(&["/tmp/work".into()][..])
+    );
+}
+
+#[test]
+fn migration_moves_schedule_allowed_tools_pollution_to_approved() {
+    // Legacy DB: no approved_tools column, and a schedule group whose
+    // allowed_tools was polluted by the old "always allow" handler. The
+    // migration must move that value to approved_tools (schedule groups are
+    // never created with a whitelist) while leaving chat groups untouched.
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    {
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE groups (
+              jid TEXT PRIMARY KEY, folder TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+              channel TEXT NOT NULL DEFAULT 'telegram', group_type TEXT NOT NULL DEFAULT 'chat',
+              is_admin INTEGER NOT NULL DEFAULT 0, requires_trigger INTEGER NOT NULL DEFAULT 1,
+              allowed_tools TEXT, allowed_paths TEXT, allowed_work_dirs TEXT,
+              bot_token TEXT, max_messages INTEGER, llm_config_id TEXT,
+              last_active TEXT, added_at TEXT NOT NULL
+            );
+            INSERT INTO groups (jid, folder, allowed_tools, added_at)
+              VALUES ('schedule:abc', 'sched', '["Skill"]', '2026-01-01');
+            INSERT INTO groups (jid, folder, allowed_tools, added_at)
+              VALUES ('tg:group:7', 'chatty', '["Read"]', '2026-01-01');
+            "#,
+        )
+        .unwrap();
+    }
+    let db = Db::open_at(tmp.path(), tmp.path(), &cfg()).unwrap();
+
+    let sched = db.get_group("schedule:abc").unwrap().unwrap();
+    assert_eq!(sched.allowed_tools, None, "whitelist pollution cleared");
+    assert_eq!(
+        db.get_group_approved_tools("schedule:abc").unwrap(),
+        vec!["Skill".to_string()]
+    );
+
+    let chat = db.get_group("tg:group:7").unwrap().unwrap();
+    assert_eq!(
+        chat.allowed_tools.as_deref(),
+        Some(&["Read".into()][..]),
+        "chat-group whitelist untouched"
     );
 }

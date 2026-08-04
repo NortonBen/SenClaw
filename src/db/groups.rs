@@ -105,15 +105,26 @@ impl super::Db {
             };
             binding.jid = new_jid.to_owned();
 
+            // `approved_tools` is not part of GroupBinding — carry it across
+            // the delete/insert by hand so "always allow" choices survive.
+            let approved_tools: Option<String> = c
+                .query_row(
+                    "SELECT approved_tools FROM groups WHERE jid = ?1",
+                    params![old_jid],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+
             let tx = c.transaction()?;
             tx.execute("DELETE FROM groups WHERE jid = ?1", params![old_jid])?;
             tx.execute(
                 r#"
                 INSERT INTO groups
                   (jid, folder, name, channel, requires_trigger,
-                   allowed_tools, allowed_paths, allowed_work_dirs,
+                   allowed_tools, approved_tools, allowed_paths, allowed_work_dirs,
                    bot_token, max_messages, llm_config_id, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 "#,
                 params![
                     binding.jid,
@@ -122,6 +133,7 @@ impl super::Db {
                     binding.channel,
                     binding.requires_trigger as i64,
                     json_or_null(&binding.allowed_tools)?,
+                    approved_tools,
                     json_or_null(&binding.allowed_paths)?,
                     json_or_null(&binding.allowed_work_dirs)?,
                     binding.bot_token,
@@ -136,13 +148,17 @@ impl super::Db {
         })
     }
 
-    /// Append a single tool name to a group's `allowed_tools` JSON array.
+    /// Append a single tool name to a group's `approved_tools` JSON array —
+    /// the permission prompt's persisted "always allow" list. This is
+    /// deliberately a separate column from `allowed_tools`: that one is the
+    /// user-configured use_tools whitelist, and appending approvals to it
+    /// used to shrink the whole tool roster to just the approved tools.
     /// No-op if the tool is already in the list or the group does not exist.
-    pub fn append_group_allowed_tool(&self, jid: &str, tool: &str) -> Result<()> {
+    pub fn append_group_approved_tool(&self, jid: &str, tool: &str) -> Result<()> {
         self.with_conn(|c| {
             let raw: Option<String> = c
                 .query_row(
-                    "SELECT allowed_tools FROM groups WHERE jid = ?1",
+                    "SELECT approved_tools FROM groups WHERE jid = ?1",
                     params![jid],
                     |r| r.get::<_, Option<String>>(0),
                 )
@@ -161,11 +177,32 @@ impl super::Db {
                 tools.push(key);
                 let json = serde_json::to_string(&tools)?;
                 c.execute(
-                    "UPDATE groups SET allowed_tools = ?1 WHERE jid = ?2",
+                    "UPDATE groups SET approved_tools = ?1 WHERE jid = ?2",
                     params![json, jid],
                 )?;
             }
             Ok(())
+        })
+    }
+
+    /// Read a group's persisted "always allow" tool list (`approved_tools`).
+    /// Missing group or empty column both yield an empty list.
+    pub fn get_group_approved_tools(&self, jid: &str) -> Result<Vec<String>> {
+        self.with_conn(|c| {
+            let raw: Option<String> = c
+                .query_row(
+                    "SELECT approved_tools FROM groups WHERE jid = ?1",
+                    params![jid],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(match raw.as_deref() {
+                Some(s) if !s.is_empty() && s != "null" => {
+                    serde_json::from_str(s).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            })
         })
     }
 
