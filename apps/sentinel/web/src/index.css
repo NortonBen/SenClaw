@@ -1,0 +1,70 @@
+/* Chủ đề do `data-theme` trên <html> điều khiển (đặt trong theme.tsx). AntD lo
+   màu của component; các biến dưới đây dành cho phần tự vẽ: biểu đồ hoạt động,
+   đường kẻ header, khối mã. `color-scheme` cũng do theme.tsx đặt — để cứng ở
+   đây thì thanh cuộn và ô nhập gốc sẽ kẹt ở một chế độ. */
+:root {
+  --sen-bg: #ffffff;
+  --sen-border: rgba(0, 0, 0, 0.09);
+  --sen-bar: #6366f1;
+  --sen-bar-fail: #d4380d;
+  --sen-muted: #64748b;
+}
+:root[data-theme='dark'] {
+  --sen-bg: #141414;
+  --sen-border: rgba(255, 255, 255, 0.08);
+  --sen-bar: #6366f1;
+  --sen-bar-fail: #ff4d4f;
+  --sen-muted: #94a3b8;
+}
+
+body {
+  margin: 0;
+  background: var(--sen-bg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  transition: background-color 0.2s ease;
+}
+
+.md-block {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.evrow {
+  cursor: pointer;
+}
+
+/* Biểu đồ hoạt động 14 ngày — vẽ tay nên phải tự bám chủ đề. */
+.sen-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 96px;
+}
+.sen-chart-col {
+  flex: 1;
+  text-align: center;
+}
+.sen-bar {
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: var(--sen-bar);
+  opacity: 0.85;
+}
+.sen-bar-fail {
+  background: var(--sen-bar-fail);
+}
+.sen-chart-label {
+  font-size: 9px;
+  color: var(--sen-muted);
+  margin-top: 3px;
+}
+.sen-header {
+  border-bottom: 1px solid var(--sen-border);
+}
