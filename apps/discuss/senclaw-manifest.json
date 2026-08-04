@@ -1,0 +1,39 @@
+{
+  "id": "discuss",
+  "name": "AI Discuss Team",
+  "description": "Phòng thảo luận AI theo đội: BOSS (người dùng) đặt đề bài + tiêu chí kết quả; các member AI có bộ nhớ riêng (nhớ cả mạch suy nghĩ đã dùng) tranh luận theo luật — mỗi ý kiến phải được member khác xem xét đồng tình (kèm bổ sung) hoặc phản đối (bắt buộc dẫn chứng); luận điểm phân 3 loại (tìm kiếm có dẫn chứng / suy diễn / sáng tạo) và gắn mức chứng minh (thực tiễn / lý thuyết); Manager AI độc lập không bàn nội dung, chỉ điều phối — bắt member im lặng phát biểu và đề nghị chốt khi đã đủ như BOSS yêu cầu; Thư ký AI ghi biên bản từng vòng; kho tài liệu chung cả đội truy cập; member dùng toàn bộ tool MCP của hệ thống (Search, Zeach, News, Thinking, memory, wiki...); tốc độ bàn luận điều chỉnh được để BOSS theo kịp và chen lời; xem dạng chat hoặc phòng họp 3D isometric. KHÔNG tự gửi tin ra kênh chat ngoài, KHÔNG thay đổi dữ liệu app khác ngoài các tool được gọi.",
+  "icon": "🗣️",
+  "runtime": {
+    "kind": "server",
+    "start": "./discuss",
+    "healthPath": "/api/status",
+    "port": 4760
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": { "postMessage": true, "capabilities": ["space.rest", "llm.request"] },
+  "mcp": {
+    "name": "discuss-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Điều khiển phòng thảo luận AI: tạo/chạy/tạm dừng phiên, BOSS phát biểu, đọc diễn biến + biên bản + tiến độ, chốt và nghiệm thu kết quả, quản lý thành viên và kho tài liệu chung (discuss_*).",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "discuss-team",
+      "path": "skills/discuss-team",
+      "triggers": [
+        "thảo luận nhóm", "hội thảo AI", "discuss team", "ai discuss", "phòng họp ai",
+        "mở phiên thảo luận", "cho team bàn", "tranh luận", "bàn luận chủ đề",
+        "biên bản thảo luận", "kết quả thảo luận", "6 chiếc mũ tư duy"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "discuss-facilitator",
+      "path": "personas/discuss-facilitator.md",
+      "description": "Điều phối viên phòng thảo luận AI Discuss Team — mở phiên, theo dõi tiến độ, đọc biên bản và trình kết quả cho BOSS."
+    }
+  ]
+}
