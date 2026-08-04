@@ -1,0 +1,24 @@
+[package]
+name = "google-workspace"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "google-workspace"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+dotenvy = "0.15"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+futures-util = "0.3"
+async-stream = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+base64 = "0.22"
+percent-encoding = "2"
+chrono = { version = "0.4", features = ["clock", "serde"] }

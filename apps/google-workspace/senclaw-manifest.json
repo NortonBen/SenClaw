@@ -1,0 +1,60 @@
+{
+  "id": "google-workspace",
+  "name": "Google Workspace",
+  "description": "Kết nối Gmail, Google Calendar và Google Drive vào Space: đọc/gửi email, xem/tạo sự kiện lịch, liệt kê/tải file lên Drive, và sync sự kiện vào Space Calendar. OAuth chạy local, token lưu SQLite cục bộ — không đi qua server trung gian nào.",
+  "icon": "🇬",
+  "runtime": {
+    "kind": "server",
+    "start": "./google-workspace",
+    "healthPath": "/health",
+    "port": 4310
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "mcp": {
+    "name": "google-workspace-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Google Workspace MCP: đọc/ghi cài đặt & trạng thái kết nối (gworkspace_get_settings/gworkspace_set_settings), Gmail (gworkspace_list_emails/gworkspace_read_email/gworkspace_send_email), Google Calendar (gworkspace_list_events/gworkspace_create_event), Google Drive (gworkspace_list_files/gworkspace_upload_file) và sync vào Space Calendar (gworkspace_sync). Cần kết nối Google trước qua UI của app (OAuth hoặc dán access token).",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "google-workspace",
+      "path": "skills/google-workspace",
+      "triggers": [
+        "đọc email",
+        "check mail",
+        "kiểm tra hộp thư",
+        "gửi email",
+        "send email",
+        "read my emails",
+        "lịch google",
+        "google calendar",
+        "tạo sự kiện",
+        "create calendar event",
+        "sự kiện sắp tới",
+        "upcoming events",
+        "google drive",
+        "tải file lên drive",
+        "upload to drive",
+        "sync gmail",
+        "sync google",
+        "đồng bộ google"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "workspace-secretary",
+      "path": "personas/workspace-secretary.md",
+      "description": "Thư ký Google Workspace: đọc/soạn email, quản lý lịch và file Drive qua tool chính xác, hỏi trước khi gửi"
+    }
+  ]
+}
