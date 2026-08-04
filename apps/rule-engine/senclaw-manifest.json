@@ -28,7 +28,7 @@
     "name": "rule-engine-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "Tạo và điều khiển các rule chain (luồng xử lý dữ liệu dạng đồ thị): liệt kê/sửa đồ thị, kích hoạt, bơm sự kiện thử, xem trace từng bước, và sinh chain từ mô tả bằng lời.",
+    "description": "Tạo và điều khiển các rule chain (luồng xử lý dữ liệu dạng đồ thị): liệt kê/sửa đồ thị, kích hoạt, xem trace từng bước, sinh chain từ mô tả bằng lời (AI). Bốn nguyên hàm dữ liệu qua MCP: rule_push (bơm sự kiện async), rule_call (gọi đồng bộ request→respond, trả kết quả), rule_get (đọc giá trị store đã cache), và callback qua node mcp-call/http-request.",
     "autoRegister": true
   },
   "widgets": [],

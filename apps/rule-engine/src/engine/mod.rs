@@ -55,6 +55,14 @@ struct Deployment {
     sources: Vec<(NodeId, String)>, // (node id, rule id)
 }
 
+/// Result of a synchronous run (see [`Engine::start_run_wait`]).
+pub struct RunOutcome {
+    pub run_id: RunId,
+    pub status: String,
+    pub result: Option<Value>,
+    pub error: Option<String>,
+}
+
 pub struct Engine {
     pub registry: Arc<Registry>,
     pub svc: Arc<Services>,
@@ -338,6 +346,101 @@ impl Engine {
         .await;
         self.runs.release(&run, 1);
         Some(run.id)
+    }
+
+    /// Synchronous request/response: inject an event, wait for that run to
+    /// finish, and return its status plus whatever a `respond` node recorded.
+    ///
+    /// We subscribe to the event bus *before* starting the run, so the terminal
+    /// `RunEnd` can't slip past between start and subscribe. On timeout the run
+    /// keeps going in the background but we stop waiting and drop any result it
+    /// may later produce, so the result map can't leak.
+    pub async fn start_run_wait(
+        &self,
+        chain_id: ChainId,
+        node_id: &str,
+        port: &str,
+        data: Value,
+        meta: Value,
+        timeout_ms: u64,
+    ) -> RunOutcome {
+        let mut rx = self.svc.bus.subscribe();
+        let Some(run_id) = self.start_run(chain_id, node_id, port, data, meta).await else {
+            return RunOutcome {
+                run_id: 0,
+                status: "error".into(),
+                result: None,
+                error: Some(format!(
+                    "không tìm thấy luồng đang chạy hoặc node `{node_id}`"
+                )),
+            };
+        };
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.svc.results.discard(run_id);
+                return RunOutcome {
+                    run_id,
+                    status: "timeout".into(),
+                    result: None,
+                    error: Some(format!("quá {timeout_ms}ms mà run chưa xong")),
+                };
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(line)) => {
+                    // Only parse the cheap shape we care about.
+                    let Ok(ev) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    if ev.get("type").and_then(|t| t.as_str()) != Some("runEnd") {
+                        continue;
+                    }
+                    if ev.get("runId").and_then(|r| r.as_u64()) != Some(run_id) {
+                        continue;
+                    }
+                    let status = ev
+                        .get("status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("done")
+                        .to_string();
+                    let error = ev
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .map(|s| s.to_string());
+                    return RunOutcome {
+                        run_id,
+                        status,
+                        result: self.svc.results.take(run_id),
+                        error,
+                    };
+                }
+                // Lagged past some events — the RunEnd may have been one of them,
+                // so fall back to a short grace check rather than hang forever.
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(_)) | Err(_) => {
+                    // Bus closed or the recv timed out: give the result slot one
+                    // last look in case `respond` fired between events.
+                    let result = self.svc.results.take(run_id);
+                    if result.is_some() {
+                        return RunOutcome {
+                            run_id,
+                            status: "done".into(),
+                            result,
+                            error: None,
+                        };
+                    }
+                    self.svc.results.discard(run_id);
+                    return RunOutcome {
+                        run_id,
+                        status: "timeout".into(),
+                        result: None,
+                        error: Some(format!("quá {timeout_ms}ms mà run chưa xong")),
+                    };
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------- worker

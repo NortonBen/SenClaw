@@ -64,7 +64,6 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/hooks/:hook_id",
             post(webhook_ingress).get(webhook_ingress),
         )
-        .route("/hooks/telegram/:token", post(telegram_ingress))
         .route(
             "/mcp/sse",
             get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
@@ -464,27 +463,6 @@ async fn webhook_ingress(
         ));
     }
     Ok(Json(json!({ "ok": true, "delivered": accepted })))
-}
-
-async fn telegram_ingress(
-    State(_st): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    body: Option<Json<Value>>,
-) -> Api {
-    let emitters = crate::rules::telegram_hook::routes().get(&token);
-    if emitters.is_empty() {
-        return Err(not_found("Không có node telegram-hook nào dùng token này."));
-    }
-    let payload = body.map(|Json(v)| v).unwrap_or(json!({}));
-    for em in &emitters {
-        em.emit(
-            "out",
-            payload.clone(),
-            json!({ "_event": "telegram", "token": token }),
-        )
-        .await;
-    }
-    Ok(Json(json!({ "ok": true, "delivered": emitters.len() })))
 }
 
 /// Header names never forwarded into the flow, even with `includeHeaders` on:

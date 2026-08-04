@@ -244,6 +244,13 @@ impl RunCtx {
             msg.into(),
         );
     }
+
+    /// Record this run's return value — what a synchronous caller
+    /// (`rule_call` → `start_run_wait`) collects once the run finishes. Only the
+    /// `respond` node calls this.
+    pub fn respond(&self, value: Value) {
+        self.svc.results.set(self.run_id, value);
+    }
 }
 
 /// A processing node.
@@ -334,6 +341,13 @@ impl SourceCtx {
     pub fn cfg_u64_or(&self, key: &str, default: u64) -> u64 {
         match self.config.get(key) {
             Some(Value::Number(n)) => n.as_u64().unwrap_or(default),
+            Some(Value::String(s)) => s.trim().parse().unwrap_or(default),
+            _ => default,
+        }
+    }
+    pub fn cfg_bool(&self, key: &str, default: bool) -> bool {
+        match self.config.get(key) {
+            Some(Value::Bool(b)) => *b,
             Some(Value::String(s)) => s.trim().parse().unwrap_or(default),
             _ => default,
         }

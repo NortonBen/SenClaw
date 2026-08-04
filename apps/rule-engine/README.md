@@ -78,7 +78,7 @@ không treo im lặng.
 Gọi `GET /api/registry` (hoặc MCP `rule_registry`) để lấy danh sách đầy đủ kèm
 cổng và JSON Schema cấu hình. Nhóm chính:
 
-- **Nguồn** — `manual`, `webhook`, `schedule`, `telegram-hook`
+- **Nguồn** — `manual`, `webhook`, `schedule`, `telegram-poll`
 - **Logic** — `conditional`, `switch`, `fork`, `join`, `merge`, `trigger-time`
 - **Biến đổi** — `arithmetic`, `format`, `project`, `delay`, `split`
 - **Lọc có state** — `moving-average`, `kalman`
@@ -101,7 +101,6 @@ cổng và JSON Schema cấu hình. Nhóm chính:
 | `DELETE /api/chains/:id/state` | xoá state của node lọc |
 | `GET /api/events` | SSE realtime (hop / log / trạng thái run) |
 | `POST /api/hooks/:webhookId` | ingress cho node `webhook` |
-| `POST /api/hooks/telegram/:token` | ingress cho `telegram-hook` |
 
 ## Biến môi trường
 

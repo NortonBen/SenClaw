@@ -51,8 +51,11 @@ async fn main() {
     // stores plaintext secrets — bot tokens, API keys — plus lets a caller
     // delete any chain. Loopback keeps it off the LAN. A page in the user's own
     // browser can still reach 127.0.0.1, so treat this as localhost-trust, not
-    // a security boundary. `RULE_ENGINE_BIND` overrides for containerized runs.
-    let host = std::env::var("RULE_ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    // a security boundary. `RULE_ENGINE_BIND` overrides for containerized runs;
+    // `SENCLAW_BIND_HOST` is the fleet-wide knob every other Space App reads.
+    let host = std::env::var("RULE_ENGINE_BIND")
+        .or_else(|_| std::env::var("SENCLAW_BIND_HOST"))
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{host}:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,

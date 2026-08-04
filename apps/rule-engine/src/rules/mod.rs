@@ -10,6 +10,7 @@
 use crate::engine::registry::Registry;
 
 // -- logic / transform (pure, no I/O) -------------------------------------
+pub mod aggregate;
 pub mod arithmetic;
 pub mod conditional;
 pub mod delay;
@@ -19,13 +20,17 @@ pub mod join_rule;
 pub mod log_rule;
 pub mod merge;
 pub mod project;
+pub mod respond;
 pub mod split;
+pub mod store;
 pub mod switch_rule;
 pub mod trigger_time;
 
 // -- filters with state ----------------------------------------------------
+pub mod dedup;
 pub mod kalman;
 pub mod moving_average;
+pub mod rate_limit;
 
 // -- I/O -------------------------------------------------------------------
 pub mod http_request;
@@ -40,8 +45,9 @@ pub mod senclaw_send;
 
 // -- sources ---------------------------------------------------------------
 pub mod manual;
+pub mod request;
 pub mod schedule;
-pub mod telegram_hook;
+pub mod telegram_poll;
 pub mod webhook;
 
 pub fn register(reg: &mut Registry) {
@@ -51,6 +57,7 @@ pub fn register(reg: &mut Registry) {
     reg.add_rule(switch_rule::rule());
     reg.add_rule(fork::rule());
     reg.add_rule(split::rule());
+    reg.add_rule(aggregate::rule());
     reg.add_rule(join_rule::rule());
     reg.add_rule(merge::rule());
     reg.add_rule(format::rule());
@@ -58,10 +65,14 @@ pub fn register(reg: &mut Registry) {
     reg.add_rule(trigger_time::rule());
     reg.add_rule(delay::rule());
     reg.add_rule(log_rule::rule());
+    reg.add_rule(store::rule());
+    reg.add_rule(respond::rule());
 
     // filters
     reg.add_rule(moving_average::rule());
     reg.add_rule(kalman::rule());
+    reg.add_rule(dedup::rule());
+    reg.add_rule(rate_limit::rule());
 
     // I/O
     reg.add_rule(http_request::rule());
@@ -76,9 +87,10 @@ pub fn register(reg: &mut Registry) {
 
     // sources
     reg.add_source(manual::source());
+    reg.add_source(request::source());
     reg.add_source(webhook::source());
     reg.add_source(schedule::source());
-    reg.add_source(telegram_hook::source());
+    reg.add_source(telegram_poll::source());
 }
 
 /// Shared by the sources that keep a task per deployed node.
@@ -172,8 +184,8 @@ mod tests {
     fn register_installs_every_node_type() {
         let mut reg = Registry::new();
         register(&mut reg);
-        // 21 processing nodes + 4 sources
-        assert_eq!(reg.len(), 25, "registry size drifted from rules::register");
+        // 26 processing nodes + 5 sources
+        assert_eq!(reg.len(), 31, "registry size drifted from rules::register");
         assert!(reg.rule("conditional").is_some());
         assert!(reg.source("webhook").is_some());
         assert!(reg.is_source("schedule"));

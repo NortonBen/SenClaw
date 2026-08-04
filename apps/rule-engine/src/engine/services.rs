@@ -110,6 +110,48 @@ impl StateStore {
     }
 }
 
+// ------------------------------------------------------------- result store
+
+/// In-memory slot for a run's *return value*, set by a `respond` node and read
+/// by a synchronous caller (`start_run_wait` → the `rule_call` MCP tool).
+///
+/// Kept out of SQLite on purpose: a result lives only for the few seconds
+/// between a `respond` firing and the caller collecting it, so persistence
+/// would be pure overhead. If nobody collects (fire-and-forget run that happens
+/// to hit a `respond`), the entry is reaped by the run reaper via `discard`.
+#[derive(Default)]
+pub struct ResultStore {
+    inner: std::sync::Mutex<std::collections::HashMap<RunId, Value>>,
+}
+
+impl ResultStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Record the value a `respond` node produced. Last write wins — a flow with
+    /// two `respond` nodes on one run keeps whichever fired last.
+    pub fn set(&self, run_id: RunId, v: Value) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(run_id, v);
+    }
+    /// Take the value out (the caller consumes it exactly once).
+    pub fn take(&self, run_id: RunId) -> Option<Value> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&run_id)
+    }
+    /// Drop a never-collected result so the map can't grow without bound.
+    pub fn discard(&self, run_id: RunId) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&run_id);
+    }
+}
+
 // -------------------------------------------------------------------- logs
 
 #[derive(Clone)]
@@ -427,6 +469,7 @@ fn mcp_text(result: &Value) -> Option<String> {
 pub struct Services {
     pub http: reqwest::Client,
     pub state: StateStore,
+    pub results: ResultStore,
     pub bridge: Bridge,
     pub log: LogSink,
     pub bus: EventBus,
@@ -441,6 +484,7 @@ impl Services {
             .unwrap_or_default();
         Self {
             state: StateStore::new(db.clone()),
+            results: ResultStore::new(),
             bridge: Bridge::new(http.clone()),
             log: LogSink::new(db.clone(), bus.clone()),
             http,

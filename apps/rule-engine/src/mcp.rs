@@ -153,6 +153,36 @@ pub fn tools_list() -> Vec<Value> {
             }}
         }),
         json!({
+            "name": "rule_push",
+            "description": "PUSH (bất đồng bộ): bơm một sự kiện vào luồng đang chạy rồi trả về NGAY với runId — không chờ luồng chạy xong. Dùng cho fire-and-forget. Mặc định vào node `manual`.",
+            "inputSchema": { "type": "object", "required": ["chainId"], "properties": {
+                "chainId": chain_id,
+                "node": { "type": "string", "description": "Node nguồn cần bơm. Bỏ trống = node `manual`/`request` đầu tiên." },
+                "port": { "type": "string", "description": "Cổng ra để phát (mặc định `out`)." },
+                "data": { "type": "object", "description": "Payload gửi vào luồng" },
+                "meta": { "type": "object", "description": "Metadata kèm theo" }
+            }}
+        }),
+        json!({
+            "name": "rule_call",
+            "description": "PULL / request-response (đồng bộ): bơm dữ liệu vào node `request` (hoặc `manual`) rồi CHỜ tới khi run chạm node `respond`, trả về { status, result, error }. `result` là dữ liệu tới `respond`. Dùng để gọi một luồng như một hàm.",
+            "inputSchema": { "type": "object", "required": ["chainId"], "properties": {
+                "chainId": chain_id,
+                "node": { "type": "string", "description": "Node vào. Bỏ trống = node `request` đầu tiên, không có thì `manual` đầu tiên." },
+                "data": { "type": "object", "description": "Payload gửi vào luồng" },
+                "meta": { "type": "object", "description": "Metadata kèm theo" },
+                "timeoutMs": { "type": "number", "description": "Chờ tối đa (mặc định 15000)." }
+            }}
+        }),
+        json!({
+            "name": "rule_get",
+            "description": "GET: đọc giá trị mới nhất mà một node `store` đã cache, KHÔNG chạy luồng. Trả về { value, ts } hoặc value rỗng nếu chưa có.",
+            "inputSchema": { "type": "object", "required": ["chainId", "node"], "properties": {
+                "chainId": chain_id,
+                "node": { "type": "string", "description": "ID của node `store` cần đọc." }
+            }}
+        }),
+        json!({
             "name": "rule_runs",
             "description": "Lịch sử các lần chạy của một luồng (trạng thái, số bước, lỗi).",
             "inputSchema": { "type": "object", "required": ["chainId"], "properties": {
@@ -391,6 +421,79 @@ pub async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value
             }
         }
 
+        // PUSH — inject and return immediately (fire-and-forget).
+        "rule_push" => {
+            let Some(id) = chain_id() else {
+                return error_result("thiếu `chainId`".into());
+            };
+            if !state.engine.is_deployed(id) {
+                return error_result("luồng chưa chạy — gọi `rule_activate` trước".into());
+            }
+            let node = match resolve_entry_node(state, id, args) {
+                Ok(n) => n,
+                Err(e) => return error_result(e),
+            };
+            let data = args.get("data").cloned().unwrap_or_else(|| json!({}));
+            let port = args.get("port").and_then(|v| v.as_str()).unwrap_or("out");
+            let meta = mcp_meta(args);
+            match state.engine.start_run(id, &node, port, data, meta).await {
+                Some(run_id) => json_result(json!({ "runId": run_id, "pushed": true })),
+                None => error_result(format!("không tìm thấy node `{node}`")),
+            }
+        }
+
+        // PULL — inject at a `request`/`manual` entry, wait for `respond`.
+        "rule_call" => {
+            let Some(id) = chain_id() else {
+                return error_result("thiếu `chainId`".into());
+            };
+            if !state.engine.is_deployed(id) {
+                return error_result("luồng chưa chạy — gọi `rule_activate` trước".into());
+            }
+            let node = match resolve_entry_node(state, id, args) {
+                Ok(n) => n,
+                Err(e) => return error_result(e),
+            };
+            let data = args.get("data").cloned().unwrap_or_else(|| json!({}));
+            let meta = mcp_meta(args);
+            let timeout_ms = args
+                .get("timeoutMs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(15000)
+                .clamp(100, 120_000);
+            let out = state
+                .engine
+                .start_run_wait(id, &node, "out", data, meta, timeout_ms)
+                .await;
+            json_result(json!({
+                "runId": out.run_id,
+                "status": out.status,
+                "result": out.result,
+                "error": out.error,
+            }))
+        }
+
+        // GET — read a `store` node's cached value, no run.
+        "rule_get" => {
+            let Some(id) = chain_id() else {
+                return error_result("thiếu `chainId`".into());
+            };
+            let Some(node) = args.get("node").and_then(|v| v.as_str()) else {
+                return error_result("thiếu `node` (id của node store)".into());
+            };
+            match state.db.state_get(id, node, crate::rules::store::SCOPE) {
+                Some(v) => json_result(json!({
+                    "value": v.get("value").cloned().unwrap_or(Value::Null),
+                    "ts": v.get("ts").cloned().unwrap_or(Value::Null),
+                })),
+                None => json_result(json!({
+                    "value": Value::Null,
+                    "ts": Value::Null,
+                    "hint": "node store này chưa nhận giá trị nào, hoặc id node sai"
+                })),
+            }
+        }
+
         "rule_runs" => {
             let Some(id) = chain_id() else {
                 return error_result("thiếu `chainId`".into());
@@ -507,6 +610,37 @@ async fn save_graph(state: &Arc<AppState>, id: i64, args: &Value) -> Result<Valu
     }))
 }
 
+/// Resolve which source node to inject into: an explicit `node`, else the first
+/// `request` node, else the first `manual` node.
+fn resolve_entry_node(
+    state: &Arc<AppState>,
+    chain_id: i64,
+    args: &Value,
+) -> Result<String, String> {
+    if let Some(n) = args.get("node").and_then(|v| v.as_str()) {
+        return Ok(n.to_string());
+    }
+    let nodes = state.db.list_nodes(chain_id).unwrap_or_default();
+    if let Some(n) = nodes.iter().find(|n| n.rule == "request") {
+        return Ok(n.id.clone());
+    }
+    if let Some(n) = nodes.iter().find(|n| n.rule == "manual") {
+        return Ok(n.id.clone());
+    }
+    Err("luồng không có node `request` hoặc `manual`; truyền `node` cụ thể".into())
+}
+
+/// Build the message meta from an optional `meta` arg, always tagging `_event`.
+fn mcp_meta(args: &Value) -> Value {
+    match args.get("meta").cloned() {
+        Some(Value::Object(mut m)) => {
+            m.entry("_event".to_string()).or_insert(json!("mcp"));
+            Value::Object(m)
+        }
+        _ => json!({ "_event": "mcp" }),
+    }
+}
+
 /// Ask the model for a graph, then hold it to the same validation a human gets.
 async fn generate_chain(state: &Arc<AppState>, args: &Value) -> Value {
     let Some(request) = args.get("request").and_then(|v| v.as_str()) else {
@@ -519,12 +653,16 @@ async fn generate_chain(state: &Arc<AppState>, args: &Value) -> Value {
         .specs()
         .into_iter()
         .map(|s| {
+            let dyn_in = matches!(s.id.as_str(), "join" | "merge" | "aggregate");
+            let dyn_out = matches!(s.id.as_str(), "switch");
             json!({
                 "rule": s.id,
+                "category": format!("{:?}", s.category).to_lowercase(),
                 "isSource": state.engine.registry.is_source(&s.id),
                 "desc": s.description,
                 "in": s.inputs.iter().map(|p| &p.id).collect::<Vec<_>>(),
                 "out": s.outputs.iter().map(|p| &p.id).collect::<Vec<_>>(),
+                "dynamicPorts": dyn_in || dyn_out,
                 "config": s.config_schema,
             })
         })
@@ -544,7 +682,13 @@ async fn generate_chain(state: &Arc<AppState>, args: &Value) -> Value {
          - TUYỆT ĐỐI không đặt id node vào `config`; mọi liên kết chỉ nằm ở `edges`.\n\
          - `config` phải khớp schema của node.\n\
          - Node rộng ~230px: toạ độ x giãn 320 một bước (0, 320, 640...), y giãn 160 cho các nhánh.\n\
-         - Đặt tên node bằng tiếng Việt, ngắn.",
+         - Đặt tên node bằng tiếng Việt, ngắn.\n\
+         Chọn kiểu luồng theo yêu cầu:\n\
+         - Hỏi-đáp đồng bộ (gọi như một hàm, cần trả kết quả): bắt đầu bằng `request`, kết thúc bằng đúng một `respond`.\n\
+         - Tra cứu giá trị mới nhất: cho nhánh đi qua `store` để bên ngoài đọc bằng rule_get.\n\
+         - Việc chạy nền theo lịch/sự kiện: dùng `schedule`/`webhook`/`manual`.\n\
+         - Gộp nhiều nhánh phải đặt opts.join = all/merge trên node `join`/`merge` (mặc định `any` KHÔNG gộp).\n\
+         - Node có dynamicPorts=true sinh cổng theo config (switch: theo cases; join/merge/aggregate: theo inputs).",
         serde_json::to_string(&catalogue).unwrap_or_default(),
         request
     );
