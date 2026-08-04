@@ -1,0 +1,30 @@
+[package]
+name = "ipscout"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+app-space-sdk = { path = "../../app-space-sdk" }
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+dotenvy = "0.15"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+futures-util = "0.3"
+async-stream = "0.3"
+chrono = { version = "0.4", features = ["clock"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+hickory-resolver = "0.24"
+url = "2"
+# Chứng thư TLS: CN/SAN/nhà phát hành/hạn dùng. KHÔNG kiểm chuỗi tin cậy — đó là
+# việc của rustls-webpki, ở đây chỉ đọc nội dung để nhận dạng dịch vụ.
+x509-parser = "0.16"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pki-types = "1"
+
+[dev-dependencies]
+tempfile = "3"

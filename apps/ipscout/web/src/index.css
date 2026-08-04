@@ -1,0 +1,87 @@
+/* Biến theo chủ đề. antd đọc `algorithm`, còn các lớp tự viết ở đây đọc
+   `data-theme` — hai bên phải đổi cùng lúc, nếu không thẻ tự viết sẽ trắng
+   trên nền tối. App.tsx đặt `document.documentElement.dataset.theme`. */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #e5e7eb;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --code-bg: #f3f4f6;
+}
+
+:root[data-theme='dark'] {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --border: #2b303a;
+  --text: #e6e8ec;
+  --muted: #98a1b0;
+  --code-bg: #23272f;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+}
+
+.wrap {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 20px 64px;
+}
+
+/* Banner thô: giữ nguyên khoảng trắng, cuộn ngang trong khung của chính nó để
+   một dòng header dài không đẩy cả trang trượt ngang. */
+.banner {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow: auto;
+  color: var(--text);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(120px, 190px) 1fr;
+  gap: 6px 14px;
+  font-size: 13px;
+}
+
+.kv dt {
+  color: var(--muted);
+}
+
+.kv dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+/* Ô cảnh báo "IP này là biên CDN". Cố ý nổi hơn mọi thẻ khác trên trang: không
+   đọc nó thì toàn bộ phần còn lại đang mô tả sai đối tượng. */
+.fronted {
+  border-left: 4px solid #fa8c16;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* Bảng rộng phải tự cuộn, không được kéo giãn cả trang. */
+.scroll-x {
+  overflow-x: auto;
+}

@@ -1,0 +1,48 @@
+{
+  "id": "ipscout",
+  "name": "Điều Tra IP",
+  "description": "Điều tra một địa chỉ IP hoặc máy chủ: nó là ai (ASN, tổ chức, dải CIDR, liên hệ abuse qua RDAP), ở đâu (địa lý kèm ĐỘ TIN — GeoIP là suy luận từ đăng ký, đúng mức quốc gia ~95% nhưng mức thành phố chỉ ~55-80% và vô nghĩa với IP của CDN), traffic đi qua đâu (nhận diện CDN/WAF/cloud đứng trước, khi đó IP thấy được KHÔNG phải máy chủ gốc), tên ngược PTR có xác nhận xuôi FCrDNS, tiếng tăm qua DNSBL. Lớp chủ động: quét cổng TCP connect có giới hạn, bắt banner nhận dạng ứng dụng + phiên bản trên từng cổng mở, đọc chứng thư TLS, và ĐOÁN HỆ ĐIỀU HÀNH bằng suy luận có trọng số từ bằng chứng kèm phần trăm tin cậy (không phải vân tay ngăn xếp TCP/IP kiểu nmap -O). Tổ chức theo project, mỗi lần điều tra là một ảnh chụp nên so được hai mốc thời gian: cổng nào vừa mở thêm, dịch vụ nào vừa đổi phiên bản, IP có nhảy ASN không. KHÔNG quét SYN/stealth, KHÔNG quét dải hàng loạt, KHÔNG dò mật khẩu, KHÔNG khai thác — đó là ranh giới thiết kế chứ không phải phần chưa làm. App KHÔNG kiểm sở hữu; người dùng chủ SenClaw có trách nhiệm chỉ quét hạ tầng của mình hoặc được uỷ quyền. Chốt kỹ thuật duy nhất còn tự chạy: chặn các điểm cuối metadata cloud (169.254.169.254 v.v.). Dữ liệu 100% local (SQLite).",
+  "icon": "🛰️",
+  "runtime": {
+    "kind": "server",
+    "start": "./ipscout",
+    "healthPath": "/api/status",
+    "port": 4710
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "ipscout-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Điều tra IP/máy chủ: project + mục tiêu (ip_project_*, ip_target_*), hồ sơ thụ động RDAP/ASN/địa lý/PTR/CDN/DNSBL (ip_profile), quét cổng + nhận dạng dịch vụ + đoán OS (ip_scan_ports), tra lịch sử và so hai lần điều tra (ip_runs, ip_run_get, ip_diff).",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "ipscout-investigate",
+      "path": "skills/ipscout-investigate",
+      "triggers": [
+        "điều tra ip",
+        "tra ip",
+        "ip này của ai",
+        "ip ở đâu",
+        "kiểm tra ip",
+        "quét cổng",
+        "port nào đang mở",
+        "cổng mở",
+        "server chạy hệ điều hành gì",
+        "server dùng gì",
+        "asn",
+        "whois",
+        "rdap",
+        "ip có bị blacklist không",
+        "máy chủ có sau cloudflare không",
+        "dịch vụ nào đang chạy"
+      ]
+    }
+  ]
+}
